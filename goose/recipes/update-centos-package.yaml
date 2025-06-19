@@ -12,15 +12,28 @@ instructions: |
     * Work only in a temporary directory that you can create with the mktemp tool.
     * Always use GitLab's glab CLI tool to create forks and open merge requests.  Do not use the git tool.
     * You can find packaging guidelines at https://docs.fedoraproject.org/en-US/packaging-guidelines/
+    * You can find the RPM packaging guide at https://rpm-packaging-guide.github.io/.
+    * Do not run the `centpkg` commands for now (testing purposes), just write down the commands you would run.
 
-# NOTE:
-#  * The Recipe currently assumes that the glab client has already been authenticated against GitLab.
-#  * Going forward, the GitLab token should also be a paramter.
+
+# TODO:
+# * handle authentication requirements: Gitlab, Jira, centpkg
+# * handle environment requirements: rpm-build, spectool, rpmdevtools, rpmlint, centpkg, git, glab
+
 parameters:
 - key: package
   input_type: string
   requirement: required
   description: Package to update
+- key: version
+  input_type: string
+  requirement: required
+  description: Version to update to
+# probably needs to be changed to accept multiple
+- key: jira_issue
+  input_type: string
+  requirement: required
+  description: Jira issue to reference
 - key: git_url
   input_type: string
   requirement: required
@@ -48,34 +61,48 @@ parameters:
   default: vrothberg
 
 prompt: |
+  You are an agent for updating a CentOS package to the provided version. You will prepare the content of the update
+  and then create a commit with the changes. Follow exactly these steps:
+  
   1. Find the location of the {{ package }} package at {{ git_url }}.  Always use the {{ git_branch }} branch.
 
-  2. Check if there is a newer version of the {{ package }} available.  That includes detecting the current version of the package and the upstream version.
-    * The current version of the package can be found in the Version field of the RPM .spec file.
-    * The latest version of the package can be found in the upstream project of {{ package }}.  Usually, there is a reference to the upstream project inside the .spec file.  That can be the URL field, a comment or references in the changelog.  Prefer references to Git repositories (e.g., GitHub or Gitlab, etc.) over ordinary websites.
-    * If there is no new version available, print a message and exit.  If there is a new version available follow the instructions below.
-    * Do not clone any repository for detecting the versions.
+  2. Check if the {{ package }} was not already updated to version {{ version }}.  That means comparing the current version and provided version.
+    * The current version of the package can be found in the 'Version' field of the RPM .spec file.
+    * If there is nothing to update, print a message and exit. Otherwise follow the instructions below.
+    * Do not clone any repository for detecting the version in .spec file.
 
   3. Create a local Git repository by following these steps:
     * Create a fork of the {{ package }} package using the glab tool.
     * Clone the fork into the temp directory.
-
+  
   4. Update the {{ package }} to the newer version:
-    * Create a new branch indicating the update of the package and that it was created by {{ git_user }}.
-    * Update the local package.
-    * Only perform changes relevant for the version update.
-    * Use the rpmlint tool to make sure that changes to the .spec file did not introduce new errors.
-    * Build the local .spec file to make sure all changes are correct.
-    * Do not rename variables or comment existing lines out.
-    * Make sure that the commit looks similar to previous ones in the Git log that update the package version.
-    * Do not change if-else branches.
+    * Create a new Git branch named `automated-packaging-update-{{ version }}`.
+    * Update the local package by:
+      * Updating the 'Version' and 'Release' fields in the .spec file as needed, following packaging documentation.
+      * Updating macros related to update (e.g., 'commit') if present and necessary; examine the file's history to see how updates are typically done.
+      * Creating a changelog entry, referencing the Jira issue as "Resolves {{ jira_issue }}".
+      * Downloading sources using `spectool -g -S {{ package }}.spec` and uploading the new sources using `centpkg --release {{ git_branch }} new-sources`.
+      * Only performing changes relevant to the version update: Do not rename variables, comment out existing lines, or alter if-else branches in the .spec file.
+      
+  5. Verify and adjust the changes:
+    * Use `rpmlint` to validate your .spec file changes and fix any new errors it identifies.
+    * Try to successfully build and test local .spec file and source changes. Follow these steps, fixing any errors along the way:
+      * Generate the SRPM using `rpmbuild -bs` (ensure your .spec file and source files are correctly copied to the build environment as required by rpmbuild).
+      * Perform a scratch build using the generated SRPM using `centpkg scratch-build --srpm <path-to-your-srpm>`
+      * Resolve build failures: If the scratch build fails, analyze the errors and adjust your packaging. Common fixes include updating Requires in .spec file to align with upstream source changes.
+      * Important: Do not attempt more than two scratch builds. If you can't resolve the issues within two attempts, document the build errors for the next phase.
+  
+  6. Commit the changes:
+    * The title of the Git commit should be in the format "[DO NOT MERGE: AI EXPERIMENTS] Update to version {{ version }}"
+    * Include the reference to Jira as "Resolves: {{ jira_issue }}"
+    * Also include any build failures and suggestions for fix from the previous step, including URL link to the failed build.
+    * Do not push (testing purposes).
 
-  5. Commit the changes:
-    * Create a Git commit and use the same format as other Git commits in the Git log for the title and body of the Git commit.
-    * The title of the Git commit should have the prefix "[DO NOT MERGE: AI EXPERIMENTS]"
 
-  6. Open a merge request:
-    * Push the commit.
-    * Open a merge request against the repository of the {{ package }} using the glab tool with previously created commit.
+#  7. Open a merge request:
+#    * Push the commit.
+#    * Open a merge request against the repository of the {{ package }} using the glab tool with previously created commit.
+#  8. Comment on the Jira issue {{ jira_issue }} in https://issues.redhat.com using Jira API this content:
+#     Automated MR for the update created in <url-of-the-created-gitlab-mr>.
 
-  Follow the above steps in the given order and let me know where you cloned the Git repository.
+

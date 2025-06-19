@@ -29,20 +29,19 @@ parameters:
   input_type: string
   requirement: required
   description: Version to update to
-# probably needs to be changed to accept multiple
-- key: jira_issue
+- key: jira_issues
   input_type: string
   requirement: required
-  description: Jira issue to reference
+  description: Comma-separated Jira issues to reference as resolved
 - key: git_url
   input_type: string
   requirement: required
   description: URL of the Git repository
   default: https://gitlab.com/redhat/centos-stream/rpms
-- key: git_branch
+- key: dist_git_branch
   input_type: string
   requirement: required
-  description: Git branch of the update
+  description: Git branch in dist-git to be updated
   default: c10s
 - key: git_user
   input_type: string
@@ -64,7 +63,7 @@ prompt: |
   You are an agent for updating a CentOS package to the provided version. You will prepare the content of the update
   and then create a commit with the changes. Follow exactly these steps:
   
-  1. Find the location of the {{ package }} package at {{ git_url }}.  Always use the {{ git_branch }} branch.
+  1. Find the location of the {{ package }} package at {{ git_url }}.  Always use the {{ dist_git_branch }} branch.
 
   2. Check if the {{ package }} was not already updated to version {{ version }}.  That means comparing the current version and provided version.
     * The current version of the package can be found in the 'Version' field of the RPM .spec file.
@@ -74,27 +73,28 @@ prompt: |
   3. Create a local Git repository by following these steps:
     * Create a fork of the {{ package }} package using the glab tool.
     * Clone the fork into the temp directory.
-  
+
   4. Update the {{ package }} to the newer version:
     * Create a new Git branch named `automated-packaging-update-{{ version }}`.
     * Update the local package by:
       * Updating the 'Version' and 'Release' fields in the .spec file as needed, following packaging documentation.
       * Updating macros related to update (e.g., 'commit') if present and necessary; examine the file's history to see how updates are typically done.
-      * Creating a changelog entry, referencing the Jira issue as "Resolves {{ jira_issue }}".
-      * Downloading sources using `spectool -g -S {{ package }}.spec` and uploading the new sources using `centpkg --release {{ git_branch }} new-sources`.
+      * Creating a changelog entry, referencing the Jira issue as "Resolves: <jira_issue>" for each issue in {{ jira_issues }}.
+      * Downloading sources using `spectool -g -S {{ package }}.spec` (you might need to copy local sources, e.g. if the .spec file loads some macros from them, to a directory where spectool expects them).
+      * Uploading the new sources using `centpkg --release {{ dist_git_branch }} new-sources`.
       * Only performing changes relevant to the version update: Do not rename variables, comment out existing lines, or alter if-else branches in the .spec file.
       
   5. Verify and adjust the changes:
     * Use `rpmlint` to validate your .spec file changes and fix any new errors it identifies.
     * Try to successfully build and test local .spec file and source changes. Follow these steps, fixing any errors along the way:
-      * Generate the SRPM using `rpmbuild -bs` (ensure your .spec file and source files are correctly copied to the build environment as required by rpmbuild).
+      * Generate the SRPM using `centpkg srpm` (ensure your .spec file and source files are correctly copied to the build environment as required by the command).
       * Perform a scratch build using the generated SRPM using `centpkg scratch-build --srpm <path-to-your-srpm>`
       * Resolve build failures: If the scratch build fails, analyze the errors and adjust your packaging. Common fixes include updating Requires in .spec file to align with upstream source changes.
       * Important: Do not attempt more than two scratch builds. If you can't resolve the issues within two attempts, document the build errors for the next phase.
   
   6. Commit the changes:
     * The title of the Git commit should be in the format "[DO NOT MERGE: AI EXPERIMENTS] Update to version {{ version }}"
-    * Include the reference to Jira as "Resolves: {{ jira_issue }}"
+    * Include the reference to Jira as "Resolves: <jira_issue>" for each issue in {{ jira_issues }}.
     * Also include any build failures and suggestions for fix from the previous step, including URL link to the failed build.
     * Do not push (testing purposes).
 
@@ -102,7 +102,7 @@ prompt: |
 #  7. Open a merge request:
 #    * Push the commit.
 #    * Open a merge request against the repository of the {{ package }} using the glab tool with previously created commit.
-#  8. Comment on the Jira issue {{ jira_issue }} in https://issues.redhat.com using Jira API this content:
+#  8. Comment on each Jira issue from {{ jira_issues }} in https://issues.redhat.com using Jira API this content:
 #     Automated MR for the update created in <url-of-the-created-gitlab-mr>.
 
 

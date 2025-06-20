@@ -1,0 +1,21 @@
+GOOSE_PROVIDER: google
+GOOSE_MODEL: gemini-2.5-pro-preview-06-05
+GOOSE_RECIPE_GITHUB_REPO: packit/ai-workflows
+extensions:
+  developer:
+    bundled: true
+    display_name: Developer
+    enabled: true
+    name: developer
+    timeout: 300
+    type: builtin
+  jiraextension:
+    bundled: null
+    description: null
+    enabled: true
+    env_keys: []
+    envs: {}
+    name: Jira Extension
+    timeout: 300
+    type: sse
+    uri: http://mcp-atlassian:9000/sse

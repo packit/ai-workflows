@@ -1,0 +1,32 @@
+services:
+  mcp-atlassian:
+    image: ghcr.io/sooperset/mcp-atlassian:latest
+    ports:
+      - "9000:9000"
+    env_file:
+      - .env
+    command: ["--transport", "sse", "--port", "9000", "-vv"]
+    restart: unless-stopped
+
+  goose:
+    depends_on:
+      - mcp-atlassian
+    image: goose-container
+    build:
+      context: .
+      dockerfile: files/Containerfile
+    env_file:
+      - .env
+    volumes:
+      - home-goose-persistent:/home/goose
+      - ./recipes:/home/goose/recipes:ro,z
+    stdin_open: true
+    tty: true
+    restart: "no"
+    # configure dns for accessing recipes in Github
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+
+volumes:
+  home-goose-persistent:

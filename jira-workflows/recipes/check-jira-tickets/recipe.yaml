@@ -1,0 +1,20 @@
+version: 0.1.0
+title: "Check if there is any Jira issue we could be interested in"
+description: "Check issues for {{ component }} in {{ project }}"
+
+
+instructions: |
+  - Never create, delete, update or modify an Issue in Jira
+
+parameters:
+- key: project
+  input_type: string
+  requirement: required
+  description: A project in the Jira server
+- key: component
+  input_type: string
+  requirement: required
+  description: A component in the Jira project
+
+prompt: |
+  1. List all New Jira issues for project {{ project }} and component {{ component }}.

@@ -13,7 +13,7 @@ instructions: |
     * Always use GitLab's glab CLI tool to create forks and open merge requests.  Do not use the git tool.
     * You can find packaging guidelines at https://docs.fedoraproject.org/en-US/packaging-guidelines/
     * You can find the RPM packaging guide at https://rpm-packaging-guide.github.io/.
-    * Do not run the `centpkg` commands for now (testing purposes), just write down the commands you would run.
+    * Do not run the `centpkg new-sources` command for now (testing purposes), just write down the commands you would run.
 
 
 # TODO:
@@ -87,10 +87,10 @@ prompt: |
   5. Verify and adjust the changes:
     * Use `rpmlint` to validate your .spec file changes and fix any new errors it identifies.
     * Try to successfully build and test local .spec file and source changes. Follow these steps, fixing any errors along the way:
-      * Generate the SRPM using `centpkg srpm` (ensure your .spec file and source files are correctly copied to the build environment as required by the command).
-      * Perform a scratch build using the generated SRPM using `centpkg scratch-build --srpm <path-to-your-srpm>`
-      * Resolve build failures: If the scratch build fails, analyze the errors and adjust your packaging. Common fixes include updating Requires in .spec file to align with upstream source changes.
-      * Important: Do not attempt more than two scratch builds. If you can't resolve the issues within two attempts, document the build errors for the next phase.
+      * Generate the SRPM using `rpmbuild -bs` (ensure your .spec file and source files are correctly copied to the build environment as required by the command).
+      * Perform a local build using the generated SRPM using `mock` command (or `rpmbuild`, if you are missing privileges for `mock`).
+      * Resolve build failures: If the build fails, analyze the errors and adjust your packaging. Common fixes include updating Requires in .spec file or regenerating patches to align with upstream source changes.
+      * If you are not able to easily resolve the errors after few attemps, document the build errors for the next step (unless they are related to the environment the build is running in).
   
   6. Commit the changes:
     * The title of the Git commit should be in the format "[DO NOT MERGE: AI EXPERIMENTS] Update to version {{ version }}"

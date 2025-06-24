@@ -67,5 +67,5 @@ help:
 	@echo "  logs-mcp-atlassian          - Show MCP server logs"
 	@echo "  run-goose                   - Run goose interactively"
 	@echo "  run-goose-bash              - Run goose with bash shell"
-	@echo "  <recipe>                    - To run the recipes/<recipe>.yaml"
+	@echo "  <recipe>                    - To run recipes/<recipe>.yaml"
 	@echo "  clean                       - Stop all services and clean volumes"

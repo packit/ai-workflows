@@ -1,0 +1,12 @@
+FROM node:lts
+
+RUN git clone --depth=1 https://github.com/cliffhall/GooseTeam.git /app
+
+WORKDIR /app
+
+RUN npm install
+RUN npm run build
+
+EXPOSE 3001
+
+ENTRYPOINT ["npm", "run", "sse:direct"]

@@ -5,6 +5,7 @@ description: "Check details for issue {{ issue }}."
 
 instructions: |
   - Never create, delete, update or modify an Issue in Jira
+  - When passing a JSON object to a tool, ensure the entire object is formatted as a single string literal
 
 parameters:
 - key: issue
@@ -27,5 +28,8 @@ prompt: |
 
   4. Identify the target branch `<git_branch>` of the `<package_name>` on GitLab to update. The branch information is usually related with the fixVersion Jira field.  Verify the branch exists on GitLab.
     * A fixVersion named rhel-N maps to a branch named cNs.
+
+  5. Push a new job to the left of the `rebase_queue` list as a JSON dictionary containing `<package_name>`,
+     `<package_version>`, `<git_branch>` and {{ issue }} as `jira_issue`.
 
   Print the detected `<package_name>`, `<package_version>` and `<git_branch>` in a pretty list.

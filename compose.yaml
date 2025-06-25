@@ -8,9 +8,26 @@ services:
     command: ["--transport", "sse", "--port", "9000", "-vv"]
     restart: unless-stopped
 
+  valkey:
+    image: docker.io/valkey/valkey:8
+    env_file:
+      - .env
+    volumes:
+      - valkey-data:/data
+    restart: unless-stopped
+
+  mcp-redis:
+    depends_on:
+      - valkey
+    image: docker.io/mcp/redis:latest
+    env_file:
+      - .env
+    restart: unless-stopped
+
   goose:
     depends_on:
       - mcp-atlassian
+      - mcp-redis
     image: goose-container
     build:
       context: ./goose-container
@@ -28,3 +45,4 @@ services:
 
 volumes:
   home-goose-persistent:
+  valkey-data:

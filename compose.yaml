@@ -49,6 +49,7 @@ services:
       - home-goose-persistent:/home/goose
       - ./goose-recipes:/home/goose/recipes:ro,z
       - ./goose-container/goose-config.yaml:/home/goose/.config/goose/config.yaml:ro,z
+      - ./scripts:/home/goose/scripts:ro,z
     stdin_open: true
     tty: true
     restart: "no"

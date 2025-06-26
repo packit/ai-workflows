@@ -34,6 +34,7 @@ rebase-package: PACKAGE ?= cockpit
 rebase-package: VERSION ?= 339
 rebase-package: JIRA_ISSUES ?= "RHEL-123"
 
+reverse-dependencies: ARCH ?= x86_64
 reverse-dependencies: PACKAGE ?= podman
 
 test-package: PACKAGE ?= podman
@@ -112,6 +113,7 @@ reverse-dependencies:
 	$(COMPOSE) run --rm \
 		--entrypoint /bin/sh goose \
 		-c "/usr/local/bin/goose run --recipe recipes/reverse-dependencies.yaml \
+			--params arch=$(ARCH) \
 			--params package=$(PACKAGE)"
 
 test-package:

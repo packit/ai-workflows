@@ -1,30 +1,60 @@
 version: 0.1.0
 title: "Find reverse dependencies of an RPM package"
-description: "Find the reverse dependencies of the {{ package }} package.  That is all packages that directly or transitively depend on the {{ package }} package."
+description: "Find the reverse dependencies of the {{ package }} package for the architecture {{ arch }}. That is all packages that directly or transitively depend on the {{ package }} package on the architecture {{ arch }}."
 
 instructions: |
-  A couple of rules that you must follow and useful information for you:
-    * Work only in a temporary directory that you can create with the mktemp tool.
-    * Run `dnf repoquery --whatdepends` to determine the direct reverse dependencies of a package.
-    * Download the RPM .repo files with curl and make sure to ignore certificates.
-    * Before executing any command, print the plan and the steps you want to take.
+  * Before starting, create a temporary directory via mktemp that will be your working directory.
+  * Before every block of commands, be sure to explicitly change into the working directory.
+  * For clarity, always use full, absolute paths for file I/O.
+  * Use `--repofrompath` when invoking dnf to avoid altering system configuration.
+  * Use `dnf repoquery --whatdepends` without --recursive or --alldeps flags, iterating manually.
+  * Before executing any command, print the plan and the steps you want to take.
+  * For efficiency and correctness, write and run python scripts (files) to assist you in your goals.
+  * When generating python scripts, strip out all newlines in string literals. It's too hard to escape them properly.
 
 parameters:
 - key: package
   input_type: string
   requirement: required
   description: The package for which to find reverse dependencies.
+- key: arch
+  input_type: string
+  requirement: required
+  description: The architecture of the platform to look for dependencies in
 
 prompt: |
-  You are an AI agent to list all direct and transitive reverse dependencies of a given RPM package.  As input you will receive the name of the package.  A reverse dependency package is one that depends on the input package.  As output you must print one list for the direct reverse dependencies, and another list for the transitive reverse dependencies.  Follow the below steps in the given order:
+  You are an AI agent to list direct and transitive reverse dependencies of a given RPM package. As input, receive the package name. Output two files and print their contents: `{{ package }}-reverse-deps.txt` and `{{ package }}-all-reverse-deps.json`.
 
-  1. First, remove all other .repo files in /etc/yum.repos.d/.  That will implicitly disable all of them.
+  Steps:
 
-  2. Then download the RPM .repo file from the following source: https://download.devel.redhat.com/rhel-10/nightly/RHEL-10/latest-RHEL-10/repofile.repo
-    * Use curl and the -k flag to ignore certificates.
-    * If you face errors during the download, print them and exit.
-    * Do not attempt to download any other file.
-    * Copy the file to the /etc/yum/repos.d directory.
+  1. Create and enter a unique working directory:
+     ```bash
+     workingdir=$(realpath $(mktemp -d "{{ package }}.XXXXX"))
+     cd "$workingdir"
+     ```
 
-  # TODO: experiment with this first and then tackle transitive dependencies later
-  2. Find the direct reverse dependencies of {{ package }} and print them in a pretty list.
+  2. Define the repository URL:
+     ```bash
+     baseurl=http://download.devel.redhat.com/rhel-10/nightly/RHEL-10/latest-RHEL-10/
+     ```
+
+  3. Query direct-only reverse dependencies:
+     ```bash
+     dnf repoquery \
+       '--disablerepo=*' \
+       --repofrompath=nightly-{BaseOS,AppStream,CRB},"$baseurl/compose/{BaseOS,AppStream,CRB}/{{ arch }}/os/" \
+       --enablerepo=nightly-{BaseOS,AppStream,CRB} \
+       --whatdepends "{{ package }}" \
+       --quiet \
+     > "$workingdir/{{ package }}-reverse-deps.txt"
+     ```
+
+  5. Write a python script to `$workingdir/find_all_reverse_deps.py` to iteratively call `dnf repoquery` and find the dependents of every direct and indirect dependency of the passed in package name using splitlines() on the outputs. Do not rely on shell brace expansion to generate the repos like we are in the direct-only query. Manually specify each repo. The script should write out a JSON object to stdout where each key in the object is the package name of a direct or indirect dependent, and all indirect dependents are added to an array associated with each key. It should use only the package names, not epochs, versions, or releases in the object keys. The package names can be extracted from the repoquery output by using a regex that captures everything before the penultimate dash. For instance, the regex `^(.*)-[^-]+-[^-]+$` could be used. Note, a given entry in the JSON object output should be closed, having all transitive dependents in its array value. There should be one key for {{ package }} itself, that lists everything in its array. Fully escape new lines in string literals.
+
+  6. Run the script to find all reverse dependencies
+  ```base
+   python3 "$workingdir/find_all_reverse_deps.py" "{{ package }}" \
+   > "$workingdir/{{ package }}-all-reverse-deps.json"
+  ```
+
+  7. Read the output files "$workingdir/{{ package }}-reverse-deps.txt" and "$workingdir/{{ package }}-all-reverse-deps.json" and read them back to me.

@@ -19,3 +19,13 @@ extensions:
     timeout: 300
     type: sse
     uri: http://mcp-atlassian:9000/sse
+  redis:
+    bundled: null
+    description: null
+    enabled: true
+    env_keys: []
+    envs: {}
+    name: Redis MCP
+    timeout: 300
+    type: sse
+    uri: http://mcp-redis:8000/sse

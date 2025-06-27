@@ -1,0 +1,13 @@
+---
+# MCP Server Configuration
+mcp_host: "{{ ansible_env.MCP_HOST | default('mcp-atlassian') }}"
+mcp_port: "{{ ansible_env.MCP_PORT | default('9000') }}"
+
+# Redis Configuration
+redis_host: "{{ ansible_env.REDIS_HOST | default('valkey') }}"
+redis_port: "{{ ansible_env.REDIS_PORT | default('6379') }}"
+check_redis: true  # Set to false to skip Redis health check
+
+# Health Check Settings
+health_check_timeout: 60
+health_check_delay: 2

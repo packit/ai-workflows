@@ -45,6 +45,7 @@ issue-details:
 PACKAGE ?= cockpit
 VERSION ?= 339
 JIRA_ISSUES ?= "RHEL-123"
+DIST_GIT_BRANCH ?= "c10s"
 .PHONY: rebase-package
 rebase-package:
 	$(COMPOSE) run --rm \
@@ -52,6 +53,7 @@ rebase-package:
 		-c "/usr/local/bin/goose run --recipe recipes/rebase-package.yaml \
 			--params package=$(PACKAGE) \
 			--params version=$(VERSION) \
+			--params dist_git_branch=$(DIST_GIT_BRANCH) \
 			--params jira_issues=$(JIRA_ISSUES)"
 
 PACKAGE ?= podman
@@ -61,6 +63,29 @@ reverse-dependencies:
 		--entrypoint /bin/sh goose \
 		-c "/usr/local/bin/goose run --recipe recipes/reverse-dependencies.yaml \
 			--params package=$(PACKAGE)"
+
+ISSUE ?= RHEL-78418
+.PHONY: workflow
+workflow:
+	$(COMPOSE) run --rm \
+		--entrypoint /bin/sh goose \
+		-c "/home/goose/workflow.sh $(ISSUE)"
+
+.PHONY: issue-details-ansible
+issue-details-ansible:
+	$(COMPOSE) run --rm \
+		--entrypoint /bin/sh goose \
+		-c "cd /home/goose/playbooks && PYTHONUNBUFFERED=1 ansible-playbook issue_details.yaml -e issue=$(ISSUE) -vvv"
+
+.PHONY: rebase-package-ansible
+rebase-package-ansible:
+	$(COMPOSE) run --rm \
+		--entrypoint /bin/sh goose \
+		-c "cd /home/goose/playbooks && PYTHONUNBUFFERED=1 ansible-playbook rebase-package.yaml -vvv"
+
+
+.PHONY: workflow-ansible
+workflow-ansible: issue-details-ansible rebase-package-ansible
 
 .PHONY: clean
 clean:
@@ -76,4 +101,7 @@ help:
 	@echo "  run-goose                   - Run goose interactively"
 	@echo "  run-goose-bash              - Run goose with bash shell"
 	@echo "  <recipe>                    - To run the recipes/<recipe>.yaml"
+	@echo "  issue-details-ansible       - Run issue details analysis with Ansible"
+	@echo "  workflow-ansible            - Run complete workflow with Ansible"
+	@echo "  rebase-package-ansible      - Run package rebase with Ansible"
 	@echo "  clean                       - Stop all services and clean volumes"

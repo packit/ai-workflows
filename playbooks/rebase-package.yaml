@@ -1,0 +1,102 @@
+---
+- name: Take a job from the Redis queue and rebase the package
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    redis_host: "{{ ansible_env.REDIS_HOST | default('valkey') }}"
+    redis_port: "{{ ansible_env.REDIS_PORT | default('6379') }}"
+    redis_queue: "rebase_queue"
+    goose_bin: "/usr/local/bin/goose"
+    recipe_dir: "../recipes"
+    
+  tasks:
+    - name: Check mcp servers are healthy
+      include_role:
+        name: check_mcp_servers
+
+    - name: Pop job from Redis queue
+      command: redis-cli -h {{ redis_host }} -p {{ redis_port }} LRANGE {{ redis_queue }} -1 -1
+      register: redis_job
+      changed_when: true
+
+    - name: Display raw Redis output
+      debug:
+        msg: "Redis output (raw): {{ redis_job.stdout }}"
+      
+    - name: Check if job was found
+      fail:
+        msg: "No job found in {{ redis_queue }} queue"
+      when: redis_job.stdout == "" or redis_job.stdout == "(nil)" or redis_job.stdout == "[]"
+
+    - name: Parse JSON job data, without the quotes
+      set_fact:
+        job_data: "{{ redis_job.stdout[1:-1] | from_json }}"
+      failed_when: false
+
+    - name: Display parsed job data
+      debug:
+        msg: "Parsed JSON: {{ job_data }}"
+
+    - name: Check if valid job data was parsed
+      fail:
+        msg: "No valid job data found or failed to parse JSON from Redis"
+      when: job_data == {} or job_data is not defined
+
+    - name: Validate required job fields
+      fail:
+        msg: "Missing required field '{{ item }}' in job data: {{ job_data }}"
+      when: job_data[item] is not defined or job_data[item] == ""
+      loop:
+        - package_name
+        - package_version  
+        - git_branch
+
+    - name: Extract job parameters
+      set_fact:
+        package_name: "{{ job_data.package_name }}"
+        package_version: "{{ job_data.package_version }}"
+        git_branch: "{{ job_data.git_branch }}"
+        jira_issues: "{{ job_data.jira_issue | default(job_data.jira_issues | default('')) }}"
+
+    - name: Display extracted job parameters
+      debug:
+        msg: |
+          Extracted job parameters:
+            package_name: {{ package_name }}
+            package_version: {{ package_version }}
+            git_branch: {{ git_branch }}
+            jira_issues: {{ jira_issues }}
+
+    - name: Display workflow execution message
+      debug:
+        msg: >
+          Workflow: rebase the package={{ package_name }}, 
+          version={{ package_version }}, 
+          branch={{ git_branch }}, 
+          jira issue={{ jira_issues }}
+
+    - name: Run package rebase with Goose
+      command: >
+        {{ goose_bin }} run 
+        --recipe {{ recipe_dir }}/rebase-package.yaml 
+        --params package={{ package_name }}
+        --params version={{ package_version }}
+        --params dist_git_branch={{ git_branch }}
+        --params jira_issues={{ jira_issues }}
+      register: rebase_result
+      changed_when: true
+
+    - name: Display rebase result
+      debug:
+        var: rebase_result.stdout_lines
+      when: rebase_result.stdout_lines is defined
+
+    - name: Workflow completion message
+      debug:
+        msg: "Workflow completed successfully!"
+
+  handlers:
+    - name: Cleanup on failure
+      debug:
+        msg: "Workflow failed, performing cleanup if needed" 

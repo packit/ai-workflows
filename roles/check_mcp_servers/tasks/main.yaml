@@ -1,0 +1,41 @@
+---
+- name: Display health check start message
+  debug:
+    msg: "Starting health checks for MCP server at {{ mcp_host }}:{{ mcp_port }}"
+
+- name: Wait for MCP server to be ready
+  uri:
+    url: "http://{{ mcp_host }}:{{ mcp_port }}/healthz"
+    method: GET
+    status_code: 200
+  register: mcp_health_check
+  until: mcp_health_check.status == 200
+  retries: "{{ (health_check_timeout / health_check_delay) | int }}"
+  delay: "{{ health_check_delay }}"
+  failed_when: false
+
+- name: Display MCP server status
+  debug:
+    msg: "MCP server health check {{ 'PASSED' if mcp_health_check.status == 200 else 'FAILED' }}"
+
+- name: Fail if MCP server is not ready
+  fail:
+    msg: |
+      MCP server health check failed!
+      URL: http://{{ mcp_host }}:{{ mcp_port }}/healthz
+      Status: {{ mcp_health_check.status | default('No response') }}
+      Timeout: {{ health_check_timeout }} seconds
+  when: mcp_health_check.status != 200
+
+- name: Give MCP server extra time to stabilize
+  wait_for:
+    timeout: 2
+
+- name: Test Redis connection
+  command: redis-cli -h {{ redis_host }} -p {{ redis_port }} ping
+  register: redis_ping
+  changed_when: false
+
+- name: Display Redis connection status
+  debug:
+    msg: "Redis connection: {{ 'OK' if redis_ping.stdout == 'PONG' else 'FAILED' }}"

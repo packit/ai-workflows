@@ -1,0 +1,35 @@
+---
+- name: Analyze the issue details and push a job to the Redis queue
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    goose_bin: "/usr/local/bin/goose"
+    recipe_dir: "../recipes"
+    
+  tasks:
+    - name: Validate required variables
+      fail:
+        msg: "Issue number is required. Pass with -e issue=RHEL-12345"
+      when: issue is not defined or issue == ""
+
+    - name: Check mcp servers are healthy
+      include_role:
+        name: check_mcp_servers
+
+    - name: Display workflow start message
+      debug:
+        msg: "Workflow: check issue details for {{ issue }}"
+
+    - name: Run issue details analysis with Goose
+      command: >
+        {{ goose_bin }} run 
+        --recipe {{ recipe_dir }}/issue-details.yaml 
+        --params issue={{ issue }}
+      register: goose_result
+      changed_when: true
+
+    - name: Display issue details result
+      debug:
+        var: goose_result.stdout_lines
+      when: goose_result.stdout_lines is defined

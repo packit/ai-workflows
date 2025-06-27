@@ -6,6 +6,7 @@ description: "Check details for issue {{ issue }}."
 instructions: |
   - Never create, delete, update or modify an Issue in Jira
   - When passing a JSON object to a tool, ensure the entire object is formatted as a single string literal
+  - The redis/valkey server is available at `redis://valkey:6379`
 
 parameters:
 - key: issue
@@ -21,15 +22,21 @@ prompt: |
 
   2. Identify the name of the package that must be updated. Let's refer to it as `<package_name>`.
      * Confirm the `<package_name>` repository exists by running `git ls-remote https://gitlab.com/redhat/centos-stream/rpms/<package_name>`. A successful command (exit code 0) confirms its existence.
+     * If it does not exist, take another look at the Jira issue. You may have picked the wrong package or name.
+
+  2. Identify the version that the `<package_name>` must be updated to.  Let's refer to it as `<package_version>`.
+     * Confirm the `<package_name>` exists at https://gitlab.com/redhat/centos-stream/rpms/`<package_name>`
      * If the `<package_name>` does not exist, take another look at the Jira issue.  You may have picked the wrong package or name.
 
-  # TODO: should we make sure the version of the package exists upstream?
   3. Identify the `<package_version>` the `<package_name>` should be updated or rebased to.
+     * Confirm the `<package_version>` is a valid version number. Look at the .spec file in the repository and take the url.
+     * Access the upstream repository and check the <package_version> is a valid tag.
 
-  4. Identify the target branch `<git_branch>` of the `<package_name>` on GitLab to update. The branch information is usually related with the fixVersion Jira field.  Verify the branch exists on GitLab.
-    * A fixVersion named rhel-N maps to a branch named cNs.
+  4. Identify the target branch `<git_branch>` of the `<package_name>` on GitLab to update. The branch information is usually the fixVersion Jira field.  Verify the branch exists on GitLab.
+     * A fixVersion named rhel-N maps to a branch named cNs.
 
-  5. Push a new job to the left of the `rebase_queue` list as a JSON dictionary containing `<package_name>`,
+  5. Use the lpush tool to push a new job to the left of the `rebase_queue` list as a JSON dictionary containing `<package_name>`,
      `<package_version>`, `<git_branch>` and {{ issue }} as `jira_issue`.
+     * Show the command to be executed.
 
   Print the detected `<package_name>`, `<package_version>` and `<git_branch>` in a pretty list.

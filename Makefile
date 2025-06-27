@@ -63,12 +63,14 @@ rebase-package:
 			--params gitlab_user=$(GITLAB_USER) && echo 'Recipe completed. Dropping into shell...' && /bin/bash"
 
 PACKAGE ?= podman
+ARCH    ?= x86_64
 .PHONY: reverse-dependencies
 reverse-dependencies:
 	$(COMPOSE) run --rm \
 		--entrypoint /bin/sh goose \
 		-c "/usr/local/bin/goose run --recipe recipes/reverse-dependencies.yaml \
-			--params package=$(PACKAGE)"
+			--params package=$(PACKAGE) \
+			--params arch=$(ARCH)"
 
 .PHONY: clean
 clean:

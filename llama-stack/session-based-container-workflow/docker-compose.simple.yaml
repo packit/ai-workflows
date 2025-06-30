@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  # Llama Stack server with persistent storage
+  llama-stack:
+    image: llama-stack:latest
+    ports:
+      - "8321:8321"
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - JIRA_PERSONAL_TOKEN=${JIRA_PERSONAL_TOKEN}
+      - INFERENCE_MODEL=${INFERENCE_MODEL:-gemini/gemini-2.5-pro}
+    volumes:
+      - ./llama_stack_config.yaml:/app/llama_stack_config.yaml
+      - llama_stack_data:/app/data  # Persistent storage for sessions
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8321/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # MCP Atlassian server (optional)
+  mcp-atlassian:
+    image: ghcr.io/sooperset/mcp-atlassian:latest
+    ports:
+      - "9000:9000"
+    environment:
+      - JIRA_PERSONAL_TOKEN=${JIRA_PERSONAL_TOKEN}
+      - JIRA_URL=${JIRA_URL}
+    command: ["--transport", "sse", "--port", "9000", "-vv"]
+
+  # Jira Analyzer Agent Container
+  jira-analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile.simple
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - JIRA_PERSONAL_TOKEN=${JIRA_PERSONAL_TOKEN}
+      - INFERENCE_MODEL=${INFERENCE_MODEL:-gemini/gemini-2.5-pro}
+      - LLAMA_STACK_URL=http://llama-stack:8321
+      - AGENT_TYPE=jira_analyzer
+      - ISSUE_ID=${ISSUE_ID:-RHEL-78418}
+    volumes:
+      - shared_data:/shared
+      - ./llama_stack_config.yaml:/app/llama_stack_config.yaml
+    depends_on:
+      llama-stack:
+        condition: service_healthy
+    command: ["python", "simple_container_workflow.py"]
+
+  # Package Rebase Agent Container
+  rebase-package:
+    build:
+      context: .
+      dockerfile: Dockerfile.simple
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - JIRA_PERSONAL_TOKEN=${JIRA_PERSONAL_TOKEN}
+      - INFERENCE_MODEL=${INFERENCE_MODEL:-gemini/gemini-2.5-pro}
+      - LLAMA_STACK_URL=http://llama-stack:8321
+      - AGENT_TYPE=rebase_package
+      - ISSUE_ID=${ISSUE_ID:-RHEL-78418}
+    volumes:
+      - shared_data:/shared
+      - ./llama_stack_config.yaml:/app/llama_stack_config.yaml
+    depends_on:
+      llama-stack:
+        condition: service_healthy
+      jira-analyzer:
+        condition: service_completed_successfully
+    command: ["python", "simple_container_workflow.py"]
+
+volumes:
+  llama_stack_data:  # Persistent storage for Llama Stack sessions
+  shared_data:       # Shared storage for coordination files 

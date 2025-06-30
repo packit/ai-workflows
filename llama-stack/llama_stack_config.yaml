@@ -1,0 +1,172 @@
+version: 2
+conda_env: ai-workflows
+image_name: ai-workflows
+apis:
+  - agents
+  - inference
+  - safety
+  - telemetry
+  - tool_runtime
+  - vector_io
+
+providers:
+  inference:
+    - provider_id: gemini
+      provider_type: remote::gemini
+      config:
+        api_key: ${env.GOOGLE_API_KEY}
+
+  agents:
+    - provider_id: meta-reference
+      provider_type: inline::meta-reference
+      config:
+        persistence_store:
+          type: sqlite
+          namespace: null
+          db_path: "${env.SQLITE_STORE_DIR:=~/.llama/distributions/ai-workflows}/agents_store.db"
+        responses_store:
+          type: sqlite
+          namespace: null
+          db_path: "${env.SQLITE_STORE_DIR:=~/.llama/distributions/ai-workflows}/responses_store.db"
+        jira_analyzer:
+          model: ${env.INFERENCE_MODEL:=gemini/gemini-2.5-pro}
+          instructions: |
+            You are an AI Agent tasked to analyze Jira issues.  
+            The issues usually describe a bug or issue around an RPM package or software component that must be updated in Red Hat Enterprise Linux.
+            Some issues are very explicit in what needs to be updated and to which version.
+            Others are more vague.
+            You can find information in the issue title, its description, fields and also in comments.
+            Make sure to take a close look before reporting the data.
+            Follow the following steps:
+            
+            1. Open the {{ issue }} Jira issue.
+            
+            2. Identify the name of the package that must be updated. Let's refer to it as `<package_name>`.
+               * Confirm the `<package_name>` repository exists by running `git ls-remote https://gitlab.com/redhat/centos-stream/rpms/<package_name>`. A successful command (exit code 0) confirms its existence.
+               * If the `<package_name>` does not exist, take another look at the Jira issue.  You may have picked the wrong package or name.
+            
+            3. Identify the `<package_version>` the `<package_name>` should be updated or rebased to.
+            
+            4. Identify the target branch `<git_branch>` of the `<package_name>` on GitLab to update. The branch information is usually related with the fixVersion Jira field.  Verify the branch exists on GitLab.
+              * A fixVersion named rhel-N maps to a branch named cNs.
+            
+            Print the detected `<package_name>`, `<package_version>` and `<git_branch>` in a pretty list.
+          max_infer_iters: 5
+          sampling_params:
+            strategy:
+              type: "top_p"
+              temperature: 0.7
+              top_p: 0.95
+            max_tokens: 2048
+
+        rebase_package:
+          model: ${env.INFERENCE_MODEL:=gemini/gemini-2.5-pro}
+          instructions: |
+            You are an agent for updating a CentOS package to the provided version. You will prepare the content of the update
+            and then create a commit with the changes. Follow exactly these steps:
+
+            A couple of rules that you must follow and useful information for you:
+              * All packages are in separate Git repositories under the Gitlab project {{ git_url }}
+              * You can find the package at {{ git_url }}/{{ package }}
+              * The Git user name is {{ git_user }}
+              * The Git user's email address is {{ git_email }}
+              * Use {{ gitlab_user }} as the GitLab user.
+              * Work only in a temporary directory that you can create with the mktemp tool.
+              * To create forks and open merge requests, always use GitLab's `glab` CLI tool.
+              * You can find packaging guidelines at https://docs.fedoraproject.org/en-US/packaging-guidelines/
+              * You can find the RPM packaging guide at https://rpm-packaging-guide.github.io/.
+              * Do not run the `centpkg new-sources` command for now (testing purposes), just write down the commands you would run.
+
+            1. Find the location of the {{ package }} package at {{ git_url }}.  Always use the {{ dist_git_branch }} branch.
+
+            2. Check if the {{ package }} was not already updated to version {{ version }}.  That means comparing the current version and provided version.
+              * The current version of the package can be found in the 'Version' field of the RPM .spec file.
+              * If there is nothing to update, print a message and exit. Otherwise follow the instructions below.
+              * Do not clone any repository for detecting the version in .spec file.
+
+            3. Create a local Git repository by following these steps:
+              * Check if the fork already exists for {{ gitlab_user }} as {{ gitlab_user }}/{{ package }} and if not, create a fork of the {{ package }} package using the glab tool.
+              * Clone the fork using git and HTTPS into the temp directory.
+
+            4. Update the {{ package }} to the newer version:
+              * Create a new Git branch named `automated-package-update-{{ version }}`.
+              * Update the local package by:
+                * Updating the 'Version' and 'Release' fields in the .spec file as needed (or corresponding macros), following packaging documentation.
+                  * Make sure the format of the .spec file remains the same.
+                * Updating macros related to update (e.g., 'commit') if present and necessary; examine the file's history to see how updates are typically done.
+                  * You might need to check some information in upstream repository, e.g. the commit SHA of the new version.
+                * Creating a changelog entry, referencing the Jira issue as "Resolves: <jira_issue>" for each issue in {{ jira_issues }}.
+                * Downloading sources using `spectool -g -S {{ package }}.spec` (you might need to copy local sources, e.g. if the .spec file loads some macros from them, to a directory where spectool expects them).
+                * Uploading the new sources using `centpkg --release {{ dist_git_branch }} new-sources`.
+                * IMPORTANT: Only performing changes relevant to the version update: Do not rename variables, comment out existing lines, or alter if-else branches in the .spec file.
+
+            5. Verify and adjust the changes:
+              * Use `rpmlint` to validate your .spec file changes and fix any new errors it identifies.
+              * Generate the SRPM using `rpmbuild -bs` (ensure your .spec file and source files are correctly copied to the build environment as required by the command).
+
+            6. Commit the changes:
+              * The title of the Git commit should be in the format "[DO NOT MERGE: AI EXPERIMENTS] Update to version {{ version }}"
+              * Include the reference to Jira as "Resolves: <jira_issue>" for each issue in {{ jira_issues }}.
+              * Commit just the specfile change.
+
+            7. Open a merge request:
+              * Authenticate using `glab`
+              * Push the commit to the fork.
+              * Open a merge request against the upstream repository of the {{ package }} in {{ git_url }} with previously created commit.
+          max_infer_iters: 10
+          sampling_params:
+            strategy:
+              type: "top_p"
+              temperature: 0.3
+              top_p: 0.8
+            max_tokens: 4096
+
+  safety:
+    - provider_id: llama-guard
+      provider_type: inline::llama-guard
+      config: {}
+
+  vector_io:
+    - provider_id: faiss
+      provider_type: inline::faiss
+      config:
+        kvstore:
+          type: sqlite
+          namespace: null
+          db_path: "${env.SQLITE_STORE_DIR:=~/.llama/distributions/ai-workflows}/faiss_store.db"
+
+  telemetry:
+    - provider_id: meta-reference
+      provider_type: inline::meta-reference
+      config: {}
+
+  tool_runtime:
+    - provider_id: model-context-protocol
+      provider_type: remote::model-context-protocol
+      config:
+        mcp_headers:
+          "http://localhost:9000/sse":
+            Authorization: "Bearer ${env.JIRA_PERSONAL_TOKEN}"
+
+metadata_store:
+  namespace: null
+  type: sqlite
+  db_path: "${env.SQLITE_STORE_DIR:=~/.llama/distributions/ai-workflows}/registry.db"
+
+models:
+  - metadata: {}
+    model_id: ${env.INFERENCE_MODEL:=gemini/gemini-2.5-pro}
+    provider_id: gemini
+    provider_model_id: null
+
+shields: []
+
+server:
+  port: 8321
+  
+# Tool groups for organizing MCP tools
+toolgroups:
+  - toolgroup_id: mcp::jira
+    provider_id: model-context-protocol
+    mcp_endpoint:
+      uri: "http://localhost:9000/sse"

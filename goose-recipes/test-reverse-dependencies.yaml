@@ -1,0 +1,81 @@
+version: 0.1.0
+title: "Test reverse dependencies of an RPM package"
+description: >-
+  Find all reverse dependencies of the {{ package }} package for architecture {{ arch }},
+  convert them to source packages, and run Testing Farm tests for each source package
+  on branch {{ dist_git_branch }} against compose {{ compose }}.
+
+instructions: |
+  * Before starting, create a temporary directory via mktemp that will be your working directory.
+  * For clarity, always use full, absolute paths for file I/O.
+  * Run all steps that need to share an environment in a single shell command session.
+  * First find all reverse dependencies and convert them to source packages.
+  * Then submit Testing Farm requests for the selected subset of those source packages.
+
+parameters:
+  - key: arch
+    input_type: string
+    requirement: required
+    description: The architecture of the platform to look for dependencies in
+  - key: package
+    input_type: string
+    requirement: required
+    description: The package for which to find reverse dependencies and test them
+  - key: git_url
+    input_type: string
+    requirement: required
+    description: Base URL of the dist-git project
+  - key: baseurl
+    input_type: string
+    requirement: optional
+    default: http://download.devel.redhat.com/rhel-10/nightly/RHEL-10/latest-RHEL-10/
+    description: Location of repos to query for dependencies
+  - key: dist_git_branch
+    input_type: string
+    requirement: required
+    description: Branch in the dist-git repository
+  - key: compose
+    input_type: string
+    requirement: required
+    description: Testing Farm compose to use
+  - key: max_results
+    input_type: string
+    requirement: optional
+    default: 50
+    description: Maximum number of reverse dependencies to fetch from repeated dnf queries
+  - key: number_of_requests
+    input_type: string
+    requirement: optional
+    default: 10
+    description: The number of testing farm requests to initiate
+  - key: change
+    input_type: string
+    requirement: optional
+    default: (no relevant changes)
+    description: A pertinent change to the package relevant to which dependent tests should run
+
+prompt: |
+  You are an AI agent to find reverse dependencies of a given RPM package and test each source package. Please follow the following steps:
+
+  1. Query the first {{ max_results }} direct and indirect reverse dependencies as source packages along with their descriptions by running the helper script:
+     ```bash
+       workingdir=$(mktemp "$PWD/{{ package }}.reverse-deps-tests.XXXXXX")
+       $(pwd)/scripts/find-package-dependents.py --base-url {{ baseurl }} --all --describe --max-results {{ max_results }} --source-packages --format=plain '{{ package }}' \
+       --filter-command 'wget --spider -q https://gitlab.com/redhat/centos-stream/rpms/$PACKAGE/-/raw/{{ dist_git_branch }}/.fmf/version' \
+       --log-file "$workingdir/{{ package }}-logs.txt" \
+       --verbose \
+       --output-file "$workingdir/{{ package }}-source-deps.txt"
+     ```
+     Read the source packages list from "$workingdir/{{ package }}-source-deps.txt" and read it back to me.
+
+  2. Select no more than {{ number_of_requests }} source packages from the list that would be good candidates for testing. Use your pre-existing knowledge of what the packages do, along with their provided descriptions, and how they relate to {{ package }} to make selections. Also, consider this relevant change to {{ package }} when deciding which dependents to test:
+
+  ```text
+  {{ change }}
+  ```
+
+  3. For each selected source package, submit a Testing Farm request using the git url {{ git_url }}/<source package>.git and the branch {{ dist_git_branch }} and the compose {{ compose }}.
+
+  4. Track the job IDs and write the results as JSON in a file called "$workingdir/jobs.json". The jobs should be of the form `[{ package: "<package-name>", jobId: "<uuid>" }, ... ]`. Use those object properties specifically and exactly, so it can be machine parsed later.
+
+  5. Finally, as a last step, Tell me where $workingdir is on the filesystem and read back "$workingdir/jobs.json" to me. Do not clean up the contents of $workingdir. They will be harvested as workflow artifacts.

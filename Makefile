@@ -20,6 +20,7 @@
 .PHONY: rebase-package
 .PHONY: reverse-dependencies
 .PHONY: test-package
+.PHONY: test-reverse-dependencies
 .PHONY: triage-issue
 .PHONY: backport-fix
 
@@ -42,6 +43,13 @@ test-package: PACKAGE ?= podman
 test-package: DIST_GIT_BRANCH ?= c10s
 test-package: GIT_URL ?= https://gitlab.com/redhat/centos-stream/rpms
 test-package: RPM_COMPOSE ?= CentOS-Stream-10
+
+test-reverse-dependencies: ARCH ?= x86_64
+test-reverse-dependencies: PACKAGE ?= podman
+test-reverse-dependencies: CHANGE ?=
+test-reverse-dependencies: DIST_GIT_BRANCH ?= c10s
+test-reverse-dependencies: GIT_URL ?= https://gitlab.com/redhat/centos-stream/rpms
+test-reverse-dependencies: RPM_COMPOSE ?= CentOS-Stream-10
 
 triage-issue: ISSUE ?= RHEL-78418
 
@@ -145,6 +153,17 @@ test-package:
 			--params dist_git_branch=$(DIST_GIT_BRANCH) \
 			--params compose=$(RPM_COMPOSE)"
 
+test-reverse-dependencies:
+	$(COMPOSE) run --rm \
+		--entrypoint /bin/sh goose \
+		-c "/usr/local/bin/goose run --recipe recipes/test-reverse-dependencies.yaml \
+			--params arch=$(ARCH) \
+			--params package=$(PACKAGE) \
+			--params change='$(CHANGE)' \
+			--params git_url=$(GIT_URL) \
+			--params dist_git_branch=$(DIST_GIT_BRANCH) \
+			--params compose=$(RPM_COMPOSE)"
+
 config: GLOBAL_TEMPLATE = templates/compose.env
 config: SECRET_TEMPLATES = $(filter-out $(GLOBAL_TEMPLATE), $(wildcard templates/*))
 config:
@@ -170,5 +189,6 @@ help:
 	@echo "  run-goose                   - Run goose interactively"
 	@echo "  run-goose-bash              - Run goose with bash shell"
 	@echo "  test-package                - Submit package testing request to testing farm"
+	@echo "  test-reverse-dependencies   - Test all reverse dependencies of a package"
 	@echo "  <recipe>                    - To run the recipes/<recipe>.yaml"
 	@echo "  clean                       - Stop all services and clean volumes"

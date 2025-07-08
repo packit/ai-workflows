@@ -30,7 +30,8 @@ RUN dnf install -y \
         rpmbuild \
         spectool \
         rpmlint \
-        centpkg
+        centpkg \
+        wget
 
 RUN useradd -m -G wheel goose \
  && echo '%wheel ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/wheel-nopasswd \

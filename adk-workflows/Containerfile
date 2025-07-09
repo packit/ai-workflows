@@ -13,8 +13,8 @@ RUN dnf install -y \
     rpmbuild \
     spectool
 
-# Install Google ADK
-RUN pip3 install google-adk
+# Install Google ADK and Phoenix tracing
+RUN pip3 install openinference-instrumentation-google-adk google-adk arize-phoenix-otel
 
 # Create user
 RUN useradd -m -G wheel adk

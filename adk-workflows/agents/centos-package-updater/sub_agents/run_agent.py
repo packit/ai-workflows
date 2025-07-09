@@ -27,9 +27,39 @@ def setup_logging():
     )
     return logging.getLogger('adk_runner')
 
+def setup_phoenix_tracing():
+    """Set up Phoenix tracing if environment is configured."""
+    logger = logging.getLogger('adk_runner')
+
+    collector_endpoint = os.getenv('COLLECTOR_ENDPOINT')
+    if not collector_endpoint:
+        logger.debug("Phoenix tracing not configured - COLLECTOR_ENDPOINT not set")
+        return
+
+    try:
+        from phoenix.otel import register
+
+        logger.info("Setting up Phoenix tracing")
+
+        register(
+            project_name="centos-package-workflow",
+            auto_instrument=True,
+        )
+
+        logger.info("Phoenix tracing initialized")
+
+    except ImportError:
+        logger.warning("Phoenix tracing requested but arize-phoenix-otel not installed")
+    except Exception as e:
+        logger.error(f"Failed to initialize Phoenix tracing: {e}")
+
 async def run_centos_agent():
     """Run the selected agent based on AGENT_TYPE environment variable."""
     logger = setup_logging()
+
+    # Initialize Phoenix tracing early if configured
+    setup_phoenix_tracing()
+
     agent_type = os.environ.get('AGENT_TYPE', 'workflow')
     logger.info(f"Starting agent: {agent_type}")
 

@@ -1,0 +1,71 @@
+version: 0.1.0
+title: "Test reverse dependencies of an RPM package"
+description: >-
+  Find all reverse dependencies of the {{ package }} package for architecture {{ arch }},
+  convert them to source packages, and run Testing Farm tests for each source package
+  on branch {{ dist_git_branch }} against compose {{ compose }}.
+
+instructions: |
+  * Before starting, create a temporary directory via mktemp that will be your working directory.
+  * For clarity, always use full, absolute paths for file I/O.
+  * Run all steps in a single shell command, so they share an environment.
+  * First find all reverse dependencies and convert them to source packages.
+  * Then submit Testing Farm requests for each source package.
+  * Wait for all tests to complete and report results.
+
+parameters:
+  - key: arch
+    input_type: string
+    requirement: required
+    description: The architecture of the platform to look for dependencies in
+  - key: package
+    input_type: string
+    requirement: required
+    description: The package for which to find reverse dependencies and test them
+  - key: git_url
+    input_type: string
+    requirement: required
+    description: Base URL of the dist-git project
+  - key: dist_git_branch
+    input_type: string
+    requirement: required
+    description: Branch in the dist-git repository
+  - key: compose
+    input_type: string
+    requirement: required
+    description: Testing Farm compose to use
+
+prompt: |
+  You are an AI agent to find reverse dependencies of a given RPM package and test each source package. Please follow the following steps:
+
+  1. Save the location of the `scripts/` directory for later use in an environment variable, and then create and enter a unique working directory:
+     ```bash
+     scriptsdir=$(pwd)/scripts
+     workingdir=$(realpath $(mktemp -d "{{ package }}-reverse-test.XXXXX"))
+     cd "$workingdir"
+     ```
+
+  2. Define the repository URL:
+     ```bash
+     baseurl=http://download.devel.redhat.com/rhel-10/nightly/RHEL-10/latest-RHEL-10/
+     ```
+
+  3. Query all direct and indirect reverse dependencies as source packages by running the helper script:
+     ```bash
+     $scriptsdir/find-package-dependents.py --base-url $baseurl --all --source-packages --format=plain '{{ package }}' \
+     --output-file "$workingdir/{{ package }}-source-deps.txt"
+     ```
+
+  4. Read the source packages list and store it in a variable:
+     ```bash
+     source_packages=$(cat "$workingdir/{{ package }}-source-deps.txt")
+     echo "Found $(echo "$source_packages" | wc -l) source packages to test:"
+     echo "$source_packages"
+     ```
+
+  5. For each source package, submit a Testing Farm request using the git url {{ git_url }}/<source package>.git and the branch {{ dist_git_branch }} and the compose {{ compose }}. Track the job IDs.
+
+  6. Wait for all tests to complete and collect results.
+
+  7. Generate a summary report.
+

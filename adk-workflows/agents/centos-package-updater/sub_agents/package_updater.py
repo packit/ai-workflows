@@ -3,19 +3,21 @@ from google.adk.tools import agent_tool, google_search
 from typing import Dict, Any
 import os
 from shell_utils import shell_command
+from google.genai.types import GenerateContentConfig
+
 
 def get_model() -> str:
     """Get model from environment with consistent default."""
-    return os.environ.get('MODEL', 'gemini-2.5-flash')
+    return os.environ.get('MODEL', 'gemini-2.5-pro')
 
 def get_config() -> Dict[str, Any]:
     """Get configuration for the combined version checker and package updater agent."""
     return {
-        'package': os.environ.get('PACKAGE', ''),
-        'version': os.environ.get('VERSION', ''),
+        'package': os.environ.get('PACKAGE_NAME', os.environ.get('PACKAGE', '')),
+        'version': os.environ.get('PACKAGE_VERSION', os.environ.get('VERSION', '')),
+        'branch': os.environ.get('GIT_BRANCH', os.environ.get('DIST_GIT_BRANCH', 'c10s')),
         'jira_issue': os.environ.get('JIRA_ISSUE', ''),
         'git_url': os.environ.get('GIT_URL', 'https://gitlab.com/redhat/centos-stream/rpms'),
-        'dist_git_branch': os.environ.get('DIST_GIT_BRANCH', 'c10s'),
         'git_user': os.environ.get('GIT_USER', 'RHEL Packaging Agent'),
         'git_email': os.environ.get('GIT_EMAIL', 'rhel-packaging-agent@redhat.com'),
         'gitlab_user': os.environ.get('GITLAB_USER',''),
@@ -41,23 +43,23 @@ You are a CentOS package version checker and updater agent. You first check if a
    - Check that the changes you have done make sense and correct yourself
 - **Configuration**:
   - Package repository: {config['git_url']}/[package_name]
-  - Git branch: {config['dist_git_branch']}
-  - Available config: PACKAGE="{config['package']}", VERSION="{config['version']}", JIRA_ISSUE="{config['jira_issue']}"
+  - Git branch: {config['branch']}
+  - Available config: PACKAGE="{config['package']}", VERSION="{config['version']}", BRANCH="{config['branch']}", JIRA_ISSUE="{config['jira_issue']}"
 
 **STEP-BY-STEP INSTRUCTIONS**
 
 **Step 1: Get Package Information**
 - Look for package info from previous issue_analyzer agent output in conversation
-- If not found, use configuration variables: PACKAGE_NAME="{config['package']}", VERSION="{config['version']}", BRANCH="{config['dist_git_branch']}"
+- If not found, use configuration variables: PACKAGE_NAME="{config['package']}", VERSION="{config['version']}", BRANCH="{config['branch']}"
 - Verify you have all three values (PACKAGE_NAME, VERSION, BRANCH)
 - If missing any values, clearly state what's needed and stop
 
 **Step 2: Check Current Version**
 - Use curl the .spec file from the repository and look for "Version:" field in the .spec file
 - Compare current version with target VERSION
-- **Decision**: Output "VERSION_CHECK_DECISION: NO_UPDATE_NEEDED" if versions match, "UPDATE_REQUIRED" if update needed, "ERROR" if issues
+- **Decision**: Continue if update needed, stop if versions match
 
-**Step 3: Package Update** (Only if UPDATE_REQUIRED)
+**Step 3: Package Update** (Only if update needed)
 - Create working directory: ```mkdir -p /tmp/package-update-work && cd /tmp/package-update-work```
 - Clone repository: ```cd /tmp/package-update-work && git clone {config['git_url']}/[PACKAGE_NAME].git && cd [PACKAGE_NAME] && ls -la```
 - Create update branch: ```cd /tmp/package-update-work/[PACKAGE_NAME] && git checkout -b automated-packaging-update-[VERSION]```
@@ -76,23 +78,37 @@ You are a CentOS package version checker and updater agent. You first check if a
 - Try to generate an SRPM using the updated .spec file, using `rpmbuild -bs` command (might require defining the source and spec directories).
 - Fix any errors.
 
-** Step 6: Commit the changes**
+**Step 5: Commit the changes**
 - Use the {config['git_user']} and {config['git_email']} for the commit.
 - The title of the Git commit should be in the format "[DO NOT MERGE: AI EXPERIMENTS] Update to version <version>"
 - Include the reference to Jira as "Resolves: <jira_issue>" for each issue in.
 - Commit just the specfile change.
 
-**Step 5: Output Results**
-- Provide structured summary with VERSION_CHECK_DECISION, UPDATE_STATUS, STEPS_COMPLETED, COMMANDS_EXECUTED, VALIDATION_RESULTS
+**Output Format**:
+
+Your output must strictly follow the format below.
+
+STATUS: success | failure
+
+If Success:
+    PACKAGE: [package name]
+    VERSION: [updated version]
+    BRANCH: [git branch]
+    COMMIT_HASH: [git commit hash]
+    LOGS: [Detailed logs of all operations performed]
+
+If Failure:
+    PACKAGE: [package name]
+    VERSION: [target version]
+    BRANCH: [git branch]
+    ERROR_MESSAGE: [Description of what went wrong]
+    LOGS: [Detailed logs including error information]
 """
 
-def create_package_updater_agent():
+def create_package_updater_agent(mcp_tools=None):
     """Factory function to create package updater agent."""
     config = get_config()
     model = config['model']
-
-        # Import the GenerateContentConfig for temperature settings
-    from google.genai.types import GenerateContentConfig
 
     # Search specialist agent - uses Google search for finding package information
     search_agent = Agent(

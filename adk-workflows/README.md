@@ -17,8 +17,8 @@ This Google ADK agent automates CentOS package updates and prepares merge reques
 
 3. **Run specific workflows:**
    ```bash
-   # Full pipeline
-   make rebase-pipeline JIRA_ISSUE="RHEL-123"
+   # Full workflow
+   make workflow JIRA_ISSUE="RHEL-123"
 
    # Individual components
    make issue-details JIRA_ISSUE="RHEL-123"

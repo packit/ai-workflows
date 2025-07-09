@@ -14,12 +14,12 @@ def shell_command(command: str) -> str:
         String containing the command output and any errors
     """
     try:
-        # Use shell=True to allow complex commands with pipes, redirects, etc.
         result = subprocess.run(
             command,
-            shell=True,
             capture_output=True,
             text=True,
+            # TODO: change this to avoid shell injection
+            shell=True,
             timeout=300  # 5 minute timeout
         )
 

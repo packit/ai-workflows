@@ -21,11 +21,11 @@ stop-mcp:
 run-adk-bash:
 	$(COMPOSE) -f $(COMPOSE_FILE) run --rm adk-agent /bin/bash
 
-.PHONY: rebase-pipeline
-rebase-pipeline:
+.PHONY: workflow
+workflow:
 	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
-		-e AGENT_TYPE=pipeline \
+		-e AGENT_TYPE=workflow \
 		adk-agent /bin/sh -c "/wait_mcp_server.sh && cd agents/centos-package-updater/sub_agents && python run_agent.py"
 
 .PHONY: issue-details
@@ -55,7 +55,7 @@ help:
 	@echo "  stop-mcp                    - Stop MCP Atlassian server"
 	@echo "  run-adk                     - Start ADK agent (interactive)"
 	@echo "  run-adk-bash                - Run ADK container with bash shell"
-	@echo "  rebase-pipeline             - Run full update pipeline"
+	@echo "  workflow                    - Run full CentOS package workflow"
 	@echo "  issue-details               - Run issue analyzer sub-agent"
 	@echo "  rebase-package              - Run package updater sub-agent"
 	@echo "  clean                       - Stop services and remove containers"
@@ -63,7 +63,7 @@ help:
 	@echo "Usage examples:"
 	@echo "  make build"
 	@echo "  make run-adk"
-	@echo "  make rebase-pipeline PACKAGE=httpd VERSION=2.4.58 JIRA_ISSUE=\"RHEL-123\""
+	@echo "  make workflow JIRA_ISSUE=\"RHEL-123\""
 	@echo "  make issue-details JIRA_ISSUE=\"RHEL-123\""
 	@echo "  make rebase-package PACKAGE=httpd VERSION=2.4.58"
 	@echo ""

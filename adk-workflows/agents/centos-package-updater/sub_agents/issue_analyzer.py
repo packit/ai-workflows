@@ -1,14 +1,15 @@
-from google.adk.agents import Agent
-from google.adk.tools import agent_tool
+from google.adk.agents import Agent, SequentialAgent
 from typing import Dict, Any
 import os
 import logging
 from contextlib import asynccontextmanager
 from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import SseServerParams
+from google.genai.types import GenerateContentConfig
 from shell_utils import shell_command
 
 logger = logging.getLogger(__name__)
+
 
 def get_model() -> str:
     """Get model from environment with consistent default."""
@@ -28,7 +29,7 @@ async def mcp_connection():
     toolset = None
     try:
         connection_params = SseServerParams(url=mcp_server_url)
-        toolset = MCPToolset(connection_params=connection_params)
+        toolset = MCPToolset(connection_params=connection_params, tool_filter=["jira_get_issue"])
 
         logger.info("MCP connection established")
         yield [toolset]
@@ -53,73 +54,154 @@ def get_config() -> Dict[str, Any]:
         'model': get_model(),
     }
 
-def create_issue_analyzer_prompt(config: Dict[str, Any]) -> str:
-    """Creates the prompt for the JIRA issue analyzer agent."""
+def create_issue_analysis_prompt(config: Dict[str, Any]) -> str:
+    """Creates the prompt for the JIRA issue analysis agent (first agent with tools)."""
 
     jira_issue = config['jira_issue']
 
-    return f"""You are an AI Agent tasked to analyze Jira issues.
+    return f"""You are an agent tasked to analyse Jira issues for RHEL and identify the most efficient path to resolution, whether through a version rebase, a patch backport, or by requesting clarification when blocked.
 
-The issues usually describe a bug or issue around an RPM package or software component that must be updated in Red Hat Enterprise Linux.
-Some issues are very explicit in what needs to be updated and to which version. Others are more vague.
-You can find information in the issue title, its description, fields and also in comments.
-Make sure to take a close look before reporting the data.
+Goal: Analyze the given issue to determine the correct course of action.
+
+**Initial Analysis Steps**
+
+1. Open the {jira_issue} Jira issue and thoroughly analyze it:
+    * Extract all key details from the title, description, fields, links, and comments
+    * Pay special attention to comments as they often contain crucial information such as:
+        - Additional context about the problem
+        - Links to upstream fixes or patches
+        - Clarifications from reporters or developers
+    * Look for keywords indicating the root cause of the problem
+    * Identify specific error messages, log snippets, or CVE identifiers
+    * Note any functions, files, or methods mentioned
+    * Pay attention to any direct links to fixes provided in the issue
+
+2. Identify the package name that must be updated:
+   * Determine the name of the package from the issue details (usually component name)
+
+3. Identify the target branch for updates:
+   * Look at the fixVersion field in the Jira issue to determine the target branch
+   * Apply the mapping rule: fixVersion named rhel-N maps to branch named cNs
+   * Verify the branch exists on GitLab
+   * This branch information will be needed for both rebases and backports
+
+4. Proceed to decision making process described below.
+
+**Decision Guidelines & Investigation Steps**
+
+You must decide between one of 5 actions. Follow these guidelines to make your decision:
+
+1. **Rebase**
+   * A Rebase is only to be chosen when the issue explicitly instructs you to "rebase" or "update" to a newer/specific upstream version. Do not infer this.
+   * Identify the <package_version> the package should be updated or rebased to.
+
+2. **Backport a Patch OR Request Clarification**
+   This path is for issues that represent a clear bug or CVE that needs a targeted fix.
+
+   2.1. Deep Analysis of the Issue
+   * Use the details extracted from your initial analysis
+   * Focus on keywords and root cause identification
+   * If the Jira issue already provides a direct link to the fix (e.g. in the commit hash field or comment), validate it and skip step 2.2.
+
+   2.2. Systematic Source Investigation
+   * Identify the official upstream project and corresponding Fedora package source
+   * When no direct link is provided, you must proactively search for fixes - do not give up easily
+   * Using the details from your analysis, search these sources:
+     - Bug Trackers (for fixed bugs matching the issue description)
+     - Git / Version Control (for commit messages, using keywords, CVE IDs, function names, etc.)
+   * Be thorough in your search - try multiple search terms and approaches based on the issue details
+   * Advanced investigation techniques:
+     - If you can identify specific files, functions, or code sections mentioned in the issue, locate them in the source code
+     - Use git history (git log, git blame) to examine changes to those specific code areas
+     - Look for commits that modify the problematic code, especially those with relevant keywords in commit messages
+     - Check git tags and releases around the time when the issue was likely fixed
+     - Search for commits by date ranges when you know approximately when the issue was resolved
+     - Utilize dates strategically in your search if needed, using the version/release date of the package currently used in RHEL
+       - Focus on fixes that came after the RHEL package version date, as earlier fixes would already be included
+       - For CVEs, use the CVE publication date to narrow down the timeframe for fixes
+       - Check upstream release notes and changelogs after the RHEL package version date
+
+   2.3. Validate the Fix
+   * When you think you've found a potential fix, examine the actual content of the patch/commit
+   * Verify that the fix directly addresses the root cause identified in your analysis
+   * Check if the code changes align with the symptoms described in the Jira issue
+   * If the fix doesn't appear to resolve the specific issue, continue searching for other fixes
+   * Don't settle for the first fix you find - ensure it's the right one
+
+   2.4. Validate the Fix URL
+   * Make sure to provide a valid URL to the patch/commit
+   * If the URL is not valid, re-do previous steps
+
+   2.5. Decide the Outcome
+   * If your investigation successfully identifies a specific fix that you've validated, your decision is backport
+   * You must be able to justify why the patch is correct and how it addresses the issue
+   * If your investigation confirms a valid bug/CVE but fails to locate a specific fix, your decision is clarification-needed
+   * This is the correct choice when you are sure a problem exists but cannot find the solution yourself
+
+3. **No Action**
+   A No Action decision is appropriate for issues that are intentionally non-actionable:
+   * The request is too vague to be understood
+   * It's a feature request
+   * There is insufficient information to even begin an investigation
+   * Note: This is not for valid bugs where you simply can't find the patch
+
+4. **Error**
+   An Error decision is appropriate when there are processing issues that prevent proper analysis, e.g. the issue cannot be accessed
+
+**Output Format**
+
+Your output must strictly follow the format below.
+
+DECISION: rebase | backport | clarification-needed | no-action | error
+
+If Rebase:
+    PACKAGE: [package name]
+    VERSION: [target version]
+    BRANCH: [target branch]
+
+If Backport:
+    PACKAGE: [package name]
+    BRANCH: [target branch]
+    PATCH_URL: [URL or reference to the source of the fix]
+    JUSTIFICATION: [A brief but clear explanation of why this patch fixes the issue, linking it to the root cause.]
+
+If Clarification Needed:
+    FINDINGS: [Summarize your understanding of the bug and what you investigated. e.g., "The CVE-2025-XXXX describes a buffer overflow in the parse_input() function. I have scanned the upstream and Fedora git history for related commits but could not find a definitive fix."]
+    ADDITIONAL_INFO_NEEDED: [State what information you are missing. e.g., "A link to the upstream commit that fixes this issue, or a patch file, is required to proceed."]
+
+If Error:
+    DETAILS: [Provide specific details about the error. e.g., "Package 'invalid-package-name' not found in GitLab repository after examining issue details."]
+
+If No Action:
+    REASONING: [Provide a concise reason why the issue is intentionally non-actionable. e.g., "The request is for a new feature ('add dark mode') which is not appropriate for a bugfix update in RHEL."]
 
 IMPORTANT GUIDELINES:
-- **Tool Usage**: You have shell_command (for executing commands) and JiraAgent (for JIRA operations) - use them directly!
+- **Tool Usage**: You have shell_command (for executing commands) and jira_get_issue to get all the details about Jira issue - use them directly!
 - **Command Execution Rules**:
   - Use shell_command tool for ALL command execution
+  - Try to use temporary directories for all commands
   - If a command shows "no output" or empty STDOUT, that is a VALID result - do not retry
   - Commands that succeed with no output are normal - report success
 - **Never create, delete, update or modify an Issue in Jira**
-
-Follow the following steps:
-
-1. Retrieve the Jira issue (ALL the fields) using JiraAgent with jira_get_issue tool for issue key: {jira_issue}
-
-2. Identify the name of the package that must be updated. Let's refer to it as `<package_name>`.
-    * Confirm the `<package_name>` repository exists by using shell_command tool to run: `git ls-remote https://gitlab.com/redhat/centos-stream/rpms/<package_name>`.
-    * A successful command (exit code 0) confirms its existence.
-    * If the `<package_name>` does not exist, take another look at the Jira issue. You may have picked the wrong package or name.
-
-3. Identify the `<package_version>` the `<package_name>` should be updated or rebased to.
-
-4. Identify the target RHEL version and from that the target branch `<git_branch>` of the `<package_name>` on GitLab to update.
-    * The RHEL version is usually set in the version related fields of the Jira issue (e.g. fix_versions, examine all the fields).
-    * A RHEL version named rhel-N maps to a branch named cNs.
-    * Verify the branch exists on GitLab using shell_command tool.
-
-Output the following:
-PACKAGE_NAME: [package name]
-PACKAGE_VERSION: [target version]
-GIT_BRANCH: [target branch]
 """
 
-
-
 def create_issue_analyzer_agent(mcp_tools=None):
-    """Factory function to create issue analyzer agent."""
+    """Factory function to create the issue analysis agent (with tools, no output_schema)."""
     config = get_config()
     model = config['model']
 
     # Build tools list - use shell_command directly
     tools = [shell_command]
 
-    # Add MCP tools if provided (for JIRA operations)
+    # Add MCP tools directly if provided (for JIRA operations)
     if mcp_tools:
-        jira_agent = Agent(
-            model=model,
-            name='JiraAgent',
-            instruction='You are a specialist in JIRA operations. Use JIRA tools to fetch and analyze issues.',
-            tools=mcp_tools,
-        )
-        tools.append(agent_tool.AgentTool(agent=jira_agent))
+        tools.extend(mcp_tools)
 
     return Agent(
-        name="issue_analyzer",
+        name="issue_analyze_agent",
         model=model,
-        description="Analyzes JIRA issues to extract package update requirements",
-        instruction=create_issue_analyzer_prompt(config),
+        description="Analyzes JIRA issues using tools to gather information and make decisions",
+        instruction=create_issue_analysis_prompt(config),
         tools=tools,
-        output_key="issue_analysis_result",
+        generate_content_config=GenerateContentConfig(temperature=0.4),
     )

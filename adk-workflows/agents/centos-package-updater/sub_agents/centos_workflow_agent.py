@@ -16,6 +16,7 @@ from google.genai import types
 
 from issue_analyzer import create_issue_analyzer_agent, mcp_connection
 from package_updater import create_package_updater_agent
+from backport_agent import create_backport_agent
 from constants import (
     JIRA_COMMENT_REBASE_TEMPLATE,
     JIRA_COMMENT_BACKPORT_TEMPLATE,
@@ -189,7 +190,7 @@ class CentOSPackageWorkflowAgent(BaseAgent):
             yield event
 
     async def _handle_backport_action(self, ctx: InvocationContext, decision_info: dict) -> AsyncGenerator[Event, None]:
-        """Handle backport action (placeholder for now)."""
+        """Handle backport action using backport agent."""
         logger.info(f"[{self.name}] Handling backport action")
 
         package = decision_info.get('package')
@@ -201,22 +202,28 @@ class CentOSPackageWorkflowAgent(BaseAgent):
             logger.error(f"[{self.name}] Package name or patch URL not found in decision info")
             return
 
-                # TODO: Implement actual backport logic
-        backport_msg = f"Would backport patch {patch_url} to package {package} on branch {branch}"
-        if justification:
-            backport_msg += f"\nJustification: {justification}"
-
-        logger.info(f"[{self.name}] {backport_msg}")
-
-        # Store backport info in session state
-        ctx.session.state["backport_info"] = {
-            'package': package,
-            'patch_url': patch_url,
-            'branch': branch,
-            'justification': justification
+        # Set environment variables for backport agent
+        env_vars = {
+            'PACKAGE_NAME': package,
+            'PATCH_URL': patch_url,
+            'UPSTREAM_FIX': patch_url
         }
+        if branch:
+            env_vars['DIST_GIT_BRANCH'] = branch
 
-        yield self._create_event(backport_msg)
+        os.environ.update(env_vars)
+
+        # Create and run backport agent
+        backport_agent = create_backport_agent()
+        logger.info(f"[{self.name}] Running backport agent for {package}")
+
+        async for event in backport_agent.run_async(ctx):
+            if event.is_final_response():
+                logger.info(f"[{self.name}] Backport completed")
+                # Store result in session state
+                if event.content and event.content.parts:
+                    ctx.session.state["backport_result"] = event.content.parts[0].text
+            yield event
 
     async def _handle_no_action_decision(self, ctx: InvocationContext, decision_info: dict) -> AsyncGenerator[Event, None]:
         """Handle no-action or clarification-needed decisions."""

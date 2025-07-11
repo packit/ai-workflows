@@ -8,9 +8,21 @@ services:
     command: ["--transport", "sse", "--port", "9000", "-vv"]
     restart: unless-stopped
 
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"  # UI and OTLP HTTP collector
+      - "4317:4317"  # OTLP gRPC collector
+    environment:
+      - PHOENIX_WORKING_DIR=/mnt/data
+    volumes:
+      - phoenix-data:/mnt/data
+    restart: unless-stopped
+
   adk-agent:
     depends_on:
       - mcp-atlassian
+      - phoenix
     image: adk-agent
     build:
       context: .
@@ -19,6 +31,8 @@ services:
       - .env
     environment:
       - MCP_JIRA_URL=http://mcp-atlassian:9000/sse
+      - COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4317
     volumes:
       - ./agents:/home/adk/agents:ro,z
       - ./wait_mcp_server.sh:/wait_mcp_server.sh:ro,z
@@ -28,3 +42,4 @@ services:
 
 volumes:
   adk-data:
+  phoenix-data:

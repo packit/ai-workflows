@@ -1,0 +1,225 @@
+From ecdb0dc67fa7ab4ccb026584d62ab288b1a48e3a Mon Sep 17 00:00:00 2001
+From: Ray Strode <rstrode@redhat.com>
+Date: Tue, 15 Jul 2025 14:00:10 -0400
+Subject: [PATCH] google: Add better error output
+
+I am seeing an odd failure in the middle of a recipe of the form:
+
+ERROR goose::agents::agent: Error: Request failed: Request failed:
+    error sending request for url (...)
+
+This commit tries to get a more specific error into the logs so I
+can see what's going on.
+
+It also bumps the timeout from 10 minutes to infinite.
+---
+ crates/goose/src/providers/google.rs | 38 +++++++++++++++++++++-------
+ 1 file changed, 29 insertions(+), 9 deletions(-)
+
+diff --git a/crates/goose/src/providers/google.rs b/crates/goose/src/providers/google.rs
+index dbe9b331d1..499437735f 100644
+--- a/crates/goose/src/providers/google.rs
++++ b/crates/goose/src/providers/google.rs
+@@ -1,46 +1,47 @@
+ use super::errors::ProviderError;
+ use crate::message::Message;
+ use crate::model::ModelConfig;
+ use crate::providers::base::{ConfigKey, Provider, ProviderMetadata, ProviderUsage};
+ use crate::providers::formats::google::{create_request, get_usage, response_to_message};
+ use crate::providers::utils::{
+     emit_debug_trace, handle_response_google_compat, unescape_json_values,
+ };
+ use anyhow::Result;
+ use async_trait::async_trait;
+ use axum::http::HeaderMap;
+ use mcp_core::tool::Tool;
+ use reqwest::Client;
+ use serde_json::Value;
+ use std::time::Duration;
+ use url::Url;
++use std::fmt::Write;
+ 
+ pub const GOOGLE_API_HOST: &str = "https://generativelanguage.googleapis.com";
+ pub const GOOGLE_DEFAULT_MODEL: &str = "gemini-2.5-flash";
+ pub const GOOGLE_KNOWN_MODELS: &[&str] = &[
+     // Gemini 2.5 models (latest generation)
+     "gemini-2.5-pro",
+     "gemini-2.5-pro-preview-06-05",
+     "gemini-2.5-pro-preview-05-06",
+     "gemini-2.5-flash",
+     "gemini-2.5-flash-preview-05-20",
+     "gemini-2.5-flash-lite-preview-06-17",
+     "gemini-2.5-flash-preview-native-audio-dialog",
+     "gemini-2.5-flash-exp-native-audio-thinking-dialog",
+     "gemini-2.5-flash-preview-tts",
+     "gemini-2.5-pro-preview-tts",
+     // Gemini 2.0 models
+     "gemini-2.0-flash",
+     "gemini-2.0-flash-exp",
+     "gemini-2.0-flash-preview-image-generation",
+     "gemini-2.0-flash-lite",
+     // Gemini 1.5 models
+     "gemini-1.5-flash",
+     "gemini-1.5-flash-latest",
+     "gemini-1.5-flash-002",
+     "gemini-1.5-flash-8b",
+     "gemini-1.5-flash-8b-latest",
+     "gemini-1.5-pro",
+     "gemini-1.5-pro-latest",
+     "gemini-1.5-pro-002",
+ ];
+@@ -48,123 +49,142 @@ pub const GOOGLE_KNOWN_MODELS: &[&str] = &[
+ pub const GOOGLE_DOC_URL: &str = "https://ai.google.dev/gemini-api/docs/models";
+ 
+ #[derive(Debug, serde::Serialize)]
+ pub struct GoogleProvider {
+     #[serde(skip)]
+     client: Client,
+     host: String,
+     model: ModelConfig,
+ }
+ 
+ impl Default for GoogleProvider {
+     fn default() -> Self {
+         let model = ModelConfig::new(GoogleProvider::metadata().default_model);
+         GoogleProvider::from_env(model).expect("Failed to initialize Google provider")
+     }
+ }
+ 
+ impl GoogleProvider {
+     pub fn from_env(model: ModelConfig) -> Result<Self> {
+         let config = crate::config::Config::global();
+         let api_key: String = config.get_secret("GOOGLE_API_KEY")?;
+         let host: String = config
+             .get_param("GOOGLE_HOST")
+             .unwrap_or_else(|_| GOOGLE_API_HOST.to_string());
+ 
+         let mut headers = HeaderMap::new();
+         headers.insert("CONTENT_TYPE", "application/json".parse()?);
+         headers.insert("x-goog-api-key", api_key.parse()?);
+ 
+         let client = Client::builder()
+-            .timeout(Duration::from_secs(600))
++            .timeout(Duration::from_secs(u64::MAX))
+             .default_headers(headers)
+             .build()?;
+ 
+         Ok(Self {
+             client,
+             host,
+             model,
+         })
+     }
+ 
++    fn format_error_chain(mut err: &dyn std::error::Error) -> String {
++        let mut s = format!("{}", err);
++        while let Some(src) = err.source() {
++            let _ = write!(s, "\n\nCaused by: {}", src);
++            err = src;
++        }
++        s
++    }
++
+     async fn post(&self, payload: Value) -> Result<Value, ProviderError> {
+         let base_url = Url::parse(&self.host)
+             .map_err(|e| ProviderError::RequestFailed(format!("Invalid base URL: {e}")))?;
+ 
+         let url = base_url
+             .join(&format!(
+                 "v1beta/models/{}:generateContent",
+                 self.model.model_name
+             ))
+             .map_err(|e| {
+                 ProviderError::RequestFailed(format!("Failed to construct endpoint URL: {e}"))
+             })?;
+ 
+         let max_retries = 3;
+         let mut retries = 0;
+         let base_delay = Duration::from_secs(2);
+ 
+         loop {
+             let response = self
+                 .client
+-                .post(url.clone()) // Clone the URL for each retry
++                .post(url.clone())
+                 .json(&payload)
+                 .send()
+                 .await;
+ 
+             match response {
+                 Ok(res) => {
+                     match handle_response_google_compat(res).await {
+                         Ok(result) => return Ok(result),
+                         Err(ProviderError::RateLimitExceeded(_)) => {
+                             retries += 1;
+                             if retries > max_retries {
+                                 return Err(ProviderError::RateLimitExceeded(
+                                     "Max retries exceeded for rate limit error".to_string(),
+                                 ));
+                             }
+-
+                             let delay = 2u64.pow(retries);
+                             let total_delay = Duration::from_secs(delay) + base_delay;
+-
+                             println!("Rate limit hit. Retrying in {:?}", total_delay);
+                             tokio::time::sleep(total_delay).await;
+                             continue;
+                         }
+-                        Err(err) => return Err(err), // Other errors
++                        Err(err) => return Err(err),
+                     }
+                 }
+                 Err(err) => {
+-                    return Err(ProviderError::RequestFailed(format!(
+-                        "Request failed: {}",
+-                        err
+-                    )));
++                    // Enhanced error reporting with specific error type detection
++                    let error_msg = if err.is_timeout() {
++                        format!("Request timed out for URL {}: {}", url, Self::format_error_chain(&err))
++                    } else if err.is_connect() {
++                        format!("Connection failed for URL {}: {}", url, Self::format_error_chain(&err))
++                    } else if err.is_request() {
++                        format!("Request construction failed for URL {}: {}", url, Self::format_error_chain(&err))
++                    } else if err.is_body() {
++                        format!("Request body error for URL {}: {}", url, Self::format_error_chain(&err))
++                    } else if err.is_decode() {
++                        format!("Response decode error for URL {}: {}", url, Self::format_error_chain(&err))
++                    } else {
++                        format!("Request failed for URL {}: {}", url, Self::format_error_chain(&err))
++                    };
++
++                    return Err(ProviderError::RequestFailed(error_msg));
+                 }
+             }
+         }
+     }
+ }
+ 
+ #[async_trait]
+ impl Provider for GoogleProvider {
+     fn metadata() -> ProviderMetadata {
+         ProviderMetadata::new(
+             "google",
+             "Google Gemini",
+             "Gemini models from Google AI",
+             GOOGLE_DEFAULT_MODEL,
+             GOOGLE_KNOWN_MODELS.to_vec(),
+             GOOGLE_DOC_URL,
+             vec![
+                 ConfigKey::new("GOOGLE_API_KEY", true, true, None),
+                 ConfigKey::new("GOOGLE_HOST", false, false, Some(GOOGLE_API_HOST)),
+             ],
+         )
+     }
+ 
+     fn get_model_config(&self) -> ModelConfig {
+         self.model.clone()
+     }
+ 
+     #[tracing::instrument(
+         skip(self, system, messages, tools),
+         fields(model_config, input, output, input_tokens, output_tokens, total_tokens)
+-- 
+2.49.0
+

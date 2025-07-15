@@ -1,0 +1,57 @@
+ARG BASE_IMAGE=fedora:42
+
+FROM $BASE_IMAGE AS builder
+
+RUN dnf install -y \
+        git \
+        rust \
+        cargo \
+        protobuf-compiler \
+        protobuf-devel \
+        libxcb-devel \
+    && dnf clean all
+
+ARG GOOSE_REPO=https://github.com/block/goose.git
+ARG GOOSE_REF=main
+
+WORKDIR /usr/src
+RUN git clone \
+        --depth 1 \
+        --branch "${GOOSE_REF}" \
+        --single-branch \
+        "${GOOSE_REPO}" \
+        goose-src
+
+WORKDIR /usr/src/goose-src
+COPY *.patch patches/
+
+RUN cargo fetch --locked
+
+RUN git config --global user.email "rhel-packaging-agent@redhat.com" \
+ && git config --global user.name "RHEL Packaging Agent"
+
+RUN cargo build --release -p goose-cli
+
+RUN git am patches/*.patch \
+ && cargo build --release -p goose-cli
+
+FROM fedora:42
+
+RUN dnf install -y \
+        libxcb \
+        python3 \
+    && dnf clean all
+
+COPY --from=builder /usr/src/goose-src/target/release/goose /usr/local/bin/goose
+
+RUN useradd -m -G wheel goose \
+ && echo '%wheel ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/wheel-nopasswd \
+ && mkdir -p /home/goose/.config/goose \
+ && chown -R goose:goose /home/goose
+
+USER goose
+WORKDIR /home/goose
+
+ENTRYPOINT ["/usr/bin/bash"]
+CMD ["-c", ". ~/.bashrc; goose"]
+

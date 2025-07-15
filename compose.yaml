@@ -37,8 +37,11 @@ services:
       mcp-testing-farm: { condition: service_healthy }
     image: goose-container
     build:
-      context: ./goose-container
-      dockerfile: Containerfile
+      context: .
+      dockerfile: ./goose-container/Containerfile
+      target: ${BUILD_TARGET:-production}
+      args:
+        BASE_IMAGE: registry.fedoraproject.org/fedora@sha256:3b94b23378c64850f5e2a83d0da4471fab0716d35a2662a794cfeb63b5e6fccd
     env_file:
       - .secrets/goose.env
     volumes:

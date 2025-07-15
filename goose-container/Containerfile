@@ -1,17 +1,56 @@
-FROM fedora:42
+# This Containerfile contains two stages:
+#
+#     runtime-platform: Fedora base image with the required dependencies
+#     added on top to run goose.
+#
+#     production: Official goose builds installed on top of runtime-platform
 
-RUN dnf install -y libxcb python3 gh glab rpmbuild spectool rpmlint centpkg
+ARG BASE_IMAGE=registry.fedoraproject.org/fedora:42
 
-RUN curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | GOOSE_BIN_DIR=/usr/local/bin CONFIGURE=false bash
+#
+# runtime-platform: Fedora base image with the required dependencies to added to
+# run goose.
+#
+FROM ${BASE_IMAGE} AS runtime-platform
+RUN dnf install -y \
+        libxcb \
+        python3 \
+        gh \
+        glab \
+        rpmbuild \
+        spectool \
+        rpmlint \
+        centpkg
 
-RUN useradd -m -G wheel goose && echo '%wheel ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/wheel-nopasswd
+RUN useradd -m -G wheel goose \
+ && echo '%wheel ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/wheel-nopasswd \
+ && mkdir -p /home/goose/.config/goose /home/goose/recipes /home/goose/scripts \
+ && chown -R goose:goose /home/goose
 
-RUN mkdir -p /home/goose/.config/goose /home/goose/recipes
-COPY ./goose-config.yaml /home/goose/.config/goose/config.yaml
-RUN chown -R goose:goose /home/goose/.config
+COPY --chown=goose:goose \
+     goose-container/goose-config.yaml \
+     /home/goose/.config/goose/config.yaml
+COPY --chown=goose:goose \
+     goose-recipes/ \
+     /home/goose/recipes/
+COPY --chown=goose:goose \
+     scripts/ \
+     /home/goose/scripts/
 
 USER goose
 WORKDIR /home/goose
+
+#
+# production: Official goose builds installed on top of runtime-platform
+#
+FROM runtime-platform AS production
+
+USER root
+
+RUN curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | \
+    GOOSE_BIN_DIR=/usr/local/bin CONFIGURE=false bash
+
+USER goose
 
 ENTRYPOINT ["/usr/bin/bash"]
 CMD ["-c", ". ~/.bashrc; /usr/local/bin/goose"]

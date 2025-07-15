@@ -1,17 +1,27 @@
-# This Containerfile contains two stages:
+# This Containerfile contains several stages:
 #
 #     runtime-platform: Fedora base image with the required dependencies
 #     added on top to run goose.
 #
 #     production: Official goose builds installed on top of runtime-platform
+#
+#     source-build: Fedora base image with goose built from
+#     git on top. It applies all the patches in goose-container
+#     as well. This is useful for instrumenting goose with
+#     extra debug logging, etc.
+#
+#     debug: Custom built Goose installed on top of runtime-platform
+#     This is useful for trying out the instrumented goose builds.
 
 ARG BASE_IMAGE=registry.fedoraproject.org/fedora:42
+ARG GOOSE_VERSION=v1.1.3
 
 #
 # runtime-platform: Fedora base image with the required dependencies to added to
 # run goose.
 #
 FROM ${BASE_IMAGE} AS runtime-platform
+
 RUN dnf install -y \
         libxcb \
         python3 \
@@ -47,10 +57,50 @@ FROM runtime-platform AS production
 
 USER root
 
-RUN curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | \
+RUN curl -fsSL https://github.com/block/goose/releases/download/${GOOSE_VERSION}/download_cli.sh | \
     GOOSE_BIN_DIR=/usr/local/bin CONFIGURE=false bash
 
 USER goose
+
+ENTRYPOINT ["/usr/local/bin/goose"]
+
+FROM ${BASE_IMAGE} AS source-build
+
+RUN dnf install -y \
+        git \
+        rust \
+        cargo \
+        protobuf-compiler \
+        protobuf-devel \
+        libxcb-devel
+
+ARG GOOSE_REPO=https://github.com/block/goose.git
+ARG GOOSE_VERSION
+
+WORKDIR /usr/src
+RUN git clone --depth 1 \
+    --branch "${GOOSE_VERSION}" \
+    "${GOOSE_REPO}" \
+    goose-src
+
+WORKDIR /usr/src/goose-src
+COPY goose-container/*.patch patches/
+
+RUN cargo fetch --locked
+
+RUN git config --global user.email "rhel-packaging-agent@redhat.com" \
+ && git config --global user.name "RHEL Packaging Agent"
+
+RUN cargo build --release -p goose-cli
+
+RUN git am patches/*.patch \
+ && cargo build --release -p goose-cli
+
+#
+# debug: Custom built Goose installed on top of runtime-platform
+#
+FROM runtime-platform AS debug
+COPY --from=source-build /usr/src/goose-src/target/release/goose /usr/local/bin/goose
 
 ENTRYPOINT ["/usr/bin/bash"]
 CMD ["-c", ". ~/.bashrc; /usr/local/bin/goose"]

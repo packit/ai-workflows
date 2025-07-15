@@ -3,7 +3,7 @@
 .PHONY: help
 .PHONY:
 .PHONY: # Manage container image
-.PHONY: clean build config
+.PHONY: clean build debug-build config
 .PHONY:
 .PHONY: # Manage MCP server for JIRA
 .PHONY: stop-mcp-atlassian run-mcp-atlassian logs-mcp-atlassian
@@ -47,6 +47,9 @@ triage-issue: ISSUE ?= RHEL-78418
 ## Operations
 build:
 	$(COMPOSE) build
+
+debug-build:
+	BUILD_TARGET=debug $(COMPOSE) build
 
 run-mcp-atlassian:
 	$(COMPOSE) up -d mcp-atlassian
@@ -155,6 +158,7 @@ help:
 	@echo "Available targets:"
 	@echo "  config                      - Copy config templates to .secrets/ and .env"
 	@echo "  build                       - Build all images"
+	@echo "  debug-build                 - Build all images and rebuild goose from source"
 	@echo "  run-mcp-atlassian           - Start Atlassian MCP server in background"
 	@echo "  stop-mcp-atlassian          - Stop Atlassian MCP server"
 	@echo "  logs-mcp-atlassian          - Show Atlassian MCP server logs"

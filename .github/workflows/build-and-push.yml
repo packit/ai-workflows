@@ -1,0 +1,21 @@
+# https://github.com/sclorg/build-and-push-action
+name: Build and push to quay.io registry
+on:
+  push:
+    branches:
+      - main
+jobs:
+  build-and-push-goose-container:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build and push goose to quay.io registry
+        uses: sclorg/build-and-push-action@v4
+        with:
+          registry: "quay.io"
+          registry_namespace: "jotnar"
+          registry_username: ${{ secrets.REGISTRY_LOGIN }}
+          registry_token: ${{ secrets.REGISTRY_TOKEN }}
+          dockerfile: "./Containerfile"
+          docker_context: "goose-container"
+          image_name: "goose"
+          # tag: "staging"

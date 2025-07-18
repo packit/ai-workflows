@@ -1,0 +1,48 @@
+services:
+  mcp-atlassian:
+    image: ghcr.io/sooperset/mcp-atlassian:latest
+    env_file:
+      - .secrets/mcp-atlassian.env
+    command: ["--transport", "sse", "--port", "9000", "-vv"]
+    restart: unless-stopped
+
+  valkey:
+    image: docker.io/valkey/valkey:8
+    volumes:
+      - valkey-data:/data
+    restart: unless-stopped
+
+  phoenix:
+    image: docker.io/arizephoenix/phoenix:version-11.6.2
+    ports:
+      - "0.0.0.0:6006:6006"
+    environment:
+      - PHOENIX_WORKING_DIR=/mnt/data
+    volumes:
+      - phoenix-data:/mnt/data
+    restart: unless-stopped
+
+  beeai-agent:
+    depends_on:
+      - mcp-atlassian
+      - valkey
+      - phoenix
+    image: beeai-agent
+    build:
+      context: .
+      dockerfile: Containerfile
+    environment:
+      - MCP_JIRA_URL=http://mcp-atlassian:9000/sse
+      - REDIS_URL=redis://valkey:6379/0
+      - COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces
+    env_file:
+      - .secrets/beeai-agent.env
+    volumes:
+      - ./agents:/home/beeai/agents:ro,z
+    stdin_open: true
+    tty: true
+    restart: "no"
+
+volumes:
+  valkey-data:
+  phoenix-data:

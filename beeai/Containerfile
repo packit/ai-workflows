@@ -27,8 +27,9 @@ RUN pip3 install \
 RUN useradd -m -G wheel beeai
 
 # Create directories
-RUN mkdir -p /home/beeai/agents
-RUN chown -R beeai:beeai /home/beeai
+# `/home/beeai/agents/` should be directly copied for Openshift deployment
+# although it is locally mounted through a volume
+COPY --chown=beeai:beeai agents/ /home/beeai/agents/
 
 USER beeai
 WORKDIR /home/beeai

@@ -22,7 +22,7 @@ from beeai_framework.tools.think import ThinkTool
 from base_agent import BaseAgent, TInputSchema, TOutputSchema
 from constants import COMMIT_PREFIX, BRANCH_PREFIX
 from observability import setup_observability
-from tools import ShellCommandTool
+from tools.shell_command import ShellCommandTool
 from triage_agent import RebaseData, ErrorData
 from utils import redis_client, get_git_finalization_steps
 

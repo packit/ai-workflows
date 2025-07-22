@@ -20,7 +20,7 @@ from beeai_framework.tools.think import ThinkTool
 
 from base_agent import BaseAgent, TInputSchema, TOutputSchema
 from observability import setup_observability
-from tools import ShellCommandTool
+from tools.shell_command import ShellCommandTool
 from utils import mcp_tools, redis_client
 
 logger = logging.getLogger(__name__)

@@ -1,0 +1,16 @@
+FROM fedora:42
+
+# Install system dependencies
+RUN dnf -y install \
+      make \
+      python3 \
+      python3-pip \
+      python3-pytest \
+      python3-pytest-asyncio \
+      python3-flexmock \ 
+    && dnf clean all
+
+# Install BeeAI Framework
+RUN pip3 install --no-cache-dir beeai-framework
+
+WORKDIR /src

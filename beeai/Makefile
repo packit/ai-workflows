@@ -99,3 +99,12 @@ redis-cli:
 .PHONY: clean
 clean:
 	$(COMPOSE) -f $(COMPOSE_FILE) down --volumes
+
+
+.PHONY: build-test-image
+build-test-image:
+	$(MAKE) -f Makefile.tests build-test-image
+
+.PHONY: check-in-container
+check-in-container:
+	$(MAKE) -f Makefile.tests check-in-container

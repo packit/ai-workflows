@@ -30,6 +30,7 @@ RUN useradd -m -G wheel beeai
 # `/home/beeai/agents/` should be directly copied for Openshift deployment
 # although it is locally mounted through a volume
 COPY agents/ /home/beeai/agents/
+RUN chgrp -R root /home/beeai && chmod -R g+rwX /home/beeai
 
 USER beeai
 WORKDIR /home/beeai

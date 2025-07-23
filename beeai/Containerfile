@@ -3,15 +3,15 @@ FROM fedora:42
 # Install system dependencies
 RUN dnf -y install \
     centpkg \
+    curl \
+    git \
+    glab \
     python3 \
     python3-pip \
     python3-redis \
-    glab \
-    git \
-    curl \
-    rpmlint \
-    rpmdevtools \
     rpmbuild \
+    rpmdevtools \
+    rpmlint \
     spectool \
     && dnf -y clean all
 

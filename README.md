@@ -17,8 +17,8 @@ If you need to change the llm provider and model, they are stored in the Goose c
 
 ## Build
 
-`make build`
-
+- `make build` This builds the goose image using an officially released goose binaries
+- `make debug-build` This builds the goose image using a rebuild of goose from git. `*.patch` in `goose-container/` are applied to the git tree before building.
 ## Run Goose - interactively - with the MCP Atlassian server
 
 To run goose interactively, don't be tempted to run `podman compose up` or similar, because input from your terminal might not be directed to the Goose container. Instead use:

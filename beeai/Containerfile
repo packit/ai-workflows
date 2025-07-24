@@ -19,7 +19,7 @@ COPY beeai-gemini.patch /tmp
 
 # Install BeeAI Framework and Phoenix
 RUN pip3 install \
-    beeai-framework[mcp,duckduckgo] \
+    beeai-framework[mcp,duckduckgo]==0.1.31 \
     openinference-instrumentation-beeai \
     arize-phoenix-otel \
     && cd /usr/local/lib/python3.13/site-packages \

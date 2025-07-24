@@ -72,7 +72,6 @@ def get_git_finalization_steps(
             * Push the branch `{branch_name}` to the fork
 
         Open a merge request:
-            * Authenticate using `glab`
             * Open a merge request against {git_url}/{package}
             * Target branch: {dist_git_branch}
         """

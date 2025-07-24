@@ -114,8 +114,7 @@ class BackportAgent(BaseAgent):
           2. Check if the package {{ package }} already has the fix {{ jira_issue }} applied.
 
           3. Create a local Git repository by following these steps:
-            * Check if the fork already exists for {{ gitlab_user }} as {{ gitlab_user }}/{{ package }} and if not,
-              create a fork of the {{ package }} package using the glab tool.
+            * Create a fork of the {{ package }} package using the `fork_repository` tool.
             * Clone the fork using git and HTTPS into the temp directory.
             * Run command `centpkg sources` in the cloned repository which downloads all sources defined in the RPM specfile.
             * Create a new Git branch named `automated-package-update-{{ jira_issue }}`.

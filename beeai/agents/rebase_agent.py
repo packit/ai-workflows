@@ -22,7 +22,7 @@ from beeai_framework.tools.think import ThinkTool
 from base_agent import BaseAgent, TInputSchema, TOutputSchema
 from constants import COMMIT_PREFIX, BRANCH_PREFIX
 from observability import setup_observability
-from tools import ShellCommandTool
+from tools.shell_command import ShellCommandTool
 from triage_agent import RebaseData, ErrorData
 from utils import redis_client, get_git_finalization_steps
 
@@ -113,7 +113,6 @@ class RebaseAgent(BaseAgent):
           * The Git user's email address is {{ git_email }}
           * Use {{ gitlab_user }} as the GitLab user.
           * Work only in a temporary directory that you can create with the mktemp tool.
-          * To create forks and open merge requests, always use GitLab's `glab` CLI tool.
           * You can find packaging guidelines at https://docs.fedoraproject.org/en-US/packaging-guidelines/
           * You can find the RPM packaging guide at https://rpm-packaging-guide.github.io/.
           * Do not run the `centpkg new-sources` command for now (testing purposes), just write down the commands you would run.
@@ -137,8 +136,7 @@ class RebaseAgent(BaseAgent):
               * Do not clone any repository for detecting the version in .spec file.
 
           3. Create a local Git repository by following these steps:
-              * Check if the fork already exists for {{ gitlab_user }} as {{ gitlab_user }}/{{ package }} and if not,
-                create a fork of the {{ package }} package using the glab tool.
+              * Create a fork of the {{ package }} package using the `fork_repository` tool.
               * Clone the fork using git and HTTPS into the temp directory.
 
           4. Update the {{ package }} to the newer version:

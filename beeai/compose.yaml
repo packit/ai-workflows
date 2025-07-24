@@ -2,6 +2,7 @@
 x-beeai-agent: &beeai-agent
   depends_on:
     - mcp-atlassian
+    - mcp-gitlab
     - valkey
     - phoenix
   image: beeai-agent
@@ -10,6 +11,7 @@ x-beeai-agent: &beeai-agent
     dockerfile: Containerfile
   environment:
     - MCP_JIRA_URL=http://mcp-atlassian:9000/sse
+    - MCP_GITLAB_URL=http://mcp-gitlab:8000/sse
     - REDIS_URL=redis://valkey:6379/0
     - COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces
     - MAX_RETRIES=3
@@ -20,6 +22,18 @@ x-beeai-agent: &beeai-agent
     - ./agents:/home/beeai/agents:ro,z
   restart: unless-stopped
 
+# Base template for MCP servers
+x-mcp-server: &mcp-server
+  image: mcp-server
+  build:
+    context: .
+    dockerfile: Containerfile.mcp
+  environment:
+    - SSE_PORT=8000
+  volumes:
+    - ./mcp_servers:/home/mcp/mcp_servers:ro,z
+  restart: unless-stopped
+
 services:
   mcp-atlassian:
     image: ghcr.io/sooperset/mcp-atlassian:latest
@@ -27,6 +41,12 @@ services:
       - .secrets/mcp-atlassian.env
     command: ["--transport", "sse", "--port", "9000", "-vv"]
     restart: unless-stopped
+
+  mcp-gitlab:
+    <<: *mcp-server
+    env_file:
+      - .secrets/mcp-gitlab.env
+    command: ["python", "mcp_servers/gitlab_server.py"]
 
   valkey:
     image: docker.io/valkey/valkey:8

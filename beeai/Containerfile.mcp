@@ -1,0 +1,25 @@
+FROM fedora:42
+
+# Install system dependencies
+RUN dnf -y install \
+      python3 \
+      python3-pip \
+      python3-ogr \
+    && dnf clean all
+
+# Install FastMCP
+RUN pip3 install --no-cache-dir fastmcp
+
+# Create user
+RUN useradd -m -G wheel mcp
+
+# Create directories
+# `/home/mcp/mcp_servers/` should be directly copied for Openshift deployment
+# although it is locally mounted through a volume
+COPY mcp_servers/ /home/mcp/mcp_servers/
+RUN chgrp -R root /home/mcp && chmod -R g+rwX /home/mcp
+
+USER mcp
+WORKDIR /home/mcp
+
+CMD ["/bin/bash"]

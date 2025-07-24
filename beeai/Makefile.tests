@@ -1,0 +1,19 @@
+TEST_IMAGE ?= beeai-tests
+TEST_TARGET ?= ./tests/unit
+
+CONTAINER_ENGINE ?= $(shell command -v podman 2>/dev/null || echo "docker")
+
+.PHONY: build-test-image
+build-test-image:
+	$(CONTAINER_ENGINE) build --rm --tag $(TEST_IMAGE) -f Containerfile.tests
+
+.PHONY: check
+check:
+	cd ./agents && \
+	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+	cd ./mcp_servers && \
+	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+
+.PHONY: check-in-container
+check-in-container:
+	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE) make -f Makefile.tests check

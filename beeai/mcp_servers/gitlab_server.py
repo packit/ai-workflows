@@ -47,4 +47,5 @@ def open_merge_request(
     return pr.url
 
 
-mcp.run(transport="sse", host="0.0.0.0", port=os.getenv("SSE_PORT"))
+if __name__ == "__main__":
+    mcp.run(transport="sse", host="0.0.0.0", port=os.getenv("SSE_PORT"))

@@ -11,6 +11,8 @@ build-test-image:
 check:
 	cd ./agents && \
 	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+	cd ./mcp_servers && \
+	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
 
 .PHONY: check-in-container
 check-in-container:

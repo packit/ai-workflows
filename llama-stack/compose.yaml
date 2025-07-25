@@ -1,0 +1,17 @@
+version: '3.8'
+
+# Docker Compose automatically loads .env file from the same directory
+
+services:
+  # MCP Atlassian server for Jira integration
+  mcp-atlassian:
+    image: ghcr.io/sooperset/mcp-atlassian:latest
+    ports:
+      - "9000:9000"
+    env_file:
+      - .env
+    command: ["--transport", "sse", "--port", "9000", "-vv"]
+    restart: unless-stopped
+
+volumes:
+  valkey_data:

@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+spec:
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: 4317-tcp
+    port: 4317
+    protocol: TCP
+    targetPort: 4317
+  - name: 6006-tcp
+    port: 6006
+    protocol: TCP
+    targetPort: 6006
+  - name: 9090-tcp
+    port: 9090
+    protocol: TCP
+    targetPort: 9090
+  selector:
+    app: phoenix
+    deployment: phoenix
+  sessionAffinity: None
+  type: ClusterIP

@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: redis-commander
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: redis-commander
+        deployment: redis-commander
+    spec:
+      containers:
+      - env:
+        - name: REDIS_HOSTS
+          value: local:valkey:6379
+        image: image-registry.openshift-image-registry.svc:5000/jotnar-prod/redis-commander@sha256:d33e338d4d441a75b7bdc23fc148c9353233707ccd0234176e51f1b2fbb97ceb
+        imagePullPolicy: IfNotPresent
+        name: redis-commander
+        ports:
+        - containerPort: 8081
+          protocol: TCP
+        # TODO: add limits on cpu and memory.
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30

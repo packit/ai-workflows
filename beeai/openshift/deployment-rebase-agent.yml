@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: rebase-agent
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: rebase-agent
+        deployment: rebase-agent
+    spec:
+      containers:
+      - args:
+        - agents/rebase_agent.py
+        command:
+        - /usr/bin/python
+        env:
+        - name: MCP_JIRA_URL
+          valueFrom:
+            configMapKeyRef:
+              key: MCP_JIRA_URL
+              name: x-beeai-agent-configmap
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              key: REDIS_URL
+              name: x-beeai-agent-configmap
+        - name: COLLECTOR_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              key: COLLECTOR_ENDPOINT
+              name: x-beeai-agent-configmap
+        - name: MAX_RETRIES
+          valueFrom:
+            configMapKeyRef:
+              key: MAX_RETRIES
+              name: x-beeai-agent-configmap
+        - name: CHAT_MODEL
+          valueFrom:
+            secretKeyRef:
+              key: CHAT_MODEL
+              name: beeai-agent-secrets
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: GEMINI_API_KEY
+              name: beeai-agent-secrets
+        - name: GITLAB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: GITLAB_TOKEN
+              name: beeai-agent-secrets
+        - name: GITLAB_USER
+          valueFrom:
+            secretKeyRef:
+              key: GITLAB_USER
+              name: beeai-agent-secrets
+        - name: DRY_RUN
+          value: "true"
+        image: 'image-registry.openshift-image-registry.svc:5000/jotnar-prod/beeai-agent@sha256:649cc82f9529d48c6f4f61654d87fee6e18155944054acfa074928e5e73844a8'
+        imagePullPolicy: Always
+        name: rebase-agent
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        # TODO: add limits on cpu and memory.
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      # TODO: this should be reset when we have enough data.
+      terminationGracePeriodSeconds: 30

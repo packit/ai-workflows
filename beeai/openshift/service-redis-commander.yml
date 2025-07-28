@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+spec:
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: 8081-tcp
+    port: 8081
+    protocol: TCP
+    targetPort: 8081
+  selector:
+    app: redis-commander
+    deployment: redis-commander
+  sessionAffinity: None
+  type: ClusterIP

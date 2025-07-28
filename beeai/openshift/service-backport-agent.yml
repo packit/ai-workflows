@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+spec:
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: 8080-tcp
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: backport-agent
+    deployment: backport-agent
+  sessionAffinity: None
+  type: ClusterIP

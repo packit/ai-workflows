@@ -1,0 +1,16 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: redis-commander
+spec:
+  tags:
+    - name: prod
+      from:
+        kind: DockerImage
+        name: ghcr.io/joeferner/redis-commander:0.9.0
+      importPolicy:
+        # Periodically query registry to synchronize tag and image metadata.
+        scheduled: true
+  lookupPolicy:
+    # allows all resources pointing to this image stream to use it in the image field
+    local: true

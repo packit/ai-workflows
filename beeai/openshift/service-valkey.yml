@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+spec:
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: 6379-tcp
+    port: 6379
+    protocol: TCP
+    targetPort: 6379
+  selector:
+    app: valkey
+    deployment: valkey
+  sessionAffinity: None
+  type: ClusterIP

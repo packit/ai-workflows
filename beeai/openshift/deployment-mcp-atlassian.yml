@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: mcp-atlassian
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: mcp-atlassian
+        deployment: mcp-atlassian
+    spec:
+      containers:
+      - args:
+        - --transport
+        - sse
+        - --port
+        - "9000"
+        - -vv
+        env:
+        - name: JIRA_PERSONAL_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: JIRA_PERSONAL_TOKEN
+              name: mcp-atlassian-secret
+        - name: JIRA_URL
+          valueFrom:
+            secretKeyRef:
+              key: JIRA_URL
+              name: mcp-atlassian-secret
+        image: image-registry.openshift-image-registry.svc:5000/jotnar-prod/mcp-atlassian@sha256:0a33e7a171cf54297dceb3b2cd473133b172978d5dbde9b68bf088d201696b3c
+        imagePullPolicy: Always
+        name: mcp-atlassian
+        ports:
+        - containerPort: 9000
+          protocol: TCP
+        # TODO: add limits on cpu and memory.
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30

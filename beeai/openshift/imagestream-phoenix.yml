@@ -1,0 +1,15 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: phoenix
+spec:
+  lookupPolicy:
+    local: true
+  tags:
+    - name: prod
+      from:
+        kind: DockerImage
+        name: docker.io/arizephoenix/phoenix:version-11.6.2
+      importPolicy:
+        # Periodically query registry to synchronize tag and image metadata.
+        scheduled: true

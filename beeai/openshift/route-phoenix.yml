@@ -1,0 +1,25 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  annotations:
+    openshift.io/host.generated: "true"
+  labels:
+    app: phoenix
+    app.kubernetes.io/component: phoenix
+    app.kubernetes.io/instance: phoenix
+    app.kubernetes.io/name: phoenix
+    app.kubernetes.io/part-of: beeai
+    app.openshift.io/runtime-version: version-11.6.2
+  name: phoenix
+  namespace: jotnar-prod
+spec:
+  port:
+    targetPort: 6006-tcp
+  tls:
+    insecureEdgeTerminationPolicy: Redirect
+    termination: edge
+  to:
+    kind: Service
+    name: phoenix
+    weight: 100
+  wildcardPolicy: None

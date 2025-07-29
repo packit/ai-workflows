@@ -38,7 +38,7 @@ run-rebase-agent-standalone:
 
 .PHONY: run-backport-agent-standalone
 run-backport-agent-standalone:
-	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
+	$(COMPOSE) -f $(COMPOSE_FILE) run \
 		-e PACKAGE=$(PACKAGE) \
 		-e UPSTREAM_FIX=$(UPSTREAM_FIX) \
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \

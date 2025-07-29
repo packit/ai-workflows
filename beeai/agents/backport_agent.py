@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import subprocess
 import sys
 import traceback
 from typing import Optional
@@ -110,21 +111,11 @@ class BackportAgent(BaseAgent):
     def prompt(self) -> str:
         return """
           You are an agent for backporting a fix for a CentOS Stream package. You will prepare the content
-          of the update and then create a commit with the changes. Create a temporary directory and always work
-          inside it. Follow exactly these steps:
+          of the update and then create a commit with the changes.
+          The repository is cloned at "{{ git_repo_basepath }}/{{ package }}", you should work in this directory.
+          Follow exactly these steps:
 
-          1. Find the location of the {{ package }} package at {{ git_url }}. Always use the {{ dist_git_branch }} branch.
-
-          2. Check if the package {{ package }} already has the fix {{ jira_issue }} applied.
-             * If the fix is already applied, report this and exit successfully
-
-          3. Create a local Git repository by following these steps:
-            * Create a fork of the {{ package }} package using the `fork_repository` tool.
-            * Clone the fork using git and HTTPS into a temporary directory under {{ git_repo_basepath }}.
-            * Run command `centpkg sources` in the cloned repository which downloads all sources defined in the RPM specfile.
-            * Create a new Git branch named `automated-package-update-{{ jira_issue }}`.
-
-          4. Validate and prepare the upstream fix for integration:
+          1. Validate and prepare the upstream fix for integration:
 
              **Download and Examine the Upstream Fix:**
              * Download the upstream fix from {{ upstream_fix }}
@@ -139,27 +130,12 @@ class BackportAgent(BaseAgent):
                - Update the Release field temporarily for testing
              * Test the patch application during build preparation:
                - Run `centpkg prep` to verify the patch applies cleanly during RPM build preparation
-               - If prep fails, examine the error output to understand patch compatibility issues
-               - Document any conflicts or application failures
-             * If this test passes, the patch is ready for final spec file integration in step 5
-             * If it fails, proceed to advanced patch preparation methods below
-
-             **Advanced Patch Preparation (when integration test fails):**
-             * Set up isolated environment for patch analysis and modification:
-               - Create working directory: `mkdir patch-analysis && cd patch-analysis`
-               - Extract source code: `tar -xf ../sources/*.tar.*`
-               - Initialize git repo: `git init && git add . && git commit -m "Original source baseline"`
-             * Apply existing patches in sequence to understand current state:
-               - For each existing patch in spec file: `git apply ../patch-file.patch && git commit -m "Apply existing patch"`
-               - Attempt to apply new patch: `git apply ../{{ jira_issue }}.patch`
-             * If conflicts occur, resolve them systematically:
-               - Use `git status` to identify conflicted files
-               - Edit files to resolve conflicts, using the `think` tool to analyze context changes
-               - Generate updated patch: `git add . && git commit -m "Apply {{ jira_issue }} with conflict resolution"`
-               - Create new patch file: `git format-patch HEAD~1 --stdout > ../{{ jira_issue }}.patch`
-             * Test the modified patch through spec file integration:
-               - Return to main repo directory and update spec file with the new patch
-               - Run `centpkg prep` again to verify the modified patch applies correctly
+               - If `prep` command fails, follow these steps to resolve the issue:
+                 - Navigate to directory cups-filters-2.0.0-build/cups-filters-2.0.0 where the sources are unpacked
+                 - Using the output from previous `centpkg prep` command, manually backport the patch
+                 - Resolve all conflict the from previous patch application
+                 - Once all conflicts are resolved, update the patch {{ jira_issue }}.patch file with the new changes from cups-filters-2.0.0-build/cups-filters-2.0.0
+             * If this test passes, the patch is ready for final spec file integration in step 3
 
              **Validate the Prepared Patch:**
              * Test spec file correctness:
@@ -178,14 +154,14 @@ class BackportAgent(BaseAgent):
                - Provide detailed analysis of why automatic preparation failed
                - Include recommendations for manual preparation steps
 
-          5. Integrate the validated patch into the spec file and create changelog:
+          2. Integrate the validated patch into the spec file and create changelog:
             * Update the 'Release' field in the .spec file following RPM packaging conventions
             * Add the prepared patch to the spec file in the appropriate location (using {{ jira_issue }}.patch)
             * Ensure the patch is applied in the "%prep" section
             * Create a changelog entry with current date and "Resolves: {{ jira_issue }}"
             * IMPORTANT: Only perform changes relevant to the backport update
 
-          6. {{ backport_git_steps }}
+          3. {{ backport_git_steps }}
 
           Throughout the process:
           * Use the `think` tool to reason through complex decisions and document your approach
@@ -211,6 +187,19 @@ class BackportAgent(BaseAgent):
                         requirement._source_tool = None
 
 
+def prepare_package(package: str, jira_issue: str, dist_git_branch: str, input_schema: InputSchema) -> None:
+    """
+    Prepare a package for backporting by cloning the dist-git repository, switching to the appropriate branch,
+    and downloading the sources.
+    """
+    os.makedirs(input_schema.git_repo_basepath, exist_ok=True)
+    subprocess.check_call(["centpkg", "clone", "--anonymous", "--branch", dist_git_branch, package], cwd=input_schema.git_repo_basepath)
+    local_clone = os.path.join(input_schema.git_repo_basepath, package)
+    subprocess.check_call(["centpkg", "sources"], cwd=local_clone)
+    subprocess.check_call(["git", "switch", "-c", f"automated-package-update-{jira_issue}", dist_git_branch], cwd=local_clone)
+    subprocess.check_call(["centpkg", "prep"], cwd=local_clone)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
@@ -224,13 +213,14 @@ async def main() -> None:
         and (branch := os.getenv("BRANCH", None))
     ):
         logger.info("Running in direct mode with environment variables")
-        input = InputSchema(
+        input_schema = InputSchema(
             package=package,
             upstream_fix=upstream_fix,
             jira_issue=jira_issue,
             dist_git_branch=branch,
         )
-        output = await agent.run_with_schema(input)
+        prepare_package(package, jira_issue, branch, input_schema)
+        output = await agent.run_with_schema(input_schema)
         logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")
         return
 
@@ -258,7 +248,7 @@ async def main() -> None:
             logger.info(f"Processing backport for package: {backport_data.package}, "
                        f"JIRA: {backport_data.jira_issue}, attempt: {task.attempts + 1}")
 
-            input = InputSchema(
+            input_schema = InputSchema(
                 package=backport_data.package,
                 upstream_fix=backport_data.patch_url,
                 jira_issue=backport_data.jira_issue,
@@ -278,14 +268,14 @@ async def main() -> None:
 
             try:
                 logger.info(f"Starting backport processing for {backport_data.jira_issue}")
-                output = await agent.run_with_schema(input)
+                output = await agent.run_with_schema(input_schema)
                 logger.info(f"Backport processing completed for {backport_data.jira_issue}, "
                           f"success: {output.success}")
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during backport processing for {backport_data.jira_issue}: {error}")
                 await retry(
-                    task, ErrorData(details=error, jira_issue=input.jira_issue).model_dump_json()
+                    task, ErrorData(details=error, jira_issue=input_schema.jira_issue).model_dump_json()
                 )
             else:
                 if output.success:

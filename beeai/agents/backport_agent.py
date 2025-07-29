@@ -22,7 +22,7 @@ from beeai_framework.tools.think import ThinkTool
 from base_agent import BaseAgent, TInputSchema, TOutputSchema
 from constants import COMMIT_PREFIX, BRANCH_PREFIX
 from observability import setup_observability
-from tools.shell_command import ShellCommandTool
+from tools.commands import RunShellCommandTool
 from triage_agent import BackportData, ErrorData
 from utils import mcp_tools, redis_client, get_git_finalization_steps
 
@@ -63,7 +63,7 @@ class BackportAgent(BaseAgent):
     def __init__(self) -> None:
         super().__init__(
             llm=ChatModel.from_name(os.getenv("CHAT_MODEL")),
-            tools=[ThinkTool(), ShellCommandTool(), DuckDuckGoSearchTool()],
+            tools=[ThinkTool(), RunShellCommandTool(), DuckDuckGoSearchTool()],
             memory=UnconstrainedMemory(),
             requirements=[
                 ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),

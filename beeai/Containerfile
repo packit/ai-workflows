@@ -12,6 +12,7 @@ RUN dnf -y install \
       rpmdevtools \
       rpmlint \
       spectool \
+      sed \
     && dnf -y clean all
 
 COPY beeai-gemini.patch /tmp

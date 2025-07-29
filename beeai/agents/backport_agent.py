@@ -116,6 +116,7 @@ class BackportAgent(BaseAgent):
           1. Find the location of the {{ package }} package at {{ git_url }}. Always use the {{ dist_git_branch }} branch.
 
           2. Check if the package {{ package }} already has the fix {{ jira_issue }} applied.
+             * If the fix is already applied, report this and exit successfully
 
           3. Create a local Git repository by following these steps:
             * Create a fork of the {{ package }} package using the `fork_repository` tool.
@@ -123,25 +124,77 @@ class BackportAgent(BaseAgent):
             * Run command `centpkg sources` in the cloned repository which downloads all sources defined in the RPM specfile.
             * Create a new Git branch named `automated-package-update-{{ jira_issue }}`.
 
-          4. Update the {{ package }} with the fix:
-            * Updating the 'Release' field in the .spec file as needed (or corresponding macros), following packaging
-              documentation.
-              * Make sure the format of the .spec file remains the same.
-            * Fetch the upstream fix {{ upstream_fix }} locally and store it in the git repo as "{{ jira_issue }}.patch".
-              * Add a new "Patch:" entry in the spec file for patch "{{ jira_issue }}.patch".
-              * Verify that the patch is being applied in the "%prep" section.
-            * Creating a changelog entry, referencing the Jira issue as "Resolves: <jira_issue>" for the issue {{ jira_issue }}.
-              The changelog entry has to use the current date.
-            * IMPORTANT: Only performing changes relevant to the backport update: Do not rename variables,
-              comment out existing lines, or alter if-else branches in the .spec file.
+          4. Validate and prepare the upstream fix for integration:
 
-          5. Verify and adjust the changes:
-            * Use `rpmlint` to validate your .spec file changes and fix any new errors it identifies.
-            * Generate the SRPM using `rpmbuild -bs` (ensure your .spec file and source files are correctly copied
-              to the build environment as required by the command).
-            * Verify the newly added patch applies cleanly using the command `centpkg prep`.
+             **Download and Examine the Upstream Fix:**
+             * Download the upstream fix from {{ upstream_fix }}
+             * Examine its format (unified diff, git patch, etc.)
+             * Store the patch file as "{{ jira_issue }}.patch" in the repository root
+             * Ensure the patch has proper headers including description and author information
+
+             **Test Patch Integration via Spec File:**
+             * Temporarily add the patch to the spec file to test compatibility:
+               - Add `Patch: {{ jira_issue }}.patch` entry in the appropriate location
+               - Ensure the patch is applied in the "%prep" section (e.g., `%patch -P <number>`)
+               - Update the Release field temporarily for testing
+             * Test the patch application during build preparation:
+               - Run `centpkg prep` to verify the patch applies cleanly during RPM build preparation
+               - If prep fails, examine the error output to understand patch compatibility issues
+               - Document any conflicts or application failures
+             * If this test passes, the patch is ready for final spec file integration in step 5
+             * If it fails, proceed to advanced patch preparation methods below
+
+             **Advanced Patch Preparation (when integration test fails):**
+             * Set up isolated environment for patch analysis and modification:
+               - Create working directory: `mkdir patch-analysis && cd patch-analysis`
+               - Extract source code: `tar -xf ../sources/*.tar.*`
+               - Initialize git repo: `git init && git add . && git commit -m "Original source baseline"`
+             * Apply existing patches in sequence to understand current state:
+               - For each existing patch in spec file: `git apply ../patch-file.patch && git commit -m "Apply existing patch"`
+               - Attempt to apply new patch: `git apply ../{{ jira_issue }}.patch`
+             * If conflicts occur, resolve them systematically:
+               - Use `git status` to identify conflicted files
+               - Edit files to resolve conflicts, using the `think` tool to analyze context changes
+               - Generate updated patch: `git add . && git commit -m "Apply {{ jira_issue }} with conflict resolution"`
+               - Create new patch file: `git format-patch HEAD~1 --stdout > ../{{ jira_issue }}.patch`
+             * Test the modified patch through spec file integration:
+               - Return to main repo directory and update spec file with the new patch
+               - Run `centpkg prep` again to verify the modified patch applies correctly
+
+             **Validate the Prepared Patch:**
+             * Test spec file correctness:
+               - Use `rpmlint *.spec` to check for packaging issues and address any NEW errors
+               - Ignore pre-existing rpmlint warnings unless they're related to your changes
+             * Test build preparation and SRPM generation:
+               - Run `centpkg prep` to verify all patches apply cleanly during build preparation
+               - Generate the SRPM using `rpmbuild -bs *.spec` to ensure complete build readiness
+               - Ensure all source files are available and the SRPM builds successfully
+             * Document validation results for step 5 integration
+
+             **Handle Preparation Failures:**
+             * If advanced preparation methods also fail:
+               - Document the specific conflicts and version differences encountered
+               - Mark the patch as requiring manual intervention before integration
+               - Provide detailed analysis of why automatic preparation failed
+               - Include recommendations for manual preparation steps
+
+          5. Integrate the validated patch into the spec file and create changelog:
+            * Update the 'Release' field in the .spec file following RPM packaging conventions
+            * Add the prepared patch to the spec file in the appropriate location (using {{ jira_issue }}.patch)
+            * Ensure the patch is applied in the "%prep" section
+            * Create a changelog entry with current date and "Resolves: {{ jira_issue }}"
+            * IMPORTANT: Only perform changes relevant to the backport update
 
           6. {{ backport_git_steps }}
+
+          Throughout the process:
+          * Use the `think` tool to reason through complex decisions and document your approach
+          * If you encounter errors, try alternative approaches before giving up
+          * Always validate patch integration through the RPM build process (centpkg prep, rpmbuild) rather than direct file patching
+          * Remember that dist-git repos contain spec files and patches, while source code is downloaded separately via centpkg sources
+          * Document any assumptions or potential issues for human review
+          * Be systematic - try spec file integration first, then escalate to advanced patch modification techniques
+          * Preserve existing formatting and style conventions in spec files and patch headers
         """
 
     async def run_with_schema(self, input: TInputSchema) -> TOutputSchema:

@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 import traceback
 from typing import Optional
 
@@ -220,8 +221,13 @@ async def main() -> None:
             dist_git_branch=branch,
         )
         prepare_package(package, jira_issue, branch, input_schema)
-        output = await agent.run_with_schema(input_schema)
-        logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")
+        try:
+            output = await agent.run_with_schema(input_schema)
+            logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")
+        finally:
+            logger.info("Direct run completed, keeping the container running for debugging")
+            # keep the container running for debugging
+            time.sleep(999999)
         return
 
     class Task(BaseModel):

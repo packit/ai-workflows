@@ -36,4 +36,7 @@ RUN chgrp -R root /home/beeai && chmod -R g+rwX /home/beeai
 USER beeai
 WORKDIR /home/beeai
 
+# so that we can start working with gitlab.com immediately
+RUN ssh-keyscan gitlab.com >> ~/.ssh/known_hosts
+
 CMD ["/bin/bash"]

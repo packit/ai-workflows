@@ -1,5 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
+metadata:
+  name: triage-agent
 spec:
   progressDeadlineSeconds: 600
   replicas: 1

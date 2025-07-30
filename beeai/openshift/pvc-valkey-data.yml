@@ -1,3 +1,5 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
 metadata:
   name: valkey-data
   namespace: jotnar-prod

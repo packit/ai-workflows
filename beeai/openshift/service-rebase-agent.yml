@@ -1,5 +1,7 @@
 apiVersion: v1
 kind: Service
+metadata:
+  name: rebase-agent
 spec:
   internalTrafficPolicy: Cluster
   ipFamilies:

@@ -22,7 +22,7 @@ from beeai_framework.tools.think import ThinkTool
 from base_agent import BaseAgent, TInputSchema, TOutputSchema
 from constants import COMMIT_PREFIX, BRANCH_PREFIX
 from observability import setup_observability
-from tools.shell_command import ShellCommandTool
+from tools.commands import RunShellCommandTool
 from triage_agent import RebaseData, ErrorData
 from utils import mcp_tools, redis_client, get_git_finalization_steps
 
@@ -62,7 +62,7 @@ class RebaseAgent(BaseAgent):
     def __init__(self) -> None:
         super().__init__(
             llm=ChatModel.from_name(os.getenv("CHAT_MODEL")),
-            tools=[ThinkTool(), ShellCommandTool(), DuckDuckGoSearchTool()],
+            tools=[ThinkTool(), RunShellCommandTool(), DuckDuckGoSearchTool()],
             memory=UnconstrainedMemory(),
             requirements=[
                 ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
@@ -122,9 +122,9 @@ class RebaseAgent(BaseAgent):
           * Do not run the `centpkg new-sources` command for now (testing purposes), just write down the commands you would run.
 
           IMPORTANT GUIDELINES:
-          - **Tool Usage**: You have ShellCommand tool available - use it directly!
+          - **Tool Usage**: You have run_shell_command tool available - use it directly!
           - **Command Execution Rules**:
-            - Use ShellCommand tool for ALL command execution
+            - Use run_shell_command tool for ALL command execution
             - If a command shows "no output" or empty STDOUT, that is a VALID result - do not retry
             - Commands that succeed with no output are normal - report success
           - **Git Configuration**: Always configure git user name and email before any git operations

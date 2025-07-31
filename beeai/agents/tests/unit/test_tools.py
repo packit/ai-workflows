@@ -2,7 +2,7 @@ import pytest
 
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 
-from tools.shell_command import ShellCommandTool, ShellCommandToolInput
+from tools.commands import RunShellCommandTool, RunShellCommandToolInput
 
 
 @pytest.mark.parametrize(
@@ -29,9 +29,9 @@ from tools.shell_command import ShellCommandTool, ShellCommandToolInput
     ],
 )
 @pytest.mark.asyncio
-async def test_shell_command(command, exit_code, stdout, stderr):
-    tool = ShellCommandTool()
-    output = await tool.run(input=ShellCommandToolInput(command=command)).middleware(
+async def test_run_shell_command(command, exit_code, stdout, stderr):
+    tool = RunShellCommandTool()
+    output = await tool.run(input=RunShellCommandToolInput(command=command)).middleware(
         GlobalTrajectoryMiddleware(pretty=True)
     )
     result = output.to_json_safe()

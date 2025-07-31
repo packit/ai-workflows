@@ -39,8 +39,8 @@ def open_merge_request(
     source: Annotated[str, Field(description="Source branch (in the fork)")],
 ) -> str | None:
     """
-    Opens a new merge request against the specified repository. Returns URL
-    of the opened merge request.
+    Opens a new merge request from the specified fork against its original repository.
+    Returns URL of the opened merge request.
     """
     project = get_project(url=fork_url, token=os.getenv("GITLAB_TOKEN"))
     if not project:

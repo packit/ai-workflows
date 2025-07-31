@@ -8,24 +8,24 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, Tool, ToolRunOptions
 
 
-class ShellCommandToolInput(BaseModel):
-    command: str = Field(description="Command to run.")
+class RunShellCommandToolInput(BaseModel):
+    command: str = Field(description="Command to run")
 
 
-class ShellCommandToolResult(BaseModel):
+class RunShellCommandToolResult(BaseModel):
     exit_code: int
     stdout: str | None
     stderr: str | None
 
 
-class ShellCommandToolOutput(JSONToolOutput[ShellCommandToolResult]):
+class RunShellCommandToolOutput(JSONToolOutput[RunShellCommandToolResult]):
     pass
 
 
-class ShellCommandTool(Tool[ShellCommandToolInput, ToolRunOptions, ShellCommandToolOutput]):
-    name = "ShellCommand"
-    description = """Runs commands in a shell."""
-    input_schema = ShellCommandToolInput
+class RunShellCommandTool(Tool[RunShellCommandToolInput, ToolRunOptions, RunShellCommandToolOutput]):
+    name = "run_shell_command"
+    description = """Runs the specified command in a shell."""
+    input_schema = RunShellCommandToolInput
 
     def __init__(self, options: dict[str, Any] | None = None) -> None:
         super().__init__(options)
@@ -37,8 +37,8 @@ class ShellCommandTool(Tool[ShellCommandToolInput, ToolRunOptions, ShellCommandT
         )
 
     async def _run(
-        self, tool_input: ShellCommandToolInput, options: ToolRunOptions | None, context: RunContext
-    ) -> ShellCommandToolOutput:
+        self, tool_input: RunShellCommandToolInput, options: ToolRunOptions | None, context: RunContext
+    ) -> RunShellCommandToolOutput:
         proc = await asyncio.create_subprocess_shell(
             tool_input.command,
             stdout=asyncio.subprocess.PIPE,
@@ -53,4 +53,4 @@ class ShellCommandTool(Tool[ShellCommandToolInput, ToolRunOptions, ShellCommandT
             "stderr": stderr.decode() if stderr else None,
         }
 
-        return ShellCommandToolOutput(ShellCommandToolResult.model_validate(result))
+        return RunShellCommandToolOutput(RunShellCommandToolResult.model_validate(result))

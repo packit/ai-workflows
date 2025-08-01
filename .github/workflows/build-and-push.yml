@@ -33,3 +33,18 @@ jobs:
           docker_context: "beeai/"
           image_name: "beeai"
           # tag: "staging"
+
+  build-and-push-mcp-server:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build and push mcp-server to quay.io registry
+        uses: sclorg/build-and-push-action@v4
+        with:
+          registry: "quay.io"
+          registry_namespace: "jotnar"
+          registry_username: ${{ secrets.REGISTRY_LOGIN }}
+          registry_token: ${{ secrets.REGISTRY_TOKEN }}
+          dockerfile: "beeai/Containerfile.mcp"
+          docker_context: "beeai/"
+          image_name: "mcp-server"
+          # tag: "staging"

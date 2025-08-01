@@ -17,6 +17,11 @@
   JIRA_PERSONAL_TOKEN
   JIRA_URL
   ```
+
+  `mcp-server-keytab`:
+  ```
+  oc create secret generic mcp-server-keytab --from-file=jotnar-bot.keytab
+  ```
   
   Values of these secrets are documented in [README](https://github.com/packit/jotnar?tab=readme-ov-file#service-accounts--authentication).
 

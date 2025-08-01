@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-gateway
+spec:
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: 8000-tcp
+    port: 8000
+    protocol: TCP
+    targetPort: 8000
+  selector:
+    app: mcp-gateway
+    deployment: mcp-gateway
+  sessionAffinity: None
+  type: ClusterIP

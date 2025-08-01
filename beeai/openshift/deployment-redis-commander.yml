@@ -24,7 +24,7 @@ spec:
       - env:
         - name: REDIS_HOSTS
           value: local:valkey:6379
-        image: image-registry.openshift-image-registry.svc:5000/jotnar-prod/redis-commander@sha256:d33e338d4d441a75b7bdc23fc148c9353233707ccd0234176e51f1b2fbb97ceb
+        image: redis-commander:prod
         imagePullPolicy: IfNotPresent
         name: redis-commander
         ports:

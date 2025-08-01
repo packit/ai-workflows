@@ -46,11 +46,17 @@ spec:
             configMapKeyRef:
               key: MAX_RETRIES
               name: x-beeai-agent-configmap
-        - name: GITLAB_TOKEN
+        - name: MCP_GATEWAY_URL
           valueFrom:
-            secretKeyRef:
-              key: GITLAB_TOKEN
-              name: beeai-agent-secrets
+            configMapKeyRef:
+              key: MCP_GATEWAY_URL
+              name: x-beeai-agent-configmap
+        - name: GIT_REPO_BASEPATH
+          valueFrom:
+            configMapKeyRef:
+              key: GIT_REPO_BASEPATH
+              name: x-beeai-agent-configmap
+
         - name: GITLAB_USER
           valueFrom:
             secretKeyRef:
@@ -66,9 +72,10 @@ spec:
             secretKeyRef:
               key: GEMINI_API_KEY
               name: beeai-agent-secrets
+
         - name: DRY_RUN
           value: "true"
-        image: 'image-registry.openshift-image-registry.svc:5000/jotnar-prod/beeai-agent@sha256:649cc82f9529d48c6f4f61654d87fee6e18155944054acfa074928e5e73844a8'
+        image: 'beeai-agent:prod'
         imagePullPolicy: Always
         name: backport-agent
         ports:
@@ -78,9 +85,16 @@ spec:
         resources: {}
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /git-repos
+          name: mcp-server-git-repos
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
       securityContext: {}
       # TODO: this should be reset when we have enough data.
       terminationGracePeriodSeconds: 30
+      volumes:
+      - name: mcp-server-git-repos
+        persistentVolumeClaim:
+          claimName: mcp-server-git-repos

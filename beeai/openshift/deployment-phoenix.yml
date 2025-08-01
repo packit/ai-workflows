@@ -26,7 +26,7 @@ spec:
           value: /mnt/data
         - name: PHOENIX_PORT
           value: "6006"
-        image: image-registry.openshift-image-registry.svc:5000/jotnar-prod/phoenix@sha256:6b2cbca1e7b2516b174d3fe844a4462236e4cf6b1b747b941f92a57db29b4390
+        image: phoenix:prod
         imagePullPolicy: IfNotPresent
         name: phoenix
         ports:

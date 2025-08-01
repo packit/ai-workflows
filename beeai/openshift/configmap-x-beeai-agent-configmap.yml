@@ -4,6 +4,8 @@ data:
   MAX_RETRIES: "3"
   MCP_JIRA_URL: http://mcp-atlassian:9000/sse
   REDIS_URL: redis://valkey:6379/0
+  MCP_GATEWAY_URL: http://mcp-gateway:8000/sse
+  GIT_REPO_BASEPATH: /git-repos
 immutable: false
 kind: ConfigMap
 metadata:

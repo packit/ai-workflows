@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import os
+import subprocess
 import sys
+import time
 import traceback
 from typing import Optional
 
@@ -110,38 +112,66 @@ class BackportAgent(BaseAgent):
     def prompt(self) -> str:
         return """
           You are an agent for backporting a fix for a CentOS Stream package. You will prepare the content
-          of the update and then create a commit with the changes. Create a temporary directory and always work
-          inside it. Follow exactly these steps:
+          of the update and then create a commit with the changes.
+          The repository is cloned at "{{ git_repo_basepath }}/{{ package }}", you should work in this directory.
+          Follow exactly these steps:
 
-          1. Find the location of the {{ package }} package at {{ git_url }}. Always use the {{ dist_git_branch }} branch.
+          1. Validate and prepare the upstream fix for integration:
 
-          2. Check if the package {{ package }} already has the fix {{ jira_issue }} applied.
+             **Download and Examine the Upstream Fix:**
+             * Download the upstream fix from {{ upstream_fix }}
+             * Examine its format (unified diff, git patch, etc.)
+             * Store the patch file as "{{ jira_issue }}.patch" in the repository root
+             * Ensure the patch has proper headers including description and author information
 
-          3. Create a local Git repository by following these steps:
-            * Create a fork of the {{ package }} package using the `fork_repository` tool.
-            * Clone the fork using git and HTTPS into a temporary directory under {{ git_repo_basepath }}.
-            * Run command `centpkg sources` in the cloned repository which downloads all sources defined in the RPM specfile.
-            * Create a new Git branch named `automated-package-update-{{ jira_issue }}`.
+             **Test Patch Integration via Spec File:**
+             * Temporarily add the patch to the spec file to test compatibility:
+               - Add `Patch: {{ jira_issue }}.patch` entry in the appropriate location
+               - Ensure the patch is applied in the "%prep" section (e.g., `%patch -P <number>`)
+               - Update the Release field temporarily for testing
+             * Test the patch application during build preparation:
+               - Run `centpkg prep` to verify the patch applies cleanly during RPM build preparation
+               - If `prep` command fails, follow these steps to resolve the issue:
+                 - Navigate to directory cups-filters-2.0.0-build/cups-filters-2.0.0 where the sources are unpacked
+                 - Using the output from previous `centpkg prep` command, manually backport the patch
+                 - Resolve all conflict the from previous patch application
+                 - Once all conflicts are resolved, update the patch {{ jira_issue }}.patch file with the new changes from cups-filters-2.0.0-build/cups-filters-2.0.0
+             * If this test passes, the patch is ready for final spec file integration in step 3
 
-          4. Update the {{ package }} with the fix:
-            * Updating the 'Release' field in the .spec file as needed (or corresponding macros), following packaging
-              documentation.
-              * Make sure the format of the .spec file remains the same.
-            * Fetch the upstream fix {{ upstream_fix }} locally and store it in the git repo as "{{ jira_issue }}.patch".
-              * Add a new "Patch:" entry in the spec file for patch "{{ jira_issue }}.patch".
-              * Verify that the patch is being applied in the "%prep" section.
-            * Creating a changelog entry, referencing the Jira issue as "Resolves: <jira_issue>" for the issue {{ jira_issue }}.
-              The changelog entry has to use the current date.
-            * IMPORTANT: Only performing changes relevant to the backport update: Do not rename variables,
-              comment out existing lines, or alter if-else branches in the .spec file.
+             **Validate the Prepared Patch:**
+             * Test spec file correctness:
+               - Use `rpmlint *.spec` to check for packaging issues and address any NEW errors
+               - Ignore pre-existing rpmlint warnings unless they're related to your changes
+             * Test build preparation and SRPM generation:
+               - Run `centpkg prep` to verify all patches apply cleanly during build preparation
+               - Generate the SRPM using `rpmbuild -bs *.spec` to ensure complete build readiness
+               - Ensure all source files are available and the SRPM builds successfully
+             * Document validation results for step 5 integration
 
-          5. Verify and adjust the changes:
-            * Use `rpmlint` to validate your .spec file changes and fix any new errors it identifies.
-            * Generate the SRPM using `rpmbuild -bs` (ensure your .spec file and source files are correctly copied
-              to the build environment as required by the command).
-            * Verify the newly added patch applies cleanly using the command `centpkg prep`.
+             **Handle Preparation Failures:**
+             * If advanced preparation methods also fail:
+               - Document the specific conflicts and version differences encountered
+               - Mark the patch as requiring manual intervention before integration
+               - Provide detailed analysis of why automatic preparation failed
+               - Include recommendations for manual preparation steps
 
-          6. {{ backport_git_steps }}
+          2. Integrate the validated patch into the spec file and create changelog:
+            * Update the 'Release' field in the .spec file following RPM packaging conventions
+            * Add the prepared patch to the spec file in the appropriate location (using {{ jira_issue }}.patch)
+            * Ensure the patch is applied in the "%prep" section
+            * Create a changelog entry with current date and "Resolves: {{ jira_issue }}"
+            * IMPORTANT: Only perform changes relevant to the backport update
+
+          3. {{ backport_git_steps }}
+
+          Throughout the process:
+          * Use the `think` tool to reason through complex decisions and document your approach
+          * If you encounter errors, try alternative approaches before giving up
+          * Always validate patch integration through the RPM build process (centpkg prep, rpmbuild) rather than direct file patching
+          * Remember that dist-git repos contain spec files and patches, while source code is downloaded separately via centpkg sources
+          * Document any assumptions or potential issues for human review
+          * Be systematic - try spec file integration first, then escalate to advanced patch modification techniques
+          * Preserve existing formatting and style conventions in spec files and patch headers
         """
 
     async def run_with_schema(self, input: TInputSchema) -> TOutputSchema:
@@ -158,6 +188,19 @@ class BackportAgent(BaseAgent):
                         requirement._source_tool = None
 
 
+def prepare_package(package: str, jira_issue: str, dist_git_branch: str, input_schema: InputSchema) -> None:
+    """
+    Prepare a package for backporting by cloning the dist-git repository, switching to the appropriate branch,
+    and downloading the sources.
+    """
+    os.makedirs(input_schema.git_repo_basepath, exist_ok=True)
+    subprocess.check_call(["centpkg", "clone", "--anonymous", "--branch", dist_git_branch, package], cwd=input_schema.git_repo_basepath)
+    local_clone = os.path.join(input_schema.git_repo_basepath, package)
+    subprocess.check_call(["centpkg", "sources"], cwd=local_clone)
+    subprocess.check_call(["git", "switch", "-c", f"automated-package-update-{jira_issue}", dist_git_branch], cwd=local_clone)
+    subprocess.check_call(["centpkg", "prep"], cwd=local_clone)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
@@ -171,14 +214,20 @@ async def main() -> None:
         and (branch := os.getenv("BRANCH", None))
     ):
         logger.info("Running in direct mode with environment variables")
-        input = InputSchema(
+        input_schema = InputSchema(
             package=package,
             upstream_fix=upstream_fix,
             jira_issue=jira_issue,
             dist_git_branch=branch,
         )
-        output = await agent.run_with_schema(input)
-        logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")
+        prepare_package(package, jira_issue, branch, input_schema)
+        try:
+            output = await agent.run_with_schema(input_schema)
+            logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")
+        finally:
+            logger.info("Direct run completed, keeping the container running for debugging")
+            # keep the container running for debugging
+            time.sleep(999999)
         return
 
     class Task(BaseModel):
@@ -205,7 +254,7 @@ async def main() -> None:
             logger.info(f"Processing backport for package: {backport_data.package}, "
                        f"JIRA: {backport_data.jira_issue}, attempt: {task.attempts + 1}")
 
-            input = InputSchema(
+            input_schema = InputSchema(
                 package=backport_data.package,
                 upstream_fix=backport_data.patch_url,
                 jira_issue=backport_data.jira_issue,
@@ -225,14 +274,14 @@ async def main() -> None:
 
             try:
                 logger.info(f"Starting backport processing for {backport_data.jira_issue}")
-                output = await agent.run_with_schema(input)
+                output = await agent.run_with_schema(input_schema)
                 logger.info(f"Backport processing completed for {backport_data.jira_issue}, "
                           f"success: {output.success}")
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during backport processing for {backport_data.jira_issue}: {error}")
                 await retry(
-                    task, ErrorData(details=error, jira_issue=input.jira_issue).model_dump_json()
+                    task, ErrorData(details=error, jira_issue=input_schema.jira_issue).model_dump_json()
                 )
             else:
                 if output.success:

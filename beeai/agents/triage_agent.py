@@ -21,6 +21,7 @@ from beeai_framework.tools.think import ThinkTool
 from base_agent import BaseAgent, TInputSchema, TOutputSchema
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
+from tools.patch_validator import PatchValidatorTool
 from utils import mcp_tools, redis_client
 
 logger = logging.getLogger(__name__)
@@ -80,12 +81,13 @@ class TriageAgent(BaseAgent):
     def __init__(self) -> None:
         super().__init__(
             llm=ChatModel.from_name(os.getenv("CHAT_MODEL")),
-            tools=[ThinkTool(), RunShellCommandTool()],
+            tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool()],
             memory=UnconstrainedMemory(),
             requirements=[
                 ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
                 ConditionalRequirement("get_jira_details", min_invocations=1),
                 ConditionalRequirement(RunShellCommandTool, only_after="get_jira_details"),
+                ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),
             ],
             middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         )
@@ -174,19 +176,24 @@ class TriageAgent(BaseAgent):
                  - For CVEs, use the CVE publication date to narrow down the timeframe for fixes
                  - Check upstream release notes and changelogs after the RHEL package version date
 
-             2.3. Validate the Fix
-             * When you think you've found a potential fix, examine the actual content of the patch/commit
-             * Verify that the fix directly addresses the root cause identified in your analysis
-             * Check if the code changes align with the symptoms described in the Jira issue
-             * If the fix doesn't appear to resolve the specific issue, continue searching for other fixes
-             * Don't settle for the first fix you find - ensure it's the right one
+             2.3. Validate the Fix and URL
+             * Use the PatchValidator tool to fetch content from any patch/commit URL you intend to use
+             * The tool will verify the URL is accessible and not an issue reference, then return the content
+             * Once you have the content, you must validate two things:
+               1. **Is it a patch/diff?** Look for diff indicators like:
+                  - `diff --git` headers
+                  - `--- a/file +++ b/file` unified diff headers
+                  - `@@...@@` hunk headers
+                  - `+` and `-` lines showing changes
+               2. **Does it fix the issue?** Examine the actual code changes to verify:
+                  - The fix directly addresses the root cause identified in your analysis
+                  - The code changes align with the symptoms described in the Jira issue
+                  - The modified functions/files match those mentioned in the issue
+             * Only proceed with URLs that contain valid patch content AND address the specific issue
+             * If the content is not a proper patch or doesn't fix the issue, continue searching for other fixes
 
-             2.4. Validate the Fix URL
-             * Make sure to provide a valid URL to the patch/commit
-             * If the URL is not valid, re-do previous steps
-
-             2.5. Decide the Outcome
-             * If your investigation successfully identifies a specific fix that you've validated, your decision is backport
+             2.4. Decide the Outcome
+             * If your investigation successfully identifies a specific fix that passes both validations in step 2.3, your decision is backport
              * You must be able to justify why the patch is correct and how it addresses the issue
              * If your investigation confirms a valid bug/CVE but fails to locate a specific fix, your decision
                is clarification-needed

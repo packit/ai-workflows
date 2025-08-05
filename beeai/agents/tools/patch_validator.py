@@ -27,7 +27,7 @@ class PatchValidatorOutput(JSONToolOutput[PatchValidatorResult]):
 
 class PatchValidatorTool(Tool[PatchValidatorInput, ToolRunOptions, PatchValidatorOutput]):
     name = "PatchValidator"
-    description = """Fetches content from a URL after validating it's not an issue/bug reference and is accessible."""
+    description = """Fetches a patch from a URL after validating it's not an issue/bug reference and is accessible."""
     input_schema = PatchValidatorInput
 
     def __init__(self, options: dict[str, Any] | None = None) -> None:

@@ -159,7 +159,10 @@ class TriageAgent(BaseAgent):
                (e.g. in the commit hash field or comment)
 
              2.2. Systematic Source Investigation
-             * Identify the official upstream project and corresponding Fedora package source
+             * Identify the official upstream project from two sources:
+                * Links from the Jira issue (if any direct upstream links are provided)
+                * Package specfile (<package>.spec) in the GitLab repository: check the URL field or Source0 field for upstream project location
+
              * Even if the Jira issue provides a direct link to a fix, you need to validate it
              * When no direct link is provided, you must proactively search for fixes - do not give up easily
              * Using the details from your analysis, search these sources:

@@ -47,7 +47,6 @@ class PatchValidatorTool(Tool[PatchValidatorInput, ToolRunOptions, PatchValidato
         issue_patterns = [
             '/issues/', '/issue/', '/bug/', '/bugs/',
             'bugzilla', 'jira', '/tickets/', '/ticket/',
-            '/pull/', '/merge_requests/'  # PR/MR without specific patch view
         ]
 
         for pattern in issue_patterns:

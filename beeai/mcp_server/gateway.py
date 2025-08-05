@@ -5,7 +5,7 @@ from fastmcp import FastMCP
 
 import gitlab_tools
 import jira_tools
-import loookaside_tools
+import lookaside_tools
 
 
 mcp = FastMCP(

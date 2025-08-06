@@ -8,4 +8,3 @@ immutable: false
 kind: ConfigMap
 metadata:
   name: x-beeai-agent-configmap
-  namespace: jotnar-prod

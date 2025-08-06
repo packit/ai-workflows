@@ -46,7 +46,7 @@ services:
       - .secrets/mcp-gateway.env
     volumes:
       - ./mcp_server:/home/mcp/mcp_server:ro,z
-      - .secrets/keytab:/home/mcp/keytab:ro,z
+      - .secrets/keytab:/home/mcp/keytab:ro,z,U
       - git-repos:/git-repos
     command: ["python", "mcp_server/gateway.py"]
     restart: unless-stopped

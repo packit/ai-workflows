@@ -21,14 +21,32 @@ def test_get_jira_details():
         "fields": {"summary": "Test issue"},
         "comment": {"comments": [{"body": "Test comment"}], "total": 1},
     }
+    remote_links_data = [
+        {
+            "id": 10000,
+            "object": {
+                "url": "https://github.com/example/repo/pull/123",
+                "title": "Fix issue RHEL-12345"
+            }
+        }
+    ]
 
-    def get(url, params, headers):
-        assert url.endswith(f"rest/api/2/issue/{issue_key}")
-        assert params.get("expand") == "comments"
-        return flexmock(json=lambda: issue_data, raise_for_status=lambda: None)
+    def get(url, params=None, headers=None):
+        if url.endswith(f"rest/api/2/issue/{issue_key}"):
+            assert params.get("expand") == "comments"
+            return flexmock(json=lambda: issue_data, raise_for_status=lambda: None)
+        elif url.endswith(f"rest/api/2/issue/{issue_key}/remotelink"):
+            return flexmock(json=lambda: remote_links_data, raise_for_status=lambda: None)
+        else:
+            raise AssertionError(f"Unexpected URL: {url}")
 
     flexmock(requests).should_receive("get").replace_with(get)
-    assert get_jira_details(issue_key) == issue_data
+
+    result = get_jira_details(issue_key)
+    expected_result = issue_data.copy()
+    expected_result["remote_links"] = remote_links_data
+
+    assert result == expected_result
 
 
 @pytest.mark.parametrize(

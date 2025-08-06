@@ -8,7 +8,7 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, Tool, ToolRunOptions
 
-MAX_CONTENT_LENGTH = 10000
+MAX_CONTENT_LENGTH = 2000
 
 class PatchValidatorInput(BaseModel):
     url: str = Field(description="URL to validate as a patch/commit")

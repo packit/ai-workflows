@@ -13,6 +13,10 @@ build:
 run-beeai-bash:
 	$(COMPOSE) -f $(COMPOSE_FILE) run --rm triage-agent /bin/bash
 
+.PHONY: run-mcp-gateway-bash
+run-mcp-gateway-bash:
+	$(COMPOSE) -f $(COMPOSE_FILE) run --rm mcp-gateway /bin/bash
+
 .PHONY: run-triage-agent-standalone
 run-triage-agent-standalone:
 	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \

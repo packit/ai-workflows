@@ -90,6 +90,11 @@ class TriageAgent(BaseAgent):
                 ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),
             ],
             middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
+            role="Red Hat Enterprise Linux developer",
+            instructions=[
+                "Use the `think` tool to reason through complex decisions and document your approach.",
+                "Be proactive in your search for fixes and do not give up easily.",
+            ]
         )
 
     @property

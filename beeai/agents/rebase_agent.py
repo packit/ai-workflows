@@ -66,6 +66,7 @@ class RebaseAgent(BaseAgent):
             memory=UnconstrainedMemory(),
             requirements=[
                 ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
+                ConditionalRequirement("build_package", min_invocations=1),
             ],
             middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         )
@@ -163,6 +164,11 @@ class RebaseAgent(BaseAgent):
               * Use `rpmlint` to validate your .spec file changes and fix any new errors it identifies.
               * Generate the SRPM using `rpmbuild -bs` (ensure your .spec file and source files are correctly
                 copied to the build environment as required by the command).
+              * Take the path to the SRPM file and build the RPM in Copr using `build_package` tool, confirm it succeeds.
+                Use the following parameters:
+                * project: {{ jira_issue }}
+                * chroots: {{ dist_git_branch }} (verify how to map dist_git_branch into a Copr chroot, you can assume architecture is x86_64)
+                * srpm_path: path to the SRPM file
 
           6. {{ rebase_git_steps }}
 
@@ -177,7 +183,7 @@ class RebaseAgent(BaseAgent):
         async with mcp_tools(
             os.getenv("MCP_GATEWAY_URL"),
             filter=lambda t: t
-            in ("fork_repository", "open_merge_request", "push_to_remote_repository"),
+            in ("fork_repository", "open_merge_request", "push_to_remote_repository", "build_package"),
         ) as gateway_tools:
             tools = self._tools.copy()
             try:

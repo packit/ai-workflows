@@ -21,10 +21,22 @@ def test_triage_regression(jira_issue, expected_resolution, expected_fields):
     # Verify agent ran successfully
     assert result.returncode == 0, f"Triage agent failed: {result.stderr}"
 
-    # Verify expected resolution appears in output
-    assert expected_resolution in result.stdout.lower(), \
-        f"Expected resolution '{expected_resolution}' not found in output"
+    # The agent logs the output as a JSON string to stderr. We need to extract and parse it.
+    output_json_str = None
+    # The log format from triage_agent.py is "Direct run completed: { ...JSON... }"
+    match = re.search(r"Direct run completed: (\{.*\})", result.stderr, re.DOTALL)
+    if match:
+        output_json_str = match.group(1)
 
-    # Verify all expected fields appear in output
+    assert output_json_str, f"Could not find JSON output in agent logs:\n{result.stderr}"
+    output_data = json.loads(output_json_str)
+
+    # Verify expected resolution
+    assert output_data.get("resolution") == expected_resolution, \
+        f"Expected resolution '{expected_resolution}', but got '{output_data.get('resolution')}'"
+
+    # Verify all expected fields appear in the 'data' part of the output
+    data_part = output_data.get("data", {})
     for field_name, field_value in expected_fields.items():
-        assert str(field_name) in result.stdout and str(field_value) in result.stdout
+        assert data_part.get(field_name) == field_value, \
+            f"Field '{field_name}': expected '{field_value}', but got '{data_part.get(field_name)}'"

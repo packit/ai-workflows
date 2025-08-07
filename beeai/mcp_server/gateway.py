@@ -14,8 +14,9 @@ mcp = FastMCP(
     tools=[
         function
         for module in [gitlab_tools, jira_tools, lookaside_tools, copr_tools]
-        for name, function in inspect.getmembers(module, inspect.isfunction)
-        if function.__module__ == module.__name__
+        for name, function in inspect.getmembers(module)
+        if (inspect.isfunction(function) or inspect.iscoroutinefunction(function))
+        and function.__module__ == module.__name__
         and not name.startswith("_")
     ]
 )

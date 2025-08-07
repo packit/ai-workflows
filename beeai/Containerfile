@@ -28,6 +28,7 @@ RUN pip3 install --no-cache-dir \
     beeai-framework[mcp,duckduckgo]==0.1.31 \
     openinference-instrumentation-beeai \
     arize-phoenix-otel \
+    deepeval \
     && cd /usr/local/lib/python3.13/site-packages \
     && patch -p2 -i /tmp/beeai-gemini.patch \
     && patch -p2 -i /tmp/beeai-gemini-malformed-function-call.patch \

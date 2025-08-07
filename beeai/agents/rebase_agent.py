@@ -173,7 +173,7 @@ class RebaseAgent(BaseAgent):
           - Any validation issues found with rpmlint
         """
 
-    async def run_with_schema(self, input: TInputSchema) -> TOutputSchema:
+    async def run_with_schema(self, input: TInputSchema, capture_raw_response: bool = False) -> TOutputSchema:
         async with mcp_tools(
             os.getenv("MCP_GATEWAY_URL"),
             filter=lambda t: t
@@ -182,7 +182,7 @@ class RebaseAgent(BaseAgent):
             tools = self._tools.copy()
             try:
                 self._tools.extend(gateway_tools)
-                return await self._run_with_schema(input)
+                return await self._run_with_schema(input, capture_raw_response=capture_raw_response)
             finally:
                 self._tools = tools
                 # disassociate removed tools from requirements

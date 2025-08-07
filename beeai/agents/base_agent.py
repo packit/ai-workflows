@@ -14,6 +14,8 @@ TOutputSchema = TypeVar("TOutputSchema", bound=BaseModel)
 
 
 class BaseAgent(RequirementAgent, ABC):
+    last_raw_response: RequirementAgentRunOutput | None = None
+
     @property
     @abstractmethod
     def input_schema(self) -> type[TInputSchema]: ...
@@ -32,7 +34,9 @@ class BaseAgent(RequirementAgent, ABC):
         )
         return template.render(input)
 
-    async def _run_with_schema(self, input: TInputSchema) -> TOutputSchema:
+    async def _run_with_schema(
+        self, input: TInputSchema, capture_raw_response: bool = False
+    ) -> TOutputSchema:
         max_retries_per_step = int(os.getenv("BEEAI_MAX_RETRIES_PER_STEP", 5))
         total_max_retries = int(os.getenv("BEEAI_TOTAL_MAX_RETRIES", 10))
         max_iterations = int(os.getenv("BEEAI_MAX_ITERATIONS", 100))
@@ -46,10 +50,14 @@ class BaseAgent(RequirementAgent, ABC):
                 max_iterations=max_iterations,
             ),
         )
+        if capture_raw_response:
+            self.last_raw_response = response
         return self.output_schema.model_validate_json(response.result.text)
 
-    async def run_with_schema(self, input: TInputSchema) -> TOutputSchema:
-        return await self._run_with_schema(input)
+    async def run_with_schema(
+        self, input: TInputSchema, capture_raw_response: bool = False
+    ) -> TOutputSchema:
+        return await self._run_with_schema(input, capture_raw_response)
 
 
 if os.getenv("LITELLM_DEBUG"):
@@ -58,4 +66,5 @@ if os.getenv("LITELLM_DEBUG"):
     import beeai_framework.adapters.litellm.chat
     import beeai_framework.adapters.litellm.embedding
     from beeai_framework.adapters.litellm.utils import litellm_debug
+
     litellm_debug(True)

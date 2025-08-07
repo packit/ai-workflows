@@ -42,6 +42,7 @@ def get_git_finalization_steps(
     git_email: str = "rhel-packaging-agent@redhat.com",
     git_url: str = "https://gitlab.com/redhat/centos-stream/rpms",
     dist_git_branch: str = "c9s",
+    srpms_basepath: str = "/srpms",
 ) -> str:
     """Generate Git finalization steps with dry-run support"""
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
@@ -52,7 +53,8 @@ def get_git_finalization_steps(
 
     commit_steps = f"""* Add files to commit: {files_to_commit}
             * Create commit with title: "{commit_title}"
-            * Include JIRA reference: "Resolves: {jira_issue}" in commit body"""
+            * Include JIRA reference: "Resolves: {jira_issue}" in commit body
+            * This is the path to the SRPMs: {srpms_basepath}"""
 
     if dry_run:
         return f"""
@@ -76,3 +78,4 @@ def get_git_finalization_steps(
             * Open a merge request against {git_url}/{package}
             * Target branch: {dist_git_branch}
         """
+

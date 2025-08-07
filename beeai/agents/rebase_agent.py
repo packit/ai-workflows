@@ -49,6 +49,10 @@ class InputSchema(BaseModel):
         description="Base path for cloned git repos",
         default=os.getenv("GIT_REPO_BASEPATH"),
     )
+    srpms_basepath: str = Field(
+        description="Base path for SRPMs",
+        default=os.getenv("SRPMS_BASEPATH"),
+    )
 
 
 class OutputSchema(BaseModel):
@@ -93,6 +97,7 @@ class RebaseAgent(BaseAgent):
                 git_email=input_data.git_email,
                 git_url=input_data.git_url,
                 dist_git_branch=input_data.dist_git_branch,
+                srpms_basepath=input_data.srpms_basepath,
             )
 
         template = PromptTemplate(
@@ -121,6 +126,8 @@ class RebaseAgent(BaseAgent):
           * You can find packaging guidelines at https://docs.fedoraproject.org/en-US/packaging-guidelines/
           * You can find the RPM packaging guide at https://rpm-packaging-guide.github.io/.
           * Do not run the `centpkg new-sources` command for now (testing purposes), just write down the commands you would run.
+          * For every SRPM you generate, copy them in the {{ srpms_basepath }} directory.
+          * If the Copr build fails but returns a url you have to search for the build error. List files pointed by the returned url and start with looking at the file named "builder-live.log.gz".
 
           IMPORTANT GUIDELINES:
           - **Tool Usage**: You have run_shell_command tool available - use it directly!
@@ -162,20 +169,27 @@ class RebaseAgent(BaseAgent):
 
           5. Verify and adjust the changes:
               * Use `rpmlint` to validate your .spec file changes and fix any new errors it identifies.
-              * Generate the SRPM using `rpmbuild -bs` (ensure your .spec file and source files are correctly
-                copied to the build environment as required by the command).
+              * Generate the SRPM using `centpkg srpm --buildroot rhel-N`, where N is extracted from the cNs dist_git_branch.
+              * Ensure your .spec file and source files are correctly copied to the build environment as required by the command.
               * Take the path to the SRPM file and build the RPM in Copr using `build_package` tool, confirm it succeeds.
+                IMPORTANT: 
+                    - if the build fails, due to a kerberos ticket issue, you must try to re-run the build_package tool at least 3 times and wait 10 seconds between each attempt.
+                    - if the build fails, due to a Copr project already exists issue, you must try to re-run the build_package tool and change the project name to {{ jira_issue }}-N (where N is the number of the attempt).
+                    - if dist_git_branch is cNs, the Copr chroot is rhel-N.dev-x86_64  for Y stream.
                 Use the following parameters:
                 * project: {{ jira_issue }}
-                * chroots: {{ dist_git_branch }} (verify how to map dist_git_branch into a Copr chroot, you can assume architecture is x86_64)
-                * srpm_path: path to the SRPM file
+                * chroots: [the chroot you determined based on the dist_git_branch]
+                * srpm_path: path to the SRPM file you have copied in the {{ srpms_basepath }} directory.
+             * If the build fails and a url is provided, find the error. Fix the error and re-run the build_package tool after generating a new srpm and copying it in the {{ srpms_basepath }} directory.
+
 
           6. {{ rebase_git_steps }}
 
           Report the status of the rebase operation including:
           - Whether the package was already up to date
           - Any errors encountered during the process
-          - The URL of the created merge request if successful
+          - The URL of the created merge request if successful or the code changes you created if in dry-run mode
+          - The URL of the Copr build
           - Any validation issues found with rpmlint
         """
 

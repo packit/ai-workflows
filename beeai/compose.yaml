@@ -15,6 +15,7 @@ x-beeai-agent: &beeai-agent
     - REDIS_URL=redis://valkey:6379/0
     - COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces
     - GIT_REPO_BASEPATH=/git-repos
+    - SRPMS_BASEPATH=/srpms
     - MAX_RETRIES=3
     - DRY_RUN=${DRY_RUN:-false}
   env_file:
@@ -22,6 +23,7 @@ x-beeai-agent: &beeai-agent
   volumes:
     - ./agents:/home/beeai/agents:ro,z
     - git-repos:/git-repos
+    - srpms:/srpms
   restart: unless-stopped
 
 services:
@@ -48,6 +50,7 @@ services:
       - ./mcp_server:/home/mcp/mcp_server:ro,z
       - .secrets/keytab:/home/mcp/keytab:ro,z,U
       - git-repos:/git-repos
+      - srpms:/srpms
     command: ["python", "mcp_server/gateway.py"]
     restart: unless-stopped
 
@@ -93,3 +96,4 @@ volumes:
   valkey-data:
   phoenix-data:
   git-repos:
+  srpms:

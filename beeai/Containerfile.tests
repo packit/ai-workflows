@@ -10,6 +10,8 @@ RUN dnf -y install \
       python3-pytest \
       python3-pytest-asyncio \
       python3-flexmock \ 
+      python3-flexmock \ 
+      python3-copr \
     && dnf clean all
 
 # Install BeeAI Framework and FastMCP

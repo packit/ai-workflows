@@ -108,3 +108,7 @@ build-test-image:
 .PHONY: check-in-container
 check-in-container:
 	$(MAKE) -f Makefile.tests check-in-container
+
+.PHONY: test-regression
+test-regression:
+	cd agents && python3 -m pytest tests/regression/ -v

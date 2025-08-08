@@ -258,14 +258,14 @@ class TriageAgent(BaseAgent):
                 e.g., "The request is for a new feature ('add dark mode') which is not appropriate for a bugfix update in RHEL."]
         """
 
-    async def run_with_schema(self, input: TInputSchema) -> TOutputSchema:
+    async def run_with_schema(self, input: TInputSchema, capture_raw_response: bool = False) -> TOutputSchema:
         async with mcp_tools(
             os.getenv("MCP_GATEWAY_URL"), filter=lambda t: t == "get_jira_details"
         ) as gateway_tools:
             tools = self._tools.copy()
             try:
                 self._tools.extend(gateway_tools)
-                return await self._run_with_schema(input)
+                return await self._run_with_schema(input, capture_raw_response=capture_raw_response)
             finally:
                 self._tools = tools
                 # disassociate removed tools from requirements

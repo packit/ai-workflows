@@ -13,7 +13,7 @@ from utils import init_kerberos_ticket
 class CoprToolException(Exception):
     pass
 
-MAX_BUILD_TIME_SECONDS = 3600
+MAX_BUILD_TIME_SECONDS = 10800 # 3 hours
 OWNER = "jotnar-bot"
 COPR_URL = "https://copr.devel.redhat.com"
 PRESERVE_PROJECT = 14 # None|-1|any number of days

@@ -85,7 +85,6 @@ class TriageAgent(BaseAgent):
             memory=UnconstrainedMemory(),
             requirements=[
                 ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
-                ConditionalRequirement("get_jira_details", min_invocations=1),
                 ConditionalRequirement(RunShellCommandTool, only_after="get_jira_details"),
                 ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),
             ],
@@ -94,6 +93,8 @@ class TriageAgent(BaseAgent):
             instructions=[
                 "Use the `think` tool to reason through complex decisions and document your approach.",
                 "Be proactive in your search for fixes and do not give up easily.",
+                "Your final output must be valid JSON matching the OutputSchema - do not output human-readable text.",
+                "If check_cve_triage_eligibility returns is_eligible_for_triage=False, immediately output JSON with resolution: 'no-action' or 'error' in case error is present.",
             ]
         )
 
@@ -114,11 +115,17 @@ class TriageAgent(BaseAgent):
           **Important**: Focus on bugs, CVEs, and technical defects that need code fixes.
           QE tasks, feature requests, refactoring, documentation, and other non-bug issues should be marked as "no-action".
 
+          **CVE Processing Logic**: Use the `check_cve_triage_eligibility` tool as your first step.
+          - Proceed with normal triage if is_eligible_for_triage is True
+          - Return "no-action" or "error" (if error is present) if is_eligible_for_triage is False.
+
           Goal: Analyze the given issue to determine the correct course of action.
 
           **Initial Analysis Steps**
 
-          1. Open the {{ issue }} Jira issue and thoroughly analyze it:
+          1. If available, use `check_cve_triage_eligibility` tool to determine if this should be processed.
+
+          2. Open the {{ issue }} Jira issue and thoroughly analyze it:
              * Extract key details from the title, description, fields, and comments
              * Pay special attention to comments as they often contain crucial information such as:
                - Additional context about the problem
@@ -260,7 +267,7 @@ class TriageAgent(BaseAgent):
 
     async def run_with_schema(self, input: TInputSchema) -> TOutputSchema:
         async with mcp_tools(
-            os.getenv("MCP_GATEWAY_URL"), filter=lambda t: t == "get_jira_details"
+            os.getenv("MCP_GATEWAY_URL"), filter=lambda t: t in ["get_jira_details", "check_cve_triage_eligibility"]
         ) as gateway_tools:
             tools = self._tools.copy()
             try:

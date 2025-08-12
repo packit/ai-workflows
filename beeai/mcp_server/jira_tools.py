@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from enum import Enum
 from typing import Annotated, Any
 from urllib.parse import urljoin
@@ -125,3 +126,68 @@ def add_jira_comment(
     except requests.RequestException as e:
         return f"Failed to add the specified comment: {e}"
     return f"Successfully added the specified comment to {issue_key}"
+
+
+def check_cve_triage_eligibility(
+    issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
+) -> dict[str, Any]:
+    """
+    Analyzes if a Jira issue represents a CVE and determines if it should be processed by triage agent
+    (for now only Y-stream CVEs or non-CVE).
+
+    Returns dictioneary with:
+    - is_cve: bool - Whether this is a CVE (by type or label)
+    - is_eligible_for_triage: bool - Whether triage agent should process it
+    - reason: str - Explanation of the decision
+    - error: str - Error message if the issue cannot be processed
+
+    """
+    headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
+
+    try:
+        response = requests.get(
+            urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+            headers=headers,
+        )
+        response.raise_for_status()
+        jira_data = response.json()
+    except requests.RequestException as e:
+        return {"is_eligible_for_triage": False, "error": f"Failed to get Jira data: {e}"}
+
+    fields = jira_data.get("fields", {})
+
+    labels = fields.get("labels", [])
+
+    if "SecurityTracking" not in labels:
+        return {"is_cve": False, "is_eligible_for_triage": True, "reason": "No SecurityTracking label"}
+
+    embargo = fields.get("customfield_12324750", {}).get("value", "")
+    if embargo == "True":
+        return {"is_cve": True, "is_eligible_for_triage": False, "reason": "CVE is embargoed, not eligible for Y-stream triage"}
+
+    severity = fields.get("customfield_12316142", {}).get("value", "")
+
+    if severity not in ["Low", "Moderate"]:
+        return {"is_cve": True, "is_eligible_for_triage": False, "reason": f"CVE severity is {severity}, not Low/Moderate"}
+
+    priority_labels = [l for l in labels if l in ["compliance-priority", "contract-priority"]]
+    if priority_labels:
+        return {"is_cve": True, "is_eligible_for_triage": False, "reason": f"CVE has priority labels: {', '.join(priority_labels)}"}
+
+    fix_versions = fields.get("fixVersions", [])
+    if not fix_versions:
+        return {"is_cve": True, "is_eligible_for_triage": False, "reason": "CVE has no target release specified"}
+
+    target_version = fix_versions[0].get("name", "")
+    if not re.match(r"^rhel-\d+\.\d+$", target_version.lower()):
+        return {"is_cve": True, "is_eligible_for_triage": False, "reason": f"CVE target release {target_version} is not Y-stream"}
+
+
+    due_date = fields.get("duedate")
+
+    # can we hardcode here the release dates from schedule?
+    release_dates = {}
+    release_date = release_dates.get(target_version.lower())
+    # TODO compare the release date with the due date
+
+    return {"is_cve": True, "is_eligible_for_triage": True, "reason": f"CVE is eligible to be fixed in Y-stream: {severity} severity, targets {target_version}, due after release"}

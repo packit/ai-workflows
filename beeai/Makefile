@@ -36,6 +36,17 @@ run-rebase-agent-standalone:
 		-e DRY_RUN=$(DRY_RUN) \
 		rebase-agent
 
+.PHONY: run-copr-validator-agent-standalone
+run-copr-validator-agent-standalone:
+	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e VERSION=$(VERSION) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e SRPM_PATH=$(SRPM_PATH) \
+		copr-validator-agent
+
+
 
 
 

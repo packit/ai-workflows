@@ -16,11 +16,13 @@ from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.template import PromptTemplate, PromptTemplateInput
 from beeai_framework.tools import Tool
+from beeai_framework.tools.handoff import HandoffTool
 from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 
 from base_agent import BaseAgent, TInputSchema, TOutputSchema
 from constants import COMMIT_PREFIX, BRANCH_PREFIX
+from copr_validator_agent import CoprValidatorAgent
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from triage_agent import RebaseData, ErrorData
@@ -66,11 +68,15 @@ class RebaseAgent(BaseAgent):
     def __init__(self) -> None:
         super().__init__(
             llm=ChatModel.from_name(os.getenv("CHAT_MODEL")),
-            tools=[ThinkTool(), RunShellCommandTool(), DuckDuckGoSearchTool()],
+            tools=[ThinkTool(), RunShellCommandTool(), DuckDuckGoSearchTool(),
+                HandoffTool(
+                CoprValidatorAgent(),
+                name="CoprValidatorAgent",
+                description="Validate the patch you created in Copr, analyze the build logs and report the results.",
+            ),],
             memory=UnconstrainedMemory(),
             requirements=[
                 ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
-                ConditionalRequirement("build_package", min_invocations=1),
             ],
             middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         )
@@ -127,7 +133,6 @@ class RebaseAgent(BaseAgent):
           * You can find the RPM packaging guide at https://rpm-packaging-guide.github.io/.
           * Do not run the `centpkg new-sources` command for now (testing purposes), just write down the commands you would run.
           * For every SRPM you generate, copy them in the {{ srpms_basepath }} directory.
-          * If the Copr build fails but returns a url you have to search for the build error. List files pointed by the returned url and start with looking at the file named "builder-live.log.gz".
 
           IMPORTANT GUIDELINES:
           - **Tool Usage**: You have run_shell_command tool available - use it directly!
@@ -171,19 +176,19 @@ class RebaseAgent(BaseAgent):
               * Use `rpmlint` to validate your .spec file changes and fix any new errors it identifies.
               * Generate the SRPM using `centpkg srpm --buildroot rhel-N`, where N is extracted from the cNs dist_git_branch.
               * Ensure your .spec file and source files are correctly copied to the build environment as required by the command.
-              * Take the path to the SRPM file and build the RPM in Copr using `build_package` tool, confirm it succeeds.
-                IMPORTANT: 
-                    - if the build fails, due to a kerberos ticket issue, you must try to re-run the build_package tool at least 3 times and wait 10 seconds between each attempt.
-                    - if the build fails, due to a Copr project already exists issue, you must try to re-run the build_package tool and change the project name to {{ jira_issue }}-N (where N is the number of the attempt).
-                    - if dist_git_branch is cNs, the Copr chroot is rhel-N.dev-x86_64  for Y stream.
-                Use the following parameters:
-                * project: {{ jira_issue }}
-                * chroots: [the chroot you determined based on the dist_git_branch]
-                * srpm_path: path to the SRPM file you have copied in the {{ srpms_basepath }} directory.
-             * If the build fails and a url is provided, find the error. Fix the error and re-run the build_package tool after generating a new srpm and copying it in the {{ srpms_basepath }} directory.
 
+          6. Validate the patch you created in Copr, analyze the build logs and report the results:
+              * MANDATORY: ALWAYS use the CoprValidatorAgent tool, even in dry-run mode - validation is required regardless of whether changes will be pushed
+              * Use the CoprValidatorAgent tool with the following parameters:
+                - package: {{ package }}
+                - version: {{ version }}  
+                - jira_issue: {{ jira_issue }}
+                - dist_git_branch: {{ dist_git_branch }}
+                - srpm_path: <path to the SRPM file you generated in step 5>
+              * Wait for the validation to complete and review the results before proceeding
+              * IMPORTANT: Dry-run mode only affects Git operations (step 7), NOT validation - you must still validate the build
 
-          6. {{ rebase_git_steps }}
+          7. {{ rebase_git_steps }}
 
           Report the status of the rebase operation including:
           - Whether the package was already up to date

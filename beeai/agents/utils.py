@@ -39,6 +39,8 @@ def get_git_finalization_steps(
     files_to_commit: str,
     branch_name: str,
     git_url: str = "https://gitlab.com/redhat/centos-stream/rpms",
+    git_user: str = "RHEL Packaging Agent",
+    git_email: str = "rhel-packaging-agent@redhat.com",
     dist_git_branch: str = "c9s",
     srpms_basepath: str = "/srpms",
 ) -> str:
@@ -47,18 +49,19 @@ def get_git_finalization_steps(
 
     # Common commit steps
     commit_steps = f"""* Add files to commit: {files_to_commit}
-            * Create commit with title: "{commit_title}"
+            * Create commit with title: "{commit_title}" and author: "{git_user} <{git_email}>"
             * Include JIRA reference: "Resolves: {jira_issue}" in commit body
             * This is the path to the SRPMs: {srpms_basepath}"""
 
     if dry_run:
         return f"""
-        **DRY RUN MODE**: Commit changes locally only
+        **DRY RUN MODE**: Commit changes locally only - validation and testing still required
 
         Commit the changes:
             {commit_steps}
 
         **Important**: In dry-run mode, only commit locally. Do not push or create merge requests.
+        **Note**: Dry-run mode does NOT skip validation steps - all validation (rpmlint, Copr builds) must still be performed.
         """
     else:
         return f"""

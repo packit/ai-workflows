@@ -42,6 +42,7 @@ services:
       - KEYTAB_FILE=/home/mcp/keytab
       # default cache location is a keyring
       - KRB5CCNAME=FILE:/tmp/krb5cc
+      - DRY_RUN=${DRY_RUN:-false}
     env_file:
       - .secrets/mcp-gateway.env
     volumes:

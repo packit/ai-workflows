@@ -23,6 +23,7 @@ from beeai_framework.tools.think import ThinkTool
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.patch_validator import PatchValidatorTool
+from tools.version_mapper import VersionMapperTool
 from utils import get_agent_execution_config, mcp_tools, redis_client
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,7 @@ def render_prompt(input: InputSchema) -> str:
          * A Rebase is only to be chosen when the issue explicitly instructs you to "rebase" or "update"
            to a newer/specific upstream version. Do not infer this.
          * Identify the <package_version> the package should be updated or rebased to.
+         * Set the Jira fields as per the instructions below.
 
       2. **Backport a Patch OR Request Clarification**
          This path is for issues that represent a clear bug or CVE that needs a targeted fix.
@@ -183,6 +185,8 @@ def render_prompt(input: InputSchema) -> str:
            is clarification-needed
          * This is the correct choice when you are sure a problem exists but cannot find the solution yourself
 
+         2.5 Set the Jira fields as per the instructions below.
+
       3. **No Action**
          A No Action decision is appropriate for issues that are NOT bugs or CVEs requiring code fixes:
          * QE tasks, testing, or validation work
@@ -196,6 +200,19 @@ def render_prompt(input: InputSchema) -> str:
          An Error decision is appropriate when there are processing issues that prevent proper analysis, e.g.:
          * The package mentioned in the issue cannot be found or identified
          * The issue cannot be accessed
+
+      **Final Step: Set JIRA Fields (for Rebase and Backport decisions only)**
+
+         If your decision is rebase or backport, use set_jira_fields tool to update JIRA fields (Severity, Fix Version, Target End):
+         1. Check all of the mentioned fields in the JIRA issue and don't modify those that are already set
+         2. Extract the affected RHEL major version from the JIRA issue (look in Affects Version/s field or issue description)
+         3. Determine if this is a very critical issue requiring Z-stream (only for: privilege escalation, remote code execution, data loss/corruption, or system compromise)
+         4. Use map_version tool with the major version and criticality to get the appropriate Fix Version and branch
+         5. Set JIRA fields:
+             * Severity: default to 'moderate', for important issues use 'important', for most critical use 'critical' (privilege escalation, RCE, data loss)
+             * Fix Version: use the fix_version from map_version tool result
+             * Target End: today + 14 days
+         6. Use the branch from map_version tool result for your output
 
       **Output Format**
 
@@ -242,21 +259,23 @@ async def main() -> None:
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
         agent = RequirementAgent(
             llm=ChatModel.from_name(os.getenv("CHAT_MODEL")),
-            tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool()]
-            + [t for t in gateway_tools if t.name == "get_jira_details"],
+            tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool(), VersionMapperTool()]
+            + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields"]],
             memory=UnconstrainedMemory(),
             requirements=[
                 ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
                 ConditionalRequirement("get_jira_details", min_invocations=1),
                 ConditionalRequirement(RunShellCommandTool, only_after="get_jira_details"),
                 ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),
+                ConditionalRequirement("set_jira_fields", only_after="get_jira_details"),
             ],
             middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
             role="Red Hat Enterprise Linux developer",
             instructions=[
                 "Use the `think` tool to reason through complex decisions and document your approach.",
                 "Be proactive in your search for fixes and do not give up easily.",
-            ],
+                "After completing your triage analysis, if your decision is backport or rebase, always set appropriate JIRA fields per the instructions using set_jira_fields tool.",
+            ]
         )
 
         async def run(input):

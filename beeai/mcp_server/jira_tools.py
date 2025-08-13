@@ -1,3 +1,4 @@
+import datetime
 import os
 import json
 from enum import Enum
@@ -6,6 +7,12 @@ from urllib.parse import urljoin
 
 import requests
 from pydantic import Field
+
+
+# Jira custom field IDs
+SEVERITY_CUSTOM_FIELD = "customfield_12316142"
+PRELIMINARY_TESTING_CUSTOM_FIELD = "customfield_12321540"
+TARGET_END_CUSTOM_FIELD = "customfield_12313942"
 
 
 class Severity(Enum):
@@ -74,26 +81,31 @@ def set_jira_fields(
     issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
     fix_versions: Annotated[
         list[str] | None,
-        Field(
-            description="List of Fix Version/s values",
-            pattern=r"^(CentOS Stream \d+|eln|zstream|rhel-\d+\.\d+(\.(\d+|z)|\.\d+\.z|[._](alpha|beta))?)$",
-        ),
+        Field(description="List of Fix Version/s values (e.g., ['rhel-9.8'], ['rhel-9.7.z'])"),
     ] = None,
     severity: Annotated[Severity | None, Field(description="Severity value")] = None,
     preliminary_testing: Annotated[
         PreliminaryTesting | None, Field(description="Preliminary Testing value")
     ] = None,
+    target_end: Annotated[datetime.date | None, Field(description="Target End value")] = None,
 ) -> str:
     """
     Updates the specified Jira issue, setting the specified fields (if provided).
     """
+    if os.getenv("DRY_RUN", "False").lower() == "true":
+        return "Dry run, not updating Jira fields"
+
+    return "Not updating Jira fields"
+
     fields = {}
     if fix_versions is not None:
         fields["fixVersions"] = [{"name": fv} for fv in fix_versions]
     if severity is not None:
-        fields["customfield_12316142"] = {"value": severity.value}
+        fields[SEVERITY_CUSTOM_FIELD] = {"value": severity.value}
     if preliminary_testing is not None:
-        fields["customfield_12321540"] = {"value": preliminary_testing.value}
+        fields[PRELIMINARY_TESTING_CUSTOM_FIELD] = {"value": preliminary_testing.value}
+    if target_end is not None:
+        fields[TARGET_END_CUSTOM_FIELD] = {"value": target_end.strftime("%Y-%m-%d")}
     if not fields:
         return "No fields to update have been specified, not doing anything"
     try:

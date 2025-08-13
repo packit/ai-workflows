@@ -17,6 +17,7 @@ run-beeai-bash:
 run-triage-agent-standalone:
 	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e DRY_RUN=$(DRY_RUN) \
 		triage-agent
 
 

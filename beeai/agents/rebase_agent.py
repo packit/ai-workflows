@@ -16,7 +16,6 @@ from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.template import PromptTemplate, PromptTemplateInput
 from beeai_framework.tools import Tool
-from beeai_framework.tools.handoff import HandoffTool
 from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 
@@ -68,12 +67,7 @@ class RebaseAgent(BaseAgent):
     def __init__(self) -> None:
         super().__init__(
             llm=ChatModel.from_name(os.getenv("CHAT_MODEL")),
-            tools=[ThinkTool(), RunShellCommandTool(), DuckDuckGoSearchTool(),
-                HandoffTool(
-                CoprValidatorAgent(),
-                name="CoprValidatorAgent",
-                description="Validate the patch you created in Copr, analyze the build logs and report the results.",
-            ),],
+            tools=[ThinkTool(), RunShellCommandTool(), DuckDuckGoSearchTool()],
             memory=UnconstrainedMemory(),
             requirements=[
                 ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),

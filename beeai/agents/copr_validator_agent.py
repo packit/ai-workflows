@@ -7,7 +7,6 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from beeai_framework.agents.experimental import RequirementAgent
 from beeai_framework.agents.experimental.requirements.conditional import (
     ConditionalRequirement,
 )
@@ -20,10 +19,8 @@ from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 
 from base_agent import BaseAgent, TInputSchema, TOutputSchema
-from observability import setup_observability
 from tools.commands import RunShellCommandTool
-from triage_agent import ErrorData
-from utils import mcp_tools, redis_client
+from utils import mcp_tools
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +57,6 @@ class CoprValidatorAgent(BaseAgent):
             memory=UnconstrainedMemory(),
             requirements=[
                 ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
-                ConditionalRequirement("build_package", min_invocations=1),
             ],
             middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         )
@@ -125,43 +121,24 @@ class CoprValidatorAgent(BaseAgent):
         """
 
     async def run_with_schema(self, input: TInputSchema) -> TOutputSchema:
-        # Debug: Log available tools
-        tool_names = [getattr(tool, 'name', str(type(tool).__name__)) for tool in self._tools]
-        logger.info(f"CoprValidatorAgent available tools: {tool_names}")
+        mcp_gateway_url = os.getenv("MCP_GATEWAY_URL")
+        if not mcp_gateway_url:
+            logger.error("MCP_GATEWAY_URL not set - cannot connect to MCP gateway")
         
-        # Try to run with whatever tools are available first
-        # This handles the case where we're running as HandoffTool and tools are inherited
-        try:
-            logger.info("CoprValidatorAgent attempting to run with current tools")
-            return await self._run_with_schema(input)
-        except ValueError as e:
-            if "Source tool build_package was not found" in str(e):
-                # We need to get the build_package tool from MCP gateway
-                logger.info("build_package tool not found - connecting to MCP gateway")
-                
-                mcp_gateway_url = os.getenv("MCP_GATEWAY_URL")
-                if not mcp_gateway_url:
-                    logger.error("MCP_GATEWAY_URL not set - cannot connect to MCP gateway")
-                    raise ValueError("build_package tool not available and MCP_GATEWAY_URL not configured")
-                
-                async with mcp_tools(
-                    mcp_gateway_url,
-                    filter=lambda t: t in ("build_package",),
-                ) as gateway_tools:
-                    tools = self._tools.copy()
-                    try:
-                        self._tools.extend(gateway_tools)
-                        logger.info("Added MCP tools, retrying execution")
-                        return await self._run_with_schema(input)
-                    finally:
-                        self._tools = tools
-                        # disassociate removed tools from requirements
-                        for requirement in self._requirements:
-                            if requirement._source_tool in gateway_tools:
-                                requirement._source_tool = None
-            else:
-                # Some other error - re-raise it
-                raise
+        async with mcp_tools(
+            mcp_gateway_url,
+            filter=lambda t: t in ("build_package",),
+        ) as gateway_tools:
+            tools = self._tools.copy()
+            try:
+                self._tools.extend(gateway_tools)
+                return await self._run_with_schema(input)
+            finally:
+                self._tools = tools
+                # disassociate removed tools from requirements
+                for requirement in self._requirements:
+                    if requirement._source_tool in gateway_tools:
+                        requirement._source_tool = None
 
 
 async def main() -> None:

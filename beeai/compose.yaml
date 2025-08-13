@@ -96,6 +96,10 @@ services:
     <<: *beeai-agent
     command: ["python", "agents/copr_validator_agent.py"]
 
+  rebase-workflow:
+    <<: *beeai-agent
+    command: ["python", "agents/rebase_workflow.py"]
+
 volumes:
   valkey-data:
   phoenix-data:

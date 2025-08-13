@@ -46,6 +46,16 @@ run-copr-validator-agent-standalone:
 		-e SRPM_PATH=$(SRPM_PATH) \
 		copr-validator-agent
 
+.PHONY: run-rebase-workflow-standalone
+run-rebase-workflow-standalone:
+	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e VERSION=$(VERSION) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e DRY_RUN=$(DRY_RUN) \
+		rebase-workflow
+
 
 
 
@@ -92,6 +102,10 @@ logs-backport:
 .PHONY: logs-rebase
 logs-rebase:
 	$(COMPOSE) -f $(COMPOSE_FILE) logs -f rebase-agent
+
+.PHONY: logs-rebase-workflow
+logs-rebase-workflow:
+	$(COMPOSE) -f $(COMPOSE_FILE) logs -f rebase-workflow
 
 .PHONY: status
 status:

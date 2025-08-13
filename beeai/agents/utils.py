@@ -32,6 +32,16 @@ async def mcp_tools(
         yield tools
 
 
+async def get_mcp_tools(
+    client: ClientSession, filter: Callable[[str], bool] | None = None
+) -> list[MCPTool]:
+    """Get MCP tools and return them with the active session"""
+    tools = await MCPTool.from_client(client)
+    if filter:
+        tools = [t for t in tools if filter(t.name)]
+    return tools
+
+
 def get_git_finalization_steps(
     package: str,
     jira_issue: str,
@@ -75,3 +85,63 @@ def get_git_finalization_steps(
             * Target branch: {dist_git_branch}
         """
 
+
+def format_event_output(data, event):
+    """Format event output to be more readable"""
+    # Extract key information based on event type
+    if hasattr(data, 'state') and hasattr(data.state, 'iteration'):
+        iteration = data.state.iteration
+        
+        # Get the latest step if available
+        latest_step = None
+        if hasattr(data.state, 'steps') and data.state.steps:
+            latest_step = data.state.steps[-1]
+        
+        if latest_step:
+            if hasattr(latest_step, 'tool') and hasattr(latest_step.tool, '__class__'):
+                tool_name = latest_step.tool.__class__.__name__
+                
+                if tool_name == 'RunShellCommandTool' and hasattr(latest_step, 'input'):
+                    command = latest_step.input.get('command', 'Unknown command')
+                    print(f"[Iteration {iteration:2d}] Running: {command}")
+                    
+                    if hasattr(latest_step, 'output') and hasattr(latest_step.output, 'stdout'):
+                        stdout = latest_step.output.stdout.strip()
+                        if stdout:
+                            # Show first few lines of output
+                            lines = stdout.split('\n')
+                            if len(lines) > 3:
+                                print(f"                Output: {lines[0]}")
+                                if len(lines) > 1:
+                                    print(f"                        ... ({len(lines)-1} more lines)")
+                            else:
+                                for line in lines:
+                                    if line.strip():
+                                        print(f"                Output: {line}")
+                    
+                    if hasattr(latest_step, 'output') and hasattr(latest_step.output, 'stderr'):
+                        stderr = latest_step.output.stderr.strip()
+                        if stderr:
+                            print(f"                Error:  {stderr}")
+                            
+                elif tool_name == 'ThinkTool' and hasattr(latest_step, 'input'):
+                    thoughts = latest_step.input.get('thoughts', '')
+                    next_step = latest_step.input.get('next_step', [])
+                    if thoughts:
+                        # Show first part of thoughts
+                        thought_preview = thoughts[:150] + '...' if len(thoughts) > 150 else thoughts
+                        print(f"[Iteration {iteration:2d}] Thinking: {thought_preview}")
+                    if next_step and isinstance(next_step, list) and next_step:
+                        next_preview = next_step[0][:100] + '...' if len(next_step[0]) > 100 else next_step[0]
+                        print(f"                Next: {next_preview}")
+                else:
+                    print(f"[Iteration {iteration:2d}] Tool: {tool_name}")
+            else:
+                print(f"[Iteration {iteration:2d}] Processing...")
+        else:
+            print(f"[Iteration {iteration:2d}] {event.name if hasattr(event, 'name') else 'Unknown event'}")
+    else:
+        # Fallback for other event types
+        event_name = event.name if hasattr(event, 'name') else 'Unknown'
+        if event_name not in ['start', 'success']:  # Filter out noise
+            print(f"[Event] {event_name}")

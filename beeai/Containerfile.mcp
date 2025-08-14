@@ -23,6 +23,7 @@ RUN useradd -m -G wheel mcp
 # although it is locally mounted through a volume
 COPY mcp_server/ /home/mcp/mcp_server/
 RUN chgrp -R root /home/mcp && chmod -R g+rwX /home/mcp
+RUN mkdir /git-repos && chmod -R o+rwX /git-repos
 
 USER mcp
 WORKDIR /home/mcp

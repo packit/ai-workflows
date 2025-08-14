@@ -1,3 +1,4 @@
+import datetime
 import os
 import json
 from enum import Enum
@@ -6,6 +7,11 @@ from urllib.parse import urljoin
 
 import requests
 from pydantic import Field
+
+
+# Jira custom field IDs
+SEVERITY_CUSTOM_FIELD = "customfield_12316142"
+TARGET_END_CUSTOM_FIELD = "customfield_12313942"
 
 
 class Severity(Enum):
@@ -74,28 +80,49 @@ def set_jira_fields(
     issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
     fix_versions: Annotated[
         list[str] | None,
-        Field(
-            description="List of Fix Version/s values",
-            pattern=r"^(CentOS Stream \d+|eln|zstream|rhel-\d+\.\d+(\.(\d+|z)|\.\d+\.z|[._](alpha|beta))?)$",
-        ),
+        Field(description="List of Fix Version/s values (e.g., ['rhel-9.8'], ['rhel-9.7.z'])"),
     ] = None,
     severity: Annotated[Severity | None, Field(description="Severity value")] = None,
-    preliminary_testing: Annotated[
-        PreliminaryTesting | None, Field(description="Preliminary Testing value")
-    ] = None,
+    target_end: Annotated[datetime.date | None, Field(description="Target End value")] = None,
 ) -> str:
     """
-    Updates the specified Jira issue, setting the specified fields (if provided).
+    Updates the specified Jira issue, setting only the fields that are currently empty/unset.
     """
+    if os.getenv("DRY_RUN", "False").lower() == "true":
+        return "Dry run, not updating Jira fields"
+
+    # First, get the current issue to check existing field values
+    try:
+        response = requests.get(
+            urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+            headers=_get_jira_headers(os.getenv("JIRA_TOKEN")),
+        )
+        response.raise_for_status()
+        current_issue = response.json()
+    except requests.RequestException as e:
+        return f"Failed to get current issue details: {e}"
+
     fields = {}
+    current_fields = current_issue.get("fields", {})
+
     if fix_versions is not None:
-        fields["fixVersions"] = [{"name": fv} for fv in fix_versions]
+        current_fix_versions = current_fields.get("fixVersions", [])
+        if not current_fix_versions:
+            fields["fixVersions"] = [{"name": fv} for fv in fix_versions]
+
     if severity is not None:
-        fields["customfield_12316142"] = {"value": severity.value}
-    if preliminary_testing is not None:
-        fields["customfield_12321540"] = {"value": preliminary_testing.value}
+        current_severity = current_fields.get(SEVERITY_CUSTOM_FIELD)
+        if not current_severity.get("value"):
+            fields[SEVERITY_CUSTOM_FIELD] = {"value": severity.value}
+
+    if target_end is not None:
+        current_target_end = current_fields.get(TARGET_END_CUSTOM_FIELD)
+        if not current_target_end.get("value"):
+            fields[TARGET_END_CUSTOM_FIELD] = target_end.strftime("%Y-%m-%d")
+
     if not fields:
-        return "No fields to update have been specified, not doing anything"
+        return f"No fields needed updating in {issue_key}"
+
     try:
         response = requests.put(
             urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
@@ -105,7 +132,8 @@ def set_jira_fields(
         response.raise_for_status()
     except requests.RequestException as e:
         return f"Failed to set the specified fields: {e}"
-    return f"Successfully set the specified fields in {issue_key}"
+
+    return f"Successfully updated {issue_key}"
 
 
 def add_jira_comment(

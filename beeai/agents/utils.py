@@ -1,13 +1,16 @@
 import os
 
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Callable
+from typing import Any, AsyncGenerator, Callable
 
 import redis.asyncio as redis
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from mcp.types import TextContent
 
 from beeai_framework.agents import AgentExecutionConfig
+from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
+from beeai_framework.tools import Tool
 from beeai_framework.tools.mcp import MCPTool
 
 
@@ -17,6 +20,22 @@ def get_agent_execution_config() -> AgentExecutionConfig:
         total_max_retries=int(os.getenv("BEEAI_TOTAL_MAX_RETRIES", 10)),
         max_iterations=int(os.getenv("BEEAI_MAX_ITERATIONS", 100)),
     )
+
+
+async def run_tool(
+    tool: str | Tool,
+    available_tools: list[Tool] | None = None,
+    **kwargs: dict[str, Any]
+) -> str | dict:
+    if isinstance(tool, str):
+        tool = next(t for t in available_tools or [] if t.name == tool)
+    output = await tool.run(input=kwargs).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.to_json_safe()
+    if isinstance(result, list):
+        [result] = result
+    if isinstance(result, TextContent):
+        result = result.text
+    return result
 
 
 @asynccontextmanager
@@ -51,30 +70,13 @@ def get_git_finalization_steps(
     dist_git_branch: str = "c9s",
 ) -> str:
     """Generate Git finalization steps with dry-run support"""
-    dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
 
     # Common commit steps
     commit_steps = f"""* Add files to commit: {files_to_commit}
             * Create commit with title: "{commit_title}"
             * Include JIRA reference: "Resolves: {jira_issue}" in commit body"""
 
-    if dry_run:
-        return f"""
-        **DRY RUN MODE**: Commit changes locally only
-
-        Commit the changes:
-            {commit_steps}
-
-        **Important**: In dry-run mode, only commit locally. Do not push or create merge requests.
-        """
-    else:
-        return f"""
-        Commit and push the changes:
-            {commit_steps}
-            * Push the branch `{branch_name}` to the fork using the `push_to_remote_repository` tool,
-              do not use `git push`
-
-        Open a merge request:
-            * Open a merge request against {git_url}/{package}
-            * Target branch: {dist_git_branch}
-        """
+    return f"""
+    Commit the changes:
+        {commit_steps}
+    """

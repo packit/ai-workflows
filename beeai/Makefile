@@ -13,6 +13,10 @@ build:
 run-beeai-bash:
 	$(COMPOSE) -f $(COMPOSE_FILE) run --rm triage-agent /bin/bash
 
+.PHONY: run-mcp-gateway-bash
+run-mcp-gateway-bash:
+	$(COMPOSE) -f $(COMPOSE_FILE) run --rm mcp-gateway /bin/bash
+
 .PHONY: run-triage-agent-standalone
 run-triage-agent-standalone:
 	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
@@ -31,6 +35,27 @@ run-rebase-agent-standalone:
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
 		rebase-agent
+
+.PHONY: run-copr-validator-agent-standalone
+run-copr-validator-agent-standalone:
+	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e VERSION=$(VERSION) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e SRPM_PATH=$(SRPM_PATH) \
+		copr-validator-agent
+
+.PHONY: run-rebase-workflow-standalone
+run-rebase-workflow-standalone:
+	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e VERSION=$(VERSION) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e DRY_RUN=$(DRY_RUN) \
+		rebase-workflow
+
 
 
 
@@ -77,6 +102,10 @@ logs-backport:
 .PHONY: logs-rebase
 logs-rebase:
 	$(COMPOSE) -f $(COMPOSE_FILE) logs -f rebase-agent
+
+.PHONY: logs-rebase-workflow
+logs-rebase-workflow:
+	$(COMPOSE) -f $(COMPOSE_FILE) logs -f rebase-workflow
 
 .PHONY: status
 status:

@@ -21,6 +21,7 @@ from beeai_framework.tools.think import ThinkTool
 
 from base_agent import BaseAgent, TInputSchema, TOutputSchema
 from constants import COMMIT_PREFIX, BRANCH_PREFIX
+from copr_validator_agent import CoprValidatorAgent
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from triage_agent import RebaseData, ErrorData
@@ -49,6 +50,10 @@ class InputSchema(BaseModel):
         description="Base path for cloned git repos",
         default=os.getenv("GIT_REPO_BASEPATH"),
     )
+    srpms_basepath: str = Field(
+        description="Base path for SRPMs",
+        default=os.getenv("SRPMS_BASEPATH"),
+    )
 
 
 class OutputSchema(BaseModel):
@@ -61,6 +66,97 @@ class OutputSchema(BaseModel):
 class RebaseAgent(BaseAgent):
     def __init__(self) -> None:
         super().__init__(
+            name="RebaseAgent",
+            role="You are an AI Agent tasked to rebase a CentOS package to a newer version.",
+            instructions="""
+          You are an AI Agent tasked to rebase a CentOS package to a newer version following the exact workflow.
+
+          A couple of rules that you must follow and useful information for you:
+          * All packages are in separate Git repositories under the Gitlab project https://gitlab.com/redhat/centos-stream/rpms
+          * You can find the package at https://gitlab.com/redhat/centos-stream/rpms/libwebp
+          * The Git user name is RHEL Packaging Agent
+          * The Git user's email address is rhel-packaging-agent@redhat.com
+          * Use mmassari1 as the GitLab user.
+          * Work only in a temporary directory that you can create with the mktemp tool.
+          * You can find packaging guidelines at https://docs.fedoraproject.org/en-US/packaging-guidelines/
+          * You can find the RPM packaging guide at https://rpm-packaging-guide.github.io/.
+          * Do not run the `centpkg new-sources` command for now (testing purposes), just write down the commands you would run.
+          * For every SRPM you generate, copy them in the /srpms directory.
+
+          IMPORTANT GUIDELINES:
+          - **Tool Usage**: You have run_shell_command tool available - use it directly!
+          - **Command Execution Rules**:
+            - Use run_shell_command tool for ALL command execution
+            - If a command shows "no output" or empty STDOUT, that is a VALID result - do not retry
+            - Commands that succeed with no output are normal - report success
+          - **Git Configuration**: Always configure git user name and email before any git operations
+
+          Follow exactly these steps:
+
+          1. Find the location of the libwebp package at https://gitlab.com/redhat/centos-stream/rpms.  Always use the c10s branch.
+
+          2. Check if the libwebp was not already updated to version 1.6.0.  That means comparing
+             the current version and provided version.
+              * The current version of the package can be found in the 'Version' field of the RPM .spec file.
+              * If there is nothing to update, print a message and exit. Otherwise follow the instructions below.
+              * Do not clone any repository for detecting the version in .spec file.
+
+          3. Create a local Git repository by following these steps:
+              * Create a fork of the libwebp package using the `fork_repository` tool.
+              * Clone the fork using git and HTTPS into a temporary directory under /git-repos.
+
+          4. Update the libwebp to the newer version:
+              * Create a new Git branch named `automated-package-update-1.6.0`.
+              * Update the local package by:
+                * Updating the 'Version' and 'Release' fields in the .spec file as needed (or corresponding macros),
+                  following packaging documentation.
+                  * Make sure the format of the .spec file remains the same.
+                * Updating macros related to update (e.g., 'commit') if present and necessary; examine the file's history
+                  to see how updates are typically done.
+                  * You might need to check some information in upstream repository, e.g. the commit SHA of the new version.
+                * Creating a changelog entry, referencing the Jira issue as "Resolves: RHEL-105872".
+                * Downloading sources using `spectool -g -S libwebp.spec` (you might need to copy local sources,
+                  e.g. if the .spec file loads some macros from them, to a directory where spectool expects them).
+                * Uploading the new sources using `centpkg --release c10s new-sources`.
+                * IMPORTANT: Only performing changes relevant to the version update: Do not rename variables,
+                  comment out existing lines, or alter if-else branches in the .spec file.
+
+          5. Verify and adjust the changes:
+              * Use `rpmlint` to validate your .spec file changes and fix any new errors it identifies.
+              * Generate the SRPM using `centpkg srpm --buildroot rhel-N`, where N is extracted from the cNs dist_git_branch.
+              * Ensure your .spec file and source files are correctly copied to the build environment as required by the command.
+
+          6. Validate the patch you created in Copr, analyze the build logs and report the results:
+              * MANDATORY: ALWAYS use the CoprValidatorAgent tool, even in dry-run mode - validation is required regardless of whether changes will be pushed
+              * Use the CoprValidatorAgent tool with the following parameters:
+                - package: libwebp
+                - version: 1.6.0  
+                - jira_issue: RHEL-105872
+                - dist_git_branch: c10s
+                - srpm_path: <path to the SRPM file you generated in step 5>
+              * Wait for the validation to complete and review the results before proceeding
+              * IMPORTANT: Dry-run mode only affects Git operations (step 7), NOT validation - you must still validate the build
+
+          7. 
+        **DRY RUN MODE**: Commit changes locally only - validation and testing still required
+
+        Commit the changes:
+            * Add files to commit: *.spec
+            * Create commit with title: &quot;[DO NOT MERGE: AI EXPERIMENTS] Update to version 1.6.0&quot; and author: &quot;RHEL Packaging Agent &lt;rhel-packaging-agent@redhat.com&gt;&quot;
+            * Include JIRA reference: &quot;Resolves: RHEL-105872&quot; in commit body
+            * This is the path to the SRPMs: /srpms
+
+        **Important**: In dry-run mode, only commit locally. Do not push or create merge requests.
+        **Note**: Dry-run mode does NOT skip validation steps - all validation (rpmlint, Copr builds) must still be performed.
+        
+
+          Report the status of the rebase operation including:
+          - Whether the package was already up to date
+          - Any errors encountered during the process
+          - The URL of the created merge request if successful or the code changes you created if in dry-run mode
+          - The URL of the Copr build
+          - Any validation issues found with rpmlint
+          """,
             llm=ChatModel.from_name(os.getenv("CHAT_MODEL")),
             tools=[ThinkTool(), RunShellCommandTool(), DuckDuckGoSearchTool()],
             memory=UnconstrainedMemory(),
@@ -92,6 +188,7 @@ class RebaseAgent(BaseAgent):
                 git_email=input_data.git_email,
                 git_url=input_data.git_url,
                 dist_git_branch=input_data.dist_git_branch,
+                srpms_basepath=input_data.srpms_basepath,
             )
 
         template = PromptTemplate(
@@ -120,6 +217,7 @@ class RebaseAgent(BaseAgent):
           * You can find packaging guidelines at https://docs.fedoraproject.org/en-US/packaging-guidelines/
           * You can find the RPM packaging guide at https://rpm-packaging-guide.github.io/.
           * Do not run the `centpkg new-sources` command for now (testing purposes), just write down the commands you would run.
+          * For every SRPM you generate, copy them in the {{ srpms_basepath }} directory.
 
           IMPORTANT GUIDELINES:
           - **Tool Usage**: You have run_shell_command tool available - use it directly!
@@ -161,15 +259,27 @@ class RebaseAgent(BaseAgent):
 
           5. Verify and adjust the changes:
               * Use `rpmlint` to validate your .spec file changes and fix any new errors it identifies.
-              * Generate the SRPM using `rpmbuild -bs` (ensure your .spec file and source files are correctly
-                copied to the build environment as required by the command).
+              * Generate the SRPM using `centpkg srpm --buildroot rhel-N`, where N is extracted from the cNs dist_git_branch.
+              * Ensure your .spec file and source files are correctly copied to the build environment as required by the command.
 
-          6. {{ rebase_git_steps }}
+          6. Validate the patch you created in Copr, analyze the build logs and report the results:
+              * MANDATORY: ALWAYS use the CoprValidatorAgent tool, even in dry-run mode - validation is required regardless of whether changes will be pushed
+              * Use the CoprValidatorAgent tool with the following parameters:
+                - package: {{ package }}
+                - version: {{ version }}  
+                - jira_issue: {{ jira_issue }}
+                - dist_git_branch: {{ dist_git_branch }}
+                - srpm_path: <path to the SRPM file you generated in step 5>
+              * Wait for the validation to complete and review the results before proceeding
+              * IMPORTANT: Dry-run mode only affects Git operations (step 7), NOT validation - you must still validate the build
+
+          7. {{ rebase_git_steps }}
 
           Report the status of the rebase operation including:
           - Whether the package was already up to date
           - Any errors encountered during the process
-          - The URL of the created merge request if successful
+          - The URL of the created merge request if successful or the code changes you created if in dry-run mode
+          - The URL of the Copr build
           - Any validation issues found with rpmlint
         """
 
@@ -177,7 +287,7 @@ class RebaseAgent(BaseAgent):
         async with mcp_tools(
             os.getenv("MCP_GATEWAY_URL"),
             filter=lambda t: t
-            in ("fork_repository", "open_merge_request", "push_to_remote_repository"),
+            in ("fork_repository", "open_merge_request", "push_to_remote_repository", "build_package"),
         ) as gateway_tools:
             tools = self._tools.copy()
             try:

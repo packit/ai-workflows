@@ -66,9 +66,6 @@ async def main() -> None:
             rebase_agent,
             execution=execution,
             tools=base_tools + await get_mcp_tools(session, filter=lambda t: t in ("fork_repository", "open_merge_request", "push_to_remote_repository")),
-            name="RebaseAgent",
-            role="You are a rebase assistant. You are tasked to rebase a CentOS package to a newer version.",
-            instructions=rebase_instructions,
         )
 
         copr_validator_instructions = copr_validator_agent._render_prompt(copr_validator_agent.input_schema(
@@ -85,11 +82,7 @@ async def main() -> None:
             copr_validator_agent,
             execution=execution,
             tools=base_tools + await get_mcp_tools(session, filter=lambda t: t in ("build_package",)),
-            name="CoprValidatorAgent",
-            role="You are a copr build/validation assistant. You are tasked to validate a package patch by building it in Copr and analyzing the build results.",
-            instructions=copr_validator_instructions,
         )
-
 
         print(f"Starting workflow: Rebase the {package} package to version {version} for branch {branch}, referencing JIRA issue {jira_issue} (dry run: {dry_run})")
         
@@ -97,7 +90,7 @@ async def main() -> None:
             inputs=[
                 AgentWorkflowInput(
                     prompt=(
-                        f"Rebase a CentOS package to a newer version, use the rebase agent assistant. "
+                        f"Rebase a CentOS package to a newer version."
                         f"The package is {package}, the version is {version}, the branch is {branch}, the JIRA issue is {jira_issue}. "
                         f"The dry run mode is {dry_run}."
                     ),
@@ -106,7 +99,8 @@ async def main() -> None:
 
                 AgentWorkflowInput(
                     prompt=(
-                        f"Validate the SRPM built in the previous step for {package} {version}, use the copr build/validation assistant. "
+                        f"Validate a package patch by building it in Copr and analyzing the build results."
+                        f"Use the SRPM built in the previous step for {package} {version}, use the copr build/validation assistant. "
                         f"Use chroot appropriate for {branch}. If build fails, analyze logs and suggest fixes. "
                         f"The SRPM path is <PREVIOUS_STEP_SRPM_PATH>."
                     ),

@@ -24,7 +24,7 @@ from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.patch_validator import PatchValidatorTool
 from tools.version_mapper import VersionMapperTool
-from utils import get_agent_execution_config, mcp_tools, redis_client
+from utils import get_agent_execution_config, mcp_tools, redis_client, post_private_jira_comment
 
 logger = logging.getLogger(__name__)
 
@@ -331,14 +331,20 @@ async def main() -> None:
 
                 try:
                     logger.info(f"Starting triage processing for {input.issue}")
+
+                    # await post_private_jira_comment(gateway_tools, input.issue, "Starting ...")
+
                     output = await run(input)
                     logger.info(
                         f"Triage processing completed for {input.issue}, " f"resolution: {output.resolution.value}"
                     )
-                    # tool = next(t for t in gateway_tools if t.name == "add_jira_comment")
-                    # await tool.run(input={"issue_key": input.issue, "comment": "..."}).middleware(
-                    #    GlobalTrajectoryMiddleware(pretty=True)
-                    # )
+
+                    agent_type = "Triage"
+                    if output.resolution.value == "clarification-needed":
+                        await post_private_jira_comment(gateway_tools, input.issue, agent_type, output.data.additional_info_needed)
+                    elif output.resolution.value == "no-action":
+                        await post_private_jira_comment(gateway_tools, input.issue, agent_type, output.data.reasoning)
+
                 except Exception as e:
                     error = "".join(traceback.format_exception(e))
                     logger.error(f"Exception during triage processing for {input.issue}: {error}")

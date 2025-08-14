@@ -1,9 +1,11 @@
 import asyncio
 import logging
 import os
+from shutil import rmtree
 import subprocess
 import sys
 import traceback
+
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -30,7 +32,7 @@ from tools.specfile import AddChangelogEntryTool, BumpReleaseTool
 from tools.text import CreateTool, InsertTool, StrReplaceTool, ViewTool
 from tools.wicked_git import GitLogSearchTool, GitPatchCreationTool
 from triage_agent import BackportData, ErrorData
-from utils import check_subprocess, get_agent_execution_config, mcp_tools, redis_client
+from utils import check_subprocess, get_agent_execution_config, mcp_tools, redis_client, post_private_jira_comment
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +276,19 @@ async def main() -> None:
                     logger.info(
                         f"Backport processing completed for {backport_data.jira_issue}, " f"success: {state.backport_result.success}"
                     )
+
+                    agent_type = "Backport"
+                    if state.backport_result.success:
+                        logger.info(f"Updating JIRA {backport_data.jira_issue} with {state.backport_result.mr_url} ")
+
+                        await post_private_jira_comment(gateway_tools, backport_data.jira_issue, agent_type, state.backport_result.mr_url)
+                    else:
+                        logger.info(f"Agent failed to perform a backport for {backport_data.jira_issue}.")
+                        await post_private_jira_comment(gateway_tools, backport_data.jira_issue, agent_type,
+                                                        "Agent failed to perform a backport: {state.backport_result.error}")
+
+
+
                 except Exception as e:
                     error = "".join(traceback.format_exception(e))
                     logger.error(f"Exception during backport processing for {backport_data.jira_issue}: {error}")

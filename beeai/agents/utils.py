@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import shlex
 import subprocess
@@ -16,6 +17,7 @@ from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
 from beeai_framework.tools.mcp import MCPTool
 
+from constants import JIRA_COMMENT_TEMPLATE
 
 def get_agent_execution_config() -> AgentExecutionConfig:
     return AgentExecutionConfig(
@@ -104,3 +106,25 @@ async def mcp_tools(
         if filter:
             tools = [t for t in tools if filter(t.name)]
         yield tools
+
+async def post_private_jira_comment(gateway_tools: list, issue_key: str, agent_type: str, comment: str):
+    """Finds the Jira comment tool and posts a comment to the specified issue."""
+
+    logger = logging.getLogger(__name__)
+
+    dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
+
+    if not dry_run:
+        try:
+            comment_tool = next(t for t in gateway_tools if t.name == "add_private_jira_comment")
+            await comment_tool.run(
+                input={
+                    "issue_key": issue_key,
+                    "comment": JIRA_COMMENT_TEMPLATE.substitute({"AGENT_TYPE": agent_type,
+                                                                 "JIRA_COMMENT": comment}),
+                }
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+        except StopIteration:
+            logger.error("Jira comment tool not found in gateway tools.")
+        except Exception as e:
+            logger.error(f"Failed to post Jira comment for issue {issue_key}: {e}")

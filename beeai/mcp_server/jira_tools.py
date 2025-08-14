@@ -153,3 +153,25 @@ def add_jira_comment(
     except requests.RequestException as e:
         return f"Failed to add the specified comment: {e}"
     return f"Successfully added the specified comment to {issue_key}"
+
+def add_private_jira_comment(
+    issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
+    comment: Annotated[str, Field(description="Comment text to add")],
+) -> str:
+    """
+    Adds a private comment to the specified Jira issue.
+    """
+
+    if os.getenv("DRY_RUN", "False").lower() == "true":
+        return "Dry run, not adding private comment"
+
+    try:
+        response = requests.post(
+            urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/comment"),
+            json={"body": comment, "visibility": {"type":"group", "value":"Red Hat Employee"}},
+            headers=_get_jira_headers(os.getenv("JIRA_TOKEN")),
+        )
+        response.raise_for_status()
+    except requests.RequestException as e:
+        return f"Failed to add the specified comment: {e}"
+    return f"Successfully added the specified comment to {issue_key}"

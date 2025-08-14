@@ -28,7 +28,7 @@ from tools.commands import RunShellCommandTool
 from tools.specfile import AddChangelogEntryTool
 from tools.text import CreateTool, InsertTool, StrReplaceTool, ViewTool
 from triage_agent import RebaseData, ErrorData
-from utils import get_agent_execution_config, mcp_tools, redis_client, run_tool
+from utils import get_agent_execution_config, mcp_tools, redis_client, run_tool, post_private_jira_comment
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +279,16 @@ async def main() -> None:
                     logger.info(
                         f"Rebase processing completed for {rebase_data.jira_issue}, " f"success: {state.rebase_result.success}"
                     )
+
+                    agent_type = "Rebase"
+                    if state.rebase_result.success:
+                        logger.info(f"Updating JIRA {rebase_data.jira_issue} with {state.rebase_result.mr_url} ")
+                        await post_private_jira_comment(gateway_tools, rebase_data.jira_issue, agent_type, state.rebase_result.mr_url)
+                    else:
+                        logger.info(f"Agent failed to perform a rebase for {rebase_data.jira_issue}.")
+                        await post_private_jira_comment(gateway_tools, rebase_data.jira_issue, agent_type,
+                                                        "Agent failed to perform a rebase: {state.rebase_result.error}")
+
                 except Exception as e:
                     error = "".join(traceback.format_exception(e))
                     logger.error(f"Exception during rebase processing for {rebase_data.jira_issue}: {error}")

@@ -25,6 +25,8 @@ from tools.commands import RunShellCommandTool
 from tools.patch_validator import PatchValidatorTool
 from utils import get_agent_execution_config, mcp_tools, redis_client
 
+from constants import JIRA_COMMENT_TEMPLATE
+
 logger = logging.getLogger(__name__)
 
 
@@ -313,14 +315,29 @@ async def main() -> None:
 
                 try:
                     logger.info(f"Starting triage processing for {input.issue}")
+
+                    add_jira_comment_tool = next(t for t in gateway_tools if t.name == "add_jira_comment")
+                    await add_jira_comment_tool.run(input={"issue_key": input.issue, "comment":
+                                          JIRA_COMMENT_TEMPLATE.substitute(JIRA_COMMENT="Starting triage processing ...")}).middleware(
+                            GlobalTrajectoryMiddleware(pretty=True)
+                    )
+
                     output = await run(input)
                     logger.info(
                         f"Triage processing completed for {input.issue}, " f"resolution: {output.resolution.value}"
                     )
-                    # tool = next(t for t in gateway_tools if t.name == "add_jira_comment")
-                    # await tool.run(input={"issue_key": input.issue, "comment": "..."}).middleware(
-                    #    GlobalTrajectoryMiddleware(pretty=True)
-                    # )
+
+                    if output.resolution.value == "clarification-needed":
+                        await add_jira_comment_tool.run(input={"issue_key": input.issue, "comment":
+                                              JIRA_COMMENT_TEMPLATE.substitute(JIRA_COMMENT=output.data.additional_info_needed)}).middleware(
+                           GlobalTrajectoryMiddleware(pretty=True)
+                        )
+                    elif output.resolution.value == "no-action":
+                        await add_jira_comment_tool.run(input={"issue_key": input.issue, "comment":
+                                              JIRA_COMMENT_TEMPLATE.substitute(JIRA_COMMENT=output.data.data.reasoning)}).middleware(
+                           GlobalTrajectoryMiddleware(pretty=True)
+                        )
+
                 except Exception as e:
                     error = "".join(traceback.format_exception(e))
                     logger.error(f"Exception during triage processing for {input.issue}: {error}")

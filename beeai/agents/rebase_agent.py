@@ -235,10 +235,31 @@ async def main() -> None:
 
                 try:
                     logger.info(f"Starting rebase processing for {rebase_data.jira_issue}")
+
+                    add_jira_comment_tool = next(t for t in gateway_tools if t.name == "add_jira_comment")
+                    await add_jira_comment_tool.run(input={"issue_key": rebase_data.jira_issue, "comment":
+                                          JIRA_COMMENT_TEMPLATE.substitute(JIRA_COMMENT="Starting rebase processing ...")}).middleware(
+                            GlobalTrajectoryMiddleware(pretty=True)
+                    )
+
                     output = await run(input)
                     logger.info(
                         f"Rebase processing completed for {rebase_data.jira_issue}, " f"success: {output.success}"
                     )
+
+                    if output.success:
+                        logger.info(f"Updating JIRA {rebase_data.jira_issue} with {output.mr_url} ")
+                        await add_jira_comment_tool.run(input={"issue_key": rebase_data.jira_issue, "comment":
+                                              JIRA_COMMENT_TEMPLATE.substitute(JIRA_COMMENT=output.mr_url)}).middleware(
+                           GlobalTrajectoryMiddleware(pretty=True)
+                        )
+                    else:
+                        logger.info(f"Failed")
+                        await add_jira_comment_tool.run(input={"issue_key": rebase_data.jira_issue, "comment":
+                                              JIRA_COMMENT_TEMPLATE.substitute(JIRA_COMMENT="Agent failed to performed a rebase.")}).middleware(
+                           GlobalTrajectoryMiddleware(pretty=True)
+                        )
+
                 except Exception as e:
                     error = "".join(traceback.format_exception(e))
                     logger.error(f"Exception during rebase processing for {rebase_data.jira_issue}: {error}")

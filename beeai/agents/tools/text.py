@@ -50,8 +50,12 @@ class ViewToolInput(BaseModel):
     @field_validator("view_range", mode="after")
     @classmethod
     def validate_view_range(cls, view_range: list[int] | None) -> list[int] | None:
-        if view_range is not None and len(view_range) != 2:
-            raise ValueError("`view_range` must be a list of two integers")
+        if view_range is not None:
+            if len(view_range) == 0:
+                # treat `[]` as `None`, some LLMs just don't get the hint
+                return None
+            if len(view_range) != 2:
+                raise ValueError("`view_range` must be a list of two integers")
         return view_range
 
 

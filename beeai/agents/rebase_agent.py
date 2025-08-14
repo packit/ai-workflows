@@ -1,9 +1,12 @@
 import asyncio
 import logging
 import os
+import re
+import shutil
+import subprocess
 import sys
 import traceback
-from typing import Optional
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -19,99 +22,75 @@ from beeai_framework.template import PromptTemplate, PromptTemplateInput
 from beeai_framework.tools import Tool
 from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
+from beeai_framework.workflows import Workflow
 
 from constants import COMMIT_PREFIX, BRANCH_PREFIX
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
+from tools.specfile import AddChangelogEntryTool
+from tools.text import CreateTool, InsertTool, StrReplaceTool, ViewTool
 from triage_agent import RebaseData, ErrorData
-from utils import get_agent_execution_config, mcp_tools, redis_client, get_git_finalization_steps
+from utils import get_agent_execution_config, mcp_tools, redis_client, run_tool, get_git_finalization_steps
 
 logger = logging.getLogger(__name__)
 
 
 class InputSchema(BaseModel):
+    local_clone: Path = Field(description="Path to the local clone of forked dist-git repository")
     package: str = Field(description="Package to update")
+    dist_git_branch: str = Field(description="dist-git branch to update")
     version: str = Field(description="Version to update to")
     jira_issue: str = Field(description="Jira issue to reference as resolved")
-    dist_git_branch: str = Field(description="Git branch in dist-git to be updated")
-    gitlab_user: str = Field(
-        description="Name of the GitLab user",
-        default=os.getenv("GITLAB_USER", "rhel-packaging-agent"),
-    )
-    git_url: str = Field(
-        description="URL of the git repository",
-        default="https://gitlab.com/redhat/centos-stream/rpms",
-    )
-    git_repo_basepath: str = Field(
-        description="Base path for cloned git repos",
-        default=os.getenv("GIT_REPO_BASEPATH"),
-    )
 
 
 class OutputSchema(BaseModel):
     success: bool = Field(description="Whether the rebase was successfully completed")
     status: str = Field(description="Rebase status")
-    mr_url: Optional[str] = Field(description="URL to the opened merge request")
-    error: Optional[str] = Field(description="Specific details about an error")
+    mr_url: str | None = Field(description="URL to the opened merge request")
+    error: str | None = Field(description="Specific details about an error")
 
 
 def render_prompt(input: InputSchema) -> str:
     template = """
-      You are an AI Agent tasked to rebase a CentOS package to a newer version following the exact workflow.
+      You are an AI Agent tasked to rebase a package to a newer version following the exact workflow.
 
       A couple of rules that you must follow and useful information for you:
-      * All packages are in separate Git repositories under the Gitlab project {{ git_url }}
-      * You can find the package at {{ git_url }}/{{ package }}
-      * Use {{ gitlab_user }} as the GitLab user.
-      * Work only in a temporary directory that you can create with the mktemp tool.
-      * You can find packaging guidelines at https://docs.fedoraproject.org/en-US/packaging-guidelines/
+      * You can find packaging guidelines at https://docs.fedoraproject.org/en-US/packaging-guidelines/.
       * You can find the RPM packaging guide at https://rpm-packaging-guide.github.io/.
-      * Do not run the `centpkg new-sources` command for now (testing purposes), just write down the commands you would run.
-
-      IMPORTANT GUIDELINES:
-      - **Tool Usage**: You have run_shell_command tool available - use it directly!
-      - **Command Execution Rules**:
-        - Use run_shell_command tool for ALL command execution
-        - If a command shows "no output" or empty STDOUT, that is a VALID result - do not retry
-        - Commands that succeed with no output are normal - report success
-      - **Git Configuration**: Always configure git user name and email before any git operations
+      * IMPORTANT: Do not run the `centpkg new-sources` command for now (testing purposes), just write down
+        the commands you would run.
 
       Follow exactly these steps:
 
-      1. Find the location of the {{ package }} package at {{ git_url }}.  Always use the {{ dist_git_branch }} branch.
+      1. You will find the cloned dist-git repository of the {{ package }} package in {{ local_clone }}.
+         It is your current working directory, do not `cd` anywhere else.
 
-      2. Check if the {{ package }} was not already updated to version {{ version }}.  That means comparing
-         the current version and provided version.
-          * The current version of the package can be found in the 'Version' field of the RPM .spec file.
+      2. Check if the {{ package }} was not already updated to version {{ version }}. That means comparing
+         the current version with the provided version.
+          * The current version of the package can be found in the 'Version' field of the spec file.
           * If there is nothing to update, print a message and exit. Otherwise follow the instructions below.
-          * Do not clone any repository for detecting the version in .spec file.
 
-      3. Create a local Git repository by following these steps:
-          * Create a fork of the {{ package }} package using the `fork_repository` tool.
-          * Clone the fork using git and HTTPS into a temporary directory under {{ git_repo_basepath }}.
-
-      4. Update the {{ package }} to the newer version:
-          * Create a new Git branch named `automated-package-update-{{ version }}`.
+      3. Update the {{ package }} to the newer version:
           * Update the local package by:
-            * Updating the 'Version' and 'Release' fields in the .spec file as needed (or corresponding macros),
+            * Updating the 'Version' and 'Release' fields (or corresponding macros) in the spec file as needed,
               following packaging documentation.
-              * Make sure the format of the .spec file remains the same.
-            * Updating macros related to update (e.g., 'commit') if present and necessary; examine the file's history
+              * Make sure the format of the spec file remains the same.
+            * Updating macros related to update (e.g., 'commit') if present and necessary; examine the file history
               to see how updates are typically done.
               * You might need to check some information in upstream repository, e.g. the commit SHA of the new version.
             * Creating a changelog entry, referencing the Jira issue as "Resolves: {{ jira_issue }}".
             * Downloading sources using `spectool -g -S {{ package }}.spec` (you might need to copy local sources,
-              e.g. if the .spec file loads some macros from them, to a directory where spectool expects them).
+              e.g. if the spec file loads some macros from them, to a directory where `spectool` expects them).
             * Uploading the new sources using `centpkg --release {{ dist_git_branch }} new-sources`.
             * IMPORTANT: Only performing changes relevant to the version update: Do not rename variables,
-              comment out existing lines, or alter if-else branches in the .spec file.
+              comment out existing lines, or alter if-else branches in the spec file.
 
-      5. Verify and adjust the changes:
-          * Use `rpmlint` to validate your .spec file changes and fix any new errors it identifies.
-          * Generate the SRPM using `rpmbuild -bs` (ensure your .spec file and source files are correctly
+      4. Verify and adjust the changes:
+          * Use `rpmlint` to validate your spec file changes and fix any new errors it identifies.
+          * Generate the SRPM using `rpmbuild -bs` (ensure your spec file and source files are correctly
             copied to the build environment as required by the command).
 
-      6. {{ rebase_git_steps }}
+      5. {{ rebase_git_steps }}
 
       Report the status of the rebase operation including:
       - Whether the package was already up to date
@@ -129,7 +108,6 @@ def render_prompt(input: InputSchema) -> str:
             commit_title=f"{COMMIT_PREFIX} Update to version {input_data.version}",
             files_to_commit="*.spec",
             branch_name=f"{BRANCH_PREFIX}-{input_data.version}",
-            git_url=input_data.git_url,
             dist_git_branch=input_data.dist_git_branch,
         )
 
@@ -144,28 +122,129 @@ async def main() -> None:
     setup_observability(os.getenv("COLLECTOR_ENDPOINT"))
 
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
-        agent = RequirementAgent(
+        rebase_agent = RequirementAgent(
             llm=ChatModel.from_name(os.getenv("CHAT_MODEL")),
-            tools=[ThinkTool(), RunShellCommandTool(), DuckDuckGoSearchTool()]
-            + [
-                t
-                for t in gateway_tools
-                if t.name in ("fork_repository", "open_merge_request", "push_to_remote_repository")
+            tools=[
+                ThinkTool(),
+                RunShellCommandTool(),
+                DuckDuckGoSearchTool(),
+                CreateTool(),
+                ViewTool(),
+                InsertTool(),
+                StrReplaceTool(),
+                AddChangelogEntryTool(),
             ],
             memory=UnconstrainedMemory(),
             requirements=[
                 ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
             ],
             middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
+            role="Red Hat Enterprise Linux developer",
+            instructions=[
+                "Use the `think` tool to reason through complex decisions and document your approach.",
+                "Preserve existing formatting and style conventions in RPM spec files and patch headers.",
+                "Use `rpmlint *.spec` to check for packaging issues and address any NEW errors",
+                "Ignore pre-existing rpmlint warnings unless they're related to your changes",
+                "Run `centpkg prep` to verify all patches apply cleanly during build preparation",
+                "Generate an SRPM using `centpkg srpm` command to ensure complete build readiness",
+                "* IMPORTANT: Only perform changes relevant to the rebase update",
+            ],
         )
 
-        async def run(input):
-            response = await agent.run(
-                prompt=render_prompt(input),
-                expected_output=OutputSchema,
-                execution=get_agent_execution_config(),
+        class State(BaseModel):
+            package: str
+            dist_git_branch: str
+            version: str
+            jira_issue: str
+            fork_url: str | None = Field(default=None)
+            local_clone: Path | None = Field(default=None)
+            update_branch: str | None = Field(default=None)
+            rebase_result: OutputSchema | None = Field(default=None)
+            merge_request_url: str | None = Field(default=None)
+
+        workflow = Workflow(State)
+
+        async def fork_and_prepare_dist_git(state):
+            working_dir = Path(os.getenv("GIT_REPO_BASEPATH")) / state.jira_issue
+            working_dir.mkdir(parents=True, exist_ok=True)
+            namespace = "centos-stream" if re.match(r"^c\d+s$", state.dist_git_branch) else "rhel"
+            state.fork_url = await run_tool(
+                "fork_repository",
+                repository=f"https://gitlab.com/redhat/{namespace}/rpms/{state.package}",
+                available_tools=gateway_tools,
             )
-            return OutputSchema.model_validate_json(response.answer.text)
+            state.local_clone = working_dir / state.package
+            shutil.rmtree(state.local_clone, ignore_errors=True)
+            subprocess.check_call(
+                ["git", "clone", "--single-branch", "--branch", state.dist_git_branch, state.fork_url],
+                cwd=working_dir,
+            )
+            state.update_branch = f"automated-package-update-{state.jira_issue}"
+            subprocess.check_call(["git", "checkout", "-B", state.update_branch], cwd=state.local_clone)
+            return "run_rebase_agent"
+
+        async def run_rebase_agent(state):
+            cwd = Path.cwd()
+            try:
+                # make things easier for the LLM
+                os.chdir(state.local_clone)
+                response = await rebase_agent.run(
+                    prompt=render_prompt(
+                        InputSchema(
+                            local_clone=state.local_clone,
+                            package=state.package,
+                            dist_git_branch=state.dist_git_branch,
+                            version=state.version,
+                            jira_issue=state.jira_issue,
+                        ),
+                    ),
+                    expected_output=OutputSchema,
+                    execution=get_agent_execution_config(),
+                )
+                state.rebase_result = OutputSchema.model_validate_json(response.answer.text)
+            finally:
+                os.chdir(cwd)
+            if state.rebase_result.success:
+                return "push_and_open_mr"
+            else:
+                return Workflow.END
+
+        async def push_and_open_mr(state):
+            if os.getenv("DRY_RUN", "False").lower() == "true":
+                return Workflow.END
+            await run_tool(
+                "push_to_remote_repository",
+                repository=state.fork_url,
+                clone_path=state.local_clone,
+                branch=state.update_branch,
+                force=True,
+                available_tools=gateway_tools,
+            )
+            state.merge_request_url = await run_tool(
+                "open_merge_request",
+                fork_url=state.fork_url,
+                title="TODO",
+                description="TODO",
+                target=state.dist_git_branch,
+                source=state.update_branch,
+                available_tools=gateway_tools,
+            )
+            return Workflow.END
+
+        workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
+        workflow.add_step("run_rebase_agent", run_rebase_agent)
+        workflow.add_step("push_and_open_mr", push_and_open_mr)
+
+        async def run_workflow(package, dist_git_branch, version, jira_issue):
+            response = await workflow.run(
+                State(
+                    package=package,
+                    dist_git_branch=dist_git_branch,
+                    version=version,
+                    jira_issue=jira_issue,
+                ),
+            )
+            return response.state
 
         if (
             (package := os.getenv("PACKAGE", None))
@@ -174,14 +253,13 @@ async def main() -> None:
             and (branch := os.getenv("BRANCH", None))
         ):
             logger.info("Running in direct mode with environment variables")
-            input = InputSchema(
+            state = await run_workflow(
                 package=package,
+                dist_git_branch=branch,
                 version=version,
                 jira_issue=jira_issue,
-                dist_git_branch=branch,
             )
-            output = await run(input)
-            logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")
+            logger.info(f"Direct run completed: {state.rebase_result.model_dump_json(indent=4)}")
             return
 
         class Task(BaseModel):
@@ -211,13 +289,6 @@ async def main() -> None:
                     f"attempt: {task.attempts + 1}"
                 )
 
-                input = InputSchema(
-                    package=rebase_data.package,
-                    version=rebase_data.version,
-                    jira_issue=rebase_data.jira_issue,
-                    dist_git_branch=rebase_data.branch,
-                )
-
                 async def retry(task, error):
                     task.attempts += 1
                     if task.attempts < max_retries:
@@ -235,21 +306,26 @@ async def main() -> None:
 
                 try:
                     logger.info(f"Starting rebase processing for {rebase_data.jira_issue}")
-                    output = await run(input)
+                    state = await run_workflow(
+                        package=rebase_data.package,
+                        dist_git_branch=rebase_data.branch,
+                        version=rebase_data.version,
+                        jira_issue=rebase_data.jira_issue,
+                    )
                     logger.info(
-                        f"Rebase processing completed for {rebase_data.jira_issue}, " f"success: {output.success}"
+                        f"Rebase processing completed for {rebase_data.jira_issue}, " f"success: {state.rebase_result.success}"
                     )
                 except Exception as e:
                     error = "".join(traceback.format_exception(e))
                     logger.error(f"Exception during rebase processing for {rebase_data.jira_issue}: {error}")
-                    await retry(task, ErrorData(details=error, jira_issue=input.jira_issue).model_dump_json())
+                    await retry(task, ErrorData(details=error, jira_issue=rebase_data.jira_issue).model_dump_json())
                 else:
-                    if output.success:
+                    if state.rebase_result.success:
                         logger.info(f"Rebase successful for {rebase_data.jira_issue}, " f"adding to completed list")
-                        await redis.lpush("completed_rebase_list", output.model_dump_json())
+                        await redis.lpush("completed_rebase_list", state.rebase_result.model_dump_json())
                     else:
-                        logger.warning(f"Rebase failed for {rebase_data.jira_issue}: {output.error}")
-                        await retry(task, output.error)
+                        logger.warning(f"Rebase failed for {rebase_data.jira_issue}: {state.rebase_result.error}")
+                        await retry(task, state.rebase_result.error)
 
 
 if __name__ == "__main__":

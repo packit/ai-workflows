@@ -77,12 +77,12 @@ def render_prompt(input: InputSchema) -> str:
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
-    setup_observability(os.getenv("COLLECTOR_ENDPOINT"))
+    setup_observability(os.environ["COLLECTOR_ENDPOINT"])
     cve_id = os.getenv("CVE_ID", "")
 
-    async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
+    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
         backport_agent = RequirementAgent(
-            llm=ChatModel.from_name(os.getenv("CHAT_MODEL")),
+            llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
             tools=[
                 ThinkTool(),
                 RunShellCommandTool(),
@@ -228,7 +228,7 @@ async def main() -> None:
             attempts: int = Field(default=0, description="Number of processing attempts")
 
         logger.info("Starting backport agent in queue mode")
-        async with redis_client(os.getenv("REDIS_URL")) as redis:
+        async with redis_client(os.environ["REDIS_URL"]) as redis:
             max_retries = int(os.getenv("MAX_RETRIES", 3))
             logger.info(f"Connected to Redis, max retries set to {max_retries}")
 

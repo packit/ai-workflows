@@ -30,7 +30,7 @@ from constants import COMMIT_PREFIX, BRANCH_PREFIX
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from triage_agent import BackportData, ErrorData
-from utils import get_agent_execution_config, mcp_tools, redis_client, get_git_finalization_steps
+from utils import fixAwait, get_agent_execution_config, mcp_tools, redis_client, get_git_finalization_steps
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +230,7 @@ async def main() -> None:
 
             while True:
                 logger.info("Waiting for tasks from backport_queue (timeout: 30s)...")
-                element = await redis.brpop("backport_queue", timeout=30)
+                element = await fixAwait(redis.brpop(["backport_queue"], timeout=30))
                 if element is None:
                     logger.info("No tasks received, continuing to wait...")
                     continue
@@ -264,13 +264,13 @@ async def main() -> None:
                             f"Task failed (attempt {task.attempts}/{max_retries}), "
                             f"re-queuing for retry: {backport_data.jira_issue}"
                         )
-                        await redis.lpush("backport_queue", task.model_dump_json())
+                        await fixAwait(redis.lpush("backport_queue", task.model_dump_json()))
                     else:
                         logger.error(
                             f"Task failed after {max_retries} attempts, "
                             f"moving to error list: {backport_data.jira_issue}"
                         )
-                        await redis.lpush("error_list", error)
+                        await fixAwait(redis.lpush("error_list", error))
 
                 try:
                     logger.info(f"Starting backport processing for {backport_data.jira_issue}")
@@ -287,7 +287,7 @@ async def main() -> None:
                     rmtree(local_clone)
                     if output.success:
                         logger.info(f"Backport successful for {backport_data.jira_issue}, " f"adding to completed list")
-                        await redis.lpush("completed_backport_list", output.model_dump_json())
+                        await fixAwait(redis.lpush("completed_backport_list", output.model_dump_json()))
                     else:
                         logger.warning(f"Backport failed for {backport_data.jira_issue}: {output.error}")
                         await retry(task, output.error)

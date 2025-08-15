@@ -21,7 +21,7 @@ x-beeai-agent: &beeai-agent
     - .secrets/beeai-agent.env
   volumes:
     - ./agents:/home/beeai/agents:ro,z
-    - git-repos:/git-repos
+    - git-repos:/git-repos:rw,U
   restart: unless-stopped
 
 services:

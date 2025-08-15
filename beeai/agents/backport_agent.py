@@ -26,7 +26,7 @@ from beeai_framework.tools.think import ThinkTool
 from tools.specfile import AddChangelogEntryTool, BumpReleaseTool
 from tools.text import CreateTool, InsertTool, StrReplaceTool, ViewTool
 from tools.wicked_git import GitLogSearchTool, GitPatchCreationTool
-from constants import COMMIT_PREFIX, BRANCH_PREFIX
+from constants import COMMIT_PREFIX, BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from triage_agent import BackportData, ErrorData
@@ -274,10 +274,33 @@ async def main() -> None:
 
                 try:
                     logger.info(f"Starting backport processing for {backport_data.jira_issue}")
+
+                    add_jira_comment_tool = next(t for t in gateway_tools if t.name == "add_jira_comment")
+                    await tool.run(input={"issue_key": backport_data.jira_issue, "comment":
+                                          JIRA_COMMENT_TEMPLATE.substitute(JIRA_COMMENT="Starting backport processing ...")}).middleware(
+                            GlobalTrajectoryMiddleware(pretty=True)
+                    )
+
                     output = await run(input)
                     logger.info(
                         f"Backport processing completed for {backport_data.jira_issue}, " f"success: {output.success}"
                     )
+
+                    if output.success:
+                        logger.info(f"Updating JIRA {backport_data.jira_issue} with {output.mr_url} ")
+                        await add_jira_comment_tool.run(input={"issue_key": backport_data.jira_issue, "comment":
+                                              JIRA_COMMENT_TEMPLATE.substitute(JIRA_COMMENT=output.mr_url)}).middleware(
+                           GlobalTrajectoryMiddleware(pretty=True)
+                        )
+                    else:
+                        logger.info(f"Failed")
+                        await add_jira_comment_tool.run(input={"issue_key": backport_data.jira_issue, "comment":
+                                              JIRA_COMMENT_TEMPLATE.substitute(JIRA_COMMENT="Agent failed to performed a backport.")}).middleware(
+                           GlobalTrajectoryMiddleware(pretty=True)
+                        )
+
+
+
                 except Exception as e:
                     error = "".join(traceback.format_exception(e))
                     logger.error(f"Exception during backport processing for {backport_data.jira_issue}: {error}")

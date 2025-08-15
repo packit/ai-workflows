@@ -83,10 +83,24 @@ def render_prompt(input: InputSchema) -> str:
         return get_git_finalization_steps(
             package=input_data.package,
             jira_issue=input_data.jira_issue,
-            commit_title=f"{COMMIT_PREFIX} backport {input_data.jira_issue}",
+            commit_title=(
+                f"{COMMIT_PREFIX} resolves {input_data.jira_issue}\n\n"
+                f"CVE: {input_data.cve_id}\n\n"  # TODO: only if cve_id is not empty
+                f"Resolves: {input_data.jira_issue}\n"
+                "This commit was backported by Jotnar, a Red Hat Enterprise Linux packaging AI agent.\n"
+                f"Assisted-by: Jotnar\n"
+            ),
             files_to_commit=f"*.spec and {input_data.jira_issue}.patch",
             branch_name=f"{BRANCH_PREFIX}-{input_data.jira_issue}",
             dist_git_branch=input_data.dist_git_branch,
+            mr_title=f"{COMMIT_PREFIX} resolves {input_data.jira_issue}",
+            mr_body=(
+                f"This merge request was created by Jotnar, a Red Hat Enterprise Linux packaging AI agent.\n"
+                "Carefuly review the changes and make sure they are correct.\n"
+                f"Upstream patch: {input_data.upstream_fix}\n"
+                "Backporting steps:\n"
+                f"{backporting_steps}"  # TODO: make agent provided these steps
+            )
         )
 
     return PromptTemplate(

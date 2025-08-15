@@ -240,7 +240,7 @@ async def main() -> None:
                     continue
 
                 _, payload = element
-                logger.info(f"Received task from queue.")
+                logger.info("Received task from queue.")
 
                 task = Task.model_validate_json(payload)
                 backport_data = BackportData.model_validate(task.metadata)

@@ -243,7 +243,7 @@ async def main() -> None:
                     continue
 
                 _, payload = element
-                logger.info(f"Received task from queue.")
+                logger.info("Received task from queue.")
 
                 task = Task.model_validate_json(payload)
                 rebase_data = RebaseData.model_validate(task.metadata)

@@ -23,7 +23,7 @@ from beeai_framework.tools.think import ThinkTool
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.patch_validator import PatchValidatorTool
-from utils import get_agent_execution_config, mcp_tools, redis_client
+from utils import fixAwait, get_agent_execution_config, mcp_tools, redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -237,11 +237,11 @@ def render_prompt(input: InputSchema) -> str:
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
-    setup_observability(os.getenv("COLLECTOR_ENDPOINT"))
+    setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
-    async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
+    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
         agent = RequirementAgent(
-            llm=ChatModel.from_name(os.getenv("CHAT_MODEL")),
+            llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
             tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool()]
             + [t for t in gateway_tools if t.name == "get_jira_details"],
             memory=UnconstrainedMemory(),
@@ -279,19 +279,19 @@ async def main() -> None:
             attempts: int = Field(default=0, description="Number of processing attempts")
 
         logger.info("Starting triage agent in queue mode")
-        async with redis_client(os.getenv("REDIS_URL")) as redis:
+        async with redis_client(os.environ["REDIS_URL"]) as redis:
             max_retries = int(os.getenv("MAX_RETRIES", 3))
             logger.info(f"Connected to Redis, max retries set to {max_retries}")
 
             while True:
                 logger.info("Waiting for tasks from triage_queue (timeout: 30s)...")
-                element = await redis.brpop("triage_queue", timeout=30)
+                element = await fixAwait(redis.brpop(["triage_queue"], timeout=30))
                 if element is None:
                     logger.info("No tasks received, continuing to wait...")
                     continue
 
                 _, payload = element
-                logger.info(f"Received task from queue")
+                logger.info("Received task from queue")
 
                 task = Task.model_validate_json(payload)
                 input = InputSchema.model_validate(task.metadata)
@@ -304,12 +304,12 @@ async def main() -> None:
                             f"Task failed (attempt {task.attempts}/{max_retries}), "
                             f"re-queuing for retry: {input.issue}"
                         )
-                        await redis.lpush("triage_queue", task.model_dump_json())
+                        await fixAwait(redis.lpush("triage_queue", task.model_dump_json()))
                     else:
                         logger.error(
                             f"Task failed after {max_retries} attempts, " f"moving to error list: {input.issue}"
                         )
-                        await redis.lpush("error_list", error)
+                        await fixAwait(redis.lpush("error_list", error))
 
                 try:
                     logger.info(f"Starting triage processing for {input.issue}")
@@ -329,21 +329,21 @@ async def main() -> None:
                     if output.resolution == Resolution.REBASE:
                         logger.info(f"Triage resolved as REBASE for {input.issue}, " f"adding to rebase queue")
                         task = Task(metadata=output.data.model_dump())
-                        await redis.lpush("rebase_queue", task.model_dump_json())
+                        await fixAwait(redis.lpush("rebase_queue", task.model_dump_json()))
                     elif output.resolution == Resolution.BACKPORT:
                         logger.info(f"Triage resolved as BACKPORT for {input.issue}, " f"adding to backport queue")
                         task = Task(metadata=output.data.model_dump())
-                        await redis.lpush("backport_queue", task.model_dump_json())
+                        await fixAwait(redis.lpush("backport_queue", task.model_dump_json()))
                     elif output.resolution == Resolution.CLARIFICATION_NEEDED:
                         logger.info(
                             f"Triage resolved as CLARIFICATION_NEEDED for {input.issue}, "
                             f"adding to clarification needed queue"
                         )
                         task = Task(metadata=output.data.model_dump())
-                        await redis.lpush("clarification_needed_queue", task.model_dump_json())
+                        await fixAwait(redis.lpush("clarification_needed_queue", task.model_dump_json()))
                     elif output.resolution == Resolution.NO_ACTION:
                         logger.info(f"Triage resolved as NO_ACTION for {input.issue}, " f"adding to no action list")
-                        await redis.lpush("no_action_list", output.data.model_dump_json())
+                        await fixAwait(redis.lpush("no_action_list", output.data.model_dump_json()))
                     elif output.resolution == Resolution.ERROR:
                         logger.warning(f"Triage resolved as ERROR for {input.issue}, retrying")
                         await retry(task, output.data.model_dump_json())

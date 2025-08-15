@@ -30,7 +30,7 @@ from constants import COMMIT_PREFIX, BRANCH_PREFIX
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from triage_agent import BackportData, ErrorData
-from utils import get_agent_execution_config, mcp_tools, redis_client, get_git_finalization_steps
+from utils import fixAwait, get_agent_execution_config, mcp_tools, redis_client, get_git_finalization_steps
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class InputSchema(BaseModel):
     dist_git_branch: str = Field(description="Git branch in dist-git to be updated")
     git_repo_basepath: str = Field(
         description="Base path for cloned git repos",
-        default=os.getenv("GIT_REPO_BASEPATH"),
+        default=os.environ["GIT_REPO_BASEPATH"],
     )
     unpacked_sources: str = Field(
         description="Path to the unpacked (using `centpkg prep`) sources",
@@ -137,12 +137,12 @@ def prepare_package(
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
-    setup_observability(os.getenv("COLLECTOR_ENDPOINT"))
+    setup_observability(os.environ["COLLECTOR_ENDPOINT"])
     cve_id = os.getenv("CVE_ID", "")
 
-    async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
+    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
         agent = RequirementAgent(
-            llm=ChatModel.from_name(os.getenv("CHAT_MODEL")),
+            llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
             tools=[
                 ThinkTool(),
                 RunShellCommandTool(),
@@ -224,19 +224,19 @@ async def main() -> None:
             attempts: int = Field(default=0, description="Number of processing attempts")
 
         logger.info("Starting backport agent in queue mode")
-        async with redis_client(os.getenv("REDIS_URL")) as redis:
+        async with redis_client(os.environ["REDIS_URL"]) as redis:
             max_retries = int(os.getenv("MAX_RETRIES", 3))
             logger.info(f"Connected to Redis, max retries set to {max_retries}")
 
             while True:
                 logger.info("Waiting for tasks from backport_queue (timeout: 30s)...")
-                element = await redis.brpop("backport_queue", timeout=30)
+                element = await fixAwait(redis.brpop(["backport_queue"], timeout=30))
                 if element is None:
                     logger.info("No tasks received, continuing to wait...")
                     continue
 
                 _, payload = element
-                logger.info(f"Received task from queue.")
+                logger.info("Received task from queue.")
 
                 task = Task.model_validate_json(payload)
                 backport_data = BackportData.model_validate(task.metadata)
@@ -264,13 +264,13 @@ async def main() -> None:
                             f"Task failed (attempt {task.attempts}/{max_retries}), "
                             f"re-queuing for retry: {backport_data.jira_issue}"
                         )
-                        await redis.lpush("backport_queue", task.model_dump_json())
+                        await fixAwait(redis.lpush("backport_queue", task.model_dump_json()))
                     else:
                         logger.error(
                             f"Task failed after {max_retries} attempts, "
                             f"moving to error list: {backport_data.jira_issue}"
                         )
-                        await redis.lpush("error_list", error)
+                        await fixAwait(redis.lpush("error_list", error))
 
                 try:
                     logger.info(f"Starting backport processing for {backport_data.jira_issue}")
@@ -287,7 +287,7 @@ async def main() -> None:
                     rmtree(local_clone)
                     if output.success:
                         logger.info(f"Backport successful for {backport_data.jira_issue}, " f"adding to completed list")
-                        await redis.lpush("completed_backport_list", output.model_dump_json())
+                        await fixAwait(redis.lpush("completed_backport_list", output.model_dump_json()))
                     else:
                         logger.warning(f"Backport failed for {backport_data.jira_issue}: {output.error}")
                         await retry(task, output.error)

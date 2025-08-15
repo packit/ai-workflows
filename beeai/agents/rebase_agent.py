@@ -24,7 +24,7 @@ from constants import COMMIT_PREFIX, BRANCH_PREFIX
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from triage_agent import RebaseData, ErrorData
-from utils import get_agent_execution_config, mcp_tools, redis_client, get_git_finalization_steps
+from utils import fixAwait, get_agent_execution_config, mcp_tools, redis_client, get_git_finalization_steps
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class InputSchema(BaseModel):
     )
     git_repo_basepath: str = Field(
         description="Base path for cloned git repos",
-        default=os.getenv("GIT_REPO_BASEPATH"),
+        default=os.environ["GIT_REPO_BASEPATH"],
     )
 
 
@@ -141,11 +141,11 @@ def render_prompt(input: InputSchema) -> str:
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
-    setup_observability(os.getenv("COLLECTOR_ENDPOINT"))
+    setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
-    async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
+    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
         agent = RequirementAgent(
-            llm=ChatModel.from_name(os.getenv("CHAT_MODEL")),
+            llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
             tools=[ThinkTool(), RunShellCommandTool(), DuckDuckGoSearchTool()]
             + [
                 t
@@ -189,19 +189,19 @@ async def main() -> None:
             attempts: int = Field(default=0, description="Number of processing attempts")
 
         logger.info("Starting rebase agent in queue mode")
-        async with redis_client(os.getenv("REDIS_URL")) as redis:
+        async with redis_client(os.environ["REDIS_URL"]) as redis:
             max_retries = int(os.getenv("MAX_RETRIES", 3))
             logger.info(f"Connected to Redis, max retries set to {max_retries}")
 
             while True:
                 logger.info("Waiting for tasks from rebase_queue (timeout: 30s)...")
-                element = await redis.brpop("rebase_queue", timeout=30)
+                element = await fixAwait(redis.brpop(["rebase_queue"], timeout=30))
                 if element is None:
                     logger.info("No tasks received, continuing to wait...")
                     continue
 
                 _, payload = element
-                logger.info(f"Received task from queue.")
+                logger.info("Received task from queue.")
 
                 task = Task.model_validate_json(payload)
                 rebase_data = RebaseData.model_validate(task.metadata)
@@ -225,13 +225,13 @@ async def main() -> None:
                             f"Task failed (attempt {task.attempts}/{max_retries}), "
                             f"re-queuing for retry: {rebase_data.jira_issue}"
                         )
-                        await redis.lpush("rebase_queue", task.model_dump_json())
+                        await fixAwait(redis.lpush("rebase_queue", task.model_dump_json()))
                     else:
                         logger.error(
                             f"Task failed after {max_retries} attempts, "
                             f"moving to error list: {rebase_data.jira_issue}"
                         )
-                        await redis.lpush("error_list", error)
+                        await fixAwait(redis.lpush("error_list", error))
 
                 try:
                     logger.info(f"Starting rebase processing for {rebase_data.jira_issue}")
@@ -246,7 +246,7 @@ async def main() -> None:
                 else:
                     if output.success:
                         logger.info(f"Rebase successful for {rebase_data.jira_issue}, " f"adding to completed list")
-                        await redis.lpush("completed_rebase_list", output.model_dump_json())
+                        await fixAwait(redis.lpush("completed_rebase_list", output.model_dump_json()))
                     else:
                         logger.warning(f"Rebase failed for {rebase_data.jira_issue}: {output.error}")
                         await retry(task, output.error)

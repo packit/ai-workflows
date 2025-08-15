@@ -28,7 +28,7 @@ from tools.commands import RunShellCommandTool
 from tools.specfile import AddChangelogEntryTool
 from tools.text import CreateTool, InsertTool, StrReplaceTool, ViewTool
 from triage_agent import RebaseData, ErrorData
-from utils import get_agent_execution_config, mcp_tools, redis_client, run_tool, post_private_jira_comment
+from utils import fix_await, get_agent_execution_config, mcp_tools, redis_client, run_tool, post_private_jira_comment
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +237,7 @@ async def main() -> None:
 
             while True:
                 logger.info("Waiting for tasks from rebase_queue (timeout: 30s)...")
-                element = await redis.brpop("rebase_queue", timeout=30)
+                element = await fix_await(redis.brpop(["rebase_queue"], timeout=30))
                 if element is None:
                     logger.info("No tasks received, continuing to wait...")
                     continue
@@ -260,13 +260,13 @@ async def main() -> None:
                             f"Task failed (attempt {task.attempts}/{max_retries}), "
                             f"re-queuing for retry: {rebase_data.jira_issue}"
                         )
-                        await redis.lpush("rebase_queue", task.model_dump_json())
+                        await fix_await(redis.lpush("rebase_queue", task.model_dump_json()))
                     else:
                         logger.error(
                             f"Task failed after {max_retries} attempts, "
                             f"moving to error list: {rebase_data.jira_issue}"
                         )
-                        await redis.lpush("error_list", error)
+                        await fix_await(redis.lpush("error_list", error))
 
                 try:
                     logger.info(f"Starting rebase processing for {rebase_data.jira_issue}")
@@ -296,7 +296,7 @@ async def main() -> None:
                 else:
                     if state.rebase_result.success:
                         logger.info(f"Rebase successful for {rebase_data.jira_issue}, " f"adding to completed list")
-                        await redis.lpush("completed_rebase_list", state.rebase_result.model_dump_json())
+                        await fix_await(redis.lpush("completed_rebase_list", state.rebase_result.model_dump_json()))
                     else:
                         logger.warning(f"Rebase failed for {rebase_data.jira_issue}: {state.rebase_result.error}")
                         await retry(task, state.rebase_result.error)

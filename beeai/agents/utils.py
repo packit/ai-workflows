@@ -1,11 +1,12 @@
 import asyncio
+import inspect
 import logging
 import os
 import shlex
 import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncGenerator, Callable, Tuple
+from typing import Any, AsyncGenerator, Awaitable, Callable, TypeVar, Tuple
 
 import redis.asyncio as redis
 from mcp import ClientSession
@@ -94,6 +95,26 @@ async def redis_client(redis_url: str) -> AsyncGenerator[redis.Redis, None]:
         yield client
     finally:
         await client.aclose()
+
+
+T = TypeVar("T")
+
+async def fix_await(v: T | Awaitable[T]) -> T:
+    """
+    Work around typing problems in the asyncio redis client.
+
+    Typing for the asyncio redis client is messed up, and functions
+    return `T | Awaitable[T]` instead of `T`. This function
+    fixes the type error by asserting that the value is awaitable
+    before awaiting it.
+
+    For a proper fix, see: https://github.com/redis/redis-py/pull/3619
+
+
+    Usage: `await fixAwait(redis.get("key"))`
+    """
+    assert inspect.isawaitable(v)
+    return await v
 
 
 @asynccontextmanager

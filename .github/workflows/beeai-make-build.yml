@@ -1,0 +1,23 @@
+name: BeeAI container builds
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  beeai-make-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install packages required
+        run: |
+          sudo apt-get install -y podman podman-compose
+
+      - name: Checkout Git Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run container builds
+        run: |
+          cd beeai
+          podman-compose -f compose.yaml build

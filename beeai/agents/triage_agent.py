@@ -203,7 +203,7 @@ def render_prompt(input: InputSchema) -> str:
 
       **Final Step: Set JIRA Fields (for Rebase and Backport decisions only)**
 
-         If your decision is rebase or backport, use set_jira_fields tool to update JIRA fields (Severity, Fix Version, Target End):
+         If your decision is rebase or backport, use set_jira_fields tool to update JIRA fields (Severity, Fix Version):
          1. Check all of the mentioned fields in the JIRA issue and don't modify those that are already set
          2. Extract the affected RHEL major version from the JIRA issue (look in Affects Version/s field or issue description)
          3. Determine if this is a very critical issue requiring Z-stream (only for: privilege escalation, remote code execution, data loss/corruption, or system compromise)
@@ -211,7 +211,6 @@ def render_prompt(input: InputSchema) -> str:
          5. Set JIRA fields:
              * Severity: default to 'moderate', for important issues use 'important', for most critical use 'critical' (privilege escalation, RCE, data loss)
              * Fix Version: use the fix_version from map_version tool result
-             * Target End: today + 14 days
          6. Use the branch from map_version tool result for your output
 
       **Output Format**

@@ -14,7 +14,6 @@ class VersionMapperInput(BaseModel):
 
 class VersionMapperResult(BaseModel):
     fix_version: str = Field(description="The appropriate fix version for the given major version and criticality")
-    branch: str = Field(description="The corresponding branch name")
 
 
 class VersionMapperOutput(JSONToolOutput[VersionMapperResult]):
@@ -25,7 +24,7 @@ class VersionMapperTool(Tool[VersionMapperInput, ToolRunOptions, VersionMapperOu
     """Tool to map RHEL major versions to current development fix versions."""
 
     name = "map_version"
-    description = "Map RHEL major version to current development fix version (Y-stream or Z-stream for most critical issues only)"
+    description = "Map RHEL major version to current development fix version (Y-stream or Z-stream for most critical issues only)."
     input_schema = VersionMapperInput
 
     def __init__(self, options: dict[str, Any] | None = None) -> None:
@@ -47,7 +46,7 @@ class VersionMapperTool(Tool[VersionMapperInput, ToolRunOptions, VersionMapperOu
             tool_input: Input containing major_version and is_critical
 
         Returns:
-            VersionMapperOutput with fix_version and branch
+            VersionMapperOutput with fix_version
         """
         major_version = tool_input.major_version
         is_critical = tool_input.is_critical
@@ -67,16 +66,8 @@ class VersionMapperTool(Tool[VersionMapperInput, ToolRunOptions, VersionMapperOu
         else:
             raise ValueError(f"Unsupported RHEL major version: {major_version}. Supported versions: 8, 9, 10")
 
-        branch_map = {
-            8: "c8s",
-            9: "c9s",
-            10: "c10s"
-        }
-        branch = branch_map[major_version]
-
         result = VersionMapperResult(
-            fix_version=fix_version,
-            branch=branch
+            fix_version=fix_version
         )
 
         return VersionMapperOutput(result=result)

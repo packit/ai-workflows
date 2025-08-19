@@ -190,7 +190,7 @@ def check_cve_triage_eligibility(
     - is_cve: bool - Whether this is a CVE (by type or label)
     - is_eligible_for_triage: bool - Whether triage agent should process it
     - reason: str - Explanation of the decision
-    - branch: str - Target branch for MR (rhel-{version} or cNs)
+    - needs_internal_fix: bool - True for issues where internal fix is needed first (only for CVEs)
     - error: str - Error message if the issue cannot be processed
     """
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
@@ -227,13 +227,11 @@ def check_cve_triage_eligibility(
     target_version = fix_versions[0].get("name", "")
     is_y_stream = bool(re.match(r"^rhel-\d+\.\d+$", target_version.lower()))
 
-    version_match = re.match(r"^rhel-(\d+)", target_version.lower())
+    version_match = re.match(r"^rhel-(\d+)\.(\d+)", target_version.lower())
     if not version_match:
         return {"is_cve": True, "is_eligible_for_triage": False, "error": "Not possible to determine major version"}
 
     major_version = version_match.group(1)
-    rhel_branch = target_version # TODO check how to map to branch
-    cns_branch = f"c{major_version}s"
 
     embargo = fields.get(EMBARGO_CUSTOM_FIELD, {}).get("value", "")
     if embargo == "True":
@@ -257,7 +255,7 @@ def check_cve_triage_eligibility(
             "is_cve": True,
             "is_eligible_for_triage": True,
             "reason": f"CVE severity is {severity}, eligible for Z-stream, needs to be fixed in RHEL",
-            "branch": rhel_branch,
+            "needs_internal_fix": True,
         }
 
     if priority_labels:
@@ -271,7 +269,7 @@ def check_cve_triage_eligibility(
             "is_cve": True,
             "is_eligible_for_triage": True,
             "reason": f"CVE has priority labels: {', '.join(priority_labels)}, eligible for Z-stream, needs to be fixed in RHEL.",
-            "branch": rhel_branch,
+            "needs_internal_fix": True,
         }
 
     if major_version == "8":
@@ -285,8 +283,8 @@ def check_cve_triage_eligibility(
 
     due_date = fields.get("duedate")
 
-    release_dates = _load_release_dates()
     config = _load_rhel_config()
+    release_dates = config.get("release_dates", {})
 
     current_y_streams = config.get("current_y_streams")
 
@@ -297,20 +295,28 @@ def check_cve_triage_eligibility(
     is_due_after_y_release = _is_due_after_release(due_date, y_stream_release_date)
 
     if is_y_stream:
-        return {
+        result = {
             "is_cve": True,
             "is_eligible_for_triage": is_due_after_y_release,
             "reason": f"Y-stream CVE: {'eligible' if is_due_after_y_release else 'not eligible'} (due {'after' if is_due_after_y_release else 'before'} release)",
-            **({"branch": cns_branch} if is_due_after_y_release else {}),
         }
+        if is_due_after_y_release:
+            result.update({
+                "needs_internal_fix": False,
+            })
+        return result
 
     # Z-stream: eligible only if due before Y-stream release
-    return {
+    result = {
         "is_cve": True,
         "is_eligible_for_triage": not is_due_after_y_release,
         "reason": f"Z-stream CVE: {'not eligible - handled by Y-stream' if is_due_after_y_release else 'eligible for Z-stream fix'}",
-        **({"branch": cns_branch} if not is_due_after_y_release else {}),
     }
+    if not is_due_after_y_release:
+        result.update({
+            "needs_internal_fix": False,
+        })
+    return result
 
 
 def _load_rhel_config() -> dict[str, Any]:

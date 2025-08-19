@@ -246,11 +246,13 @@ async def main() -> None:
                 logger.info("Received task from queue.")
 
                 task = Task.model_validate_json(payload)
-                rebase_data = RebaseData.model_validate(task.metadata)
+                triage_state = task.metadata
+                rebase_data = RebaseData.model_validate(triage_state["triage_result"]["data"])
+                dist_git_branch = triage_state["target_branch"]
                 logger.info(
                     f"Processing rebase for package: {rebase_data.package}, "
                     f"version: {rebase_data.version}, JIRA: {rebase_data.jira_issue}, "
-                    f"attempt: {task.attempts + 1}"
+                    f"branch: {dist_git_branch}, attempt: {task.attempts + 1}"
                 )
 
                 async def retry(task, error):
@@ -272,7 +274,7 @@ async def main() -> None:
                     logger.info(f"Starting rebase processing for {rebase_data.jira_issue}")
                     state = await run_workflow(
                         package=rebase_data.package,
-                        dist_git_branch=rebase_data.branch,
+                        dist_git_branch=dist_git_branch,
                         version=rebase_data.version,
                         jira_issue=rebase_data.jira_issue,
                     )

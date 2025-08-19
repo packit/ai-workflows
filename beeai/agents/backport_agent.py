@@ -243,10 +243,13 @@ async def main() -> None:
                 logger.info("Received task from queue.")
 
                 task = Task.model_validate_json(payload)
-                backport_data = BackportData.model_validate(task.metadata)
+                triage_state = task.metadata
+                backport_data = BackportData.model_validate(triage_state["triage_result"]["data"])
+                dist_git_branch = triage_state["target_branch"]
                 logger.info(
                     f"Processing backport for package: {backport_data.package}, "
-                    f"JIRA: {backport_data.jira_issue}, attempt: {task.attempts + 1}"
+                    f"JIRA: {backport_data.jira_issue}, branch: {dist_git_branch}, "
+                    f"attempt: {task.attempts + 1}"
                 )
 
                 async def retry(task, error):
@@ -268,7 +271,7 @@ async def main() -> None:
                     logger.info(f"Starting backport processing for {backport_data.jira_issue}")
                     state = await run_workflow(
                         package=backport_data.package,
-                        dist_git_branch=backport_data.branch,
+                        dist_git_branch=dist_git_branch,
                         upstream_fix=backport_data.patch_url,
                         jira_issue=backport_data.jira_issue,
                         cve_id=backport_data.cve_id,

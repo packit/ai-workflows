@@ -84,8 +84,10 @@ async def run_tool(
     **kwargs: Any,
 ) -> str | dict:
     if isinstance(tool, str):
-        tool = next(t for t in available_tools or [] if t.name == tool)
-    output = await tool.run(input=kwargs).middleware(GlobalTrajectoryMiddleware(pretty=True))
+        resolved_tool = next(t for t in available_tools or [] if t.name == tool)
+    else:
+        resolved_tool = tool
+    output = await resolved_tool.run(input=kwargs).middleware(GlobalTrajectoryMiddleware(pretty=True))
     result = output.to_json_safe()
     if isinstance(result, list):
         [result] = result

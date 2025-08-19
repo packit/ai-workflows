@@ -1,0 +1,88 @@
+from enum import StrEnum
+from typing import Optional
+from pydantic import BaseModel, Field
+
+
+class IssueStatus(StrEnum):
+    NEW = "New"
+    IN_PROGRESS = "In Progress"
+    INTEGRATION = "Integration"
+    RELEASE_PENDING = "Release Pending"
+    DONE = "Done"
+    CLOSED = "Closed"
+
+
+class TestCoverage(StrEnum):
+    MANUAL = "Manual"
+    AUTOMATED = "Automated"
+    REGRESSION_ONLY = "RegressionOnly"
+    NEW_TEST_COVERAGE = "New Test Coverage"
+
+
+class PreliminaryTesting(StrEnum):
+    REQUESTED = "Requested"
+    FAIL = "Fail"
+    PASS = "Pass"
+    READY = "Ready"
+
+
+class ErrataStatus(StrEnum):
+    NEW_FILES = "NEW_FILES"
+    QE = "QE"
+    REL_PREP = "REL_PREP"
+    PUSH_READY = "PUSH_READY"
+    IN_PUSH = "IN_PUSH"
+    DROPPED_NO_SHIP = "DROPPED_NO_SHIP"
+    SHIPPED_LIVE = "SHIPPED_LIVE"
+
+
+class Erratum(BaseModel):
+    id: int
+    full_advisory: str
+    url: str
+    synopsis: str
+    status: ErrataStatus
+    all_issues_release_pending: bool
+
+
+class MergeRequestState(StrEnum):
+    OPEN = "opened"
+    CLOSED = "closed"
+    MERGED = "merged"
+
+
+class MergeRequest(BaseModel):
+    project: str
+    iid: int
+    url: str
+    title: str
+    description: str
+    state: MergeRequestState
+
+
+class Issue(BaseModel):
+    key: str
+    url: str
+    summary: str
+    components: list[str]
+    status: IssueStatus
+    fix_versions: list[str]
+    errata_link: Optional[str]
+    fixed_in_build: str | None = None
+    test_coverage: list[TestCoverage] | None = None
+    preliminary_testing: PreliminaryTesting | None = None
+
+
+class TestingState(StrEnum):
+    NOT_RUNNING = "tests-not-running"
+    PENDING = "tests-pending"
+    RUNNING = "tests-running"
+    FAILED = "tests-failed"
+    PASSED = "tests-passed"
+
+
+class WorkflowResult(BaseModel):
+    status: str
+    reschedule_in: float = Field(
+        description="Delay in seconds to reschedule the task. Negative value means don't reschedule"
+    )

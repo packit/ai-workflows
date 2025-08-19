@@ -1,6 +1,7 @@
 import datetime
 import os
 import json
+import re
 from enum import Enum
 from typing import Annotated, Any
 from urllib.parse import urljoin
@@ -12,7 +13,9 @@ from pydantic import Field
 # Jira custom field IDs
 SEVERITY_CUSTOM_FIELD = "customfield_12316142"
 TARGET_END_CUSTOM_FIELD = "customfield_12313942"
+EMBARGO_CUSTOM_FIELD = "customfield_12324750"
 
+PRIORITY_LABELS = ["compliance-priority", "contract-priority"]
 
 class Severity(Enum):
     NONE = "None"
@@ -175,3 +178,148 @@ def add_private_jira_comment(
     except requests.RequestException as e:
         return f"Failed to add the specified comment: {e}"
     return f"Successfully added the specified comment to {issue_key}"
+
+def check_cve_triage_eligibility(
+    issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
+) -> dict[str, Any]:
+    """
+    Analyzes if a Jira issue represents a CVE and determines if it should be processed by triage agent.
+    Implements logic based on Y-stream vs Z-stream releases and particular conditions.
+
+    Returns dictionary with:
+    - is_cve: bool - Whether this is a CVE (by type or label)
+    - is_eligible_for_triage: bool - Whether triage agent should process it
+    - reason: str - Explanation of the decision
+    - branch: str - Target branch for MR (rhel-{version} or cNs)
+    - error: str - Error message if the issue cannot be processed
+    """
+    headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
+
+    try:
+        response = requests.get(
+            urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+            headers=headers,
+        )
+        response.raise_for_status()
+        jira_data = response.json()
+    except requests.RequestException as e:
+        return {
+            "is_eligible_for_triage": False,
+            "error": f"Failed to get Jira data: {e}",
+        }
+
+    fields = jira_data.get("fields", {})
+    labels = fields.get("labels", [])
+
+    # Non-CVEs are always eligible
+    if "SecurityTracking" not in labels:
+        return {"is_cve": False, "is_eligible_for_triage": True, "reason": "Not a CVE"}
+
+    # CVE processing - get target version
+    fix_versions = fields.get("fixVersions", [])
+    if not fix_versions:
+        return {
+            "is_cve": True,
+            "is_eligible_for_triage": False,
+            "error": "CVE has no target release specified",
+        }
+
+    target_version = fix_versions[0].get("name", "")
+    is_y_stream = bool(re.match(r"^rhel-\d+\.\d+$", target_version.lower()))
+
+    version_match = re.match(r"^rhel-(\d+)", target_version.lower())
+    if not version_match:
+        return {"is_cve": True, "is_eligible_for_triage": False, "error": "Not possible to determine major version"}
+
+    major_version = version_match.group(1)
+    rhel_branch = target_version # TODO check how to map to branch
+    cns_branch = f"c{major_version}s"
+
+    embargo = fields.get(EMBARGO_CUSTOM_FIELD, {}).get("value", "")
+    if embargo == "True":
+        return {
+            "is_cve": True,
+            "is_eligible_for_triage": False,
+            "reason": "CVE is embargoed",
+        }
+
+    severity = fields.get(SEVERITY_CUSTOM_FIELD, {}).get("value", "")
+    priority_labels = [l for l in labels if l in PRIORITY_LABELS]
+
+    if severity not in [Severity.LOW.value, Severity.MODERATE.value]:
+        if is_y_stream:
+            return {
+                "is_cve": True,
+                "is_eligible_for_triage": False,
+                "reason": f"CVE severity is {severity}, not Low/Moderate, and target version is Y-stream",
+            }
+        return {
+            "is_cve": True,
+            "is_eligible_for_triage": True,
+            "reason": f"CVE severity is {severity}, eligible for Z-stream, needs to be fixed in RHEL",
+            "branch": rhel_branch,
+        }
+
+    if priority_labels:
+        if is_y_stream:
+            return {
+                "is_cve": True,
+                "is_eligible_for_triage": False,
+                "reason": f"CVE has priority labels: {', '.join(priority_labels)}, and target version is Y-stream",
+            }
+        return {
+            "is_cve": True,
+            "is_eligible_for_triage": True,
+            "reason": f"CVE has priority labels: {', '.join(priority_labels)}, eligible for Z-stream, needs to be fixed in RHEL.",
+            "branch": rhel_branch,
+        }
+
+    due_date = fields.get("duedate")
+
+    release_dates = _load_release_dates()
+    # For due date comparison, use the current Y-stream version for this major version
+    current_y_streams = {"9": "rhel-9.8", "10": "rhel-10.2"}
+    y_stream_version = current_y_streams.get(major_version, f"rhel-{major_version}.X")
+    y_stream_release_date = release_dates.get(y_stream_version.lower())
+
+    # Compare due date with Y-stream release date to determine Y vs Z stream processing
+    is_due_after_y_release = _is_due_after_release(due_date, y_stream_release_date)
+
+    if is_y_stream:
+        return {
+            "is_cve": True,
+            "is_eligible_for_triage": is_due_after_y_release,
+            "reason": f"Y-stream CVE: {'eligible' if is_due_after_y_release else 'not eligible'} (due {'after' if is_due_after_y_release else 'before'} release)",
+            **({"branch": cns_branch} if is_due_after_y_release else {}),
+        }
+
+    # Z-stream: eligible only if due before Y-stream release
+    return {
+        "is_cve": True,
+        "is_eligible_for_triage": not is_due_after_y_release,
+        "reason": f"Z-stream CVE: {'not eligible - handled by Y-stream' if is_due_after_y_release else 'eligible for Z-stream fix'}",
+        **({"branch": cns_branch} if not is_due_after_y_release else {}),
+    }
+
+
+def _load_release_dates() -> dict[str, str]:
+    """
+    Load RHEL release dates from configuration.
+    """
+    # TODO: implement this (use env var/configmap?)
+    return {}
+
+
+def _is_due_after_release(due_date: str | None, release_date: str | None) -> bool:
+    """
+    Compare due date with release date to determine if CVE is due after release.
+
+    Args:
+        due_date: CVE due date from Jira (YYYY-MM-DD format)
+        release_date: RHEL version release date (YYYY-MM-DD format)
+
+    Returns:
+        bool: True if due date is after release date
+    """
+    # TODO: implement this
+    return True

@@ -3,12 +3,12 @@ import os
 import json
 import re
 from enum import Enum
+from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urljoin
 
 import requests
 from pydantic import Field
-
 
 # Jira custom field IDs
 SEVERITY_CUSTOM_FIELD = "customfield_12316142"
@@ -274,13 +274,24 @@ def check_cve_triage_eligibility(
             "branch": rhel_branch,
         }
 
+    if major_version == "8":
+        #  no Y-stream, let's skip the other check
+        return {
+        "is_cve": True,
+        "is_eligible_for_triage": True,
+        "reason": "Z-stream CVE, no Y-stream",
+        "needs_internal_fix": False,
+        }
+
     due_date = fields.get("duedate")
 
     release_dates = _load_release_dates()
-    # For due date comparison, use the current Y-stream version for this major version
-    current_y_streams = {"9": "rhel-9.8", "10": "rhel-10.2"}
-    y_stream_version = current_y_streams.get(major_version, f"rhel-{major_version}.X")
-    y_stream_release_date = release_dates.get(y_stream_version.lower())
+    config = _load_rhel_config()
+
+    current_y_streams = config.get("current_y_streams")
+
+    y_stream_version = current_y_streams.get(major_version)
+    y_stream_release_date = release_dates.get(y_stream_version.lower()) if y_stream_version else None
 
     # Compare due date with Y-stream release date to determine Y vs Z stream processing
     is_due_after_y_release = _is_due_after_release(due_date, y_stream_release_date)
@@ -302,12 +313,23 @@ def check_cve_triage_eligibility(
     }
 
 
-def _load_release_dates() -> dict[str, str]:
+def _load_rhel_config() -> dict[str, Any]:
     """
-    Load RHEL release dates from configuration.
+    Load RHEL configuration from rhel-config.json file.
+
+    Returns:
+        Dictionary containing RHEL configuration, empty dict if file not found
     """
-    # TODO: implement this (use env var/configmap?)
-    return {}
+    config_file = "rhel-config.json"
+
+    if not Path(config_file).exists():
+        raise Exception(f"RHEL config file {config_file} not found")
+
+    try:
+        with open(config_file, 'r') as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        return {}
 
 
 def _is_due_after_release(due_date: str | None, release_date: str | None) -> bool:
@@ -319,7 +341,18 @@ def _is_due_after_release(due_date: str | None, release_date: str | None) -> boo
         release_date: RHEL version release date (YYYY-MM-DD format)
 
     Returns:
-        bool: True if due date is after release date
+        bool: True if due date is after release date, False otherwise.
+              Returns False if either date is None (conservative approach).
     """
-    # TODO: implement this
-    return True
+    # Let's consider that if due date is not set, it's ok to handle this in Y-stream
+    if not due_date:
+        return True
+    if not release_date:
+        return False
+
+    try:
+        due_dt = datetime.datetime.strptime(due_date, "%Y-%m-%d")
+        release_dt = datetime.datetime.strptime(release_date, "%Y-%m-%d")
+        return due_dt > release_dt
+    except ValueError as e:
+        return False

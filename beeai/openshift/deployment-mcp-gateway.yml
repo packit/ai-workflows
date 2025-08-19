@@ -64,6 +64,9 @@ spec:
           name: mcp-server-git-repos
         - mountPath: /home/mcp/mcp-server-keytab
           name: mcp-server-keytab
+        - mountPath: /home/mcp/rhel-config.json
+          name: rhel-config
+          subPath: rhel-config.json
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
@@ -76,3 +79,6 @@ spec:
       - name: mcp-server-keytab
         secret:
           secretName: mcp-server-keytab
+      - name: rhel-config
+        configMap:
+          name: rhel-config

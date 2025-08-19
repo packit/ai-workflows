@@ -12,7 +12,8 @@ Three agents process tasks through Redis queues:
 
 ## Setup
 
-Copy the `templates` directory to `.secrets` and fill in required information.
+- Copy the `templates` directory to `.secrets` and fill in required information.
+    - For `.secrets/rhel-config.json`, you can also copy the content from Bitwarden
 
 ## Running as a service
 

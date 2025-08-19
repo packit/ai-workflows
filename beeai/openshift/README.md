@@ -3,7 +3,7 @@
 ## Steps to deploy:
 
 - Ensure secrets exist for the following values:
-  
+
   `beeai-agent-secrets`:
   ```
     CHAT_MODEL
@@ -22,8 +22,18 @@
   ```
   oc create secret generic mcp-server-keytab --from-file=jotnar-bot.keytab
   ```
-  
+
   Values of these secrets are documented in [README](https://github.com/packit/jotnar?tab=readme-ov-file#service-accounts--authentication).
+
+- Create RHEL configuration ConfigMap manually:
+
+  ```bash
+  # Get rhel-config.json from Bitwarden (contains actual RHEL release dates)
+  # Then create ConfigMap:
+  oc create configmap rhel-config --from-file=rhel-config.json
+  ```
+
+  The `rhel-config.json` file is stored in **Bitwarden** and contains current release dates and Y-stream mappings.
 
 - Run `make deploy`. This would apply all the existing configurations to the project.
 

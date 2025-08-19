@@ -48,6 +48,31 @@ x-beeai-agent-c10s: &beeai-agent-c10s
     <<: *beeai-env
     CONTAINER_VERSION: c10s
 
+x-supervisor: &supervisor
+  depends_on:
+    - mcp-atlassian
+    - mcp-gateway
+    - valkey
+    - phoenix
+  image: beeai-agent
+  build:
+    context: .
+    dockerfile: Containerfile.c10s
+  environment:
+    - MCP_JIRA_URL=http://mcp-atlassian:9000/sse
+    - MCP_GATEWAY_URL=http://mcp-gateway:8000/sse
+    - REDIS_URL=redis://valkey:6379/0
+    - COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces
+    - GIT_REPO_BASEPATH=/git-repos
+    - "KRB5CCNAME=FILE:/home/beeai/ccache/krb5cc"
+  env_file:
+    - .secrets/supervisor.env
+  volumes:
+    - ./agents:/home/beeai/agents:ro,z
+    - ./supervisor:/home/beeai/supervisor:ro,z
+    - .secrets/ccache:/home/beeai/ccache:ro,z,U
+  restart: unless-stopped
+
 services:
   mcp-atlassian:
     image: ghcr.io/sooperset/mcp-atlassian:latest
@@ -55,6 +80,7 @@ services:
       - .secrets/mcp-atlassian.env
     command: ["--transport", "sse", "--port", "9000", "-vv"]
     restart: unless-stopped
+    profiles: ["agents", "supervisor"]
 
   mcp-gateway:
     image: mcp-gateway
@@ -77,12 +103,14 @@ services:
       - .secrets/rhel-config.json:/home/mcp/rhel-config.json:ro,z,U
     command: ["python", "mcp_server/gateway.py"]
     restart: unless-stopped
+    profiles: ["agents", "supervisor"]
 
   valkey:
     image: docker.io/valkey/valkey:8
     volumes:
       - valkey-data:/data
     restart: unless-stopped
+    profiles: ["agents", "supervisor"]
 
   phoenix:
     image: docker.io/arizephoenix/phoenix:version-11.6.2
@@ -93,6 +121,7 @@ services:
     volumes:
       - phoenix-data:/mnt/data
     restart: unless-stopped
+    profiles: ["agents", "supervisor"]
 
   redis-commander:
     image: ghcr.io/joeferner/redis-commander:0.9.0
@@ -103,28 +132,52 @@ services:
     depends_on:
       - valkey
     restart: unless-stopped
+    profiles: ["agents", "supervisor"]
 
   triage-agent:
     <<: *beeai-agent-c10s
     environment:
       <<: *beeai-env
     command: ["python", "agents/triage_agent.py"]
+    profiles: ["agents"]
 
   backport-agent-c9s:
     <<: *beeai-agent-c9s
     command: ["python", "agents/backport_agent.py"]
+    profiles: ["agents"]
 
   backport-agent-c10s:
     <<: *beeai-agent-c10s
     command: ["python", "agents/backport_agent.py"]
+    profiles: ["agents"]
 
   rebase-agent-c9s:
     <<: *beeai-agent-c9s
     command: ["python", "agents/rebase_agent.py"]
+    profiles: ["agents"]
 
   rebase-agent-c10s:
     <<: *beeai-agent-c10s
     command: ["python", "agents/rebase_agent.py"]
+    profiles: ["agents"]
+
+  supervisor-collector:
+    <<: *supervisor
+    command: ["python", "-m", "supervisor.main", "collect"]
+    profiles: ["supervisor"]
+
+  supervisor-processor:
+    <<: *supervisor
+    command: ["python", "-m", "supervisor.main", "process"]
+    profiles: ["supervisor"]
+
+  # This is here so we can use it for '$(COMPOSE) run'
+  supervisor:
+    <<: *supervisor
+    command: ["sh", "-c", "echo 'This service isn't run directly' && exit 1"]
+    profiles: []
+    restart: no
+
 
   jira-issue-fetcher:
     # No hard dependencies - will connect to existing services or fail gracefully

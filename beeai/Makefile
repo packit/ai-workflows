@@ -3,19 +3,24 @@ COMPOSE_FILE ?= compose.yaml
 DRY_RUN ?= false
 
 COMPOSE ?= $(shell command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker-compose")
+COMPOSE_AGENTS=$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents
+COMPOSE_SUPERVISOR=$(COMPOSE) -f $(COMPOSE_FILE) --profile=supervisor
 
 .PHONY: build
-build:
+build: certs/Current-IT-Root-CAs.pem
 	$(COMPOSE) -f $(COMPOSE_FILE) build
 
+certs/Current-IT-Root-CAs.pem:
+	curl -o certs/Current-IT-Root-CAs.pem \
+	https://certs.corp.redhat.com/certs/Current-IT-Root-CAs.pem
 
 .PHONY: run-beeai-bash
 run-beeai-bash:
-	$(COMPOSE) -f $(COMPOSE_FILE) run --rm triage-agent /bin/bash
+	$(COMPOSE_AGENTS) run --rm triage-agent /bin/bash
 
 .PHONY: run-triage-agent-standalone
 run-triage-agent-standalone:
-	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
+	$(COMPOSE_AGENTS) run --rm \
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e DRY_RUN=$(DRY_RUN) \
 		triage-agent
@@ -25,7 +30,7 @@ run-triage-agent-standalone:
 
 .PHONY: run-rebase-agent-c9s-standalone
 run-rebase-agent-c9s-standalone:
-	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
+	$(COMPOSE_AGENTS) run --rm \
 		-e PACKAGE=$(PACKAGE) \
 		-e VERSION=$(VERSION) \
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
@@ -35,7 +40,7 @@ run-rebase-agent-c9s-standalone:
 
 .PHONY: run-rebase-agent-c10s-standalone
 run-rebase-agent-c10s-standalone:
-	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
+	$(COMPOSE_AGENTS) run --rm \
 		-e PACKAGE=$(PACKAGE) \
 		-e VERSION=$(VERSION) \
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
@@ -52,7 +57,7 @@ run-rebase-agent-standalone: run-rebase-agent-c10s-standalone
 
 .PHONY: run-backport-agent-c9s-standalone
 run-backport-agent-c9s-standalone:
-	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
+	$(COMPOSE_AGENTS)  run --rm \
 		-e PACKAGE=$(PACKAGE) \
 		-e UPSTREAM_FIX=$(UPSTREAM_FIX) \
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
@@ -63,7 +68,7 @@ run-backport-agent-c9s-standalone:
 
 .PHONY: run-backport-agent-c10s-standalone
 run-backport-agent-c10s-standalone:
-	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
+	$(COMPOSE_AGENTS) run --rm \
 		-e PACKAGE=$(PACKAGE) \
 		-e UPSTREAM_FIX=$(UPSTREAM_FIX) \
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
@@ -100,37 +105,36 @@ build-jira-issue-fetcher:
 
 .PHONY: start
 start:
-	DRY_RUN=$(DRY_RUN) $(COMPOSE) -f $(COMPOSE_FILE) up
+	DRY_RUN=$(DRY_RUN) $(COMPOSE_AGENTS) up
 
 .PHONY: start-detached
 start-detached:
-	DRY_RUN=$(DRY_RUN) $(COMPOSE) -f $(COMPOSE_FILE) up -d
+	DRY_RUN=$(DRY_RUN) $(COMPOSE_AGENTS) up -d
 
 .PHONY: stop
 stop:
 	$(COMPOSE) -f $(COMPOSE_FILE) down
 
+.PHONY: clean
+clean:
+	$(COMPOSE) -f $(COMPOSE_FILE) down --volumes
 
 
 .PHONY: logs-triage
 logs-triage:
-	$(COMPOSE) -f $(COMPOSE_FILE) logs -f triage-agent
+	$(COMPOSE_AGENTS) logs -f triage-agent
 
 .PHONY: logs-backport
 logs-backport:
-	$(COMPOSE) -f $(COMPOSE_FILE) logs -f backport-agent
+	$(COMPOSE_AGENTS) logs -f backport-agent
 
 .PHONY: logs-rebase
 logs-rebase:
-	$(COMPOSE) -f $(COMPOSE_FILE) logs -f rebase-agent
+	$(COMPOSE_AGENTS) logs -f rebase-agent
 
 .PHONY: logs-jira-issue-fetcher
 logs-jira-issue-fetcher:
 	$(COMPOSE) -f $(COMPOSE_FILE) --profile manual logs -f jira-issue-fetcher
-
-.PHONY: status
-status:
-	$(COMPOSE) -f $(COMPOSE_FILE) ps
 
 .PHONY: trigger-pipeline
 trigger-pipeline:
@@ -139,16 +143,57 @@ trigger-pipeline:
 		exit 1; \
 	fi
 	@echo "Triggering pipeline for issue: $(JIRA_ISSUE)"
-	$(COMPOSE) -f $(COMPOSE_FILE) exec valkey redis-cli LPUSH triage_queue '{"metadata": {"issue": "$(JIRA_ISSUE)"}}'
+	$(COMPOSE_AGENTS) exec valkey redis-cli LPUSH triage_queue '{"metadata": {"issue": "$(JIRA_ISSUE)"}}'
+
+
+# Testing and Release Supervisor
+
+.PHONY: supervisor-start
+supervisor-start:
+	DRY_RUN=$(DRY_RUN) $(COMPOSE_SUPERVISOR) up
+
+.PHONY: supervisor-start-detached
+supervisor-start-detached:
+	DRY_RUN=$(DRY_RUN) $(COMPOSE_SUPERVISOR) up -d
+
+.PHONY: supervisor-stop
+supervisor-stop:
+	$(COMPOSE_SUPERVISOR) down
+
+DEBUG_LOWER := $(shell echo $(DEBUG) | tr '[:upper:]' '[:lower:]')
+ifeq ($(DEBUG_LOWER),true)
+DEBUG_FLAG := --debug
+else
+DEBUG_FLAG :=
+endif
+
+DRY_RUN_LOWER := $(shell echo $(DRY_RUN) | tr '[:upper:]' '[:lower:]')
+ifeq ($(DRY_RUN_LOWER),true)
+DRY_RUN_FLAG := --dry-run
+else
+DRY_RUN_FLAG :=
+endif
+
+.PHONY: process-issue
+process-issue:
+	$(COMPOSE_SUPERVISOR) run --rm \
+		supervisor python -m supervisor.main $(DEBUG_FLAG) $(DRY_RUN_FLAG) process-issue $(JIRA_ISSUE)
+
+.PHONY: process-erratum
+process-erratum:
+	$(COMPOSE_SUPERVISOR) run --rm \
+		supervisor python -m supervisor.main $(DEBUG_FLAG) $(DRY_RUN_FLAG) process-erratum $(ERRATA_ID)
+
+
+# Common utility targets
+
+.PHONY: status
+status:
+	$(COMPOSE) -f $(COMPOSE_FILE) ps
 
 .PHONY: redis-cli
 redis-cli:
-	$(COMPOSE) -f $(COMPOSE_FILE) exec valkey redis-cli
-
-
-.PHONY: clean
-clean:
-	$(COMPOSE) -f $(COMPOSE_FILE) down --volumes
+	$(COMPOSE_AGENTS) exec valkey redis-cli
 
 
 .PHONY: build-test-image

@@ -6,13 +6,13 @@ Every agent can run individually or pick up tasks from a Redis queue.
 ## Architecture
 
 Three agents process tasks through Redis queues:
-- **Triage Agent**: Analyzes JIRA issues and determines resolution path
-- **Rebase Agent**: Updates packages to newer upstream versions
-- **Backport Agent**: Applies specific fixes/patches to packages
+- **Triage Agent**: Analyzes JIRA issues and determines resolution path. It can ask for clarification, create tasks for other agents or may take no action if not needed.
+- **Rebase Agent**: Updates packages to newer upstream versions. It looks for upstream references that are linked, attached and present in the description or comments in the issue.
+- **Backport Agent**: Applies specific fixes/patches to packages. It looks for patches that are linked, attached and present in the description or comments in the issue.
 
 ## Setup
 
-Copy the `templates` directory to `.secrets` and fill in required information.
+Copy the `templates` directory to to the `.secrets` directory and fill in required information.
 
 ## Running as a service
 

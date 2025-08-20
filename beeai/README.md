@@ -64,9 +64,7 @@ uv sync
 uv run make -f Makefile.tests check
 ```
 
+You'll need to have `python3-rpm` installed on the host system -
+the `rpm` module installed from PyPI is [rpm-shim](https://github.com/packit/rpm-shim)
+and just pulls the files from python3-rpm into the venv.
 In an IDE, select beeai/.venv/bin/python as the Python interpreter.
-
-Note that that Python version in your development environment must match that of the system
-because of the use of the RPM Python bindings. Currently, that means you must run this on a
-system with python-3.13 as system Python, such as Fedora 42. On a different system,
-you can create a F42 toolbox.

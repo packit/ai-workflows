@@ -49,7 +49,7 @@ services:
       - ./mcp_server:/home/mcp/mcp_server:ro,z
       - .secrets/keytab:/home/mcp/keytab:ro,z
       - git-repos:/git-repos
-      - .secrets/rhel-config.json:/home/mcp/rhel-config.json:ro,z
+      - .secrets/rhel-config.json:/home/mcp/rhel-config.json:ro,z,U
     command: ["python", "mcp_server/gateway.py"]
     restart: unless-stopped
 

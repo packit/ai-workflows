@@ -32,7 +32,7 @@ from utils import fix_await, get_agent_execution_config, mcp_tools, redis_client
 logger = logging.getLogger(__name__)
 
 
-def determine_target_branch(cve_eligibility_result: dict | None, triage_data) -> str | None:
+def determine_target_branch(cve_eligibility_result: dict | None, triage_data: BaseModel) -> str | None:
     """
     Determine target branch from fix_version and CVE eligibility.
     """
@@ -72,7 +72,7 @@ def _map_version_to_branch(version: str, needs_internal_fix: bool) -> str | None
 
     if needs_internal_fix:
         branch = f"rhel-{major_version}.{minor_version}"
-        if major_version != "10":
+        if int(major_version) < 10:
             branch += ".0"
         logger.info(f"Mapped {version} -> {branch} (RHEL internal fix)")
     else:

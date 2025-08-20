@@ -272,7 +272,10 @@ def check_cve_triage_eligibility(
             "needs_internal_fix": True,
         }
 
-    if major_version == "8":
+    config = _load_rhel_config()
+    current_y_streams = config.get("current_y_streams")
+
+    if not current_y_streams.get(major_version):
         #  no Y-stream, let's skip the other check
         return {
         "is_cve": True,
@@ -283,10 +286,7 @@ def check_cve_triage_eligibility(
 
     due_date = fields.get("duedate")
 
-    config = _load_rhel_config()
     release_dates = config.get("release_dates", {})
-
-    current_y_streams = config.get("current_y_streams")
 
     y_stream_version = current_y_streams.get(major_version)
     y_stream_release_date = release_dates.get(y_stream_version.lower()) if y_stream_version else None

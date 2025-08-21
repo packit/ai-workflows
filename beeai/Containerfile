@@ -36,14 +36,16 @@ RUN pip3 install --no-cache-dir \
 # Create user
 RUN useradd -m -G wheel beeai
 
-# Create directories
-# `/home/beeai/agents/` should be directly copied for Openshift deployment
-# although it is locally mounted through a volume
+# Copy required directories
+# Individual directories are mounted as volumes in development
 COPY agents/ /home/beeai/agents/
+COPY common/ /home/beeai/common/
 RUN chgrp -R root /home/beeai && chmod -R g+rwX /home/beeai
 
 USER beeai
 WORKDIR /home/beeai
+
+ENV PYTHONPATH=/home/beeai
 
 # so that we can start working with gitlab.com immediately
 RUN mkdir ~/.ssh \

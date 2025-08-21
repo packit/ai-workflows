@@ -20,14 +20,16 @@ RUN pip3 install --no-cache-dir fastmcp
 # Create user
 RUN useradd -m -G wheel mcp
 
-# Create directories
-# `/home/mcp/mcp_server/` should be directly copied for Openshift deployment
-# although it is locally mounted through a volume
+# Copy required directories
+# Individual directories are mounted as volumes in development
 COPY mcp_server/ /home/mcp/mcp_server/
+COPY common/ /home/mcp/common/
 RUN chgrp -R root /home/mcp && chmod -R g+rwX /home/mcp
 RUN mkdir /git-repos && chmod -R o+rwX /git-repos
 
 USER mcp
 WORKDIR /home/mcp
+
+ENV PYTHONPATH=/home/mcp
 
 CMD ["/bin/bash"]

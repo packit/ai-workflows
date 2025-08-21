@@ -165,13 +165,7 @@ def render_prompt(input: InputSchema) -> str:
          * If the package does not exist, re-examine the Jira issue for the correct package name and if it is not found,
            return error and explicitly state the reason
 
-      3. Identify the target branch for updates:
-         * Look at the fixVersion field in the Jira issue to determine the target branch
-         * Apply the mapping rule: fixVersion named rhel-N maps to branch named cNs
-         * Verify the branch exists on GitLab
-         * This branch information will be needed for both rebases and backports
-
-      4. Proceed to decision making process described below.
+      3. Proceed to decision making process described below.
 
       **Decision Guidelines & Investigation Steps**
 

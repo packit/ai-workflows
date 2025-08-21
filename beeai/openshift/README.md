@@ -28,12 +28,12 @@
 - Create RHEL configuration ConfigMap manually:
 
   ```bash
-  # Get rhel-config.json from Bitwarden (contains actual RHEL release dates)
+  # Get rhel-config.json from Bitwarden (contains info about RHEL versions)
   # Then create ConfigMap:
   oc create configmap rhel-config --from-file=rhel-config.json
   ```
 
-  The `rhel-config.json` file is stored in **Bitwarden** and contains current release dates and Y-stream mappings.
+  The `rhel-config.json` file is stored in [jotnar](https://github.com/packit/jotnar) repo.
 
 - Run `make deploy`. This would apply all the existing configurations to the project.
 

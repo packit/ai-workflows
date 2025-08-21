@@ -21,7 +21,9 @@ x-beeai-agent: &beeai-agent
     - .secrets/beeai-agent.env
   volumes:
     - ./agents:/home/beeai/agents:ro,z
+    - ./common:/home/beeai/common:ro,z
     - git-repos:/git-repos:rw,U
+    - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
   restart: unless-stopped
 
 services:
@@ -47,6 +49,7 @@ services:
       - .secrets/mcp-gateway.env
     volumes:
       - ./mcp_server:/home/mcp/mcp_server:ro,z
+      - ./common:/home/mcp/common:ro,z
       - .secrets/keytab:/home/mcp/keytab:ro,z,U
       - git-repos:/git-repos
       - .secrets/rhel-config.json:/home/mcp/rhel-config.json:ro,z,U

@@ -30,7 +30,7 @@ from tools.specfile import AddChangelogEntryTool, BumpReleaseTool
 from tools.text import CreateTool, InsertTool, StrReplaceTool, ViewTool
 from tools.wicked_git import GitLogSearchTool, GitPatchCreationTool
 from triage_agent import BackportData, ErrorData
-from utils import fix_await, check_subprocess, get_agent_execution_config, mcp_tools, redis_client, post_private_jira_comment
+from utils import fix_await, check_subprocess, get_agent_execution_config, mcp_tools, redis_client
 
 logger = logging.getLogger(__name__)
 

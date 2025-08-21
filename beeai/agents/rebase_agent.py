@@ -28,7 +28,7 @@ from tools.commands import RunShellCommandTool
 from tools.specfile import AddChangelogEntryTool
 from tools.text import CreateTool, InsertTool, StrReplaceTool, ViewTool
 from triage_agent import RebaseData, ErrorData
-from utils import fix_await, get_agent_execution_config, mcp_tools, redis_client, run_tool, post_private_jira_comment
+from utils import fix_await, get_agent_execution_config, mcp_tools, redis_client, run_tool
 
 logger = logging.getLogger(__name__)
 

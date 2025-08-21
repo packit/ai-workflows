@@ -10,6 +10,93 @@ Three agents process tasks through Redis queues:
 - **Rebase Agent**: Updates packages to newer upstream versions
 - **Backport Agent**: Applies specific fixes/patches to packages
 
+### Entry Criteria
+
+Issues enter the system automatically via the Jira Issue Fetcher when they meet these criteria:
+- Belongs to the specified filter (e.g., `Jotnar_1000_packages`)
+- Status is "New"
+- No `jotnar_*` labels other than `jotnar_retry_needed`
+
+### Queue Transitions and Label Management
+
+The system uses Redis queues to route issues between agents and applies JIRA labels to track progress:
+
+**From Triage Agent:**
+- **REBASE decision** → `rebase_queue` + applies `jotnar_rebase_in_progress` label
+- **BACKPORT decision** → `backport_queue` + applies `jotnar_backport_in_progress` label
+- **CLARIFICATION_NEEDED decision** → `clarification_needed_queue` + applies `jotnar_needs_attention` label
+- **NO_ACTION decision** → `no_action_list` + applies `jotnar_no_action_needed` label (jötnar team members may apply `jotnar_cant_do` if the system cannot solve the problem)
+- **ERROR/Exception** → `error_list` + applies `jotnar_errored` label
+- **Max retries exceeded** → `error_list` + applies `jotnar_errored` label
+
+**From Rebase Agent:**
+- **Success** → `completed_rebase_list` + applies `jotnar_rebased` label
+- **Failure** → `error_list` + applies `jotnar_errored` label
+- **Retry** → remains in `rebase_queue` (keeps `jotnar_rebase|backport_in_progress` label)
+
+**From Backport Agent:**
+- **Success** → `completed_backport_list` + applies `jotnar_backported` label
+- **Failure** → `error_list` + applies `jotnar_errored` label
+- **Retry** → remains in `backport_queue` (keeps `jotnar_rebase|backport_in_progress` label)
+
+#### Re-triggering Mechanism
+
+Issues can be re-triggered through the workflow in two ways:
+1. **Remove any existing `jotnar_*` label** - allows the issue to re-enter the system on the next fetcher run
+2. **Add the `jotnar_retry_needed` label** - triggers workflow retry. Use cases include:
+   - Package maintainers who have made changes (e.g., updated issue description)
+   - Jötnar team members after production code updates to resolve issues
+
+#### Maintainer Review Process
+
+The Jotnar team can require maintainer review by applying the `jotnar_needs_maintainer_review` label to an issue. This is especially important for FuSa (Functional Safety) project packages.
+
+The `jotnar_fusa` label will be automatically added by the triage agent to JIRA issues involving FuSa packages, and related merge requests will need to be reviewed and handled by subject matter experts.
+
+#### Workflow Diagram
+
+```mermaid
+flowchart TD
+    Start["JIRA Issue<br/>(New, no jotnar_* labels)"] --> Triage["Triage Agent"]
+    
+    Triage --> |"REBASE"| RebaseQ["rebase_queue<br/>+ jotnar_rebase_in_progress<br/>(+ jotnar_fusa if FuSa pkg)"]
+    Triage --> |"BACKPORT"| BackportQ["backport_queue<br/>+ jotnar_backport_in_progress<br/>(+ jotnar_fusa if FuSa pkg)"]
+    Triage --> |"CLARIFICATION_NEEDED"| ClarQ["clarification_needed_queue<br/>+ jotnar_needs_attention<br/>(+ jotnar_fusa if FuSa pkg)"]
+    Triage --> |"NO_ACTION"| NoAction["no_action_list<br/>+ jotnar_no_action_needed<br/>(or jotnar_cant_do manually)"]
+    Triage --> |"ERROR"| ErrorList["error_list<br/>+ jotnar_errored"]
+    
+    RebaseQ --> RebaseAgent["Rebase Agent"]
+    RebaseAgent --> |"Success"| RebaseSuccess["completed_rebase_list<br/>+ jotnar_rebased"]
+    RebaseAgent --> |"Failure"| ErrorList
+    RebaseAgent --> |"Retry"| RebaseQ
+    
+    BackportQ --> BackportAgent["Backport Agent"]
+    BackportAgent --> |"Success"| BackportSuccess["completed_backport_list<br/>+ jotnar_backported"]
+    BackportAgent --> |"Failure"| ErrorList
+    BackportAgent --> |"Retry"| BackportQ
+    
+    %% Re-triggering mechanisms
+    Retrigger1["Remove any jotnar_* label"] -.-> |"Re-enters system"| Start
+    Retrigger2["Add jotnar_retry_needed label"] -.-> |"Re-enters system"| Start
+    
+    %% Manual review option
+    ManualReview["Manual Review<br/>+ jotnar_needs_maintainer_review"]
+    RebaseSuccess -.-> ManualReview
+    BackportSuccess -.-> ManualReview
+    ClarQ -.-> ManualReview
+    
+    style Start fill:#e1f5fe
+    style Triage fill:#f3e5f5
+    style RebaseAgent fill:#f3e5f5
+    style BackportAgent fill:#f3e5f5
+    style RebaseSuccess fill:#e8f5e8
+    style BackportSuccess fill:#e8f5e8
+    style ErrorList fill:#ffebee
+    style Retrigger1 fill:#e0f2f1
+    style Retrigger2 fill:#e0f2f1
+    style ManualReview fill:#fce4ec
+```
+
 ## Setup
 
 Copy the `templates` directory to `.secrets` and fill in required information.

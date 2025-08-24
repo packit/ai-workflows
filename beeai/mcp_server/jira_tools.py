@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urljoin
 
-import requests
+import aiohttp
+import aiofiles
 from pydantic import Field
 
 # Jira custom field IDs
@@ -41,7 +42,7 @@ def _get_jira_headers(token: str) -> dict[str, str]:
     }
 
 
-def get_jira_details(
+async def get_jira_details(
     issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
 ) -> dict[str, Any] | str:
     """
@@ -50,36 +51,36 @@ def get_jira_details(
     """
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
 
-    # Get main issue data
-    try:
-        response = requests.get(
-            urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
-            params={"expand": "comments"},
-            headers=headers,
-        )
-        response.raise_for_status()
-        issue_data = response.json()
-    except requests.RequestException as e:
-        return f"Failed to get details about the specified issue: {e}"
+    async with aiohttp.ClientSession() as session:
+        # Get main issue data
+        try:
+            async with session.get(
+                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+                params={"expand": "comments"},
+                headers=headers,
+            ) as response:
+                response.raise_for_status()
+                issue_data = await response.json()
+        except aiohttp.ClientError as e:
+            return f"Failed to get details about the specified issue: {e}"
 
-    # get remote links - these often contain links to PRs or mailing lists
-    try:
-        remote_links_response = requests.get(
-            urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/remotelink"),
-            headers=headers,
-        )
-        remote_links_response.raise_for_status()
-        remote_links = remote_links_response.json()
-        issue_data["remote_links"] = remote_links
-    except requests.RequestException as e:
-        # If remote links fail, continue without them
-        issue_data["remote_links"] = []
+        # get remote links - these often contain links to PRs or mailing lists
+        try:
+            async with session.get(
+                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/remotelink"),
+                headers=headers,
+            ) as remote_links_response:
+                remote_links_response.raise_for_status()
+                remote_links = await remote_links_response.json()
+                issue_data["remote_links"] = remote_links
+        except aiohttp.ClientError as e:
+            # If remote links fail, continue without them
+            issue_data["remote_links"] = []
 
     return issue_data
 
 
-
-def set_jira_fields(
+async def set_jira_fields(
     issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
     fix_versions: Annotated[
         list[str] | None,
@@ -94,52 +95,53 @@ def set_jira_fields(
     if os.getenv("DRY_RUN", "False").lower() == "true":
         return "Dry run, not updating Jira fields"
 
-    # First, get the current issue to check existing field values
-    try:
-        response = requests.get(
-            urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
-            headers=_get_jira_headers(os.getenv("JIRA_TOKEN")),
-        )
-        response.raise_for_status()
-        current_issue = response.json()
-    except requests.RequestException as e:
-        return f"Failed to get current issue details: {e}"
+    async with aiohttp.ClientSession() as session:
+        # First, get the current issue to check existing field values
+        try:
+            async with session.get(
+                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+                headers=_get_jira_headers(os.getenv("JIRA_TOKEN")),
+            ) as response:
+                response.raise_for_status()
+                current_issue = await response.json()
+        except aiohttp.ClientError as e:
+            return f"Failed to get current issue details: {e}"
 
-    fields = {}
-    current_fields = current_issue.get("fields", {})
+        fields = {}
+        current_fields = current_issue.get("fields", {})
 
-    if fix_versions is not None:
-        current_fix_versions = current_fields.get("fixVersions", [])
-        if not current_fix_versions:
-            fields["fixVersions"] = [{"name": fv} for fv in fix_versions]
+        if fix_versions is not None:
+            current_fix_versions = current_fields.get("fixVersions", [])
+            if not current_fix_versions:
+                fields["fixVersions"] = [{"name": fv} for fv in fix_versions]
 
-    if severity is not None:
-        current_severity = current_fields.get(SEVERITY_CUSTOM_FIELD)
-        if not current_severity.get("value"):
-            fields[SEVERITY_CUSTOM_FIELD] = {"value": severity.value}
+        if severity is not None:
+            current_severity = current_fields.get(SEVERITY_CUSTOM_FIELD)
+            if not current_severity.get("value"):
+                fields[SEVERITY_CUSTOM_FIELD] = {"value": severity.value}
 
-    if target_end is not None:
-        current_target_end = current_fields.get(TARGET_END_CUSTOM_FIELD)
-        if not current_target_end.get("value"):
-            fields[TARGET_END_CUSTOM_FIELD] = target_end.strftime("%Y-%m-%d")
+        if target_end is not None:
+            current_target_end = current_fields.get(TARGET_END_CUSTOM_FIELD)
+            if not current_target_end.get("value"):
+                fields[TARGET_END_CUSTOM_FIELD] = target_end.strftime("%Y-%m-%d")
 
-    if not fields:
-        return f"No fields needed updating in {issue_key}"
+        if not fields:
+            return f"No fields needed updating in {issue_key}"
 
-    try:
-        response = requests.put(
-            urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
-            json={"fields": fields},
-            headers=_get_jira_headers(os.getenv("JIRA_TOKEN")),
-        )
-        response.raise_for_status()
-    except requests.RequestException as e:
-        return f"Failed to set the specified fields: {e}"
+        try:
+            async with session.put(
+                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+                json={"fields": fields},
+                headers=_get_jira_headers(os.getenv("JIRA_TOKEN")),
+            ) as response:
+                response.raise_for_status()
+        except aiohttp.ClientError as e:
+            return f"Failed to set the specified fields: {e}"
 
     return f"Successfully updated {issue_key}"
 
 
-def add_jira_comment(
+async def add_jira_comment(
     issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
     comment: Annotated[str, Field(description="Comment text to add")],
     private: Annotated[bool, Field(description="Whether the comment should be hidden from public")] = False,
@@ -147,21 +149,23 @@ def add_jira_comment(
     """
     Adds a comment to the specified Jira issue.
     """
-    try:
-        response = requests.post(
-            urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/comment"),
-            json={
-                "body": comment,
-                **({"visibility": {"type": "group", "value": "Red Hat Employee"}} if private else {}),
-            },
-            headers=_get_jira_headers(os.getenv("JIRA_TOKEN")),
-        )
-        response.raise_for_status()
-    except requests.RequestException as e:
-        return f"Failed to add the specified comment: {e}"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(
+                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/comment"),
+                json={
+                    "body": comment,
+                    **({"visibility": {"type": "group", "value": "Red Hat Employee"}} if private else {}),
+                },
+                headers=_get_jira_headers(os.getenv("JIRA_TOKEN")),
+            ) as response:
+                response.raise_for_status()
+        except aiohttp.ClientError as e:
+            return f"Failed to add the specified comment: {e}"
     return f"Successfully added the specified comment to {issue_key}"
 
-def check_cve_triage_eligibility(
+
+async def check_cve_triage_eligibility(
     issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
 ) -> dict[str, Any]:
     """
@@ -177,18 +181,19 @@ def check_cve_triage_eligibility(
     """
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
 
-    try:
-        response = requests.get(
-            urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
-            headers=headers,
-        )
-        response.raise_for_status()
-        jira_data = response.json()
-    except requests.RequestException as e:
-        return {
-            "is_eligible_for_triage": False,
-            "error": f"Failed to get Jira data: {e}",
-        }
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(
+                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+                headers=headers,
+            ) as response:
+                response.raise_for_status()
+                jira_data = await response.json()
+        except aiohttp.ClientError as e:
+            return {
+                "is_eligible_for_triage": False,
+                "error": f"Failed to get Jira data: {e}",
+            }
 
     fields = jira_data.get("fields", {})
     labels = fields.get("labels", [])
@@ -254,7 +259,7 @@ def check_cve_triage_eligibility(
             "needs_internal_fix": True,
         }
 
-    config = _load_rhel_config()
+    config = await _load_rhel_config()
     current_y_streams = config.get("current_y_streams")
 
     if not current_y_streams.get(major_version):
@@ -301,7 +306,7 @@ def check_cve_triage_eligibility(
     return result
 
 
-def _load_rhel_config() -> dict[str, Any]:
+async def _load_rhel_config() -> dict[str, Any]:
     """
     Load RHEL configuration from rhel-config.json file.
 
@@ -314,8 +319,9 @@ def _load_rhel_config() -> dict[str, Any]:
         raise Exception(f"RHEL config file {config_file} not found")
 
     try:
-        with open(config_file, 'r') as f:
-            return json.load(f)
+        async with aiofiles.open(config_file, 'r') as f:
+            content = await f.read()
+            return json.loads(content)
     except json.JSONDecodeError:
         return {}
 

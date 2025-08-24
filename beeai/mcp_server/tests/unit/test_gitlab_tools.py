@@ -1,13 +1,15 @@
-import subprocess
+import asyncio
 from pathlib import Path
 
+import pytest
 from flexmock import flexmock
 from ogr.services.gitlab import GitlabService
 
 from gitlab_tools import fork_repository, open_merge_request, push_to_remote_repository
 
 
-def test_fork_repository():
+@pytest.mark.asyncio
+async def test_fork_repository():
     repository = "https://gitlab.com/redhat/centos-stream/rpms/bash"
     clone_url = "https://gitlab.com/ai-bot/bash.git"
     flexmock(GitlabService).should_receive("get_project_from_url").with_args(
@@ -15,10 +17,11 @@ def test_fork_repository():
     ).and_return(
         flexmock(get_fork=lambda create: flexmock(get_git_urls=lambda: {"git": clone_url}))
     )
-    assert fork_repository(repository=repository) == clone_url
+    assert await fork_repository(repository=repository) == clone_url
 
 
-def test_open_merge_request():
+@pytest.mark.asyncio
+async def test_open_merge_request():
     fork_url = "https://gitlab.com/ai-bot/bash.git"
     title = "Fix RHEL-12345"
     description = "Resolves RHEL-12345"
@@ -31,7 +34,7 @@ def test_open_merge_request():
     ).and_return(flexmock(create_pr=lambda title, body, target, source: pr_mock))
     pr_mock.should_receive("add_label").with_args("jotnar_needs_attention").once()
     assert (
-        open_merge_request(
+        await open_merge_request(
             fork_url=fork_url,
             title=title,
             description=description,
@@ -42,18 +45,22 @@ def test_open_merge_request():
     )
 
 
-def test_push_to_remote_repository():
+@pytest.mark.asyncio
+async def test_push_to_remote_repository():
     repository = "https://gitlab.com/ai-bot/bash.git"
     branch = "automated-package-update-RHEL-12345"
     clone_path = Path("/git-repos/bash")
 
-    def run(cmd, **kwargs):
-        assert cmd[0:2] == ["git", "push"]
-        assert cmd[2].endswith(repository.removeprefix("https://"))
-        assert cmd[3] == branch
+    async def create_subprocess_exec(cmd, *args, **kwargs):
+        assert cmd == "git"
+        assert args[0] == "push"
+        assert args[1].endswith(repository.removeprefix("https://"))
+        assert args[2] == branch
         assert kwargs.get("cwd") == clone_path
-        return flexmock(returncode=0)
+        async def wait():
+            return 0
+        return flexmock(wait=wait)
 
-    flexmock(subprocess).should_receive("run").replace_with(run)
-    result = push_to_remote_repository(repository=repository, clone_path=clone_path, branch=branch)
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+    result = await push_to_remote_repository(repository=repository, clone_path=clone_path, branch=branch)
     assert result.startswith("Successfully")

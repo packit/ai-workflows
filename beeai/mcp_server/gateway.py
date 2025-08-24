@@ -11,10 +11,10 @@ import lookaside_tools
 mcp = FastMCP(
     name="MCP Gateway",
     tools=[
-        function
+        coroutine
         for module in [gitlab_tools, jira_tools, lookaside_tools]
-        for name, function in inspect.getmembers(module, inspect.isfunction)
-        if function.__module__ == module.__name__
+        for name, coroutine in inspect.getmembers(module, inspect.iscoroutinefunction)
+        if coroutine.__module__ == module.__name__
         and not name.startswith("_")
     ]
 )

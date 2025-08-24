@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "aiohttp>=3.12.15",
+    "aiofiles>=24.1.0",
     "arize-phoenix-otel>=0.13.0",
     "beeai-framework[mcp,duckduckgo]>=0.1.36",
     "fastmcp>=2.11.3",

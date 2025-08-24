@@ -1,5 +1,5 @@
+import asyncio
 import os
-import subprocess
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlparse
@@ -9,7 +9,7 @@ from ogr.exceptions import OgrException
 from pydantic import Field
 
 
-def fork_repository(
+async def fork_repository(
     repository: Annotated[str, Field(description="Repository URL")],
 ) -> str:
     """
@@ -18,16 +18,16 @@ def fork_repository(
     or an error message on failure.
     """
     # TODO: add support for destination namespace
-    project = get_project(url=repository, token=os.getenv("GITLAB_TOKEN"))
+    project = await asyncio.to_thread(get_project, url=repository, token=os.getenv("GITLAB_TOKEN"))
     if not project:
         return "Failed to get the specified repository"
-    fork = project.get_fork(create=True)
+    fork = await asyncio.to_thread(project.get_fork, create=True)
     if not fork:
         return "Failed to fork the specified repository"
     return fork.get_git_urls()["git"]
 
 
-def open_merge_request(
+async def open_merge_request(
     fork_url: Annotated[str, Field(description="URL of the fork to open the MR from")],
     title: Annotated[str, Field(description="MR title")],
     description: Annotated[str, Field(description="MR description")],
@@ -38,15 +38,15 @@ def open_merge_request(
     Opens a new merge request from the specified fork against its original repository.
     Returns URL of the opened merge request or an error message on failure.
     """
-    project = get_project(url=fork_url, token=os.getenv("GITLAB_TOKEN"))
+    project = await asyncio.to_thread(get_project, url=fork_url, token=os.getenv("GITLAB_TOKEN"))
     if not project:
         return "Failed to get the specified fork"
-    pr = project.create_pr(title, description, target, source)
+    pr = await asyncio.to_thread(project.create_pr, title, description, target, source)
     if not pr:
         return "Failed to open the merge request"
     # by default, set this label on a newly created MR so we can inspect it ASAP
     try:
-        pr.add_label("jotnar_needs_attention")
+        await asyncio.to_thread(pr.add_label, "jotnar_needs_attention")
     except OgrException as ex:
         # TODO: log the error here
         # we should still continue and return the MR URL
@@ -54,7 +54,7 @@ def open_merge_request(
     return pr.url
 
 
-def push_to_remote_repository(
+async def push_to_remote_repository(
     repository: Annotated[str, Field(description="Repository URL")],
     clone_path: Annotated[Path, Field(description="Absolute path to local clone of the repository")],
     branch: Annotated[str, Field(description="Branch to push")],
@@ -69,6 +69,7 @@ def push_to_remote_repository(
     command = ["git", "push", remote, branch]
     if force:
         command.append("--force")
-    if subprocess.run(command, cwd=clone_path).returncode != 0:
+    proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
+    if await proc.wait():
         return "Failed to push to the specified repository"
     return f"Successfully pushed the specified branch to {repository}"

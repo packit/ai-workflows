@@ -1,9 +1,10 @@
+import asyncio
 import os
 import re
 import subprocess
 
 
-def extract_principal(keytab_file: str) -> str | None:
+async def extract_principal(keytab_file: str) -> str | None:
     """
     Extracts principal from the specified keytab file. Assumes that there is
     a single principal in the keytab.
@@ -14,13 +15,18 @@ def extract_principal(keytab_file: str) -> str | None:
     Returns:
         Extracted principal.
     """
-    proc = subprocess.run(["klist", "-k", "-K", "-e", keytab_file], capture_output=True, text=True)
-    print(proc.stdout)
+    proc = await asyncio.create_subprocess_exec(
+        "klist", "-k", "-K", "-e", keytab_file,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    print(stdout.decode(), flush=True)
     if proc.returncode:
-        print(proc.stderr)
+        print(stderr.decode(), flush=True)
         return None
     key_pattern = re.compile(r"^\s*(\d+)\s+(\S+)\s+\((\S+)\)\s+\((\S+)\)$")
-    for line in proc.stdout.splitlines():
+    for line in stdout.decode().splitlines():
         if not (match := key_pattern.match(line)):
             continue
         # just return the principal associated with the first key
@@ -28,21 +34,27 @@ def extract_principal(keytab_file: str) -> str | None:
     return None
 
 
-def init_kerberos_ticket() -> bool:
+async def init_kerberos_ticket() -> bool:
     """
     Initializes Kerberos ticket unless it's already present in a credentials cache.
     """
     keytab_file = os.getenv("KEYTAB_FILE")
-    principal = extract_principal(keytab_file)
+    principal = await extract_principal(keytab_file)
     if not principal:
-        print("Failed to extract principal")
+        print("Failed to extract principal", flush=True)
         return False
-    proc = subprocess.run(["klist", "-l"], capture_output=True, text=True)
-    print(proc.stdout)
+    proc = await asyncio.create_subprocess_exec(
+        "klist", "-l",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    print(stdout.decode(), flush=True)
     if proc.returncode:
-        print(proc.stderr)
-    elif principal in proc.stdout:
+        print(stderr.decode(), flush=True)
+    elif principal in stdout.decode():
         return True
     env = os.environ.copy()
     env.update({"KRB5_TRACE": "/dev/stdout"})
-    return not subprocess.run(["kinit", "-k", "-t", keytab_file, principal], env=env).returncode
+    proc = await asyncio.create_subprocess_exec("kinit", "-k", "-t", keytab_file, principal, env=env)
+    return not await proc.wait()

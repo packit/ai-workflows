@@ -1,4 +1,4 @@
-import subprocess
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -11,27 +11,38 @@ from lookaside_tools import download_sources, upload_sources
 @pytest.mark.parametrize(
     "internal", [False, True],
 )
-def test_download_sources(internal):
-    def run(cmd, **kwargs):
-        assert cmd == ["rhpkg" if internal else "centpkg", "sources"]
-        return flexmock(returncode=0)
+@pytest.mark.asyncio
+async def test_download_sources(internal):
+    async def create_subprocess_exec(cmd, *args, **kwargs):
+        assert cmd == "rhpkg" if internal else "centpkg"
+        assert args[0] == "sources"
+        async def wait():
+            return 0
+        return flexmock(wait=wait)
 
-    flexmock(subprocess).should_receive("run").replace_with(run)
-    result =  download_sources(dist_git_path=".", internal=internal)
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+    result = await download_sources(dist_git_path=".", internal=internal)
     assert result.startswith("Successfully")
 
 
 @pytest.mark.parametrize(
     "internal", [False, True],
 )
-def test_upload_sources(internal):
+@pytest.mark.asyncio
+async def test_upload_sources(internal):
     new_sources = ["package-1.2-3.tar.gz"]
 
-    def run(cmd, **kwargs):
-        assert cmd == ["rhpkg" if internal else "centpkg", "new-sources", *new_sources]
-        return flexmock(returncode=0)
+    async def init_kerberos_ticket():
+        return True
 
-    flexmock(lookaside_tools).should_receive("init_kerberos_ticket").and_return(True).once()
-    flexmock(subprocess).should_receive("run").replace_with(run)
-    result =  upload_sources(dist_git_path=".", new_sources=new_sources, internal=internal)
+    async def create_subprocess_exec(cmd, *args, **kwargs):
+        assert cmd == "rhpkg" if internal else "centpkg"
+        assert args == ("new-sources", *new_sources)
+        async def wait():
+            return 0
+        return flexmock(wait=wait)
+
+    flexmock(lookaside_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+    result = await upload_sources(dist_git_path=".", new_sources=new_sources, internal=internal)
     assert result.startswith("Successfully")

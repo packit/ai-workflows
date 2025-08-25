@@ -116,12 +116,12 @@ async def set_jira_fields(
                 fields["fixVersions"] = [{"name": fv} for fv in fix_versions]
 
         if severity is not None:
-            current_severity = current_fields.get(SEVERITY_CUSTOM_FIELD)
+            current_severity = current_fields.get(SEVERITY_CUSTOM_FIELD, {})
             if not current_severity.get("value"):
                 fields[SEVERITY_CUSTOM_FIELD] = {"value": severity.value}
 
         if target_end is not None:
-            current_target_end = current_fields.get(TARGET_END_CUSTOM_FIELD)
+            current_target_end = current_fields.get(TARGET_END_CUSTOM_FIELD, {})
             if not current_target_end.get("value"):
                 fields[TARGET_END_CUSTOM_FIELD] = target_end.strftime("%Y-%m-%d")
 

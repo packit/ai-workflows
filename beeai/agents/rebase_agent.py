@@ -6,6 +6,7 @@ import traceback
 from pathlib import Path
 
 from pydantic import BaseModel, Field
+from agents.models import Task, RebaseInputSchema as InputSchema, RebaseOutputSchema as OutputSchema
 
 from beeai_framework.agents.experimental import RequirementAgent
 from beeai_framework.agents.experimental.requirements.conditional import (
@@ -33,18 +34,7 @@ from utils import fix_await, get_agent_execution_config, mcp_tools, redis_client
 logger = logging.getLogger(__name__)
 
 
-class InputSchema(BaseModel):
-    local_clone: Path = Field(description="Path to the local clone of forked dist-git repository")
-    package: str = Field(description="Package to update")
-    dist_git_branch: str = Field(description="dist-git branch to update")
-    version: str = Field(description="Version to update to")
-    jira_issue: str = Field(description="Jira issue to reference as resolved")
-
-
-class OutputSchema(BaseModel):
-    success: bool = Field(description="Whether the rebase was successfully completed")
-    status: str = Field(description="Rebase status")
-    error: str | None = Field(description="Specific details about an error")
+# InputSchema and OutputSchema are now imported from agents.models
 
 
 def render_prompt(input: InputSchema) -> str:
@@ -253,10 +243,6 @@ async def main() -> None:
             )
             logger.info(f"Direct run completed: {state.rebase_result.model_dump_json(indent=4)}")
             return
-
-        class Task(BaseModel):
-            metadata: dict = Field(description="Task metadata")
-            attempts: int = Field(default=0, description="Number of processing attempts")
 
         logger.info("Starting rebase agent in queue mode")
         async with redis_client(os.environ["REDIS_URL"]) as redis:

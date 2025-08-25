@@ -94,6 +94,20 @@ services:
     <<: *beeai-agent
     command: ["python", "agents/rebase_agent.py"]
 
+  jira-issue-fetcher:
+    depends_on:
+      - valkey
+    image: jira-issue-fetcher
+    build:
+      context: .
+      dockerfile: Containerfile.issue-fetcher
+    environment:
+      - REDIS_URL=redis://valkey:6379/0
+    env_file:
+      - .secrets/jira-issue-fetcher.env
+    restart: "no"
+    profiles: ["manual"]  # Don't start by default, run manually for testing
+
 volumes:
   valkey-data:
   phoenix-data:

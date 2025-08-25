@@ -42,6 +42,33 @@ make PACKAGE=httpd VERSION=2.4.62 JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-rebase-a
 make PACKAGE=httpd UPSTREAM_FIX=https://github.com/... JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-backport-agent-standalone
 ```
 
+## Jira Issue Fetcher
+
+The Jira Issue Fetcher automatically fetches issues from Jira and adds them to the triage queue. It runs as a standalone service.
+
+**Setup:**
+```bash
+# Copy the environment template
+cp templates/jira-issue-fetcher.env .secrets/jira-issue-fetcher.env
+
+# Edit with your credentials
+vim .secrets/jira-issue-fetcher.env
+```
+
+**Running:**
+```bash
+# Build the issue fetcher image
+make build-jira-issue-fetcher
+
+# Run the fetcher once (includes validation checks)
+make run-jira-issue-fetcher
+
+# View logs if running in background
+make logs-jira-fetcher
+```
+
+The fetcher will automatically fetch issues based on the configured JQL query and push them to the triage queue for processing.
+
 ## Dry-Run mode
 
 Both backport and rebase agents support **dry-run mode** for testing workflows without actually pushing changes or creating merge requests. By default, agents run in **production mode** and will create actual commits, pushes, and merge requests.

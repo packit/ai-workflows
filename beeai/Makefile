@@ -48,6 +48,23 @@ run-backport-agent-standalone:
 		-e CVE_ID=$(CVE_ID) \
 		backport-agent
 
+.PHONY: run-jira-issue-fetcher
+run-jira-issue-fetcher:
+	@echo "Running Jira Issue Fetcher..."
+	@if [ ! -f .secrets/jira-issue-fetcher.env ]; then \
+		echo "Error: .secrets/jira-issue-fetcher.env not found"; \
+		echo "Copy the template: cp templates/jira-issue-fetcher.env .secrets/jira-issue-fetcher.env"; \
+		echo "Then edit it with your credentials"; \
+		exit 1; \
+	fi
+	@if [ ! -f .secrets/keytab ]; then \
+		echo "Warning: .secrets/keytab not found - Kerberos authentication will be skipped"; \
+	fi
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile manual run --rm jira-issue-fetcher
+
+.PHONY: build-jira-issue-fetcher
+build-jira-issue-fetcher:
+	$(COMPOSE) --profile manual build jira-issue-fetcher
 
 
 
@@ -79,6 +96,10 @@ logs-backport:
 .PHONY: logs-rebase
 logs-rebase:
 	$(COMPOSE) -f $(COMPOSE_FILE) logs -f rebase-agent
+
+.PHONY: logs-jira-fetcher
+logs-jira-fetcher:
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile manual logs -f jira-issue-fetcher
 
 .PHONY: status
 status:

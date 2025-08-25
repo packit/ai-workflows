@@ -64,7 +64,7 @@ class VersionMapperTool(Tool[VersionMapperInput, ToolRunOptions, VersionMapperOu
         if is_critical:
             fix_version = z_streams.get(major_version_str)
             if not fix_version:
-                raise Exception(
+                raise ValueError(
                     f"Unsupported RHEL major version for Z-stream: {major_version}. "
                     f"Available Z-stream versions: {z_streams.keys()}"
                 )
@@ -75,7 +75,7 @@ class VersionMapperTool(Tool[VersionMapperInput, ToolRunOptions, VersionMapperOu
                 fix_version = z_streams.get(major_version_str)
 
                 if not fix_version:
-                    raise Exception(
+                    raise ValueError(
                         f"Unsupported RHEL major version: {major_version}. "
                         f"Available versions - Y-stream: {y_streams.keys()}, Z-stream: {z_streams.keys()}"
                     )

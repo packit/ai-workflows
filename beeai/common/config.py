@@ -21,10 +21,10 @@ async def load_rhel_config() -> dict[str, Any]:
     config_file = "rhel-config.json"
 
     if not Path(config_file).exists():
-        raise Exception(f"RHEL config file {config_file} not found")
+        raise FileNotFoundError(f"RHEL config file {config_file} not found")
     try:
         async with aiofiles.open(config_file, 'r') as f:
             content = await f.read()
             return json.loads(content)
-    except json.JSONDecodeError:
-        return {}
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Error decoding {config_file}: {e}") from e

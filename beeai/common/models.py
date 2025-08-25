@@ -22,11 +22,11 @@ class CVEEligibilityResult(BaseModel):
     reason: str = Field(
         description="Explanation of the eligibility decision"
     )
-    needs_internal_fix: Optional[bool] = Field(
+    needs_internal_fix: bool | None = Field(
         default=None,
         description="True for CVEs where internal fix is needed first (only applicable for CVEs)"
     )
-    error: Optional[str] = Field(
+    error: str | None = Field(
         default=None,
         description="Error message if the issue cannot be processed"
     )

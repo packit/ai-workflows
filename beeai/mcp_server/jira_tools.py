@@ -209,6 +209,7 @@ async def check_cve_triage_eligibility(
         return CVEEligibilityResult(
             is_cve=True,
             is_eligible_for_triage=False,
+            reason="CVE has no target release specified",
             error="CVE has no target release specified"
         )
 

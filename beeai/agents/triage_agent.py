@@ -344,8 +344,7 @@ async def main() -> None:
                 available_tools=gateway_tools,
                 issue_key=state.jira_issue
             )
-            result_data = json.loads(result) if isinstance(result, str) else result
-            state.cve_eligibility_result = CVEEligibilityResult(**result_data)
+            state.cve_eligibility_result = CVEEligibilityResult.model_validate_json(result)
 
             logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
 

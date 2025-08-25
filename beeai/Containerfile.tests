@@ -4,12 +4,13 @@ FROM fedora:42
 RUN dnf -y install \
       make \
       python3 \
+      python3-copr \
+      python3-flexmock \
       python3-ogr \
-      python3-specfile \
       python3-pip \
       python3-pytest \
       python3-pytest-asyncio \
-      python3-flexmock \ 
+      python3-specfile \
     && dnf clean all
 
 # Install BeeAI Framework and FastMCP

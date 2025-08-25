@@ -1,10 +1,4 @@
 {
-    "release_dates": {
-      "rhel-9.7": "",
-      "rhel-9.8": "",
-      "rhel-10.1": "",
-      "rhel-10.2": ""
-    },
     "current_y_streams": {
       "9": "rhel-9.8",
       "10": "rhel-10.2"

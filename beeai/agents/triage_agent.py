@@ -24,6 +24,8 @@ from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 
 import tasks
+
+from common.models import CVEEligibilityResult
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.patch_validator import PatchValidatorTool
@@ -33,7 +35,7 @@ from utils import fix_await, get_agent_execution_config, mcp_tools, redis_client
 logger = logging.getLogger(__name__)
 
 
-def determine_target_branch(cve_eligibility_result: dict | None, triage_data: BaseModel) -> str | None:
+def determine_target_branch(cve_eligibility_result: CVEEligibilityResult | None, triage_data: BaseModel) -> str | None:
     """
     Determine target branch from fix_version and CVE eligibility.
     """
@@ -44,8 +46,8 @@ def determine_target_branch(cve_eligibility_result: dict | None, triage_data: Ba
     # Check if CVE needs internal fix first
     needs_internal_fix = (
         cve_eligibility_result
-        and cve_eligibility_result.get("is_cve")
-        and cve_eligibility_result.get("needs_internal_fix", False)
+        and cve_eligibility_result.is_cve
+        and cve_eligibility_result.needs_internal_fix
     )
 
     return _map_version_to_branch(triage_data.fix_version, needs_internal_fix)
@@ -328,7 +330,7 @@ async def main() -> None:
 
         class State(BaseModel):
             jira_issue: str
-            cve_eligibility_result: dict | None = Field(default=None)
+            cve_eligibility_result: CVEEligibilityResult | None = Field(default=None)
             triage_result: OutputSchema | None = Field(default=None)
             target_branch: str | None = Field(default=None)
 
@@ -342,13 +344,14 @@ async def main() -> None:
                 available_tools=gateway_tools,
                 issue_key=state.jira_issue
             )
-            state.cve_eligibility_result = json.loads(result)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            state.cve_eligibility_result = CVEEligibilityResult(**result_data)
 
             logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
 
             # If not eligible for triage, end workflow
-            if not state.cve_eligibility_result.get("is_eligible_for_triage", True):
-                reason = state.cve_eligibility_result.get('reason', 'Not eligible for triage')
+            if not state.cve_eligibility_result.is_eligible_for_triage:
+                reason = state.cve_eligibility_result.reason
                 logger.info(f"Issue {state.jira_issue} not eligible for triage: {reason}")
                 state.triage_result = OutputSchema(
                     resolution=Resolution.NO_ACTION,
@@ -359,7 +362,7 @@ async def main() -> None:
                 )
                 return "comment_in_jira"
 
-            reason = state.cve_eligibility_result.get('reason', 'Eligible')
+            reason = state.cve_eligibility_result.reason
             logger.info(f"Issue {state.jira_issue} is eligible for triage: {reason}")
             return "run_triage_analysis"
 

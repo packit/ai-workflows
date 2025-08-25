@@ -8,8 +8,9 @@ from typing import Annotated, Any
 from urllib.parse import urljoin
 
 import aiohttp
-import aiofiles
 from pydantic import Field
+
+from common import CVEEligibilityResult
 
 # Jira custom field IDs
 SEVERITY_CUSTOM_FIELD = "customfield_12316142"
@@ -167,17 +168,12 @@ async def add_jira_comment(
 
 async def check_cve_triage_eligibility(
     issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
-) -> dict[str, Any]:
+) -> CVEEligibilityResult:
     """
     Analyzes if a Jira issue represents a CVE and determines if it should be processed by triage agent.
-    Implements logic based on Y-stream vs Z-stream releases and particular conditions.
+    Only process CVEs if they are Z-stream (based on fixVersion).
 
-    Returns dictionary with:
-    - is_cve: bool - Whether this is a CVE (by type or label)
-    - is_eligible_for_triage: bool - Whether triage agent should process it
-    - reason: str - Explanation of the decision
-    - needs_internal_fix: bool - True for issues where internal fix is needed first (only for CVEs)
-    - error: str - Error message if the issue cannot be processed
+    Returns CVEEligibilityResult model with eligibility decision and reasoning.
     """
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
 
@@ -190,163 +186,70 @@ async def check_cve_triage_eligibility(
                 response.raise_for_status()
                 jira_data = await response.json()
         except aiohttp.ClientError as e:
-            return {
-                "is_eligible_for_triage": False,
-                "error": f"Failed to get Jira data: {e}",
-            }
+            return CVEEligibilityResult(
+                is_cve=False,
+                is_eligible_for_triage=False,
+                reason="Failed to fetch Jira data",
+                error=f"Failed to get Jira data: {e}"
+            )
 
     fields = jira_data.get("fields", {})
     labels = fields.get("labels", [])
 
     # Non-CVEs are always eligible
     if "SecurityTracking" not in labels:
-        return {"is_cve": False, "is_eligible_for_triage": True, "reason": "Not a CVE"}
+        return CVEEligibilityResult(
+            is_cve=False,
+            is_eligible_for_triage=True,
+            reason="Not a CVE"
+        )
 
-    # CVE processing - get target version
     fix_versions = fields.get("fixVersions", [])
     if not fix_versions:
-        return {
-            "is_cve": True,
-            "is_eligible_for_triage": False,
-            "error": "CVE has no target release specified",
-        }
+        return CVEEligibilityResult(
+            is_cve=True,
+            is_eligible_for_triage=False,
+            error="CVE has no target release specified"
+        )
 
     target_version = fix_versions[0].get("name", "")
-    is_y_stream = bool(re.match(r"^rhel-\d+\.\d+$", target_version.lower()))
 
-    version_match = re.match(r"^rhel-(\d+)\.(\d+)", target_version.lower())
-    if not version_match:
-        return {"is_cve": True, "is_eligible_for_triage": False, "error": "Not possible to determine major version"}
-
-    major_version = version_match.group(1)
+    # Only process Z-stream CVEs (reject Y-stream)
+    if re.match(r"^rhel-\d+\.\d+$", target_version.lower()):
+        return CVEEligibilityResult(
+            is_cve=True,
+            is_eligible_for_triage=False,
+            reason="Y-stream CVEs will be handled in Z-stream"
+        )
 
     embargo = fields.get(EMBARGO_CUSTOM_FIELD, {}).get("value", "")
     if embargo == "True":
-        return {
-            "is_cve": True,
-            "is_eligible_for_triage": False,
-            "reason": "CVE is embargoed",
-        }
+        return CVEEligibilityResult(
+            is_cve=True,
+            is_eligible_for_triage=False,
+            reason="CVE is embargoed"
+        )
 
+    # Determine if internal fix is needed based on severity and priority
     severity = fields.get(SEVERITY_CUSTOM_FIELD, {}).get("value", "")
-    priority_labels = [l for l in labels if l in PRIORITY_LABELS]
+    priority_labels = [label for label in labels if label in PRIORITY_LABELS]
 
-    if severity not in [Severity.LOW.value, Severity.MODERATE.value]:
-        if is_y_stream:
-            return {
-                "is_cve": True,
-                "is_eligible_for_triage": False,
-                "reason": f"CVE severity is {severity}, not Low/Moderate, and target version is Y-stream",
-            }
-        return {
-            "is_cve": True,
-            "is_eligible_for_triage": True,
-            "reason": f"CVE severity is {severity}, eligible for Z-stream, needs to be fixed in RHEL",
-            "needs_internal_fix": True,
-        }
+    needs_internal_fix = (
+        severity not in [Severity.LOW.value, Severity.MODERATE.value] or
+        bool(priority_labels)
+    )
 
-    if priority_labels:
-        if is_y_stream:
-            return {
-                "is_cve": True,
-                "is_eligible_for_triage": False,
-                "reason": f"CVE has priority labels: {', '.join(priority_labels)}, and target version is Y-stream",
-            }
-        return {
-            "is_cve": True,
-            "is_eligible_for_triage": True,
-            "reason": f"CVE has priority labels: {', '.join(priority_labels)}, eligible for Z-stream, needs to be fixed in RHEL.",
-            "needs_internal_fix": True,
-        }
+    if needs_internal_fix:
+        if severity not in [Severity.LOW.value, Severity.MODERATE.value]:
+            reason = f"High severity CVE ({severity}) eligible for Z-stream, needs RHEL fix first"
+        else:
+            reason = f"Priority CVE with labels {priority_labels} eligible for Z-stream, needs RHEL fix first"
+    else:
+        reason = "CVE eligible for Z-stream fix in CentOS Stream"
 
-    config = await _load_rhel_config()
-    current_y_streams = config.get("current_y_streams")
-
-    if not current_y_streams.get(major_version):
-        #  no Y-stream, let's skip the other check
-        return {
-        "is_cve": True,
-        "is_eligible_for_triage": True,
-        "reason": "Z-stream CVE, no Y-stream",
-        "needs_internal_fix": False,
-        }
-
-    due_date = fields.get("duedate")
-
-    release_dates = config.get("release_dates", {})
-
-    y_stream_version = current_y_streams.get(major_version)
-    y_stream_release_date = release_dates.get(y_stream_version.lower()) if y_stream_version else None
-
-    # Compare due date with Y-stream release date to determine Y vs Z stream processing
-    is_due_after_y_release = _is_due_after_release(due_date, y_stream_release_date)
-
-    if is_y_stream:
-        result = {
-            "is_cve": True,
-            "is_eligible_for_triage": is_due_after_y_release,
-            "reason": f"Y-stream CVE: {'eligible' if is_due_after_y_release else 'not eligible'} (due {'after' if is_due_after_y_release else 'before'} release)",
-        }
-        if is_due_after_y_release:
-            result.update({
-                "needs_internal_fix": False,
-            })
-        return result
-
-    # Z-stream: eligible only if due before Y-stream release
-    result = {
-        "is_cve": True,
-        "is_eligible_for_triage": not is_due_after_y_release,
-        "reason": f"Z-stream CVE: {'not eligible - handled by Y-stream' if is_due_after_y_release else 'eligible for Z-stream fix'}",
-    }
-    if not is_due_after_y_release:
-        result.update({
-            "needs_internal_fix": False,
-        })
-    return result
-
-
-async def _load_rhel_config() -> dict[str, Any]:
-    """
-    Load RHEL configuration from rhel-config.json file.
-
-    Returns:
-        Dictionary containing RHEL configuration, empty dict if file not found
-    """
-    config_file = "rhel-config.json"
-
-    if not Path(config_file).exists():
-        raise Exception(f"RHEL config file {config_file} not found")
-
-    try:
-        async with aiofiles.open(config_file, 'r') as f:
-            content = await f.read()
-            return json.loads(content)
-    except json.JSONDecodeError:
-        return {}
-
-
-def _is_due_after_release(due_date: str | None, release_date: str | None) -> bool:
-    """
-    Compare due date with release date to determine if CVE is due after release.
-
-    Args:
-        due_date: CVE due date from Jira (YYYY-MM-DD format)
-        release_date: RHEL version release date (YYYY-MM-DD format)
-
-    Returns:
-        bool: True if due date is after release date, False otherwise.
-              Returns False if either date is None (conservative approach).
-    """
-    # Let's consider that if due date is not set, it's ok to handle this in Y-stream
-    if not due_date:
-        return True
-    if not release_date:
-        return False
-
-    try:
-        due_dt = datetime.datetime.strptime(due_date, "%Y-%m-%d")
-        release_dt = datetime.datetime.strptime(release_date, "%Y-%m-%d")
-        return due_dt > release_dt
-    except ValueError as e:
-        return False
+    return CVEEligibilityResult(
+        is_cve=True,
+        is_eligible_for_triage=True,
+        reason=reason,
+        needs_internal_fix=needs_internal_fix
+    )

@@ -351,15 +351,23 @@ async def main() -> None:
 
             # If not eligible for triage, end workflow
             if not state.cve_eligibility_result.is_eligible_for_triage:
-                reason = state.cve_eligibility_result.reason
-                logger.info(f"Issue {state.jira_issue} not eligible for triage: {reason}")
-                state.triage_result = OutputSchema(
-                    resolution=Resolution.NO_ACTION,
-                    data=NoActionData(
-                        reasoning=f"CVE eligibility check: {reason}",
+                logger.info(f"Issue {state.jira_issue} not eligible for triage: {state.cve_eligibility_result.reason}")
+                if state.cve_eligibility_result.error:
+                    state.triage_result = OutputSchema(
+                    resolution=Resolution.ERROR,
+                    data=ErrorData(
+                        details=f"CVE eligibility check error: {state.cve_eligibility_result.error}",
                         jira_issue=state.jira_issue
                     )
                 )
+                else:
+                    state.triage_result = OutputSchema(
+                        resolution=Resolution.NO_ACTION,
+                        data=NoActionData(
+                            reasoning=f"CVE eligibility check decided to skip triaging: {state.cve_eligibility_result.reason}",
+                            jira_issue=state.jira_issue
+                        )
+                    )
                 return "comment_in_jira"
 
             reason = state.cve_eligibility_result.reason
@@ -398,19 +406,17 @@ async def main() -> None:
             else:
                 logger.warning(f"Could not determine target branch for {state.jira_issue}")
 
-            return Workflow.END
+            return "comment_in_jira"
 
         async def comment_in_jira(state):
+            comment_text=state.triage_result.model_dump_json(indent=4)
+            logger.info(f"Result to be put in Jira comment: {comment_text}")
             if dry_run:
                 return Workflow.END
             await tasks.comment_in_jira(
                 jira_issue=state.jira_issue,
                 agent_type="Triage",
-                comment_text=(
-                    state.triage_result.data.additional_info_needed
-                    if state.triage_result.resolution == Resolution.CLARIFICATION_NEEDED
-                    else state.triage_result.data.reasoning
-                ),
+                comment_text=comment_text,
                 available_tools=gateway_tools,
             )
             return Workflow.END

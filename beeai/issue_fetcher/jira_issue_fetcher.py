@@ -30,6 +30,18 @@ import redis.asyncio as redis
 import requests
 import backoff
 
+from agents.models import (
+    Task, 
+    TriageInputSchema, 
+    RebaseInputSchema, 
+    BackportInputSchema,
+    RebaseOutputSchema,
+    BackportOutputSchema,
+    ClarificationNeededData,
+    NoActionData,
+    ErrorData
+)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -38,19 +50,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def create_task(metadata: Dict[str, Any], attempts: int = 0) -> Dict[str, Any]:
-    """Create a task dictionary for Redis queue"""
-    return {
-        "metadata": metadata,
-        "attempts": attempts
-    }
-
-
-def create_issue_metadata(issue: str) -> Dict[str, Any]:
-    """Create metadata dictionary for a Jira issue to be triaged"""
-    return {
-        "issue": issue
-    }
 
 
 class JiraIssueFetcher:
@@ -67,7 +66,7 @@ class JiraIssueFetcher:
         self.redis_url = os.environ["REDIS_URL"]
         
         # Allow query override from environment
-        self.query = os.environ("QUERY", self.DEFAULT_QUERY)
+        self.query = os.getenv("QUERY", self.DEFAULT_QUERY)
         
         # Use constant page size
         self.max_results_per_page = self.MAX_RESULTS_PER_PAGE
@@ -110,12 +109,12 @@ class JiraIssueFetcher:
             headers=self.headers,
             timeout=self.API_TIMEOUT
         )
-        
+                
         # Handle rate limiting specifically
         if response.status_code == 429:
             logger.warning("Rate limited (429), will retry with backoff")
             raise requests.HTTPError("Rate limited", response=response)
-        
+                
         response.raise_for_status()
         return response.json()
     
@@ -210,17 +209,55 @@ class JiraIssueFetcher:
                     
                     for item in queue_items:
                         try:
-                            task_data = json.loads(item)
-                            # Try different possible key locations in the JSON structure
-                            issue_key = (
-                                task_data.get("metadata", {}).get("jira_issue") or
-                                task_data.get("metadata", {}).get("issue") or
-                                task_data.get("jira_issue")
-                            )
+                            issue_key = None
+                            
+                            # For input queues, parse as Task and extract from metadata
+                            if queue_name in ["triage_queue", "rebase_queue", "backport_queue"]:
+                                task = Task.model_validate_json(item)
+                                if task.metadata:
+                                    if queue_name == "triage_queue":
+                                        schema = TriageInputSchema.model_validate(task.metadata)
+                                        issue_key = schema.issue
+                                    elif queue_name == "rebase_queue":
+                                        schema = RebaseInputSchema.model_validate(task.metadata)
+                                        issue_key = schema.jira_issue
+                                    elif queue_name == "backport_queue":
+                                        schema = BackportInputSchema.model_validate(task.metadata)
+                                        issue_key = schema.jira_issue
+                            
+                            # For result/data queues, parse the data directly
+                            else:
+                                try:
+                                    if queue_name in ["completed_rebase_list"]:
+                                        schema = RebaseOutputSchema.model_validate_json(item)
+                                        # Output schemas don't have issue keys, skip these
+                                        # hopefully we get it from the jira labels query
+                                        continue
+                                    elif queue_name in ["completed_backport_list"]:
+                                        schema = BackportOutputSchema.model_validate_json(item)
+                                        # Output schemas don't have issue keys, skip these
+                                        # hopefully we get it from the jira labels query
+                                        continue
+                                    elif queue_name in ["clarification_needed_queue"]:
+                                        schema = ClarificationNeededData.model_validate_json(item)
+                                        issue_key = schema.jira_issue
+                                    elif queue_name in ["no_action_list"]:
+                                        schema = NoActionData.model_validate_json(item)
+                                        issue_key = schema.jira_issue
+                                    elif queue_name in ["error_list"]:
+                                        schema = ErrorData.model_validate_json(item)
+                                        issue_key = schema.jira_issue
+                                except ValueError:
+                                    # Fallback to task parsing for these queues if direct parsing fails
+                                    task = Task.model_validate_json(item)
+                                    if task.metadata and "issue" in task.metadata:
+                                        issue_key = task.metadata["issue"]
+                            
                             if issue_key:
                                 existing_keys.add(issue_key)
                                 queue_count += 1
-                        except (json.JSONDecodeError, KeyError) as e:
+                                
+                        except (json.JSONDecodeError, ValueError) as e:
                             logger.warning(f"Failed to parse item from {queue_name}: {e}")
                             continue
                     
@@ -275,11 +312,10 @@ class JiraIssueFetcher:
                         skipped_count += 1
                         continue
                     
-                    # Create task metadata in the format expected by triage_agent
-                    task_metadata = create_issue_metadata(issue_key)
-                    task = create_task(metadata=task_metadata)
+                    # Create task using shared Pydantic model
+                    task = Task.from_issue(issue_key)
                     
-                    await redis_conn.lpush("triage_queue", json.dumps(task))
+                    await redis_conn.lpush("triage_queue", task.to_json())
                     pushed_count += 1
                     
                     # Add to existing_keys to avoid duplicates within this batch

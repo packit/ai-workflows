@@ -30,3 +30,4 @@ class CVEEligibilityResult(BaseModel):
         default=None,
         description="Error message if the issue cannot be processed"
     )
+

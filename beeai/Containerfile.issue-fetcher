@@ -7,6 +7,7 @@ RUN dnf -y install \
       python3-requests \
       python3-redis \
       python3-backoff \
+      python3-pydantic \
     && dnf clean all
 
 # Create user
@@ -15,8 +16,12 @@ RUN useradd -m -G wheel issuebot
 # Create working directory
 WORKDIR /home/issuebot
 
-# Copy issue fetcher script, startup script, and utilities
+# Copy issue fetcher script and shared models
 COPY issue_fetcher/jira_issue_fetcher.py /home/issuebot/
+# Create agents directory and copy models module
+RUN mkdir -p /home/issuebot/agents
+COPY agents/__init__.py /home/issuebot/agents/
+COPY agents/models.py /home/issuebot/agents/
 
 # Set proper permissions
 RUN chgrp -R root /home/issuebot && chmod -R g+rwX /home/issuebot

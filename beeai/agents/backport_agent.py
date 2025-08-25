@@ -7,6 +7,7 @@ from pathlib import Path
 
 import aiohttp
 from pydantic import BaseModel, Field
+from agents.models import Task, BackportInputSchema as InputSchema, BackportOutputSchema as OutputSchema
 
 from beeai_framework.agents.experimental import RequirementAgent
 from beeai_framework.agents.experimental.requirements.conditional import (
@@ -35,20 +36,7 @@ from utils import fix_await, check_subprocess, get_agent_execution_config, mcp_t
 logger = logging.getLogger(__name__)
 
 
-class InputSchema(BaseModel):
-    local_clone: Path = Field(description="Path to the local clone of forked dist-git repository")
-    unpacked_sources: Path = Field(description="Path to the unpacked (using `centpkg prep`) sources")
-    package: str = Field(description="Package to update")
-    dist_git_branch: str = Field(description="Git branch in dist-git to be updated")
-    upstream_fix: str = Field(description="Link to an upstream fix for the issue")
-    jira_issue: str = Field(description="Jira issue to reference as resolved")
-    cve_id: str = Field(default="", description="CVE ID if the jira issue is a CVE")
-
-
-class OutputSchema(BaseModel):
-    success: bool = Field(description="Whether the backport was successfully completed")
-    status: str = Field(description="Backport status with details of how the potential merge conflicts were resolved")
-    error: str | None = Field(description="Specific details about an error")
+# InputSchema and OutputSchema are now imported from agents.models
 
 
 def render_prompt(input: InputSchema) -> str:
@@ -254,10 +242,6 @@ async def main() -> None:
             )
             logger.info(f"Direct run completed: {state.backport_result.model_dump_json(indent=4)}")
             return
-
-        class Task(BaseModel):
-            metadata: dict = Field(description="Task metadata")
-            attempts: int = Field(default=0, description="Number of processing attempts")
 
         logger.info("Starting backport agent in queue mode")
         async with redis_client(os.environ["REDIS_URL"]) as redis:

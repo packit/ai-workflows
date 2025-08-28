@@ -42,7 +42,7 @@ index 21da0aa2..c32ae843 100644
              from beeai_framework.agents.react.agent import ReActAgent
  
 diff --git a/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/middleware.py b/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/middleware.py
-index f8150f04..24a0781e 100644
+index f8150f04..9062367b 100644
 --- a/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/middleware.py
 +++ b/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/middleware.py
 @@ -19,6 +19,8 @@ from importlib.metadata import PackageNotFoundError, version
@@ -54,7 +54,16 @@ index f8150f04..24a0781e 100644
  from beeai_framework.agents.react.agent import ReActAgent
  from beeai_framework.agents.react.events import ReActAgentSuccessEvent
  from beeai_framework.agents.tool_calling.agent import ToolCallingAgent
-@@ -283,6 +285,26 @@ def create_telemetry_middleware(
+@@ -63,6 +65,8 @@ def create_telemetry_middleware(
+         if trace_id in active_traces_map:
+             return
+         active_traces_map[trace_id] = type(instance).__name__
++        if isinstance(instance, BaseAgent) and instance.meta.name:
++            active_traces_map[trace_id] += f"({instance.meta.name})"
+         base_path = ".".join(emitter.namespace)
+         prompt = None
+         if isinstance(instance, BaseAgent):
+@@ -283,6 +287,26 @@ def create_telemetry_middleware(
                          }
                          for m in react_agent_typed_data.memory.messages
                      ]
@@ -68,15 +77,15 @@ index f8150f04..24a0781e 100644
 +                        for m in requirement_agent_typed_data.state.memory.messages
 +                    ]
 +                    if (
-+                        hasattr(requirement_agent_typed_data.state, "result")
-+                        and requirement_agent_typed_data.state.result is not None
++                        hasattr(requirement_agent_typed_data.state, "answer")
++                        and requirement_agent_typed_data.state.answer is not None
 +                    ):
-+                        result_role = requirement_agent_typed_data.state.result.role
++                        result_role = requirement_agent_typed_data.state.answer.role
 +                        generated_message = {
 +                            "role": result_role.value
 +                            if hasattr(result_role, "value")
 +                            else result_role,
-+                            "text": requirement_agent_typed_data.state.result.text,
++                            "text": requirement_agent_typed_data.state.answer.text,
 +                        }
              except Exception as e:
                  logger.error("Instrumentation error: failed to extract success message", exc_info=e)

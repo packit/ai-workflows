@@ -71,6 +71,7 @@ async def main() -> None:
 
     async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
         backport_agent = RequirementAgent(
+            name="Backport",
             llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
             tools=[
                 ThinkTool(),

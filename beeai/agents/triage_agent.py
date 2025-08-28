@@ -24,6 +24,7 @@ from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 
 import tasks
+from common.config import load_rhel_config
 from common.models import (
     Task,
     TriageInputSchema as InputSchema,
@@ -47,7 +48,7 @@ from utils import get_agent_execution_config, mcp_tools, run_tool
 logger = logging.getLogger(__name__)
 
 
-def determine_target_branch(cve_eligibility_result: CVEEligibilityResult | None, triage_data: BaseModel) -> str | None:
+async def determine_target_branch(cve_eligibility_result: CVEEligibilityResult | None, triage_data: BaseModel) -> str | None:
     """
     Determine target branch from fix_version and CVE eligibility.
     """
@@ -62,10 +63,10 @@ def determine_target_branch(cve_eligibility_result: CVEEligibilityResult | None,
         and cve_eligibility_result.needs_internal_fix
     )
 
-    return _map_version_to_branch(triage_data.fix_version, needs_internal_fix)
+    return await _map_version_to_branch(triage_data.fix_version, needs_internal_fix)
 
 
-def _map_version_to_branch(version: str, needs_internal_fix: bool) -> str | None:
+async def _map_version_to_branch(version: str, needs_internal_fix: bool) -> str | None:
     """
     Map version string to target branch.
 
@@ -85,7 +86,12 @@ def _map_version_to_branch(version: str, needs_internal_fix: bool) -> str | None
     major_version = version_match.group(1)
     minor_version = version_match.group(2)
 
-    if needs_internal_fix:
+    # Load rhel-config to check which major versions have Y-stream mappings
+    config = await load_rhel_config()
+    y_streams = config.get("current_y_streams", {})
+
+    # Major versions without Y-stream mappings are handled always in Stream
+    if needs_internal_fix and major_version in y_streams:
         branch = f"rhel-{major_version}.{minor_version}"
         if int(major_version) < 10:
             branch += ".0"
@@ -361,7 +367,7 @@ async def main() -> None:
                 """Determine target branch for rebase/backport decisions"""
                 logger.info(f"Determining target branch for {state.jira_issue}")
 
-                state.target_branch = determine_target_branch(
+                state.target_branch = await determine_target_branch(
                     cve_eligibility_result=state.cve_eligibility_result,
                     triage_data=state.triage_result.data
                 )

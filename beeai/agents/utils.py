@@ -11,9 +11,11 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, TypeVar, Tuple
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.types import TextContent
+from pydantic import BaseModel
 
 from beeai_framework.agents import AgentExecutionConfig
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
+from beeai_framework.template import PromptTemplate, PromptTemplateInput
 from beeai_framework.tools import Tool
 from beeai_framework.tools.mcp import MCPTool
 
@@ -25,6 +27,11 @@ def get_agent_execution_config() -> AgentExecutionConfig:
         # 100 is not enough for a medium complexity task
         max_iterations=int(os.getenv("BEEAI_MAX_ITERATIONS", 140)),
     )
+
+
+def render_prompt(template: str, input: BaseModel) -> str:
+    """Renders a prompt template with the specified input, according to its schema."""
+    return PromptTemplate(PromptTemplateInput(template=template, schema=type(input))).render(input)
 
 
 async def run_subprocess(

@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import logging
 import os
 import sys
@@ -6,9 +7,9 @@ import traceback
 from pathlib import Path
 
 from pydantic import BaseModel, Field
-from common.models import Task, RebaseInputSchema as InputSchema, RebaseOutputSchema as OutputSchema
 
 from beeai_framework.agents.experimental import RequirementAgent
+from beeai_framework.agents.experimental.prompts import RequirementAgentSystemPrompt
 from beeai_framework.agents.experimental.requirements.conditional import (
     ConditionalRequirement,
 )
@@ -16,75 +17,107 @@ from beeai_framework.backend import ChatModel
 from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
-from beeai_framework.template import PromptTemplate, PromptTemplateInput
 from beeai_framework.tools import Tool
 from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 
 import tasks
+from agents.build_agent import create_build_agent, get_prompt as get_build_prompt
+from common.models import BuildInputSchema, BuildOutputSchema, RebaseInputSchema, RebaseOutputSchema, Task
+from common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.specfile import AddChangelogEntryTool
 from tools.text import CreateTool, InsertTool, StrReplaceTool, ViewTool
 from triage_agent import RebaseData, ErrorData
-from utils import get_agent_execution_config, mcp_tools, run_tool
-from common.utils import redis_client, fix_await
+from utils import get_agent_execution_config, mcp_tools, render_prompt, run_tool
 
 logger = logging.getLogger(__name__)
 
 
-# InputSchema and OutputSchema are now imported from common.models
+def get_instructions() -> str:
+    return """
+      You are an expert on rebasing packages in RHEL ecosystem.
+
+      To rebase package <PACKAGE> to version <VERSION> in dist-git branch <DIST_GIT_BRANCH>, do the following:
+
+      1. Check if the current version is older than <VERSION>. To get the current version,
+         you can use `rpmspec -q --queryformat "%{VERSION}\n" --srpm <PACKAGE>.spec`.
+         To compare versions, use `rpmdev-vercmp`. If the current version is not older than <VERSION>,
+         rebasing doesn't make sense, so end the process with an error.
+
+      2. Try to find past rebases in git history to see how this particular package does rebases.
+         Keep in mind what parts of the spec file are usually changed. At the minimum a rebase should
+         change `Version` and `Release` tags (or corresponding macros) and add a new changelog entry,
+         but sometimes other things are changed - if that's the case, try to understand the logic behind it.
+
+      3. Update the spec file. Set <VERSION>, reset release and do any other usual changes. You may need
+         to get some information from the upstream repository, for example commit hashes.
+         Add a new changelog entry. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any
+         new issues.
+
+      4. Download upstream sources using `spectool -g -S <PACKAGE>.spec`. Run `centpkg --release <DIST_GIT_BRANCH> prep`
+         to see if everything is in order. It is possible that some *.patch files will fail to apply now
+         that the spec file has been updated. Don't jump to conclusions - if one patch fails to apply, it doesn't mean
+         all other patches fail to apply as well. Go through the errors one by one, fix them and verify the changes
+         by running `centpkg --release <DIST_GIT_BRANCH> prep` again. Repeat as necessary. Do not remove any patches
+         unless all their hunks have been already applied to the upstream sources.
+
+      5. Generate a SRPM using `centpkg --release <DIST_GIT_BRANCH> srpm`.
 
 
-def render_prompt(input: InputSchema) -> str:
-    template = """
-      You are an AI Agent tasked to rebase a package to a newer version following the exact workflow.
+      General instructions:
 
-      A couple of rules that you must follow and useful information for you:
-      * You can find packaging guidelines at https://docs.fedoraproject.org/en-US/packaging-guidelines/.
-      * You can find the RPM packaging guide at https://rpm-packaging-guide.github.io/.
-      * IMPORTANT: Do not run the `centpkg new-sources` command for now (testing purposes), just write down
-        the commands you would run.
-
-      Follow exactly these steps:
-
-      1. You will find the cloned dist-git repository of the {{package}} package in {{local_clone}}.
-         It is your current working directory, do not `cd` anywhere else.
-
-      2. Check if the {{package}} was not already updated to version {{version}}. That means comparing
-         the current version with the provided version.
-          * The current version of the package can be found in the 'Version' field of the spec file.
-          * If there is nothing to update, print a message and exit. Otherwise follow the instructions below.
-
-      3. Update the {{package}} to the newer version:
-          * Update the local package by:
-            * Updating the 'Version' and 'Release' fields (or corresponding macros) in the spec file as needed,
-              following packaging documentation.
-              * Make sure the format of the spec file remains the same.
-            * Updating macros related to update (e.g., 'commit') if present and necessary; examine the file history
-              to see how updates are typically done.
-              * You might need to check some information in upstream repository, e.g. the commit SHA of the new version.
-            * Creating a changelog entry, referencing the Jira issue as "Resolves: {{jira_issue}}".
-            * Downloading sources using `spectool -g -S {{package}}.spec` (you might need to copy local sources,
-              e.g. if the spec file loads some macros from them, to a directory where `spectool` expects them).
-            * Uploading the new sources using `centpkg --release {{dist_git_branch}} new-sources`.
-            * IMPORTANT: Only performing changes relevant to the version update: Do not rename variables,
-              comment out existing lines, or alter if-else branches in the spec file.
-
-      4. Verify and adjust the changes:
-          * Use `rpmlint` to validate your spec file changes and fix any new errors it identifies.
-          * Generate the SRPM using `rpmbuild -bs` (ensure your spec file and source files are correctly
-            copied to the build environment as required by the command).
-
-      Report the status of the rebase operation including:
-      - Whether the package was already up to date
-      - Any errors encountered during the process
-      - The URL of the created merge request if successful
-      - Any validation issues found with rpmlint
+      - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
+      - Never change anything in the spec file changelog, you are only allowed to add a single changelog entry.
     """
-    return PromptTemplate(PromptTemplateInput(schema=InputSchema, template=template)).render(input)
+
+
+def get_prompt() -> str:
+    return """
+      Your working directory is {{local_clone}}, a clone of dist-git repository of package {{package}}.
+      {{ dist_git_branch }} dist-git branch has been checked out.
+      {{^build_error}}
+      Rebase the package to version {{version}}. Use "- resolves: {{jira_issue}}" as changelog entry.
+      {{/build_error}}
+      {{#build_error}}
+      This is a repeated rebase, after the previous attempt the generated SRPM failed to build:
+
+      {{.}}
+
+      Do your best to fix the issue and then generate a new SRPM.
+      {{/build_error}}
+    """
+
+
+def create_rebase_agent(mcp_tools: list[Tool]) -> RequirementAgent:
+    return RequirementAgent(
+        name="Rebase",
+        llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
+        tools=[
+            ThinkTool(),
+            RunShellCommandTool(),
+            DuckDuckGoSearchTool(),
+            CreateTool(),
+            ViewTool(),
+            InsertTool(),
+            StrReplaceTool(),
+            AddChangelogEntryTool(),
+        ],
+        memory=UnconstrainedMemory(),
+        requirements=[
+            ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
+        ],
+        middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
+        role="Red Hat Enterprise Linux developer",
+        instructions=get_instructions(),
+        # role and instructions above set defaults for the system prompt input
+        # but the `RequirementAgentSystemPrompt` instance is shared so the defaults
+        # affect all requirement agents - use our own copy to prevent that
+        templates={"system": copy.deepcopy(RequirementAgentSystemPrompt)},
+    )
 
 
 async def main() -> None:
@@ -93,37 +126,12 @@ async def main() -> None:
     setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
     async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-        rebase_agent = RequirementAgent(
-            name="Rebase",
-            llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
-            tools=[
-                ThinkTool(),
-                RunShellCommandTool(),
-                DuckDuckGoSearchTool(),
-                CreateTool(),
-                ViewTool(),
-                InsertTool(),
-                StrReplaceTool(),
-                AddChangelogEntryTool(),
-            ],
-            memory=UnconstrainedMemory(),
-            requirements=[
-                ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
-            ],
-            middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
-            role="Red Hat Enterprise Linux developer",
-            instructions=[
-                "Use the `think` tool to reason through complex decisions and document your approach.",
-                "Preserve existing formatting and style conventions in RPM spec files and patch headers.",
-                "Use `rpmlint *.spec` to check for packaging issues and address any NEW errors",
-                "Ignore pre-existing rpmlint warnings unless they're related to your changes",
-                "Run `centpkg prep` to verify all patches apply cleanly during build preparation",
-                "Generate an SRPM using `centpkg srpm` command to ensure complete build readiness",
-                "* IMPORTANT: Only perform changes relevant to the rebase update",
-            ],
-        )
+        rebase_agent = create_rebase_agent(gateway_tools)
+        build_agent = create_build_agent(gateway_tools)
 
         dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
+
+        MAX_ATTEMPTS = 10
 
         class State(BaseModel):
             jira_issue: str
@@ -133,7 +141,9 @@ async def main() -> None:
             local_clone: Path | None = Field(default=None)
             update_branch: str | None = Field(default=None)
             fork_url: str | None = Field(default=None)
-            rebase_result: OutputSchema | None = Field(default=None)
+            attempts_remaining: int = Field(default=MAX_ATTEMPTS)
+            build_error: str | None = Field(default=None)
+            rebase_result: RebaseOutputSchema | None = Field(default=None)
             merge_request_url: str | None = Field(default=None)
 
         workflow = Workflow(State)
@@ -154,24 +164,50 @@ async def main() -> None:
                 os.chdir(state.local_clone)
                 response = await rebase_agent.run(
                     prompt=render_prompt(
-                        InputSchema(
+                        template=get_prompt(),
+                        input=RebaseInputSchema(
                             local_clone=state.local_clone,
                             package=state.package,
                             dist_git_branch=state.dist_git_branch,
                             version=state.version,
                             jira_issue=state.jira_issue,
+                            build_error=state.build_error,
                         ),
                     ),
-                    expected_output=OutputSchema,
+                    expected_output=RebaseOutputSchema,
                     execution=get_agent_execution_config(),
                 )
-                state.rebase_result = OutputSchema.model_validate_json(response.answer.text)
+                state.rebase_result = RebaseOutputSchema.model_validate_json(response.answer.text)
             finally:
                 os.chdir(cwd)
             if state.rebase_result.success:
+                return "run_build_agent"
+            return "comment_in_jira"
+
+        async def run_build_agent(state):
+            response = await build_agent.run(
+                prompt=render_prompt(
+                    template=get_build_prompt(),
+                    input=BuildInputSchema(
+                        srpm_path=state.rebase_result.srpm_path,
+                        dist_git_branch=state.dist_git_branch,
+                        jira_issue=state.jira_issue,
+                    ),
+                ),
+                expected_output=BuildOutputSchema,
+                execution=get_agent_execution_config(),
+            )
+            build_result = BuildOutputSchema.model_validate_json(response.answer.text)
+            if build_result.success:
                 return "commit_push_and_open_mr"
-            else:
+            state.attempts_remaining -= 1
+            if not state.attempts_remaining:
+                state.rebase_result.error = (
+                    f"Unable to successfully build the package in {MAX_ATTEMPTS} attempts"
+                )
                 return "comment_in_jira"
+            state.build_error = build_result.error
+            return "run_rebase_agent"
 
         async def commit_push_and_open_mr(state):
             state.merge_request_url = await tasks.commit_push_and_open_mr(
@@ -216,6 +252,7 @@ async def main() -> None:
 
         workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
         workflow.add_step("run_rebase_agent", run_rebase_agent)
+        workflow.add_step("run_build_agent", run_build_agent)
         workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
         workflow.add_step("comment_in_jira", comment_in_jira)
 

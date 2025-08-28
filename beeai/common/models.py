@@ -69,12 +69,14 @@ class RebaseInputSchema(BaseModel):
     dist_git_branch: str = Field(description="dist-git branch to update")
     version: str = Field(description="Version to update to")
     jira_issue: str = Field(description="Jira issue to reference as resolved")
+    build_error: str | None = Field(description="Error encountered during package build")
 
 
 class RebaseOutputSchema(BaseModel):
     """Output schema for the rebase agent."""
     success: bool = Field(description="Whether the rebase was successfully completed")
     status: str = Field(description="Rebase status")
+    srpm_path: Path | None = Field(description="Absolute path to generated SRPM")
     error: str | None = Field(description="Specific details about an error")
 
 
@@ -156,3 +158,20 @@ class TriageOutputSchema(BaseModel):
     data: Union[RebaseData, BackportData, ClarificationNeededData, NoActionData, ErrorData] = Field(
         description="Associated data"
     )
+
+
+# ============================================================================
+# Build Agent Schemas
+# ============================================================================
+
+class BuildInputSchema(BaseModel):
+    """Input schema for the build agent."""
+    srpm_path: Path = Field(description="Path to SRPM to build")
+    dist_git_branch: str = Field(description="dist-git branch to update")
+    jira_issue: str = Field(description="Jira issue to reference as resolved")
+
+
+class BuildOutputSchema(BaseModel):
+    """Output schema for the build agent."""
+    success: bool = Field(description="Whether the build was successfully completed")
+    error: str | None = Field(description="Specific details about an error")

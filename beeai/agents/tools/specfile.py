@@ -22,8 +22,8 @@ class AddChangelogEntryToolInput(BaseModel):
         every paragraph should start with "- "
         """
     )
-    author: str = Field(description="Author of the entry (change)")
-    email: str = Field(description="E-mail address of the author")
+    author: str | None = Field(description="Author of the entry (change)", default=None)
+    email: str | None = Field(description="E-mail address of the author", default=None)
 
 
 class AddChangelogEntryTool(Tool[AddChangelogEntryToolInput, ToolRunOptions, StringToolOutput]):

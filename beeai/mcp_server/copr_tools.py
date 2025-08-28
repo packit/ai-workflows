@@ -1,11 +1,13 @@
 import asyncio
+import gzip
 import logging
 import re
 import time
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
+import aiohttp
 import rpm
 from copr.v3 import BuildProxy, ProjectProxy
 from pydantic import BaseModel, Field
@@ -164,3 +166,27 @@ async def build_package(
         error_message=message,
         artifacts_urls=await get_artifacts_urls(build) if build else None,
     )
+
+
+async def download_artifacts(
+    artifacts_urls: Annotated[list[str], Field(description="URLs to build artifacts (logs and RPM files)")],
+    target_path: Annotated[Path, Field(description="Absolute path where to download the artifacts")],
+) -> str:
+    """Downloads build artifacts to the specified location."""
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for url in artifacts_urls:
+            try:
+                async with session.get(url) as response:
+                    if response.status < 400:
+                        target = Path(Path(urlparse(url).path).name)
+                        if target.suffixes == [".log", ".gz"]:
+                            # decompress logs on-the-fly
+                            (target_path / target.with_suffix("")).write_bytes(gzip.decompress(await response.read()))
+                        else:
+                            (target_path / target).write_bytes(await response.read())
+                    else:
+                        return f"Failed to download {url}: {response.status} {response.reason}"
+            except asyncio.TimeoutError:
+                return f"Failed to download {url}: timed out"
+    return "Successfully downloaded the specified build artifacts"

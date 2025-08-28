@@ -1,12 +1,15 @@
 import asyncio
+import gzip
+from contextlib import asynccontextmanager
 from pathlib import Path
 
+import aiohttp
 import pytest
 from copr.v3 import ProjectProxy, BuildProxy
 from flexmock import flexmock
 
 import copr_tools
-from copr_tools import COPR_USER, COPR_PROJECT_LIFETIME, COPR_BUILD_TIMEOUT, build_package
+from copr_tools import COPR_USER, COPR_PROJECT_LIFETIME, COPR_BUILD_TIMEOUT, build_package, download_artifacts
 
 
 @pytest.mark.parametrize(
@@ -91,3 +94,36 @@ async def test_build_package(build_failure, exclusive_arch):
         assert any(
             url.endswith(f"test-0.1-1.el10.{exclusive_arch or 'x86_64'}.rpm") for url in result.artifacts_urls
         )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://test.url/build.log.gz",
+        "https://broken.url/root.log.gz",
+        "https://test.url/test-0.1-1.el10.rpm",
+    ],
+)
+@pytest.mark.asyncio
+async def test_download_artifacts(url, tmp_path):
+    artifacts_urls = [url]
+    target_path = tmp_path
+    content = b"123"
+
+    @asynccontextmanager
+    async def get(url):
+        async def read():
+            return content
+        yield flexmock(status=404 if "broken" in url else 200, reason="Because", read=read)
+
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)
+    flexmock(gzip).should_receive("decompress").and_return(content).times(
+        1 if url.endswith(".log.gz") and not "broken" in url else 0
+    )
+    result = await download_artifacts(artifacts_urls=artifacts_urls, target_path=target_path)
+    assert result.startswith("Failed" if "broken" in url else "Successfully")
+    path = target_path / url.rsplit("/", 1)[-1].removesuffix(".gz")
+    if "broken" in url:
+        assert not path.is_file()
+    else:
+        assert path.read_bytes() == content

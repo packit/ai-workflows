@@ -42,24 +42,24 @@ logger = logging.getLogger(__name__)
 
 def render_prompt(input: InputSchema) -> str:
     template = (
-        'Work inside the repository cloned in "{{ local_clone }}", it is your current working directory\n'
-        "Use the `git_log_search` tool in the directory {{ local_clone }} to check if the jira issue ({{ jira_issue }}) or CVE ({{ cve_id }}) is already resolved.\n"
+        'Work inside the repository cloned in "{{local_clone}}", it is your current working directory\n'
+        "Use the `git_log_search` tool in the directory {{local_clone}} to check if the jira issue ({{jira_issue}}) or CVE ({{cve_id}}) is already resolved.\n"
         "If the issue or the CVE are already resolved, exit the backporting process with success=True and status=\"Backport already applied\"\n"
-        "Use `git_prepare_package_sources` tool with argument {{ unpacked_sources }} to prepare the package sources for application of the upstream fix\n"
-        "Backport the upstream fix stored in \"{{ local_clone }}/{{ jira_issue }}.patch\". "
-        "Navigate to the directory {{ unpacked_sources }} and use `git am --reject "
-        "{{ local_clone }}/{{ jira_issue }}.patch` command to apply the patch.\n"
-        "Resolve all conflicts inside {{ unpacked_sources }} directory and "
+        "Use `git_prepare_package_sources` tool with argument {{unpacked_sources}} to prepare the package sources for application of the upstream fix\n"
+        "Backport the upstream fix stored in \"{{local_clone}}/{{jira_issue}}.patch\". "
+        "Navigate to the directory {{unpacked_sources}} and use `git am --reject "
+        "{{local_clone}}/{{jira_issue}}.patch` command to apply the patch.\n"
+        "Resolve all conflicts inside {{unpacked_sources}} directory and "
         "leave the repository in a dirty state\n"
         "Delete all *.rej files\n"
         "DO **NOT** RUN COMMAND `git am --continue`\n"
         "Once you resolve all conflicts, use tool `git_patch_create` with argument `patch_file_path` "
-        "set to \"{{ local_clone }}/{{ jira_issue }}.patch\" to update the patch file\n"
-        "Increment the 'Release' field in the {{ package }}.spec file following RPM packaging conventions "
+        "set to \"{{local_clone}}/{{jira_issue}}.patch\" to update the patch file\n"
+        "Increment the 'Release' field in the {{package}}.spec file following RPM packaging conventions "
         "using the `bump_release` tool\n"
-        "Add a new changelog entry to the {{ package }}.spec file using the `add_changelog_entry` tool using name "
+        "Add a new changelog entry to the {{package}}.spec file using the `add_changelog_entry` tool using name "
         '"RHEL Packaging Agent <jotnar@redhat.com>"\n'
-        "Add a new `Patch` entry to the {{ package }}.spec after the last definition of `Patch` for {{ jira_issue }}.patch\n"
+        "Add a new `Patch` entry to the {{package}}.spec after the last definition of `Patch` for {{jira_issue}}.patch\n"
     )
     return PromptTemplate(PromptTemplateInput(schema=InputSchema, template=template)).render(input)
 

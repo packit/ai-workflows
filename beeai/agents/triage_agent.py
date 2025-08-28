@@ -112,7 +112,7 @@ def render_prompt(input: InputSchema) -> str:
 
       **Initial Analysis Steps**
 
-      1. Open the {{ issue }} Jira issue and thoroughly analyze it:
+      1. Open the {{issue}} Jira issue and thoroughly analyze it:
          * Extract key details from the title, description, fields, and comments
          * Pay special attention to comments as they often contain crucial information such as:
            - Additional context about the problem
@@ -230,7 +230,7 @@ def render_prompt(input: InputSchema) -> str:
 
       Your output must strictly follow the format below.
 
-      JIRA_ISSUE: {{ issue }}
+      JIRA_ISSUE: {{issue}}
       DECISION: rebase | backport | clarification-needed | no-action | error
 
       If Rebase:

@@ -50,15 +50,15 @@ def render_prompt(input: InputSchema) -> str:
 
       Follow exactly these steps:
 
-      1. You will find the cloned dist-git repository of the {{ package }} package in {{ local_clone }}.
+      1. You will find the cloned dist-git repository of the {{package}} package in {{local_clone}}.
          It is your current working directory, do not `cd` anywhere else.
 
-      2. Check if the {{ package }} was not already updated to version {{ version }}. That means comparing
+      2. Check if the {{package}} was not already updated to version {{version}}. That means comparing
          the current version with the provided version.
           * The current version of the package can be found in the 'Version' field of the spec file.
           * If there is nothing to update, print a message and exit. Otherwise follow the instructions below.
 
-      3. Update the {{ package }} to the newer version:
+      3. Update the {{package}} to the newer version:
           * Update the local package by:
             * Updating the 'Version' and 'Release' fields (or corresponding macros) in the spec file as needed,
               following packaging documentation.
@@ -66,10 +66,10 @@ def render_prompt(input: InputSchema) -> str:
             * Updating macros related to update (e.g., 'commit') if present and necessary; examine the file history
               to see how updates are typically done.
               * You might need to check some information in upstream repository, e.g. the commit SHA of the new version.
-            * Creating a changelog entry, referencing the Jira issue as "Resolves: {{ jira_issue }}".
-            * Downloading sources using `spectool -g -S {{ package }}.spec` (you might need to copy local sources,
+            * Creating a changelog entry, referencing the Jira issue as "Resolves: {{jira_issue}}".
+            * Downloading sources using `spectool -g -S {{package}}.spec` (you might need to copy local sources,
               e.g. if the spec file loads some macros from them, to a directory where `spectool` expects them).
-            * Uploading the new sources using `centpkg --release {{ dist_git_branch }} new-sources`.
+            * Uploading the new sources using `centpkg --release {{dist_git_branch}} new-sources`.
             * IMPORTANT: Only performing changes relevant to the version update: Do not rename variables,
               comment out existing lines, or alter if-else branches in the spec file.
 

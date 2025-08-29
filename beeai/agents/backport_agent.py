@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import logging
 import os
 import sys
@@ -9,6 +10,7 @@ import aiohttp
 from pydantic import BaseModel, Field
 
 from beeai_framework.agents.experimental import RequirementAgent
+from beeai_framework.agents.experimental.prompts import RequirementAgentSystemPrompt
 from beeai_framework.agents.experimental.requirements.conditional import (
     ConditionalRequirement,
 )
@@ -23,7 +25,8 @@ from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 
 import tasks
-from common.models import Task, BackportInputSchema as InputSchema, BackportOutputSchema as OutputSchema
+from agents.build_agent import create_build_agent, get_prompt as get_build_prompt
+from common.models import BackportInputSchema, BackportOutputSchema, BuildInputSchema, BuildOutputSchema, Task
 from common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
@@ -32,36 +35,101 @@ from tools.specfile import AddChangelogEntryTool, BumpReleaseTool
 from tools.text import CreateTool, InsertTool, StrReplaceTool, ViewTool
 from tools.wicked_git import GitLogSearchTool, GitPatchCreationTool, GitPreparePackageSources
 from triage_agent import BackportData, ErrorData
-from utils import check_subprocess, get_agent_execution_config, mcp_tools
+from utils import check_subprocess, get_agent_execution_config, mcp_tools, render_prompt
 
 logger = logging.getLogger(__name__)
 
 
-# InputSchema and OutputSchema are now imported from common.models
+def get_instructions() -> str:
+    return """
+      You are an expert on backporting upstream patches to packages in RHEL ecosystem.
+
+      To backport upstream fix <UPSTREAM_FIX> to package <PACKAGE> in dist-git branch <DIST_GIT_BRANCH>, do the following:
+
+      1. Knowing Jira issue <JIRA_ISSUE>, CVE ID <CVE_ID> or both, use the `git_log_search` tool to check
+         whether the issue/CVE has already been resolved. If it has, end the process with `success=True`
+         and `status="Backport already applied"`.
+
+      2. Use the `git_prepare_package_sources` tool to prepare package sources in directory <UNPACKED_SOURCES>
+         for application of the upstream fix.
+
+      3. Backport the <UPSTREAM_FIX> patch:
+
+         - Navigate to <UNPACKED_SOURCES> and use `git am --reject <UPSTREAM_FIX>` to apply the patch.
+           Use absolute path to the patch file.
+         - Resolve all conflicts and leave the repository in a dirty state. Under any circumstances
+           do not run `git am --continue`.
+         - Delete all *.rej files.
+
+      4. Once there are no more conflicts, use the `git_patch_create` tool with <UPSTREAM_FIX>
+         as an argument to update the patch file.
+
+      5. Bump release in the spec file and add a new changelog entry. Add a new `Patch` tag pointing
+         to the <UPSTREAM_FIX> patch file. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any
+         new issues.
+
+      6. Run `centpkg --release <DIST_GIT_BRANCH> prep` to see if the new patch applies cleanly.
+
+      7. Generate a SRPM using `centpkg --release <DIST_GIT_BRANCH> srpm`.
 
 
-def render_prompt(input: InputSchema) -> str:
-    template = (
-        'Work inside the repository cloned in "{{local_clone}}", it is your current working directory\n'
-        "Use the `git_log_search` tool in the directory {{local_clone}} to check if the jira issue ({{jira_issue}}) or CVE ({{cve_id}}) is already resolved.\n"
-        "If the issue or the CVE are already resolved, exit the backporting process with success=True and status=\"Backport already applied\"\n"
-        "Use `git_prepare_package_sources` tool with argument {{unpacked_sources}} to prepare the package sources for application of the upstream fix\n"
-        "Backport the upstream fix stored in \"{{local_clone}}/{{jira_issue}}.patch\". "
-        "Navigate to the directory {{unpacked_sources}} and use `git am --reject "
-        "{{local_clone}}/{{jira_issue}}.patch` command to apply the patch.\n"
-        "Resolve all conflicts inside {{unpacked_sources}} directory and "
-        "leave the repository in a dirty state\n"
-        "Delete all *.rej files\n"
-        "DO **NOT** RUN COMMAND `git am --continue`\n"
-        "Once you resolve all conflicts, use tool `git_patch_create` with argument `patch_file_path` "
-        "set to \"{{local_clone}}/{{jira_issue}}.patch\" to update the patch file\n"
-        "Increment the 'Release' field in the {{package}}.spec file following RPM packaging conventions "
-        "using the `bump_release` tool\n"
-        "Add a new changelog entry to the {{package}}.spec file using the `add_changelog_entry` tool using name "
-        '"RHEL Packaging Agent <jotnar@redhat.com>"\n'
-        "Add a new `Patch` entry to the {{package}}.spec after the last definition of `Patch` for {{jira_issue}}.patch\n"
+      General instructions:
+
+      - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
+      - Never change anything in the spec file changelog, you are only allowed to add a single changelog entry.
+      - Preserve existing formatting and style conventions in spec files and patch headers.
+    """
+
+
+def get_prompt() -> str:
+    return """
+      Your working directory is {{local_clone}}, a clone of dist-git repository of package {{package}}.
+      {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
+      {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
+      {{^build_error}}
+      Backport upstream fix {{jira_issue}}.patch. Unpacked upstream sources are in {{unpacked_sources}}.
+      Use "- resolves: {{jira_issue}}" as changelog entry content, author being "RHEL Packaging Agent <jotnar@redhat.com>".
+      {{/build_error}}
+      {{#build_error}}
+      This is a repeated backport, after the previous attempt the generated SRPM failed to build:
+
+      {{.}}
+
+      Do your best to fix the issue and then generate a new SRPM.
+      {{/build_error}}
+    """
+
+
+def create_backport_agent(_: list[Tool]) -> RequirementAgent:
+    return RequirementAgent(
+        name="Backport",
+        llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
+        tools=[
+            ThinkTool(),
+            RunShellCommandTool(),
+            DuckDuckGoSearchTool(),
+            CreateTool(),
+            ViewTool(),
+            InsertTool(),
+            StrReplaceTool(),
+            GitPatchCreationTool(),
+            GitLogSearchTool(),
+            BumpReleaseTool(),
+            AddChangelogEntryTool(),
+            GitPreparePackageSources(),
+        ],
+        memory=UnconstrainedMemory(),
+        requirements=[
+            ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
+        ],
+        middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
+        role="Red Hat Enterprise Linux developer",
+        instructions=get_instructions(),
+        # role and instructions above set defaults for the system prompt input
+        # but the `RequirementAgentSystemPrompt` instance is shared so the defaults
+        # affect all requirement agents - use our own copy to prevent that
+        templates={"system": copy.deepcopy(RequirementAgentSystemPrompt)},
     )
-    return PromptTemplate(PromptTemplateInput(schema=InputSchema, template=template)).render(input)
 
 
 async def main() -> None:
@@ -70,41 +138,11 @@ async def main() -> None:
     setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
     async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-        backport_agent = RequirementAgent(
-            name="Backport",
-            llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
-            tools=[
-                ThinkTool(),
-                RunShellCommandTool(),
-                DuckDuckGoSearchTool(),
-                CreateTool(),
-                ViewTool(),
-                InsertTool(),
-                StrReplaceTool(),
-                GitPatchCreationTool(),
-                GitLogSearchTool(),
-                BumpReleaseTool(),
-                AddChangelogEntryTool(),
-                GitPreparePackageSources(),
-            ],
-            memory=UnconstrainedMemory(),
-            requirements=[
-                ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
-            ],
-            middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
-            role="Red Hat Enterprise Linux developer",
-            instructions=[
-                "Use the `think` tool to reason through complex decisions and document your approach.",
-                "Preserve existing formatting and style conventions in RPM spec files and patch headers.",
-                "Use `rpmlint *.spec` to check for packaging issues and address any NEW errors",
-                "Ignore pre-existing rpmlint warnings unless they're related to your changes",
-                "Run `centpkg prep` to verify all patches apply cleanly during build preparation",
-                "Generate an SRPM using `centpkg srpm` command to ensure complete build readiness",
-                "* IMPORTANT: Only perform changes relevant to the backport update",
-            ],
-        )
+        backport_agent = create_backport_agent(gateway_tools)
+        build_agent = create_build_agent(gateway_tools)
 
         dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
+        max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
 
         class State(BaseModel):
             jira_issue: str
@@ -116,7 +154,9 @@ async def main() -> None:
             update_branch: str | None = Field(default=None)
             fork_url: str | None = Field(default=None)
             unpacked_sources: Path | None = Field(default=None)
-            backport_result: OutputSchema | None = Field(default=None)
+            attempts_remaining: int = Field(default=max_build_attempts)
+            build_error: str | None = Field(default=None)
+            backport_result: BackportOutputSchema | None = Field(default=None)
             merge_request_url: str | None = Field(default=None)
 
         workflow = Workflow(State)
@@ -150,26 +190,53 @@ async def main() -> None:
                 os.chdir(state.local_clone)
                 response = await backport_agent.run(
                     prompt=render_prompt(
-                        InputSchema(
+                        template=get_prompt(),
+                        input=BackportInputSchema(
                             local_clone=state.local_clone,
                             unpacked_sources=state.unpacked_sources,
                             package=state.package,
                             dist_git_branch=state.dist_git_branch,
-                            upstream_fix=state.upstream_fix,
                             jira_issue=state.jira_issue,
                             cve_id=state.cve_id,
+                            build_error=state.build_error,
                         ),
                     ),
-                    expected_output=OutputSchema,
+                    expected_output=BackportOutputSchema,
                     execution=get_agent_execution_config(),
                 )
-                state.backport_result = OutputSchema.model_validate_json(response.answer.text)
+                state.backport_result = BackportOutputSchema.model_validate_json(response.answer.text)
             finally:
                 os.chdir(cwd)
             if state.backport_result.success:
-                return "commit_push_and_open_mr"
+                return "run_build_agent"
             else:
                 return "comment_in_jira"
+
+        async def run_build_agent(state):
+            response = await build_agent.run(
+                prompt=render_prompt(
+                    template=get_build_prompt(),
+                    input=BuildInputSchema(
+                        srpm_path=state.backport_result.srpm_path,
+                        dist_git_branch=state.dist_git_branch,
+                        jira_issue=state.jira_issue,
+                    ),
+                ),
+                expected_output=BuildOutputSchema,
+                execution=get_agent_execution_config(),
+            )
+            build_result = BuildOutputSchema.model_validate_json(response.answer.text)
+            if build_result.success:
+                return "commit_push_and_open_mr"
+            state.attempts_remaining -= 1
+            if state.attempts_remaining <= 0:
+                state.backport_result.success = False
+                state.backport_result.error = (
+                    f"Unable to successfully build the package in {max_build_attempts} attempts"
+                )
+                return "comment_in_jira"
+            state.build_error = build_result.error
+            return "run_backport_agent"
 
         async def commit_push_and_open_mr(state):
             state.merge_request_url = await tasks.commit_push_and_open_mr(
@@ -216,6 +283,7 @@ async def main() -> None:
 
         workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
         workflow.add_step("run_backport_agent", run_backport_agent)
+        workflow.add_step("run_build_agent", run_build_agent)
         workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
         workflow.add_step("comment_in_jira", comment_in_jira)
 

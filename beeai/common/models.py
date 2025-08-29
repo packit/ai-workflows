@@ -90,15 +90,16 @@ class BackportInputSchema(BaseModel):
     unpacked_sources: Path = Field(description="Path to the unpacked (using `centpkg prep`) sources")
     package: str = Field(description="Package to update")
     dist_git_branch: str = Field(description="Git branch in dist-git to be updated")
-    upstream_fix: str = Field(description="Link to an upstream fix for the issue")
     jira_issue: str = Field(description="Jira issue to reference as resolved")
     cve_id: str = Field(default="", description="CVE ID if the jira issue is a CVE")
+    build_error: str | None = Field(description="Error encountered during package build")
 
 
 class BackportOutputSchema(BaseModel):
     """Output schema for the backport agent."""
     success: bool = Field(description="Whether the backport was successfully completed")
     status: str = Field(description="Backport status with details of how the potential merge conflicts were resolved")
+    srpm_path: Path | None = Field(description="Absolute path to generated SRPM")
     error: str | None = Field(description="Specific details about an error")
 
 

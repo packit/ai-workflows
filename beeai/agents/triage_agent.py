@@ -37,6 +37,9 @@ from common.models import (
     CVEEligibilityResult,
 )
 from common.utils import redis_client, fix_await
+from constants import JiraLabels
+
+from common.models import CVEEligibilityResult
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.patch_validator import PatchValidatorTool
@@ -45,6 +48,21 @@ from utils import get_agent_execution_config, mcp_tools, run_tool
 
 logger = logging.getLogger(__name__)
 
+RESOLUTION_LABELS = {
+    Resolution.REBASE: JiraLabels.REBASE_IN_PROGRESS,
+    Resolution.BACKPORT: JiraLabels.BACKPORT_IN_PROGRESS,
+    Resolution.CLARIFICATION_NEEDED: JiraLabels.NEEDS_ATTENTION,
+    Resolution.NO_ACTION: JiraLabels.NO_ACTION_NEEDED,
+    Resolution.ERROR: JiraLabels.TRIAGE_ERRORED,
+}
+
+RESOLUTION_QUEUES = {
+    Resolution.REBASE: "rebase_queue",
+    Resolution.BACKPORT: "backport_queue",
+    Resolution.CLARIFICATION_NEEDED: "clarification_needed_queue",
+    Resolution.NO_ACTION: "no_action_list",
+    Resolution.ERROR: "error_list",
+}
 
 def determine_target_branch(cve_eligibility_result: CVEEligibilityResult | None, triage_data: BaseModel) -> str | None:
     """
@@ -262,6 +280,43 @@ def render_prompt(input: InputSchema) -> str:
     return PromptTemplate(PromptTemplateInput(schema=InputSchema, template=template)).render(input)
 
 
+async def handle_triage_resolution(
+    resolution: Resolution,
+    issue: str,
+    state,
+    output_data,
+    redis,
+    gateway_tools,
+    dry_run: bool
+) -> None:
+    queue_name = RESOLUTION_QUEUES.get(resolution)
+
+    if not queue_name:
+        logger.error(f"Unknown resolution type: {resolution}")
+        return
+
+    if resolution in [Resolution.REBASE, Resolution.BACKPORT, Resolution.CLARIFICATION_NEEDED]:
+        logger.info(f"Triage resolved as {resolution.value.upper()} for {issue}, adding to {queue_name}")
+        task = Task(metadata=state.model_dump())
+        await fix_await(redis.lpush(queue_name, task.model_dump_json()))
+    elif resolution == Resolution.NO_ACTION:
+        logger.info(f"Triage resolved as NO_ACTION for {issue}, adding to {queue_name}")
+        await fix_await(redis.lpush(queue_name, output_data.model_dump_json()))
+
+    label_name = RESOLUTION_LABELS.get(resolution)
+    logger.info(f"Label to add: {label_name}")
+
+    if not dry_run and label_name:
+        try:
+            await tasks.edit_jira_labels(
+                jira_issue=issue,
+                labels_to_add=[label_name],
+                available_tools=gateway_tools,
+            )
+        except Exception as ex:
+            logger.warning(f"Failed to add label {label_name} to {issue}: {ex}")
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
@@ -435,6 +490,26 @@ async def main() -> None:
                             f"Task failed after {max_retries} attempts, " f"moving to error list: {input.issue}"
                         )
                         await fix_await(redis.lpush("error_list", error))
+                        if not dry_run:
+                            try:
+                                await tasks.edit_jira_labels(
+                                    jira_issue=input.issue,
+                                    labels_to_add=[JiraLabels.TRIAGE_ERRORED],
+                                    available_tools=gateway_tools,
+                                )
+                            except Exception as ex:
+                                logger.warning(f"Failed to add error label to {input.issue}: {ex}")
+
+                # clean up any existing jotnar labels before starting triage
+                if not dry_run:
+                    try:
+                        await tasks.edit_jira_labels(
+                            jira_issue=input.issue,
+                            labels_to_remove=list(JiraLabels.all_labels()),
+                            available_tools=gateway_tools,
+                        )
+                    except Exception as ex:
+                        logger.warning(f"Failed to clean up labels for {input.issue}: {ex}")
 
                 try:
                     logger.info(f"Starting triage processing for {input.issue}")
@@ -453,27 +528,18 @@ async def main() -> None:
                     logger.error(f"Exception during triage processing for {input.issue}: {error}")
                     await retry(task, ErrorData(details=error, jira_issue=input.issue).model_dump_json())
                 else:
-                    if output.resolution == Resolution.REBASE:
-                        logger.info(f"Triage resolved as REBASE for {input.issue}, " f"adding to rebase queue")
-                        task = Task(metadata=state.model_dump())
-                        await redis.lpush("rebase_queue", task.model_dump_json())
-                    elif output.resolution == Resolution.BACKPORT:
-                        logger.info(f"Triage resolved as BACKPORT for {input.issue}, " f"adding to backport queue")
-                        task = Task(metadata=state.model_dump())
-                        await redis.lpush("backport_queue", task.model_dump_json())
-                    elif output.resolution == Resolution.CLARIFICATION_NEEDED:
-                        logger.info(
-                            f"Triage resolved as CLARIFICATION_NEEDED for {input.issue}, "
-                            f"adding to clarification needed queue"
-                        )
-                        task = Task(metadata=state.model_dump())
-                        await redis.lpush("clarification_needed_queue", task.model_dump_json())
-                    elif output.resolution == Resolution.NO_ACTION:
-                        logger.info(f"Triage resolved as NO_ACTION for {input.issue}, " f"adding to no action list")
-                        await fix_await(redis.lpush("no_action_list", output.data.model_dump_json()))
-                    elif output.resolution == Resolution.ERROR:
-                        logger.warning(f"Triage resolved as ERROR for {input.issue}, retrying")
+                    if output.resolution == Resolution.ERROR:
                         await retry(task, output.data.model_dump_json())
+                    else:
+                        await handle_triage_resolution(
+                            resolution=output.resolution,
+                            issue=input.issue,
+                            state=state,
+                            output_data=output.data,
+                            redis=redis,
+                            gateway_tools=gateway_tools,
+                            dry_run=dry_run
+                        )
 
 
 if __name__ == "__main__":

@@ -42,7 +42,7 @@ index 21da0aa2..c32ae843 100644
              from beeai_framework.agents.react.agent import ReActAgent
  
 diff --git a/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/middleware.py b/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/middleware.py
-index f8150f04..9062367b 100644
+index f8150f04..a976e4e8 100644
 --- a/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/middleware.py
 +++ b/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/middleware.py
 @@ -19,6 +19,8 @@ from importlib.metadata import PackageNotFoundError, version
@@ -54,16 +54,26 @@ index f8150f04..9062367b 100644
  from beeai_framework.agents.react.agent import ReActAgent
  from beeai_framework.agents.react.events import ReActAgentSuccessEvent
  from beeai_framework.agents.tool_calling.agent import ToolCallingAgent
-@@ -63,6 +65,8 @@ def create_telemetry_middleware(
+@@ -27,6 +29,7 @@ from beeai_framework.backend import Role
+ from beeai_framework.context import RunContext
+ from beeai_framework.emitter import EventMeta
+ from beeai_framework.errors import FrameworkError
++from beeai_framework.tools import Tool
+ 
+ from openinference.instrumentation import OITracer
+ from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
+@@ -63,6 +66,10 @@ def create_telemetry_middleware(
          if trace_id in active_traces_map:
              return
          active_traces_map[trace_id] = type(instance).__name__
 +        if isinstance(instance, BaseAgent) and instance.meta.name:
 +            active_traces_map[trace_id] += f"({instance.meta.name})"
++        elif isinstance(instance, Tool) and instance.name:
++            active_traces_map[trace_id] += f"({instance.name})"
          base_path = ".".join(emitter.namespace)
          prompt = None
          if isinstance(instance, BaseAgent):
-@@ -283,6 +287,26 @@ def create_telemetry_middleware(
+@@ -283,6 +290,26 @@ def create_telemetry_middleware(
                          }
                          for m in react_agent_typed_data.memory.messages
                      ]

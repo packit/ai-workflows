@@ -28,7 +28,7 @@ import tasks
 from agents.build_agent import create_build_agent, get_prompt as get_build_prompt
 from common.models import BackportInputSchema, BackportOutputSchema, BuildInputSchema, BuildOutputSchema, Task
 from common.utils import redis_client, fix_await
-from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
+from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES, JiraLabels
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.specfile import AddChangelogEntryTool, BumpReleaseTool
@@ -161,6 +161,20 @@ async def main() -> None:
 
             workflow = Workflow(State, name="BackportWorkflow")
 
+            async def change_jira_status(state):
+                if not dry_run:
+                    try:
+                        await tasks.change_jira_status(
+                            jira_issue=state.jira_issue,
+                            status="In Progress",
+                            available_tools=gateway_tools,
+                        )
+                    except Exception as status_error:
+                        logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
+                else:
+                    logger.info(f"Dry run: would change status of {state.jira_issue} to In Progress")
+                return "fork_and_prepare_dist_git"
+
             async def fork_and_prepare_dist_git(state):
                 state.local_clone, state.update_branch, state.fork_url = await tasks.fork_and_prepare_dist_git(
                     jira_issue=state.jira_issue,
@@ -281,6 +295,7 @@ async def main() -> None:
                 )
                 return Workflow.END
 
+            workflow.add_step("change_jira_status", change_jira_status)
             workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
             workflow.add_step("run_backport_agent", run_backport_agent)
             workflow.add_step("run_build_agent", run_build_agent)
@@ -353,6 +368,12 @@ async def main() -> None:
                         f"Task failed after {max_retries} attempts, "
                         f"moving to error list: {backport_data.jira_issue}"
                     )
+                    await tasks.set_jira_labels(
+                        jira_issue=backport_data.jira_issue,
+                        labels_to_add=[JiraLabels.BACKPORT_ERRORED.value],
+                        labels_to_remove=[JiraLabels.BACKPORT_IN_PROGRESS.value],
+                        dry_run=dry_run
+                    )
                     await fix_await(redis.lpush("error_list", error))
 
             try:
@@ -375,9 +396,21 @@ async def main() -> None:
             else:
                 if state.backport_result.success:
                     logger.info(f"Backport successful for {backport_data.jira_issue}, " f"adding to completed list")
+                    await tasks.set_jira_labels(
+                        jira_issue=backport_data.jira_issue,
+                        labels_to_add=[JiraLabels.BACKPORTED.value],
+                        labels_to_remove=[JiraLabels.BACKPORT_IN_PROGRESS.value],
+                        dry_run=dry_run
+                    )
                     await redis.lpush("completed_backport_list", state.backport_result.model_dump_json())
                 else:
                     logger.warning(f"Backport failed for {backport_data.jira_issue}: {state.backport_result.error}")
+                    await tasks.set_jira_labels(
+                        jira_issue=backport_data.jira_issue,
+                        labels_to_add=[JiraLabels.BACKPORT_FAILED.value],
+                        labels_to_remove=[JiraLabels.BACKPORT_IN_PROGRESS.value],
+                        dry_run=dry_run
+                    )
                     await retry(task, state.backport_result.error)
 
 

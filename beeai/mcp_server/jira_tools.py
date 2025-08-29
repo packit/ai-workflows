@@ -254,3 +254,97 @@ async def check_cve_triage_eligibility(
         reason=reason,
         needs_internal_fix=needs_internal_fix
     )
+
+
+async def change_jira_status(
+    issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
+    status: Annotated[str, Field(description="New status to transition to (e.g. 'In Progress', 'Done', 'Closed')")],
+) -> str:
+    if os.getenv("DRY_RUN", "False").lower() == "true":
+        return f"Dry run, not changing status of {issue_key} to {status}  (this is expected, not an error)"
+
+    headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
+    jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/transitions")
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(
+                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+                params={"fields": "status"},
+                headers=headers,
+            ) as response:
+                response.raise_for_status()
+                current_issue = await response.json()
+                current_status = current_issue.get("fields", {}).get("status", {}).get("name", "")
+                if current_status.lower() == status.lower():
+                    return f"JIRA issue {issue_key} is already in status '{current_status}', no change needed (this is expected, not an error)"
+        except aiohttp.ClientError as e:
+            # if we can't check current status, continue with transition attempt
+            pass
+
+        # get available transitions
+        try:
+            async with session.get(jira_url, headers=headers) as resp:
+                resp.raise_for_status()
+                transitions = (await resp.json()).get("transitions", [])
+        except aiohttp.ClientError as e:
+            return f"Failed to get available transitions for {issue_key}: {e}"
+
+        # get desired status
+        transition = next(
+            (t for t in transitions if t.get("to", {}).get("name", "").lower() == status.lower()),
+            None,
+        )
+
+        if not transition:
+            available = ", ".join(t.get("to", {}).get("name", "?") for t in transitions)
+            return f"Status '{status}' is not available for {issue_key}. Available: {available}"
+
+        # do the transition
+        try:
+            async with session.post(jira_url, json={"transition": {"id": transition["id"]}}, headers=headers) as resp:
+                resp.raise_for_status()
+        except aiohttp.ClientError as e:
+            return f"Failed to change status of {issue_key} to {status}: {e}"
+
+    return f"Successfully changed status of {issue_key} to {status}"
+
+
+
+async def edit_jira_labels(
+    issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
+    labels_to_add: Annotated[list[str] | None, Field(description="List of labels to add to the issue")] = None,
+    labels_to_remove: Annotated[list[str] | None, Field(description="List of labels to remove from the issue")] = None,
+) -> str:
+    """
+    Edits labels on a Jira issue by adding and/or removing specified labels.
+    """
+    if not (labels_to_add or labels_to_remove):
+        return f"No label changes requested for {issue_key}"
+
+    if os.getenv("DRY_RUN", "False").lower() == "true":
+        return f"Dry run, not editing labels on {issue_key} (this is expected, not an error)"
+
+    jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}")
+    headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
+
+    update_payload = []
+    if labels_to_add:
+        update_payload.extend([{"add": label} for label in labels_to_add])
+    if labels_to_remove:
+        update_payload.extend([{"remove": label} for label in labels_to_remove])
+
+    payload = {"update": {"labels": update_payload}}
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.put(
+                jira_url,
+                json=payload,
+                headers=headers,
+            ) as response:
+                response.raise_for_status()
+        except aiohttp.ClientError as e:
+            return f"Failed to edit labels on {issue_key}: {e}"
+
+    return f"Successfully edited labels on {issue_key}."

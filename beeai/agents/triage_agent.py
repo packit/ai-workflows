@@ -37,6 +37,7 @@ from common.models import (
     CVEEligibilityResult,
 )
 from common.utils import redis_client, fix_await
+from constants import JiraLabels
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.patch_validator import PatchValidatorTool
@@ -434,9 +435,21 @@ async def main() -> None:
                     logger.error(
                         f"Task failed after {max_retries} attempts, " f"moving to error list: {input.issue}"
                     )
+                    await tasks.set_jira_labels(
+                        jira_issue=input.issue,
+                        labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
+                        dry_run=dry_run
+                    )
                     await fix_await(redis.lpush("error_list", error))
 
             try:
+                await tasks.set_jira_labels(
+                    jira_issue=input.issue,
+                    labels_to_remove=list(JiraLabels.all_labels()),
+                    dry_run=dry_run
+                )
+                logger.info(f"Cleaned up existing labels for {input.issue}")
+
                 logger.info(f"Starting triage processing for {input.issue}")
                 state = await run_workflow(input.issue)
                 output = state.triage_result
@@ -455,10 +468,20 @@ async def main() -> None:
             else:
                 if output.resolution == Resolution.REBASE:
                     logger.info(f"Triage resolved as REBASE for {input.issue}, " f"adding to rebase queue")
+                    await tasks.set_jira_labels(
+                        jira_issue=input.issue,
+                        labels_to_add=[JiraLabels.REBASE_IN_PROGRESS.value],
+                        dry_run=dry_run
+                    )
                     task = Task(metadata=state.model_dump())
                     await redis.lpush("rebase_queue", task.model_dump_json())
                 elif output.resolution == Resolution.BACKPORT:
                     logger.info(f"Triage resolved as BACKPORT for {input.issue}, " f"adding to backport queue")
+                    await tasks.set_jira_labels(
+                        jira_issue=input.issue,
+                        labels_to_add=[JiraLabels.BACKPORT_IN_PROGRESS.value],
+                        dry_run=dry_run
+                    )
                     task = Task(metadata=state.model_dump())
                     await redis.lpush("backport_queue", task.model_dump_json())
                 elif output.resolution == Resolution.CLARIFICATION_NEEDED:
@@ -466,13 +489,28 @@ async def main() -> None:
                         f"Triage resolved as CLARIFICATION_NEEDED for {input.issue}, "
                         f"adding to clarification needed queue"
                     )
+                    await tasks.set_jira_labels(
+                        jira_issue=input.issue,
+                        labels_to_add=[JiraLabels.NEEDS_ATTENTION.value],
+                        dry_run=dry_run
+                    )
                     task = Task(metadata=state.model_dump())
                     await redis.lpush("clarification_needed_queue", task.model_dump_json())
                 elif output.resolution == Resolution.NO_ACTION:
                     logger.info(f"Triage resolved as NO_ACTION for {input.issue}, " f"adding to no action list")
+                    await tasks.set_jira_labels(
+                        jira_issue=input.issue,
+                        labels_to_add=[JiraLabels.NO_ACTION_NEEDED.value],
+                        dry_run=dry_run
+                    )
                     await fix_await(redis.lpush("no_action_list", output.data.model_dump_json()))
                 elif output.resolution == Resolution.ERROR:
                     logger.warning(f"Triage resolved as ERROR for {input.issue}, retrying")
+                    await tasks.set_jira_labels(
+                        jira_issue=input.issue,
+                        labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
+                        dry_run=dry_run
+                    )
                     await retry(task, output.data.model_dump_json())
 
 

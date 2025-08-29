@@ -1,4 +1,5 @@
 import itertools
+import logging
 import os
 import re
 import shutil
@@ -7,8 +8,10 @@ from typing import Tuple
 
 from beeai_framework.tools import Tool
 
-from constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
-from utils import check_subprocess, run_tool
+from constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE, JiraLabels
+from utils import check_subprocess, run_tool, mcp_tools
+
+logger = logging.getLogger(__name__)
 
 
 async def fork_and_prepare_dist_git(
@@ -88,3 +91,40 @@ async def comment_in_jira(
         private=True,
         available_tools=available_tools,
     )
+
+
+async def change_jira_status(
+    jira_issue: str,
+    status: str,
+    available_tools: list[Tool],
+) -> None:
+    await run_tool(
+        "change_jira_status",
+        issue_key=jira_issue,
+        status=status,
+        available_tools=available_tools,
+    )
+
+
+async def set_jira_labels(
+    jira_issue: str,
+    labels_to_add: list[str] | None = None,
+    labels_to_remove: list[str] | None = None,
+    dry_run: bool = False
+) -> None:
+    if dry_run:
+        logger.info(f"Dry run, not updating labels for {jira_issue}")
+        return
+
+    try:
+        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+            await run_tool(
+                "edit_jira_labels",
+                issue_key=jira_issue,
+                labels_to_add=labels_to_add or [],
+                labels_to_remove=labels_to_remove or [],
+                available_tools=gateway_tools,
+            )
+
+    except Exception as e:
+        logger.warning(f"Failed to update labels for {jira_issue}: {e}")

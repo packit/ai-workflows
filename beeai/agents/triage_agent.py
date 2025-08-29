@@ -84,7 +84,8 @@ def _map_version_to_branch(version: str, needs_internal_fix: bool) -> str | None
     major_version = version_match.group(1)
     minor_version = version_match.group(2)
 
-    if needs_internal_fix:
+    # RHEL 8 contributions are handled always in Stream
+    if needs_internal_fix and int(major_version) != 8:
         branch = f"rhel-{major_version}.{minor_version}"
         if int(major_version) < 10:
             branch += ".0"

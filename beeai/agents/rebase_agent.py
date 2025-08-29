@@ -72,15 +72,18 @@ def get_instructions() -> str:
 
       - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
       - Never change anything in the spec file changelog, you are only allowed to add a single changelog entry.
+      - Preserve existing formatting and style conventions in spec files and patch headers.
     """
 
 
 def get_prompt() -> str:
     return """
       Your working directory is {{local_clone}}, a clone of dist-git repository of package {{package}}.
-      {{ dist_git_branch }} dist-git branch has been checked out.
+      {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
+      {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
       {{^build_error}}
-      Rebase the package to version {{version}}. Use "- resolves: {{jira_issue}}" as changelog entry.
+      Rebase the package to version {{version}}. Use "- resolves: {{jira_issue}}" as changelog entry content,
+      author being "RHEL Packaging Agent <jotnar@redhat.com>".
       {{/build_error}}
       {{#build_error}}
       This is a repeated rebase, after the previous attempt the generated SRPM failed to build:

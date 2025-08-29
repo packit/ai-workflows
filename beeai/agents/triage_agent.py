@@ -9,17 +9,6 @@ from enum import Enum
 from typing import Union
 
 from pydantic import BaseModel, Field
-from common.models import (
-    Task,
-    TriageInputSchema as InputSchema,
-    TriageOutputSchema as OutputSchema,
-    Resolution,
-    RebaseData,
-    BackportData,
-    ClarificationNeededData,
-    NoActionData,
-    ErrorData
-)
 
 from beeai_framework.agents.experimental import RequirementAgent
 from beeai_framework.agents.experimental.requirements.conditional import (
@@ -35,14 +24,24 @@ from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 
 import tasks
-
-from common.models import CVEEligibilityResult
+from common.models import (
+    Task,
+    TriageInputSchema as InputSchema,
+    TriageOutputSchema as OutputSchema,
+    Resolution,
+    RebaseData,
+    BackportData,
+    ClarificationNeededData,
+    NoActionData,
+    ErrorData,
+    CVEEligibilityResult,
+)
+from common.utils import redis_client, fix_await
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.patch_validator import PatchValidatorTool
 from tools.version_mapper import VersionMapperTool
 from utils import get_agent_execution_config, mcp_tools, run_tool
-from common.utils import redis_client, fix_await
 
 logger = logging.getLogger(__name__)
 

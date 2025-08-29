@@ -7,7 +7,6 @@ from pathlib import Path
 
 import aiohttp
 from pydantic import BaseModel, Field
-from common.models import Task, BackportInputSchema as InputSchema, BackportOutputSchema as OutputSchema
 
 from beeai_framework.agents.experimental import RequirementAgent
 from beeai_framework.agents.experimental.requirements.conditional import (
@@ -24,6 +23,8 @@ from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 
 import tasks
+from common.models import Task, BackportInputSchema as InputSchema, BackportOutputSchema as OutputSchema
+from common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
@@ -32,7 +33,6 @@ from tools.text import CreateTool, InsertTool, StrReplaceTool, ViewTool
 from tools.wicked_git import GitLogSearchTool, GitPatchCreationTool, GitPreparePackageSources
 from triage_agent import BackportData, ErrorData
 from utils import check_subprocess, get_agent_execution_config, mcp_tools
-from common.utils import redis_client, fix_await
 
 logger = logging.getLogger(__name__)
 

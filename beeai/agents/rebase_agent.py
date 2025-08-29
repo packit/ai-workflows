@@ -95,7 +95,7 @@ def get_prompt() -> str:
     """
 
 
-def create_rebase_agent(mcp_tools: list[Tool]) -> RequirementAgent:
+def create_rebase_agent(_: list[Tool]) -> RequirementAgent:
     return RequirementAgent(
         name="Rebase",
         llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
@@ -133,8 +133,7 @@ async def main() -> None:
         build_agent = create_build_agent(gateway_tools)
 
         dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
-
-        MAX_ATTEMPTS = 10
+        max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
 
         class State(BaseModel):
             jira_issue: str
@@ -144,7 +143,7 @@ async def main() -> None:
             local_clone: Path | None = Field(default=None)
             update_branch: str | None = Field(default=None)
             fork_url: str | None = Field(default=None)
-            attempts_remaining: int = Field(default=MAX_ATTEMPTS)
+            attempts_remaining: int = Field(default=max_build_attempts)
             build_error: str | None = Field(default=None)
             rebase_result: RebaseOutputSchema | None = Field(default=None)
             merge_request_url: str | None = Field(default=None)
@@ -204,9 +203,10 @@ async def main() -> None:
             if build_result.success:
                 return "commit_push_and_open_mr"
             state.attempts_remaining -= 1
-            if not state.attempts_remaining:
+            if state.attempts_remaining <= 0:
+                state.rebase_result.success = False
                 state.rebase_result.error = (
-                    f"Unable to successfully build the package in {MAX_ATTEMPTS} attempts"
+                    f"Unable to successfully build the package in {max_build_attempts} attempts"
                 )
                 return "comment_in_jira"
             state.build_error = build_result.error

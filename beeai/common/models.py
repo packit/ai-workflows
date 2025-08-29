@@ -126,7 +126,7 @@ class RebaseData(BaseModel):
 class BackportData(BaseModel):
     """Data for backport resolution."""
     package: str = Field(description="Package name")
-    patch_url: str = Field(description="URL or reference to the source of the fix")
+    patch_urls: list[str] = Field(description="URLs or references to the source of the fixes")
     justification: str = Field(description="Clear explanation of why this patch fixes the issue")
     jira_issue: str = Field(description="Jira issue identifier")
     cve_id: str = Field(description="CVE identifier")

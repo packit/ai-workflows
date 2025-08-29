@@ -15,13 +15,14 @@ class PatchValidatorInput(BaseModel):
 
 
 class PatchValidatorResult(BaseModel):
+    url: str = Field(description="URL of the patch/commit")
     is_accessible: bool = Field(description="Whether the URL is accessible and not an issue reference")
     status_code: int | None = Field(description="HTTP status code")
     content: str | None = Field(description="Content of the URL (truncated if too long)")
     reason: str = Field(description="Brief explanation")
 
 
-class PatchValidatorOutput(JSONToolOutput[PatchValidatorResult]):
+class PatchValidatorOutput(JSONToolOutput[list[PatchValidatorResult]]):
     pass
 
 
@@ -65,48 +66,50 @@ class PatchValidatorTool(Tool[PatchValidatorInput, ToolRunOptions, PatchValidato
     async def _run(
         self, tool_input: PatchValidatorInput, options: ToolRunOptions | None, context: RunContext
     ) -> PatchValidatorOutput:
+        results = []
+        for url in tool_input.urls:
+            url = url.strip()
 
-        url = tool_input.url.strip()
+            is_issue, reason = self._is_issue_reference(url)
 
-        is_issue, reason = self._is_issue_reference(url)
+            status_code = None
+            is_accessible = False
+            content = None
 
-        status_code = None
-        is_accessible = False
-        content = None
+            if not is_issue:
+                try:
+                    timeout = aiohttp.ClientTimeout(total=30)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.get(url) as response:
+                            status_code = response.status
+                            is_accessible = response.status < 400
 
-        if not is_issue:
-            try:
-                timeout = aiohttp.ClientTimeout(total=30)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(url) as response:
-                        status_code = response.status
-                        is_accessible = response.status < 400
-
-                        if is_accessible:
-                            max_length = MAX_CONTENT_LENGTH
-                            if response.content_length and response.content_length > max_length:
-                                # Avoid reading a huge response into memory.
-                                partial_bytes = await response.content.read(max_length)
-                                content = partial_bytes.decode(response.get_encoding() or 'utf-8', errors='ignore')
-                                content += f"\n\n[Content truncated - showing first {max_length} bytes of {response.content_length} total]"
+                            if is_accessible:
+                                max_length = MAX_CONTENT_LENGTH
+                                if response.content_length and response.content_length > max_length:
+                                    # Avoid reading a huge response into memory.
+                                    partial_bytes = await response.content.read(max_length)
+                                    content = partial_bytes.decode(response.get_encoding() or 'utf-8', errors='ignore')
+                                    content += f"\n\n[Content truncated - showing first {max_length} bytes of {response.content_length} total]"
+                                else:
+                                    # For responses without content-length or smaller ones, read fully and then truncate.
+                                    raw_content = await response.text()
+                                    content = self._truncate_content(raw_content)
+                                reason = "URL is accessible and content fetched successfully"
                             else:
-                                # For responses without content-length or smaller ones, read fully and then truncate.
-                                raw_content = await response.text()
-                                content = self._truncate_content(raw_content)
-                            reason = "URL is accessible and content fetched successfully"
-                        else:
-                            reason = f"Not an issue reference but not accessible (HTTP {response.status})"
+                                reason = f"Not an issue reference but not accessible (HTTP {response.status})"
 
-            except asyncio.TimeoutError:
-                reason = "Not an issue reference but request timeout"
-            except Exception as e:
-                reason = f"Not an issue reference but raised exception: {str(e)}"
+                except asyncio.TimeoutError:
+                    reason = "Not an issue reference but request timeout"
+                except Exception as e:
+                    reason = f"Not an issue reference but raised exception: {str(e)}"
 
-        result = PatchValidatorResult(
-            is_accessible=is_accessible,
-            status_code=status_code,
-            content=content,
-            reason=reason,
-        )
+            results.append(PatchValidatorResult(
+                url=url,
+                is_accessible=is_accessible,
+                status_code=status_code,
+                content=content,
+                reason=reason,
+            ))
 
-        return PatchValidatorOutput(result)
+        return PatchValidatorOutput(results)

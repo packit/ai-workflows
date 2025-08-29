@@ -1,0 +1,28 @@
+GOOSE_PROVIDER: google
+GOOSE_MODEL: gemini-2.5-flash-preview-05-20
+GOOSE_DISABLE_KEYRING: true
+extensions:
+  computercontroller:
+    bundled: true
+    display_name: Computer Controller
+    enabled: true
+    name: computercontroller
+    timeout: 300
+    type: builtin
+  developer:
+    bundled: true
+    display_name: Developer
+    enabled: true
+    name: developer
+    timeout: 300
+    type: builtin
+  goose-team:
+    bundled: null
+    description: null
+    enabled: true
+    env_keys: []
+    envs: {}
+    name: Goose Team
+    timeout: 300
+    type: sse
+    uri: http://goose-team:3001/sse

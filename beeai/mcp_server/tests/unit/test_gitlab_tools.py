@@ -1,6 +1,8 @@
 import asyncio
 from pathlib import Path
 
+import gitlab
+from ogr.exceptions import GitlabAPIException
 import pytest
 from flexmock import flexmock
 from ogr.services.gitlab import GitlabService
@@ -32,6 +34,43 @@ async def test_open_merge_request():
     flexmock(GitlabService).should_receive("get_project_from_url").with_args(
         url=fork_url
     ).and_return(flexmock(create_pr=lambda title, body, target, source: pr_mock))
+    pr_mock.should_receive("add_label").with_args("jotnar_needs_attention").once()
+    assert (
+        await open_merge_request(
+            fork_url=fork_url,
+            title=title,
+            description=description,
+            target=target,
+            source=source,
+        )
+        == mr_url
+    )
+
+
+@pytest.mark.asyncio
+async def test_open_merge_request_with_existing_mr():
+    fork_url = "https://gitlab.com/ai-bot/bash.git"
+    title = "Fix RHEL-12345"
+    description = "Resolves RHEL-12345"
+    target = "c10s"
+    source = "automated-package-update-RHEL-12345"
+    mr_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/1"
+    pr_mock = flexmock(url=mr_url, source_branch=source)
+
+    # create_pr raises an exception with code 409 indicating the MR already exists
+    def create_pr_raises(*args, **kwargs):
+        exc = GitlabAPIException()
+        exc.__cause__ = gitlab.GitlabError(response_code=409)
+        raise exc
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url=fork_url
+    ).and_return(
+        flexmock(
+            create_pr=create_pr_raises,
+            get_pr_list=lambda: [pr_mock]
+        )
+    )
     pr_mock.should_receive("add_label").with_args("jotnar_needs_attention").once()
     assert (
         await open_merge_request(

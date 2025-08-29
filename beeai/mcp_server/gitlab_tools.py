@@ -5,7 +5,7 @@ from typing import Annotated
 from urllib.parse import urlparse
 
 from ogr.factory import get_project
-from ogr.exceptions import OgrException
+from ogr.exceptions import OgrException, GitlabAPIException
 from pydantic import Field
 
 
@@ -44,7 +44,24 @@ async def open_merge_request(
     project = await asyncio.to_thread(get_project, url=fork_url, token=os.getenv("GITLAB_TOKEN"))
     if not project:
         return "Failed to get the specified fork"
-    pr = await asyncio.to_thread(project.create_pr, title, description, target, source)
+    try:
+        pr = await asyncio.to_thread(project.create_pr, title, description, target, source)
+    except GitlabAPIException as ex:
+        logger.info("Gitlab API exception: %s", ex)
+        if ex.response_code == 409:
+            # 409 code means conflict: MR already exists; let's verify
+            prs = await asyncio.to_thread(project.get_pr_list)
+            for pr in prs:
+                if pr.source_branch == source:
+                    logger.info("Reusing existing MR %s", pr)
+                    # we have to update the MR description to include the new commit hash
+                    # this is an active API call via PR's setter method
+                    pr.description = description
+                    break
+            else:
+                raise
+        else:
+            raise
     if not pr:
         return "Failed to open the merge request"
     # by default, set this label on a newly created MR so we can inspect it ASAP

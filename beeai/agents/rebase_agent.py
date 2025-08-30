@@ -65,7 +65,10 @@ def get_instructions() -> str:
          by running `centpkg --release <DIST_GIT_BRANCH> prep` again. Repeat as necessary. Do not remove any patches
          unless all their hunks have been already applied to the upstream sources.
 
-      5. Generate a SRPM using `centpkg --release <DIST_GIT_BRANCH> srpm`.
+      5. Upload new upstream sources (files that the `spectool` command downloaded in the previous step)
+         to lookaside cache using the `upload_sources` tool.
+
+      6. Generate a SRPM using `centpkg --release <DIST_GIT_BRANCH> srpm`.
 
 
       General instructions:
@@ -95,7 +98,7 @@ def get_prompt() -> str:
     """
 
 
-def create_rebase_agent(_: list[Tool]) -> RequirementAgent:
+def create_rebase_agent(mcp_tools: list[Tool]) -> RequirementAgent:
     return RequirementAgent(
         name="Rebase",
         llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
@@ -108,7 +111,7 @@ def create_rebase_agent(_: list[Tool]) -> RequirementAgent:
             InsertTool(),
             StrReplaceTool(),
             AddChangelogEntryTool(),
-        ],
+        ] + [t for t in mcp_tools if t.name == "upload_sources"],
         memory=UnconstrainedMemory(),
         requirements=[
             ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),

@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -8,7 +9,7 @@ from utils import init_kerberos_ticket
 
 
 async def download_sources(
-    dist_git_path: Annotated[Path, Field(description="Path to cloned dist-git repository")],
+    dist_git_path: Annotated[Path, Field(description="Absolute path to cloned dist-git repository")],
     internal: Annotated[bool, Field(description="Whether to use internal RHEL dist-git instead of CentOS Stream one")] = False,
 ) -> str:
     """
@@ -22,7 +23,7 @@ async def download_sources(
 
 
 async def upload_sources(
-    dist_git_path: Annotated[Path, Field(description="Path to cloned dist-git repository")],
+    dist_git_path: Annotated[Path, Field(description="Absolute path to cloned dist-git repository")],
     new_sources: Annotated[list[str], Field(description="List of new sources (file names) to upload")],
     internal: Annotated[bool, Field(description="Whether to use internal RHEL dist-git instead of CentOS Stream one")] = False,
 ) -> str:
@@ -30,6 +31,8 @@ async def upload_sources(
     Uploads the specified sources to lookaside cache. Also updates the `sources` and `.gitignore` files
     accordingly and adds them to git index.
     """
+    if os.getenv("DRY_RUN", "False").lower() == "true":
+        return "Dry run, not uploading sources"
     tool = "rhpkg" if internal else "centpkg"
     if not await init_kerberos_ticket():
         return "Failed to initialize Kerberos ticket"

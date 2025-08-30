@@ -279,7 +279,7 @@ class JiraIssueFetcher:
             # Get existing issue keys to avoid duplicates
             existing_keys = await self._get_existing_issue_keys(redis_conn)
 
-            remove_issues_for_retry = []
+            remove_issues_for_retry = set()
             # Extend existing_keys with issues that have jötnar labels (except jotnar_retry_needed)
             for issue in issues:
                 issue_key = issue.get("key")
@@ -294,11 +294,11 @@ class JiraIssueFetcher:
                         logger.info(f"Issue {issue_key} has jötnar labels {jotnar_labels} - marking as existing")
                     elif 'jotnar_retry_needed' in jotnar_labels:
                         logger.info(f"Issue {issue_key} has jotnar_retry_needed label - marking for retry")
-                        remove_issues_for_retry.append(issue)
+                        remove_issues_for_retry.add(issue_key)
                     elif not jotnar_labels:
                         # TODO: uncomment this when we have implemented applying the labels to the issues in all the agents
                         # logger.info(f"Issue {issue_key} has no jötnar labels - marking for retry")
-                        # remove_issues_for_retry.append(issue)
+                        # remove_issues_for_retry.add(issue_key)
                         pass
 
             pushed_count = 0
@@ -308,7 +308,7 @@ class JiraIssueFetcher:
                 try:
                     issue_key = issue["key"]
 
-                    if issue_key in existing_keys - set(remove_issues_for_retry):
+                    if issue_key in existing_keys - remove_issues_for_retry:
                         logger.debug(f"Skipping issue {issue_key} - already exists in triage_queue")
                         skipped_count += 1
                         continue

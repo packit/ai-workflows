@@ -28,7 +28,7 @@ import tasks
 from agents.build_agent import create_build_agent, get_prompt as get_build_prompt
 from common.models import BackportInputSchema, BackportOutputSchema, BuildInputSchema, BuildOutputSchema, Task
 from common.utils import redis_client, fix_await
-from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
+from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES, JiraLabels
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.specfile import AddChangelogEntryTool, BumpReleaseTool
@@ -287,6 +287,26 @@ async def main() -> None:
         workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
         workflow.add_step("comment_in_jira", comment_in_jira)
 
+        async def set_backport_labels(jira_issue: str, state, exception_occurred: bool = False):
+            """Handle labeling for all completion scenarios"""
+            try:
+                final_label = (
+                    JiraLabels.BACKPORT_ERRORED
+                    if exception_occurred or not (state and getattr(state, "backport_result", None) and state.backport_result.success)
+                    else JiraLabels.BACKPORTED
+                )
+
+                await tasks.edit_jira_labels(
+                    jira_issue=jira_issue,
+                    labels_to_remove=[JiraLabels.BACKPORT_IN_PROGRESS],
+                    labels_to_add=[final_label],
+                    available_tools=gateway_tools,
+                )
+                logger.info(f"Updated labels on {jira_issue} (removed in-progress, added {final_label})")
+
+            except Exception as e:
+                logger.warning(f"Failed to update labels for {jira_issue}: {e}")
+
         async def run_workflow(package, dist_git_branch, upstream_fix, jira_issue, cve_id):
             response = await workflow.run(
                 State(
@@ -355,7 +375,27 @@ async def main() -> None:
                             f"moving to error list: {backport_data.jira_issue}"
                         )
                         await fix_await(redis.lpush("error_list", error))
+                        if not dry_run:
+                            await set_backport_labels(
+                                jira_issue=backport_data.jira_issue,
+                                state=None,
+                                exception_occurred=True
+                            )
 
+                if not dry_run:
+                    try:
+                        await tasks.change_jira_status(
+                            jira_issue=backport_data.jira_issue,
+                            status="In Progress",
+                            available_tools=gateway_tools,
+                        )
+                        logger.info(f"Changed status of {backport_data.jira_issue} to In Progress")
+                    except Exception as status_error:
+                        logger.warning(f"Failed to change status for {backport_data.jira_issue}: {status_error}")
+                else:
+                    logger.info(f"Dry run: would change status of {backport_data.jira_issue} to In Progress")
+
+                state = None
                 try:
                     logger.info(f"Starting backport processing for {backport_data.jira_issue}")
                     state = await run_workflow(
@@ -374,6 +414,9 @@ async def main() -> None:
                     logger.error(f"Exception during backport processing for {backport_data.jira_issue}: {error}")
                     await retry(task, ErrorData(details=error, jira_issue=backport_data.jira_issue).model_dump_json())
                 else:
+                    if not dry_run:
+                        await set_backport_labels(backport_data.jira_issue, state, exception_occurred=False)
+
                     if state.backport_result.success:
                         logger.info(f"Backport successful for {backport_data.jira_issue}, " f"adding to completed list")
                         await redis.lpush("completed_backport_list", state.backport_result.model_dump_json())

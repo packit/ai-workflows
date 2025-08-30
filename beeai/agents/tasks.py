@@ -88,3 +88,31 @@ async def comment_in_jira(
         private=True,
         available_tools=available_tools,
     )
+
+
+async def change_jira_status(
+    jira_issue: str,
+    status: str,
+    available_tools: list[Tool],
+) -> None:
+    await run_tool(
+        "change_jira_status",
+        issue_key=jira_issue,
+        status=status,
+        available_tools=available_tools,
+    )
+
+
+async def edit_jira_labels(
+    jira_issue: str,
+    labels_to_add: list[str] = None,
+    labels_to_remove: list[str] = None,
+    available_tools: list[Tool] = None,
+) -> None:
+    await run_tool(
+        "edit_jira_labels",
+        issue_key=jira_issue,
+        labels_to_add=labels_to_add or [],
+        labels_to_remove=labels_to_remove or [],
+        available_tools=available_tools,
+    )

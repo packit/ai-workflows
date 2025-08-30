@@ -26,7 +26,7 @@ import tasks
 from agents.build_agent import create_build_agent, get_prompt as get_build_prompt
 from common.models import BuildInputSchema, BuildOutputSchema, RebaseInputSchema, RebaseOutputSchema, Task
 from common.utils import redis_client, fix_await
-from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
+from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES, JiraLabels
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.specfile import AddChangelogEntryTool
@@ -259,6 +259,25 @@ async def main() -> None:
         workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
         workflow.add_step("comment_in_jira", comment_in_jira)
 
+        async def set_rebase_labels(jira_issue: str, state, exception_occurred: bool = False):
+            """Handle labeling for all completion scenarios"""
+            try:
+                final_label = (
+                    JiraLabels.REBASE_ERRORED
+                    if exception_occurred or not (state and getattr(state, "rebase_result", None) and state.rebase_result.success)
+                    else JiraLabels.REBASED
+                )
+
+                await tasks.edit_jira_labels(
+                    jira_issue=jira_issue,
+                    labels_to_remove=[JiraLabels.REBASE_IN_PROGRESS],
+                    labels_to_add=[final_label],
+                    available_tools=gateway_tools,
+                )
+                logger.info(f"Updated labels on {jira_issue} (removed in-progress, added {final_label})")
+            except Exception as label_error:
+                logger.warning(f"Failed to update labels for {jira_issue}: {label_error}")
+
         async def run_workflow(package, dist_git_branch, version, jira_issue):
             response = await workflow.run(
                 State(
@@ -325,7 +344,27 @@ async def main() -> None:
                             f"moving to error list: {rebase_data.jira_issue}"
                         )
                         await fix_await(redis.lpush("error_list", error))
+                        if not dry_run:
+                            await set_rebase_labels(
+                                jira_issue=rebase_data.jira_issue,
+                                state=None,
+                                exception_occurred=True
+                            )
 
+                if not dry_run:
+                    try:
+                        await tasks.change_jira_status(
+                            jira_issue=rebase_data.jira_issue,
+                            status="In Progress",
+                            available_tools=gateway_tools,
+                        )
+                        logger.info(f"Changed status of {rebase_data.jira_issue} to In Progress")
+                    except Exception as status_error:
+                        logger.warning(f"Failed to change status for {rebase_data.jira_issue}: {status_error}")
+                else:
+                    logger.info(f"Dry run: would change status of {rebase_data.jira_issue} to In Progress")
+
+                state = None
                 try:
                     logger.info(f"Starting rebase processing for {rebase_data.jira_issue}")
                     state = await run_workflow(
@@ -343,6 +382,9 @@ async def main() -> None:
                     logger.error(f"Exception during rebase processing for {rebase_data.jira_issue}: {error}")
                     await retry(task, ErrorData(details=error, jira_issue=rebase_data.jira_issue).model_dump_json())
                 else:
+                    if not dry_run:
+                        await set_rebase_labels(rebase_data.jira_issue, state, exception_occurred=False)
+
                     if state.rebase_result.success:
                         logger.info(f"Rebase successful for {rebase_data.jira_issue}, " f"adding to completed list")
                         await fix_await(redis.lpush("completed_rebase_list", state.rebase_result.model_dump_json()))

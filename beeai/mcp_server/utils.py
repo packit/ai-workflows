@@ -52,7 +52,7 @@ async def init_kerberos_ticket() -> bool:
     print(stdout.decode(), flush=True)
     if proc.returncode:
         print(stderr.decode(), flush=True)
-    elif principal in stdout.decode():
+    elif any(l for l in stdout.decode().splitlines() if principal in l and "Expired" not in l):
         return True
     env = os.environ.copy()
     env.update({"KRB5_TRACE": "/dev/stdout"})

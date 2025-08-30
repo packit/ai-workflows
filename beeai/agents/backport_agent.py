@@ -137,157 +137,157 @@ async def main() -> None:
 
     setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
-    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-        backport_agent = create_backport_agent(gateway_tools)
-        build_agent = create_build_agent(gateway_tools)
+    dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
+    max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
 
-        dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
-        max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
+    class State(BaseModel):
+        jira_issue: str
+        package: str
+        dist_git_branch: str
+        upstream_fix: str
+        cve_id: str
+        local_clone: Path | None = Field(default=None)
+        update_branch: str | None = Field(default=None)
+        fork_url: str | None = Field(default=None)
+        unpacked_sources: Path | None = Field(default=None)
+        attempts_remaining: int = Field(default=max_build_attempts)
+        build_error: str | None = Field(default=None)
+        backport_result: BackportOutputSchema | None = Field(default=None)
+        merge_request_url: str | None = Field(default=None)
 
-        class State(BaseModel):
-            jira_issue: str
-            package: str
-            dist_git_branch: str
-            upstream_fix: str
-            cve_id: str
-            local_clone: Path | None = Field(default=None)
-            update_branch: str | None = Field(default=None)
-            fork_url: str | None = Field(default=None)
-            unpacked_sources: Path | None = Field(default=None)
-            attempts_remaining: int = Field(default=max_build_attempts)
-            build_error: str | None = Field(default=None)
-            backport_result: BackportOutputSchema | None = Field(default=None)
-            merge_request_url: str | None = Field(default=None)
+    async def run_workflow(package, dist_git_branch, upstream_fix, jira_issue, cve_id):
+        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+            backport_agent = create_backport_agent(gateway_tools)
+            build_agent = create_build_agent(gateway_tools)
 
-        workflow = Workflow(State)
+            workflow = Workflow(State)
 
-        async def fork_and_prepare_dist_git(state):
-            state.local_clone, state.update_branch, state.fork_url = await tasks.fork_and_prepare_dist_git(
-                jira_issue=state.jira_issue,
-                package=state.package,
-                dist_git_branch=state.dist_git_branch,
-                available_tools=gateway_tools,
-            )
-            await check_subprocess(["centpkg", "sources"], cwd=state.local_clone)
-            await check_subprocess(["centpkg", "prep"], cwd=state.local_clone)
-            unpacked_sources = list(state.local_clone.glob(f"*-build/*{state.package}*"))
-            if len(unpacked_sources) != 1:
-                raise ValueError(f"Expected exactly one unpacked source, got {unpacked_sources}")
-            [state.unpacked_sources] = unpacked_sources
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(state.upstream_fix) as response:
-                    if response.status < 400:
-                        (state.local_clone / f"{state.jira_issue}.patch").write_text(await response.text())
-                    else:
-                        raise ValueError(f"Failed to fetch upstream fix: {response.status}")
-            return "run_backport_agent"
+            async def fork_and_prepare_dist_git(state):
+                state.local_clone, state.update_branch, state.fork_url = await tasks.fork_and_prepare_dist_git(
+                    jira_issue=state.jira_issue,
+                    package=state.package,
+                    dist_git_branch=state.dist_git_branch,
+                    available_tools=gateway_tools,
+                )
+                await check_subprocess(["centpkg", "sources"], cwd=state.local_clone)
+                await check_subprocess(["centpkg", "prep"], cwd=state.local_clone)
+                unpacked_sources = list(state.local_clone.glob(f"*-build/*{state.package}*"))
+                if len(unpacked_sources) != 1:
+                    raise ValueError(f"Expected exactly one unpacked source, got {unpacked_sources}")
+                [state.unpacked_sources] = unpacked_sources
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(state.upstream_fix) as response:
+                        if response.status < 400:
+                            (state.local_clone / f"{state.jira_issue}.patch").write_text(await response.text())
+                        else:
+                            raise ValueError(f"Failed to fetch upstream fix: {response.status}")
+                return "run_backport_agent"
 
-        async def run_backport_agent(state):
-            cwd = Path.cwd()
-            try:
-                # make things easier for the LLM
-                os.chdir(state.local_clone)
-                response = await backport_agent.run(
+            async def run_backport_agent(state):
+                cwd = Path.cwd()
+                try:
+                    # make things easier for the LLM
+                    os.chdir(state.local_clone)
+                    response = await backport_agent.run(
+                        prompt=render_prompt(
+                            template=get_prompt(),
+                            input=BackportInputSchema(
+                                local_clone=state.local_clone,
+                                unpacked_sources=state.unpacked_sources,
+                                package=state.package,
+                                dist_git_branch=state.dist_git_branch,
+                                jira_issue=state.jira_issue,
+                                cve_id=state.cve_id,
+                                build_error=state.build_error,
+                            ),
+                        ),
+                        expected_output=BackportOutputSchema,
+                        execution=get_agent_execution_config(),
+                    )
+                    state.backport_result = BackportOutputSchema.model_validate_json(response.answer.text)
+                finally:
+                    os.chdir(cwd)
+                if state.backport_result.success:
+                    return "run_build_agent"
+                else:
+                    return "comment_in_jira"
+
+            async def run_build_agent(state):
+                response = await build_agent.run(
                     prompt=render_prompt(
-                        template=get_prompt(),
-                        input=BackportInputSchema(
-                            local_clone=state.local_clone,
-                            unpacked_sources=state.unpacked_sources,
-                            package=state.package,
+                        template=get_build_prompt(),
+                        input=BuildInputSchema(
+                            srpm_path=state.backport_result.srpm_path,
                             dist_git_branch=state.dist_git_branch,
                             jira_issue=state.jira_issue,
-                            cve_id=state.cve_id,
-                            build_error=state.build_error,
                         ),
                     ),
-                    expected_output=BackportOutputSchema,
+                    expected_output=BuildOutputSchema,
                     execution=get_agent_execution_config(),
                 )
-                state.backport_result = BackportOutputSchema.model_validate_json(response.answer.text)
-            finally:
-                os.chdir(cwd)
-            if state.backport_result.success:
-                return "run_build_agent"
-            else:
-                return "comment_in_jira"
+                build_result = BuildOutputSchema.model_validate_json(response.answer.text)
+                if build_result.success:
+                    return "commit_push_and_open_mr"
+                state.attempts_remaining -= 1
+                if state.attempts_remaining <= 0:
+                    state.backport_result.success = False
+                    state.backport_result.error = (
+                        f"Unable to successfully build the package in {max_build_attempts} attempts"
+                    )
+                    return "comment_in_jira"
+                state.build_error = build_result.error
+                return "run_backport_agent"
 
-        async def run_build_agent(state):
-            response = await build_agent.run(
-                prompt=render_prompt(
-                    template=get_build_prompt(),
-                    input=BuildInputSchema(
-                        srpm_path=state.backport_result.srpm_path,
-                        dist_git_branch=state.dist_git_branch,
-                        jira_issue=state.jira_issue,
+            async def commit_push_and_open_mr(state):
+                state.merge_request_url = await tasks.commit_push_and_open_mr(
+                    local_clone=state.local_clone,
+                    files_to_commit=["*.spec", f"{state.jira_issue}.patch"],
+                    commit_message=(
+                        f"Fix {state.jira_issue}\n\n"
+                        f"{f'CVE: {state.cve_id}\n' if state.cve_id else ''}"
+                        f"{f'Upstream fix: {state.upstream_fix}\n'}"
+                        f"Resolves: {state.jira_issue}\n\n"
+                        f"This commit was backported {I_AM_JOTNAR}\n\n"
+                        f"Assisted-by: Jotnar\n"
                     ),
-                ),
-                expected_output=BuildOutputSchema,
-                execution=get_agent_execution_config(),
-            )
-            build_result = BuildOutputSchema.model_validate_json(response.answer.text)
-            if build_result.success:
-                return "commit_push_and_open_mr"
-            state.attempts_remaining -= 1
-            if state.attempts_remaining <= 0:
-                state.backport_result.success = False
-                state.backport_result.error = (
-                    f"Unable to successfully build the package in {max_build_attempts} attempts"
+                    fork_url=state.fork_url,
+                    dist_git_branch=state.dist_git_branch,
+                    update_branch=state.update_branch,
+                    mr_title=f"Resolves {state.jira_issue}",
+                    mr_description=(
+                        f"This merge request was created {I_AM_JOTNAR}\n"
+                        f"{CAREFULLY_REVIEW_CHANGES}\n\n"
+                        f"Upstream patch: {state.upstream_fix}\n\n"
+                        "Backporting steps:\n\n"
+                        f"{state.backport_result.status}"
+                    ),
+                    available_tools=gateway_tools,
+                    commit_only=dry_run,
                 )
                 return "comment_in_jira"
-            state.build_error = build_result.error
-            return "run_backport_agent"
 
-        async def commit_push_and_open_mr(state):
-            state.merge_request_url = await tasks.commit_push_and_open_mr(
-                local_clone=state.local_clone,
-                files_to_commit=["*.spec", f"{state.jira_issue}.patch"],
-                commit_message=(
-                    f"Fix {state.jira_issue}\n\n"
-                    f"{f'CVE: {state.cve_id}\n' if state.cve_id else ''}"
-                    f"{f'Upstream fix: {state.upstream_fix}\n'}"
-                    f"Resolves: {state.jira_issue}\n\n"
-                    f"This commit was backported {I_AM_JOTNAR}\n\n"
-                    f"Assisted-by: Jotnar\n"
-                ),
-                fork_url=state.fork_url,
-                dist_git_branch=state.dist_git_branch,
-                update_branch=state.update_branch,
-                mr_title=f"Resolves {state.jira_issue}",
-                mr_description=(
-                    f"This merge request was created {I_AM_JOTNAR}\n"
-                    f"{CAREFULLY_REVIEW_CHANGES}\n\n"
-                    f"Upstream patch: {state.upstream_fix}\n\n"
-                    "Backporting steps:\n\n"
-                    f"{state.backport_result.status}"
-                ),
-                available_tools=gateway_tools,
-                commit_only=dry_run,
-            )
-            return "comment_in_jira"
-
-        async def comment_in_jira(state):
-            if dry_run:
+            async def comment_in_jira(state):
+                if dry_run:
+                    return Workflow.END
+                await tasks.comment_in_jira(
+                    jira_issue=state.jira_issue,
+                    agent_type="Backport",
+                    comment_text=(
+                        state.merge_request_url
+                        if state.backport_result.success
+                        else f"Agent failed to perform a backport: {state.backport_result.error}"
+                    ),
+                    available_tools=gateway_tools,
+                )
                 return Workflow.END
-            await tasks.comment_in_jira(
-                jira_issue=state.jira_issue,
-                agent_type="Backport",
-                comment_text=(
-                    state.merge_request_url
-                    if state.backport_result.success
-                    else f"Agent failed to perform a backport: {state.backport_result.error}"
-                ),
-                available_tools=gateway_tools,
-            )
-            return Workflow.END
 
-        workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
-        workflow.add_step("run_backport_agent", run_backport_agent)
-        workflow.add_step("run_build_agent", run_build_agent)
-        workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
-        workflow.add_step("comment_in_jira", comment_in_jira)
+            workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
+            workflow.add_step("run_backport_agent", run_backport_agent)
+            workflow.add_step("run_build_agent", run_build_agent)
+            workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
+            workflow.add_step("comment_in_jira", comment_in_jira)
 
-        async def run_workflow(package, dist_git_branch, upstream_fix, jira_issue, cve_id):
             response = await workflow.run(
                 State(
                     package=package,
@@ -299,87 +299,87 @@ async def main() -> None:
             )
             return response.state
 
-        if (
-            (package := os.getenv("PACKAGE", None))
-            and (branch := os.getenv("BRANCH", None))
-            and (upstream_fix := os.getenv("UPSTREAM_FIX", None))
-            and (jira_issue := os.getenv("JIRA_ISSUE", None))
-        ):
-            logger.info("Running in direct mode with environment variables")
-            state = await run_workflow(
-                package=package,
-                dist_git_branch=branch,
-                upstream_fix=upstream_fix,
-                jira_issue=jira_issue,
-                cve_id=os.getenv("CVE_ID", ""),
+    if (
+        (package := os.getenv("PACKAGE", None))
+        and (branch := os.getenv("BRANCH", None))
+        and (upstream_fix := os.getenv("UPSTREAM_FIX", None))
+        and (jira_issue := os.getenv("JIRA_ISSUE", None))
+    ):
+        logger.info("Running in direct mode with environment variables")
+        state = await run_workflow(
+            package=package,
+            dist_git_branch=branch,
+            upstream_fix=upstream_fix,
+            jira_issue=jira_issue,
+            cve_id=os.getenv("CVE_ID", ""),
+        )
+        logger.info(f"Direct run completed: {state.backport_result.model_dump_json(indent=4)}")
+        return
+
+    logger.info("Starting backport agent in queue mode")
+    async with redis_client(os.environ["REDIS_URL"]) as redis:
+        max_retries = int(os.getenv("MAX_RETRIES", 3))
+        logger.info(f"Connected to Redis, max retries set to {max_retries}")
+
+        while True:
+            logger.info("Waiting for tasks from backport_queue (timeout: 30s)...")
+            element = await fix_await(redis.brpop(["backport_queue"], timeout=30))
+            if element is None:
+                logger.info("No tasks received, continuing to wait...")
+                continue
+
+            _, payload = element
+            logger.info("Received task from queue.")
+
+            task = Task.model_validate_json(payload)
+            triage_state = task.metadata
+            backport_data = BackportData.model_validate(triage_state["triage_result"]["data"])
+            dist_git_branch = triage_state["target_branch"]
+            logger.info(
+                f"Processing backport for package: {backport_data.package}, "
+                f"JIRA: {backport_data.jira_issue}, branch: {dist_git_branch}, "
+                f"attempt: {task.attempts + 1}"
             )
-            logger.info(f"Direct run completed: {state.backport_result.model_dump_json(indent=4)}")
-            return
 
-        logger.info("Starting backport agent in queue mode")
-        async with redis_client(os.environ["REDIS_URL"]) as redis:
-            max_retries = int(os.getenv("MAX_RETRIES", 3))
-            logger.info(f"Connected to Redis, max retries set to {max_retries}")
+            async def retry(task, error):
+                task.attempts += 1
+                if task.attempts < max_retries:
+                    logger.warning(
+                        f"Task failed (attempt {task.attempts}/{max_retries}), "
+                        f"re-queuing for retry: {backport_data.jira_issue}"
+                    )
+                    await fix_await(redis.lpush("backport_queue", task.model_dump_json()))
+                else:
+                    logger.error(
+                        f"Task failed after {max_retries} attempts, "
+                        f"moving to error list: {backport_data.jira_issue}"
+                    )
+                    await fix_await(redis.lpush("error_list", error))
 
-            while True:
-                logger.info("Waiting for tasks from backport_queue (timeout: 30s)...")
-                element = await fix_await(redis.brpop(["backport_queue"], timeout=30))
-                if element is None:
-                    logger.info("No tasks received, continuing to wait...")
-                    continue
-
-                _, payload = element
-                logger.info("Received task from queue.")
-
-                task = Task.model_validate_json(payload)
-                triage_state = task.metadata
-                backport_data = BackportData.model_validate(triage_state["triage_result"]["data"])
-                dist_git_branch = triage_state["target_branch"]
+            try:
+                logger.info(f"Starting backport processing for {backport_data.jira_issue}")
+                state = await run_workflow(
+                    package=backport_data.package,
+                    dist_git_branch=dist_git_branch,
+                    upstream_fix=backport_data.patch_url,
+                    jira_issue=backport_data.jira_issue,
+                    cve_id=backport_data.cve_id,
+                )
                 logger.info(
-                    f"Processing backport for package: {backport_data.package}, "
-                    f"JIRA: {backport_data.jira_issue}, branch: {dist_git_branch}, "
-                    f"attempt: {task.attempts + 1}"
+                    f"Backport processing completed for {backport_data.jira_issue}, " f"success: {state.backport_result.success}"
                 )
 
-                async def retry(task, error):
-                    task.attempts += 1
-                    if task.attempts < max_retries:
-                        logger.warning(
-                            f"Task failed (attempt {task.attempts}/{max_retries}), "
-                            f"re-queuing for retry: {backport_data.jira_issue}"
-                        )
-                        await fix_await(redis.lpush("backport_queue", task.model_dump_json()))
-                    else:
-                        logger.error(
-                            f"Task failed after {max_retries} attempts, "
-                            f"moving to error list: {backport_data.jira_issue}"
-                        )
-                        await fix_await(redis.lpush("error_list", error))
-
-                try:
-                    logger.info(f"Starting backport processing for {backport_data.jira_issue}")
-                    state = await run_workflow(
-                        package=backport_data.package,
-                        dist_git_branch=dist_git_branch,
-                        upstream_fix=backport_data.patch_url,
-                        jira_issue=backport_data.jira_issue,
-                        cve_id=backport_data.cve_id,
-                    )
-                    logger.info(
-                        f"Backport processing completed for {backport_data.jira_issue}, " f"success: {state.backport_result.success}"
-                    )
-
-                except Exception as e:
-                    error = "".join(traceback.format_exception(e))
-                    logger.error(f"Exception during backport processing for {backport_data.jira_issue}: {error}")
-                    await retry(task, ErrorData(details=error, jira_issue=backport_data.jira_issue).model_dump_json())
+            except Exception as e:
+                error = "".join(traceback.format_exception(e))
+                logger.error(f"Exception during backport processing for {backport_data.jira_issue}: {error}")
+                await retry(task, ErrorData(details=error, jira_issue=backport_data.jira_issue).model_dump_json())
+            else:
+                if state.backport_result.success:
+                    logger.info(f"Backport successful for {backport_data.jira_issue}, " f"adding to completed list")
+                    await redis.lpush("completed_backport_list", state.backport_result.model_dump_json())
                 else:
-                    if state.backport_result.success:
-                        logger.info(f"Backport successful for {backport_data.jira_issue}, " f"adding to completed list")
-                        await redis.lpush("completed_backport_list", state.backport_result.model_dump_json())
-                    else:
-                        logger.warning(f"Backport failed for {backport_data.jira_issue}: {state.backport_result.error}")
-                        await retry(task, state.backport_result.error)
+                    logger.warning(f"Backport failed for {backport_data.jira_issue}: {state.backport_result.error}")
+                    await retry(task, state.backport_result.error)
 
 
 if __name__ == "__main__":

@@ -128,138 +128,138 @@ async def main() -> None:
 
     setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
-    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-        rebase_agent = create_rebase_agent(gateway_tools)
-        build_agent = create_build_agent(gateway_tools)
+    dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
+    max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
 
-        dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
-        max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
+    class State(BaseModel):
+        jira_issue: str
+        package: str
+        dist_git_branch: str
+        version: str
+        local_clone: Path | None = Field(default=None)
+        update_branch: str | None = Field(default=None)
+        fork_url: str | None = Field(default=None)
+        attempts_remaining: int = Field(default=max_build_attempts)
+        build_error: str | None = Field(default=None)
+        rebase_result: RebaseOutputSchema | None = Field(default=None)
+        merge_request_url: str | None = Field(default=None)
 
-        class State(BaseModel):
-            jira_issue: str
-            package: str
-            dist_git_branch: str
-            version: str
-            local_clone: Path | None = Field(default=None)
-            update_branch: str | None = Field(default=None)
-            fork_url: str | None = Field(default=None)
-            attempts_remaining: int = Field(default=max_build_attempts)
-            build_error: str | None = Field(default=None)
-            rebase_result: RebaseOutputSchema | None = Field(default=None)
-            merge_request_url: str | None = Field(default=None)
+    async def run_workflow(package, dist_git_branch, version, jira_issue):
+        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+            rebase_agent = create_rebase_agent(gateway_tools)
+            build_agent = create_build_agent(gateway_tools)
 
-        workflow = Workflow(State)
+            workflow = Workflow(State)
 
-        async def fork_and_prepare_dist_git(state):
-            state.local_clone, state.update_branch, state.fork_url = await tasks.fork_and_prepare_dist_git(
-                jira_issue=state.jira_issue,
-                package=state.package,
-                dist_git_branch=state.dist_git_branch,
-                available_tools=gateway_tools,
-            )
-            return "run_rebase_agent"
+            async def fork_and_prepare_dist_git(state):
+                state.local_clone, state.update_branch, state.fork_url = await tasks.fork_and_prepare_dist_git(
+                    jira_issue=state.jira_issue,
+                    package=state.package,
+                    dist_git_branch=state.dist_git_branch,
+                    available_tools=gateway_tools,
+                )
+                return "run_rebase_agent"
 
-        async def run_rebase_agent(state):
-            cwd = Path.cwd()
-            try:
-                # make things easier for the LLM
-                os.chdir(state.local_clone)
-                response = await rebase_agent.run(
+            async def run_rebase_agent(state):
+                cwd = Path.cwd()
+                try:
+                    # make things easier for the LLM
+                    os.chdir(state.local_clone)
+                    response = await rebase_agent.run(
+                        prompt=render_prompt(
+                            template=get_prompt(),
+                            input=RebaseInputSchema(
+                                local_clone=state.local_clone,
+                                package=state.package,
+                                dist_git_branch=state.dist_git_branch,
+                                version=state.version,
+                                jira_issue=state.jira_issue,
+                                build_error=state.build_error,
+                            ),
+                        ),
+                        expected_output=RebaseOutputSchema,
+                        execution=get_agent_execution_config(),
+                    )
+                    state.rebase_result = RebaseOutputSchema.model_validate_json(response.answer.text)
+                finally:
+                    os.chdir(cwd)
+                if state.rebase_result.success:
+                    return "run_build_agent"
+                return "comment_in_jira"
+
+            async def run_build_agent(state):
+                response = await build_agent.run(
                     prompt=render_prompt(
-                        template=get_prompt(),
-                        input=RebaseInputSchema(
-                            local_clone=state.local_clone,
-                            package=state.package,
+                        template=get_build_prompt(),
+                        input=BuildInputSchema(
+                            srpm_path=state.rebase_result.srpm_path,
                             dist_git_branch=state.dist_git_branch,
-                            version=state.version,
                             jira_issue=state.jira_issue,
-                            build_error=state.build_error,
                         ),
                     ),
-                    expected_output=RebaseOutputSchema,
+                    expected_output=BuildOutputSchema,
                     execution=get_agent_execution_config(),
                 )
-                state.rebase_result = RebaseOutputSchema.model_validate_json(response.answer.text)
-            finally:
-                os.chdir(cwd)
-            if state.rebase_result.success:
-                return "run_build_agent"
-            return "comment_in_jira"
+                build_result = BuildOutputSchema.model_validate_json(response.answer.text)
+                if build_result.success:
+                    return "commit_push_and_open_mr"
+                state.attempts_remaining -= 1
+                if state.attempts_remaining <= 0:
+                    state.rebase_result.success = False
+                    state.rebase_result.error = (
+                        f"Unable to successfully build the package in {max_build_attempts} attempts"
+                    )
+                    return "comment_in_jira"
+                state.build_error = build_result.error
+                return "run_rebase_agent"
 
-        async def run_build_agent(state):
-            response = await build_agent.run(
-                prompt=render_prompt(
-                    template=get_build_prompt(),
-                    input=BuildInputSchema(
-                        srpm_path=state.rebase_result.srpm_path,
-                        dist_git_branch=state.dist_git_branch,
-                        jira_issue=state.jira_issue,
+            async def commit_push_and_open_mr(state):
+                state.merge_request_url = await tasks.commit_push_and_open_mr(
+                    local_clone=state.local_clone,
+                    files_to_commit="*.spec",
+                    commit_message=(
+                        f"Rebase to version {state.version}\n\n"
+                        f"Resolves: {state.jira_issue}\n\n"
+                        f"This commit was created {I_AM_JOTNAR}\n\n"
+                        f"Assisted-by: Jotnar\n"
                     ),
-                ),
-                expected_output=BuildOutputSchema,
-                execution=get_agent_execution_config(),
-            )
-            build_result = BuildOutputSchema.model_validate_json(response.answer.text)
-            if build_result.success:
-                return "commit_push_and_open_mr"
-            state.attempts_remaining -= 1
-            if state.attempts_remaining <= 0:
-                state.rebase_result.success = False
-                state.rebase_result.error = (
-                    f"Unable to successfully build the package in {max_build_attempts} attempts"
+                    fork_url=state.fork_url,
+                    dist_git_branch=state.dist_git_branch,
+                    update_branch=state.update_branch,
+                    mr_title=f"Update to version {state.version}",
+                    mr_description=(
+                        f"This merge request was created {I_AM_JOTNAR}\n"
+                        f"{CAREFULLY_REVIEW_CHANGES}\n\n"
+                        f"Resolves: {state.jira_issue}\n\n"
+                        "Status of the rebase:\n\n"
+                        f"{state.rebase_result.status}"
+                    ),
+                    available_tools=gateway_tools,
+                    commit_only=dry_run,
                 )
                 return "comment_in_jira"
-            state.build_error = build_result.error
-            return "run_rebase_agent"
 
-        async def commit_push_and_open_mr(state):
-            state.merge_request_url = await tasks.commit_push_and_open_mr(
-                local_clone=state.local_clone,
-                files_to_commit="*.spec",
-                commit_message=(
-                    f"Rebase to version {state.version}\n\n"
-                    f"Resolves: {state.jira_issue}\n\n"
-                    f"This commit was created {I_AM_JOTNAR}\n\n"
-                    f"Assisted-by: Jotnar\n"
-                ),
-                fork_url=state.fork_url,
-                dist_git_branch=state.dist_git_branch,
-                update_branch=state.update_branch,
-                mr_title=f"Update to version {state.version}",
-                mr_description=(
-                    f"This merge request was created {I_AM_JOTNAR}\n"
-                    f"{CAREFULLY_REVIEW_CHANGES}\n\n"
-                    f"Resolves: {state.jira_issue}\n\n"
-                    "Status of the rebase:\n\n"
-                    f"{state.rebase_result.status}"
-                ),
-                available_tools=gateway_tools,
-                commit_only=dry_run,
-            )
-            return "comment_in_jira"
-
-        async def comment_in_jira(state):
-            if dry_run:
+            async def comment_in_jira(state):
+                if dry_run:
+                    return Workflow.END
+                await tasks.comment_in_jira(
+                    jira_issue=state.jira_issue,
+                    agent_type="Rebase",
+                    comment_text=(
+                        state.merge_request_url
+                        if state.rebase_result.success
+                        else f"Agent failed to perform a rebase: {state.rebase_result.error}"
+                    ),
+                    available_tools=gateway_tools,
+                )
                 return Workflow.END
-            await tasks.comment_in_jira(
-                jira_issue=state.jira_issue,
-                agent_type="Rebase",
-                comment_text=(
-                    state.merge_request_url
-                    if state.rebase_result.success
-                    else f"Agent failed to perform a rebase: {state.rebase_result.error}"
-                ),
-                available_tools=gateway_tools,
-            )
-            return Workflow.END
 
-        workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
-        workflow.add_step("run_rebase_agent", run_rebase_agent)
-        workflow.add_step("run_build_agent", run_build_agent)
-        workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
-        workflow.add_step("comment_in_jira", comment_in_jira)
+            workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
+            workflow.add_step("run_rebase_agent", run_rebase_agent)
+            workflow.add_step("run_build_agent", run_build_agent)
+            workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
+            workflow.add_step("comment_in_jira", comment_in_jira)
 
-        async def run_workflow(package, dist_git_branch, version, jira_issue):
             response = await workflow.run(
                 State(
                     package=package,
@@ -270,85 +270,85 @@ async def main() -> None:
             )
             return response.state
 
-        if (
-            (package := os.getenv("PACKAGE", None))
-            and (version := os.getenv("VERSION", None))
-            and (jira_issue := os.getenv("JIRA_ISSUE", None))
-            and (branch := os.getenv("BRANCH", None))
-        ):
-            logger.info("Running in direct mode with environment variables")
-            state = await run_workflow(
-                package=package,
-                dist_git_branch=branch,
-                version=version,
-                jira_issue=jira_issue,
+    if (
+        (package := os.getenv("PACKAGE", None))
+        and (version := os.getenv("VERSION", None))
+        and (jira_issue := os.getenv("JIRA_ISSUE", None))
+        and (branch := os.getenv("BRANCH", None))
+    ):
+        logger.info("Running in direct mode with environment variables")
+        state = await run_workflow(
+            package=package,
+            dist_git_branch=branch,
+            version=version,
+            jira_issue=jira_issue,
+        )
+        logger.info(f"Direct run completed: {state.rebase_result.model_dump_json(indent=4)}")
+        return
+
+    logger.info("Starting rebase agent in queue mode")
+    async with redis_client(os.environ["REDIS_URL"]) as redis:
+        max_retries = int(os.getenv("MAX_RETRIES", 3))
+        logger.info(f"Connected to Redis, max retries set to {max_retries}")
+
+        while True:
+            logger.info("Waiting for tasks from rebase_queue (timeout: 30s)...")
+            element = await fix_await(redis.brpop(["rebase_queue"], timeout=30))
+            if element is None:
+                logger.info("No tasks received, continuing to wait...")
+                continue
+
+            _, payload = element
+            logger.info("Received task from queue.")
+
+            task = Task.model_validate_json(payload)
+            triage_state = task.metadata
+            rebase_data = RebaseData.model_validate(triage_state["triage_result"]["data"])
+            dist_git_branch = triage_state["target_branch"]
+            logger.info(
+                f"Processing rebase for package: {rebase_data.package}, "
+                f"version: {rebase_data.version}, JIRA: {rebase_data.jira_issue}, "
+                f"branch: {dist_git_branch}, attempt: {task.attempts + 1}"
             )
-            logger.info(f"Direct run completed: {state.rebase_result.model_dump_json(indent=4)}")
-            return
 
-        logger.info("Starting rebase agent in queue mode")
-        async with redis_client(os.environ["REDIS_URL"]) as redis:
-            max_retries = int(os.getenv("MAX_RETRIES", 3))
-            logger.info(f"Connected to Redis, max retries set to {max_retries}")
+            async def retry(task, error):
+                task.attempts += 1
+                if task.attempts < max_retries:
+                    logger.warning(
+                        f"Task failed (attempt {task.attempts}/{max_retries}), "
+                        f"re-queuing for retry: {rebase_data.jira_issue}"
+                    )
+                    await fix_await(redis.lpush("rebase_queue", task.model_dump_json()))
+                else:
+                    logger.error(
+                        f"Task failed after {max_retries} attempts, "
+                        f"moving to error list: {rebase_data.jira_issue}"
+                    )
+                    await fix_await(redis.lpush("error_list", error))
 
-            while True:
-                logger.info("Waiting for tasks from rebase_queue (timeout: 30s)...")
-                element = await fix_await(redis.brpop(["rebase_queue"], timeout=30))
-                if element is None:
-                    logger.info("No tasks received, continuing to wait...")
-                    continue
-
-                _, payload = element
-                logger.info("Received task from queue.")
-
-                task = Task.model_validate_json(payload)
-                triage_state = task.metadata
-                rebase_data = RebaseData.model_validate(triage_state["triage_result"]["data"])
-                dist_git_branch = triage_state["target_branch"]
+            try:
+                logger.info(f"Starting rebase processing for {rebase_data.jira_issue}")
+                state = await run_workflow(
+                    package=rebase_data.package,
+                    dist_git_branch=dist_git_branch,
+                    version=rebase_data.version,
+                    jira_issue=rebase_data.jira_issue,
+                )
                 logger.info(
-                    f"Processing rebase for package: {rebase_data.package}, "
-                    f"version: {rebase_data.version}, JIRA: {rebase_data.jira_issue}, "
-                    f"branch: {dist_git_branch}, attempt: {task.attempts + 1}"
+                    f"Rebase processing completed for {rebase_data.jira_issue}, " f"success: {state.rebase_result.success}"
                 )
 
-                async def retry(task, error):
-                    task.attempts += 1
-                    if task.attempts < max_retries:
-                        logger.warning(
-                            f"Task failed (attempt {task.attempts}/{max_retries}), "
-                            f"re-queuing for retry: {rebase_data.jira_issue}"
-                        )
-                        await fix_await(redis.lpush("rebase_queue", task.model_dump_json()))
-                    else:
-                        logger.error(
-                            f"Task failed after {max_retries} attempts, "
-                            f"moving to error list: {rebase_data.jira_issue}"
-                        )
-                        await fix_await(redis.lpush("error_list", error))
-
-                try:
-                    logger.info(f"Starting rebase processing for {rebase_data.jira_issue}")
-                    state = await run_workflow(
-                        package=rebase_data.package,
-                        dist_git_branch=dist_git_branch,
-                        version=rebase_data.version,
-                        jira_issue=rebase_data.jira_issue,
-                    )
-                    logger.info(
-                        f"Rebase processing completed for {rebase_data.jira_issue}, " f"success: {state.rebase_result.success}"
-                    )
-
-                except Exception as e:
-                    error = "".join(traceback.format_exception(e))
-                    logger.error(f"Exception during rebase processing for {rebase_data.jira_issue}: {error}")
-                    await retry(task, ErrorData(details=error, jira_issue=rebase_data.jira_issue).model_dump_json())
+            except Exception as e:
+                error = "".join(traceback.format_exception(e))
+                logger.error(f"Exception during rebase processing for {rebase_data.jira_issue}: {error}")
+                await retry(task, ErrorData(details=error, jira_issue=rebase_data.jira_issue).model_dump_json())
+            else:
+                if state.rebase_result.success:
+                    logger.info(f"Rebase successful for {rebase_data.jira_issue}, " f"adding to completed list")
+                    await fix_await(redis.lpush("completed_rebase_list", state.rebase_result.model_dump_json()))
                 else:
-                    if state.rebase_result.success:
-                        logger.info(f"Rebase successful for {rebase_data.jira_issue}, " f"adding to completed list")
-                        await fix_await(redis.lpush("completed_rebase_list", state.rebase_result.model_dump_json()))
-                    else:
-                        logger.warning(f"Rebase failed for {rebase_data.jira_issue}: {state.rebase_result.error}")
-                        await retry(task, state.rebase_result.error)
+                    logger.warning(f"Rebase failed for {rebase_data.jira_issue}: {state.rebase_result.error}")
+                    await retry(task, state.rebase_result.error)
 
 
 if __name__ == "__main__":

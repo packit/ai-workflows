@@ -180,11 +180,14 @@ async def download_artifacts(
                 async with session.get(url) as response:
                     if response.status < 400:
                         target = Path(Path(urlparse(url).path).name)
-                        if target.suffixes == [".log", ".gz"]:
-                            # decompress logs on-the-fly
-                            (target_path / target.with_suffix("")).write_bytes(gzip.decompress(await response.read()))
-                        else:
-                            (target_path / target).write_bytes(await response.read())
+                        content = await response.read()
+                        if ".log" in target.suffixes:
+                            if content.startswith(b"\x1f\x8b"):
+                                # decompress logs on-the-fly
+                                content = gzip.decompress(content)
+                            if target.suffix == ".gz":
+                                target = target.with_suffix("")
+                        (target_path / target).write_bytes(content)
                     else:
                         return f"Failed to download {url}: {response.status} {response.reason}"
             except asyncio.TimeoutError:

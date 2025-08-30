@@ -9,7 +9,13 @@ from copr.v3 import ProjectProxy, BuildProxy
 from flexmock import flexmock
 
 import copr_tools
-from copr_tools import COPR_USER, COPR_PROJECT_LIFETIME, COPR_BUILD_TIMEOUT, build_package, download_artifacts
+from copr_tools import (
+    COPR_USER,
+    COPR_PROJECT_LIFETIME,
+    COPR_BUILD_TIMEOUT,
+    build_package,
+    download_artifacts,
+)
 
 
 @pytest.mark.parametrize(
@@ -99,6 +105,7 @@ async def test_build_package(build_failure, exclusive_arch):
 @pytest.mark.parametrize(
     "url",
     [
+        "https://test.url/builder-live.log.gz",
         "https://test.url/build.log.gz",
         "https://broken.url/root.log.gz",
         "https://test.url/test-0.1-1.el10.rpm",
@@ -108,17 +115,18 @@ async def test_build_package(build_failure, exclusive_arch):
 async def test_download_artifacts(url, tmp_path):
     artifacts_urls = [url]
     target_path = tmp_path
-    content = b"123"
+    content = b"12345"
+    content_gz = b"\x1f\x8b\x00\x00"
 
     @asynccontextmanager
     async def get(url):
         async def read():
-            return content
+            return content_gz if url.endswith(".log.gz") and not url.endswith("build.log.gz") else content
         yield flexmock(status=404 if "broken" in url else 200, reason="Because", read=read)
 
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)
     flexmock(gzip).should_receive("decompress").and_return(content).times(
-        1 if url.endswith(".log.gz") and not "broken" in url else 0
+        1 if url.endswith(".log.gz") and not url.endswith("build.log.gz") and "broken" not in url else 0
     )
     result = await download_artifacts(artifacts_urls=artifacts_urls, target_path=target_path)
     assert result.startswith("Failed" if "broken" in url else "Successfully")

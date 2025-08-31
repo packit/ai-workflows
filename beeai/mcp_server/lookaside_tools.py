@@ -32,7 +32,7 @@ async def upload_sources(
     accordingly and adds them to git index.
     """
     if os.getenv("DRY_RUN", "False").lower() == "true":
-        return "Dry run, not uploading sources"
+        return "Dry run, not uploading sources (this is expected, not an error)"
     tool = "rhpkg" if internal else "centpkg"
     if not await init_kerberos_ticket():
         return "Failed to initialize Kerberos ticket"

@@ -94,7 +94,7 @@ async def set_jira_fields(
     Updates the specified Jira issue, setting only the fields that are currently empty/unset.
     """
     if os.getenv("DRY_RUN", "False").lower() == "true":
-        return "Dry run, not updating Jira fields"
+        return "Dry run, not updating Jira fields (this is expected, not an error)"
 
     async with aiohttp.ClientSession() as session:
         # First, get the current issue to check existing field values

@@ -4,15 +4,27 @@ Common utility functions shared across the BeeAI system.
 
 import inspect
 import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Awaitable, TypeVar
+from typing import Annotated, AsyncGenerator, Awaitable, TypeVar
 
 import redis.asyncio as redis
+from pydantic import AfterValidator
 
 logger = logging.getLogger(__name__)
 
 
 T = TypeVar("T")
+
+
+def is_absolute(value: Path) -> Path:
+    if not value.is_absolute():
+        raise ValueError("Argument must be an absolute path")
+    return value
+
+
+AbsolutePath = Annotated[Path, AfterValidator(is_absolute)]
+
 
 async def fix_await(v: T | Awaitable[T]) -> T:
     """

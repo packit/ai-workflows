@@ -6,11 +6,14 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
 
+from common.utils import AbsolutePath
 from utils import run_subprocess
 
 
 class GitPreparePackageSourcesInput(BaseModel):
-    unpacked_sources_path: str = Field(description="Absolute path to the unpacked sources which result from `centpkg prep`")
+    unpacked_sources_path: AbsolutePath = Field(
+        description="Absolute path to the unpacked sources which result from `centpkg prep`",
+    )
 
 
 class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOptions, StringToolOutput]):
@@ -30,7 +33,7 @@ class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOption
         self, tool_input: GitPreparePackageSourcesInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
         try:
-            tool_input_path = Path(tool_input.unpacked_sources_path)
+            tool_input_path = tool_input.unpacked_sources_path
             if not tool_input_path.exists():
                 return StringToolOutput(result=f"ERROR: provided path does not exist: {tool_input_path}")
             if not (tool_input_path / ".git").exists():
@@ -70,8 +73,8 @@ class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOption
 
 
 class GitPatchCreationToolInput(BaseModel):
-    repository_path: str = Field(description="Absolute path to the git repository")
-    patch_file_path: str = Field(description="Absolute path where the patch file should be saved")
+    repository_path: AbsolutePath = Field(description="Absolute path to the git repository")
+    patch_file_path: AbsolutePath = Field(description="Absolute path where the patch file should be saved")
 
 
 class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, StringToolOutput]):
@@ -94,7 +97,7 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
     ) -> StringToolOutput:
         try:
             # Ensure the repository path exists and is a git repository
-            tool_input_path = Path(tool_input.repository_path)
+            tool_input_path = tool_input.repository_path
             if not tool_input_path.exists():
                 return StringToolOutput(result=f"ERROR: Repository path does not exist: {tool_input_path}")
 
@@ -148,7 +151,7 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
             cmd = [
                 "git", "format-patch",
                 "--output",
-                tool_input.patch_file_path,
+                str(tool_input.patch_file_path),
                 "HEAD~1..HEAD"
             ]
             exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input_path)
@@ -161,7 +164,7 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
 
 
 class GitLogSearchToolInput(BaseModel):
-    repository_path: str = Field(description="Absolute path to the git repository")
+    repository_path: AbsolutePath = Field(description="Absolute path to the git repository")
     cve_id: str = Field(description="CVE ID to look for in git history")
     jira_issue: str = Field(description="Jira issue to look for in git history")
 
@@ -183,7 +186,7 @@ class GitLogSearchTool(Tool[GitLogSearchToolInput, ToolRunOptions, StringToolOut
     async def _run(
         self, tool_input: GitLogSearchToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
-        repo_path = Path(tool_input.repository_path)
+        repo_path = tool_input.repository_path
         if not repo_path.exists():
             return StringToolOutput(result=f"ERROR: Repository path does not exist: {repo_path}")
 

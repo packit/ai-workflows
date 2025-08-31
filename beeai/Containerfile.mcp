@@ -8,6 +8,7 @@ RUN dnf -y install \
       python3-copr \
       python3-ogr \
       python3-pip \
+      python3-redis \
       python3-requests \
       krb5-libs \
       krb5-workstation \

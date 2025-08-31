@@ -12,6 +12,7 @@ import rpm
 from copr.v3 import BuildProxy, ProjectProxy
 from pydantic import BaseModel, Field
 
+from common.utils import AbsolutePath
 from utils import init_kerberos_ticket
 
 COPR_USER = "jotnar-bot"
@@ -65,7 +66,7 @@ def _branch_to_chroot(dist_git_branch: str) -> str:
 
 
 async def build_package(
-    srpm_path: Annotated[Path, Field(description="Absolute path to SRPM (*.src.rpm) file to build")],
+    srpm_path: Annotated[AbsolutePath, Field(description="Absolute path to SRPM (*.src.rpm) file to build")],
     dist_git_branch: Annotated[str, Field(description="dist-git branch")],
     jira_issue: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
 ) -> BuildResult:
@@ -170,7 +171,7 @@ async def build_package(
 
 async def download_artifacts(
     artifacts_urls: Annotated[list[str], Field(description="URLs to build artifacts (logs and RPM files)")],
-    target_path: Annotated[Path, Field(description="Absolute path where to download the artifacts")],
+    target_path: Annotated[AbsolutePath, Field(description="Absolute path where to download the artifacts")],
 ) -> str:
     """Downloads build artifacts to the specified location."""
     timeout = aiohttp.ClientTimeout(total=30)

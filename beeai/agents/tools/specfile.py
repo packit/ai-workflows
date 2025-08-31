@@ -9,13 +9,15 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
 
+from common.utils import AbsolutePath
+
 
 # version update & release reset ?
 # patch addition ?
 
 
 class AddChangelogEntryToolInput(BaseModel):
-    spec: Path = Field(description="Absolute path to a spec file")
+    spec: AbsolutePath = Field(description="Absolute path to a spec file")
     content: list[str] = Field(
         description="""
         Content of the entry as a list of lines, maximum line length should be 80 characters,
@@ -51,7 +53,7 @@ class AddChangelogEntryTool(Tool[AddChangelogEntryToolInput, ToolRunOptions, Str
 
 
 class BumpReleaseToolInput(BaseModel):
-    spec: Path = Field(description="Absolute path to a spec file")
+    spec: AbsolutePath = Field(description="Absolute path to a spec file")
 
 
 class BumpReleaseTool(Tool[BumpReleaseToolInput, ToolRunOptions, StringToolOutput]):
@@ -79,7 +81,7 @@ class BumpReleaseTool(Tool[BumpReleaseToolInput, ToolRunOptions, StringToolOutpu
 
 
 class SetZStreamReleaseToolInput(BaseModel):
-    spec: Path = Field(description="Absolute path to a spec file")
+    spec: AbsolutePath = Field(description="Absolute path to a spec file")
     latest_ystream_evr: str = Field(description="EVR (Epoch-Version-Release) of the latest Y-Stream build")
 
 

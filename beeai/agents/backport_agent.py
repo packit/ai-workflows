@@ -56,7 +56,6 @@ def get_instructions() -> str:
       3. Backport the <UPSTREAM_FIX> patch:
 
          - Navigate to <UNPACKED_SOURCES> and use `git am --reject <UPSTREAM_FIX>` to apply the patch.
-           Use absolute path to the patch file.
          - Resolve all conflicts and leave the repository in a dirty state. Under any circumstances
            do not run `git am --continue`.
          - Delete all *.rej files.

@@ -5,11 +5,12 @@ from typing import Annotated
 
 from pydantic import Field
 
+from common.utils import AbsolutePath
 from utils import init_kerberos_ticket
 
 
 async def download_sources(
-    dist_git_path: Annotated[Path, Field(description="Absolute path to cloned dist-git repository")],
+    dist_git_path: Annotated[AbsolutePath, Field(description="Absolute path to cloned dist-git repository")],
     internal: Annotated[bool, Field(description="Whether to use internal RHEL dist-git instead of CentOS Stream one")] = False,
 ) -> str:
     """
@@ -23,7 +24,7 @@ async def download_sources(
 
 
 async def upload_sources(
-    dist_git_path: Annotated[Path, Field(description="Absolute path to cloned dist-git repository")],
+    dist_git_path: Annotated[AbsolutePath, Field(description="Absolute path to cloned dist-git repository")],
     new_sources: Annotated[list[str], Field(description="List of new sources (file names) to upload")],
     internal: Annotated[bool, Field(description="Whether to use internal RHEL dist-git instead of CentOS Stream one")] = False,
 ) -> str:

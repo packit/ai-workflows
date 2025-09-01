@@ -1,18 +1,28 @@
 diff --git a/python/beeai_framework/adapters/litellm/chat.py b/python/beeai_framework/adapters/litellm/chat.py
-index b35acde3..8d01b0c9 100644
+index f0c747a3..ae041653 100644
 --- a/python/beeai_framework/adapters/litellm/chat.py
 +++ b/python/beeai_framework/adapters/litellm/chat.py
-@@ -231,6 +231,13 @@ class LiteLLMChatModel(ChatModel, ABC):
+@@ -240,11 +240,11 @@ class LiteLLMChatModel(ChatModel, ABC):
          )
  
      def _transform_output(self, chunk: ModelResponse | ModelResponseStream) -> ChatModelOutput:
-+        if not chunk.choices:
-+            usage = chunk.get("usage")  # type: ignore
-+            return ChatModelOutput(
-+                messages=[],
-+                finish_reason="stop",
-+                usage=ChatModelUsage(**usage.model_dump()) if usage else None,
-+            )
-         choice = chunk.choices[0]
-         finish_reason = choice.finish_reason
+-        choice = chunk.choices[0]
+-        finish_reason = choice.finish_reason
++        choice = chunk.choices[0] if chunk.choices else None
++        finish_reason = choice.finish_reason if choice else None
+         model = chunk.get("model")  # type: ignore
          usage = chunk.get("usage")  # type: ignore
+-        update = choice.delta if isinstance(choice, StreamingChoices) else choice.message
++        update = None if not choice else choice.delta if isinstance(choice, StreamingChoices) else choice.message
+ 
+         cost: ChatModelCost | None = None
+         with contextlib.suppress(Exception):
+@@ -280,7 +280,7 @@ class LiteLLMChatModel(ChatModel, ABC):
+                         else AssistantMessage(update.content, id=chunk.id)  # type: ignore
+                     )
+                 ]
+-                if update.model_dump(exclude_none=True)
++                if update and update.model_dump(exclude_none=True)
+                 else []
+             ),
+             finish_reason=finish_reason,

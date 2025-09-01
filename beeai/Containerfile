@@ -15,11 +15,16 @@ RUN dnf -y install \
       spectool \
     && dnf -y clean all
 
+# https://github.com/i-am-bee/beeai-framework/issues/961
+COPY beeai-gemini-malformed-function-call.patch /tmp
+
 # Install BeeAI Framework and Phoenix
 RUN pip3 install --no-cache-dir \
     beeai-framework[mcp,duckduckgo]==0.1.40 \
     openinference-instrumentation-beeai \
-    arize-phoenix-otel
+    arize-phoenix-otel \
+    && cd /usr/local/lib/python3.13/site-packages \
+    && patch -p2 -i /tmp/beeai-gemini-malformed-function-call.patch
 
 # Create user
 RUN useradd -m -G wheel beeai

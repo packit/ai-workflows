@@ -350,7 +350,9 @@ async def main() -> None:
                 )
                 state.triage_result = OutputSchema.model_validate_json(response.answer.text)
 
-                if state.triage_result.resolution in [Resolution.REBASE, Resolution.BACKPORT]:
+                if state.triage_result.resolution == Resolution.REBASE:
+                    return "verify_rebase_author"
+                elif state.triage_result.resolution == Resolution.BACKPORT:
                     return "determine_target_branch"
                 elif state.triage_result.resolution in [Resolution.CLARIFICATION_NEEDED, Resolution.NO_ACTION]:
                     return "comment_in_jira"
@@ -373,6 +375,34 @@ async def main() -> None:
 
                 return "comment_in_jira"
 
+            async def verify_rebase_author(state):
+                """Verify that the issue author is a Red Hat employee"""
+                logger.info(f"Verifying issue author for {state.jira_issue}")
+
+                is_rh_employee = await run_tool(
+                    "verify_issue_author",
+                    available_tools=gateway_tools,
+                    issue_key=state.jira_issue
+                )
+
+                if not is_rh_employee:
+                    logger.warning(f"Issue author for {state.jira_issue} is not verified as RH employee - ending triage with clarification needed")
+
+                    # override triage result with clarification needed so that it gets reviewed by us
+                    state.triage_result = OutputSchema(
+                        resolution=Resolution.CLARIFICATION_NEEDED,
+                        data=ClarificationNeededData(
+                            findings="The rebase resolution was determined, but author verification failed.",
+                            additional_info_needed="Needs human review, as the issue author is not verified as a Red Hat employee.",
+                            jira_issue=state.jira_issue
+                        )
+                    )
+
+                    return "comment_in_jira"
+
+                logger.info(f"Issue author for {state.jira_issue} verified as RH employee - proceeding with rebase")
+                return "determine_target_branch"
+
             async def comment_in_jira(state):
                 comment_text=state.triage_result.model_dump_json(indent=4)
                 logger.info(f"Result to be put in Jira comment: {comment_text}")
@@ -388,6 +418,7 @@ async def main() -> None:
 
             workflow.add_step("check_cve_eligibility", check_cve_eligibility)
             workflow.add_step("run_triage_analysis", run_triage_analysis)
+            workflow.add_step("verify_rebase_author", verify_rebase_author)
             workflow.add_step("determine_target_branch", determine_target_branch_step)
             workflow.add_step("comment_in_jira", comment_in_jira)
 

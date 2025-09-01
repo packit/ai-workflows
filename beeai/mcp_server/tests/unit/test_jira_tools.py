@@ -6,7 +6,7 @@ import aiohttp
 import pytest
 from flexmock import flexmock
 
-from jira_tools import Severity, PreliminaryTesting, get_jira_details, set_jira_fields, add_jira_comment, change_jira_status, edit_jira_labels
+from jira_tools import Severity, PreliminaryTesting, get_jira_details, set_jira_fields, add_jira_comment, change_jira_status, edit_jira_labels, verify_issue_author
 
 
 @pytest.fixture(autouse=True)
@@ -222,3 +222,46 @@ async def test_edit_jira_labels(labels_to_add, labels_to_remove, expected_update
 
     result = await edit_jira_labels(issue_key, labels_to_add, labels_to_remove)
     assert result.startswith("Successfully")
+
+
+@pytest.mark.parametrize(
+    "user_groups, expected_result",
+    [
+        (["Red Hat Employee", "Other Group"], True),
+        (["Other Group", "Red Hat Employee"], True),
+        (["Some Group", "Other Group"], False),
+        ([], False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_verify_issue_author(user_groups, expected_result):
+    issue_key = "RHEL-12345"
+
+    issue_data = {
+        "fields": {
+            "reporter": {
+                "accountId": "test-account-id-123",
+            }
+        }
+    }
+
+    groups_data = [{"name": group} for group in user_groups]
+
+    @asynccontextmanager
+    async def get(url, params=None, headers=None):
+        if url.endswith(f"rest/api/2/issue/{issue_key}"):
+            async def json():
+                return issue_data
+            yield flexmock(json=json, raise_for_status=lambda: None)
+        elif url.endswith("rest/api/2/user/groups"):
+            assert params.get("accountId") == "test-account-id-123"
+            async def json():
+                return groups_data
+            yield flexmock(json=json, raise_for_status=lambda: None)
+        else:
+            raise AssertionError(f"Unexpected URL: {url}")
+
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)
+
+    result = await verify_issue_author(issue_key)
+    assert result == expected_result

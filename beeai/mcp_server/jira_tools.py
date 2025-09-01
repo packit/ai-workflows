@@ -19,6 +19,8 @@ EMBARGO_CUSTOM_FIELD = "customfield_12324750"
 
 PRIORITY_LABELS = ["compliance-priority", "contract-priority"]
 
+RH_EMPLOYEE_GROUP = "Red Hat Employee"
+
 class Severity(Enum):
     NONE = "None"
     INFORMATIONAL = "Informational"
@@ -156,7 +158,7 @@ async def add_jira_comment(
                 urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/comment"),
                 json={
                     "body": comment,
-                    **({"visibility": {"type": "group", "value": "Red Hat Employee"}} if private else {}),
+                    **({"visibility": {"type": "group", "value": RH_EMPLOYEE_GROUP}} if private else {}),
                 },
                 headers=_get_jira_headers(os.getenv("JIRA_TOKEN")),
             ) as response:
@@ -348,3 +350,44 @@ async def edit_jira_labels(
             return f"Failed to edit labels on {issue_key}: {e}"
 
     return f"Successfully edited labels on {issue_key}."
+
+
+async def verify_issue_author(
+    issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
+) -> bool:
+    """
+    Verifies if the author of the Jira issue is a Red Hat employee by checking their group membership.
+    """
+    headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(
+                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+                headers=headers,
+            ) as response:
+                response.raise_for_status()
+                issue_data = await response.json()
+        except aiohttp.ClientError as e:
+            return False
+
+        reporter = issue_data.get("fields", {}).get("reporter", {})
+        author_account_id = reporter.get("accountId", "")
+
+        if not author_account_id:
+            return False
+
+        try:
+            async with session.get(
+                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/user/groups"),
+                params={"accountId": author_account_id},
+                headers=headers,
+            ) as groups_response:
+                groups_response.raise_for_status()
+                groups_data = await groups_response.json()
+        except aiohttp.ClientError as e:
+            return False
+
+        group_names = [group.get("name", "") for group in groups_data]
+
+        return RH_EMPLOYEE_GROUP in group_names

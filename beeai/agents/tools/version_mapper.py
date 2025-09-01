@@ -80,4 +80,4 @@ class VersionMapperTool(Tool[VersionMapperInput, ToolRunOptions, VersionMapperOu
                         f"Available versions - Y-stream: {y_streams.keys()}, Z-stream: {z_streams.keys()}"
                     )
 
-        return VersionMapperResult(fix_version=fix_version)
+        return VersionMapperOutput(VersionMapperResult(fix_version=fix_version))

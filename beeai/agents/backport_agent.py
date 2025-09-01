@@ -101,7 +101,7 @@ def get_prompt() -> str:
 
 def create_backport_agent(_: list[Tool]) -> RequirementAgent:
     return RequirementAgent(
-        name="Backport",
+        name="BackportAgent",
         llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
         tools=[
             ThinkTool(),
@@ -159,7 +159,7 @@ async def main() -> None:
             backport_agent = create_backport_agent(gateway_tools)
             build_agent = create_build_agent(gateway_tools)
 
-            workflow = Workflow(State)
+            workflow = Workflow(State, name="BackportWorkflow")
 
             async def fork_and_prepare_dist_git(state):
                 state.local_clone, state.update_branch, state.fork_url = await tasks.fork_and_prepare_dist_git(

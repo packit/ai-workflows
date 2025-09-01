@@ -278,7 +278,7 @@ async def main() -> None:
     async def run_workflow(jira_issue):
         async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
             triage_agent = RequirementAgent(
-                name="Triage",
+                name="TriageAgent",
                 llm=ChatModel.from_name(os.getenv("CHAT_MODEL")),
                 tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool(), VersionMapperTool()]
                 + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields"]],
@@ -299,7 +299,7 @@ async def main() -> None:
                 ]
             )
 
-            workflow = Workflow(State)
+            workflow = Workflow(State, name="TriageWorkflow")
 
             async def check_cve_eligibility(state):
                 """Check CVE eligibility for the issue"""

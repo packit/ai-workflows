@@ -100,7 +100,7 @@ def get_prompt() -> str:
 
 def create_rebase_agent(mcp_tools: list[Tool]) -> RequirementAgent:
     return RequirementAgent(
-        name="Rebase",
+        name="RebaseAgent",
         llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
         tools=[
             ThinkTool(),
@@ -152,7 +152,7 @@ async def main() -> None:
             rebase_agent = create_rebase_agent(gateway_tools)
             build_agent = create_build_agent(gateway_tools)
 
-            workflow = Workflow(State)
+            workflow = Workflow(State, name="RebaseWorkflow")
 
             async def fork_and_prepare_dist_git(state):
                 state.local_clone, state.update_branch, state.fork_url = await tasks.fork_and_prepare_dist_git(

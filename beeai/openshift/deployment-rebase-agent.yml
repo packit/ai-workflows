@@ -68,6 +68,11 @@ spec:
             configMapKeyRef:
               key: MCP_GATEWAY_URL
               name: x-beeai-agent-configmap
+        - name: GIT_REPO_BASEPATH
+          valueFrom:
+            configMapKeyRef:
+              key: GIT_REPO_BASEPATH
+              name: x-beeai-agent-configmap
         image: 'beeai-agent:prod'
         imagePullPolicy: Always
         name: rebase-agent

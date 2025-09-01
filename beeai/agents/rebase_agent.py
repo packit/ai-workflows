@@ -101,7 +101,7 @@ def get_prompt() -> str:
 def create_rebase_agent(mcp_tools: list[Tool]) -> RequirementAgent:
     return RequirementAgent(
         name="RebaseAgent",
-        llm=ChatModel.from_name(os.environ["CHAT_MODEL"], allow_parallel_tool_calls=True),
+        llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
         tools=[
             ThinkTool(),
             RunShellCommandTool(),
@@ -114,7 +114,7 @@ def create_rebase_agent(mcp_tools: list[Tool]) -> RequirementAgent:
         ] + [t for t in mcp_tools if t.name == "upload_sources"],
         memory=UnconstrainedMemory(),
         requirements=[
-            ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
+            ConditionalRequirement(ThinkTool, force_at_step=1, force_after=Tool, consecutive_allowed=False),
         ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         role="Red Hat Enterprise Linux developer",

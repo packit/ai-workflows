@@ -102,7 +102,7 @@ def get_prompt() -> str:
 def create_backport_agent(_: list[Tool]) -> RequirementAgent:
     return RequirementAgent(
         name="BackportAgent",
-        llm=ChatModel.from_name(os.environ["CHAT_MODEL"], allow_parallel_tool_calls=True),
+        llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
         tools=[
             ThinkTool(),
             RunShellCommandTool(),
@@ -119,7 +119,7 @@ def create_backport_agent(_: list[Tool]) -> RequirementAgent:
         ],
         memory=UnconstrainedMemory(),
         requirements=[
-            ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
+            ConditionalRequirement(ThinkTool, force_at_step=1, force_after=Tool, consecutive_allowed=False),
         ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         role="Red Hat Enterprise Linux developer",

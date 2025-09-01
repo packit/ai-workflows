@@ -38,7 +38,7 @@ def get_prompt() -> str:
 def create_build_agent(mcp_tools: list[Tool]) -> RequirementAgent:
     return RequirementAgent(
         name="BuildAgent",
-        llm=ChatModel.from_name(os.environ["CHAT_MODEL"], allow_parallel_tool_calls=True),
+        llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
         tools=[
             ThinkTool(),
             RunShellCommandTool(),
@@ -50,7 +50,7 @@ def create_build_agent(mcp_tools: list[Tool]) -> RequirementAgent:
         ] + [t for t in mcp_tools if t.name in ["build_package", "download_artifacts"]],
         memory=UnconstrainedMemory(),
         requirements=[
-            ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
+            ConditionalRequirement(ThinkTool, force_at_step=1, force_after=Tool, consecutive_allowed=False),
             ConditionalRequirement("build_package", min_invocations=1),
             ConditionalRequirement("download_artifacts", only_after="build_package"),
         ],

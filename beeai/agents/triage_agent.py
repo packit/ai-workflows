@@ -279,12 +279,12 @@ async def main() -> None:
         async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
             triage_agent = RequirementAgent(
                 name="TriageAgent",
-                llm=ChatModel.from_name(os.getenv("CHAT_MODEL"), allow_parallel_tool_calls=True),
+                llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
                 tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool(), VersionMapperTool()]
                 + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields"]],
                 memory=UnconstrainedMemory(),
                 requirements=[
-                    ConditionalRequirement(ThinkTool, force_after=Tool, consecutive_allowed=False),
+                    ConditionalRequirement(ThinkTool, force_at_step=1, force_after=Tool, consecutive_allowed=False),
                     ConditionalRequirement("get_jira_details", min_invocations=1),
                     ConditionalRequirement(RunShellCommandTool, only_after="get_jira_details"),
                     ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),

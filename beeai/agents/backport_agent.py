@@ -102,7 +102,7 @@ def get_prompt() -> str:
 def create_backport_agent(_: list[Tool]) -> RequirementAgent:
     return RequirementAgent(
         name="BackportAgent",
-        llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
+        llm=ChatModel.from_name(os.environ["CHAT_MODEL"], allow_parallel_tool_calls=True),
         tools=[
             ThinkTool(),
             RunShellCommandTool(),

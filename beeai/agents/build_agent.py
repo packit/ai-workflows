@@ -38,7 +38,7 @@ def get_prompt() -> str:
 def create_build_agent(mcp_tools: list[Tool]) -> RequirementAgent:
     return RequirementAgent(
         name="BuildAgent",
-        llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
+        llm=ChatModel.from_name(os.environ["CHAT_MODEL"], allow_parallel_tool_calls=True),
         tools=[
             ThinkTool(),
             RunShellCommandTool(),

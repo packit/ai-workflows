@@ -64,8 +64,9 @@ def get_instructions() -> str:
          as an argument to update the patch file.
 
       5. Bump release in the spec file and add a new changelog entry. Add a new `Patch` tag pointing
-         to the <UPSTREAM_FIX> patch file. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any
-         new issues.
+         to the <UPSTREAM_FIX> patch file. Add the new `Patch` tag after all existing `Patch` tags
+         and, if `Patch` tags are numbered, make sure it has the highest number.
+         Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
       6. Run `centpkg --release <DIST_GIT_BRANCH> prep` to see if the new patch applies cleanly.
 

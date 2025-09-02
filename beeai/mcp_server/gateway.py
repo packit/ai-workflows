@@ -24,4 +24,5 @@ mcp = FastMCP(
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    logging.getLogger("FastMCP").handlers = [logging.StreamHandler()]
     mcp.run(transport="sse", host="0.0.0.0", port=int(os.getenv("SSE_PORT", "8000")))

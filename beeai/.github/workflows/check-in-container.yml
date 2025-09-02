@@ -1,0 +1,32 @@
+name: Check in Container
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  check-in-container:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Podman
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y podman
+        podman --version
+
+    - name: Build test image from Containerfile.tests
+      run: |
+        podman build --rm --tag beeai-tests -f Containerfile.tests .
+
+    - name: Run check-in-container target
+      env:
+        CONTAINER_ENGINE: podman
+        TEST_IMAGE: beeai-tests
+      run: |
+        make check-in-container

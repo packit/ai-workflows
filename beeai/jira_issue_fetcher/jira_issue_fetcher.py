@@ -169,6 +169,11 @@ class JiraIssueFetcher:
                 logger.error(f"Error fetching issues: {e}")
                 raise
 
+        # It seems that Jira issue keys are not case-sensitive, convert them
+        # all to upper-case here so that we can use them in sets and direct comparisons
+        for issue in all_issues:
+            issue["key"] = issue["key"].upper()
+
         logger.info(f"Successfully retrieved {len(all_issues)} issues")
         return all_issues
 
@@ -209,13 +214,13 @@ class JiraIssueFetcher:
                                 if task.metadata:
                                     if queue_name == "triage_queue":
                                         schema = TriageInputSchema.model_validate(task.metadata)
-                                        issue_key = schema.issue
+                                        issue_key = schema.issue.upper()
                                     elif queue_name == "rebase_queue":
                                         schema = RebaseInputSchema.model_validate(task.metadata)
-                                        issue_key = schema.jira_issue
+                                        issue_key = schema.jira_issue.upper()
                                     elif queue_name == "backport_queue":
                                         schema = BackportInputSchema.model_validate(task.metadata)
-                                        issue_key = schema.jira_issue
+                                        issue_key = schema.jira_issue.upper()
 
                             # For result/data queues, parse the data directly
                             else:
@@ -232,18 +237,18 @@ class JiraIssueFetcher:
                                         continue
                                     elif queue_name in ["clarification_needed_queue"]:
                                         schema = ClarificationNeededData.model_validate_json(item)
-                                        issue_key = schema.jira_issue
+                                        issue_key = schema.jira_issue.upper()
                                     elif queue_name in ["no_action_list"]:
                                         schema = NoActionData.model_validate_json(item)
-                                        issue_key = schema.jira_issue
+                                        issue_key = schema.jira_issue.upper()
                                     elif queue_name in ["error_list"]:
                                         schema = ErrorData.model_validate_json(item)
-                                        issue_key = schema.jira_issue
+                                        issue_key = schema.jira_issue.upper()
                                 except ValueError:
                                     # Fallback to task parsing for these queues if direct parsing fails
                                     task = Task.model_validate_json(item)
                                     if task.metadata and "issue" in task.metadata:
-                                        issue_key = task.metadata["issue"]
+                                        issue_key = task.metadata["issue"].upper()
 
                             if issue_key:
                                 existing_keys.add(issue_key)

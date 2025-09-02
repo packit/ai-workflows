@@ -1,6 +1,5 @@
 from enum import Enum
 from string import Template
-from common.constants import JiraLabels
 
 BRANCH_PREFIX = "automated-package-update"
 

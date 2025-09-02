@@ -9,7 +9,7 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
 
-from common.utils import AbsolutePath
+from common.validators import AbsolutePath, NonEmptyString
 
 
 # version update & release reset ?
@@ -24,8 +24,8 @@ class AddChangelogEntryToolInput(BaseModel):
         every paragraph should start with "- "
         """
     )
-    author: str | None = Field(description="Author of the entry (change)", default=None)
-    email: str | None = Field(description="E-mail address of the author", default=None)
+    author: NonEmptyString | None = Field(description="Author of the entry (change)", default=None)
+    email: NonEmptyString | None = Field(description="E-mail address of the author", default=None)
 
 
 class AddChangelogEntryTool(Tool[AddChangelogEntryToolInput, ToolRunOptions, StringToolOutput]):
@@ -82,7 +82,7 @@ class BumpReleaseTool(Tool[BumpReleaseToolInput, ToolRunOptions, StringToolOutpu
 
 class SetZStreamReleaseToolInput(BaseModel):
     spec: AbsolutePath = Field(description="Absolute path to a spec file")
-    latest_ystream_evr: str = Field(description="EVR (Epoch-Version-Release) of the latest Y-Stream build")
+    latest_ystream_evr: NonEmptyString = Field(description="EVR (Epoch-Version-Release) of the latest Y-Stream build")
 
 
 class SetZStreamReleaseTool(Tool[SetZStreamReleaseToolInput, ToolRunOptions, StringToolOutput]):

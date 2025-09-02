@@ -6,7 +6,7 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
 
-from common.utils import AbsolutePath
+from common.validators import AbsolutePath
 from utils import run_subprocess
 
 

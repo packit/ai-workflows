@@ -9,7 +9,7 @@ from ogr.factory import get_project
 from ogr.exceptions import OgrException, GitlabAPIException
 from pydantic import Field
 
-from common.utils import AbsolutePath
+from common.validators import AbsolutePath
 
 
 logger = logging.getLogger(__name__)

@@ -5,7 +5,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from common.utils import AbsolutePath
+from common.validators import AbsolutePath
 from utils import init_kerberos_ticket
 
 

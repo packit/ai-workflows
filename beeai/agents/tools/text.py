@@ -1,13 +1,13 @@
 import asyncio
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
 
-from common.utils import AbsolutePath
+from common.validators import AbsolutePath, Range
 
 
 class CreateToolInput(BaseModel):
@@ -40,7 +40,7 @@ class CreateTool(Tool[CreateToolInput, ToolRunOptions, StringToolOutput]):
 
 class ViewToolInput(BaseModel):
     path: AbsolutePath = Field(description="Absolute path to a file or directory to view")
-    view_range: list[int] | None = Field(
+    view_range: Range | None = Field(
         description="""
         List of two integers specifying the start and end line numbers to view.
         Line numbers are 1-indexed, and -1 for the end line means read to the end of the file.
@@ -48,17 +48,6 @@ class ViewToolInput(BaseModel):
         """,
         default=None,
     )
-
-    @field_validator("view_range", mode="after")
-    @classmethod
-    def validate_view_range(cls, view_range: list[int] | None) -> list[int] | None:
-        if view_range is not None:
-            if len(view_range) == 0:
-                # treat `[]` as `None`, some LLMs just don't get the hint
-                return None
-            if len(view_range) != 2:
-                raise ValueError("`view_range` must be a list of two integers")
-        return view_range
 
 
 class ViewTool(Tool[ViewToolInput, ToolRunOptions, StringToolOutput]):

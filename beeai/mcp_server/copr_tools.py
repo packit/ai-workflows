@@ -12,7 +12,7 @@ import rpm
 from copr.v3 import BuildProxy, ProjectProxy
 from pydantic import BaseModel, Field
 
-from common.utils import AbsolutePath
+from common.validators import AbsolutePath
 from utils import init_kerberos_ticket
 
 COPR_USER = "jotnar-bot"

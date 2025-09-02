@@ -62,7 +62,7 @@ async def commit_push_and_open_mr(
     await run_tool(
         "push_to_remote_repository",
         repository=fork_url,
-        clone_path=local_clone,
+        clone_path=str(local_clone),
         branch=update_branch,
         force=True,
         available_tools=available_tools,

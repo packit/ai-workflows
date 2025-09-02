@@ -31,6 +31,16 @@ spec:
             configMapKeyRef:
               key: SSE_PORT
               name: mcp-gateway
+        - name: KEYTAB_FILE
+          valueFrom:
+            configMapKeyRef:
+              key: KEYTAB_FILE
+              name: mcp-gateway
+        - name: KRB5CCNAME
+          valueFrom:
+            configMapKeyRef:
+              key: KRB5CCNAME
+              name: mcp-gateway
 
         - name: GITLAB_TOKEN
           valueFrom:

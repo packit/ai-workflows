@@ -72,9 +72,6 @@ spec:
             secretKeyRef:
               key: GEMINI_API_KEY
               name: beeai-agent-secrets
-
-        - name: DRY_RUN
-          value: "true"
         image: 'beeai-agent:prod'
         imagePullPolicy: Always
         name: backport-agent

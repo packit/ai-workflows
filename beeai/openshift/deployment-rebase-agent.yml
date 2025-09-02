@@ -61,8 +61,6 @@ spec:
             secretKeyRef:
               key: GITLAB_USER
               name: beeai-agent-secrets
-        - name: DRY_RUN
-          value: "true"
         - name: MCP_GATEWAY_URL
           valueFrom:
             configMapKeyRef:

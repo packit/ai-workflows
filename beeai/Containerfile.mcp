@@ -30,8 +30,9 @@ RUN chgrp -R root /home/mcp && chmod -R g+rwX /home/mcp
 RUN mkdir /git-repos && chmod -R o+rwX /git-repos
 
 USER mcp
-WORKDIR /home/mcp
+ENV HOME=/home/mcp
+WORKDIR $HOME
 
-ENV PYTHONPATH=/home/mcp
+ENV PYTHONPATH=$HOME:$PYTHONPATH
 
 CMD ["/bin/bash"]

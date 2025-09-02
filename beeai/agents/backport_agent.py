@@ -87,7 +87,7 @@ def get_prompt() -> str:
       {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
       {{^build_error}}
       Backport upstream fix {{jira_issue}}.patch. Unpacked upstream sources are in {{unpacked_sources}}.
-      Use "- resolves: {{jira_issue}}" as changelog entry content, author being "RHEL Packaging Agent <jotnar@redhat.com>".
+      Use "- resolves: {{jira_issue}}" as changelog entry.
       {{/build_error}}
       {{#build_error}}
       This is a repeated backport, after the previous attempt the generated SRPM failed to build:

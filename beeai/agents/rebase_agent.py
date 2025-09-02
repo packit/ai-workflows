@@ -85,8 +85,7 @@ def get_prompt() -> str:
       {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
       {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
       {{^build_error}}
-      Rebase the package to version {{version}}. Use "- resolves: {{jira_issue}}" as changelog entry content,
-      author being "RHEL Packaging Agent <jotnar@redhat.com>".
+      Rebase the package to version {{version}}. Use "- resolves: {{jira_issue}}" as changelog entry.
       {{/build_error}}
       {{#build_error}}
       This is a repeated rebase, after the previous attempt the generated SRPM failed to build:

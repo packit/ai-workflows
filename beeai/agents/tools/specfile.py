@@ -24,8 +24,6 @@ class AddChangelogEntryToolInput(BaseModel):
         every paragraph should start with "- "
         """
     )
-    author: NonEmptyString | None = Field(description="Author of the entry (change)", default=None)
-    email: NonEmptyString | None = Field(description="E-mail address of the author", default=None)
 
 
 class AddChangelogEntryTool(Tool[AddChangelogEntryToolInput, ToolRunOptions, StringToolOutput]):
@@ -46,7 +44,7 @@ class AddChangelogEntryTool(Tool[AddChangelogEntryToolInput, ToolRunOptions, Str
     ) -> StringToolOutput:
         try:
             with Specfile(tool_input.spec) as spec:
-                spec.add_changelog_entry(tool_input.content, author=tool_input.author, email=tool_input.email)
+                spec.add_changelog_entry(tool_input.content)
         except Exception as e:
             return StringToolOutput(result=f"Failed to add changelog entry: {e}")
         return StringToolOutput(result=f"Successfully added a new changelog entry to {tool_input.spec}")

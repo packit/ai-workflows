@@ -98,8 +98,7 @@ def minimal_spec(tmp_path):
 @pytest.mark.asyncio
 async def test_add_changelog_entry(minimal_spec):
     content = ["- some change", "  second line"]
-    author = "rhel-packaging-agent"
-    email = "rhel-packaging-agent@redhat.com"
+    flexmock(specfile).should_receive("guess_packager").and_return(f"RHEL Packaging Agent <jotnar@redhat.com>")
     flexmock(specfile).should_receive("datetime").and_return(
         flexmock(
             datetime=flexmock(now=lambda _: flexmock(date=lambda: datetime.date(2025, 8, 5))),
@@ -108,13 +107,13 @@ async def test_add_changelog_entry(minimal_spec):
     )
     tool = AddChangelogEntryTool()
     output = await tool.run(
-        input=AddChangelogEntryToolInput(spec=minimal_spec, content=content, author=author, email=email)
+        input=AddChangelogEntryToolInput(spec=minimal_spec, content=content)
     ).middleware(GlobalTrajectoryMiddleware(pretty=True))
     result = output.result
     assert result.startswith("Successfully")
     assert minimal_spec.read_text().splitlines()[-7:-2] == [
         "%changelog",
-        "* Tue Aug 05 2025 rhel-packaging-agent <rhel-packaging-agent@redhat.com> - 0.1-2",
+        "* Tue Aug 05 2025 RHEL Packaging Agent <jotnar@redhat.com> - 0.1-2",
         "- some change",
         "  second line",
         "",

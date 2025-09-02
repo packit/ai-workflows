@@ -2,6 +2,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: valkey
+  annotations:
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"valkey:prod"},"fieldPath":"spec.template.spec.containers[?(@.name==\"valkey\")].image"}]'
 spec:
   progressDeadlineSeconds: 600
   replicas: 1

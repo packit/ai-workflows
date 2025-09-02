@@ -5,6 +5,8 @@ metadata:
   labels:
     app: jira-issue-fetcher
     component: scheduler
+  annotations:
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"jira-issue-fetcher:prod"},"fieldPath":"spec.jobTemplate.spec.template.spec.containers[?(@.name==\"jira-issue-fetcher\")].image"}]'
 spec:
   schedule: "*/30 * * * *"  # Every 30 minutes
   concurrencyPolicy: Forbid  # Prevent overlapping runs

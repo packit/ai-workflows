@@ -53,9 +53,9 @@ async def open_merge_request(
         logger.info("Gitlab API exception: %s", ex)
         if ex.response_code == 409:
             # 409 code means conflict: MR already exists; let's verify
-            prs = await asyncio.to_thread(project.get_pr_list)
+            prs = await asyncio.to_thread(project.parent.get_pr_list)
             for pr in prs:
-                if pr.source_branch == source:
+                if pr.source_branch == source and pr.target_branch == target:
                     logger.info("Reusing existing MR %s", pr)
                     # we have to update the MR description to include the new commit hash
                     # this is an active API call via PR's setter method

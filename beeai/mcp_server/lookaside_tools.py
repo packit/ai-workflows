@@ -5,18 +5,19 @@ from typing import Annotated
 
 from pydantic import Field
 
+from common.utils import is_cs_branch
 from common.validators import AbsolutePath
 from utils import init_kerberos_ticket
 
 
 async def download_sources(
     dist_git_path: Annotated[AbsolutePath, Field(description="Absolute path to cloned dist-git repository")],
-    internal: Annotated[bool, Field(description="Whether to use internal RHEL dist-git instead of CentOS Stream one")] = False,
+    dist_git_branch: Annotated[str, Field(description="dist-git branch")],
 ) -> str:
     """
     Downloads sources from lookaside cache.
     """
-    tool = "rhpkg" if internal else "centpkg"
+    tool = "centpkg" if is_cs_branch(dist_git_branch) else "rhpkg"
     proc = await asyncio.create_subprocess_exec(tool, "sources", cwd=dist_git_path)
     if await proc.wait():
         return "Failed to download sources"
@@ -25,8 +26,8 @@ async def download_sources(
 
 async def upload_sources(
     dist_git_path: Annotated[AbsolutePath, Field(description="Absolute path to cloned dist-git repository")],
+    dist_git_branch: Annotated[str, Field(description="dist-git branch")],
     new_sources: Annotated[list[str], Field(description="List of new sources (file names) to upload")],
-    internal: Annotated[bool, Field(description="Whether to use internal RHEL dist-git instead of CentOS Stream one")] = False,
 ) -> str:
     """
     Uploads the specified sources to lookaside cache. Also updates the `sources` and `.gitignore` files
@@ -34,7 +35,7 @@ async def upload_sources(
     """
     if os.getenv("DRY_RUN", "False").lower() == "true":
         return "Dry run, not uploading sources (this is expected, not an error)"
-    tool = "rhpkg" if internal else "centpkg"
+    tool = "centpkg" if is_cs_branch(dist_git_branch) else "rhpkg"
     if not await init_kerberos_ticket():
         return "Failed to initialize Kerberos ticket"
     proc = await asyncio.create_subprocess_exec(tool, "new-sources", *new_sources, cwd=dist_git_path)

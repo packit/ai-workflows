@@ -4,6 +4,7 @@ Common utility functions shared across the BeeAI system.
 
 import inspect
 import logging
+import re
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Awaitable, TypeVar
 
@@ -56,3 +57,9 @@ async def redis_client(redis_url: str) -> AsyncGenerator[redis.Redis, None]:
     finally:
         await client.aclose()
         logger.debug("Disconnected from Redis")
+
+
+CS_BRANCH_PATTERN = re.compile(r"^c\d+s$")
+
+def is_cs_branch(dist_git_branch: str) -> bool:
+    return CS_BRANCH_PATTERN.match(dist_git_branch) is not None

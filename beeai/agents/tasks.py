@@ -1,13 +1,13 @@
 import itertools
 import logging
 import os
-import re
 import shutil
 from pathlib import Path
 from typing import Tuple
 
 from beeai_framework.tools import Tool
 
+from common.utils import is_cs_branch
 from constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE, JiraLabels
 from utils import check_subprocess, run_tool, mcp_tools
 
@@ -22,7 +22,7 @@ async def fork_and_prepare_dist_git(
 ) -> Tuple[Path, str, str]:
     working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / jira_issue
     working_dir.mkdir(parents=True, exist_ok=True)
-    namespace = "centos-stream" if re.match(r"^c\d+s$", dist_git_branch) else "rhel"
+    namespace = "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
     fork_url = await run_tool(
         "fork_repository",
         repository=f"https://gitlab.com/redhat/{namespace}/rpms/{package}",

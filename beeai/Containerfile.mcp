@@ -29,6 +29,10 @@ COPY common/ /home/mcp/common/
 RUN chgrp -R root /home/mcp && chmod -R g+rwX /home/mcp
 RUN mkdir /git-repos && chmod -R o+rwX /git-repos
 
+# Install RH IT Root CAs for lookaside cache access
+COPY files/Current-IT-Root-CAs.pem /etc/pki/ca-trust/source/anchors/
+RUN update-ca-trust
+
 USER mcp
 ENV HOME=/home/mcp
 WORKDIR $HOME

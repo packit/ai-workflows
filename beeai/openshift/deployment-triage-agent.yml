@@ -22,6 +22,8 @@ spec:
         app: triage-agent
         deployment: triage-agent
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: ip-10-30-34-89.us-east-1.compute.internal
       containers:
       - args:
         - agents/triage_agent.py

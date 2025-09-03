@@ -22,6 +22,8 @@ spec:
         app: mcp-gateway
         deployment: mcp-gateway
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: ip-10-30-34-89.us-east-1.compute.internal
       containers:
       - args:
         - mcp_server/gateway.py

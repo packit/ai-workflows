@@ -71,7 +71,7 @@ async def open_merge_request(
     for attempt in range(5):
         try:
             # First, verify the MR exists before trying to add the label
-            pr = await asyncio.to_thread(project.get_pr, pr.id)
+            pr = await asyncio.to_thread(project.parent.get_pr, pr.id)
             # by default, set this label on a newly created MR so we can inspect it ASAP
             await asyncio.to_thread(pr.add_label, "jotnar_needs_attention")
             break

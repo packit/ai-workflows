@@ -306,6 +306,11 @@ def git_repo(tmp_path):
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
     subprocess.run(["git", "init"], cwd=repo_path, check=True)
+
+    # Configure git user identity for the test repository
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_path, check=True)
+
     # Create a file and commit it
     file_path = repo_path / "file.txt"
     file_path.write_text("Line 1\n")
@@ -327,6 +332,11 @@ async def test_git_patch_creation_tool_success(git_repo, tmp_path):
     new_file = git_repo / "file.txt"
     new_file.write_text("Line 1\nLine 3\n")
     subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+
+    # Ensure git user identity is configured for this commit
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=git_repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=git_repo, check=True)
+
     subprocess.run(["git", "commit", "-m", "Add line 3"], cwd=git_repo, check=True)
 
     patch_file = tmp_path / "patch.patch"

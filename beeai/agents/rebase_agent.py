@@ -26,7 +26,8 @@ import tasks
 from agents.build_agent import create_build_agent, get_prompt as get_build_prompt
 from common.models import BuildInputSchema, BuildOutputSchema, RebaseInputSchema, RebaseOutputSchema, Task
 from common.utils import redis_client, fix_await
-from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES, JiraLabels
+from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
+from common.constants import JiraLabels, RedisQueues
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.specfile import AddChangelogEntryTool
@@ -310,7 +311,7 @@ async def main() -> None:
 
         while True:
             logger.info("Waiting for tasks from rebase_queue (timeout: 30s)...")
-            element = await fix_await(redis.brpop(["rebase_queue"], timeout=30))
+            element = await fix_await(redis.brpop([RedisQueues.REBASE_QUEUE.value], timeout=30))
             if element is None:
                 logger.info("No tasks received, continuing to wait...")
                 continue
@@ -335,7 +336,7 @@ async def main() -> None:
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {rebase_data.jira_issue}"
                     )
-                    await fix_await(redis.lpush("rebase_queue", task.model_dump_json()))
+                    await fix_await(redis.lpush(RedisQueues.REBASE_QUEUE.value, task.model_dump_json()))
                 else:
                     logger.error(
                         f"Task failed after {max_retries} attempts, "
@@ -347,7 +348,7 @@ async def main() -> None:
                         labels_to_remove=[JiraLabels.REBASE_IN_PROGRESS.value],
                         dry_run=dry_run
                     )
-                    await fix_await(redis.lpush("error_list", error))
+                    await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
             try:
                 logger.info(f"Starting rebase processing for {rebase_data.jira_issue}")
@@ -374,7 +375,7 @@ async def main() -> None:
                         labels_to_remove=[JiraLabels.REBASE_IN_PROGRESS.value],
                         dry_run=dry_run
                     )
-                    await fix_await(redis.lpush("completed_rebase_list", state.rebase_result.model_dump_json()))
+                    await fix_await(redis.lpush(RedisQueues.COMPLETED_REBASE_LIST.value, state.rebase_result.model_dump_json()))
                 else:
                     logger.warning(f"Rebase failed for {rebase_data.jira_issue}: {state.rebase_result.error}")
                     await tasks.set_jira_labels(

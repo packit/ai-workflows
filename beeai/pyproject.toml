@@ -1,3 +1,10 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agents*", "common*", "mcp_server*", "jira_issue_fetcher*"]
+
 [project]
 name = "ai-workflows-beeai"
 version = "0.1.0"
@@ -9,13 +16,25 @@ dependencies = [
     "aiofiles>=24.1.0",
     "arize-phoenix-otel>=0.13.0",
     "beeai-framework[mcp,duckduckgo]>=0.1.36",
+    "copr>=1.129",
     "fastmcp>=2.11.3",
-    "flexmock>=0.12.2",
     "ogr>=0.55.0",
     "openinference-instrumentation-beeai>=0.1.8",
-    "pytest>=8.4.1",
-    "pytest-asyncio>=1.1.0",
     "redis>=6.4.0",
     "rpm>=0.4.0",
     "specfile>=0.36.0",
+    "backoff>=2.2.1"
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+    "flexmock>=0.12.2",
+    "coverage>=7.6.0",
+    "pytest-xdist>=3.6.0",
+    "pytest-html>=4.1.1",
+    "httpx>=0.28.0",
 ]

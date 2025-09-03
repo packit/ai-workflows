@@ -25,6 +25,7 @@ from beeai_framework.workflows import Workflow
 
 import tasks
 from agents.build_agent import create_build_agent, get_prompt as get_build_prompt
+from common.config import get_package_instructions
 from common.models import BuildInputSchema, BuildOutputSchema, RebaseInputSchema, RebaseOutputSchema, Task
 from common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES, JiraLabels
@@ -71,6 +72,10 @@ def get_instructions() -> str:
 
       6. Generate a SRPM using `centpkg --release <DIST_GIT_BRANCH> srpm`.
 
+      7. In your output, provide a "files_to_git_add" list containing all files that should be git added for this rebase.
+         This typically includes the updated .spec file and any new/modified/deleted patch files or other files you've changed
+         or added/removed during the rebase. Do not include files that were automatically generated or downloaded by spectool.
+
 
       General instructions:
 
@@ -78,6 +83,8 @@ def get_instructions() -> str:
       - Never change anything in the spec file changelog, you are only allowed to add a single changelog entry.
       - Preserve existing formatting and style conventions in spec files and patch headers.
       - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
+      - If there are package-specific instructions, incorporate them into your work.
+      - If you need to use Fedora package, it is located in https://src.fedoraproject.org/rpms/<PACKAGE>
     """
 
 
@@ -88,6 +95,11 @@ def get_prompt() -> str:
       {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
       {{^build_error}}
       Rebase the package to version {{version}}. Use "- resolves: {{jira_issue}}" as changelog entry.
+      {{#package_instructions}}
+
+      **Package-specific instructions (these are important to follow, incorporate them into your workflow reasonably):**
+      {{.}}
+      {{/package_instructions}}
       {{/build_error}}
       {{#build_error}}
       This is a repeated rebase, after the previous attempt the generated SRPM failed to build:
@@ -184,6 +196,7 @@ async def main() -> None:
                 return "run_rebase_agent"
 
             async def run_rebase_agent(state):
+                package_instructions = await get_package_instructions(state.package, "rebase")
                 response = await rebase_agent.run(
                     prompt=render_prompt(
                         template=get_prompt(),
@@ -194,6 +207,7 @@ async def main() -> None:
                             version=state.version,
                             jira_issue=state.jira_issue,
                             build_error=state.build_error,
+                            package_instructions=package_instructions,
                         ),
                     ),
                     expected_output=RebaseOutputSchema,
@@ -231,9 +245,12 @@ async def main() -> None:
                 return "run_rebase_agent"
 
             async def commit_push_and_open_mr(state):
+                # Use files specified by rebase agent, fallback to *.spec if none specified
+                files_to_git_add = state.rebase_result.files_to_git_add or ["*.spec"]
+
                 state.merge_request_url = await tasks.commit_push_and_open_mr(
                     local_clone=state.local_clone,
-                    files_to_commit="*.spec",
+                    files_to_commit=files_to_git_add,
                     commit_message=(
                         f"Rebase to version {state.version}\n\n"
                         f"Resolves: {state.jira_issue}\n\n"

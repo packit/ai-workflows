@@ -70,6 +70,7 @@ class RebaseInputSchema(BaseModel):
     version: str = Field(description="Version to update to")
     jira_issue: str = Field(description="Jira issue to reference as resolved")
     build_error: str | None = Field(description="Error encountered during package build")
+    package_instructions: str | None = Field(description="Package-specific instructions for rebase")
 
 
 class RebaseOutputSchema(BaseModel):
@@ -77,6 +78,7 @@ class RebaseOutputSchema(BaseModel):
     success: bool = Field(description="Whether the rebase was successfully completed")
     status: str = Field(description="Rebase status")
     srpm_path: Path | None = Field(description="Absolute path to generated SRPM")
+    files_to_git_add: list[str] | None = Field(description="List of files that should be git added and committed")
     error: str | None = Field(description="Specific details about an error")
 
 

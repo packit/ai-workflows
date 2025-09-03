@@ -67,14 +67,20 @@ async def open_merge_request(
             raise
     if not pr:
         return "Failed to open the merge request"
-    # by default, set this label on a newly created MR so we can inspect it ASAP
-    try:
-        # Add a short delay before adding the label to avoid race conditions with MR creation
-        await asyncio.sleep(0.5)
-        await asyncio.to_thread(pr.add_label, "jotnar_needs_attention")
-    except OgrException as ex:
-        logger.error("Unable to set label 'jotnar_needs_attention' on MR %s (%s)", pr, ex)
-        # we should still continue and return the MR URL
+
+    for attempt in range(5):
+        try:
+            # First, verify the MR exists before trying to add the label
+            pr = await asyncio.to_thread(project.get_pr, pr.id)
+            # by default, set this label on a newly created MR so we can inspect it ASAP
+            await asyncio.to_thread(pr.add_label, "jotnar_needs_attention")
+            break
+        except OgrException as ex:
+            logger.info("Failed to add label on attempt %d/5, retrying. Error: %s", attempt + 1, ex)
+            await asyncio.sleep(0.5 * (2 ** attempt))
+    else:
+        logger.error("MR %s does not appear to exist after creation", pr)
+        logger.error("Unable to set label 'jotnar_needs_attention' on the MR")
     return pr.url
 
 

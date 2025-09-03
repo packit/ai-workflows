@@ -13,6 +13,7 @@ from beeai_framework.template import PromptTemplate, PromptTemplateInput
 
 from agents.utils import get_agent_execution_config
 from .supervisor_types import FullIssue, TestingState
+from .tools.read_readme import ReadReadmeTool
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,7 @@ async def analyze_issue(jira_issue: FullIssue) -> OutputSchema:
             allow_parallel_tools_calls=True,
         ),
         memory=UnconstrainedMemory(),
-        tools=[],
+        tools=[ReadReadmeTool()],
     )
 
     async def run(input: InputSchema):

@@ -13,8 +13,7 @@ Three agents process tasks through Redis queues:
 ### Entry Criteria
 
 Issues enter the system automatically via the Jira Issue Fetcher when they meet these criteria:
-- Belongs to the specified filter (e.g., `Jotnar_1000_packages`)
-- Status is "New"
+- `jotnar-project` is assignee of the issue
 - No `jotnar_*` labels other than `jotnar_retry_needed`
 
 ### Queue Transitions and Label Management

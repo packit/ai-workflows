@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 class JiraIssueFetcher:
 
-    DEFAULT_QUERY = 'filter = "Jotnar_1000_packages"'
+    DEFAULT_QUERY = "project=RHEL and assignee = jotnar-project"
     MAX_RESULTS_PER_PAGE = 500  # Optimize for fewer, more expensive calls
     RATE_LIMIT_CALLS_PER_SECOND = 5
     RATE_LIMIT_DELAY = 1.0 / RATE_LIMIT_CALLS_PER_SECOND  # 0.2 seconds between calls

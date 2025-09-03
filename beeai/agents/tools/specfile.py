@@ -7,13 +7,9 @@ from specfile.utils import EVR
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
+from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 
 from common.validators import AbsolutePath, NonEmptyString
-
-
-# version update & release reset ?
-# patch addition ?
 
 
 class AddChangelogEntryToolInput(BaseModel):
@@ -46,7 +42,7 @@ class AddChangelogEntryTool(Tool[AddChangelogEntryToolInput, ToolRunOptions, Str
             with Specfile(tool_input.spec) as spec:
                 spec.add_changelog_entry(tool_input.content)
         except Exception as e:
-            return StringToolOutput(result=f"Failed to add changelog entry: {e}")
+            raise ToolError(f"Failed to add changelog entry: {e}") from e
         return StringToolOutput(result=f"Successfully added a new changelog entry to {tool_input.spec}")
 
 
@@ -74,7 +70,7 @@ class BumpReleaseTool(Tool[BumpReleaseToolInput, ToolRunOptions, StringToolOutpu
             with Specfile(tool_input.spec) as spec:
                 spec.bump_release()
         except Exception as e:
-            return StringToolOutput(result=f"Failed to bump release: {e}")
+            raise ToolError(f"Failed to bump release: {e}") from e
         return StringToolOutput(result=f"Successfully bumped release in {tool_input.spec}")
 
 
@@ -108,5 +104,5 @@ class SetZStreamReleaseTool(Tool[SetZStreamReleaseToolInput, ToolRunOptions, Str
                 base_raw_release = base_release.rsplit(".el", maxsplit=1)[0]
                 spec.raw_release = base_raw_release + "%{?dist}.%{autorelease -n}"
         except Exception as e:
-            return StringToolOutput(result=f"Failed to set Z-Stream release: {e}")
+            raise ToolError(f"Failed to set Z-Stream release: {e}") from e
         return StringToolOutput(result=f"Successfully set Z-Stream release in {tool_input.spec}")

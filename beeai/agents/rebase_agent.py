@@ -135,7 +135,7 @@ async def main() -> None:
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
 
-    run_shell_command_options = {}
+    run_shell_command_options = {"working_directory": None}
 
     class State(BaseModel):
         jira_issue: str
@@ -151,6 +151,8 @@ async def main() -> None:
         merge_request_url: str | None = Field(default=None)
 
     async def run_workflow(package, dist_git_branch, version, jira_issue):
+        run_shell_command_options["working_directory"] = None
+
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
             rebase_agent = create_rebase_agent(gateway_tools, run_shell_command_options)
             build_agent = create_build_agent(gateway_tools, run_shell_command_options)

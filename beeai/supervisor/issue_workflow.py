@@ -1,12 +1,14 @@
 import logging
 
 from .supervisor_types import (
+    FullIssue,
     Issue,
     IssueStatus,
     PreliminaryTesting,
     TestingState,
     WorkflowResult,
 )
+from .jira_utils import get_issue
 from .testing_analyst import analyze_issue
 
 
@@ -37,7 +39,7 @@ def resolve_flag_attention(issue: Issue, why: str):
     return WorkflowResult(status=why, reschedule_in=-1)
 
 
-async def run_issue_workflow(issue: Issue) -> WorkflowResult:
+async def run_issue_workflow(issue: FullIssue) -> WorkflowResult:
     """
     Runs the workflow for a single issue.
     """
@@ -56,7 +58,7 @@ async def run_issue_workflow(issue: Issue) -> WorkflowResult:
             "Preliminary testing has passed, moving to Integration",
         )
     elif issue.status == IssueStatus.INTEGRATION:
-        testing_analysis = await analyze_issue(issue.key)
+        testing_analysis = await analyze_issue(issue)
         if testing_analysis.state == TestingState.NOT_RUNNING:
             return resolve_flag_attention(
                 issue,

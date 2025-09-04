@@ -13,15 +13,15 @@ from beeai_framework.template import PromptTemplate, PromptTemplateInput
 from beeai_framework.tools import Tool
 from beeai_framework.tools.think import ThinkTool
 
-from agents.utils import get_agent_execution_config, mcp_tools
-from .supervisor_types import TestingState
+from agents.utils import get_agent_execution_config
+from .supervisor_types import FullIssue, TestingState
 
 
 logger = logging.getLogger(__name__)
 
 
 class InputSchema(BaseModel):
-    issue: str = Field(description="Jira issue identifier to analyze (e.g. RHEL-12345)")
+    issue: FullIssue = Field(description="Details of JIRA issue to analyze")
 
 
 class OutputSchema(BaseModel):
@@ -56,33 +56,31 @@ def render_prompt(input: InputSchema) -> str:
 
 
 async def analyze_issue(jira_issue) -> OutputSchema:
-    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-        agent = RequirementAgent(
-            llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
-            tools=[ThinkTool()]
-            + [t for t in gateway_tools if t.name == "get_jira_details"],
-            memory=UnconstrainedMemory(),
-            requirements=[
-                ConditionalRequirement(
-                    ThinkTool, force_after=Tool, consecutive_allowed=False
-                ),
-                ConditionalRequirement("get_jira_details", min_invocations=1),
-            ],
-            # middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
-            role="Red Hat Enterprise Linux developer",
-            instructions=[
-                "Use the `think` tool to reason through complex decisions and document your approach.",
-            ],
+    agent = RequirementAgent(
+        llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
+        tools=[ThinkTool()],
+        memory=UnconstrainedMemory(),
+        requirements=[
+            ConditionalRequirement(
+                ThinkTool, force_after=Tool, consecutive_allowed=False
+            ),
+            ConditionalRequirement("get_jira_details", min_invocations=1),
+        ],
+        # middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
+        role="Red Hat Enterprise Linux developer",
+        instructions=[
+            "Use the `think` tool to reason through complex decisions and document your approach.",
+        ],
+    )
+
+    async def run(input):
+        response = await agent.run(
+            prompt=render_prompt(input),
+            expected_output=OutputSchema,
+            execution=get_agent_execution_config(),
         )
+        return OutputSchema.model_validate_json(response.answer.text)
 
-        async def run(input):
-            response = await agent.run(
-                prompt=render_prompt(input),
-                expected_output=OutputSchema,
-                execution=get_agent_execution_config(),
-            )
-            return OutputSchema.model_validate_json(response.answer.text)
-
-        output = await run(InputSchema(issue=jira_issue))
-        logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")
-        return output
+    output = await run(InputSchema(issue=jira_issue))
+    logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")
+    return output

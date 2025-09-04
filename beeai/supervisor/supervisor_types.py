@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import StrEnum
 from typing import Optional
 from pydantic import BaseModel, Field
@@ -83,6 +84,17 @@ class Issue(BaseModel):
     fixed_in_build: str | None = None  # RHEL only
     test_coverage: list[TestCoverage] | None = None  # RHEL only
     preliminary_testing: PreliminaryTesting | None = None  # RHEL only
+
+
+class IssueComment(BaseModel):
+    authorName: str
+    authorEmail: str
+    created: datetime
+    body: str
+
+
+class FullIssue(Issue):
+    comments: list[IssueComment]
 
 
 class TestingState(StrEnum):

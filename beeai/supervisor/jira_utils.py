@@ -1,13 +1,16 @@
+from datetime import datetime
 from enum import Enum
 from functools import cache
 import logging
 import os
-from typing import Any, Collection, Generator, Type, TypeVar
+from typing import Any, Collection, Generator, Literal, Type, TypeVar, overload
 import requests
 from urllib.parse import quote as urlquote
 
 from .supervisor_types import (
+    FullIssue,
     Issue,
+    IssueComment,
     IssueStatus,
     TestCoverage,
     PreliminaryTesting,
@@ -59,7 +62,15 @@ AND 'Fixed in Build' is not EMPTY
 """
 
 
-def decode_issue(issue_data: Any) -> Issue:
+@overload
+def decode_issue(issue_data: Any, full: Literal[False] = False) -> Issue: ...
+
+
+@overload
+def decode_issue(issue_data: Any, full: Literal[True]) -> FullIssue: ...
+
+
+def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
     custom_fields = get_custom_fields()
 
     _E = TypeVar("_E", bound=Enum)
@@ -87,7 +98,7 @@ def decode_issue(issue_data: Any) -> Issue:
     ]
     errata_link = custom("Errata Link")
 
-    return Issue(
+    issue = Issue(
         key=key,
         url=f"https://issues.redhat.com/browse/{urlquote(key)}",
         summary=issue_data["fields"]["summary"],
@@ -100,14 +111,30 @@ def decode_issue(issue_data: Any) -> Issue:
         preliminary_testing=custom_enum(PreliminaryTesting, "Preliminary Testing"),
     )
 
+    if full:
+        return FullIssue(
+            **issue.__dict__,
+            comments=[
+                IssueComment(
+                    authorName=c["author"]["displayName"],
+                    authorEmail=c["author"]["emailAddress"],
+                    created=datetime.fromisoformat(c["created"]),
+                    body=c["body"],
+                )
+                for c in issue_data["fields"]["comment"]["comments"]
+            ],
+        )
+    else:
+        return issue
 
-def _fields():
+
+def _fields(full: bool):
     # Passing in the specific list of fields improves performance
     # significantly - in a test case, it reduced the time to fetch
     # 145 issues from 16s to 0.7s.
 
     custom_fields = get_custom_fields()
-    return [
+    base_fields = [
         "components",
         "summary",
         "status",
@@ -117,18 +144,42 @@ def _fields():
         custom_fields["Test Coverage"],
         custom_fields["Preliminary Testing"],
     ]
+    if full:
+        return base_fields + ["comment"]
+    else:
+        return base_fields
 
 
-def get_issue(issue_key) -> Issue:
-    url = f"https://issues.redhat.com/rest/api/2/issue/{urlquote(issue_key)}?fields={','.join(_fields())}"
+@overload
+def get_issue(issue_key: str, full: Literal[False] = False) -> Issue: ...
+
+
+@overload
+def get_issue(issue_key: str, full: Literal[True]) -> FullIssue: ...
+
+
+def get_issue(issue_key: str, full: bool = False) -> Issue | FullIssue:
+    url = f"https://issues.redhat.com/rest/api/2/issue/{urlquote(issue_key)}?fields={','.join(_fields(full))}"
     response = requests.get(url, headers=jira_headers())
     response.raise_for_status()
     issue_data = response.json()
 
-    return decode_issue(issue_data)
+    return decode_issue(issue_data, full)
 
 
-def get_current_issues() -> Generator[Issue, None, None]:
+@overload
+def get_current_issues(
+    full: Literal[False] = False,
+) -> Generator[Issue, None, None]: ...
+
+
+@overload
+def get_current_issues(full: Literal[True]) -> Generator[FullIssue, None, None]: ...
+
+
+def get_current_issues(
+    full: bool = False,
+) -> Generator[Issue, None, None] | Generator[FullIssue, None, None]:
     start_at = 0
     max_results = 1000
     while True:
@@ -136,7 +187,7 @@ def get_current_issues() -> Generator[Issue, None, None]:
             "jql": CURRENT_ISSUES_JQL,
             "startAt": start_at,
             "maxResults": max_results,
-            "fields": _fields(),
+            "fields": _fields(full),
         }
 
         url = "https://issues.redhat.com/rest/api/2/search"
@@ -146,7 +197,7 @@ def get_current_issues() -> Generator[Issue, None, None]:
         logger.debug("Got %d issues", len(response_data["issues"]))
 
         for issue_data in response_data["issues"]:
-            yield decode_issue(issue_data)
+            yield decode_issue(issue_data, full)
 
         start_at += max_results
         if response_data["total"] <= start_at:
@@ -171,3 +222,7 @@ def get_issues_statuses(issue_keys: Collection[str]) -> dict[str, IssueStatus]:
         issue_data["key"]: IssueStatus(issue_data["fields"]["status"]["name"])
         for issue_data in response_data["issues"]
     }
+
+
+if __name__ == "__main__":
+    print(get_issue(os.environ["JIRA_ISSUE"], full=True).model_dump_json())

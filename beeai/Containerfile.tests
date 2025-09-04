@@ -13,6 +13,9 @@ RUN dnf -y install \
       python3-specfile \
     && dnf clean all
 
+RUN git config --global user.email "jotnar-tests@example.com" \
+      && git config --global user.name "Jotnar Tests"
+
 # Install BeeAI Framework and FastMCP
 RUN pip3 install --no-cache-dir beeai-framework fastmcp redis
 

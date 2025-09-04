@@ -7,13 +7,17 @@ CONTAINER_ENGINE ?= $(shell command -v podman 2>/dev/null || echo "docker")
 build-test-image:
 	$(CONTAINER_ENGINE) build --rm --tag $(TEST_IMAGE) -f Containerfile.tests
 
-.PHONY: check
-check:
+.PHONY: check check-agents check-mcp-server check-in-container check-agents-in-container check-mcp-server-in-container
+check-agents:
 	cd ./agents && \
-	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET) || true
+	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+check-mcp-server:
 	cd ./mcp_server && \
 	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+check: check-agents check-mcp-server
 
-.PHONY: check-in-container
-check-in-container:
-	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE) make -f Makefile.tests check
+check-agents-in-container:
+	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE) make -f Makefile.tests check-agents
+check-mcp-server-in-container:
+	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE) make -f Makefile.tests check-mcp-server
+check-in-container: check-agents-in-container check-mcp-server-in-container

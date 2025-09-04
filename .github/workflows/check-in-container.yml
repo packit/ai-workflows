@@ -10,24 +10,26 @@ on:
 jobs:
   check-in-container:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: check-agents-in-container
+          - target: check-mcp-server-in-container
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
     - name: Set up Podman
       run: |
         sudo apt-get update
         sudo apt-get install -y podman
         podman --version
-
     - name: Build test image from Containerfile.tests
       run: |
         podman build --rm --tag beeai-tests -f Containerfile.tests ./beeai
-
-    - name: Run check-in-container target
+    - name: Run ${{ matrix.target }} target
       env:
         CONTAINER_ENGINE: podman
         TEST_IMAGE: beeai-tests
       working-directory: beeai/
-      run: |
-        make check-in-container
+      run: make ${{ matrix.target }}

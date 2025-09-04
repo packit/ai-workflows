@@ -128,6 +128,10 @@ clean:
 build-test-image:
 	$(MAKE) -f Makefile.tests build-test-image
 
-.PHONY: check-in-container
+.PHONY: check-in-container check-agents-in-container check-mcp-server-in-container
 check-in-container:
 	$(MAKE) -f Makefile.tests check-in-container
+check-agents-in-container:
+	$(MAKE) -f Makefile.tests check-agents-in-container
+check-mcp-server-in-container:
+	$(MAKE) -f Makefile.tests check-mcp-server-in-container

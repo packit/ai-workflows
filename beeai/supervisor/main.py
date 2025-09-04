@@ -69,7 +69,7 @@ def collect(
 async def execute_once(queue: TaskQueue):
     task = await queue.wait_first_ready_task()
     if task.task_type == TaskType.PROCESS_ISSUE:
-        issue = get_issue(task.task_data)
+        issue = get_issue(task.task_data, full=True)
         result = await run_issue_workflow(issue)
         if result.reschedule_in >= 0:
             await queue.schedule_tasks([task], delay=result.reschedule_in)
@@ -119,7 +119,7 @@ def execute(repeat: bool = typer.Option(True)):
 
 
 async def do_process_issue(key: str):
-    issue = get_issue(key)
+    issue = get_issue(key, full=True)
     result = await run_issue_workflow(issue)
     logger.info(
         "Issue %s processed, status=%s, reschedule_in=%s",

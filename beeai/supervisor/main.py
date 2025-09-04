@@ -112,7 +112,7 @@ def collect(
 async def process_once(queue: WorkQueue):
     work_item = await queue.wait_first_ready_work_item()
     if work_item.item_type == WorkItemType.PROCESS_ISSUE:
-        issue = get_issue(work_item.item_data)
+        issue = get_issue(work_item.item_data, full=True)
         result = await IssueHandler(issue, dry_run=app_state.dry_run).run()
         if result.reschedule_in >= 0:
             await queue.schedule_work_items([work_item], delay=result.reschedule_in)
@@ -164,7 +164,7 @@ def process(repeat: bool = typer.Option(True)):
 
 
 async def do_process_issue(key: str):
-    issue = get_issue(key)
+    issue = get_issue(key, full=True)
     result = await IssueHandler(issue, dry_run=app_state.dry_run).run()
     logger.info(
         "Issue %s processed, status=%s, reschedule_in=%s",

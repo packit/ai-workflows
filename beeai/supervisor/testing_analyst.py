@@ -1,27 +1,24 @@
+import asyncio
+from functools import cache
 import logging
 import os
 
+import aiohttp
 from pydantic import BaseModel, Field
 
-from beeai_framework.agents.experimental import RequirementAgent
-from beeai_framework.agents.experimental.requirements.conditional import (
-    ConditionalRequirement,
-)
+from beeai_framework.agents.tool_calling import ToolCallingAgent
 from beeai_framework.backend import ChatModel
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.template import PromptTemplate, PromptTemplateInput
-from beeai_framework.tools import Tool
-from beeai_framework.tools.think import ThinkTool
 
-from agents.utils import get_agent_execution_config, mcp_tools
-from .supervisor_types import TestingState
-
+from agents.utils import get_agent_execution_config
+from .supervisor_types import FullIssue, TestingState
 
 logger = logging.getLogger(__name__)
 
 
 class InputSchema(BaseModel):
-    issue: str = Field(description="Jira issue identifier to analyze (e.g. RHEL-12345)")
+    issue: FullIssue = Field(description="Details of JIRA issue to analyze")
 
 
 class OutputSchema(BaseModel):
@@ -34,55 +31,60 @@ def render_prompt(input: InputSchema) -> str:
       You are an agent that analyzes a RHEL JIRA issue with a fix attached and determines
       the state and what needs to be done.
 
-      **Output Format**
+      JIRA_ISSUE_DATA: {{ issue }}
 
-      Your output must strictly follow the format below.
+      Call the final_answer tool passing in the state and a comment as follows.
+      The comment should use JIRA comment syntax.
 
-      JIRA_ISSUE: {{ issue }}
-      STATE: tests-not-running | tests-pending | tests-running | tests-failed | tests-passed
+      If the tests need to be started manually:
+         state: tests-not-running
+         comment: [explain what needs to be done to start tests]
 
-      If STATE is tests-not-running:
-          COMMENT: [explain what needs to be done to start tests]
+      If the tests are complete and failed:
+         state: tests-failed:
+         comment: [list failed tests with URLs.t]
 
-      If STATE is tests-failed:
-          COMMENT: [list failed tests with URLs. Use the JIRA comment format]
+      If the tests are complete and passed:
+         state: tests-passed:
+         comment: [Give a brief summary of what was tested with a link to the result.]
 
-      If STATE is tests-passed:
-          COMMENT: [Give a brief summary of what was tested with a link to the result. Use the JIRA comment format]
+      If the tests will be started automatically without user intervention, but are not yet running::
+         state: tests-pending
+         commnet: [Provide a brief description of what tests are expected to run and where the results will be]
+
+      If the tests are currently running:
+         state: tests-running
+         comment: [Provide a brief description of what tests are running and where the results will be]
     """
     return PromptTemplate(
         PromptTemplateInput(schema=InputSchema, template=template)
     ).render(input)
 
 
-async def analyze_issue(jira_issue) -> OutputSchema:
-    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-        agent = RequirementAgent(
-            llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
-            tools=[ThinkTool()]
-            + [t for t in gateway_tools if t.name == "get_jira_details"],
-            memory=UnconstrainedMemory(),
-            requirements=[
-                ConditionalRequirement(
-                    ThinkTool, force_after=Tool, consecutive_allowed=False
-                ),
-                ConditionalRequirement("get_jira_details", min_invocations=1),
-            ],
-            # middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
-            role="Red Hat Enterprise Linux developer",
-            instructions=[
-                "Use the `think` tool to reason through complex decisions and document your approach.",
-            ],
+async def analyze_issue(jira_issue: FullIssue) -> OutputSchema:
+    agent = ToolCallingAgent(
+        llm=ChatModel.from_name(
+            os.environ["CHAT_MODEL"],
+            allow_parallel_tools_calls=True,
+        ),
+        memory=UnconstrainedMemory(),
+        tools=[],
+    )
+
+    async def run(input: InputSchema):
+        response = await agent.run(
+            render_prompt(input),
+            expected_output=OutputSchema,
+            **get_agent_execution_config(),  # type: ignore
         )
+        if response.state.result is None:
+            raise ValueError("Agent did not return a result")
+        return OutputSchema.model_validate_json(response.state.result.text)
 
-        async def run(input):
-            response = await agent.run(
-                render_prompt(input),
-                expected_output=OutputSchema,
-                **get_agent_execution_config(),  # type: ignore
-            )
-            return OutputSchema.model_validate_json(response.answer.text)
-
-        output = await run(InputSchema(issue=jira_issue))
-        logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")
-        return output
+    output = await run(
+        InputSchema(
+            issue=jira_issue,
+        )
+    )
+    logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")
+    return output

@@ -50,8 +50,6 @@ x-beeai-agent-c10s: &beeai-agent-c10s
 
 x-supervisor: &supervisor
   depends_on:
-    - mcp-atlassian
-    - mcp-gateway
     - valkey
     - phoenix
   image: beeai-agent
@@ -59,8 +57,6 @@ x-supervisor: &supervisor
     context: .
     dockerfile: Containerfile.c10s
   environment:
-    - MCP_JIRA_URL=http://mcp-atlassian:9000/sse
-    - MCP_GATEWAY_URL=http://mcp-gateway:8000/sse
     - REDIS_URL=redis://valkey:6379/0
     - COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces
     - GIT_REPO_BASEPATH=/git-repos

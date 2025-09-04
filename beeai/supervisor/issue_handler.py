@@ -2,7 +2,7 @@ import logging
 
 from .work_item_handler import WorkItemHandler
 from .supervisor_types import (
-    Issue,
+    FullIssue,
     IssueStatus,
     PreliminaryTesting,
     TestingState,
@@ -20,7 +20,7 @@ class IssueHandler(WorkItemHandler):
     This includes changing the issue status, adding comments, and adding labels.
     """
 
-    def __init__(self, issue: Issue, *, dry_run: bool):
+    def __init__(self, issue: FullIssue, *, dry_run: bool):
         super().__init__(dry_run=dry_run)
         self.issue = issue
 
@@ -67,7 +67,7 @@ class IssueHandler(WorkItemHandler):
                 "Preliminary testing has passed, moving to Integration",
             )
         elif issue.status == IssueStatus.INTEGRATION:
-            testing_analysis = await analyze_issue(issue.key)
+            testing_analysis = await analyze_issue(issue)
             if testing_analysis.state == TestingState.NOT_RUNNING:
                 return self.resolve_flag_attention(
                     testing_analysis.comment

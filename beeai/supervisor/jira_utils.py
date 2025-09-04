@@ -52,6 +52,7 @@ def jira_headers() -> dict[str, str]:
 def get_custom_fields() -> dict[str, str]:
     URL = "https://issues.redhat.com/rest/api/2/field"
     response = requests.get(URL, headers=jira_headers())
+    response.raise_for_status()
     return {field["name"]: field["id"] for field in response.json()}
 
 

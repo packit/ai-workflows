@@ -65,6 +65,7 @@ class Task(BaseModel):
 class RebaseInputSchema(BaseModel):
     """Input schema for the rebase agent."""
     local_clone: Path = Field(description="Path to the local clone of forked dist-git repository")
+    fedora_clone: Path | None = Field(description="Path to the local clone of corresponding Fedora repository (rawhide branch), None if clone failed")
     package: str = Field(description="Package to update")
     dist_git_branch: str = Field(description="dist-git branch to update")
     version: str = Field(description="Version to update to")

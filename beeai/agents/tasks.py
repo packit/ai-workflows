@@ -19,7 +19,8 @@ async def fork_and_prepare_dist_git(
     package: str,
     dist_git_branch: str,
     available_tools: list[Tool],
-) -> Tuple[Path, str, str]:
+    with_fedora: bool = False,
+) -> Tuple[Path, str, str, Path | None]:
     working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / jira_issue
     working_dir.mkdir(parents=True, exist_ok=True)
     namespace = "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
@@ -36,7 +37,20 @@ async def fork_and_prepare_dist_git(
     )
     update_branch = f"{BRANCH_PREFIX}-{jira_issue}"
     await check_subprocess(["git", "checkout", "-B", update_branch], cwd=local_clone)
-    return local_clone, update_branch, fork_url
+    fedora_clone = None
+    if with_fedora:
+        try:
+            fedora_clone = working_dir / f"{package}-fedora"
+            shutil.rmtree(fedora_clone, ignore_errors=True)
+            await check_subprocess(
+                ["git", "clone", "--single-branch", "--branch", "rawhide", f"https://src.fedoraproject.org/rpms/{package}", f"{package}-fedora"],
+                cwd=working_dir,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to clone Fedora repository for {package}: {e}")
+            fedora_clone = None
+
+    return local_clone, update_branch, fork_url, fedora_clone
 
 
 async def commit_push_and_open_mr(

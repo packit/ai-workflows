@@ -84,7 +84,6 @@ def get_instructions() -> str:
       - Preserve existing formatting and style conventions in spec files and patch headers.
       - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
       - If there are package-specific instructions, incorporate them into your work.
-      - If you need to use Fedora package, it is located in https://src.fedoraproject.org/rpms/<PACKAGE>
     """
 
 
@@ -93,6 +92,12 @@ def get_prompt() -> str:
       Your working directory is {{local_clone}}, a clone of dist-git repository of package {{package}}.
       {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
       {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
+
+      {{#fedora_clone}}
+      Additionally, you have access to the corresponding Fedora repository (rawhide branch) at {{.}}.
+      This can be used as a reference for comparing package versions, spec files, patches, and other packaging details when explicitly instructed to do so.
+      {{/fedora_clone}}
+
       {{^build_error}}
       Rebase the package to version {{version}}. Use "- resolves: {{jira_issue}}" as changelog entry.
       {{#package_instructions}}
@@ -155,6 +160,7 @@ async def main() -> None:
         dist_git_branch: str
         version: str
         local_clone: Path | None = Field(default=None)
+        fedora_clone: Path | None = Field(default=None)
         update_branch: str | None = Field(default=None)
         fork_url: str | None = Field(default=None)
         attempts_remaining: int = Field(default=max_build_attempts)
@@ -186,11 +192,12 @@ async def main() -> None:
                 return "fork_and_prepare_dist_git"
 
             async def fork_and_prepare_dist_git(state):
-                state.local_clone, state.update_branch, state.fork_url = await tasks.fork_and_prepare_dist_git(
+                state.local_clone, state.update_branch, state.fork_url, state.fedora_clone = await tasks.fork_and_prepare_dist_git(
                     jira_issue=state.jira_issue,
                     package=state.package,
                     dist_git_branch=state.dist_git_branch,
                     available_tools=gateway_tools,
+                    with_fedora=True,
                 )
                 run_shell_command_options["working_directory"] = state.local_clone
                 return "run_rebase_agent"
@@ -202,6 +209,7 @@ async def main() -> None:
                         template=get_prompt(),
                         input=RebaseInputSchema(
                             local_clone=state.local_clone,
+                            fedora_clone=state.fedora_clone,
                             package=state.package,
                             dist_git_branch=state.dist_git_branch,
                             version=state.version,

@@ -183,7 +183,7 @@ async def main() -> None:
                 return "fork_and_prepare_dist_git"
 
             async def fork_and_prepare_dist_git(state):
-                state.local_clone, state.update_branch, state.fork_url = await tasks.fork_and_prepare_dist_git(
+                state.local_clone, state.update_branch, state.fork_url, _ = await tasks.fork_and_prepare_dist_git(
                     jira_issue=state.jira_issue,
                     package=state.package,
                     dist_git_branch=state.dist_git_branch,

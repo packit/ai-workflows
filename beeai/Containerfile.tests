@@ -14,6 +14,6 @@ RUN dnf -y install \
     && dnf clean all
 
 # Install BeeAI Framework and FastMCP
-RUN pip3 install --no-cache-dir beeai-framework fastmcp
+RUN pip3 install --no-cache-dir beeai-framework fastmcp redis
 
 WORKDIR /src

@@ -1,4 +1,4 @@
-name: Check in Container
+name: Check BeeAI agents in container
 
 on:
   push:
@@ -22,11 +22,12 @@ jobs:
 
     - name: Build test image from Containerfile.tests
       run: |
-        podman build --rm --tag beeai-tests -f Containerfile.tests .
+        podman build --rm --tag beeai-tests -f Containerfile.tests ./beeai
 
     - name: Run check-in-container target
       env:
         CONTAINER_ENGINE: podman
         TEST_IMAGE: beeai-tests
+      working-directory: beeai/
       run: |
         make check-in-container

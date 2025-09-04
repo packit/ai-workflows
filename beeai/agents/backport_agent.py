@@ -5,6 +5,7 @@ import os
 import sys
 import traceback
 from pathlib import Path
+from typing import Any
 
 import aiohttp
 from pydantic import BaseModel, Field
@@ -78,6 +79,7 @@ def get_instructions() -> str:
       - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
       - Never change anything in the spec file changelog, you are only allowed to add a single changelog entry.
       - Preserve existing formatting and style conventions in spec files and patch headers.
+      - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
     """
 
 
@@ -100,13 +102,13 @@ def get_prompt() -> str:
     """
 
 
-def create_backport_agent(_: list[Tool]) -> RequirementAgent:
+def create_backport_agent(_: list[Tool], run_shell_command_options: dict[str, Any]) -> RequirementAgent:
     return RequirementAgent(
         name="BackportAgent",
         llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
         tools=[
             ThinkTool(),
-            RunShellCommandTool(),
+            RunShellCommandTool(options=run_shell_command_options),
             DuckDuckGoSearchTool(),
             CreateTool(),
             ViewTool(),
@@ -140,6 +142,8 @@ async def main() -> None:
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
 
+    run_shell_command_options = {}
+
     class State(BaseModel):
         jira_issue: str
         package: str
@@ -157,8 +161,8 @@ async def main() -> None:
 
     async def run_workflow(package, dist_git_branch, upstream_fix, jira_issue, cve_id):
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-            backport_agent = create_backport_agent(gateway_tools)
-            build_agent = create_build_agent(gateway_tools)
+            backport_agent = create_backport_agent(gateway_tools, run_shell_command_options)
+            build_agent = create_build_agent(gateway_tools, run_shell_command_options)
 
             workflow = Workflow(State, name="BackportWorkflow")
 
@@ -183,6 +187,7 @@ async def main() -> None:
                     dist_git_branch=state.dist_git_branch,
                     available_tools=gateway_tools,
                 )
+                run_shell_command_options["working_directory"] = state.local_clone
                 await check_subprocess(["centpkg", "sources"], cwd=state.local_clone)
                 await check_subprocess(["centpkg", "prep"], cwd=state.local_clone)
                 unpacked_sources = list(state.local_clone.glob(f"*-build/*{state.package}*"))
@@ -199,29 +204,23 @@ async def main() -> None:
                 return "run_backport_agent"
 
             async def run_backport_agent(state):
-                cwd = Path.cwd()
-                try:
-                    # make things easier for the LLM
-                    os.chdir(state.local_clone)
-                    response = await backport_agent.run(
-                        prompt=render_prompt(
-                            template=get_prompt(),
-                            input=BackportInputSchema(
-                                local_clone=state.local_clone,
-                                unpacked_sources=state.unpacked_sources,
-                                package=state.package,
-                                dist_git_branch=state.dist_git_branch,
-                                jira_issue=state.jira_issue,
-                                cve_id=state.cve_id,
-                                build_error=state.build_error,
-                            ),
+                response = await backport_agent.run(
+                    prompt=render_prompt(
+                        template=get_prompt(),
+                        input=BackportInputSchema(
+                            local_clone=state.local_clone,
+                            unpacked_sources=state.unpacked_sources,
+                            package=state.package,
+                            dist_git_branch=state.dist_git_branch,
+                            jira_issue=state.jira_issue,
+                            cve_id=state.cve_id,
+                            build_error=state.build_error,
                         ),
-                        expected_output=BackportOutputSchema,
-                        execution=get_agent_execution_config(),
-                    )
-                    state.backport_result = BackportOutputSchema.model_validate_json(response.answer.text)
-                finally:
-                    os.chdir(cwd)
+                    ),
+                    expected_output=BackportOutputSchema,
+                    execution=get_agent_execution_config(),
+                )
+                state.backport_result = BackportOutputSchema.model_validate_json(response.answer.text)
                 if state.backport_result.success:
                     return "run_build_agent"
                 else:

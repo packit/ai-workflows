@@ -1,5 +1,6 @@
 import copy
 import os
+from typing import Any
 
 from beeai_framework.agents.experimental import RequirementAgent
 from beeai_framework.agents.experimental.prompts import RequirementAgentSystemPrompt
@@ -22,10 +23,11 @@ def get_instructions() -> str:
       You are an expert on building packages in RHEL ecosystem and analyzing build failures.
 
       Build a package using the `build_package` tool. If the build succeeded, your work is done.
-      If the build failed, download all *.log.gz files returned in `artifacts_urls`, if any.
-      If there are no log files, just return the error message. Otherwise, start with `builder-live.log`
-      and try to identify the build failure. If not found, try the same with `root.log`. Summarize
-      the findings and return them as `error`.
+      If the build failed, download all *.log.gz files returned in `artifacts_urls`, if any,
+      using the `download_artifacts` tool to the current directory. If there are no log files,
+      just return the error message. Otherwise, start with `builder-live.log` and try to identify
+      the build failure. If not found, try the same with `root.log`. Summarize the findings
+      and return them as `error`.
     """
 
 
@@ -35,13 +37,13 @@ def get_prompt() -> str:
     """
 
 
-def create_build_agent(mcp_tools: list[Tool]) -> RequirementAgent:
+def create_build_agent(mcp_tools: list[Tool], run_shell_command_options: dict[str, Any]) -> RequirementAgent:
     return RequirementAgent(
         name="BuildAgent",
         llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
         tools=[
             ThinkTool(),
-            RunShellCommandTool(),
+            RunShellCommandTool(options=run_shell_command_options),
             DuckDuckGoSearchTool(),
             CreateTool(),
             ViewTool(),

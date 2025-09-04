@@ -5,6 +5,7 @@ import os
 import sys
 import traceback
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -55,8 +56,8 @@ def get_instructions() -> str:
 
       3. Update the spec file. Set <VERSION>, reset release and do any other usual changes. You may need
          to get some information from the upstream repository, for example commit hashes.
-         Add a new changelog entry. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any
-         new issues.
+         Add a new changelog entry using the `add_changelog_entry` tool. Use `rpmlint <PACKAGE>.spec`
+         to validate your changes and fix any new issues.
 
       4. Download upstream sources using `spectool -g -S <PACKAGE>.spec`. Run `centpkg --release <DIST_GIT_BRANCH> prep`
          to see if everything is in order. It is possible that some *.patch files will fail to apply now
@@ -76,6 +77,7 @@ def get_instructions() -> str:
       - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
       - Never change anything in the spec file changelog, you are only allowed to add a single changelog entry.
       - Preserve existing formatting and style conventions in spec files and patch headers.
+      - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
     """
 
 
@@ -97,13 +99,13 @@ def get_prompt() -> str:
     """
 
 
-def create_rebase_agent(mcp_tools: list[Tool]) -> RequirementAgent:
+def create_rebase_agent(mcp_tools: list[Tool], run_shell_command_options: dict[str, Any]) -> RequirementAgent:
     return RequirementAgent(
         name="RebaseAgent",
         llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
         tools=[
             ThinkTool(),
-            RunShellCommandTool(),
+            RunShellCommandTool(options=run_shell_command_options),
             DuckDuckGoSearchTool(),
             CreateTool(),
             ViewTool(),
@@ -133,6 +135,8 @@ async def main() -> None:
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
 
+    run_shell_command_options = {}
+
     class State(BaseModel):
         jira_issue: str
         package: str
@@ -148,8 +152,8 @@ async def main() -> None:
 
     async def run_workflow(package, dist_git_branch, version, jira_issue):
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-            rebase_agent = create_rebase_agent(gateway_tools)
-            build_agent = create_build_agent(gateway_tools)
+            rebase_agent = create_rebase_agent(gateway_tools, run_shell_command_options)
+            build_agent = create_build_agent(gateway_tools, run_shell_command_options)
 
             workflow = Workflow(State, name="RebaseWorkflow")
 
@@ -174,31 +178,26 @@ async def main() -> None:
                     dist_git_branch=state.dist_git_branch,
                     available_tools=gateway_tools,
                 )
+                run_shell_command_options["working_directory"] = state.local_clone
                 return "run_rebase_agent"
 
             async def run_rebase_agent(state):
-                cwd = Path.cwd()
-                try:
-                    # make things easier for the LLM
-                    os.chdir(state.local_clone)
-                    response = await rebase_agent.run(
-                        prompt=render_prompt(
-                            template=get_prompt(),
-                            input=RebaseInputSchema(
-                                local_clone=state.local_clone,
-                                package=state.package,
-                                dist_git_branch=state.dist_git_branch,
-                                version=state.version,
-                                jira_issue=state.jira_issue,
-                                build_error=state.build_error,
-                            ),
+                response = await rebase_agent.run(
+                    prompt=render_prompt(
+                        template=get_prompt(),
+                        input=RebaseInputSchema(
+                            local_clone=state.local_clone,
+                            package=state.package,
+                            dist_git_branch=state.dist_git_branch,
+                            version=state.version,
+                            jira_issue=state.jira_issue,
+                            build_error=state.build_error,
                         ),
-                        expected_output=RebaseOutputSchema,
-                        execution=get_agent_execution_config(),
-                    )
-                    state.rebase_result = RebaseOutputSchema.model_validate_json(response.answer.text)
-                finally:
-                    os.chdir(cwd)
+                    ),
+                    expected_output=RebaseOutputSchema,
+                    execution=get_agent_execution_config(),
+                )
+                state.rebase_result = RebaseOutputSchema.model_validate_json(response.answer.text)
                 if state.rebase_result.success:
                     return "run_build_agent"
                 return "comment_in_jira"

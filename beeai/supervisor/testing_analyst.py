@@ -17,13 +17,45 @@ from .supervisor_types import FullIssue, TestingState
 logger = logging.getLogger(__name__)
 
 
+class TestLocationInfo(BaseModel):
+    assigned_team: str
+    component: str
+    qa_contact: str
+    tests_location: str | None = None
+    test_config_location: str | None = None
+    test_trigger_method: str | None = None
+    test_result_location: str | None = None
+    test_docs_url: str | None = None
+    notes: str | None = None
+
+
 class InputSchema(BaseModel):
     issue: FullIssue = Field(description="Details of JIRA issue to analyze")
+    test_location_info: TestLocationInfo = Field(
+        description="Information about where to find tests and test results"
+    )
 
 
 class OutputSchema(BaseModel):
     state: TestingState = Field(description="State of tests")
     comment: str | None = Field(description="Comment to add to the JIRA issue")
+
+
+async def fetch_qe_data_map() -> dict[str, dict[str, str]]:
+    url = "https://gitlab.cee.redhat.com/otaylor/jotnar-qe-data/-/raw/main/jotnar_qe_data.json?ref_type=heads&inline=false"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            response.raise_for_status()
+            return await response.json(content_type=None)
+
+
+@cache
+def get_qe_data_map_task() -> asyncio.Task[dict[str, dict[str, str]]]:
+    return asyncio.create_task(fetch_qe_data_map())
+
+
+async def get_qe_data(component: str) -> TestLocationInfo:
+    return TestLocationInfo(**(await get_qe_data_map_task()).get(component, {}))
 
 
 def render_prompt(input: InputSchema) -> str:
@@ -32,6 +64,7 @@ def render_prompt(input: InputSchema) -> str:
       the state and what needs to be done.
 
       JIRA_ISSUE_DATA: {{ issue }}
+      TEST_LOCATION_INFO: {{ test_location_info }}
 
       Call the final_answer tool passing in the state and a comment as follows.
       The comment should use JIRA comment syntax.
@@ -84,6 +117,7 @@ async def analyze_issue(jira_issue: FullIssue) -> OutputSchema:
     output = await run(
         InputSchema(
             issue=jira_issue,
+            test_location_info=await get_qe_data(jira_issue.components[0]),
         )
     )
     logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")

@@ -1,0 +1,189 @@
+import asyncio
+import logging
+import os
+import re
+
+import typer
+
+from agents.observability import setup_observability
+from .errata_utils import get_errata_info, get_errata_info_for_link
+from .errata_workflow import run_errata_workflow
+from .issue_workflow import run_issue_workflow
+from .jira_utils import get_current_issues, get_issue
+from .supervisor_types import ErrataStatus, IssueStatus
+from .task_queue import Task, TaskQueue, TaskType, task_queue
+
+logger = logging.getLogger(__name__)
+
+
+app = typer.Typer()
+
+
+async def collect_once(queue: TaskQueue):
+    logger.info("Getting all relevant issues from JIRA")
+    issues = [i for i in get_current_issues()]
+
+    errata_links = set(i.errata_link for i in issues if i.errata_link is not None)
+    errata = [get_errata_info_for_link(link) for link in errata_links]
+
+    tasks = set(
+        Task(task_type=TaskType.PROCESS_ISSUE, task_data=i.key)
+        for i in issues
+        if i.status != IssueStatus.RELEASE_PENDING
+    ) | set(
+        Task(task_type=TaskType.PROCESS_ERRATUM, task_data=str(e.id))
+        for e in errata
+        if (
+            e.status == ErrataStatus.NEW_FILES
+            or (e.status == ErrataStatus.QE and e.all_issues_release_pending)
+        )
+    )
+
+    new_tasks = tasks - set(await queue.get_all_tasks())
+    await queue.schedule_tasks(new_tasks)
+
+    for new_task in new_tasks:
+        logger.info("New task: %s", new_task)
+
+    logger.info("Scheduled %d new tasks", len(new_tasks))
+
+
+async def do_collect(repeat: bool, repeat_delay: int):
+    async with task_queue(os.environ["REDIS_URL"]) as queue:
+        while repeat:
+            try:
+                await collect_once(queue)
+            except Exception:
+                logger.exception("Error while collecting tasks")
+            await asyncio.sleep(repeat_delay)
+
+
+@app.command()
+def collect(
+    repeat: bool = typer.Option(True, "--repeat"),
+    repeat_delay=typer.Option(1200, "--repeat-delay"),
+):
+    asyncio.run(do_collect(repeat, repeat_delay))
+
+
+async def execute_once(queue: TaskQueue):
+    task = await queue.wait_first_ready_task()
+    if task.task_type == TaskType.PROCESS_ISSUE:
+        issue = get_issue(task.task_data, full=True)
+        result = await run_issue_workflow(issue)
+        if result.reschedule_in >= 0:
+            await queue.schedule_tasks([task], delay=result.reschedule_in)
+        else:
+            await queue.remove_tasks([task])
+
+        logger.info(
+            "Issue %s processed, status=%s, reschedule_in=%s",
+            issue.url,
+            result.status,
+            result.reschedule_in if result.reschedule_in >= 0 else "never",
+        )
+    elif task.task_type == TaskType.PROCESS_ERRATUM:
+        erratum = get_errata_info(task.task_data)
+        result = await run_errata_workflow(erratum)
+        if result.reschedule_in >= 0:
+            await queue.schedule_tasks([task], delay=result.reschedule_in)
+        else:
+            await queue.remove_tasks([task])
+
+        logger.info(
+            "Errata %s (%s) processed, status=%s, reschedule_in=%s",
+            erratum.url,
+            erratum.full_advisory,
+            result.status,
+            result.reschedule_in if result.reschedule_in >= 0 else "never",
+        )
+    else:
+        logger.warning("Unknown task type: %s", task)
+
+
+async def do_execute(repeat: bool):
+    async with task_queue(os.environ["REDIS_URL"]) as queue:
+        while repeat:
+            try:
+                await execute_once(queue)
+            except Exception:
+                logger.exception("Error while executing task")
+                await asyncio.sleep(60)
+        else:
+            await execute_once(queue)
+
+
+@app.command()
+def execute(repeat: bool = typer.Option(True)):
+    asyncio.run(do_execute(repeat))
+
+
+async def do_process_issue(key: str):
+    issue = get_issue(key, full=True)
+    result = await run_issue_workflow(issue)
+    logger.info(
+        "Issue %s processed, status=%s, reschedule_in=%s",
+        key,
+        result.status,
+        result.reschedule_in if result.reschedule_in > 0 else "never",
+    )
+
+
+@app.command()
+def process_issue(key_or_url: str):
+    if key_or_url.startswith("http"):
+        m = re.match(r"https://issues.redhat.com/browse/([^/?]+)(?:\?.*)?$", key_or_url)
+        if m is None:
+            raise typer.BadParameter(f"Invalid issue URL {key_or_url}")
+        key = m.group(1)
+    else:
+        key = key_or_url
+
+    if not key.startswith("RHEL-"):
+        raise typer.BadParameter("Issue must be in the RHEL project")
+
+    asyncio.run(do_process_issue(key))
+
+
+async def do_process_erratum(id: str):
+    erratum = get_errata_info(id)
+    result = await run_errata_workflow(erratum)
+
+    logger.info(
+        "Errata %s (%s) processed, status=%s, reschedule_in=%s",
+        erratum.url,
+        erratum.full_advisory,
+        result.status,
+        result.reschedule_in if result.reschedule_in >= 0 else "never",
+    )
+
+
+@app.command()
+def process_erratum(id_or_url: str):
+    if id_or_url.startswith("http"):
+        m = re.match(
+            r"https://errata.engineering.redhat.com/advisory/(\d+)$", id_or_url
+        )
+        if m is None:
+            raise typer.BadParameter(f"Invalid advisory URL {id_or_url}")
+        id = m.group(1)
+    else:
+        id = id_or_url
+
+    asyncio.run(do_process_erratum(id))
+
+
+@app.callback()
+def main(debug: bool = False):
+    if debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+    collector_endpoint = os.environ.get("COLLECTOR_ENDPOINT")
+    if collector_endpoint is not None:
+        setup_observability(collector_endpoint)
+
+
+if __name__ == "__main__":
+    app()

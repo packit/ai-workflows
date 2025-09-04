@@ -6,9 +6,12 @@ RUN dnf -y install \
       curl \
       git \
       python3 \
+      python3-beautifulsoup4 \
       python3-pip \
       python3-redis \
+      python3-requests-gssapi \
       python3-specfile \
+      python3-typer \
       rpmbuild \
       rpmdevtools \
       rpmlint \
@@ -19,6 +22,10 @@ RUN dnf -y install \
 COPY beeai-gemini-malformed-function-call.patch /tmp
 # https://github.com/i-am-bee/beeai-framework/issues/1064
 COPY beeai-propagate-mcp-errors.patch /tmp
+
+# Add Red Hat internal certificate authority
+COPY certs/Current-IT-Root-CAs.pem /etc/pki/ca-trust/source/anchors/
+RUN update-ca-trust
 
 # Install BeeAI Framework and Phoenix
 RUN pip3 install --no-cache-dir \

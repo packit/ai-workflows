@@ -88,6 +88,9 @@ spec:
         volumeMounts:
         - mountPath: /git-repos
           name: mcp-server-git-repos
+        - mountPath: /home/beeai/rhel-config.json
+          name: rhel-config
+          subPath: rhel-config.json
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
@@ -98,3 +101,6 @@ spec:
       - name: mcp-server-git-repos
         persistentVolumeClaim:
           claimName: mcp-server-git-repos
+      - name: rhel-config
+        configMap:
+          name: rhel-config

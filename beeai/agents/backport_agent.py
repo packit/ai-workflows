@@ -255,31 +255,37 @@ async def main() -> None:
                 return "run_backport_agent"
 
             async def commit_push_and_open_mr(state):
-                state.merge_request_url = await tasks.commit_push_and_open_mr(
-                    local_clone=state.local_clone,
-                    files_to_commit=["*.spec", f"{state.jira_issue}.patch"],
-                    commit_message=(
-                        f"Fix {state.jira_issue}\n\n"
-                        f"{f'CVE: {state.cve_id}\n' if state.cve_id else ''}"
-                        f"{f'Upstream fix: {state.upstream_fix}\n'}"
-                        f"Resolves: {state.jira_issue}\n\n"
-                        f"This commit was backported {I_AM_JOTNAR}\n\n"
-                        f"Assisted-by: Jotnar\n"
-                    ),
-                    fork_url=state.fork_url,
-                    dist_git_branch=state.dist_git_branch,
-                    update_branch=state.update_branch,
-                    mr_title=f"Resolves {state.jira_issue}",
-                    mr_description=(
-                        f"This merge request was created {I_AM_JOTNAR}\n"
-                        f"{CAREFULLY_REVIEW_CHANGES}\n\n"
-                        f"Upstream patch: {state.upstream_fix}\n\n"
-                        "Backporting steps:\n\n"
-                        f"{state.backport_result.status}"
-                    ),
-                    available_tools=gateway_tools,
-                    commit_only=dry_run,
-                )
+                try:
+                    state.merge_request_url = await tasks.commit_push_and_open_mr(
+                        local_clone=state.local_clone,
+                        files_to_commit=["*.spec", f"{state.jira_issue}.patch"],
+                        commit_message=(
+                            f"Fix {state.jira_issue}\n\n"
+                            f"{f'CVE: {state.cve_id}\n' if state.cve_id else ''}"
+                            f"{f'Upstream fix: {state.upstream_fix}\n'}"
+                            f"Resolves: {state.jira_issue}\n\n"
+                            f"This commit was backported {I_AM_JOTNAR}\n\n"
+                            f"Assisted-by: Jotnar\n"
+                        ),
+                        fork_url=state.fork_url,
+                        dist_git_branch=state.dist_git_branch,
+                        update_branch=state.update_branch,
+                        mr_title=f"Resolves {state.jira_issue}",
+                        mr_description=(
+                            f"This merge request was created {I_AM_JOTNAR}\n"
+                            f"{CAREFULLY_REVIEW_CHANGES}\n\n"
+                            f"Upstream patch: {state.upstream_fix}\n\n"
+                            "Backporting steps:\n\n"
+                            f"{state.backport_result.status}"
+                        ),
+                        available_tools=gateway_tools,
+                        commit_only=dry_run,
+                    )
+                except Exception as e:
+                    logger.warning(f"Error committing and opening MR: {e}")
+                    state.merge_request_url = None
+                    state.backport_result.success = False
+                    state.backport_result.error = f"Could not commit and open MR: {e}"
                 return "comment_in_jira"
 
             async def comment_in_jira(state):

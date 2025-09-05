@@ -40,6 +40,7 @@ async def run_subprocess(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> Tuple[int, str | None, str | None]:
+    """Run a subprocess and return the exit code, stdout, and stderr."""
     kwargs = {
         "stdout": asyncio.subprocess.PIPE,
         "stderr": asyncio.subprocess.PIPE,

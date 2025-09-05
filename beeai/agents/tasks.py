@@ -9,7 +9,7 @@ from beeai_framework.tools import Tool
 
 from common.utils import is_cs_branch
 from constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE, JiraLabels
-from utils import check_subprocess, run_tool, mcp_tools
+from utils import check_subprocess, run_subprocess, run_tool, mcp_tools
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,15 @@ async def commit_push_and_open_mr(
         files_to_commit = [files_to_commit]
     for path in itertools.chain(*(local_clone.glob(pat) for pat in files_to_commit)):
         await check_subprocess(["git", "add", str(path)], cwd=local_clone)
-    # TODO: check for empty commit (the command below will fail anyway, but we need to handle this somehow)
+    # Check if any files are staged before committing, if none, bail
+    exit_code, _, _ = await run_subprocess(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=local_clone,
+    )
+    # 1 = staged, 0 = none staged
+    if exit_code == 0:
+        logger.info("No files staged for commit, halting.")
+        raise RuntimeError("No files staged for commit, halting.")
     await check_subprocess(["git", "commit", "-m", commit_message], cwd=local_clone)
     if commit_only:
         return None

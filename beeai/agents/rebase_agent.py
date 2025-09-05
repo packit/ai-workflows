@@ -256,29 +256,35 @@ async def main() -> None:
                 # Use files specified by rebase agent, fallback to *.spec if none specified
                 files_to_git_add = state.rebase_result.files_to_git_add or ["*.spec"]
 
-                state.merge_request_url = await tasks.commit_push_and_open_mr(
-                    local_clone=state.local_clone,
-                    files_to_commit=files_to_git_add,
-                    commit_message=(
-                        f"Rebase to version {state.version}\n\n"
-                        f"Resolves: {state.jira_issue}\n\n"
-                        f"This commit was created {I_AM_JOTNAR}\n\n"
-                        f"Assisted-by: Jotnar\n"
-                    ),
-                    fork_url=state.fork_url,
-                    dist_git_branch=state.dist_git_branch,
-                    update_branch=state.update_branch,
-                    mr_title=f"Update to version {state.version}",
-                    mr_description=(
-                        f"This merge request was created {I_AM_JOTNAR}\n"
-                        f"{CAREFULLY_REVIEW_CHANGES}\n\n"
-                        f"Resolves: {state.jira_issue}\n\n"
-                        "Status of the rebase:\n\n"
-                        f"{state.rebase_result.status}"
-                    ),
-                    available_tools=gateway_tools,
-                    commit_only=dry_run,
-                )
+                try:
+                    state.merge_request_url = await tasks.commit_push_and_open_mr(
+                        local_clone=state.local_clone,
+                        files_to_commit=files_to_git_add,
+                        commit_message=(
+                            f"Rebase to version {state.version}\n\n"
+                            f"Resolves: {state.jira_issue}\n\n"
+                            f"This commit was created {I_AM_JOTNAR}\n\n"
+                            f"Assisted-by: Jotnar\n"
+                        ),
+                        fork_url=state.fork_url,
+                        dist_git_branch=state.dist_git_branch,
+                        update_branch=state.update_branch,
+                        mr_title=f"Update to version {state.version}",
+                        mr_description=(
+                            f"This merge request was created {I_AM_JOTNAR}\n"
+                            f"{CAREFULLY_REVIEW_CHANGES}\n\n"
+                            f"Resolves: {state.jira_issue}\n\n"
+                            "Status of the rebase:\n\n"
+                            f"{state.rebase_result.status}"
+                        ),
+                        available_tools=gateway_tools,
+                        commit_only=dry_run,
+                    )
+                except Exception as e:
+                    logger.warning(f"Error committing and opening MR: {e}")
+                    state.merge_request_url = None
+                    state.rebase_result.success = False
+                    state.rebase_result.error = f"Could not commit and open MR: {e}"
                 return "comment_in_jira"
 
             async def comment_in_jira(state):

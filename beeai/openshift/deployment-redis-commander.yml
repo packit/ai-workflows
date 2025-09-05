@@ -2,8 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: redis-commander
-  annotations:
-    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"redis-commander:prod"},"fieldPath":"spec.template.spec.containers[?(@.name==\"redis-commander\")].image"}]'
 spec:
   progressDeadlineSeconds: 600
   replicas: 1

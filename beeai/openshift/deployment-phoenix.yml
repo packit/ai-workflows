@@ -2,8 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: phoenix
-  annotations:
-    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"phoenix:prod"},"fieldPath":"spec.template.spec.containers[?(@.name==\"phoenix\")].image"}]'
 spec:
   progressDeadlineSeconds: 600
   replicas: 1

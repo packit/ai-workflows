@@ -69,7 +69,14 @@ async def commit_push_and_open_mr(
         files_to_commit = [files_to_commit]
     for path in itertools.chain(*(local_clone.glob(pat) for pat in files_to_commit)):
         await check_subprocess(["git", "add", str(path)], cwd=local_clone)
-    # TODO: check for empty commit (the command below will fail anyway, but we need to handle this somehow)
+    # Check how many files are staged before committing, if none, bail
+    stdout, _ = await check_subprocess(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=local_clone,
+    )
+    if not stdout.strip():
+        logger.info("No files staged for commit, halting.")
+        return None
     await check_subprocess(["git", "commit", "-m", commit_message], cwd=local_clone)
     if commit_only:
         return None

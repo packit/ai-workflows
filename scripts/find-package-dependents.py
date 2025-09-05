@@ -607,7 +607,7 @@ def generate_direct_dependents(
     dependents_list: List[str] = []
     is_partial = False
     count = 0
-    
+
     for line in stdout_content.splitlines():
         if max_results is not None and count > max_results:
             is_partial = True
@@ -619,7 +619,7 @@ def generate_direct_dependents(
             dependents_found += 1
             dependents_list.append(dependent_name)
             logging.debug(f"\n   Found dependent: {dependent_name}")
-            
+
             if max_results is None or count <= max_results:
                 dependency_cache.set(package_name, dependents_list, partial=True)
                 yield dependent_name
@@ -832,7 +832,7 @@ def compute_transitive_closure(
 
     # The root package gets all results but itself as dependents
     max_root_dependents = max_results - 1 if max_results is not None else None
-    
+
     for package, entry in dependents_map.items():
         known_packages: Set[str] = set()
         transitive_dependents: List[str] = []
@@ -843,7 +843,7 @@ def compute_transitive_closure(
         # (But we still need to extend the queue for the remaining of the loop to know if we're missing out
         # on any results because of the max_results limit)
         root_hit_max_dependents = False
-        
+
         while queue:
             dependent = queue.popleft()
 
@@ -870,7 +870,7 @@ def compute_transitive_closure(
                     is_partial = True
 
                 queue.extend(dependent_entry["dependents"])
-            
+
             if root_hit_max_dependents:
                 # At this point the queue accurately reflects what work is left to do
                 # so we can use it to know if the results are complete for the root package

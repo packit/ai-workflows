@@ -37,7 +37,7 @@ class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOption
             if not tool_input_path.exists():
                 return StringToolOutput(result=f"ERROR: provided path does not exist: {tool_input_path}")
             if not (tool_input_path / ".git").exists():
-                # let's create it and initialize it 
+                # let's create it and initialize it
                 cmd = ["git", "init"]
                 exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input_path)
                 if exit_code != 0:

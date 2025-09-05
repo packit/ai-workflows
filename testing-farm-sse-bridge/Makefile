@@ -34,4 +34,4 @@ run-container:
 run-container-debug:
 	podman run --rm -it -p 10000:10000 \
 		--env-file ../.secrets/testing-farm-sse-bridge.env \
-		testing-farm-sse-bridge:debug 
+		testing-farm-sse-bridge:debug

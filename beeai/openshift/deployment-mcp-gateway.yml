@@ -2,8 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mcp-gateway
-  annotations:
-    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"mcp-server:prod"},"fieldPath":"spec.template.spec.containers[?(@.name==\"mcp-gateway\")].image"}]'
 spec:
   progressDeadlineSeconds: 600
   replicas: 1

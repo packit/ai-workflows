@@ -32,7 +32,7 @@ from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES, JiraLabels
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.specfile import AddChangelogEntryTool
-from tools.text import CreateTool, InsertTool, StrReplaceTool, ViewTool
+from tools.text import CreateTool, InsertAfterSubstringTool, InsertTool, StrReplaceTool, ViewTool
 from triage_agent import RebaseData, ErrorData
 from utils import get_agent_execution_config, mcp_tools, render_prompt, run_tool
 
@@ -127,6 +127,7 @@ def create_rebase_agent(mcp_tools: list[Tool], run_shell_command_options: dict[s
             CreateTool(),
             ViewTool(),
             InsertTool(),
+            InsertAfterSubstringTool(),
             StrReplaceTool(),
             AddChangelogEntryTool(),
         ] + [t for t in mcp_tools if t.name == "upload_sources"],

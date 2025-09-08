@@ -89,7 +89,7 @@ class InsertToolInput(BaseModel):
 class InsertTool(Tool[InsertToolInput, ToolRunOptions, StringToolOutput]):
     name = "insert"
     description = """
-    Inserts the specified text at a specific location in a file.
+    Inserts the specified text at a specific location in a file
     """
     input_schema = InsertToolInput
 
@@ -106,6 +106,51 @@ class InsertTool(Tool[InsertToolInput, ToolRunOptions, StringToolOutput]):
             lines = (await asyncio.to_thread(tool_input.file.read_text)).splitlines(keepends=True)
             lines.insert(tool_input.line, tool_input.new_string + "\n")
             await asyncio.to_thread(tool_input.file.write_text, "".join(lines))
+        except Exception as e:
+            raise ToolError(f"Failed to insert text: {e}") from e
+        return StringToolOutput(result=f"Successfully inserted the specified text into {tool_input.file}")
+
+
+class InsertAfterSubstringToolInput(BaseModel):
+    file: AbsolutePath = Field(description="Absolute path to a file to edit")
+    insert_after_substring: str = Field(description="Substring to insert the text after")
+    new_string: str = Field(description="Text to insert")
+
+
+class InsertAfterSubstringTool(Tool[InsertAfterSubstringToolInput, ToolRunOptions, StringToolOutput]):
+    name = "insert_after_substring"
+    description = """
+    Inserts the provided text new_string on a new line after the first
+    occurrence of the specified substring insert_after_substring. The insertion
+    happens only once.
+    """
+    input_schema = InsertAfterSubstringToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "text", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self, tool_input: InsertAfterSubstringToolInput, options: ToolRunOptions | None, context: RunContext
+    ) -> StringToolOutput:
+        if not tool_input.insert_after_substring:
+            raise ToolError("No insertion was done because the specified substring wasn't provided")
+        try:
+            content = await asyncio.to_thread(tool_input.file.read_text)
+            if tool_input.insert_after_substring not in content:
+                raise ToolError("No insertion was done because the specified substring wasn't present")
+            await asyncio.to_thread(
+                tool_input.file.write_text,
+                content.replace(
+                    tool_input.insert_after_substring,
+                    tool_input.insert_after_substring + "\n" + tool_input.new_string,
+                    1  # Replace only the first occurrence, 'count' kw introduced in Python 3.13
+                )
+            )
+        except ToolError:
+            raise
         except Exception as e:
             raise ToolError(f"Failed to insert text: {e}") from e
         return StringToolOutput(result=f"Successfully inserted the specified text into {tool_input.file}")

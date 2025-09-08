@@ -2,6 +2,7 @@ import datetime
 import subprocess
 from textwrap import dedent
 
+from beeai_framework.tools import ToolError
 import pytest
 from flexmock import flexmock
 from specfile import specfile
@@ -26,6 +27,8 @@ from tools.specfile import (
 from tools.text import (
     CreateTool,
     CreateToolInput,
+    InsertAfterSubstringTool,
+    InsertAfterSubstringToolInput,
     ViewTool,
     ViewToolInput,
     InsertTool,
@@ -263,6 +266,49 @@ async def test_insert(line, content, tmp_path):
     result = output.result
     assert result.startswith("Successfully")
     assert test_file.read_text() == content
+
+
+@pytest.mark.parametrize(
+    "insert_after_substring, final_content",
+    [
+        (
+            "Line 1",
+            "Line 1\nInserted line\nLine 2\nLine 3\n",
+        ),
+        (
+            "Line 2",
+            "Line 1\nLine 2\nInserted line\nLine 3\n",
+        ),
+        (
+            "Line 3",
+            "Line 1\nLine 2\nLine 3\nInserted line\n",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_insert_after_substring(insert_after_substring, final_content, tmp_path):
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("Line 1\nLine 2\nLine 3\n")
+    tool = InsertAfterSubstringTool()
+    output = await tool.run(
+        input=InsertAfterSubstringToolInput(file=test_file, insert_after_substring=insert_after_substring, new_string="Inserted line")
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    assert test_file.read_text() == final_content
+
+
+@pytest.mark.asyncio
+async def test_insert_after_substring_missing(tmp_path):
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("Line 1\nLine 2\nLine 3\n")
+    tool = InsertAfterSubstringTool()
+    with pytest.raises(ToolError) as e:
+        await tool.run(
+            input=InsertAfterSubstringToolInput(file=test_file, insert_after_substring="Line 4", new_string="Inserted line")
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = e.value.message
+    assert "No insertion was done because the specified substring wasn't present" in result
 
 
 @pytest.mark.asyncio

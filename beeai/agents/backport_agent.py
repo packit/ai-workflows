@@ -33,7 +33,7 @@ from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES, JiraLabels
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.specfile import AddChangelogEntryTool, BumpReleaseTool
-from tools.text import CreateTool, InsertTool, StrReplaceTool, ViewTool
+from tools.text import CreateTool, InsertAfterSubstringTool, InsertTool, StrReplaceTool, ViewTool
 from tools.wicked_git import GitLogSearchTool, GitPatchCreationTool, GitPreparePackageSources
 from triage_agent import BackportData, ErrorData
 from utils import check_subprocess, get_agent_execution_config, mcp_tools, render_prompt
@@ -113,6 +113,7 @@ def create_backport_agent(_: list[Tool], run_shell_command_options: dict[str, An
             CreateTool(),
             ViewTool(),
             InsertTool(),
+            InsertAfterSubstringTool(),
             StrReplaceTool(),
             GitPatchCreationTool(),
             GitLogSearchTool(),

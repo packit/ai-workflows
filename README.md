@@ -28,7 +28,7 @@ This platform consists of several integrated components:
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Podman
+- Podman, podman-compose
 - Make
 - API tokens (see Configuration section)
 

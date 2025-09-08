@@ -357,6 +357,45 @@ async def test_git_patch_creation_tool_success(git_repo, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_git_patch_creation_tool_with_hideous_patch_file(git_repo, tmp_path):
+    """ Verifies that GitPatchCreationTool can recover from a `git am` failure
+    caused by a patch file without a proper header (i.e., missing author identity).
+    """
+    patch_file = tmp_path / "hideous-patch.patch"
+    patch_file.write_text(
+        "\nRotten plums and apples\n\n"
+        "--- a/file.txt\n"
+        "+++ b/file.txt\n"
+        "@@ -1,2 +1,3 @@\n"
+        " Line 1\n"
+        " Line 2\n"
+        "+Line 3\n"
+        "--\n"
+        "2.51.0\n"
+    )
+    # Now apply the patch with git am
+    proc = subprocess.run(["git", "am", str(patch_file)], cwd=git_repo, capture_output=True, text=True)
+    assert proc.returncode != 0, "git am was expected to fail but succeeded"
+    # verify the git-am fails with the expected error message
+    assert "fatal: empty ident name (for <>) not allowed" in proc.stderr
+
+    # Now use the tool to create a patch file from the repo
+    tool = GitPatchCreationTool()
+    output_patch = tmp_path / "output.patch"
+    output = await tool.run(
+        input=GitPatchCreationToolInput(
+            repository_path=str(git_repo),
+            patch_file_path=str(output_patch),
+        )
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert "Successfully created a patch file" in result
+    assert output_patch.exists()
+    # The patch file should contain the addition of 'Line 3'
+    assert "+Line 3\n" in output_patch.read_text()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "cve_id, jira_issue, expected",
     [

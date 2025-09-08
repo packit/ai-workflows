@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
+from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 
 from common.validators import AbsolutePath
 from utils import run_subprocess
@@ -145,8 +145,19 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
             cmd = ["git", "am", "--continue"]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input_path)
             if exit_code != 0:
-                return StringToolOutput(result=f"ERROR: git-am failed: {stderr},"
-                f" out={stdout}")
+                # if the patch file doesn't have the header, this will fail
+                # let's verify in the error message
+                if "fatal: empty ident name " in stderr:
+                    exit_code, stdout, stderr = await run_subprocess(
+                        ["git", "commit", "-m", f"Patch {tool_input.patch_file_path.name}"], cwd=tool_input_path)
+                    if exit_code != 0:
+                        raise ToolError(f"Command git-commit failed: {stderr}")
+                    exit_code, stdout, stderr = await run_subprocess(
+                        ["git", "am", "--skip"], cwd=tool_input_path)
+                    if exit_code != 0:
+                        raise ToolError(f"Command git-am failed: {stderr}")
+                else:
+                    raise ToolError(f"Command git-am failed: {stderr} out={stdout}")
             # good, now we should have the patch committed, so let's get the file
             cmd = [
                 "git", "format-patch",
@@ -156,11 +167,12 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
             ]
             exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input_path)
             if exit_code != 0:
-                return StringToolOutput(result=f"ERROR: git-format-patch failed: {stderr}")
+                raise ToolError(f"Command git-format-patch failed: {stderr}")
             return StringToolOutput(result=f"Successfully created a patch file: {tool_input.patch_file_path}")
+        except ToolError:
+            raise
         except Exception as e:
-            # we absolutely need to do this otherwise the error won't appear anywhere
-            return StringToolOutput(result=f"ERROR: {e}")
+            raise ToolError(f"ERROR: {e}")
 
 
 class GitLogSearchToolInput(BaseModel):

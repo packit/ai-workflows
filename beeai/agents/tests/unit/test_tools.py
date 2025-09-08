@@ -312,7 +312,7 @@ def git_repo(tmp_path):
     subprocess.run(["git", "add", "file.txt"], cwd=repo_path, check=True)
     subprocess.run(["git", "commit", "-m", "Initial commit\n\nCVE-2025-12345"],
         cwd=repo_path, check=True)
-    file_path.write_text("Line1\nLine 2\n")
+    file_path.write_text("Line 1\nLine 2\n")
     subprocess.run(["git", "add", "file.txt"], cwd=repo_path, check=True)
     subprocess.run(["git", "commit", "-m", "Initial commit2\n\nResolves: RHEL-123456"],
         cwd=repo_path, check=True)

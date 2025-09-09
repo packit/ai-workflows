@@ -99,7 +99,7 @@ def get_prompt() -> str:
       {{/fedora_clone}}
 
       {{^build_error}}
-      Rebase the package to version {{version}}. Use "- resolves: {{jira_issue}}" as changelog entry.
+      Rebase the package to version {{version}}. Use "- Resolves: {{jira_issue}}" as changelog entry.
       {{#package_instructions}}
 
       **Package-specific instructions (these are important to follow, incorporate them into your workflow reasonably):**

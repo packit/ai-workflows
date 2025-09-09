@@ -20,6 +20,7 @@ from .supervisor_types import (
     Issue,
     IssueComment,
     IssueStatus,
+    JotnarTag,
     TestCoverage,
     PreliminaryTesting,
 )
@@ -213,6 +214,53 @@ def get_current_issues(
             break
 
 
+@overload
+def get_issue_by_jotnar_tag(
+    project: str,
+    tag: JotnarTag,
+    full: Literal[False] = False,
+    with_label: str | None = None,
+) -> Issue | None: ...
+
+
+@overload
+def get_issue_by_jotnar_tag(
+    project: str,
+    tag: JotnarTag,
+    full: Literal[True],
+    with_label: str | None = None,
+) -> FullIssue | None: ...
+
+
+def get_issue_by_jotnar_tag(
+    project: str, tag: JotnarTag, full: bool = False, with_label: str | None = None
+) -> Issue | FullIssue | None:
+    start_at = 0
+    max_results = 2
+    jql = f'project = {project} AND status NOT IN (Done, Closed) AND description ~ "\\"{tag}\\""'
+    if with_label is not None:
+        jql += f' AND labels = "{with_label}"'
+
+    body = {
+        "jql": jql,
+        "startAt": 0,
+        "maxResults": 2,
+        "fields": _fields(full),
+    }
+
+    url = "https://issues.redhat.com/rest/api/2/search"
+    logger.debug("Fetching JIRA issues, start=%d, max=%d", start_at, max_results)
+    response = requests.post(url, json=body, headers=jira_headers())
+    response_data = response.json()
+
+    if len(response_data["issues"]) == 0:
+        return None
+    elif len(response_data["issues"]) > 1:
+        raise ValueError(f"Multiple open issues found with JOTNAR tag {tag}")
+    else:
+        return decode_issue(response_data["issues"][0], full)
+
+
 def get_issues_statuses(issue_keys: Collection[str]) -> dict[str, IssueStatus]:
     if len(issue_keys) == 0:
         return {}
@@ -327,6 +375,112 @@ def add_issue_label(
 
     response = requests.put(url, json=body, headers=jira_headers())
     response.raise_for_status()
+
+
+@cache
+def get_user_name(email: str) -> str:
+    url = f"https://issues.redhat.com/rest/api/2/user/search?username={urlquote(email)}"
+    response = requests.get(url, headers=jira_headers())
+    response.raise_for_status()
+    users = response.json()
+    if len(users) == 0:
+        raise ValueError(f"No JIRA user with email {email}")
+    elif len(users) > 1:
+        raise ValueError(f"Multiple JIRA users with email {email}")
+    return users[0]["key"]
+
+
+@overload
+def create_issue(
+    *,
+    project: str,
+    summary: str,
+    description: str,
+    tag: JotnarTag | None = None,
+    assignee_email: str | None = None,
+    reporter_email: str | None = None,
+    components: Collection[str] | None = None,
+    fix_versions: Collection[str] | None = None,
+    labels: Collection[str] | None = None,
+    dry_run: Literal[False] = False,
+) -> str: ...
+
+
+@overload
+def create_issue(
+    *,
+    project: str,
+    summary: str,
+    description: str,
+    tag: JotnarTag | None = None,
+    assignee_email: str | None = None,
+    reporter_email: str | None = None,
+    components: Collection[str] | None = None,
+    fix_versions: Collection[str] | None = None,
+    labels: Collection[str] | None = None,
+    dry_run: Literal[True],
+) -> None: ...
+
+
+def create_issue(
+    *,
+    project: str,
+    summary: str,
+    description: str,
+    tag: JotnarTag | None = None,
+    assignee_email: str | None = None,
+    reporter_email: str | None = None,
+    components: Collection[str] | None = None,
+    fix_versions: Collection[str] | None = None,
+    labels: Collection[str] | None = None,
+    dry_run: bool = False,
+) -> str | None:
+    url = "https://issues.redhat.com/rest/api/2/issue"
+
+    if tag is not None:
+        description = f"{tag}\n\n{description}"
+
+    fields = {
+        "project": {"key": project},
+        "summary": summary,
+        "description": description,
+        "issuetype": {"name": "Task"},
+    }
+
+    if assignee_email:
+        fields |= {"assignee": {"name": get_user_name(assignee_email)}}
+
+    if reporter_email:
+        fields |= {"reporter": {"name": get_user_name(reporter_email)}}
+
+    if components:
+        fields |= {"components": [{"name": c} for c in components]}
+
+    if fix_versions:
+        fields |= {"fixVersions": [{"name": v} for v in fix_versions]}
+
+    if labels:
+        fields |= {"labels": list(labels)}
+
+    body = {"fields": fields}
+
+    if dry_run:
+        logger.info(
+            "Dry run: would add file new issue project=%s, summary=%s, jotnar_tag=%s",
+            project,
+            summary,
+            tag,
+        )
+        logger.debug("Dry run: would post %s to %s", body, url)
+        return
+
+    response = requests.post(url, json=body, headers=jira_headers())
+    response.raise_for_status()
+
+    key = response.json()["key"]
+    logger.info("Created new issue %s", key)
+
+    return key
 
 
 if __name__ == "__main__":

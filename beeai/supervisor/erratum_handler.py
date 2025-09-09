@@ -11,10 +11,35 @@ from .errata_utils import (
     erratum_refresh_security_alerts,
     get_erratum_transition_rules,
 )
-from .supervisor_types import ErrataStatus, Erratum, WorkflowResult
+from .jira_utils import (
+    add_issue_label,
+    create_issue,
+    get_issue_by_jotnar_tag,
+)
+from .supervisor_types import ErrataStatus, Erratum, JotnarTag, WorkflowResult
 
 
 logger = logging.getLogger(__name__)
+
+
+# This tag identifies the issue that tracks any human work needed for an erratum.
+# If there is an existing issue for the tag and it's not closed, we'll reuse
+# it, but if the existing issue is closed, we'll create a new one.
+#
+# The string form of the tag is "::: JOTNAR needs_attention E: 123456 :::"
+
+
+def _needs_attention_tag(erratum_id: int) -> JotnarTag:
+    return JotnarTag(type="needs_attention", resource="erratum", id=str(erratum_id))
+
+
+def erratum_needs_attention(erratum_id: int) -> bool:
+    issue = get_issue_by_jotnar_tag(
+        "RHELMISC",
+        _needs_attention_tag(erratum_id),
+        with_label="jotnar_needs_attention",
+    )
+    return issue is not None
 
 
 class ErratumHandler(WorkItemHandler):
@@ -29,8 +54,29 @@ class ErratumHandler(WorkItemHandler):
         self.erratum = erratum
 
     def resolve_flag_attention(self, why: str):
-        # TODO: implement this - we need to file a JIRA issue
-        # against RHELMISC with the jotnar_needs_attention label
+        tag = _needs_attention_tag(self.erratum.id)
+
+        issue = get_issue_by_jotnar_tag("RHELMISC", tag)
+        if issue is not None:
+            add_issue_label(
+                issue.key,
+                "jotnar_needs_attention",
+                why,
+                dry_run=self.dry_run,
+            )
+        else:
+            create_issue(
+                project="RHELMISC",
+                summary=f"Erratum {self.erratum.id} needs attention",
+                description=why,
+                tag=tag,
+                reporter_email="jotnar+bot@redhat.com",
+                assignee_email="jotnar+bot@redhat.com",
+                labels=["jotnar_needs_attention"],
+                components=["jotnar-package-automation"],
+                dry_run=self.dry_run,
+            )
+
         return WorkflowResult(status=why, reschedule_in=-1)
 
     def resolve_set_status(self, status: ErrataStatus, why: str):
@@ -104,6 +150,11 @@ class ErratumHandler(WorkItemHandler):
             erratum.url,
             erratum.full_advisory,
         )
+
+        if erratum_needs_attention(erratum.id):
+            return self.resolve_remove_work_item(
+                "Erratum already flagged for human attention"
+            )
 
         if erratum.status == ErrataStatus.NEW_FILES:
             return self.try_to_advance_erratum(ErrataStatus.QE)

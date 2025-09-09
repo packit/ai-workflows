@@ -1,6 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
 from typing import Optional
+from typing_extensions import Literal
 from pydantic import BaseModel, Field
 
 
@@ -95,6 +96,23 @@ class IssueComment(BaseModel):
 
 class FullIssue(Issue):
     comments: list[IssueComment]
+
+
+class JotnarTag(BaseModel):
+    """
+    A magic string appearing in the description of an issue that
+    associates it with a particular resource - like an erratum.
+
+    This method of labelling issues and the format is borrowed from NEWA.
+    Using a custom field would be cleaner.
+    """
+
+    type: Literal["needs_attention"]
+    resource: Literal["erratum"]
+    id: str
+
+    def __str__(self) -> str:
+        return f"::: JOTNAR {self.type} E: {self.id.strip()} :::"
 
 
 class TestingState(StrEnum):

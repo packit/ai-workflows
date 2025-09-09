@@ -83,17 +83,17 @@ def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
     _E = TypeVar("_E", bound=Enum)
 
     def custom(name) -> str | None:
-        return issue_data["fields"][custom_fields[name]]
+        return issue_data["fields"].get(custom_fields[name])
 
     def custom_enum(enum_class: Type[_E], name) -> _E | None:
-        data = issue_data["fields"][custom_fields[name]]
+        data = issue_data["fields"].get(custom_fields[name])
         if data is None:
             return None
         else:
             return enum_class(data["value"])
 
     def custom_enum_list(enum_class: Type[_E], name) -> list[_E] | None:
-        data = issue_data["fields"][custom_fields[name]]
+        data = issue_data["fields"].get(custom_fields[name])
         if data is None:
             return None
         else:

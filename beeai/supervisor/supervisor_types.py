@@ -6,11 +6,12 @@ from pydantic import BaseModel, Field
 
 class IssueStatus(StrEnum):
     NEW = "New"
-    PLANNING = "Planning"
+    PLANNING = "Planning"  # RHEL only
+    REFINEMENT = "Refinement"  # RHELMISC only
     IN_PROGRESS = "In Progress"
-    INTEGRATION = "Integration"
-    RELEASE_PENDING = "Release Pending"
-    DONE = "Done"
+    INTEGRATION = "Integration"  # RHEL only
+    RELEASE_PENDING = "Release Pending"  # RHEL only
+    DONE = "Done"  # RHEL ONLY
     CLOSED = "Closed"
 
 
@@ -69,10 +70,10 @@ class Issue(BaseModel):
     components: list[str]
     status: IssueStatus
     fix_versions: list[str]
-    errata_link: Optional[str]
-    fixed_in_build: str | None = None
-    test_coverage: list[TestCoverage] | None = None
-    preliminary_testing: PreliminaryTesting | None = None
+    errata_link: Optional[str]  # RHEL only
+    fixed_in_build: str | None = None  # RHEL only
+    test_coverage: list[TestCoverage] | None = None  # RHEL only
+    preliminary_testing: PreliminaryTesting | None = None  # RHEL only
 
 
 class IssueComment(BaseModel):

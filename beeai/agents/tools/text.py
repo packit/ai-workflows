@@ -7,7 +7,7 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 
-from common.validators import AbsolutePath, Range
+from common.validators import AbsolutePath, NonEmptyString, Range
 
 
 class CreateToolInput(BaseModel):
@@ -88,9 +88,7 @@ class InsertToolInput(BaseModel):
 
 class InsertTool(Tool[InsertToolInput, ToolRunOptions, StringToolOutput]):
     name = "insert"
-    description = """
-    Inserts the specified text at a specific location in a file
-    """
+    description = "Inserts the specified text at a specific location in a file."
     input_schema = InsertToolInput
 
     def _create_emitter(self) -> Emitter:
@@ -113,15 +111,15 @@ class InsertTool(Tool[InsertToolInput, ToolRunOptions, StringToolOutput]):
 
 class InsertAfterSubstringToolInput(BaseModel):
     file: AbsolutePath = Field(description="Absolute path to a file to edit")
-    insert_after_substring: str = Field(description="Substring to insert the text after")
-    new_string: str = Field(description="Text to insert")
+    insert_after_substring: NonEmptyString = Field(description="Substring to insert the text after")
+    new_string: NonEmptyString = Field(description="Text to insert")
 
 
 class InsertAfterSubstringTool(Tool[InsertAfterSubstringToolInput, ToolRunOptions, StringToolOutput]):
     name = "insert_after_substring"
     description = """
-    Inserts the provided text new_string on a new line after the first
-    occurrence of the specified substring insert_after_substring. The insertion
+    Inserts the provided text `new_string` on a new line after the first
+    occurrence of the specified substring `insert_after_substring`. The insertion
     happens only once.
     """
     input_schema = InsertAfterSubstringToolInput
@@ -135,8 +133,6 @@ class InsertAfterSubstringTool(Tool[InsertAfterSubstringToolInput, ToolRunOption
     async def _run(
         self, tool_input: InsertAfterSubstringToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
-        if not tool_input.insert_after_substring:
-            raise ToolError("No insertion was done because the specified substring wasn't provided")
         try:
             content = await asyncio.to_thread(tool_input.file.read_text)
             if tool_input.insert_after_substring not in content:

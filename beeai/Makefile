@@ -137,15 +137,29 @@ supervisor-stop:
 supervisor-clean:
 	$(COMPOSE) -f $(COMPOSE_FILE) down --volumes
 
+DEBUG_LOWER := $(shell echo $(DEBUG) | tr '[:upper:]' '[:lower:]')
+ifeq ($(DEBUG_LOWER),true)
+DEBUG_FLAG := --debug
+else
+DEBUG_FLAG :=
+endif
+
+DRY_RUN_LOWER := $(shell echo $(DRY_RUN) | tr '[:upper:]' '[:lower:]')
+ifeq ($(DRY_RUN_LOWER),true)
+DRY_RUN_FLAG := --dry-run
+else
+DRY_RUN_FLAG :=
+endif
+
 .PHONY: process-issue
 process-issue:
 	$(COMPOSE_SUPERVISOR) run --rm \
-		supervisor python -m supervisor.main process-issue $(JIRA_ISSUE)
+		supervisor python -m supervisor.main $(DEBUG_FLAG) $(DRY_RUN_FLAG) process-issue $(JIRA_ISSUE)
 
 .PHONY: process-erratum
 process-erratum:
 	$(COMPOSE_SUPERVISOR) run --rm \
-		supervisor python -m supervisor.main process-erratum $(ERRATA_ID)
+		supervisor python -m supervisor.main $(DEBUG_FLAG) $(DRY_RUN_FLAG) process-erratum $(ERRATA_ID)
 
 
 # Common utility targets

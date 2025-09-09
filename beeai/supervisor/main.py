@@ -3,12 +3,13 @@ import logging
 import os
 import re
 
+from attr import dataclass
 import typer
 
 from agents.observability import setup_observability
 from .errata_utils import get_errata_info, get_errata_info_for_link
-from .errata_workflow import run_errata_workflow
-from .issue_workflow import run_issue_workflow
+from .erratum_workflow import ErratumWorkflow
+from .issue_workflow import IssueWorkflow
 from .jira_utils import get_current_issues, get_issue
 from .supervisor_types import ErrataStatus, IssueStatus
 from .task_queue import Task, TaskQueue, TaskType, task_queue
@@ -17,6 +18,14 @@ logger = logging.getLogger(__name__)
 
 
 app = typer.Typer()
+
+
+@dataclass
+class State:
+    dry_run: bool = False
+
+
+app_state = State()
 
 
 async def collect_once(queue: TaskQueue):
@@ -70,7 +79,7 @@ async def execute_once(queue: TaskQueue):
     task = await queue.wait_first_ready_task()
     if task.task_type == TaskType.PROCESS_ISSUE:
         issue = get_issue(task.task_data, full=True)
-        result = await run_issue_workflow(issue)
+        result = await IssueWorkflow(issue, dry_run=app_state.dry_run).run()
         if result.reschedule_in >= 0:
             await queue.schedule_tasks([task], delay=result.reschedule_in)
         else:
@@ -84,7 +93,7 @@ async def execute_once(queue: TaskQueue):
         )
     elif task.task_type == TaskType.PROCESS_ERRATUM:
         erratum = get_errata_info(task.task_data)
-        result = await run_errata_workflow(erratum)
+        result = await ErratumWorkflow(erratum, dry_run=app_state.dry_run).run()
         if result.reschedule_in >= 0:
             await queue.schedule_tasks([task], delay=result.reschedule_in)
         else:
@@ -119,18 +128,21 @@ def execute(repeat: bool = typer.Option(True)):
 
 
 async def do_process_issue(key: str):
+    assert app_state.dry_run
     issue = get_issue(key, full=True)
-    result = await run_issue_workflow(issue)
+    result = await IssueWorkflow(issue, dry_run=app_state.dry_run).run()
     logger.info(
         "Issue %s processed, status=%s, reschedule_in=%s",
         key,
         result.status,
-        result.reschedule_in if result.reschedule_in > 0 else "never",
+        result.reschedule_in if result.reschedule_in >= 0 else "never",
     )
 
 
 @app.command()
-def process_issue(key_or_url: str):
+def process_issue(
+    key_or_url: str,
+):
     if key_or_url.startswith("http"):
         m = re.match(r"https://issues.redhat.com/browse/([^/?]+)(?:\?.*)?$", key_or_url)
         if m is None:
@@ -147,10 +159,10 @@ def process_issue(key_or_url: str):
 
 async def do_process_erratum(id: str):
     erratum = get_errata_info(id)
-    result = await run_errata_workflow(erratum)
+    result = await ErratumWorkflow(erratum, dry_run=app_state.dry_run).run()
 
     logger.info(
-        "Errata %s (%s) processed, status=%s, reschedule_in=%s",
+        "Erratum %s (%s) processed, status=%s, reschedule_in=%s",
         erratum.url,
         erratum.full_advisory,
         result.status,
@@ -174,11 +186,18 @@ def process_erratum(id_or_url: str):
 
 
 @app.callback()
-def main(debug: bool = False):
+def main(
+    debug: bool = typer.Option(False, help="Enable debug mode."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Don't actually change anything."
+    ),
+):
     if debug:
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.INFO)
+
+    app_state.dry_run = dry_run
 
     collector_endpoint = os.environ.get("COLLECTOR_ENDPOINT")
     if collector_endpoint is not None:

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 class IssueStatus(StrEnum):
     NEW = "New"
+    PLANNING = "Planning"
     IN_PROGRESS = "In Progress"
     INTEGRATION = "Integration"
     RELEASE_PENDING = "Release Pending"

@@ -9,6 +9,11 @@ from beeai_framework.tools import JSONToolOutput, Tool, ToolRunOptions
 from common.config import load_rhel_config
 
 
+class MaintenanceVersionPolicyError(Exception):
+    """Raised when a non-critical issue should not be fixed on maintenance versions."""
+    pass
+
+
 class VersionMapperInput(BaseModel):
     major_version: int = Field(description="RHEL major version (e.g., 8, 9, 10)")
     is_critical: bool = Field(description="Whether this is a most critical issue requiring Z-stream (e.g., privilege escalation, remote code execution, data loss)", default=False)
@@ -71,13 +76,11 @@ class VersionMapperTool(Tool[VersionMapperInput, ToolRunOptions, VersionMapperOu
         else:
             fix_version = y_streams.get(major_version_str)
             if not fix_version:
-                # No Y-stream available (e.g., RHEL 8), use Z-stream instead
-                fix_version = z_streams.get(major_version_str)
-
-                if not fix_version:
-                    raise ValueError(
-                        f"Unsupported RHEL major version: {major_version}. "
-                        f"Available versions - Y-stream: {y_streams.keys()}, Z-stream: {z_streams.keys()}"
-                    )
+                # No Y-stream available (e.g., RHEL 8)
+                # For maintenance versions, we only fix critical bugs
+                raise MaintenanceVersionPolicyError(
+                    f"For maintenance versions (RHEL {major_version}) we are fixing only critical bugs. "
+                    f"Non-critical issues should be marked as no-action."
+                )
 
         return VersionMapperOutput(VersionMapperResult(fix_version=fix_version))

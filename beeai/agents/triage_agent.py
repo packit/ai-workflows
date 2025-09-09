@@ -228,6 +228,7 @@ def render_prompt(input: InputSchema) -> str:
          2. Extract the affected RHEL major version from the JIRA issue (look in Affects Version/s field or issue description)
          3. Determine if this is a very critical issue requiring Z-stream (only for: privilege escalation, remote code execution, data loss/corruption, or system compromise)
          4. Use map_version tool with the major version and criticality to get the appropriate Fix Version
+             * If the tool raises MaintenanceVersionPolicyError, this means the issue shouldn't be fixed, change your decision to no-action with appropriate reasoning and don't set any fields.
          5. Set JIRA fields:
              * Severity: default to 'moderate', for important issues use 'important', for most critical use 'critical' (privilege escalation, RCE, data loss)
              * Fix Version: use the fix_version from map_version tool result

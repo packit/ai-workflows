@@ -1,9 +1,17 @@
 from datetime import datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from functools import cache
 import logging
 import os
-from typing import Any, Collection, Generator, Literal, Type, TypeVar, overload
+from typing import (
+    Any,
+    Collection,
+    Generator,
+    Literal,
+    Type,
+    TypeVar,
+    overload,
+)
 import requests
 from urllib.parse import quote as urlquote
 
@@ -223,6 +231,102 @@ def get_issues_statuses(issue_keys: Collection[str]) -> dict[str, IssueStatus]:
         issue_data["key"]: IssueStatus(issue_data["fields"]["status"]["name"])
         for issue_data in response_data["issues"]
     }
+
+
+class CommentVisibility(StrEnum):
+    PUBLIC = "Public"
+    RED_HAT_EMPLOYEE = "Red Hat Employee"
+
+
+CommentSpec = None | str | tuple[str, CommentVisibility]
+
+
+def _add_comment_update(
+    update: dict[str, Any], comment: CommentSpec
+) -> dict[str, Any] | None:
+    if comment is None:
+        return
+
+    if isinstance(comment, str):
+        comment_value = comment
+        visibility = CommentVisibility.PUBLIC
+    else:
+        comment_value, visibility = comment
+
+    if visibility == CommentVisibility.PUBLIC:
+        comment_update = {"add": {"body": comment_value}}
+    else:
+        comment_update = {
+            "add": {
+                "body": comment_value,
+                "visibility": {"type": "group", "value": str(visibility)},
+            }
+        }
+
+    update["comment"] = [comment_update]
+
+
+def change_issue_status(
+    issue_key: str,
+    new_status: IssueStatus,
+    comment: CommentSpec = None,
+    *,
+    dry_run: bool = False,
+) -> None:
+    url = f"https://issues.redhat.com/rest/api/2/issue/{urlquote(issue_key)}/transitions?expand=transitions.fields"
+    response = requests.get(url, headers=jira_headers())
+    response.raise_for_status()
+
+    status_str = str(new_status)
+    transition = None
+    for t in response.json()["transitions"]:
+        if t["to"]["name"] == status_str:
+            transition = t
+            break
+
+    if transition is None:
+        raise ValueError(f"Cannot transition issue {issue_key} to status {status_str}")
+
+    if any(f["required"] for f in transition.get("fields", {}).values()):
+        raise ValueError(
+            f"Cannot transition issue {issue_key} to status {status_str}: transition has required fields"
+        )
+
+    url = (
+        f"https://issues.redhat.com/rest/api/2/issue/{urlquote(issue_key)}/transitions"
+    )
+    body: dict[str, Any] = {"transition": {"id": transition["id"]}, "update": {}}
+    if comment is not None:
+        _add_comment_update(body["update"], comment)
+
+    if dry_run:
+        logger.info(
+            "Dry run: would change issue %s status to %s", issue_key, new_status
+        )
+        logger.debug("Dry run: would post %s to %s", body, url)
+        return
+
+    response = requests.post(url, json=body, headers=jira_headers())
+    response.raise_for_status()
+
+
+def add_issue_label(
+    issue_key: str, label: str, comment: CommentSpec = None, *, dry_run: bool = False
+) -> None:
+    url = f"https://issues.redhat.com/rest/api/2/issue/{urlquote(issue_key)}"
+    body: dict[str, Any] = {
+        "update": {"labels": [{"add": label}]},
+    }
+    if comment is not None:
+        _add_comment_update(body["update"], comment)
+
+    if dry_run:
+        logger.info("Dry run: would add label %s to issue %s", label, issue_key)
+        logger.debug("Dry run: would post %s to %s", body, url)
+        return
+
+    response = requests.put(url, json=body, headers=jira_headers())
+    response.raise_for_status()
 
 
 if __name__ == "__main__":

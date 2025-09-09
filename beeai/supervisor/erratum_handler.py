@@ -3,7 +3,12 @@ from textwrap import dedent
 
 from .work_item_handler import WorkItemHandler
 from .errata_utils import (
+    ErratumPushStatus,
     TransitionRuleOutcome,
+    erratum_change_state,
+    erratum_get_latest_stage_push_status,
+    erratum_push_to_stage,
+    erratum_refresh_security_alerts,
     get_erratum_transition_rules,
 )
 from .supervisor_types import ErrataStatus, Erratum, WorkflowResult
@@ -29,8 +34,7 @@ class ErratumHandler(WorkItemHandler):
         return WorkflowResult(status=why, reschedule_in=-1)
 
     def resolve_set_status(self, status: ErrataStatus, why: str):
-        # TODO: Actally change the state
-        logger.info("Would set erratum %d to %s: %s", self.erratum.id, status, why)
+        erratum_change_state(self.erratum.id, status, dry_run=self.dry_run)
 
         if status in (ErrataStatus.NEW_FILES, ErrataStatus.QE):
             reschedule_delay = 0
@@ -54,13 +58,33 @@ class ErratumHandler(WorkItemHandler):
             for rule in rule_set.rules:
                 if rule.outcome != TransitionRuleOutcome.OK:
                     if rule.name == "Stagepush":
-                        # TODO try pushing to stage
-                        logger.info("Would stage-push erratum %d", self.erratum.id)
+                        # is it already running?
+                        existing = erratum_get_latest_stage_push_status(self.erratum.id)
+                        # COMPLETE == not valid after respin ...
+                        if existing in (
+                            None,
+                            ErratumPushStatus.COMPLETE,
+                        ):
+                            erratum_push_to_stage(self.erratum.id, dry_run=self.dry_run)
+                            return self.resolve_wait(
+                                f"Stage-pushing erratum {self.erratum.id} before moving to {new_status}"
+                            )
+                        elif existing == ErratumPushStatus.FAILED:
+                            return self.resolve_flag_attention(
+                                f"Stage-push previously FAILED for erratum {self.erratum.id},"
+                                f" needs manual intervention before moving to {new_status}"
+                            )
+                        else:
+                            return self.resolve_wait(
+                                f"Stage-push already in progress ({existing}) for erratum {self.erratum.id},"
+                                f" waiting for completion before moving to {new_status}"
+                            )
                     elif rule.name == "Securityalert":
-                        # TODO: try refreshing security alerts
-                        logger.info(
-                            "Would refresh security alerts for erratum %d",
-                            self.erratum.id,
+                        erratum_refresh_security_alerts(
+                            self.erratum.id, dry_run=self.dry_run
+                        )
+                        return self.resolve_wait(
+                            f"Refreshing security alerts for erratum {self.erratum.id} before moving to {new_status}"
                         )
 
             return self.resolve_flag_attention(

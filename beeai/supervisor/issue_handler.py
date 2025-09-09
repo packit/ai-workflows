@@ -1,6 +1,7 @@
 import logging
 
 from .work_item_handler import WorkItemHandler
+from .jira_utils import add_issue_label, change_issue_status
 from .supervisor_types import (
     FullIssue,
     IssueStatus,
@@ -25,8 +26,7 @@ class IssueHandler(WorkItemHandler):
         self.issue = issue
 
     def resolve_set_status(self, status: IssueStatus, why: str):
-        # TODO: change the issue status
-        logger.info("Would set issue %s to %s: %s", self.issue.key, status, why)
+        change_issue_status(self.issue.key, status, why, dry_run=self.dry_run)
 
         if status in (IssueStatus.RELEASE_PENDING, IssueStatus.CLOSED):
             reschedule_delay = -1
@@ -36,8 +36,12 @@ class IssueHandler(WorkItemHandler):
         return WorkflowResult(status=why, reschedule_in=reschedule_delay)
 
     def resolve_flag_attention(self, why: str):
-        # TODO: add the jotnar_needs_attention label to the issue
-        logger.info("Would flag issue %s for human attention: %s", self.issue.key, why)
+        add_issue_label(
+            self.issue.key,
+            "jotnar_needs_attention",
+            why,
+            dry_run=self.dry_run,
+        )
 
         return WorkflowResult(status=why, reschedule_in=-1)
 

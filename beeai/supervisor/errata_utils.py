@@ -164,5 +164,72 @@ def get_erratum_transition_rules(erratum_id) -> TransitionRuleSet:
     )
 
 
+class ErratumPushStatus(StrEnum):
+    QUEUED = "QUEUED"
+    READY = "READY"
+    RUNNING = "RUNNING"
+    WAITING_ON_PUB = "WAITING_ON_PUB"
+    POST_PUSH_PROCESSING = "POST_PUSH_PROCESSING"
+    COMPLETE = "COMPLETE"
+    FAILED = "FAILED"
+
+
+def erratum_get_latest_stage_push_status(erratum_id) -> ErratumPushStatus | None:
+    response = requests.get(
+        f"https://errata.engineering.redhat.com/api/v1/erratum/{erratum_id}/push",
+        auth=HTTPSPNEGOAuth(),
+    )
+    response.raise_for_status()
+
+    highest_push_id = 0
+    status = None
+    for push in response.json():
+        if push["target"]["name"] == "cdn_stage" and push["id"] > highest_push_id:
+            highest_push_id = push["id"]
+            status = push["status"]
+
+    return ErratumPushStatus(status) if status else None
+
+
+def erratum_push_to_stage(erratum_id, *, dry_run: bool = False):
+    if dry_run:
+        logger.info("Dry run: Would stage push erratum %s to stage", erratum_id)
+        return
+
+    response = requests.post(
+        f"https://errata.engineering.redhat.com/api/v1/erratum/{erratum_id}/push",
+        data={"defaults": "stage"},
+        auth=HTTPSPNEGOAuth(),
+    )
+    response.raise_for_status()
+
+
+def erratum_refresh_security_alerts(erratum_id, *, dry_run: bool = False):
+    if dry_run:
+        logger.info("Dry run: Would refresh security alerts for erratum %s", erratum_id)
+        return
+
+    response = requests.post(
+        f"https://errata.engineering.redhat.com/api/v1/erratum/{erratum_id}/security_alerts/refresh",
+        auth=HTTPSPNEGOAuth(),
+    )
+    response.raise_for_status()
+
+
+def erratum_change_state(erratum_id, new_state: ErrataStatus, *, dry_run: bool = False):
+    if dry_run:
+        logger.info(
+            "Dry run: Would change state of erratum %s to %s", erratum_id, new_state
+        )
+        return
+
+    response = requests.post(
+        url=f"https://errata.engineering.redhat.com/api/v1/erratum/{erratum_id}/change_state",
+        data={"new_state": new_state},
+        auth=HTTPSPNEGOAuth(),
+    )
+    response.raise_for_status()
+
+
 if __name__ == "__main__":
     print(get_erratum_transition_rules(151838))

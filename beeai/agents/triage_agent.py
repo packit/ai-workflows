@@ -159,12 +159,16 @@ def render_prompt(input: InputSchema) -> str:
            (e.g. in the commit hash field or comment)
 
          2.2. Systematic Source Investigation
-         * Identify the official upstream project from two sources:
+         * Even if the Jira issue provides a direct link to a fix, you need to validate it
+         * When no direct link is provided, you must proactively search for fixes - do not give up easily
+
+         * There are 2 locations where you can search for the fixes: Fedora and upstream project.
+         * First, check if the fix is in Fedora repository in https://src.fedoraproject.org/rpms/<package_name>.
+           * In Fedora, search for .patch files and check git commit history for fixes using relevant keywords (CVE IDs, function names, error messages)
+         * If it's not, identify the official upstream project from the following 2 sources and search there:
             * Links from the Jira issue (if any direct upstream links are provided)
             * Package spec file (<package>.spec) in the GitLab repository: check the URL field or Source0 field for upstream project location
 
-         * Even if the Jira issue provides a direct link to a fix, you need to validate it
-         * When no direct link is provided, you must proactively search for fixes - do not give up easily
          * Using the details from your analysis, search these sources:
            - Bug Trackers (for fixed bugs matching the issue summary and description)
            - Git / Version Control (for commit messages, using keywords, CVE IDs, function names, etc.)

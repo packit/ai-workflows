@@ -8,7 +8,7 @@ import typer
 
 from agents.observability import setup_observability
 from .errata_utils import get_errata_info, get_errata_info_for_link
-from .erratum_workflow import ErratumWorkflow
+from .erratum_workflow import ErratumWorkflow, erratum_needs_attention
 from .issue_workflow import IssueWorkflow
 from .jira_utils import get_current_issues, get_issue
 from .supervisor_types import ErrataStatus, IssueStatus
@@ -43,8 +43,11 @@ async def collect_once(queue: TaskQueue):
         Task(task_type=TaskType.PROCESS_ERRATUM, task_data=str(e.id))
         for e in errata
         if (
-            e.status == ErrataStatus.NEW_FILES
-            or (e.status == ErrataStatus.QE and e.all_issues_release_pending)
+            (
+                e.status == ErrataStatus.NEW_FILES
+                or (e.status == ErrataStatus.QE and e.all_issues_release_pending)
+            )
+            and not erratum_needs_attention(e.id)
         )
     )
 

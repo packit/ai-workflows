@@ -213,7 +213,6 @@ def erratum_refresh_security_alerts(erratum_id, *, dry_run: bool = False):
 
     response = requests.post(
         f"https://errata.engineering.redhat.com/api/v1/erratum/{erratum_id}/security_alerts/refresh",
-        data={"defaults": "stage"},
         auth=HTTPSPNEGOAuth(),
     )
     response.raise_for_status()

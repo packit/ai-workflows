@@ -17,6 +17,6 @@ RUN git config --global user.email "jotnar-tests@example.com" \
       && git config --global user.name "Jotnar Tests"
 
 # Install BeeAI Framework and FastMCP
-RUN pip3 install --no-cache-dir beeai-framework fastmcp redis
+RUN pip3 install --no-cache-dir 'beeai-framework<=0.1.41' fastmcp redis
 
 WORKDIR /src

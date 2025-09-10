@@ -1,0 +1,485 @@
+from datetime import datetime
+from enum import Enum, StrEnum
+from functools import cache
+import logging
+import os
+from typing import (
+    Any,
+    Collection,
+    Generator,
+    Literal,
+    Type,
+    TypeVar,
+    overload,
+)
+import requests
+
+from .supervisor_types import (
+    FullIssue,
+    Issue,
+    IssueComment,
+    IssueStatus,
+    JotnarTag,
+    TestCoverage,
+    PreliminaryTesting,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+@cache
+def components():
+    result: list[str] = []
+    with open("components.csv") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("#"):
+                continue
+            component, _ = line.strip().split(",")
+            result.append(component)
+
+    return result
+
+
+def quote(component: str):
+    return f"'{component}'"
+
+
+@cache
+def jira_headers() -> dict[str, str]:
+    jira_token = os.environ["JIRA_TOKEN"]
+
+    return {
+        "Authorization": f"Bearer {jira_token}",
+        "Content-Type": "application/json",
+    }
+
+
+@cache
+def get_custom_fields() -> dict[str, str]:
+    URL = "https://issues.redhat.com/rest/api/2/field"
+    response = requests.get(URL, headers=jira_headers())
+    return {field["name"]: field["id"] for field in response.json()}
+
+
+CURRENT_ISSUES_JQL = """
+filter = Jotnar_1000_packages
+AND status in ('In Progress', 'Integration', 'Release Pending')
+AND 'Fixed in Build' is not EMPTY
+"""
+
+
+@overload
+def decode_issue(issue_data: Any, full: Literal[False] = False) -> Issue: ...
+
+
+@overload
+def decode_issue(issue_data: Any, full: Literal[True]) -> FullIssue: ...
+
+
+def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
+    custom_fields = get_custom_fields()
+
+    _E = TypeVar("_E", bound=Enum)
+
+    def custom(name) -> str | None:
+        return issue_data["fields"].get(custom_fields[name])
+
+    def custom_enum(enum_class: Type[_E], name) -> _E | None:
+        data = issue_data["fields"].get(custom_fields[name])
+        if data is None:
+            return None
+        else:
+            return enum_class(data["value"])
+
+    def custom_enum_list(enum_class: Type[_E], name) -> list[_E] | None:
+        data = issue_data["fields"].get(custom_fields[name])
+        if data is None:
+            return None
+        else:
+            return [enum_class(d["value"]) for d in data]
+
+    key = issue_data["key"]
+    issue_components: list[str] = [
+        str(v["name"]) for v in issue_data["fields"]["components"]
+    ]
+    errata_link = custom("Errata Link")
+
+    if full:
+        return FullIssue(
+            key=key,
+            url=f"https://issues.redhat.com/browse/{key}",
+            summary=issue_data["fields"]["summary"],
+            status=issue_data["fields"]["status"]["name"],
+            components=issue_components,
+            fix_versions=[v["name"] for v in issue_data["fields"]["fixVersions"]],
+            errata_link=errata_link,
+            fixed_in_build=custom("Fixed in Build"),
+            test_coverage=custom_enum_list(TestCoverage, "Test Coverage"),
+            preliminary_testing=custom_enum(PreliminaryTesting, "Preliminary Testing"),
+            comments=[
+                IssueComment(
+                    authorName=c["author"]["displayName"],
+                    authorEmail=c["author"]["emailAddress"],
+                    created=datetime.fromisoformat(c["created"]),
+                    body=c["body"],
+                )
+                for c in issue_data["fields"]["comment"]["comments"]
+            ],
+        )
+    else:
+        return Issue(
+            key=key,
+            url=f"https://issues.redhat.com/browse/{key}",
+            summary=issue_data["fields"]["summary"],
+            status=issue_data["fields"]["status"]["name"],
+            components=issue_components,
+            fix_versions=[v["name"] for v in issue_data["fields"]["fixVersions"]],
+            errata_link=errata_link,
+            fixed_in_build=custom("Fixed in Build"),
+            test_coverage=custom_enum_list(TestCoverage, "Test Coverage"),
+            preliminary_testing=custom_enum(PreliminaryTesting, "Preliminary Testing"),
+        )
+
+
+def _fields(full: bool):
+    # FIXME: verify the set of fields here and uncomment this
+    # (check that it actually makes a difference to the query time)
+    #            [
+    #                "components",
+    #                "status",
+    #                "fixVersions",
+    #                custom_fields["Errata Link"],
+    #                custom_fields["Fixed in Build"],
+    #                custom_fields["Test Coverage"],
+    #                custom_fields["Preliminary Testing"],
+    #                custom_fields["Due Date"],
+    #            ],
+    if full:
+        return ["*navigable", "comment"]
+    else:
+        return ["*navigable"]
+
+
+@overload
+def get_issue(issue_key: str, full: Literal[False] = False) -> Issue: ...
+
+
+@overload
+def get_issue(issue_key: str, full: Literal[True]) -> FullIssue: ...
+
+
+def get_issue(issue_key: str, full: bool = False) -> Issue | FullIssue:
+    url = f"https://issues.redhat.com/rest/api/2/issue/{issue_key}?fields={','.join(_fields(full))}"
+    response = requests.get(url, headers=jira_headers())
+    response.raise_for_status()
+    issue_data = response.json()
+
+    return decode_issue(issue_data, full)
+
+
+@overload
+def get_current_issues(full: Literal[False] = False) -> Generator[Issue, None]: ...
+
+
+@overload
+def get_current_issues(full: Literal[True]) -> Generator[FullIssue, None]: ...
+
+
+def get_current_issues(
+    full: bool = False,
+) -> Generator[Issue, None] | Generator[FullIssue, None]:
+    start_at = 0
+    max_results = 1000
+    while True:
+        body = {
+            "jql": CURRENT_ISSUES_JQL,
+            "startAt": start_at,
+            "maxResults": max_results,
+            "fields": _fields(full),
+        }
+
+        url = "https://issues.redhat.com/rest/api/2/search"
+        logger.debug("Fetching JIRA issues, start=%d, max=%d", start_at, max_results)
+        response = requests.post(url, json=body, headers=jira_headers())
+        response_data = response.json()
+        logger.debug("Got %d issues", len(response_data["issues"]))
+
+        for issue_data in response_data["issues"]:
+            yield decode_issue(issue_data, full)
+
+        start_at += max_results
+        if response_data["total"] <= start_at:
+            break
+
+
+@overload
+def get_issue_by_jotnar_tag(
+    project: str,
+    tag: JotnarTag,
+    full: Literal[False] = False,
+    with_label: str | None = None,
+) -> Issue | None: ...
+
+
+@overload
+def get_issue_by_jotnar_tag(
+    project: str,
+    tag: JotnarTag,
+    full: Literal[True],
+    with_label: str | None = None,
+) -> FullIssue | None: ...
+
+
+def get_issue_by_jotnar_tag(
+    project: str, tag: JotnarTag, full: bool = False, with_label: str | None = None
+) -> Issue | FullIssue | None:
+    start_at = 0
+    max_results = 2
+    jql = f'project = {project} AND status NOT IN (Done, Closed) AND description ~ "\\"{tag}\\""'
+    if with_label is not None:
+        jql += f' AND labels = "{with_label}"'
+
+    body = {
+        "jql": jql,
+        "startAt": 0,
+        "maxResults": 2,
+        "fields": _fields(full),
+    }
+
+    url = "https://issues.redhat.com/rest/api/2/search"
+    logger.debug("Fetching JIRA issues, start=%d, max=%d", start_at, max_results)
+    response = requests.post(url, json=body, headers=jira_headers())
+    response_data = response.json()
+
+    if len(response_data["issues"]) == 0:
+        return None
+    elif len(response_data["issues"]) > 1:
+        raise ValueError(f"Multiple open issues found with JOTNAR tag {tag}")
+    else:
+        return decode_issue(response_data["issues"][0], full)
+
+
+def get_issues_statuses(issue_keys: Collection[str]) -> dict[str, IssueStatus]:
+    if len(issue_keys) == 0:
+        return {}
+
+    body = {
+        "jql": f"key in ({','.join(issue_keys)})",
+        "maxResults": len(issue_keys),
+        "fields": ["status"],
+    }
+
+    url = "https://issues.redhat.com/rest/api/2/search"
+    response = requests.post(url, json=body, headers=jira_headers())
+    response_data = response.json()
+
+    return {
+        issue_data["key"]: IssueStatus(issue_data["fields"]["status"]["name"])
+        for issue_data in response_data["issues"]
+    }
+
+
+class CommentVisibility(StrEnum):
+    PUBLIC = "Public"
+    RED_HAT_EMPLOYEE = "Red Hat Employee"
+
+
+CommentSpec = None | str | tuple[str, CommentVisibility]
+
+
+def _add_comment_update(
+    update: dict[str, Any], comment: CommentSpec
+) -> dict[str, Any] | None:
+    if comment is None:
+        return
+
+    if isinstance(comment, str):
+        comment_value = comment
+        visibility = CommentVisibility.PUBLIC
+    else:
+        comment_value, visibility = comment
+
+    if visibility == CommentVisibility.PUBLIC:
+        comment_update = {"add": {"body": comment_value}}
+    else:
+        comment_update = {
+            "add": {
+                "body": comment_value,
+                "visibility": {"type": "group", "value": str(visibility)},
+            }
+        }
+
+    update["comment"] = [comment_update]
+
+
+def change_issue_status(
+    issue_key: str,
+    new_status: IssueStatus,
+    comment: CommentSpec = None,
+    *,
+    dry_run: bool = False,
+) -> None:
+    url = f"https://issues.redhat.com/rest/api/2/issue/{issue_key}/transitions?expand=transitions.fields"
+    response = requests.get(url, headers=jira_headers())
+    response.raise_for_status()
+
+    status_str = str(new_status)
+    transition = None
+    for t in response.json()["transitions"]:
+        if t["to"]["name"] == status_str:
+            transition = t
+            break
+
+    if transition is None:
+        raise ValueError(f"Cannot transition issue {issue_key} to status {status_str}")
+
+    if any(f["required"] for f in transition.get("fields", {}).values()):
+        raise ValueError(
+            f"Cannot transition issue {issue_key} to status {status_str}: transition has required fields"
+        )
+
+    url = f"https://issues.redhat.com/rest/api/2/issue/{issue_key}/transitions"
+    body: dict[str, Any] = {"transition": {"id": transition["id"]}, "update": {}}
+    if comment is not None:
+        _add_comment_update(body["update"], comment)
+
+    if dry_run:
+        logger.info(
+            "Dry run: would change issue %s status to %s", issue_key, new_status
+        )
+        logger.debug("Dry run: would post %s to %s", body, url)
+        return
+
+    response = requests.post(url, json=body, headers=jira_headers())
+    response.raise_for_status()
+
+
+def add_issue_label(
+    issue_key: str, label: str, comment: CommentSpec = None, *, dry_run: bool = False
+) -> None:
+    url = f"https://issues.redhat.com/rest/api/2/issue/{issue_key}/labels"
+    body: dict[str, Any] = {
+        "update": {"labels": [{"add": label}]},
+    }
+    if comment is not None:
+        _add_comment_update(body["update"], comment)
+
+    if dry_run:
+        logger.info("Dry run: would add label %s to issue %s", label, issue_key)
+        logger.debug("Dry run: would post %s to %s", body, url)
+        return
+
+    response = requests.post(url, json=body, headers=jira_headers())
+    response.raise_for_status()
+
+
+@cache
+def get_user_name(email: str) -> str:
+    url = f"https://issues.redhat.com/rest/api/2/user/search?username={email}"
+    response = requests.get(url, headers=jira_headers())
+    response.raise_for_status()
+    users = response.json()
+    if len(users) == 0:
+        raise ValueError(f"No JIRA user with email {email}")
+    elif len(users) > 1:
+        raise ValueError(f"Multiple JIRA users with email {email}")
+    return users[0]["key"]
+
+
+@overload
+def create_issue(
+    *,
+    project: str,
+    summary: str,
+    description: str,
+    tag: JotnarTag | None = None,
+    assignee_email: str | None = None,
+    reporter_email: str | None = None,
+    components: Collection[str] | None = None,
+    fix_versions: Collection[str] | None = None,
+    labels: Collection[str] | None = None,
+    dry_run: Literal[False] = False,
+) -> str: ...
+
+
+@overload
+def create_issue(
+    *,
+    project: str,
+    summary: str,
+    description: str,
+    tag: JotnarTag | None = None,
+    assignee_email: str | None = None,
+    reporter_email: str | None = None,
+    components: Collection[str] | None = None,
+    fix_versions: Collection[str] | None = None,
+    labels: Collection[str] | None = None,
+    dry_run: Literal[True],
+) -> None: ...
+
+
+def create_issue(
+    *,
+    project: str,
+    summary: str,
+    description: str,
+    tag: JotnarTag | None = None,
+    assignee_email: str | None = None,
+    reporter_email: str | None = None,
+    components: Collection[str] | None = None,
+    fix_versions: Collection[str] | None = None,
+    labels: Collection[str] | None = None,
+    dry_run: bool = False,
+) -> str | None:
+    url = "https://issues.redhat.com/rest/api/2/issue"
+
+    if tag is not None:
+        description = f"{tag}\n\n{description}"
+
+    fields = {
+        "project": {"key": project},
+        "summary": summary,
+        "description": description,
+        "issuetype": {"name": "Task"},
+    }
+
+    if assignee_email:
+        fields |= {"assignee": {"name": get_user_name(assignee_email)}}
+
+    if reporter_email:
+        fields |= {"reporter": {"name": get_user_name(reporter_email)}}
+
+    if components:
+        fields |= {"components": [{"name": c} for c in components]}
+
+    if fix_versions:
+        fields |= {"fixVersions": [{"name": v} for v in fix_versions]}
+
+    if labels:
+        fields |= {"labels": list(labels)}
+
+    body = {"fields": fields}
+
+    if dry_run:
+        logger.info(
+            "Dry run: would add file new issue project=%s, summary=%s, jotnar_tag=%s",
+            project,
+            summary,
+            tag,
+        )
+        logger.debug("Dry run: would post %s to %s", body, url)
+        return
+
+    response = requests.post(url, json=body, headers=jira_headers())
+    response.raise_for_status()
+
+    key = response.json()["key"]
+    logger.info("Created new issue %s", key)
+
+    return key
+
+
+if __name__ == "__main__":
+    print(get_issue(os.environ["JIRA_ISSUE"], full=True).model_dump_json())

@@ -7,7 +7,7 @@ from attr import dataclass
 import typer
 
 from agents.observability import setup_observability
-from .errata_utils import get_errata_info, get_errata_info_for_link
+from .errata_utils import get_erratum, get_erratum_for_link
 from .erratum_workflow import ErratumWorkflow, erratum_needs_attention
 from .issue_workflow import IssueWorkflow
 from .jira_utils import get_current_issues, get_issue
@@ -32,8 +32,8 @@ async def collect_once(queue: WorkQueue):
     logger.info("Getting all relevant issues from JIRA")
     issues = [i for i in get_current_issues()]
 
-    errata_links = set(i.errata_link for i in issues if i.errata_link is not None)
-    errata = [get_errata_info_for_link(link) for link in errata_links]
+    erratum_links = set(i.errata_link for i in issues if i.errata_link is not None)
+    errata = [get_erratum_for_link(link) for link in erratum_links]
 
     work_items = set(
         WorkItem(item_type=WorkItemType.PROCESS_ISSUE, item_data=i.key)
@@ -95,7 +95,7 @@ async def execute_once(queue: WorkQueue):
             result.reschedule_in if result.reschedule_in >= 0 else "never",
         )
     elif work_item.item_type == WorkItemType.PROCESS_ERRATUM:
-        erratum = get_errata_info(work_item.item_data)
+        erratum = get_erratum(work_item.item_data)
         result = await ErratumWorkflow(erratum, dry_run=app_state.dry_run).run()
         if result.reschedule_in >= 0:
             await queue.schedule_work_items([work_item], delay=result.reschedule_in)
@@ -103,7 +103,7 @@ async def execute_once(queue: WorkQueue):
             await queue.remove_work_items([work_item])
 
         logger.info(
-            "Errata %s (%s) processed, status=%s, reschedule_in=%s",
+            "Erratum %s (%s) processed, status=%s, reschedule_in=%s",
             erratum.url,
             erratum.full_advisory,
             result.status,
@@ -161,7 +161,7 @@ def process_issue(
 
 
 async def do_process_erratum(id: str):
-    erratum = get_errata_info(id)
+    erratum = get_erratum(id)
     result = await ErratumWorkflow(erratum, dry_run=app_state.dry_run).run()
 
     logger.info(

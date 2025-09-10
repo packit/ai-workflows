@@ -10,9 +10,9 @@ See [README.md](README.md) for general notes about setting up the development en
 
 **Work Item** - the basic unit of work is to examine an issue or erratum and figure out what needs to happen next. The result of processing a work item will typically to be one of:
 
- - Perform an action like firing off a set of tests or pushing the files of the errata to staging.
- - Change the state of the issue or errata
- - Flag the issue or errata for human attention
+ - Perform an action like firing off a set of tests or pushing the files of the erratum to staging.
+ - Change the state of the issue or erratum
+ - Flag the issue or erratum for human attention
 
  Sometimes no action will be performed, and the work item will be rescheduled to be run again later.
 

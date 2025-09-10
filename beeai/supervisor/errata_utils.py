@@ -13,22 +13,22 @@ logger = logging.getLogger(__name__)
 
 
 @cache
-def get_errata_info(errata_id: str | int):
-    logger.debug("Getting detailed information for errata %s", errata_id)
+def get_erratum(erratum_id: str | int):
+    logger.debug("Getting detailed information for erratum %s", erratum_id)
     data = requests.get(
-        f"https://errata.engineering.redhat.com/api/v1/erratum/{errata_id}",
+        f"https://errata.engineering.redhat.com/api/v1/erratum/{erratum_id}",
         auth=HTTPSPNEGOAuth(),
     ).json()
-    errata_data = data["errata"]
+    erratum_data = data["errata"]
 
-    if "rhba" in errata_data:
-        details = errata_data["rhba"]
-    elif "rhsa" in errata_data:
-        details = errata_data["rhsa"]
-    elif "rhea" in errata_data:
-        details = errata_data["rhea"]
+    if "rhba" in erratum_data:
+        details = erratum_data["rhba"]
+    elif "rhsa" in erratum_data:
+        details = erratum_data["rhsa"]
+    elif "rhea" in erratum_data:
+        details = erratum_data["rhea"]
     else:
-        raise ValueError("Unknown errata type")
+        raise ValueError("Unknown erratum type")
 
     jira_issues = data["jira_issues"]["jira_issues"]
 
@@ -40,7 +40,7 @@ def get_errata_info(errata_id: str | int):
     return Erratum(
         id=details["id"],
         full_advisory=details["fulladvisory"],
-        url=f"https://errata.engineering.redhat.com/advisory/{errata_id}",
+        url=f"https://errata.engineering.redhat.com/advisory/{erratum_id}",
         synopsis=details["synopsis"],
         status=ErrataStatus(details["status"]),
         all_issues_release_pending=all_issues_release_pending,
@@ -48,9 +48,9 @@ def get_errata_info(errata_id: str | int):
 
 
 @cache
-def get_errata_info_for_link(errata_link: str):
-    errata_id = errata_link.split("/")[-1]
-    return get_errata_info(errata_id)
+def get_erratum_for_link(link: str):
+    erratum_id = link.split("/")[-1]
+    return get_erratum(erratum_id)
 
 
 class RuleParseError(Exception):

@@ -11,7 +11,7 @@ from common.utils import redis_client, fix_await
 
 class WorkItemType(StrEnum):
     PROCESS_ISSUE = "process_issue"
-    PROCESS_ERRATUM = "process_errata"
+    PROCESS_ERRATUM = "process_erratum"
 
 
 class WorkItem(BaseModel, frozen=True):

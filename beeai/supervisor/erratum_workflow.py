@@ -23,20 +23,20 @@ logger = logging.getLogger(__name__)
 
 
 # This tag identifies the issue that tracks any human work needed for an erratum.
-# If there is an existing errata for the tag and it's not closed, we'll reuse
-# it, but if the existing errata is closed, we'll create a new one.
+# If there is an existing issue for the tag and it's not closed, we'll reuse
+# it, but if the existing issue is closed, we'll create a new one.
 #
 # The string form of the tag is "::: JOTNAR needs_attention E: 123456 :::"
 
 
-def _needs_attention_tag(errata_id: int) -> JotnarTag:
-    return JotnarTag(type="needs_attention", resource="erratum", id=str(errata_id))
+def _needs_attention_tag(erratum_id: int) -> JotnarTag:
+    return JotnarTag(type="needs_attention", resource="erratum", id=str(erratum_id))
 
 
-def erratum_needs_attention(errata_id: int) -> bool:
+def erratum_needs_attention(erratum_id: int) -> bool:
     issue = get_issue_by_jotnar_tag(
         "RHELMISC",
-        _needs_attention_tag(errata_id),
+        _needs_attention_tag(erratum_id),
         with_label="jotnar_needs_attention",
     )
     return issue is not None

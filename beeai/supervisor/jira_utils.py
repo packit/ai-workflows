@@ -237,7 +237,7 @@ def get_issue_by_jotnar_tag(
 ) -> Issue | FullIssue | None:
     start_at = 0
     max_results = 2
-    jql = f'project = {project} AND status NOT IN (Done, Closed) AND description ~ ""{tag}""'
+    jql = f'project = {project} AND status NOT IN (Done, Closed) AND description ~ "\\"{tag}\\""'
     if with_label is not None:
         jql += f' AND labels = "{with_label}"'
 

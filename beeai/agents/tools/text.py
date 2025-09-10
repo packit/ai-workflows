@@ -7,11 +7,11 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 
-from common.validators import AbsolutePath, NonEmptyString, Range
+from common.validators import NonEmptyString, Range
 
 
 class CreateToolInput(BaseModel):
-    file: AbsolutePath = Field(description="Absolute path to a file to create")
+    file: Path = Field(description="Path to a file to create")
     content: str = Field(description="Content to write to the new file")
 
 
@@ -39,7 +39,7 @@ class CreateTool(Tool[CreateToolInput, ToolRunOptions, StringToolOutput]):
 
 
 class ViewToolInput(BaseModel):
-    path: AbsolutePath = Field(description="Absolute path to a file or directory to view")
+    path: Path = Field(description="Path to a file or directory to view")
     view_range: Range | None = Field(
         description="""
         List of two integers specifying the start and end line numbers to view.
@@ -81,7 +81,7 @@ class ViewTool(Tool[ViewToolInput, ToolRunOptions, StringToolOutput]):
 
 
 class InsertToolInput(BaseModel):
-    file: AbsolutePath = Field(description="Absolute path to a file to edit")
+    file: Path = Field(description="Path to a file to edit")
     line: int = Field(description="Line number after which to insert the text (0 for beginning of file)")
     new_string: str = Field(description="Text to insert")
 
@@ -110,7 +110,7 @@ class InsertTool(Tool[InsertToolInput, ToolRunOptions, StringToolOutput]):
 
 
 class InsertAfterSubstringToolInput(BaseModel):
-    file: AbsolutePath = Field(description="Absolute path to a file to edit")
+    file: Path = Field(description="Path to a file to edit")
     insert_after_substring: NonEmptyString = Field(description="Substring to insert the text after")
     new_string: NonEmptyString = Field(description="Text to insert")
 
@@ -153,7 +153,7 @@ class InsertAfterSubstringTool(Tool[InsertAfterSubstringToolInput, ToolRunOption
 
 
 class StrReplaceToolInput(BaseModel):
-    file: AbsolutePath = Field(description="Absolute path to a file to edit")
+    file: Path = Field(description="Path to a file to edit")
     old_string: str = Field(
         description="Text to replace (must match exactly, including whitespace and indentation)"
     )

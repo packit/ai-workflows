@@ -8,6 +8,7 @@ from typing import Annotated, Any
 from urllib.parse import urljoin
 
 import aiohttp
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from common import CVEEligibilityResult
@@ -47,10 +48,10 @@ def _get_jira_headers(token: str) -> dict[str, str]:
 
 async def get_jira_details(
     issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
-) -> dict[str, Any] | str:
+) -> dict[str, Any]:
     """
     Gets details about the specified Jira issue, including all comments and remote links.
-    Returns a dictionary with issue details and comments or an error message on failure.
+    Returns a dictionary with issue details and comments.
     """
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
 
@@ -65,7 +66,7 @@ async def get_jira_details(
                 response.raise_for_status()
                 issue_data = await response.json()
         except aiohttp.ClientError as e:
-            return f"Failed to get details about the specified issue: {e}"
+            raise ToolError(f"Failed to get details about the specified issue: {e}") from e
 
         # get remote links - these often contain links to PRs or mailing lists
         try:
@@ -108,7 +109,7 @@ async def set_jira_fields(
                 response.raise_for_status()
                 current_issue = await response.json()
         except aiohttp.ClientError as e:
-            return f"Failed to get current issue details: {e}"
+            raise ToolError(f"Failed to get current issue details: {e}") from e
 
         fields = {}
         current_fields = current_issue.get("fields", {})
@@ -139,7 +140,7 @@ async def set_jira_fields(
             ) as response:
                 response.raise_for_status()
         except aiohttp.ClientError as e:
-            return f"Failed to set the specified fields: {e}"
+            raise ToolError(f"Failed to set the specified fields: {e}") from e
 
     return f"Successfully updated {issue_key}"
 
@@ -164,7 +165,7 @@ async def add_jira_comment(
             ) as response:
                 response.raise_for_status()
         except aiohttp.ClientError as e:
-            return f"Failed to add the specified comment: {e}"
+            raise ToolError(f"Failed to add the specified comment: {e}") from e
     return f"Successfully added the specified comment to {issue_key}"
 
 
@@ -188,12 +189,7 @@ async def check_cve_triage_eligibility(
                 response.raise_for_status()
                 jira_data = await response.json()
         except aiohttp.ClientError as e:
-            return CVEEligibilityResult(
-                is_cve=False,
-                is_eligible_for_triage=False,
-                reason="Failed to fetch Jira data",
-                error=f"Failed to get Jira data: {e}"
-            )
+            raise ToolError(f"Failed to get Jira data: {e}") from e
 
     fields = jira_data.get("fields", {})
     labels = fields.get("labels", [])
@@ -290,7 +286,7 @@ async def change_jira_status(
                 resp.raise_for_status()
                 transitions = (await resp.json()).get("transitions", [])
         except aiohttp.ClientError as e:
-            return f"Failed to get available transitions for {issue_key}: {e}"
+            raise ToolError(f"Failed to get available transitions for {issue_key}: {e}") from e
 
         # get desired status
         transition = next(
@@ -300,14 +296,14 @@ async def change_jira_status(
 
         if not transition:
             available = ", ".join(t.get("to", {}).get("name", "?") for t in transitions)
-            return f"Status '{status}' is not available for {issue_key}. Available: {available}"
+            raise ToolError(f"Status '{status}' is not available for {issue_key}. Available: {available}")
 
         # do the transition
         try:
             async with session.post(jira_url, json={"transition": {"id": transition["id"]}}, headers=headers) as resp:
                 resp.raise_for_status()
         except aiohttp.ClientError as e:
-            return f"Failed to change status of {issue_key} to {status}: {e}"
+            raise ToolError(f"Failed to change status of {issue_key} to {status}: {e}") from e
 
     return f"Successfully changed status of {issue_key} to {status}"
 
@@ -347,7 +343,7 @@ async def edit_jira_labels(
             ) as response:
                 response.raise_for_status()
         except aiohttp.ClientError as e:
-            return f"Failed to edit labels on {issue_key}: {e}"
+            raise ToolError(f"Failed to edit labels on {issue_key}: {e}") from e
 
     return f"Successfully edited labels on {issue_key}."
 
@@ -369,7 +365,7 @@ async def verify_issue_author(
                 response.raise_for_status()
                 issue_data = await response.json()
         except aiohttp.ClientError as e:
-            return False
+            raise ToolError(f"Failed to get Jira data: {e}") from e
 
         reporter = issue_data.get("fields", {}).get("reporter", {})
         author_account_id = reporter.get("accountId", "")
@@ -386,7 +382,7 @@ async def verify_issue_author(
                 groups_response.raise_for_status()
                 groups_data = await groups_response.json()
         except aiohttp.ClientError as e:
-            return False
+            raise ToolError(f"Failed to get user groups: {e}") from e
 
         group_names = [group.get("name", "") for group in groups_data]
 

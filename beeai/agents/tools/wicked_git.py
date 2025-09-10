@@ -35,41 +35,42 @@ class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOption
         try:
             tool_input_path = tool_input.unpacked_sources_path
             if not tool_input_path.exists():
-                return StringToolOutput(result=f"ERROR: provided path does not exist: {tool_input_path}")
+                raise ToolError(f"Provided path does not exist: {tool_input_path}")
             if not (tool_input_path / ".git").exists():
                 # let's create it and initialize it
                 cmd = ["git", "init"]
                 exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input_path)
                 if exit_code != 0:
-                    return StringToolOutput(result=f"ERROR: git init failed: {stderr}")
+                    raise ToolError(f"Command git-init failed: {stderr}")
                 cmd = ["git", "add", "-A"]
                 exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input_path)
                 if exit_code != 0:
-                    return StringToolOutput(result=f"ERROR: git add failed: {stderr}")
+                    raise ToolError(f"Command git-add failed: {stderr}")
                 cmd = ["git", "commit", "-m", "Initial commit"]
                 exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input_path)
                 if exit_code != 0:
-                    return StringToolOutput(result=f"ERROR: git commit failed: {stderr}")
+                    raise ToolError(f"Command git-commit failed: {stderr}")
             # commit changes if the repo is dirty
             cmd = ["git", "status", "--porcelain"]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input_path)
             if exit_code != 0:
-                return StringToolOutput(result=f"ERROR: git status failed: {stderr}")
+                raise ToolError(f"Command git-status failed: {stderr}")
             if stdout:
                 cmd = ["git", "add", "-A"]
                 exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input_path)
                 if exit_code != 0:
-                    return StringToolOutput(result=f"ERROR: git add failed: {stderr}")
+                    raise ToolError(f"Command git-add failed: {stderr}")
                 cmd = ["git", "commit", "-m", "Apply %prep changes"]
                 exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input_path)
                 if exit_code != 0:
-                    return StringToolOutput(result=f"ERROR: git commit failed: {stderr}")
+                    raise ToolError(f"Command git-commit failed: {stderr}")
             return StringToolOutput(
                 result=f"Successfully prepared the package sources at {tool_input_path}"
                         " for application of the upstream fix")
+        except ToolError:
+            raise
         except Exception as e:
-            # we absolutely need to do this otherwise the error won't appear anywhere
-            return StringToolOutput(result=f"ERROR: {e}")
+            raise ToolError(f"ERROR: {e}") from e
 
 
 class GitPatchCreationToolInput(BaseModel):
@@ -99,11 +100,11 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
             # Ensure the repository path exists and is a git repository
             tool_input_path = tool_input.repository_path
             if not tool_input_path.exists():
-                return StringToolOutput(result=f"ERROR: Repository path does not exist: {tool_input_path}")
+                raise ToolError(f"Repository path does not exist: {tool_input_path}")
 
             git_dir = tool_input_path / ".git"
             if not git_dir.exists():
-                return StringToolOutput(result=f"ERROR: Not a git repository: {tool_input_path}")
+                raise ToolError(f"Not a git repository: {tool_input_path}")
 
             cmd = ["git", "status"]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input_path)
@@ -116,22 +117,22 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
             cmd = ["git", "ls-files", "--others", "--exclude-standard"]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input_path)
             if exit_code != 0:
-                return StringToolOutput(result=f"ERROR: Git command failed: {stderr}")
+                raise ToolError(f"Git command failed: {stderr}")
             if stdout:  # none means no untracked files
                 rej_candidates.extend(stdout.splitlines())
             # list staged as well since that's what the agent usually does after it resolves conflicts
             cmd = ["git", "diff", "--name-only", "--cached"]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input_path)
             if exit_code != 0:
-                return StringToolOutput(result=f"ERROR: Git command failed: {stderr}")
+                raise ToolError(f"Git command failed: {stderr}")
             if stdout:
                 rej_candidates.extend(stdout.splitlines())
             if rej_candidates:
                 # make sure there are no *.rej files in the repository
                 rej_files = [file for file in rej_candidates if file.endswith(".rej")]
                 if rej_files:
-                    return StringToolOutput(result=f"ERROR: Merge conflicts detected in the repository: "
-                                            f"{tool_input.repository_path}, {rej_files}")
+                    raise ToolError("Merge conflicts detected in the repository: "
+                                    f"{tool_input.repository_path}, {rej_files}")
 
             # git-am leaves the repository in a dirty state, so we need to stage everything
             # I considered to inspect the patch and only stage the files that are changed by the patch,
@@ -140,7 +141,7 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
             cmd = ["git", "add", "-A"]
             exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input_path)
             if exit_code != 0:
-                return StringToolOutput(result=f"ERROR: Git command failed: {stderr}")
+                raise ToolError(f"Git command failed: {stderr}")
             # continue git-am process
             cmd = ["git", "am", "--continue"]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input_path)
@@ -172,7 +173,7 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
         except ToolError:
             raise
         except Exception as e:
-            raise ToolError(f"ERROR: {e}")
+            raise ToolError(f"ERROR: {e}") from e
 
 
 class GitLogSearchToolInput(BaseModel):
@@ -200,14 +201,13 @@ class GitLogSearchTool(Tool[GitLogSearchToolInput, ToolRunOptions, StringToolOut
     ) -> StringToolOutput:
         repo_path = tool_input.repository_path
         if not repo_path.exists():
-            return StringToolOutput(result=f"ERROR: Repository path does not exist: {repo_path}")
+            raise ToolError(f"Repository path does not exist: {repo_path}")
 
         if not (repo_path / ".git").exists():
-            return StringToolOutput(result=f"ERROR: Not a git repository: {repo_path}")
+            raise ToolError(f"Not a git repository: {repo_path}")
         search = tool_input.cve_id or tool_input.jira_issue
         if not search:
-            return StringToolOutput(
-                result="ERROR: No search string provided, jira_issue or cve_id is required")
+            raise ToolError("No search string provided, jira_issue or cve_id is required")
 
         cmd = [
             "git",
@@ -220,7 +220,7 @@ class GitLogSearchTool(Tool[GitLogSearchToolInput, ToolRunOptions, StringToolOut
 
         exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
         if exit_code != 0:
-            return StringToolOutput(result=f"ERROR: Git command failed: {stderr}")
+            raise ToolError(f"Git command failed: {stderr}")
 
         output = (stdout or "").strip()
         if not output:

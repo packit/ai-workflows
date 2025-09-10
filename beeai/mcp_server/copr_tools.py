@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlparse
 import aiohttp
 import rpm
 from copr.v3 import BuildProxy, ProjectProxy
+from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, Field
 
 from common.validators import AbsolutePath
@@ -72,18 +73,18 @@ async def build_package(
 ) -> BuildResult:
     """Builds the specified SRPM in Copr."""
     if not await init_kerberos_ticket():
-        return BuildResult(success=False, error_message="Failed to initialize Kerberos ticket")
+        raise ToolError("Failed to initialize Kerberos ticket")
     try:
         exclusive_arches = await _get_exclusive_arches(srpm_path)
     except Exception as e:
-        return BuildResult(success=False, error_message=f"Failed to read SRPM header: {e}")
+        raise ToolError(f"Failed to read SRPM header: {e}") from e
     # build for x86_64 unless the package is exclusive to other arch(es),
     # in such case build for either of them
     build_arch = exclusive_arches.pop() if exclusive_arches else "x86_64"
     try:
         chroot = _branch_to_chroot(dist_git_branch) + f"-{build_arch}"
     except ValueError as e:
-        return BuildResult(success=False, error_message=f"Failed to deduce Copr chroot: {e}")
+        raise ToolError(f"Failed to deduce Copr chroot: {e}") from e
     project_proxy = ProjectProxy(COPR_CONFIG)
     kwargs = {
         "ownername": COPR_USER,
@@ -101,7 +102,7 @@ async def build_package(
             kwargs["chroots"] = sorted(set(project.chroot_repos.keys()) | {chroot})
             await asyncio.to_thread(project_proxy.edit, **kwargs)
     except Exception as e:
-        return BuildResult(success=False, error_message=f"Failed to create or update Copr project: {e}")
+        raise ToolError(f"Failed to create or update Copr project: {e}") from e
     build_proxy = BuildProxy(COPR_CONFIG)
     try:
         build = await asyncio.to_thread(
@@ -112,7 +113,7 @@ async def build_package(
             buildopts={"chroots": [chroot], "timeout": COPR_BUILD_TIMEOUT},
         )
     except Exception as e:
-        return BuildResult(success=False, error_message=f"Failed to submit Copr build: {e}")
+        raise ToolError(f"Failed to submit Copr build: {e}") from e
     else:
         logger.info(f"{jira_issue}: build of {srpm_path} in {chroot} started: {build.id:08d}")
 
@@ -190,7 +191,7 @@ async def download_artifacts(
                                 target = target.with_suffix("")
                         (target_path / target).write_bytes(content)
                     else:
-                        return f"Failed to download {url}: {response.status} {response.reason}"
-            except asyncio.TimeoutError:
-                return f"Failed to download {url}: timed out"
+                        raise ToolError(f"Failed to download {url}: {response.status} {response.reason}")
+            except asyncio.TimeoutError as e:
+                raise ToolError(f"Failed to download {url}: timed out") from e
     return "Successfully downloaded the specified build artifacts"

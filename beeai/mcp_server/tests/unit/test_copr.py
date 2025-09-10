@@ -6,6 +6,7 @@ from pathlib import Path
 import aiohttp
 import pytest
 from copr.v3 import ProjectProxy, BuildProxy
+from fastmcp.exceptions import ToolError
 from flexmock import flexmock
 
 import copr_tools
@@ -128,8 +129,12 @@ async def test_download_artifacts(url, tmp_path):
     flexmock(gzip).should_receive("decompress").and_return(content).times(
         1 if url.endswith(".log.gz") and not url.endswith("build.log.gz") and "broken" not in url else 0
     )
-    result = await download_artifacts(artifacts_urls=artifacts_urls, target_path=target_path)
-    assert result.startswith("Failed" if "broken" in url else "Successfully")
+    if "broken" in url:
+        with pytest.raises(ToolError):
+            await download_artifacts(artifacts_urls=artifacts_urls, target_path=target_path)
+    else:
+        result = await download_artifacts(artifacts_urls=artifacts_urls, target_path=target_path)
+        assert result.startswith("Successfully")
     path = target_path / url.rsplit("/", 1)[-1].removesuffix(".gz")
     if "broken" in url:
         assert not path.is_file()

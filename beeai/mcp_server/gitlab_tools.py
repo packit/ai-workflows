@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlparse
 
+from fastmcp.exceptions import ToolError
 from ogr.factory import get_project
 from ogr.exceptions import OgrException, GitlabAPIException
 from pydantic import Field
@@ -20,16 +21,15 @@ async def fork_repository(
 ) -> str:
     """
     Creates a new fork of the specified repository if it doesn't exist yet,
-    otherwise gets the existing fork. Returns a clonable git URL of the fork
-    or an error message on failure.
+    otherwise gets the existing fork. Returns a clonable git URL of the fork.
     """
-    # TODO: add support for destination namespace
+    # TODO: handle name conflict when forking from internal dist-git
     project = await asyncio.to_thread(get_project, url=repository, token=os.getenv("GITLAB_TOKEN"))
     if not project:
-        return "Failed to get the specified repository"
+        raise ToolError("Failed to get the specified repository")
     fork = await asyncio.to_thread(project.get_fork, create=True)
     if not fork:
-        return "Failed to fork the specified repository"
+        raise ToolError("Failed to fork the specified repository")
     return fork.get_git_urls()["git"]
 
 
@@ -42,11 +42,11 @@ async def open_merge_request(
 ) -> str:
     """
     Opens a new merge request from the specified fork against its original repository.
-    Returns URL of the opened merge request or an error message on failure.
+    Returns URL of the opened merge request.
     """
     project = await asyncio.to_thread(get_project, url=fork_url, token=os.getenv("GITLAB_TOKEN"))
     if not project:
-        return "Failed to get the specified fork"
+        raise ToolError("Failed to get the specified fork")
     try:
         pr = await asyncio.to_thread(project.create_pr, title, description, target, source)
     except GitlabAPIException as ex:
@@ -66,7 +66,7 @@ async def open_merge_request(
         else:
             raise
     if not pr:
-        return "Failed to open the merge request"
+        raise ToolError("Failed to open the merge request")
 
     for attempt in range(5):
         try:
@@ -101,5 +101,5 @@ async def push_to_remote_repository(
         command.append("--force")
     proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
     if await proc.wait():
-        return "Failed to push to the specified repository"
+        raise ToolError("Failed to push to the specified repository")
     return f"Successfully pushed the specified branch to {repository}"

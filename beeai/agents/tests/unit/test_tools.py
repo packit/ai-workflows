@@ -2,12 +2,12 @@ import datetime
 import subprocess
 from textwrap import dedent
 
-from beeai_framework.tools import ToolError
 import pytest
 from flexmock import flexmock
 from specfile import specfile
 
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
+from beeai_framework.tools import ToolError
 
 from tools.wicked_git import (
     GitPatchCreationTool,
@@ -338,14 +338,15 @@ async def test_git_patch_creation_tool_nonexistent_repo(tmp_path):
     repo_path = tmp_path / "not_a_repo"
     patch_file_path = tmp_path / "patch.patch"
     tool = GitPatchCreationTool()
-    output = await tool.run(
-        input=GitPatchCreationToolInput(
-            repository_path=str(repo_path),
-            patch_file_path=str(patch_file_path),
-        )
-    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
-    result = output.result
-    assert "ERROR: Repository path does not exist" in result
+    with pytest.raises(ToolError) as e:
+        await tool.run(
+            input=GitPatchCreationToolInput(
+                repository_path=str(repo_path),
+                patch_file_path=str(patch_file_path),
+            )
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = e.value.message
+    assert "Repository path does not exist" in result
 
 @pytest.fixture
 def git_repo(tmp_path):

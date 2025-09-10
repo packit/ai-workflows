@@ -48,8 +48,8 @@ class RunShellCommandTool(Tool[RunShellCommandToolInput, ToolRunOptions, RunShel
                 run_subprocess(tool_input.command, shell=True, cwd=(self.options or {}).get("working_directory")),
                 timeout=TIMEOUT,
             )
-        except TimeoutError:
-            raise ToolError(f"The specified command timed out after {TIMEOUT} seconds")
+        except TimeoutError as e:
+            raise ToolError(f"The specified command timed out after {TIMEOUT} seconds") from e
         result = {
             "exit_code": exit_code,
             "stdout": stdout,

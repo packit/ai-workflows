@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from typing import Annotated
 
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from common.utils import is_cs_branch
@@ -20,7 +21,7 @@ async def download_sources(
     tool = "centpkg" if is_cs_branch(dist_git_branch) else "rhpkg"
     proc = await asyncio.create_subprocess_exec(tool, "sources", cwd=dist_git_path)
     if await proc.wait():
-        return "Failed to download sources"
+        raise ToolError("Failed to download sources")
     return "Successfully downloaded sources from lookaside cache"
 
 
@@ -37,8 +38,8 @@ async def upload_sources(
         return "Dry run, not uploading sources (this is expected, not an error)"
     tool = "centpkg" if is_cs_branch(dist_git_branch) else "rhpkg"
     if not await init_kerberos_ticket():
-        return "Failed to initialize Kerberos ticket"
+        raise ToolError("Failed to initialize Kerberos ticket")
     proc = await asyncio.create_subprocess_exec(tool, "new-sources", *new_sources, cwd=dist_git_path)
     if await proc.wait():
-        return "Failed to upload sources"
+        raise ToolError("Failed to upload sources")
     return "Successfully uploaded the specified new sources to lookaside cache"

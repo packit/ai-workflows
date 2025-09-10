@@ -43,6 +43,12 @@ def erratum_needs_attention(errata_id: int) -> bool:
 
 
 class ErratumWorkflow(BaseWorkflow):
+    """
+    Perform a single step in the lifecycle of an erratum. This might involve
+    changing the erratum state, performing actions like pushing to staging,
+    adding comments, or flagging it for human attention.
+    """
+
     def __init__(self, erratum: Erratum, *, dry_run: bool):
         super().__init__(dry_run=dry_run)
         self.erratum = erratum
@@ -137,9 +143,6 @@ class ErratumWorkflow(BaseWorkflow):
             )
 
     async def run(self) -> WorkflowResult:
-        """
-        Runs the workflow for a single erratum.
-        """
         erratum = self.erratum
 
         logger.info(
@@ -149,7 +152,7 @@ class ErratumWorkflow(BaseWorkflow):
         )
 
         if erratum_needs_attention(erratum.id):
-            return self.resolve_remove_task(
+            return self.resolve_remove_work_item(
                 "Erratum already flagged for human attention"
             )
 
@@ -157,7 +160,9 @@ class ErratumWorkflow(BaseWorkflow):
             return self.try_to_advance_erratum(ErrataStatus.QE)
         elif erratum.status == ErrataStatus.QE:
             if not erratum.all_issues_release_pending:
-                return self.resolve_remove_task("Not all issues are release pending")
+                return self.resolve_remove_work_item(
+                    "Not all issues are release pending"
+                )
             return self.try_to_advance_erratum(ErrataStatus.REL_PREP)
         else:
-            return self.resolve_remove_task(f"status is {erratum.status}")
+            return self.resolve_remove_work_item(f"status is {erratum.status}")

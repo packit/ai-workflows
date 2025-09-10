@@ -114,7 +114,11 @@ class TestingState(StrEnum):
 
 
 class WorkflowResult(BaseModel):
-    status: str
+    """Represents the result of running a workflow once."""
+
+    status: str = Field(
+        description="A message describing what happened during the workflow run and why"
+    )
     reschedule_in: float = Field(
-        description="Delay in seconds to reschedule the task. Negative value means don't reschedule"
+        description="Delay in seconds to reschedule the work item. Negative value means don't reschedule"
     )

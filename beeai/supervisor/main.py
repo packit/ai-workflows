@@ -12,7 +12,7 @@ from .erratum_workflow import ErratumWorkflow, erratum_needs_attention
 from .issue_workflow import IssueWorkflow
 from .jira_utils import get_current_issues, get_issue
 from .supervisor_types import ErrataStatus, IssueStatus
-from .task_queue import Task, TaskQueue, TaskType, task_queue
+from .work_queue import WorkItem, WorkQueue, WorkItemType, work_queue
 
 logger = logging.getLogger(__name__)
 
@@ -28,19 +28,19 @@ class State:
 app_state = State()
 
 
-async def collect_once(queue: TaskQueue):
+async def collect_once(queue: WorkQueue):
     logger.info("Getting all relevant issues from JIRA")
     issues = [i for i in get_current_issues()]
 
     errata_links = set(i.errata_link for i in issues if i.errata_link is not None)
     errata = [get_errata_info_for_link(link) for link in errata_links]
 
-    tasks = set(
-        Task(task_type=TaskType.PROCESS_ISSUE, task_data=i.key)
+    work_items = set(
+        WorkItem(item_type=WorkItemType.PROCESS_ISSUE, item_data=i.key)
         for i in issues
         if i.status != IssueStatus.RELEASE_PENDING
     ) | set(
-        Task(task_type=TaskType.PROCESS_ERRATUM, task_data=str(e.id))
+        WorkItem(item_type=WorkItemType.PROCESS_ERRATUM, item_data=str(e.id))
         for e in errata
         if (
             (
@@ -51,22 +51,22 @@ async def collect_once(queue: TaskQueue):
         )
     )
 
-    new_tasks = tasks - set(await queue.get_all_tasks())
-    await queue.schedule_tasks(new_tasks)
+    new_work_items = work_items - set(await queue.get_all_work_items())
+    await queue.schedule_work_items(new_work_items)
 
-    for new_task in new_tasks:
-        logger.info("New task: %s", new_task)
+    for new_work_item in new_work_items:
+        logger.info("New work item: %s", new_work_item)
 
-    logger.info("Scheduled %d new tasks", len(new_tasks))
+    logger.info("Scheduled %d new work items", len(new_work_items))
 
 
 async def do_collect(repeat: bool, repeat_delay: int):
-    async with task_queue(os.environ["REDIS_URL"]) as queue:
+    async with work_queue(os.environ["REDIS_URL"]) as queue:
         while repeat:
             try:
                 await collect_once(queue)
             except Exception:
-                logger.exception("Error while collecting tasks")
+                logger.exception("Error while collecting work items")
             await asyncio.sleep(repeat_delay)
 
 
@@ -78,15 +78,15 @@ def collect(
     asyncio.run(do_collect(repeat, repeat_delay))
 
 
-async def execute_once(queue: TaskQueue):
-    task = await queue.wait_first_ready_task()
-    if task.task_type == TaskType.PROCESS_ISSUE:
-        issue = get_issue(task.task_data, full=True)
+async def execute_once(queue: WorkQueue):
+    work_item = await queue.wait_first_ready_work_item()
+    if work_item.item_type == WorkItemType.PROCESS_ISSUE:
+        issue = get_issue(work_item.item_data, full=True)
         result = await IssueWorkflow(issue, dry_run=app_state.dry_run).run()
         if result.reschedule_in >= 0:
-            await queue.schedule_tasks([task], delay=result.reschedule_in)
+            await queue.schedule_work_items([work_item], delay=result.reschedule_in)
         else:
-            await queue.remove_tasks([task])
+            await queue.remove_work_items([work_item])
 
         logger.info(
             "Issue %s processed, status=%s, reschedule_in=%s",
@@ -94,13 +94,13 @@ async def execute_once(queue: TaskQueue):
             result.status,
             result.reschedule_in if result.reschedule_in >= 0 else "never",
         )
-    elif task.task_type == TaskType.PROCESS_ERRATUM:
-        erratum = get_errata_info(task.task_data)
+    elif work_item.item_type == WorkItemType.PROCESS_ERRATUM:
+        erratum = get_errata_info(work_item.item_data)
         result = await ErratumWorkflow(erratum, dry_run=app_state.dry_run).run()
         if result.reschedule_in >= 0:
-            await queue.schedule_tasks([task], delay=result.reschedule_in)
+            await queue.schedule_work_items([work_item], delay=result.reschedule_in)
         else:
-            await queue.remove_tasks([task])
+            await queue.remove_work_items([work_item])
 
         logger.info(
             "Errata %s (%s) processed, status=%s, reschedule_in=%s",
@@ -110,16 +110,16 @@ async def execute_once(queue: TaskQueue):
             result.reschedule_in if result.reschedule_in >= 0 else "never",
         )
     else:
-        logger.warning("Unknown task type: %s", task)
+        logger.warning("Unknown work item type: %s", work_item)
 
 
 async def do_execute(repeat: bool):
-    async with task_queue(os.environ["REDIS_URL"]) as queue:
+    async with work_queue(os.environ["REDIS_URL"]) as queue:
         while repeat:
             try:
                 await execute_once(queue)
             except Exception:
-                logger.exception("Error while executing task")
+                logger.exception("Error while executing work item")
                 await asyncio.sleep(60)
         else:
             await execute_once(queue)

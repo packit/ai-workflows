@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 
 class IssueWorkflow(BaseWorkflow):
+    """
+    Perform a single step in the lifecycle of a JIRA issue.
+    This includes changing the issue status, adding comments, and adding labels.
+    """
+
     def __init__(self, issue: FullIssue, *, dry_run: bool):
         super().__init__(dry_run=dry_run)
         self.issue = issue
@@ -49,10 +54,12 @@ class IssueWorkflow(BaseWorkflow):
         logger.info("Running workflow for issue %s", issue.url)
 
         if issue.fixed_in_build is None:
-            return self.resolve_remove_task("Issue has no fixed_in_build")
+            return self.resolve_remove_work_item("Issue has no fixed_in_build")
 
         if issue.preliminary_testing != PreliminaryTesting.PASS:
-            return self.resolve_remove_task("Issue has not passed preliminary_testing")
+            return self.resolve_remove_work_item(
+                "Issue has not passed preliminary_testing"
+            )
 
         if issue.status in (
             IssueStatus.NEW,
@@ -91,6 +98,6 @@ class IssueWorkflow(BaseWorkflow):
             else:
                 raise ValueError(f"Unknown testing state: {testing_analysis.state}")
         elif issue.status in (IssueStatus.RELEASE_PENDING, IssueStatus.CLOSED):
-            return self.resolve_remove_task(f"Issue status is {issue.status}")
+            return self.resolve_remove_work_item(f"Issue status is {issue.status}")
         else:
             raise ValueError(f"Unknown issue status: {issue.status}")

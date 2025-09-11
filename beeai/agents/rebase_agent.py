@@ -117,20 +117,20 @@ def get_prompt() -> str:
     """
 
 
-def create_rebase_agent(mcp_tools: list[Tool], run_shell_command_options: dict[str, Any]) -> RequirementAgent:
+def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> RequirementAgent:
     return RequirementAgent(
         name="RebaseAgent",
         llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
         tools=[
             ThinkTool(),
-            RunShellCommandTool(options=run_shell_command_options),
             DuckDuckGoSearchTool(),
-            CreateTool(),
-            ViewTool(),
-            InsertTool(),
-            InsertAfterSubstringTool(),
-            StrReplaceTool(),
-            AddChangelogEntryTool(),
+            RunShellCommandTool(options=local_tool_options),
+            CreateTool(options=local_tool_options),
+            ViewTool(options=local_tool_options),
+            InsertTool(options=local_tool_options),
+            InsertAfterSubstringTool(options=local_tool_options),
+            StrReplaceTool(options=local_tool_options),
+            AddChangelogEntryTool(options=local_tool_options),
         ] + [t for t in mcp_tools if t.name == "upload_sources"],
         memory=UnconstrainedMemory(),
         requirements=[
@@ -154,7 +154,7 @@ async def main() -> None:
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
 
-    run_shell_command_options = {"working_directory": None}
+    local_tool_options = {"working_directory": None}
 
     class State(BaseModel):
         jira_issue: str
@@ -171,11 +171,11 @@ async def main() -> None:
         merge_request_url: str | None = Field(default=None)
 
     async def run_workflow(package, dist_git_branch, version, jira_issue):
-        run_shell_command_options["working_directory"] = None
+        local_tool_options["working_directory"] = None
 
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-            rebase_agent = create_rebase_agent(gateway_tools, run_shell_command_options)
-            build_agent = create_build_agent(gateway_tools, run_shell_command_options)
+            rebase_agent = create_rebase_agent(gateway_tools, local_tool_options)
+            build_agent = create_build_agent(gateway_tools, local_tool_options)
 
             workflow = Workflow(State, name="RebaseWorkflow")
 
@@ -201,7 +201,7 @@ async def main() -> None:
                     available_tools=gateway_tools,
                     with_fedora=True,
                 )
-                run_shell_command_options["working_directory"] = state.local_clone
+                local_tool_options["working_directory"] = state.local_clone
                 return "run_rebase_agent"
 
             async def run_rebase_agent(state):

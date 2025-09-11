@@ -10,6 +10,7 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 
 from common.validators import NonEmptyString
+from utils import get_absolute_path
 
 
 class AddChangelogEntryToolInput(BaseModel):
@@ -38,12 +39,13 @@ class AddChangelogEntryTool(Tool[AddChangelogEntryToolInput, ToolRunOptions, Str
     async def _run(
         self, tool_input: AddChangelogEntryToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
+        spec_path = get_absolute_path(tool_input.spec, self)
         try:
-            with Specfile(tool_input.spec) as spec:
+            with Specfile(spec_path) as spec:
                 spec.add_changelog_entry(tool_input.content)
         except Exception as e:
             raise ToolError(f"Failed to add changelog entry: {e}") from e
-        return StringToolOutput(result=f"Successfully added a new changelog entry to {tool_input.spec}")
+        return StringToolOutput(result=f"Successfully added a new changelog entry to {spec_path}")
 
 
 class BumpReleaseToolInput(BaseModel):
@@ -66,12 +68,13 @@ class BumpReleaseTool(Tool[BumpReleaseToolInput, ToolRunOptions, StringToolOutpu
     async def _run(
         self, tool_input: BumpReleaseToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
+        spec_path = get_absolute_path(tool_input.spec, self)
         try:
-            with Specfile(tool_input.spec) as spec:
+            with Specfile(spec_path) as spec:
                 spec.bump_release()
         except Exception as e:
             raise ToolError(f"Failed to bump release: {e}") from e
-        return StringToolOutput(result=f"Successfully bumped release in {tool_input.spec}")
+        return StringToolOutput(result=f"Successfully bumped release in {spec_path}")
 
 
 class SetZStreamReleaseToolInput(BaseModel):
@@ -96,8 +99,9 @@ class SetZStreamReleaseTool(Tool[SetZStreamReleaseToolInput, ToolRunOptions, Str
     async def _run(
         self, tool_input: SetZStreamReleaseToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
+        spec_path = get_absolute_path(tool_input.spec, self)
         try:
-            with Specfile(tool_input.spec) as spec:
+            with Specfile(spec_path) as spec:
                 if not spec.has_autorelease:
                     return StringToolOutput(result="The specified spec file doesn't use %autorelease")
                 base_release = EVR.from_string(tool_input.latest_ystream_evr).release
@@ -105,4 +109,4 @@ class SetZStreamReleaseTool(Tool[SetZStreamReleaseToolInput, ToolRunOptions, Str
                 spec.raw_release = base_raw_release + "%{?dist}.%{autorelease -n}"
         except Exception as e:
             raise ToolError(f"Failed to set Z-Stream release: {e}") from e
-        return StringToolOutput(result=f"Successfully set Z-Stream release in {tool_input.spec}")
+        return StringToolOutput(result=f"Successfully set Z-Stream release in {spec_path}")

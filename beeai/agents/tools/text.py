@@ -8,6 +8,7 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 
 from common.validators import NonEmptyString, Range
+from utils import get_absolute_path
 
 
 class CreateToolInput(BaseModel):
@@ -31,11 +32,12 @@ class CreateTool(Tool[CreateToolInput, ToolRunOptions, StringToolOutput]):
     async def _run(
         self, tool_input: CreateToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
+        file_path = get_absolute_path(tool_input.file, self)
         try:
-            await asyncio.to_thread(tool_input.file.write_text, tool_input.content)
+            await asyncio.to_thread(file_path.write_text, tool_input.content)
         except Exception as e:
             raise ToolError(f"Failed to create file: {e}") from e
-        return StringToolOutput(result=f"Successfully created {tool_input.file} with the specified text")
+        return StringToolOutput(result=f"Successfully created {file_path} with the specified text")
 
 
 class ViewToolInput(BaseModel):
@@ -67,15 +69,16 @@ class ViewTool(Tool[ViewToolInput, ToolRunOptions, StringToolOutput]):
     async def _run(
         self, tool_input: ViewToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
+        path = get_absolute_path(tool_input.path, self)
         try:
-            if tool_input.path.is_file():
-                content = await asyncio.to_thread(tool_input.path.read_text)
+            if path.is_file():
+                content = await asyncio.to_thread(path.read_text)
                 if tool_input.view_range is not None:
                     start, end = tool_input.view_range
                     lines = content.splitlines(keepends=True)
                     content = "".join(lines[start - 1 : None if end < 0 else end])
                 return StringToolOutput(result=content)
-            return StringToolOutput(result="\n".join(e.name for e in tool_input.path.iterdir()) + "\n")
+            return StringToolOutput(result="\n".join(e.name for e in path.iterdir()) + "\n")
         except Exception as e:
             raise ToolError(f"Failed to view path: {e}") from e
 
@@ -100,13 +103,14 @@ class InsertTool(Tool[InsertToolInput, ToolRunOptions, StringToolOutput]):
     async def _run(
         self, tool_input: InsertToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
+        file_path = get_absolute_path(tool_input.file, self)
         try:
-            lines = (await asyncio.to_thread(tool_input.file.read_text)).splitlines(keepends=True)
+            lines = (await asyncio.to_thread(file_path.read_text)).splitlines(keepends=True)
             lines.insert(tool_input.line, tool_input.new_string + "\n")
-            await asyncio.to_thread(tool_input.file.write_text, "".join(lines))
+            await asyncio.to_thread(file_path.write_text, "".join(lines))
         except Exception as e:
             raise ToolError(f"Failed to insert text: {e}") from e
-        return StringToolOutput(result=f"Successfully inserted the specified text into {tool_input.file}")
+        return StringToolOutput(result=f"Successfully inserted the specified text into {file_path}")
 
 
 class InsertAfterSubstringToolInput(BaseModel):
@@ -133,12 +137,13 @@ class InsertAfterSubstringTool(Tool[InsertAfterSubstringToolInput, ToolRunOption
     async def _run(
         self, tool_input: InsertAfterSubstringToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
+        file_path = get_absolute_path(tool_input.file, self)
         try:
-            content = await asyncio.to_thread(tool_input.file.read_text)
+            content = await asyncio.to_thread(file_path.read_text)
             if tool_input.insert_after_substring not in content:
                 raise ToolError("No insertion was done because the specified substring wasn't present")
             await asyncio.to_thread(
-                tool_input.file.write_text,
+                file_path.write_text,
                 content.replace(
                     tool_input.insert_after_substring,
                     tool_input.insert_after_substring + "\n" + tool_input.new_string,
@@ -149,7 +154,7 @@ class InsertAfterSubstringTool(Tool[InsertAfterSubstringToolInput, ToolRunOption
             raise
         except Exception as e:
             raise ToolError(f"Failed to insert text: {e}") from e
-        return StringToolOutput(result=f"Successfully inserted the specified text into {tool_input.file}")
+        return StringToolOutput(result=f"Successfully inserted the specified text into {file_path}")
 
 
 class StrReplaceToolInput(BaseModel):
@@ -176,15 +181,16 @@ class StrReplaceTool(Tool[StrReplaceToolInput, ToolRunOptions, StringToolOutput]
     async def _run(
         self, tool_input: StrReplaceToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
+        file_path = get_absolute_path(tool_input.file, self)
         try:
-            content = await asyncio.to_thread(tool_input.file.read_text)
+            content = await asyncio.to_thread(file_path.read_text)
             if tool_input.old_string not in content:
                 raise ToolError("No replacement was done because the specified text to replace wasn't present")
             await asyncio.to_thread(
-                tool_input.file.write_text, content.replace(tool_input.old_string, tool_input.new_string)
+                file_path.write_text, content.replace(tool_input.old_string, tool_input.new_string)
             )
         except ToolError:
             raise
         except Exception as e:
             raise ToolError(f"Failed to replace text: {e}") from e
-        return StringToolOutput(result=f"Successfully replaced the specified text in {tool_input.file}")
+        return StringToolOutput(result=f"Successfully replaced the specified text in {file_path}")

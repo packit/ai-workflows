@@ -102,24 +102,24 @@ def get_prompt() -> str:
     """
 
 
-def create_backport_agent(_: list[Tool], run_shell_command_options: dict[str, Any]) -> RequirementAgent:
+def create_backport_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> RequirementAgent:
     return RequirementAgent(
         name="BackportAgent",
         llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
         tools=[
             ThinkTool(),
-            RunShellCommandTool(options=run_shell_command_options),
             DuckDuckGoSearchTool(),
-            CreateTool(),
-            ViewTool(),
-            InsertTool(),
-            InsertAfterSubstringTool(),
-            StrReplaceTool(),
-            GitPatchCreationTool(),
-            GitLogSearchTool(),
-            BumpReleaseTool(),
-            AddChangelogEntryTool(),
-            GitPreparePackageSources(),
+            RunShellCommandTool(options=local_tool_options),
+            CreateTool(options=local_tool_options),
+            ViewTool(options=local_tool_options),
+            InsertTool(options=local_tool_options),
+            InsertAfterSubstringTool(options=local_tool_options),
+            StrReplaceTool(options=local_tool_options),
+            GitPatchCreationTool(options=local_tool_options),
+            GitLogSearchTool(options=local_tool_options),
+            BumpReleaseTool(options=local_tool_options),
+            AddChangelogEntryTool(options=local_tool_options),
+            GitPreparePackageSources(options=local_tool_options),
         ],
         memory=UnconstrainedMemory(),
         requirements=[
@@ -143,7 +143,7 @@ async def main() -> None:
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
 
-    run_shell_command_options = {"working_directory": None}
+    local_tool_options = {"working_directory": None}
 
     class State(BaseModel):
         jira_issue: str
@@ -161,11 +161,11 @@ async def main() -> None:
         merge_request_url: str | None = Field(default=None)
 
     async def run_workflow(package, dist_git_branch, upstream_fix, jira_issue, cve_id):
-        run_shell_command_options["working_directory"] = None
+        local_tool_options["working_directory"] = None
 
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-            backport_agent = create_backport_agent(gateway_tools, run_shell_command_options)
-            build_agent = create_build_agent(gateway_tools, run_shell_command_options)
+            backport_agent = create_backport_agent(gateway_tools, local_tool_options)
+            build_agent = create_build_agent(gateway_tools, local_tool_options)
 
             workflow = Workflow(State, name="BackportWorkflow")
 
@@ -190,7 +190,7 @@ async def main() -> None:
                     dist_git_branch=state.dist_git_branch,
                     available_tools=gateway_tools,
                 )
-                run_shell_command_options["working_directory"] = state.local_clone
+                local_tool_options["working_directory"] = state.local_clone
                 await check_subprocess(["centpkg", "sources"], cwd=state.local_clone)
                 await check_subprocess(["centpkg", "prep"], cwd=state.local_clone)
                 unpacked_sources = list(state.local_clone.glob(f"*-build/*{state.package}*"))

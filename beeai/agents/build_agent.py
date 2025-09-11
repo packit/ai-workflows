@@ -15,7 +15,7 @@ from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 
 from tools.commands import RunShellCommandTool
-from tools.text import CreateTool, InsertTool, StrReplaceTool, ViewTool
+from tools.text import CreateTool, InsertTool, InsertAfterSubstringTool, StrReplaceTool, ViewTool
 
 
 def get_instructions() -> str:
@@ -37,18 +37,19 @@ def get_prompt() -> str:
     """
 
 
-def create_build_agent(mcp_tools: list[Tool], run_shell_command_options: dict[str, Any]) -> RequirementAgent:
+def create_build_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> RequirementAgent:
     return RequirementAgent(
         name="BuildAgent",
         llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
         tools=[
             ThinkTool(),
-            RunShellCommandTool(options=run_shell_command_options),
             DuckDuckGoSearchTool(),
-            CreateTool(),
-            ViewTool(),
-            InsertTool(),
-            StrReplaceTool(),
+            RunShellCommandTool(options=local_tool_options),
+            CreateTool(options=local_tool_options),
+            ViewTool(options=local_tool_options),
+            InsertTool(options=local_tool_options),
+            InsertAfterSubstringTool(options=local_tool_options),
+            StrReplaceTool(options=local_tool_options),
         ] + [t for t in mcp_tools if t.name in ["build_package", "download_artifacts"]],
         memory=UnconstrainedMemory(),
         requirements=[

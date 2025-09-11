@@ -33,6 +33,13 @@ def render_prompt(template: str, input: BaseModel) -> str:
     return PromptTemplate(template=template, schema=type(input)).render(input)
 
 
+def get_absolute_path(path: Path, tool: Tool) -> Path:
+    if path.is_absolute():
+        return path
+    cwd = (tool.options or {}).get("working_directory") or Path.cwd()
+    return Path(cwd) / path
+
+
 async def run_subprocess(
     cmd: str | list[str],
     shell: bool = False,

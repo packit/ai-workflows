@@ -207,7 +207,7 @@ async def main() -> None:
             async def run_rebase_agent(state):
                 package_instructions = await get_package_instructions(state.package, "rebase")
                 response = await rebase_agent.run(
-                    prompt=render_prompt(
+                    render_prompt(
                         template=get_prompt(),
                         input=RebaseInputSchema(
                             local_clone=state.local_clone,
@@ -221,16 +221,16 @@ async def main() -> None:
                         ),
                     ),
                     expected_output=RebaseOutputSchema,
-                    execution=get_agent_execution_config(),
+                    **get_agent_execution_config(),
                 )
-                state.rebase_result = RebaseOutputSchema.model_validate_json(response.answer.text)
+                state.rebase_result = RebaseOutputSchema.model_validate_json(response.last_message.text)
                 if state.rebase_result.success:
                     return "run_build_agent"
                 return "comment_in_jira"
 
             async def run_build_agent(state):
                 response = await build_agent.run(
-                    prompt=render_prompt(
+                    render_prompt(
                         template=get_build_prompt(),
                         input=BuildInputSchema(
                             srpm_path=state.rebase_result.srpm_path,
@@ -239,9 +239,9 @@ async def main() -> None:
                         ),
                     ),
                     expected_output=BuildOutputSchema,
-                    execution=get_agent_execution_config(),
+                    **get_agent_execution_config(),
                 )
-                build_result = BuildOutputSchema.model_validate_json(response.answer.text)
+                build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
                 if build_result.success:
                     return "commit_push_and_open_mr"
                 state.attempts_remaining -= 1

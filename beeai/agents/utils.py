@@ -13,15 +13,14 @@ from mcp.client.sse import sse_client
 from mcp.types import TextContent
 from pydantic import BaseModel
 
-from beeai_framework.agents import AgentExecutionConfig
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
-from beeai_framework.template import PromptTemplate, PromptTemplateInput
+from beeai_framework.template import PromptTemplate
 from beeai_framework.tools import Tool
 from beeai_framework.tools.mcp import MCPTool
 
 
-def get_agent_execution_config() -> AgentExecutionConfig:
-    return AgentExecutionConfig(
+def get_agent_execution_config() -> dict[str, int]:
+    return dict(
         max_retries_per_step=int(os.getenv("BEEAI_MAX_RETRIES_PER_STEP", 5)),
         total_max_retries=int(os.getenv("BEEAI_TOTAL_MAX_RETRIES", 10)),
         # 100 is not enough for a medium complexity task
@@ -31,7 +30,7 @@ def get_agent_execution_config() -> AgentExecutionConfig:
 
 def render_prompt(template: str, input: BaseModel) -> str:
     """Renders a prompt template with the specified input, according to its schema."""
-    return PromptTemplate(PromptTemplateInput(template=template, schema=type(input))).render(input)
+    return PromptTemplate(template=template, schema=type(input)).render(input)
 
 
 async def run_subprocess(

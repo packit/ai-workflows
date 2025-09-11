@@ -19,7 +19,6 @@ from beeai_framework.backend import ChatModel
 from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
-from beeai_framework.template import PromptTemplate, PromptTemplateInput
 from beeai_framework.tools import Tool
 from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
@@ -209,7 +208,7 @@ async def main() -> None:
 
             async def run_backport_agent(state):
                 response = await backport_agent.run(
-                    prompt=render_prompt(
+                    render_prompt(
                         template=get_prompt(),
                         input=BackportInputSchema(
                             local_clone=state.local_clone,
@@ -222,9 +221,9 @@ async def main() -> None:
                         ),
                     ),
                     expected_output=BackportOutputSchema,
-                    execution=get_agent_execution_config(),
+                    **get_agent_execution_config(),
                 )
-                state.backport_result = BackportOutputSchema.model_validate_json(response.answer.text)
+                state.backport_result = BackportOutputSchema.model_validate_json(response.last_message.text)
                 if state.backport_result.success:
                     return "run_build_agent"
                 else:
@@ -232,7 +231,7 @@ async def main() -> None:
 
             async def run_build_agent(state):
                 response = await build_agent.run(
-                    prompt=render_prompt(
+                    render_prompt(
                         template=get_build_prompt(),
                         input=BuildInputSchema(
                             srpm_path=state.backport_result.srpm_path,
@@ -241,9 +240,9 @@ async def main() -> None:
                         ),
                     ),
                     expected_output=BuildOutputSchema,
-                    execution=get_agent_execution_config(),
+                    **get_agent_execution_config(),
                 )
-                build_result = BuildOutputSchema.model_validate_json(response.answer.text)
+                build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
                 if build_result.success:
                     return "commit_push_and_open_mr"
                 state.attempts_remaining -= 1

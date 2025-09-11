@@ -4,6 +4,7 @@ FROM fedora:42
 RUN dnf -y install \
       centpkg \
       curl \
+      gcc \
       git \
       python3 \
       python3-pip \

@@ -1,7 +1,9 @@
 import asyncio
+from contextlib import asynccontextmanager
 from functools import cache
 import logging
 import os
+import ssl
 
 import aiohttp
 from pydantic import BaseModel, Field
@@ -42,9 +44,21 @@ class OutputSchema(BaseModel):
     comment: str | None = Field(description="Comment to add to the JIRA issue")
 
 
+@asynccontextmanager
+async def with_aiohttp_session():
+    context = ssl.create_default_context()
+    redhat_it_ca_bundle = os.getenv("REDHAT_IT_CA_BUNDLE")
+    if redhat_it_ca_bundle:
+        context.load_verify_locations(cafile=redhat_it_ca_bundle)
+    connector = aiohttp.TCPConnector(ssl=context)
+
+    async with aiohttp.ClientSession(connector=connector) as session:
+        yield session
+
+
 async def fetch_qe_data_map() -> dict[str, dict[str, str]]:
     url = "https://gitlab.cee.redhat.com/otaylor/jotnar-qe-data/-/raw/main/jotnar_qe_data.json?ref_type=heads&inline=false"
-    async with aiohttp.ClientSession() as session:
+    async with with_aiohttp_session() as session:
         async with session.get(url) as response:
             response.raise_for_status()
             return await response.json(content_type=None)

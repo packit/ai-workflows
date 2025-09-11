@@ -61,12 +61,14 @@ x-supervisor: &supervisor
     - COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces
     - GIT_REPO_BASEPATH=/git-repos
     - "KRB5CCNAME=FILE:/home/beeai/ccache/krb5cc"
+    - REDHAT_IT_CA_BUNDLE=/home/beeai/certs/Current-IT-Root-CAs.pem
   env_file:
     - .secrets/supervisor.env
   volumes:
     - ./agents:/home/beeai/agents:ro,z
     - ./supervisor:/home/beeai/supervisor:ro,z
     - .secrets/ccache:/home/beeai/ccache:ro,z,U
+    - ./certs:/home/beeai/certs:ro,z,U
   restart: unless-stopped
 
 services:

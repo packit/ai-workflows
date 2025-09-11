@@ -1,6 +1,7 @@
 from enum import StrEnum
 from functools import cache
 import logging
+import os
 
 from bs4 import BeautifulSoup, Tag  # type: ignore
 from pydantic import BaseModel
@@ -12,12 +13,55 @@ from .supervisor_types import Erratum, ErrataStatus
 logger = logging.getLogger(__name__)
 
 
+session = requests.Session()
+
+
+ET_URL = "https://errata.engineering.redhat.com/"
+
+
+@cache
+def ET_verify() -> bool | str:
+    verify = os.getenv("REDHAT_IT_CA_BUNDLE")
+    if verify:
+        return verify
+    else:
+        return True
+
+
+def ET_api_get(path: str):
+    response = session.get(
+        f"{ET_URL}/api/v1/{path}",
+        auth=HTTPSPNEGOAuth(opportunistic_auth=True),
+        verify=ET_verify(),
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def ET_api_post(path: str, data: dict):
+    response = session.post(
+        f"{ET_URL}/api/v1/{path}",
+        data=data,
+        auth=HTTPSPNEGOAuth(opportunistic_auth=True),
+        verify=ET_verify(),
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def ET_get_html(path: str):
+    response = session.get(
+        f"{ET_URL}/{path}",
+        auth=HTTPSPNEGOAuth(opportunistic_auth=True),
+        verify=ET_verify(),
+    )
+    response.raise_for_status()
+    return response.text
+
+
 def get_erratum(erratum_id: str | int):
     logger.debug("Getting detailed information for erratum %s", erratum_id)
-    data = requests.get(
-        f"https://errata.engineering.redhat.com/api/v1/erratum/{erratum_id}",
-        auth=HTTPSPNEGOAuth(),
-    ).json()
+    data = ET_api_get(f"erratum/{erratum_id}")
     erratum_data = data["errata"]
 
     if "rhba" in erratum_data:
@@ -90,10 +134,9 @@ def get_erratum_transition_rules(erratum_id) -> TransitionRuleSet:
     # If show_all=1 is added to the URL, the table will include rules
     # for all defined state transitions, without it just gives the
     # rules for the current state to the "next" one.
-    html = requests.get(
-        f"https://errata.engineering.redhat.com/workflow_rules/for_advisory/{erratum_id}",
-        auth=HTTPSPNEGOAuth(),
-    ).text
+    html = ET_get_html(
+        f"/workflow_rules/for_advisory/{erratum_id}",
+    )
     soup = BeautifulSoup(html, "lxml")
 
     tbody = soup.tbody
@@ -175,15 +218,13 @@ class ErratumPushStatus(StrEnum):
 
 
 def erratum_get_latest_stage_push_status(erratum_id) -> ErratumPushStatus | None:
-    response = requests.get(
-        f"https://errata.engineering.redhat.com/api/v1/erratum/{erratum_id}/push",
-        auth=HTTPSPNEGOAuth(),
+    pushes = ET_api_get(
+        f"erratum/{erratum_id}/push",
     )
-    response.raise_for_status()
 
     highest_push_id = 0
     status = None
-    for push in response.json():
+    for push in pushes:
         if push["target"]["name"] == "cdn_stage" and push["id"] > highest_push_id:
             highest_push_id = push["id"]
             status = push["status"]
@@ -196,12 +237,10 @@ def erratum_push_to_stage(erratum_id, *, dry_run: bool = False):
         logger.info("Dry run: Would stage push erratum %s to stage", erratum_id)
         return
 
-    response = requests.post(
-        f"https://errata.engineering.redhat.com/api/v1/erratum/{erratum_id}/push",
+    ET_api_post(
+        f"erratum/{erratum_id}/push",
         data={"defaults": "stage"},
-        auth=HTTPSPNEGOAuth(),
     )
-    response.raise_for_status()
 
 
 def erratum_refresh_security_alerts(erratum_id, *, dry_run: bool = False):
@@ -209,11 +248,7 @@ def erratum_refresh_security_alerts(erratum_id, *, dry_run: bool = False):
         logger.info("Dry run: Would refresh security alerts for erratum %s", erratum_id)
         return
 
-    response = requests.post(
-        f"https://errata.engineering.redhat.com/api/v1/erratum/{erratum_id}/security_alerts/refresh",
-        auth=HTTPSPNEGOAuth(),
-    )
-    response.raise_for_status()
+    ET_api_post(f"erratum/{erratum_id}/security_alerts/refresh", {})
 
 
 def erratum_change_state(erratum_id, new_state: ErrataStatus, *, dry_run: bool = False):
@@ -223,12 +258,10 @@ def erratum_change_state(erratum_id, new_state: ErrataStatus, *, dry_run: bool =
         )
         return
 
-    response = requests.post(
-        url=f"https://errata.engineering.redhat.com/api/v1/erratum/{erratum_id}/change_state",
+    ET_api_post(
+        f"erratum/{erratum_id}/change_state",
         data={"new_state": new_state},
-        auth=HTTPSPNEGOAuth(),
     )
-    response.raise_for_status()
 
 
 if __name__ == "__main__":

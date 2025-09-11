@@ -174,7 +174,10 @@ async def download_artifacts(
     artifacts_urls: Annotated[list[str], Field(description="URLs to build artifacts (logs and RPM files)")],
     target_path: Annotated[AbsolutePath, Field(description="Absolute path where to download the artifacts")],
 ) -> str:
-    """Downloads build artifacts to the specified location."""
+    """
+    Downloads build artifacts to the specified location. Any gzipped log files will be automatically decompressed,
+    for example `http://example.com/builder-live.log.gz` will be downloaded as `builder-live.log`.
+    """
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         for url in artifacts_urls:

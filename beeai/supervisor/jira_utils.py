@@ -4,6 +4,7 @@ import logging
 import os
 from typing import Any, Collection, Generator, Type, TypeVar
 import requests
+from urllib.parse import quote as urlquote
 
 from .supervisor_types import (
     Issue,
@@ -88,7 +89,7 @@ def decode_issue(issue_data: Any) -> Issue:
 
     return Issue(
         key=key,
-        url=f"https://issues.redhat.com/browse/{key}",
+        url=f"https://issues.redhat.com/browse/{urlquote(key)}",
         summary=issue_data["fields"]["summary"],
         status=issue_data["fields"]["status"]["name"],
         components=issue_components,
@@ -119,7 +120,7 @@ def _fields():
 
 
 def get_issue(issue_key) -> Issue:
-    url = f"https://issues.redhat.com/rest/api/2/issue/{issue_key}?fields={','.join(_fields())}"
+    url = f"https://issues.redhat.com/rest/api/2/issue/{urlquote(issue_key)}?fields={','.join(_fields())}"
     response = requests.get(url, headers=jira_headers())
     response.raise_for_status()
     issue_data = response.json()

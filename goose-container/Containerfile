@@ -58,6 +58,8 @@ FROM runtime-platform AS production
 
 USER root
 
+ARG GOOSE_VERSION
+
 RUN curl -fsSL https://github.com/block/goose/releases/download/${GOOSE_VERSION}/download_cli.sh | \
     GOOSE_BIN_DIR=/usr/local/bin CONFIGURE=false bash
 

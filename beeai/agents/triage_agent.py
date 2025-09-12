@@ -226,7 +226,7 @@ def render_prompt(input: InputSchema) -> str:
          If your decision is rebase or backport, use set_jira_fields tool to update JIRA fields (Severity, Fix Version):
          1. Check all of the mentioned fields in the JIRA issue and don't modify those that are already set
          2. Extract the affected RHEL major version from the JIRA issue (look in Affects Version/s field or issue description)
-         3. Determine if this is a very critical issue requiring Z-stream (only for: privilege escalation, remote code execution, data loss/corruption, or system compromise)
+         3. Determine if this is a very critical issue requiring Z-stream (only for: privilege escalation, remote code execution, data loss/corruption, or system compromise; definitely not for: performance issues, usability improvements)
          4. Use map_version tool with the major version and criticality to get the appropriate Fix Version
              * If the tool raises MaintenanceVersionPolicyError, this means the issue shouldn't be fixed, change your decision to no-action with appropriate reasoning and don't set any fields.
          5. Set JIRA fields:

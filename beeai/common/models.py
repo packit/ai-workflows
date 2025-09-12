@@ -179,3 +179,19 @@ class BuildOutputSchema(BaseModel):
     """Output schema for the build agent."""
     success: bool = Field(description="Whether the build was successfully completed")
     error: str | None = Field(description="Specific details about an error")
+
+
+# ============================================================================
+# Log Agent Schemas
+# ============================================================================
+
+class LogInputSchema(BaseModel):
+    """Input schema for the log agent."""
+    jira_issue: str = Field(description="Jira issue to reference as resolved")
+    changes_summary: str = Field(description="Summary of performed changes")
+
+
+class LogOutputSchema(BaseModel):
+    """Output schema for the log agent."""
+    title: str = Field(description="Title to use for commit message and MR")
+    description: str = Field(description="Description of changes for commit message and MR")

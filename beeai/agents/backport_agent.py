@@ -26,13 +26,22 @@ from beeai_framework.workflows import Workflow
 
 import tasks
 from agents.build_agent import create_build_agent, get_prompt as get_build_prompt
-from common.models import BackportInputSchema, BackportOutputSchema, BuildInputSchema, BuildOutputSchema, Task
+from agents.log_agent import create_log_agent, get_prompt as get_log_prompt
+from common.constants import JiraLabels, RedisQueues
+from common.models import (
+    BackportInputSchema,
+    BackportOutputSchema,
+    BuildInputSchema,
+    BuildOutputSchema,
+    LogInputSchema,
+    LogOutputSchema,
+    Task,
+)
 from common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
-from common.constants import JiraLabels, RedisQueues
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
-from tools.specfile import AddChangelogEntryTool, BumpReleaseTool
+from tools.specfile import BumpReleaseTool
 from tools.text import CreateTool, InsertAfterSubstringTool, InsertTool, StrReplaceTool, ViewTool
 from tools.wicked_git import GitLogSearchTool, GitPatchCreationTool, GitPreparePackageSources
 from triage_agent import BackportData, ErrorData
@@ -64,9 +73,9 @@ def get_instructions() -> str:
       4. Once there are no more conflicts, use the `git_patch_create` tool with <UPSTREAM_FIX>
          as an argument to update the patch file.
 
-      5. Bump release in the spec file and add a new changelog entry. Add a new `Patch` tag pointing
-         to the <UPSTREAM_FIX> patch file. Add the new `Patch` tag after all existing `Patch` tags
-         and, if `Patch` tags are numbered, make sure it has the highest number.
+      5. Bump release in the spec file and add a new `Patch` tag pointing to the <UPSTREAM_FIX> patch file.
+         Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
+         make sure it has the highest number.
          Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
       6. Run `centpkg --release <DIST_GIT_BRANCH> prep` to see if the new patch applies cleanly.
@@ -77,7 +86,7 @@ def get_instructions() -> str:
       General instructions:
 
       - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
-      - Never change anything in the spec file changelog, you are only allowed to add a single changelog entry.
+      - Never change anything in the spec file changelog.
       - Preserve existing formatting and style conventions in spec files and patch headers.
       - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
     """
@@ -90,7 +99,6 @@ def get_prompt() -> str:
       {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
       {{^build_error}}
       Backport upstream fix {{jira_issue}}.patch. Unpacked upstream sources are in {{unpacked_sources}}.
-      Use "- Resolves: {{jira_issue}}" as changelog entry.
       {{/build_error}}
       {{#build_error}}
       This is a repeated backport, after the previous attempt the generated SRPM failed to build:
@@ -118,7 +126,6 @@ def create_backport_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> 
             GitPatchCreationTool(options=local_tool_options),
             GitLogSearchTool(options=local_tool_options),
             BumpReleaseTool(options=local_tool_options),
-            AddChangelogEntryTool(options=local_tool_options),
             GitPreparePackageSources(options=local_tool_options),
         ],
         memory=UnconstrainedMemory(),
@@ -156,8 +163,10 @@ async def main() -> None:
         fork_url: str | None = Field(default=None)
         unpacked_sources: Path | None = Field(default=None)
         attempts_remaining: int = Field(default=max_build_attempts)
+        backport_log: list[str] = Field(default=[])
         build_error: str | None = Field(default=None)
         backport_result: BackportOutputSchema | None = Field(default=None)
+        log_result: LogOutputSchema | None = Field(default=None)
         merge_request_url: str | None = Field(default=None)
 
     async def run_workflow(package, dist_git_branch, upstream_fix, jira_issue, cve_id):
@@ -166,6 +175,7 @@ async def main() -> None:
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
             backport_agent = create_backport_agent(gateway_tools, local_tool_options)
             build_agent = create_build_agent(gateway_tools, local_tool_options)
+            log_agent = create_log_agent(gateway_tools, local_tool_options)
 
             workflow = Workflow(State, name="BackportWorkflow")
 
@@ -225,6 +235,7 @@ async def main() -> None:
                 )
                 state.backport_result = BackportOutputSchema.model_validate_json(response.last_message.text)
                 if state.backport_result.success:
+                    state.backport_log.append(state.backport_result.status)
                     return "run_build_agent"
                 else:
                     return "comment_in_jira"
@@ -244,7 +255,7 @@ async def main() -> None:
                 )
                 build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
                 if build_result.success:
-                    return "commit_push_and_open_mr"
+                    return "run_log_agent"
                 state.attempts_remaining -= 1
                 if state.attempts_remaining <= 0:
                     state.backport_result.success = False
@@ -255,13 +266,29 @@ async def main() -> None:
                 state.build_error = build_result.error
                 return "run_backport_agent"
 
+            async def run_log_agent(state):
+                response = await log_agent.run(
+                    render_prompt(
+                        template=get_log_prompt(),
+                        input=LogInputSchema(
+                            jira_issue=state.jira_issue,
+                            changes_summary="\n".join(state.backport_log),
+                        ),
+                    ),
+                    expected_output=LogOutputSchema,
+                    **get_agent_execution_config(),
+                )
+                state.log_result = LogOutputSchema.model_validate_json(response.last_message.text)
+                return "commit_push_and_open_mr"
+
             async def commit_push_and_open_mr(state):
                 try:
                     state.merge_request_url = await tasks.commit_push_and_open_mr(
                         local_clone=state.local_clone,
                         files_to_commit=["*.spec", f"{state.jira_issue}.patch"],
                         commit_message=(
-                            f"Fix {state.jira_issue}\n\n"
+                            f"{state.log_result.title}\n\n"
+                            f"{state.log_result.description}\n\n"
                             f"{f'CVE: {state.cve_id}\n' if state.cve_id else ''}"
                             f"{f'Upstream fix: {state.upstream_fix}\n'}"
                             f"Resolves: {state.jira_issue}\n\n"
@@ -271,13 +298,15 @@ async def main() -> None:
                         fork_url=state.fork_url,
                         dist_git_branch=state.dist_git_branch,
                         update_branch=state.update_branch,
-                        mr_title=f"Resolves {state.jira_issue}",
+                        mr_title=state.log_result.title,
                         mr_description=(
                             f"This merge request was created {I_AM_JOTNAR}\n"
                             f"{CAREFULLY_REVIEW_CHANGES}\n\n"
+                            f"{state.log_result.description}\n\n"
                             f"Upstream patch: {state.upstream_fix}\n\n"
+                            f"Resolves: {state.jira_issue}\n\n"
                             "Backporting steps:\n\n"
-                            f"{state.backport_result.status}"
+                            f"{'\n'.join(state.backport_log)}"
                         ),
                         available_tools=gateway_tools,
                         commit_only=dry_run,
@@ -308,6 +337,7 @@ async def main() -> None:
             workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
             workflow.add_step("run_backport_agent", run_backport_agent)
             workflow.add_step("run_build_agent", run_build_agent)
+            workflow.add_step("run_log_agent", run_log_agent)
             workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
             workflow.add_step("comment_in_jira", comment_in_jira)
 

@@ -25,14 +25,22 @@ from beeai_framework.workflows import Workflow
 
 import tasks
 from agents.build_agent import create_build_agent, get_prompt as get_build_prompt
+from agents.log_agent import create_log_agent, get_prompt as get_log_prompt
 from common.config import get_package_instructions
-from common.models import BuildInputSchema, BuildOutputSchema, RebaseInputSchema, RebaseOutputSchema, Task
+from common.constants import JiraLabels, RedisQueues
+from common.models import (
+    BuildInputSchema,
+    BuildOutputSchema,
+    LogInputSchema,
+    LogOutputSchema,
+    RebaseInputSchema,
+    RebaseOutputSchema,
+    Task,
+)
 from common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
-from common.constants import JiraLabels, RedisQueues
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
-from tools.specfile import AddChangelogEntryTool
 from tools.text import CreateTool, InsertAfterSubstringTool, InsertTool, StrReplaceTool, ViewTool
 from triage_agent import RebaseData, ErrorData
 from utils import get_agent_execution_config, mcp_tools, render_prompt, run_tool
@@ -58,8 +66,7 @@ def get_instructions() -> str:
 
       3. Update the spec file. Set <VERSION>, reset release and do any other usual changes. You may need
          to get some information from the upstream repository, for example commit hashes.
-         Add a new changelog entry using the `add_changelog_entry` tool. Use `rpmlint <PACKAGE>.spec`
-         to validate your changes and fix any new issues.
+         Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
       4. Download upstream sources using `spectool -g -S <PACKAGE>.spec`. Run `centpkg --release <DIST_GIT_BRANCH> prep`
          to see if everything is in order. It is possible that some *.patch files will fail to apply now
@@ -74,14 +81,14 @@ def get_instructions() -> str:
       6. Generate a SRPM using `centpkg --release <DIST_GIT_BRANCH> srpm`.
 
       7. In your output, provide a "files_to_git_add" list containing all files that should be git added for this rebase.
-         This typically includes the updated .spec file and any new/modified/deleted patch files or other files you've changed
+         This typically includes the updated spec file and any new/modified/deleted patch files or other files you've changed
          or added/removed during the rebase. Do not include files that were automatically generated or downloaded by spectool.
 
 
       General instructions:
 
       - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
-      - Never change anything in the spec file changelog, you are only allowed to add a single changelog entry.
+      - Never change anything in the spec file changelog.
       - Preserve existing formatting and style conventions in spec files and patch headers.
       - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
       - If there are package-specific instructions, incorporate them into your work.
@@ -100,7 +107,7 @@ def get_prompt() -> str:
       {{/fedora_clone}}
 
       {{^build_error}}
-      Rebase the package to version {{version}}. Use "- Resolves: {{jira_issue}}" as changelog entry.
+      Rebase the package to version {{version}}.
       {{#package_instructions}}
 
       **Package-specific instructions (these are important to follow, incorporate them into your workflow reasonably):**
@@ -130,7 +137,6 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
             InsertTool(options=local_tool_options),
             InsertAfterSubstringTool(options=local_tool_options),
             StrReplaceTool(options=local_tool_options),
-            AddChangelogEntryTool(options=local_tool_options),
         ] + [t for t in mcp_tools if t.name == "upload_sources"],
         memory=UnconstrainedMemory(),
         requirements=[
@@ -166,8 +172,10 @@ async def main() -> None:
         update_branch: str | None = Field(default=None)
         fork_url: str | None = Field(default=None)
         attempts_remaining: int = Field(default=max_build_attempts)
+        rebase_log: list[str] = Field(default=[])
         build_error: str | None = Field(default=None)
         rebase_result: RebaseOutputSchema | None = Field(default=None)
+        log_result: LogOutputSchema | None = Field(default=None)
         merge_request_url: str | None = Field(default=None)
 
     async def run_workflow(package, dist_git_branch, version, jira_issue):
@@ -176,6 +184,7 @@ async def main() -> None:
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
             rebase_agent = create_rebase_agent(gateway_tools, local_tool_options)
             build_agent = create_build_agent(gateway_tools, local_tool_options)
+            log_agent = create_log_agent(gateway_tools, local_tool_options)
 
             workflow = Workflow(State, name="RebaseWorkflow")
 
@@ -225,6 +234,7 @@ async def main() -> None:
                 )
                 state.rebase_result = RebaseOutputSchema.model_validate_json(response.last_message.text)
                 if state.rebase_result.success:
+                    state.rebase_log.append(state.rebase_result.status)
                     return "run_build_agent"
                 return "comment_in_jira"
 
@@ -243,7 +253,7 @@ async def main() -> None:
                 )
                 build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
                 if build_result.success:
-                    return "commit_push_and_open_mr"
+                    return "run_log_agent"
                 state.attempts_remaining -= 1
                 if state.attempts_remaining <= 0:
                     state.rebase_result.success = False
@@ -254,6 +264,21 @@ async def main() -> None:
                 state.build_error = build_result.error
                 return "run_rebase_agent"
 
+            async def run_log_agent(state):
+                response = await log_agent.run(
+                    render_prompt(
+                        template=get_log_prompt(),
+                        input=LogInputSchema(
+                            jira_issue=state.jira_issue,
+                            changes_summary="\n".join(state.rebase_log),
+                        ),
+                    ),
+                    expected_output=LogOutputSchema,
+                    **get_agent_execution_config(),
+                )
+                state.log_result = LogOutputSchema.model_validate_json(response.last_message.text)
+                return "commit_push_and_open_mr"
+
             async def commit_push_and_open_mr(state):
                 # Use files specified by rebase agent, fallback to *.spec if none specified
                 files_to_git_add = state.rebase_result.files_to_git_add or ["*.spec"]
@@ -263,7 +288,8 @@ async def main() -> None:
                         local_clone=state.local_clone,
                         files_to_commit=files_to_git_add,
                         commit_message=(
-                            f"Rebase to version {state.version}\n\n"
+                            f"{state.log_result.title}\n\n"
+                            f"{state.log_result.description}\n\n"
                             f"Resolves: {state.jira_issue}\n\n"
                             f"This commit was created {I_AM_JOTNAR}\n\n"
                             f"Assisted-by: Jotnar\n"
@@ -271,13 +297,14 @@ async def main() -> None:
                         fork_url=state.fork_url,
                         dist_git_branch=state.dist_git_branch,
                         update_branch=state.update_branch,
-                        mr_title=f"Update to version {state.version}",
+                        mr_title=state.log_result.title,
                         mr_description=(
                             f"This merge request was created {I_AM_JOTNAR}\n"
                             f"{CAREFULLY_REVIEW_CHANGES}\n\n"
+                            f"{state.log_result.description}\n\n"
                             f"Resolves: {state.jira_issue}\n\n"
                             "Status of the rebase:\n\n"
-                            f"{state.rebase_result.status}"
+                            f"{'\n'.join(state.rebase_log)}"
                         ),
                         available_tools=gateway_tools,
                         commit_only=dry_run,
@@ -308,6 +335,7 @@ async def main() -> None:
             workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
             workflow.add_step("run_rebase_agent", run_rebase_agent)
             workflow.add_step("run_build_agent", run_build_agent)
+            workflow.add_step("run_log_agent", run_log_agent)
             workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
             workflow.add_step("comment_in_jira", comment_in_jira)
 

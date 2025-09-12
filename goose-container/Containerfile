@@ -47,6 +47,9 @@ COPY --chown=goose:goose \
 COPY --chown=goose:goose \
      scripts/ \
      /home/goose/scripts/
+COPY --chown=goose:goose \
+     adk-workflows/wait_mcp_server.sh \
+     /home/goose/
 
 USER goose
 WORKDIR /home/goose

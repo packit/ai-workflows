@@ -1,3 +1,13 @@
+# Environment variables shared by all agents
+x-beeai-env: &beeai-env
+  MCP_JIRA_URL: http://mcp-atlassian:9000/sse
+  MCP_GATEWAY_URL: http://mcp-gateway:8000/sse
+  REDIS_URL: redis://valkey:6379/0
+  COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
+  GIT_REPO_BASEPATH: /git-repos
+  MAX_RETRIES: 3
+  DRY_RUN: ${DRY_RUN:-false}
+
 # Base template for BeeAI agents
 x-beeai-agent: &beeai-agent
   depends_on:
@@ -5,18 +15,8 @@ x-beeai-agent: &beeai-agent
     - mcp-gateway
     - valkey
     - phoenix
-  image: beeai-agent
-  build:
-    context: .
-    dockerfile: Containerfile
   environment:
-    - MCP_JIRA_URL=http://mcp-atlassian:9000/sse
-    - MCP_GATEWAY_URL=http://mcp-gateway:8000/sse
-    - REDIS_URL=redis://valkey:6379/0
-    - COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces
-    - GIT_REPO_BASEPATH=/git-repos
-    - MAX_RETRIES=3
-    - DRY_RUN=${DRY_RUN:-false}
+    <<: *beeai-env
   env_file:
     - .secrets/beeai-agent.env
   volumes:
@@ -25,6 +25,28 @@ x-beeai-agent: &beeai-agent
     - git-repos:/git-repos:rw,U
     - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
   restart: unless-stopped
+
+# C9S agent template
+x-beeai-agent-c9s: &beeai-agent-c9s
+  <<: *beeai-agent
+  image: beeai-agent:c9s
+  build:
+    context: .
+    dockerfile: Containerfile.c9s
+  environment:
+    <<: *beeai-env
+    CONTAINER_VERSION: c9s
+
+# C10S agent template
+x-beeai-agent-c10s: &beeai-agent-c10s
+  <<: *beeai-agent
+  image: beeai-agent:c10s
+  build:
+    context: .
+    dockerfile: Containerfile.c10s
+  environment:
+    <<: *beeai-env
+    CONTAINER_VERSION: c10s
 
 services:
   mcp-atlassian:
@@ -83,15 +105,25 @@ services:
     restart: unless-stopped
 
   triage-agent:
-    <<: *beeai-agent
+    <<: *beeai-agent-c10s
+    environment:
+      <<: *beeai-env
     command: ["python", "agents/triage_agent.py"]
 
-  backport-agent:
-    <<: *beeai-agent
+  backport-agent-c9s:
+    <<: *beeai-agent-c9s
     command: ["python", "agents/backport_agent.py"]
 
-  rebase-agent:
-    <<: *beeai-agent
+  backport-agent-c10s:
+    <<: *beeai-agent-c10s
+    command: ["python", "agents/backport_agent.py"]
+
+  rebase-agent-c9s:
+    <<: *beeai-agent-c9s
+    command: ["python", "agents/rebase_agent.py"]
+
+  rebase-agent-c10s:
+    <<: *beeai-agent-c10s
     command: ["python", "agents/rebase_agent.py"]
 
   jira-issue-fetcher:

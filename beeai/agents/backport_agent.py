@@ -396,11 +396,14 @@ async def main() -> None:
     logger.info("Starting backport agent in queue mode")
     async with redis_client(os.environ["REDIS_URL"]) as redis:
         max_retries = int(os.getenv("MAX_RETRIES", 3))
-        logger.info(f"Connected to Redis, max retries set to {max_retries}")
+        # Determine which backport queue to listen to based on container version
+        container_version = os.getenv("CONTAINER_VERSION", "c10s")
+        backport_queue = RedisQueues.BACKPORT_QUEUE_C9S.value if container_version == "c9s" else RedisQueues.BACKPORT_QUEUE_C10S.value
+        logger.info(f"Connected to Redis, max retries set to {max_retries}, listening to queue: {backport_queue}")
 
         while True:
-            logger.info("Waiting for tasks from backport_queue (timeout: 30s)...")
-            element = await fix_await(redis.brpop([RedisQueues.BACKPORT_QUEUE.value], timeout=30))
+            logger.info(f"Waiting for tasks from {backport_queue} (timeout: 30s)...")
+            element = await fix_await(redis.brpop([backport_queue], timeout=30))
             if element is None:
                 logger.info("No tasks received, continuing to wait...")
                 continue
@@ -425,7 +428,7 @@ async def main() -> None:
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {backport_data.jira_issue}"
                     )
-                    await fix_await(redis.lpush(RedisQueues.BACKPORT_QUEUE.value, task.model_dump_json()))
+                    await fix_await(redis.lpush(backport_queue, task.model_dump_json()))
                 else:
                     logger.error(
                         f"Task failed after {max_retries} attempts, "

@@ -23,22 +23,35 @@ run-triage-agent-standalone:
 
 
 
-.PHONY: run-rebase-agent-standalone
-run-rebase-agent-standalone:
+.PHONY: run-rebase-agent-c9s-standalone
+run-rebase-agent-c9s-standalone:
 	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
 		-e PACKAGE=$(PACKAGE) \
 		-e VERSION=$(VERSION) \
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
-		rebase-agent
+		rebase-agent-c9s
+
+.PHONY: run-rebase-agent-c10s-standalone
+run-rebase-agent-c10s-standalone:
+	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e VERSION=$(VERSION) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e DRY_RUN=$(DRY_RUN) \
+		rebase-agent-c10s
+
+.PHONY: run-rebase-agent-standalone
+run-rebase-agent-standalone: run-rebase-agent-c10s-standalone
 
 
 
 
 
-.PHONY: run-backport-agent-standalone
-run-backport-agent-standalone:
+.PHONY: run-backport-agent-c9s-standalone
+run-backport-agent-c9s-standalone:
 	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
 		-e PACKAGE=$(PACKAGE) \
 		-e UPSTREAM_FIX=$(UPSTREAM_FIX) \
@@ -46,7 +59,21 @@ run-backport-agent-standalone:
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e CVE_ID=$(CVE_ID) \
-		backport-agent
+		backport-agent-c9s
+
+.PHONY: run-backport-agent-c10s-standalone
+run-backport-agent-c10s-standalone:
+	$(COMPOSE) -f $(COMPOSE_FILE) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e UPSTREAM_FIX=$(UPSTREAM_FIX) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e CVE_ID=$(CVE_ID) \
+		backport-agent-c10s
+
+.PHONY: run-backport-agent-standalone
+run-backport-agent-standalone: run-backport-agent-c10s-standalone
 
 .PHONY: run-jira-issue-fetcher
 run-jira-issue-fetcher:

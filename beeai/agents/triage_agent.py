@@ -515,7 +515,8 @@ async def main() -> None:
                         dry_run=dry_run
                     )
                     task = Task(metadata=state.model_dump())
-                    await redis.lpush(RedisQueues.REBASE_QUEUE.value, task.model_dump_json())
+                    rebase_queue = RedisQueues.get_rebase_queue_for_branch(state.target_branch)
+                    await redis.lpush(rebase_queue, task.model_dump_json())
                 elif output.resolution == Resolution.BACKPORT:
                     logger.info(f"Triage resolved as BACKPORT for {input.issue}, " f"adding to backport queue")
                     await tasks.set_jira_labels(
@@ -524,7 +525,8 @@ async def main() -> None:
                         dry_run=dry_run
                     )
                     task = Task(metadata=state.model_dump())
-                    await redis.lpush(RedisQueues.BACKPORT_QUEUE.value, task.model_dump_json())
+                    backport_queue = RedisQueues.get_backport_queue_for_branch(state.target_branch)
+                    await redis.lpush(backport_queue, task.model_dump_json())
                 elif output.resolution == Resolution.CLARIFICATION_NEEDED:
                     logger.info(
                         f"Triage resolved as CLARIFICATION_NEEDED for {input.issue}, "

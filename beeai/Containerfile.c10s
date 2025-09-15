@@ -1,0 +1,65 @@
+FROM quay.io/centos/centos:stream10
+
+RUN dnf -y install epel-release \
+    && dnf config-manager --set-enabled crb \
+    && dnf -y update
+
+RUN dnf -y install --allowerasing \
+      centpkg \
+      curl \
+      gcc \
+      git \
+      python3 \
+      python3-pip \
+      python3-devel \
+      python3-rpm \
+      rpm-build \
+      rpmdevtools \
+      rpmlint \
+      autoconf \
+      automake \
+      libtool \
+      libtool-ltdl \
+      libtool-ltdl-devel \
+      make \
+      meson \
+      ninja-build \
+      cmake \
+      wget \
+      findutils \
+      which \
+      sed \
+      gawk \
+    && dnf clean all
+
+RUN pip3 install --no-cache-dir \
+    beeai-framework[mcp,duckduckgo]==0.1.43 \
+    openinference-instrumentation-beeai \
+    arize-phoenix-otel \
+    redis \
+    specfile
+
+# Create user
+RUN useradd -m -G wheel beeai
+
+# Copy required directories
+# Individual directories are mounted as volumes in development
+COPY agents/ /home/beeai/agents/
+COPY common/ /home/beeai/common/
+RUN chgrp -R root /home/beeai && chmod -R g+rwX /home/beeai
+
+USER beeai
+ENV HOME=/home/beeai
+WORKDIR $HOME
+
+# Set PYTHONPATH so agents module can be imported
+ENV PYTHONPATH=$HOME:$PYTHONPATH
+
+# so that we can start working with gitlab.com immediately
+RUN mkdir ~/.ssh \
+      && chmod 0700 ~/.ssh \
+      && ssh-keyscan gitlab.com >> ~/.ssh/known_hosts \
+      && git config --global user.email "jotnar@redhat.com" \
+      && git config --global user.name "RHEL Packaging Agent"
+
+CMD ["/bin/bash"]

@@ -1,14 +1,14 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: backport-agent
+  name: rebase-agent-c9s
 spec:
   progressDeadlineSeconds: 600
   replicas: 1
   revisionHistoryLimit: 10
   selector:
     matchLabels:
-      app: backport-agent
+      app: rebase-agent-c9s
   strategy:
     rollingUpdate:
       maxSurge: 25%
@@ -17,14 +17,14 @@ spec:
   template:
     metadata:
       labels:
-        app: backport-agent
-        deployment: backport-agent
+        app: rebase-agent-c9s
+        deployment: rebase-agent-c9s
     spec:
       nodeSelector:
         kubernetes.io/hostname: ip-10-30-34-89.us-east-1.compute.internal
       containers:
       - args:
-        - agents/backport_agent.py
+        - agents/rebase_agent.py
         command:
         - /usr/bin/python
         env:
@@ -48,22 +48,6 @@ spec:
             configMapKeyRef:
               key: MAX_RETRIES
               name: x-beeai-agent-configmap
-        - name: MCP_GATEWAY_URL
-          valueFrom:
-            configMapKeyRef:
-              key: MCP_GATEWAY_URL
-              name: x-beeai-agent-configmap
-        - name: GIT_REPO_BASEPATH
-          valueFrom:
-            configMapKeyRef:
-              key: GIT_REPO_BASEPATH
-              name: x-beeai-agent-configmap
-
-        - name: GITLAB_USER
-          valueFrom:
-            secretKeyRef:
-              key: GITLAB_USER
-              name: beeai-agent-secrets
         - name: CHAT_MODEL
           valueFrom:
             secretKeyRef:
@@ -74,9 +58,26 @@ spec:
             secretKeyRef:
               key: GEMINI_API_KEY
               name: beeai-agent-secrets
-        image: 'beeai-agent:prod'
+        - name: GITLAB_USER
+          valueFrom:
+            secretKeyRef:
+              key: GITLAB_USER
+              name: beeai-agent-secrets
+        - name: MCP_GATEWAY_URL
+          valueFrom:
+            configMapKeyRef:
+              key: MCP_GATEWAY_URL
+              name: x-beeai-agent-configmap
+        - name: GIT_REPO_BASEPATH
+          valueFrom:
+            configMapKeyRef:
+              key: GIT_REPO_BASEPATH
+              name: x-beeai-agent-configmap
+        - name: CONTAINER_VERSION
+          value: "c9s"
+        image: 'beeai-agent:c9s'
         imagePullPolicy: Always
-        name: backport-agent
+        name: rebase-agent-c9s
         ports:
         - containerPort: 8080
           protocol: TCP
@@ -87,6 +88,9 @@ spec:
         volumeMounts:
         - mountPath: /git-repos
           name: mcp-server-git-repos
+        - mountPath: /home/beeai/rhel-config.json
+          name: rhel-config
+          subPath: rhel-config.json
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
@@ -97,3 +101,6 @@ spec:
       - name: mcp-server-git-repos
         persistentVolumeClaim:
           claimName: mcp-server-git-repos
+      - name: rhel-config
+        configMap:
+          name: rhel-config

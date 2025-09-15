@@ -5,10 +5,17 @@ metadata:
   name: beeai-agent
 spec:
   tags:
-    - name: prod
+    - name: c9s
       from:
         kind: DockerImage
-        name: quay.io/jotnar/beeai:latest
+        name: quay.io/jotnar/beeai:c9s
+      importPolicy:
+        # Periodically query registry to synchronize tag and image metadata.
+        scheduled: true
+    - name: c10s
+      from:
+        kind: DockerImage
+        name: quay.io/jotnar/beeai:c10s
       importPolicy:
         # Periodically query registry to synchronize tag and image metadata.
         scheduled: true

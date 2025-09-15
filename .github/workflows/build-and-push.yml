@@ -19,20 +19,29 @@ jobs:
           docker_context: "."
           image_name: "goose"
 
-  build-and-push-beeai-container:
+  build-and-push-beeai-containers:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - dockerfile: "beeai/Containerfile.c9s"
+            tag: "c9s"
+            description: "CentOS Stream 9"
+          - dockerfile: "beeai/Containerfile.c10s"
+            tag: "c10s"
+            description: "CentOS Stream 10"
     steps:
-      - name: Build and push beeai to quay.io registry
+      - name: Build and push beeai:${{ matrix.tag }} to quay.io registry (${{ matrix.description }})
         uses: sclorg/build-and-push-action@v4
         with:
           registry: "quay.io"
           registry_namespace: "jotnar"
           registry_username: ${{ secrets.REGISTRY_LOGIN }}
           registry_token: ${{ secrets.REGISTRY_TOKEN }}
-          dockerfile: "beeai/Containerfile"
+          dockerfile: ${{ matrix.dockerfile }}
           docker_context: "beeai/"
           image_name: "beeai"
-          # tag: "staging"
+          tag: ${{ matrix.tag }}
 
   build-and-push-mcp-server:
     runs-on: ubuntu-latest

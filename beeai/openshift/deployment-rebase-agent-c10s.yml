@@ -1,14 +1,14 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: rebase-agent
+  name: rebase-agent-c10s
 spec:
   progressDeadlineSeconds: 600
   replicas: 1
   revisionHistoryLimit: 10
   selector:
     matchLabels:
-      app: rebase-agent
+      app: rebase-agent-c10s
   strategy:
     rollingUpdate:
       maxSurge: 25%
@@ -17,8 +17,8 @@ spec:
   template:
     metadata:
       labels:
-        app: rebase-agent
-        deployment: rebase-agent
+        app: rebase-agent-c10s
+        deployment: rebase-agent-c10s
     spec:
       nodeSelector:
         kubernetes.io/hostname: ip-10-30-34-89.us-east-1.compute.internal
@@ -73,9 +73,11 @@ spec:
             configMapKeyRef:
               key: GIT_REPO_BASEPATH
               name: x-beeai-agent-configmap
-        image: 'beeai-agent:prod'
+        - name: CONTAINER_VERSION
+          value: "c10s"
+        image: 'beeai-agent:c10s'
         imagePullPolicy: Always
-        name: rebase-agent
+        name: rebase-agent-c10s
         ports:
         - containerPort: 8080
           protocol: TCP

@@ -199,7 +199,9 @@ async def test_get_existing_issue_keys(fetcher, mock_redis_context):
     )
 
     # Mock other queues as empty
-    for queue in [RedisQueues.REBASE_QUEUE.value, RedisQueues.BACKPORT_QUEUE.value, RedisQueues.CLARIFICATION_NEEDED_QUEUE.value,
+    for queue in [RedisQueues.REBASE_QUEUE_C9S.value, RedisQueues.REBASE_QUEUE_C10S.value,
+                 RedisQueues.BACKPORT_QUEUE_C9S.value, RedisQueues.BACKPORT_QUEUE_C10S.value,
+                 RedisQueues.CLARIFICATION_NEEDED_QUEUE.value,
                  RedisQueues.ERROR_LIST.value, RedisQueues.NO_ACTION_LIST.value, RedisQueues.COMPLETED_REBASE_LIST.value, RedisQueues.COMPLETED_BACKPORT_LIST.value]:
         mock_redis.should_receive('lrange').with_args(queue, 0, -1).and_return(
             create_async_mock_return_value([])
@@ -351,12 +353,20 @@ async def test_run_full_workflow_with_labeled_issues(fetcher, mock_redis_context
         create_async_mock_return_value([existing_issues['ISSUE-1'], existing_issues['ISSUE-4']])
     )
 
-    mock_redis.should_receive('lrange').with_args(RedisQueues.REBASE_QUEUE.value, 0, -1).and_return(
+    mock_redis.should_receive('lrange').with_args(RedisQueues.REBASE_QUEUE_C9S.value, 0, -1).and_return(
         create_async_mock_return_value([existing_issues['ISSUE-2']])
     )
 
-    mock_redis.should_receive('lrange').with_args(RedisQueues.BACKPORT_QUEUE.value, 0, -1).and_return(
+    mock_redis.should_receive('lrange').with_args(RedisQueues.REBASE_QUEUE_C10S.value, 0, -1).and_return(
+        create_async_mock_return_value([])
+    )
+
+    mock_redis.should_receive('lrange').with_args(RedisQueues.BACKPORT_QUEUE_C9S.value, 0, -1).and_return(
         create_async_mock_return_value([existing_issues['ISSUE-3']])
+    )
+
+    mock_redis.should_receive('lrange').with_args(RedisQueues.BACKPORT_QUEUE_C10S.value, 0, -1).and_return(
+        create_async_mock_return_value([])
     )
 
     mock_redis.should_receive('lrange').with_args(RedisQueues.CLARIFICATION_NEEDED_QUEUE.value, 0, -1).and_return(

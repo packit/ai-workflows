@@ -208,7 +208,7 @@ class JiraIssueFetcher:
                                         case RedisQueues.TRIAGE_QUEUE.value:
                                             schema = TriageInputSchema.model_validate(task.metadata)
                                             issue_key = schema.issue.upper()
-                                        case RedisQueues.REBASE_QUEUE.value | RedisQueues.BACKPORT_QUEUE.value | RedisQueues.CLARIFICATION_NEEDED_QUEUE.value:
+                                        case RedisQueues.REBASE_QUEUE_C9S.value | RedisQueues.REBASE_QUEUE_C10S.value | RedisQueues.BACKPORT_QUEUE_C9S.value | RedisQueues.BACKPORT_QUEUE_C10S.value | RedisQueues.CLARIFICATION_NEEDED_QUEUE.value | RedisQueues.BACKPORT_QUEUE.value | RedisQueues.REBASE_QUEUE.value:
                                             issue_key = task.metadata.get("jira_issue", "").upper()
                                         case _:
                                             continue

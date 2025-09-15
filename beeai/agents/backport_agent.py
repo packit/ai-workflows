@@ -312,11 +312,11 @@ async def main() -> None:
                         commit_message=(
                             f"{state.log_result.title}\n\n"
                             f"{state.log_result.description}\n\n"
-                            f"{f'CVE: {state.cve_id}\n' if state.cve_id else ''}"
-                            f"{f'Upstream fix: {state.upstream_fix}\n'}"
-                            f"Resolves: {state.jira_issue}\n\n"
+                            + (f"CVE: {state.cve_id}\n" if state.cve_id else "")
+                            + f"Upstream fix: {state.upstream_fix}\n"
+                            + f"Resolves: {state.jira_issue}\n\n"
                             f"This commit was backported {I_AM_JOTNAR}\n\n"
-                            f"Assisted-by: Jotnar\n"
+                            "Assisted-by: Jotnar\n"
                         ),
                         fork_url=state.fork_url,
                         dist_git_branch=state.dist_git_branch,
@@ -329,7 +329,7 @@ async def main() -> None:
                             f"Upstream patch: {state.upstream_fix}\n\n"
                             f"Resolves: {state.jira_issue}\n\n"
                             "Backporting steps:\n\n"
-                            f"{'\n'.join(state.backport_log)}"
+                            + '\n'.join(state.backport_log)
                         ),
                         available_tools=gateway_tools,
                         commit_only=dry_run,

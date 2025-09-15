@@ -316,7 +316,7 @@ async def main() -> None:
                             f"{state.log_result.description}\n\n"
                             f"Resolves: {state.jira_issue}\n\n"
                             "Status of the rebase:\n\n"
-                            f"{'\n'.join(state.rebase_log)}"
+                            + '\n'.join(state.rebase_log)
                         ),
                         available_tools=gateway_tools,
                         commit_only=dry_run,

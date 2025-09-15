@@ -16,6 +16,20 @@ RUN dnf -y install --allowerasing \
       python3.11 \
       python3.11-pip \
       python3.11-devel \
+      autoconf \
+      automake \
+      libtool \
+      libtool-ltdl \
+      libtool-ltdl-devel \
+      make \
+      meson \
+      ninja-build \
+      cmake \
+      wget \
+      findutils \
+      which \
+      sed \
+      gawk \
     && dnf clean all
 
 # Create Python 3.11 virtual environment and install Python packages

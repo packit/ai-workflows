@@ -142,6 +142,20 @@ def create_backport_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> 
     )
 
 
+def get_unpacked_sources(local_clone: Path, package: str) -> Path:
+    glob_patterns = (
+        f"{package}-*-build/*-*/",
+        f"{package}-*-build/{package}*/"
+    )
+    for p in glob_patterns:
+        unpacked_sources = list(local_clone.glob(p))
+        if len(unpacked_sources) == 1:
+            break
+    else:
+        raise ValueError(f"Expected exactly one unpacked source, got {unpacked_sources}")
+    return unpacked_sources[0]
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
@@ -203,10 +217,7 @@ async def main() -> None:
                 local_tool_options["working_directory"] = state.local_clone
                 await check_subprocess(["centpkg", "sources"], cwd=state.local_clone)
                 await check_subprocess(["centpkg", "prep"], cwd=state.local_clone)
-                unpacked_sources = list(state.local_clone.glob(f"*-build/*{state.package}*"))
-                if len(unpacked_sources) != 1:
-                    raise ValueError(f"Expected exactly one unpacked source, got {unpacked_sources}")
-                [state.unpacked_sources] = unpacked_sources
+                state.unpacked_sources = get_unpacked_sources(state.local_clone, state.package)
                 timeout = aiohttp.ClientTimeout(total=30)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.get(state.upstream_fix) as response:

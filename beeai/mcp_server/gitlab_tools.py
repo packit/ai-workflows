@@ -60,6 +60,7 @@ async def open_merge_request(
                     # we have to update the MR description to include the new commit hash
                     # this is an active API call via PR's setter method
                     pr.description = description
+                    pr.title = title
                     break
             else:
                 raise

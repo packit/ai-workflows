@@ -4,6 +4,7 @@ from pathlib import Path
 import gitlab
 from ogr.abstract import PRStatus
 from ogr.exceptions import GitlabAPIException
+from ogr.services.gitlab.project import GitlabProject
 import pytest
 from flexmock import flexmock
 from ogr.services.gitlab import GitlabService
@@ -11,14 +12,45 @@ from ogr.services.gitlab import GitlabService
 from gitlab_tools import fork_repository, open_merge_request, push_to_remote_repository
 
 
+@pytest.mark.parametrize(
+    "repository",
+    [
+        "https://gitlab.com/redhat/centos-stream/rpms/bash",
+        "https://gitlab.com/redhat/rhel/rpms/bash",
+    ],
+)
+@pytest.mark.parametrize(
+    "fork_exists",
+    [False, True],
+)
 @pytest.mark.asyncio
-async def test_fork_repository():
-    repository = "https://gitlab.com/redhat/centos-stream/rpms/bash"
-    clone_url = "https://gitlab.com/ai-bot/bash.git"
-    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
-        url=repository
-    ).and_return(
-        flexmock(get_fork=lambda create: flexmock(get_git_urls=lambda: {"git": clone_url}))
+async def test_fork_repository(repository, fork_exists):
+    package = "bash"
+    fork_namespace = "ai-bot"
+    fork_name = f"{package}-internal" if "/rhel/" in repository else package
+    clone_url = f"https://gitlab.com/{fork_namespace}/{fork_name}.git"
+    fork = flexmock(
+        gitlab_repo=flexmock(namespace={"full_path": fork_namespace}, path=fork_name),
+        get_git_urls=lambda: {"git": clone_url},
+    )
+    flexmock(GitlabProject).new_instances(fork)
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(url=repository).and_return(
+        flexmock(
+            get_forks=lambda: [fork] if fork_exists else [],
+            gitlab_repo=flexmock(
+                forks=flexmock()
+                .should_receive("create")
+                .with_args(data={"name": fork_name, "path": fork_name})
+                .and_return(fork.gitlab_repo)
+                .mock(),
+                name=package,
+                namespace={
+                    "full_path": repository.removeprefix("https://gitlab.com/").removesuffix(f"/{package}")
+                },
+                path=package,
+            ),
+            service=flexmock(user=flexmock(get_username=lambda: fork_namespace)),
+        )
     )
     assert await fork_repository(repository=repository) == clone_url
 

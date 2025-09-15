@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from fastmcp.exceptions import ToolError
 from ogr.factory import get_project
 from ogr.exceptions import OgrException, GitlabAPIException
+from ogr.services.gitlab.project import GitlabProject
 from pydantic import Field
 
 from common.validators import AbsolutePath
@@ -23,11 +24,33 @@ async def fork_repository(
     Creates a new fork of the specified repository if it doesn't exist yet,
     otherwise gets the existing fork. Returns a clonable git URL of the fork.
     """
-    # TODO: handle name conflict when forking from internal dist-git
     project = await asyncio.to_thread(get_project, url=repository, token=os.getenv("GITLAB_TOKEN"))
     if not project:
         raise ToolError("Failed to get the specified repository")
-    fork = await asyncio.to_thread(project.get_fork, create=True)
+
+    def get_fork():
+        username = project.service.user.get_username()
+        for fork in project.get_forks():
+            if fork.gitlab_repo.namespace["full_path"] == username:
+                return fork
+        return None
+
+    if fork := await asyncio.to_thread(get_fork):
+        return fork.get_git_urls()["git"]
+
+    def create_fork():
+        # fork the project and avoid name conflict:
+        # gitlab.com/redhat/centos-stream/rpms/bash => gitlab.com/jotnar-bot/bash
+        # gitlab.com/redhat/rhel/rpms/bash => gitlab.com/jotnar-bot/bash-internal
+        name = project.gitlab_repo.name
+        path = project.gitlab_repo.path
+        if "/rhel/" in project.gitlab_repo.namespace["full_path"]:
+            name += "-internal"
+            path += "-internal"
+        fork = project.gitlab_repo.forks.create(data={"name": name, "path": path})
+        return GitlabProject(namespace=fork.namespace["full_path"], service=project.service, repo=fork.path)
+
+    fork = await asyncio.to_thread(create_fork)
     if not fork:
         raise ToolError("Failed to fork the specified repository")
     return fork.get_git_urls()["git"]

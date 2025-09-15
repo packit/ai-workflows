@@ -26,8 +26,8 @@ def get_instructions() -> str:
       To document a change corresponding to <JIRA_ISSUE> Jira issue, having a brief summary
       of changes performed, do the following:
 
-      1. Use `git diff HEAD` to see what are the final changes that have been made in dist-git.
-         This command shows all changes (staged and unstaged) since the last commit.
+      1. Use `git diff --cached` to see what are the final changes that have been made
+         in dist-git and staged for commit.
 
       2. Add a new changelog entry to the spec file. Use the `add_changelog_entry` tool.
          Examine the previous changelog entries and try to use the same style. In general,

@@ -266,7 +266,7 @@ async def main() -> None:
                 )
                 build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
                 if build_result.success:
-                    return "run_log_agent"
+                    return "stage_changes"
                 state.attempts_remaining -= 1
                 if state.attempts_remaining <= 0:
                     state.backport_result.success = False
@@ -276,6 +276,19 @@ async def main() -> None:
                     return "comment_in_jira"
                 state.build_error = build_result.error
                 return "run_backport_agent"
+
+            async def stage_changes(state):
+                try:
+                    await tasks.stage_changes(
+                        local_clone=state.local_clone,
+                        files_to_commit=["*.spec", f"{state.jira_issue}.patch"],
+                    )
+                except Exception as e:
+                    logger.warning(f"Error staging changes: {e}")
+                    state.backport_result.success = False
+                    state.backport_result.error = f"Could not stage changes: {e}"
+                    return "comment_in_jira"
+                return "run_log_agent"
 
             async def run_log_agent(state):
                 response = await log_agent.run(
@@ -296,7 +309,6 @@ async def main() -> None:
                 try:
                     state.merge_request_url = await tasks.commit_push_and_open_mr(
                         local_clone=state.local_clone,
-                        files_to_commit=["*.spec", f"{state.jira_issue}.patch"],
                         commit_message=(
                             f"{state.log_result.title}\n\n"
                             f"{state.log_result.description}\n\n"
@@ -348,6 +360,7 @@ async def main() -> None:
             workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
             workflow.add_step("run_backport_agent", run_backport_agent)
             workflow.add_step("run_build_agent", run_build_agent)
+            workflow.add_step("stage_changes", stage_changes)
             workflow.add_step("run_log_agent", run_log_agent)
             workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
             workflow.add_step("comment_in_jira", comment_in_jira)

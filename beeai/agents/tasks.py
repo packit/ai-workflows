@@ -53,9 +53,18 @@ async def fork_and_prepare_dist_git(
     return local_clone, update_branch, fork_url, fedora_clone
 
 
-async def commit_push_and_open_mr(
+async def stage_changes(
     local_clone: Path,
     files_to_commit: str | list[str],
+) -> None:
+    if isinstance(files_to_commit, str):
+        files_to_commit = [files_to_commit]
+    for path in itertools.chain(*(local_clone.glob(pat) for pat in files_to_commit)):
+        await check_subprocess(["git", "add", str(path)], cwd=local_clone)
+
+
+async def commit_push_and_open_mr(
+    local_clone: Path,
     commit_message: str,
     fork_url: str,
     dist_git_branch: str,
@@ -65,10 +74,6 @@ async def commit_push_and_open_mr(
     available_tools: list[Tool],
     commit_only: bool = False,
 ) -> str | None:
-    if isinstance(files_to_commit, str):
-        files_to_commit = [files_to_commit]
-    for path in itertools.chain(*(local_clone.glob(pat) for pat in files_to_commit)):
-        await check_subprocess(["git", "add", str(path)], cwd=local_clone)
     # Check if any files are staged before committing, if none, bail
     exit_code, _, _ = await run_subprocess(
         ["git", "diff", "--cached", "--quiet"],

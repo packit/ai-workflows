@@ -182,9 +182,9 @@ def render_prompt(input: InputSchema) -> str:
              - For CVEs, use the CVE publication date to narrow down the timeframe for fixes
              - Check upstream release notes and changelogs after the RHEL package version date
 
-         2.3. Validate the Fix and URL
-         * Use the PatchValidator tool to fetch content from any patch/commit URL you intend to use
-         * The tool will verify the URL is accessible and not an issue reference, then return the content
+         2.3. Validate the Fix and URLs
+         * Use the PatchValidator tool to fetch content from any patch/commit URLs you intend to use
+         * The tool will verify the URLs are accessible and not an issue references, then return the content
          * Once you have the content, you must validate two things:
            1. **Is it a patch/diff?** Look for diff indicators like:
               - `diff --git` headers
@@ -247,7 +247,7 @@ def render_prompt(input: InputSchema) -> str:
 
       If Backport:
           PACKAGE: [package name]
-          PATCH_URL: [URL or reference to the source of the fix]
+          PATCH_URLS: [URLs or references to the source of the fixes]
           CVE_ID: [CVE identifier, leave blank if not applicable]
           JUSTIFICATION: [A brief but clear explanation of why this patch fixes the issue, linking it to the root cause.]
           FIX_VERSION: [fix version set in JIRA]

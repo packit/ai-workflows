@@ -32,7 +32,7 @@ async def fork_and_prepare_dist_git(
     local_clone = working_dir / package
     shutil.rmtree(local_clone, ignore_errors=True)
     await check_subprocess(
-        ["git", "clone", "--single-branch", "--branch", dist_git_branch, fork_url],
+        ["git", "clone", "--single-branch", "--branch", dist_git_branch, fork_url, package],
         cwd=working_dir,
     )
     update_branch = f"{BRANCH_PREFIX}-{jira_issue}"

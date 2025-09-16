@@ -46,6 +46,7 @@ from tools.text import CreateTool, InsertAfterSubstringTool, InsertTool, StrRepl
 from tools.wicked_git import GitLogSearchTool, GitPatchCreationTool, GitPreparePackageSources
 from triage_agent import BackportData, ErrorData
 from utils import check_subprocess, get_agent_execution_config, mcp_tools, render_prompt
+from specfile import Specfile
 
 logger = logging.getLogger(__name__)
 
@@ -143,17 +144,14 @@ def create_backport_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> 
 
 
 def get_unpacked_sources(local_clone: Path, package: str) -> Path:
-    glob_patterns = (
-        f"{package}-*-build/*-*/",
-        f"{package}-*-build/{package}*/"
-    )
-    for p in glob_patterns:
-        unpacked_sources = list(local_clone.glob(p))
-        if len(unpacked_sources) == 1:
-            break
-    else:
-        raise ValueError(f"Expected exactly one unpacked source, got {unpacked_sources}")
-    return unpacked_sources[0]
+    with Specfile(local_clone / f"{package}.spec") as spec:
+        buildsubdir = spec.expand("%{buildsubdir}")
+    sources_dir = local_clone / buildsubdir
+
+    if not sources_dir.exists():
+        raise ValueError(f"Unpacked source directory does not exist: {sources_dir}")
+
+    return sources_dir
 
 
 async def main() -> None:

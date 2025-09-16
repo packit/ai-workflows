@@ -2,6 +2,7 @@ FROM fedora:42
 
 # Install system dependencies
 RUN dnf -y install \
+      gcc \
       make \
       python3 \
       python3-copr \
@@ -23,6 +24,6 @@ RUN git config --global user.email "jotnar-tests@example.com" \
 ENV PYTHONPATH=/src:$PYTHONPATH
 
 # Install BeeAI Framework and FastMCP
-RUN pip3 install --no-cache-dir beeai-framework fastmcp redis
+RUN pip3 install --no-cache-dir beeai-framework fastmcp redis backoff
 
 WORKDIR /src

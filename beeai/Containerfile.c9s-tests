@@ -1,0 +1,42 @@
+FROM quay.io/centos/centos:stream9
+
+RUN dnf -y install epel-release \
+    && dnf config-manager --set-enabled crb \
+    && dnf -y update
+
+RUN dnf -y install --allowerasing \
+      curl \
+      gcc \
+      git \
+      python3-rpm \
+      rpm-build \
+      rpmdevtools \
+      rpmlint \
+      python3.11 \
+      python3.11-pip \
+      python3.11-devel \
+    && dnf clean all
+
+# Create Python 3.11 virtual environment and install Python packages
+RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
+    && /opt/beeai-venv/bin/pip install --upgrade pip \
+    && /opt/beeai-venv/bin/pip install --no-cache-dir \
+       beeai-framework[mcp,duckduckgo]==0.1.43 \
+       openinference-instrumentation-beeai \
+       arize-phoenix-otel \
+       redis \
+       specfile \
+       pytest \
+       pytest-asyncio \
+       flexmock
+
+# Make venv Python the default
+ENV PATH=/opt/beeai-venv/bin:$PATH
+
+RUN git config --global user.email "jotnar-tests@example.com" \
+      && git config --global user.name "Jotnar Tests"
+
+# Set PYTHONPATH so agents module can be imported
+ENV PYTHONPATH=/src:$PYTHONPATH
+
+WORKDIR /src

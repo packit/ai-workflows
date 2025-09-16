@@ -1,11 +1,17 @@
 TEST_IMAGE ?= beeai-tests
+TEST_IMAGE_C9S ?= beeai-tests-c9s
 TEST_TARGET ?= ./tests/unit
 
 CONTAINER_ENGINE ?= $(shell command -v podman 2>/dev/null || echo "docker")
 
-.PHONY: build-test-image
-build-test-image:
+.PHONY: build-test-image build-test-image-fedora build-test-image-c9s
+build-test-image: build-test-image-fedora build-test-image-c9s
+
+build-test-image-fedora:
 	$(CONTAINER_ENGINE) build --rm --tag $(TEST_IMAGE) -f Containerfile.tests
+
+build-test-image-c9s:
+	$(CONTAINER_ENGINE) build --rm --tag $(TEST_IMAGE_C9S) -f Containerfile.c9s-tests
 
 .PHONY: check check-agents check-mcp-server check-in-container \
 	check-agents-in-container check-mcp-server-in-container check-jira-issue-fetcher-in-container
@@ -23,7 +29,7 @@ check-jira-issue-fetcher:
 check: check-agents check-mcp-server check-jira-issue-fetcher
 
 check-agents-in-container:
-	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE) make -f Makefile.tests check-agents
+	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE_C9S) make -f Makefile.tests check-agents
 check-mcp-server-in-container:
 	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE) make -f Makefile.tests check-mcp-server
 check-jira-issue-fetcher-in-container:

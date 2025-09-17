@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncGenerator, Awaitable, Callable, TypeVar, Tuple
 
+from beeai_framework.backend import ChatModel, ChatModelParameters
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.types import TextContent
@@ -17,6 +18,13 @@ from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.template import PromptTemplate
 from beeai_framework.tools import Tool
 from beeai_framework.tools.mcp import MCPTool
+
+
+def get_chat_model() -> ChatModel:
+    return ChatModel.from_name(
+        os.environ["CHAT_MODEL"],
+        options=ChatModelParameters(temperature=0.6),
+    )
 
 
 def get_agent_execution_config() -> dict[str, int]:

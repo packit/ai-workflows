@@ -14,7 +14,6 @@ from beeai_framework.agents.experimental import RequirementAgent
 from beeai_framework.agents.experimental.requirements.conditional import (
     ConditionalRequirement,
 )
-from beeai_framework.backend import ChatModel
 from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
@@ -43,7 +42,7 @@ from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.patch_validator import PatchValidatorTool
 from tools.version_mapper import VersionMapperTool
-from utils import get_agent_execution_config, mcp_tools, run_tool
+from utils import get_agent_execution_config, get_chat_model, mcp_tools, run_tool
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +286,7 @@ async def main() -> None:
         async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
             triage_agent = RequirementAgent(
                 name="TriageAgent",
-                llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
+                llm=get_chat_model(),
                 tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool(), VersionMapperTool()]
                 + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields"]],
                 memory=UnconstrainedMemory(),

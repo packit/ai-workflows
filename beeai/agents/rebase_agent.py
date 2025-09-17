@@ -14,7 +14,6 @@ from beeai_framework.agents.experimental.prompts import RequirementAgentSystemPr
 from beeai_framework.agents.experimental.requirements.conditional import (
     ConditionalRequirement,
 )
-from beeai_framework.backend import ChatModel
 from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
@@ -43,7 +42,7 @@ from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.text import CreateTool, InsertAfterSubstringTool, InsertTool, StrReplaceTool, ViewTool
 from triage_agent import RebaseData, ErrorData
-from utils import get_agent_execution_config, mcp_tools, render_prompt, run_tool
+from utils import get_agent_execution_config, get_chat_model, mcp_tools, render_prompt, run_tool
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +126,7 @@ def get_prompt() -> str:
 def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> RequirementAgent:
     return RequirementAgent(
         name="RebaseAgent",
-        llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
+        llm=get_chat_model(),
         tools=[
             ThinkTool(),
             DuckDuckGoSearchTool(),

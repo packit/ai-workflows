@@ -1,5 +1,4 @@
 import copy
-import os
 from typing import Any
 
 from beeai_framework.agents.experimental import RequirementAgent
@@ -7,7 +6,6 @@ from beeai_framework.agents.experimental.prompts import RequirementAgentSystemPr
 from beeai_framework.agents.experimental.requirements.conditional import (
     ConditionalRequirement,
 )
-from beeai_framework.backend import ChatModel
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
@@ -16,6 +14,7 @@ from beeai_framework.tools.think import ThinkTool
 
 from tools.commands import RunShellCommandTool
 from tools.text import CreateTool, InsertTool, InsertAfterSubstringTool, StrReplaceTool, ViewTool
+from utils import get_chat_model
 
 
 def get_instructions() -> str:
@@ -40,7 +39,7 @@ def get_prompt() -> str:
 def create_build_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> RequirementAgent:
     return RequirementAgent(
         name="BuildAgent",
-        llm=ChatModel.from_name(os.environ["CHAT_MODEL"]),
+        llm=get_chat_model(),
         tools=[
             ThinkTool(),
             DuckDuckGoSearchTool(),

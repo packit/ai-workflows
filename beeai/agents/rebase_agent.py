@@ -277,6 +277,8 @@ async def main() -> None:
                     state.rebase_result.success = False
                     state.rebase_result.error = f"Could not stage changes: {e}"
                     return "comment_in_jira"
+                if state.log_result:
+                    return "commit_push_and_open_mr"
                 return "run_log_agent"
 
             async def run_log_agent(state):
@@ -292,7 +294,7 @@ async def main() -> None:
                     **get_agent_execution_config(),
                 )
                 state.log_result = LogOutputSchema.model_validate_json(response.last_message.text)
-                return "commit_push_and_open_mr"
+                return "stage_changes"
 
             async def commit_push_and_open_mr(state):
                 try:

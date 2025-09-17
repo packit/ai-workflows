@@ -5,15 +5,12 @@ import os
 
 from bs4 import BeautifulSoup, Tag  # type: ignore
 from pydantic import BaseModel
-import requests
 from requests_gssapi import HTTPSPNEGOAuth
 
+from .http_utils import requests_session
 from .supervisor_types import Erratum, ErrataStatus
 
 logger = logging.getLogger(__name__)
-
-
-session = requests.Session()
 
 
 ET_URL = "https://errata.engineering.redhat.com/"
@@ -29,7 +26,7 @@ def ET_verify() -> bool | str:
 
 
 def ET_api_get(path: str):
-    response = session.get(
+    response = requests_session().get(
         f"{ET_URL}/api/v1/{path}",
         auth=HTTPSPNEGOAuth(opportunistic_auth=True),
         verify=ET_verify(),
@@ -39,7 +36,7 @@ def ET_api_get(path: str):
 
 
 def ET_api_post(path: str, data: dict):
-    response = session.post(
+    response = requests_session().post(
         f"{ET_URL}/api/v1/{path}",
         data=data,
         auth=HTTPSPNEGOAuth(opportunistic_auth=True),
@@ -50,7 +47,7 @@ def ET_api_post(path: str, data: dict):
 
 
 def ET_get_html(path: str):
-    response = session.get(
+    response = requests_session().get(
         f"{ET_URL}/{path}",
         auth=HTTPSPNEGOAuth(opportunistic_auth=True),
         verify=ET_verify(),

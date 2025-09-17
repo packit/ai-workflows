@@ -12,9 +12,9 @@ from typing import (
     TypeVar,
     overload,
 )
-import requests
 from urllib.parse import quote as urlquote
 
+from .http_utils import requests_session
 from .supervisor_types import (
     FullIssue,
     Issue,
@@ -57,12 +57,31 @@ def jira_headers() -> dict[str, str]:
     }
 
 
+def jira_api_get(path: str) -> Any:
+    url = f"https://issues.redhat.com/rest/api/2/{path}"
+    response = requests_session().get(url, headers=jira_headers())
+    response.raise_for_status()
+    return response.json()
+
+
+def jira_api_post(path: str, json: dict[str, Any]) -> Any:
+    url = f"https://issues.redhat.com/rest/api/2/{path}"
+    response = requests_session().post(url, headers=jira_headers(), json=json)
+    response.raise_for_status()
+    return response.json()
+
+
+def jira_api_put(path: str, json: dict[str, Any]) -> Any:
+    url = f"https://issues.redhat.com/rest/api/2/{path}"
+    response = requests_session().put(url, headers=jira_headers(), json=json)
+    response.raise_for_status()
+    return response.json()
+
+
 @cache
 def get_custom_fields() -> dict[str, str]:
-    URL = "https://issues.redhat.com/rest/api/2/field"
-    response = requests.get(URL, headers=jira_headers())
-    response.raise_for_status()
-    return {field["name"]: field["id"] for field in response.json()}
+    response = jira_api_get("field")
+    return {field["name"]: field["id"] for field in response}
 
 
 CURRENT_ISSUES_JQL = """
@@ -169,12 +188,9 @@ def get_issue(issue_key: str, full: Literal[True]) -> FullIssue: ...
 
 
 def get_issue(issue_key: str, full: bool = False) -> Issue | FullIssue:
-    url = f"https://issues.redhat.com/rest/api/2/issue/{urlquote(issue_key)}?fields={','.join(_fields(full))}"
-    response = requests.get(url, headers=jira_headers())
-    response.raise_for_status()
-    issue_data = response.json()
-
-    return decode_issue(issue_data, full)
+    path = f"issue/{urlquote(issue_key)}?fields={','.join(_fields(full))}"
+    response_data = jira_api_get(path)
+    return decode_issue(response_data, full)
 
 
 @overload
@@ -200,10 +216,8 @@ def get_current_issues(
             "fields": _fields(full),
         }
 
-        url = "https://issues.redhat.com/rest/api/2/search"
         logger.debug("Fetching JIRA issues, start=%d, max=%d", start_at, max_results)
-        response = requests.post(url, json=body, headers=jira_headers())
-        response_data = response.json()
+        response_data = jira_api_post("search", json=body)
         logger.debug("Got %d issues", len(response_data["issues"]))
 
         for issue_data in response_data["issues"]:
@@ -248,10 +262,8 @@ def get_issue_by_jotnar_tag(
         "fields": _fields(full),
     }
 
-    url = "https://issues.redhat.com/rest/api/2/search"
     logger.debug("Fetching JIRA issues, start=%d, max=%d", start_at, max_results)
-    response = requests.post(url, json=body, headers=jira_headers())
-    response_data = response.json()
+    response_data = jira_api_post("search", json=body)
 
     if len(response_data["issues"]) == 0:
         return None
@@ -271,9 +283,7 @@ def get_issues_statuses(issue_keys: Collection[str]) -> dict[str, IssueStatus]:
         "fields": ["status"],
     }
 
-    url = "https://issues.redhat.com/rest/api/2/search"
-    response = requests.post(url, json=body, headers=jira_headers())
-    response_data = response.json()
+    response_data = jira_api_post("search", json=body)
 
     return {
         issue_data["key"]: IssueStatus(issue_data["fields"]["status"]["name"])
@@ -321,13 +331,12 @@ def change_issue_status(
     *,
     dry_run: bool = False,
 ) -> None:
-    url = f"https://issues.redhat.com/rest/api/2/issue/{urlquote(issue_key)}/transitions?expand=transitions.fields"
-    response = requests.get(url, headers=jira_headers())
-    response.raise_for_status()
+    path = f"issue/{urlquote(issue_key)}/transitions?expand=transitions.fields"
+    response_data = jira_api_get(path)
 
     status_str = str(new_status)
     transition = None
-    for t in response.json()["transitions"]:
+    for t in response_data["transitions"]:
         if t["to"]["name"] == status_str:
             transition = t
             break
@@ -340,9 +349,7 @@ def change_issue_status(
             f"Cannot transition issue {issue_key} to status {status_str}: transition has required fields"
         )
 
-    url = (
-        f"https://issues.redhat.com/rest/api/2/issue/{urlquote(issue_key)}/transitions"
-    )
+    path = f"issue/{urlquote(issue_key)}/transitions"
     body: dict[str, Any] = {"transition": {"id": transition["id"]}, "update": {}}
     if comment is not None:
         _add_comment_update(body["update"], comment)
@@ -351,17 +358,16 @@ def change_issue_status(
         logger.info(
             "Dry run: would change issue %s status to %s", issue_key, new_status
         )
-        logger.debug("Dry run: would post %s to %s", body, url)
+        logger.debug("Dry run: would post %s to %s", body, path)
         return
 
-    response = requests.post(url, json=body, headers=jira_headers())
-    response.raise_for_status()
+    jira_api_post(path, json=body)
 
 
 def add_issue_label(
     issue_key: str, label: str, comment: CommentSpec = None, *, dry_run: bool = False
 ) -> None:
-    url = f"https://issues.redhat.com/rest/api/2/issue/{urlquote(issue_key)}"
+    path = f"issue/{urlquote(issue_key)}"
     body: dict[str, Any] = {
         "update": {"labels": [{"add": label}]},
     }
@@ -370,19 +376,16 @@ def add_issue_label(
 
     if dry_run:
         logger.info("Dry run: would add label %s to issue %s", label, issue_key)
-        logger.debug("Dry run: would post %s to %s", body, url)
+        logger.debug("Dry run: would post %s to %s", body, path)
         return
 
-    response = requests.put(url, json=body, headers=jira_headers())
-    response.raise_for_status()
+    jira_api_put(path, json=body)
 
 
 @cache
 def get_user_name(email: str) -> str:
-    url = f"https://issues.redhat.com/rest/api/2/user/search?username={urlquote(email)}"
-    response = requests.get(url, headers=jira_headers())
-    response.raise_for_status()
-    users = response.json()
+    path = f"user/search?username={urlquote(email)}"
+    users = jira_api_get(path)
     if len(users) == 0:
         raise ValueError(f"No JIRA user with email {email}")
     elif len(users) > 1:
@@ -435,8 +438,6 @@ def create_issue(
     labels: Collection[str] | None = None,
     dry_run: bool = False,
 ) -> str | None:
-    url = "https://issues.redhat.com/rest/api/2/issue"
-
     if tag is not None:
         description = f"{tag}\n\n{description}"
 
@@ -462,6 +463,7 @@ def create_issue(
     if labels:
         fields |= {"labels": list(labels)}
 
+    path = "issue"
     body = {"fields": fields}
 
     if dry_run:
@@ -471,13 +473,11 @@ def create_issue(
             summary,
             tag,
         )
-        logger.debug("Dry run: would post %s to %s", body, url)
+        logger.debug("Dry run: would post %s to %s", body, path)
         return
 
-    response = requests.post(url, json=body, headers=jira_headers())
-    response.raise_for_status()
-
-    key = response.json()["key"]
+    response_data = jira_api_post(path, json=body)
+    key = response_data["key"]
     logger.info("Created new issue %s", key)
 
     return key

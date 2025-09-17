@@ -1,9 +1,10 @@
-import aiohttp
 from pydantic import BaseModel, Field
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
+
+from ..http_utils import aiohttp_session
 
 
 class ReadReadmeInput(BaseModel):
@@ -37,14 +38,16 @@ class ReadReadmeTool(Tool[ReadReadmeInput, ToolRunOptions, StringToolOutput]):
         options: ToolRunOptions | None,
         context: RunContext,
     ) -> StringToolOutput:
-        async with aiohttp.ClientSession() as session:
-            url = None
-            for prefix, suffix in README_PATTERNS:
-                if input.repo_url.startswith(prefix):
-                    url = input.repo_url.removesuffix("/") + suffix
-                    async with session.get(url) as response:
-                        if response.status == 200:
-                            return StringToolOutput(
-                                result=await response.text(),
-                            )
+        session = aiohttp_session()
+
+        url = None
+        for prefix, suffix in README_PATTERNS:
+            if input.repo_url.startswith(prefix):
+                url = input.repo_url.removesuffix("/") + suffix
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        return StringToolOutput(
+                            result=await response.text(),
+                        )
+
         return StringToolOutput(result=f"Failed to find README.md for {input.repo_url}")

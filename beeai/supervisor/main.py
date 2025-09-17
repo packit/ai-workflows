@@ -12,6 +12,7 @@ from .erratum_handler import ErratumHandler, erratum_needs_attention
 from .issue_handler import IssueHandler
 from .jira_utils import get_current_issues, get_issue
 from .supervisor_types import ErrataStatus, IssueStatus
+from .http_utils import with_http_sessions
 from .work_queue import WorkItem, WorkQueue, WorkItemType, work_queue
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ def check_env(chat: bool = False, jira: bool = False, redis: bool = False):
         raise typer.Exit(1)
 
 
+@with_http_sessions()
 async def collect_once(queue: WorkQueue):
     logger.info("Getting all relevant issues from JIRA")
     issues = [i for i in get_current_issues()]
@@ -112,6 +114,7 @@ def collect(
     asyncio.run(do_collect(repeat, repeat_delay))
 
 
+@with_http_sessions()
 async def process_once(queue: WorkQueue):
     work_item = await queue.wait_first_ready_work_item()
     if work_item.item_type == WorkItemType.PROCESS_ISSUE:
@@ -166,6 +169,7 @@ def process(repeat: bool = typer.Option(True)):
     asyncio.run(do_process(repeat))
 
 
+@with_http_sessions()
 async def do_process_issue(key: str):
     issue = get_issue(key, full=True)
     result = await IssueHandler(issue, dry_run=app_state.dry_run).run()
@@ -197,6 +201,7 @@ def process_issue(
     asyncio.run(do_process_issue(key))
 
 
+@with_http_sessions()
 async def do_process_erratum(id: str):
     check_env(chat=True, jira=True)
 

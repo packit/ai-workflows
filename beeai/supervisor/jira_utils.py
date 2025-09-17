@@ -48,6 +48,12 @@ def quote(component: str):
 
 
 @cache
+def jira_url() -> str:
+    url = os.environ.get("JIRA_URL", "https://issues.redhat.com")
+    return url.rstrip("/")
+
+
+@cache
 def jira_headers() -> dict[str, str]:
     jira_token = os.environ["JIRA_TOKEN"]
 
@@ -58,21 +64,21 @@ def jira_headers() -> dict[str, str]:
 
 
 def jira_api_get(path: str) -> Any:
-    url = f"https://issues.redhat.com/rest/api/2/{path}"
+    url = f"{jira_url()}/rest/api/2/{path}"
     response = requests_session().get(url, headers=jira_headers())
     response.raise_for_status()
     return response.json()
 
 
 def jira_api_post(path: str, json: dict[str, Any]) -> Any:
-    url = f"https://issues.redhat.com/rest/api/2/{path}"
+    url = f"{jira_url()}/rest/api/2/{path}"
     response = requests_session().post(url, headers=jira_headers(), json=json)
     response.raise_for_status()
     return response.json()
 
 
 def jira_api_put(path: str, json: dict[str, Any]) -> Any:
-    url = f"https://issues.redhat.com/rest/api/2/{path}"
+    url = f"{jira_url()}/rest/api/2/{path}"
     response = requests_session().put(url, headers=jira_headers(), json=json)
     response.raise_for_status()
     return response.json()

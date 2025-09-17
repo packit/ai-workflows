@@ -36,11 +36,8 @@ def check_env(chat: bool = False, jira: bool = False, redis: bool = False):
             ("CHAT_MODEL", "name of model to use (e.g., gemini:gemini-2.5-pro)")
         )
     if jira:
-        required_vars.extend(
-            [
-                ("JIRA_URL", "Jira instance URL (e.g., https://issues.redhat.com)"),
-                ("JIRA_TOKEN", "Jira authentication token"),
-            ]
+        required_vars.append(
+            ("JIRA_TOKEN", "Jira authentication token"),
         )
     if redis:
         required_vars.append(

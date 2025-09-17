@@ -68,7 +68,7 @@ async def analyze_issue(jira_issue: FullIssue) -> OutputSchema:
     agent = ToolCallingAgent(
         llm=ChatModel.from_name(
             os.environ["CHAT_MODEL"],
-            allow_parallel_tools_calls=True,
+            allow_parallel_tool_calls=True,
         ),
         memory=UnconstrainedMemory(),
         tools=[ReadReadmeTool()],

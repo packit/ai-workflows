@@ -16,10 +16,8 @@ from pydantic import BaseModel, Field
 from common.validators import AbsolutePath
 from utils import init_kerberos_ticket
 
-COPR_USER = "jotnar-bot"
 COPR_CONFIG = {
     "copr_url": "https://copr.devel.redhat.com",
-    "username": COPR_USER,
     "gssapi": True,
 }
 COPR_PROJECT_LIFETIME = 7  # days
@@ -72,8 +70,9 @@ async def build_package(
     jira_issue: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
 ) -> BuildResult:
     """Builds the specified SRPM in Copr."""
-    if not await init_kerberos_ticket():
+    if not (principal := await init_kerberos_ticket()):
         raise ToolError("Failed to initialize Kerberos ticket")
+    copr_user = principal.split("@", maxsplit=1)[0]
     try:
         exclusive_arches = await _get_exclusive_arches(srpm_path)
     except Exception as e:
@@ -85,9 +84,9 @@ async def build_package(
         chroot = _branch_to_chroot(dist_git_branch) + f"-{build_arch}"
     except ValueError as e:
         raise ToolError(f"Failed to deduce Copr chroot: {e}") from e
-    project_proxy = ProjectProxy(COPR_CONFIG)
+    project_proxy = ProjectProxy({"username": copr_user, **COPR_CONFIG})
     kwargs = {
-        "ownername": COPR_USER,
+        "ownername": copr_user,
         "projectname": jira_issue,
         "chroots": [chroot],
         "description": f"Test builds for {jira_issue}",
@@ -103,11 +102,11 @@ async def build_package(
             await asyncio.to_thread(project_proxy.edit, **kwargs)
     except Exception as e:
         raise ToolError(f"Failed to create or update Copr project: {e}") from e
-    build_proxy = BuildProxy(COPR_CONFIG)
+    build_proxy = BuildProxy({"username": copr_user, **COPR_CONFIG})
     try:
         build = await asyncio.to_thread(
             build_proxy.create_from_file,
-            ownername=COPR_USER,
+            ownername=copr_user,
             projectname=jira_issue,
             path=str(srpm_path),
             buildopts={"chroots": [chroot], "timeout": COPR_BUILD_TIMEOUT},

@@ -11,7 +11,6 @@ from flexmock import flexmock
 
 import copr_tools
 from copr_tools import (
-    COPR_USER,
     COPR_PROJECT_LIFETIME,
     COPR_BUILD_TIMEOUT,
     build_package,
@@ -29,6 +28,7 @@ from copr_tools import (
 )
 @pytest.mark.asyncio
 async def test_build_package(build_failure, exclusive_arch):
+    ownername = "jotnar-bot"
     srpm_path = Path("test.src.rpm")
     dist_git_branch = "c10s"
     jira_issue = "RHEL-12345"
@@ -36,7 +36,7 @@ async def test_build_package(build_failure, exclusive_arch):
     existing_chroot = f"rhel-9.dev-{exclusive_arch or 'x86_64'}"
 
     async def init_kerberos_ticket():
-        return True
+        return f"{ownername}@EXAMPLE.COM"
 
     async def _get_exclusive_arches(*_):
         return {exclusive_arch} if exclusive_arch else set()
@@ -50,7 +50,7 @@ async def test_build_package(build_failure, exclusive_arch):
     flexmock(asyncio).should_receive("sleep").replace_with(sleep)
 
     kwargs = {
-        "ownername": COPR_USER,
+        "ownername": ownername,
         "projectname": jira_issue,
         "chroots": [chroot],
         "description": f"Test builds for {jira_issue}",
@@ -62,7 +62,7 @@ async def test_build_package(build_failure, exclusive_arch):
     kwargs["chroots"] = sorted({existing_chroot} | {chroot})
     flexmock(ProjectProxy).should_receive("edit").with_args(**kwargs).once()
     flexmock(BuildProxy).should_receive("create_from_file").with_args(
-        ownername=COPR_USER,
+        ownername=ownername,
         projectname=jira_issue,
         path=str(srpm_path),
         buildopts={"chroots": [chroot], "timeout": COPR_BUILD_TIMEOUT},

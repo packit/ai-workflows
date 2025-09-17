@@ -1,5 +1,3 @@
-import asyncio
-from functools import cache
 import logging
 import os
 
@@ -11,23 +9,11 @@ from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.template import PromptTemplate, PromptTemplateInput
 
 from agents.utils import get_agent_execution_config
-from .http_utils import aiohttp_session
+from .qe_data import get_qe_data, TestLocationInfo
 from .supervisor_types import FullIssue, TestingState
 from .tools.read_readme import ReadReadmeTool
 
 logger = logging.getLogger(__name__)
-
-
-class TestLocationInfo(BaseModel):
-    assigned_team: str
-    component: str
-    qa_contact: str
-    tests_location: str | None = None
-    test_config_location: str | None = None
-    test_trigger_method: str | None = None
-    test_result_location: str | None = None
-    test_docs_url: str | None = None
-    notes: str | None = None
 
 
 class InputSchema(BaseModel):
@@ -40,22 +26,6 @@ class InputSchema(BaseModel):
 class OutputSchema(BaseModel):
     state: TestingState = Field(description="State of tests")
     comment: str | None = Field(description="Comment to add to the JIRA issue")
-
-
-async def fetch_qe_data_map() -> dict[str, dict[str, str]]:
-    url = "https://gitlab.cee.redhat.com/otaylor/jotnar-qe-data/-/raw/main/jotnar_qe_data.json?ref_type=heads&inline=false"
-    async with aiohttp_session().get(url) as response:
-        response.raise_for_status()
-        return await response.json(content_type=None)
-
-
-@cache
-def get_qe_data_map_task() -> asyncio.Task[dict[str, dict[str, str]]]:
-    return asyncio.create_task(fetch_qe_data_map())
-
-
-async def get_qe_data(component: str) -> TestLocationInfo:
-    return TestLocationInfo(**(await get_qe_data_map_task()).get(component, {}))
 
 
 def render_prompt(input: InputSchema) -> str:

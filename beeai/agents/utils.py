@@ -23,8 +23,8 @@ def get_agent_execution_config() -> dict[str, int]:
     return dict(
         max_retries_per_step=int(os.getenv("BEEAI_MAX_RETRIES_PER_STEP", 5)),
         total_max_retries=int(os.getenv("BEEAI_TOTAL_MAX_RETRIES", 10)),
-        # 100 is not enough for a medium complexity task
-        max_iterations=int(os.getenv("BEEAI_MAX_ITERATIONS", 140)),
+        # 140 is not enough for a more complex rebase
+        max_iterations=int(os.getenv("BEEAI_MAX_ITERATIONS", 180)),
     )
 
 

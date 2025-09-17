@@ -24,6 +24,7 @@ def get_chat_model() -> ChatModel:
     return ChatModel.from_name(
         os.environ["CHAT_MODEL"],
         options=ChatModelParameters(temperature=0.6),
+        timeout=1200,
     )
 
 

@@ -28,6 +28,13 @@ async def fork_repository(
     if not project:
         raise ToolError("Failed to get the specified repository")
 
+    if urlparse(project.service.instance_url).hostname != "gitlab.com":
+        raise ToolError("Unexpected git forge, expected gitlab.com/redhat")
+
+    namespace = project.gitlab_repo.namespace["full_path"].split("/")
+    if not namespace or namespace[0] != "redhat":
+        raise ToolError("Unexpected GitLab project, expected gitlab.com/redhat")
+
     def get_fork():
         username = project.service.user.get_username()
         for fork in project.get_forks():
@@ -39,15 +46,12 @@ async def fork_repository(
         return fork.get_git_urls()["git"]
 
     def create_fork():
-        # fork the project and avoid name conflict:
-        # gitlab.com/redhat/centos-stream/rpms/bash => gitlab.com/jotnar-bot/bash
-        # gitlab.com/redhat/rhel/rpms/bash => gitlab.com/jotnar-bot/bash-internal
-        name = project.gitlab_repo.name
-        path = project.gitlab_repo.path
-        if "/rhel/" in project.gitlab_repo.namespace["full_path"]:
-            name += "-internal"
-            path += "-internal"
-        fork = project.gitlab_repo.forks.create(data={"name": name, "path": path})
+        # follow the convention set by `centpkg fork` and prefix repo name with namespace, e.g.:
+        # * gitlab.com/redhat/centos-stream/rpms/bash => gitlab.com/jotnar-bot/centos_rpms_bash
+        # * gitlab.com/redhat/rhel/rpms/bash => gitlab.com/jotnar-bot/rhel_rpms_bash
+        prefix = "_".join(ns.replace("centos-stream", "centos") for ns in namespace[1:])
+        fork_name = (f"{prefix}_" if prefix else "") + project.gitlab_repo.name
+        fork = project.gitlab_repo.forks.create(data={"name": fork_name, "path": fork_name})
         return GitlabProject(namespace=fork.namespace["full_path"], service=project.service, repo=fork.path)
 
     fork = await asyncio.to_thread(create_fork)

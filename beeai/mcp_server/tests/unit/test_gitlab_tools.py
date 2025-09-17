@@ -27,7 +27,7 @@ from gitlab_tools import fork_repository, open_merge_request, push_to_remote_rep
 async def test_fork_repository(repository, fork_exists):
     package = "bash"
     fork_namespace = "ai-bot"
-    fork_name = f"{package}-internal" if "/rhel/" in repository else package
+    fork_name = f"{'rhel' if '/rhel/' in repository else 'centos'}_rpms_{package}"
     clone_url = f"https://gitlab.com/{fork_namespace}/{fork_name}.git"
     fork = flexmock(
         gitlab_repo=flexmock(namespace={"full_path": fork_namespace}, path=fork_name),
@@ -49,7 +49,7 @@ async def test_fork_repository(repository, fork_exists):
                 },
                 path=package,
             ),
-            service=flexmock(user=flexmock(get_username=lambda: fork_namespace)),
+            service=flexmock(instance_url="https://gitlab.com", user=flexmock(get_username=lambda: fork_namespace)),
         )
     )
     assert await fork_repository(repository=repository) == clone_url

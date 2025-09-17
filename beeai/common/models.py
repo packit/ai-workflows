@@ -163,6 +163,53 @@ class TriageOutputSchema(BaseModel):
         description="Associated data"
     )
 
+    def format_for_comment(self) -> str:
+        """Format the triage result in a human-readable format for Jira comments."""
+        resolution = f"*Resolution*: {self.resolution.value}\n"
+
+        match self.data:
+            case BackportData():
+                fix_version_text = f"\n*Fix Version*: {self.data.fix_version}" if self.data.fix_version else ""
+
+                return (
+                    f"{resolution}"
+                    f"*Patch URL*: {self.data.patch_url}\n"
+                    f"*Justification*: {self.data.justification}"
+                    f"{fix_version_text}"
+                )
+
+            case RebaseData():
+                fix_version_text = f"\n*Fix Version*: {self.data.fix_version}" if self.data.fix_version else ""
+
+                return (
+                    f"{resolution}"
+                    f"*Package*: {self.data.package}\n"
+                    f"*Version*: {self.data.version}{fix_version_text}"
+                )
+
+            case ClarificationNeededData():
+                return (
+                    f"{resolution}"
+                    f"*Findings*: {self.data.findings}\n"
+                    f"*Additional info needed*: {self.data.additional_info_needed}"
+                )
+
+            case NoActionData():
+                return (
+                    f"{resolution}"
+                    f"*Reasoning*: {self.data.reasoning}"
+                )
+
+            case ErrorData():
+                return (
+                    f"{resolution}"
+                    f"*Details*: {self.data.details}"
+                )
+
+            case _:
+                # Fallback to JSON format
+                return self.model_dump_json(indent=4)
+
 
 # ============================================================================
 # Build Agent Schemas

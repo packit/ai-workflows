@@ -413,7 +413,7 @@ async def main() -> None:
                 return "determine_target_branch"
 
             async def comment_in_jira(state):
-                comment_text=state.triage_result.model_dump_json(indent=4)
+                comment_text = state.triage_result.format_for_comment()
                 logger.info(f"Result to be put in Jira comment: {comment_text}")
                 if dry_run:
                     return Workflow.END

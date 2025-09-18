@@ -1,4 +1,4 @@
-# Merge Request Workflow
+# Package Maintenance Workflows
 
 A set of AI agents implemented in the BeeAI Framework, interconnected via Redis.
 Every agent can run individually or pick up tasks from a Redis queue.
@@ -12,11 +12,53 @@ Three agents process tasks through Redis queues:
 - **Rebase Agent**: Updates packages to newer upstream versions. A Rebase is only to be chosen when the issue explicitly instructs you to "rebase" or "update". It looks for upstream references that are linked, attached and present in the description or comments in the issue.
 - **Backport Agent**: Applies specific fixes/patches to packages. It looks for patches that are linked, attached and present in the description or comments in the issue. It tries to apply the patch and resolve any conflicts that may arise during the backport process.
 
-### Entry Criteria
 
-Issues enter the system automatically via the Jira Issue Fetcher when they meet these criteria:
-- `jotnar-project` is assignee of the issue
-- No `jotnar_*` labels other than `jotnar_retry_needed`
+## Dry run mode
+
+**Without setting `DRY_RUN=true` env var, agents will make real changes:**
+- **Modify JIRA issues** (add comments, update fields, apply labels)
+- **Create GitLab merge requests** and push commits
+
+## Setup
+
+### Required API Tokens & Authentication
+
+- Copy templates:
+
+```bash
+cp -r templates .secrets
+```
+
+- Follow the comments to fill out the needed credentials.
+
+## Running the System
+
+### Full Pipeline (Production)
+```bash
+# Start all agents and services
+make start
+# make start DRY_RUN=true for testing purposes
+
+# Process a JIRA issue
+make trigger-pipeline JIRA_ISSUE=RHEL-12345
+```
+
+### Individual Agents Runs
+```bash
+# Test specific agents standalone
+make JIRA_ISSUE=RHEL-12345 run-triage-agent-standalone
+make PACKAGE=httpd VERSION=2.4.62 JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-rebase-agent-standalone
+make PACKAGE=httpd UPSTREAM_FIX=https://github.com/... JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-backport-agent-standalone
+
+# Or with dry-run
+DRY_RUN=true make JIRA_ISSUE=RHEL-12345 run-triage-agent-standalone
+```
+
+**Monitoring:**
+- Phoenix tracing: http://localhost:6006/
+- Redis queue monitoring: http://localhost:8081/
+
+## How It Works
 
 ### Queue Transitions and Label Management
 
@@ -40,7 +82,9 @@ The system uses Redis queues to route issues between agents and applies JIRA lab
 - **Failure** → `error_list` + applies `jotnar_errored` label
 - **Retry** → remains in `backport_queue` (keeps `jotnar_rebase|backport_in_progress` label)
 
-#### Re-triggering Mechanism
+### Service triggering
+
+Jotnar bot processes issues assigned to `jotnar-project`.
 
 Issues can be re-triggered through the workflow in two ways:
 1. **Remove any existing `jotnar_*` label** - allows the issue to re-enter the system on the next fetcher run
@@ -48,13 +92,13 @@ Issues can be re-triggered through the workflow in two ways:
    - Package maintainers who have made changes (e.g., updated some fields, added links, commented)
    - Jötnar team members after production code updates to resolve issues
 
-#### Maintainer Review Process
+### Maintainer Review Process
 
 Some Jira issues will require a maintainer review by applying the `jotnar_needs_maintainer_review` label to an issue. This is currently agreed on for FuSa (Functional Safety) project packages.
 
 The `jotnar_fusa` label will be automatically added by the triage agent to JIRA issues involving FuSa packages, and related merge requests will need to be reviewed and handled by subject matter experts.
 
-#### Workflow Diagram
+### Workflow Diagram
 
 ```mermaid
 flowchart TD
@@ -98,67 +142,12 @@ flowchart TD
     style ManualReview fill:#fce4ec
 ```
 
-## Setup
+## Advanced Usage
 
-- Copy the `templates` directory to `.secrets` and fill in required information.
-    - For `.secrets/rhel-config.json`, you can also copy the content from [jotnar](https://github.com/packit/jotnar) repo
-
-## Running as a service
-
-The agents run continuously, waiting for work from Redis queues. To process a JIRA issue:
-
-**Step 1: Start the system** (if not already running)
+### Automatic Issue Fetching
 ```bash
-make start
-```
-
-This runs the services in the foreground, showing logs for monitoring and debugging. If you prefer to run the services in the background, use `make start-detached` instead.
-
-**Step 2: Trigger work**
-```bash
-make trigger-pipeline JIRA_ISSUE=RHEL-12345
-```
-
-## Running individual agents
-
-You can run any agent individually with the appropriate make target, passing required input data via environment variables, e.g. `make JIRA_ISSUE=RHEL-12345 run-triage-agent-standalone`.
-The agent will run only once, print its output and exit.
-
-```bash
-make JIRA_ISSUE=RHEL-12345 run-triage-agent-standalone
-make PACKAGE=httpd VERSION=2.4.62 JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-rebase-agent-standalone
-make PACKAGE=httpd UPSTREAM_FIX=https://github.com/... JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-backport-agent-standalone
-```
-
-## Jira Issue Fetcher
-
-The Jira Issue Fetcher automatically fetches issues from Jira and adds them to the triage queue. It runs as a standalone service.
-
-**Setup:**
-```bash
-# Copy the environment template
+# Setup automatic issue fetching from JIRA
 cp templates/jira-issue-fetcher.env .secrets/jira-issue-fetcher.env
-
-# Edit with your credentials
-vim .secrets/jira-issue-fetcher.env
-```
-
-**Running:**
-```bash
-# Build the issue fetcher image
 make build-jira-issue-fetcher
-
-# Run the fetcher once (includes validation checks)
 make run-jira-issue-fetcher
-
-# View logs if running in background
-make logs-jira-issue-fetcher
 ```
-
-The fetcher will automatically fetch issues based on the configured JQL query and push them to the triage queue for processing.
-
-## Dry-Run mode
-
-Both backport and rebase agents support **dry-run mode** for testing workflows without actually pushing changes or creating merge requests. By default, agents run in **production mode** and will create actual commits, pushes, and merge requests.
-
-To enable dry-run mode for testing, set the `DRY_RUN=true` environment variable.

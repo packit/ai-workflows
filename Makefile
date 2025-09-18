@@ -105,7 +105,7 @@ issue-details:
 triage-issue:
 	$(COMPOSE) run --rm \
 		--entrypoint /bin/sh goose \
-		-c "/home/goose/wait_mcp_server.sh && /usr/local/bin/goose run --recipe recipes/triage-issue.yaml \
+		-c "/usr/local/bin/goose run --recipe recipes/triage-issue.yaml \
 			--params issue=$(ISSUE)"
 
 rebase-package:
@@ -134,7 +134,7 @@ backport-fix:
 			echo 'echo \$$GITLAB_TOKEN' >> \"\$$askpass\"; \
 			chmod +x \"\$$askpass\"; \
 			export GIT_ASKPASS=\"\$$askpass\"; \
-			/home/goose/wait_mcp_server.sh && /usr/local/bin/goose run --recipe recipes/backport-fix.yaml \
+			/usr/local/bin/goose run --recipe recipes/backport-fix.yaml \
 			--params package=$(PACKAGE) \
 			--params upstream_fix=$(BACKPORT_FIX) \
 			--params jira_issue=$(JIRA_ISSUE) \

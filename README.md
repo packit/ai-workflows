@@ -1,6 +1,6 @@
 # AI Workflows Platform
 
-An AI automation platform that leverages multiple AI agent frameworks for Red Hat engineering workflows. This repository uses **Goose AI**, **BeeAI**, and **ADK Workflows** to provide automation for RHEL/CentOS package management, issue triage, and development workflows.
+An AI automation platform that leverages multiple AI agent frameworks for Red Hat engineering workflows. This repository uses **Goose AI** and **BeeAI** to provide automation for RHEL/CentOS package management, issue triage, and development workflows.
 
 ## 🏗️ Architecture Overview
 
@@ -9,7 +9,6 @@ This platform consists of several integrated components:
 ### AI Agents
 - **[Goose AI](./goose/)** - Driven by human language instructions that call out to tools backed by MCP servers and the shell
 - **[BeeAI Framework](./beeai/)** - Driven by python scripts that call out to tools backed by MCP servers
-- **[ADK Workflows](./adk-workflows/)** - Also driven by python
 
 ### MCP (Model Context Protocol) Servers
 - **Atlassian MCP Server** - Jira/Confluence integration for issue management
@@ -60,8 +59,6 @@ This platform consists of several integrated components:
 #### BeeAI Automated Workflows
 See beeai/README.md
 
-#### ADK Package Automation
-See adk-workflows/README.md
 
 #### Goose Recipe Execution
 ```bash
@@ -108,7 +105,6 @@ Enable safe testing without actual changes:
 ai-workflows/
 ├── goose/                    # Goose AI agent framework
 ├── beeai/                    # BeeAI framework with specialized agents
-├── adk-workflows/            # Google ADK automation workflows
 ├── goose-recipes/            # Predefined automation workflows
 ├── scripts/                  # Utility scripts and tools
 ├── templates/                # Configuration templates
@@ -144,7 +140,6 @@ Available at [jotnar organization on quay.io](https://quay.io/organization/jotna
 ## 📖 Documentation
 
 - [BeeAI Framework Details](./beeai/README.md)
-- [ADK Workflows Guide](./adk-workflows/README.md)
 - [Goose AI Documentation](./goose/README.md)
 - [Package Analysis Tools](./scripts/README.md)
 

@@ -7,6 +7,7 @@ from attr import dataclass
 import typer
 
 from agents.observability import setup_observability
+from common.utils import init_kerberos_ticket
 from .errata_utils import get_erratum, get_erratum_for_link
 from .erratum_handler import ErratumHandler, erratum_needs_attention
 from .issue_handler import IssueHandler
@@ -58,6 +59,8 @@ def check_env(chat: bool = False, jira: bool = False, redis: bool = False):
 
 @with_http_sessions()
 async def collect_once(queue: WorkQueue):
+    await init_kerberos_ticket()
+
     logger.info("Getting all relevant issues from JIRA")
     issues = [i for i in get_current_issues()]
 
@@ -129,6 +132,10 @@ async def process_once(queue: WorkQueue):
             result.reschedule_in if result.reschedule_in >= 0 else "never",
         )
     elif work_item.item_type == WorkItemType.PROCESS_ERRATUM:
+        # Calling this on every work item is a little inefficient, but it makes
+        # sure that we'll get a new ticket if the old one expires.
+        await init_kerberos_ticket()
+
         erratum = get_erratum(work_item.item_data)
         result = await ErratumHandler(erratum, dry_run=app_state.dry_run).run()
         if result.reschedule_in >= 0:
@@ -200,6 +207,7 @@ def process_issue(
 
 @with_http_sessions()
 async def do_process_erratum(id: str):
+    await init_kerberos_ticket()
 
     erratum = get_erratum(id)
     result = await ErratumHandler(erratum, dry_run=app_state.dry_run).run()

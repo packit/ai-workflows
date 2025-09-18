@@ -18,7 +18,7 @@ This platform consists of several integrated components:
 - **[Package Dependency Analyzer](./scripts/find-package-dependents.py)** - Script for finding reverse dependencies
 
 ### Automation Recipes
-- **[Goose Recipes](./goose-recipes/)** - Predefined workflows for common tasks
+- **[Goose Recipes](./goose/recipes/)** - Predefined workflows for common tasks
 - **Issue Triage** - Automated analysis and routing of RHEL issues
 - **Package Rebase** - Automated package version updates
 - **Backport Management** - Automated patch application workflows
@@ -34,7 +34,7 @@ This platform consists of several integrated components:
 ### Initial Setup
 1. **Configure environment:**
    ```bash
-   ❯ make config
+   ❯ cd goose && make config
    ```
    This copies template files to `.secrets/` for manual configuration.
 
@@ -46,14 +46,14 @@ This platform consists of several integrated components:
 
 3. **Build the platform:**
    ```bash
-   ❯ make build
+   ❯ cd goose && make build
    ```
 
 ### Running Different Components
 
 #### Interactive Goose AI Session
 ```bash
-❯ make run-goose
+❯ cd goose && make run-goose
 ```
 
 #### BeeAI Automated Workflows
@@ -63,10 +63,10 @@ See beeai/README.md
 #### Goose Recipe Execution
 ```bash
 # Run specific automation recipes
-❯ make triage-issue
-❯ make backport-fix
-❯ make rebase-package
-❯ make test-reverse-dependencies PACKAGE=systemd CHANGE='Fix bug in hostnamed that caused avahi to crash'
+❯ cd goose && make triage-issue ISSUE=RHEL-12345
+❯ cd goose && make backport-fix PACKAGE=systemd BACKPORT_FIX="Fix memory leak"
+❯ cd goose && make rebase-package PACKAGE=curl VERSION=8.0.1
+❯ cd goose && make test-reverse-dependencies PACKAGE=systemd CHANGE='Fix bug in hostnamed that caused avahi to crash'
 ```
 
 ## 📋 Available Workflows
@@ -89,7 +89,7 @@ See beeai/README.md
 ## 🔧 Configuration
 
 ### LLM Provider Configuration
-Edit `goose-container/goose-config.yaml` to configure:
+Edit `goose/container/goose-config.yaml` to configure:
 - `GOOSE_PROVIDER` - Your preferred LLM provider
 - `GOOSE_MODEL` - Specific model to use
 
@@ -104,12 +104,14 @@ Enable safe testing without actual changes:
 ```
 ai-workflows/
 ├── goose/                    # Goose AI agent framework
+│   ├── container/            # Container configuration and build files
+│   ├── recipes/              # Predefined automation workflows
+│   ├── templates/            # Configuration templates for Goose stack
+│   ├── compose.yaml          # Docker Compose for Goose infrastructure
+│   └── Makefile              # Goose-specific build and run targets
 ├── beeai/                    # BeeAI framework with specialized agents
-├── goose-recipes/            # Predefined automation workflows
 ├── scripts/                  # Utility scripts and tools
-├── templates/                # Configuration templates
-├── goose-container/          # Container configuration for Goose
-└── compose.yaml              # Docker Compose orchestration
+└── templates/                # Shared configuration templates
 ```
 
 ## 🤖 Agent Capabilities

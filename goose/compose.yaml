@@ -34,7 +34,7 @@ services:
   testing-farm-sse-bridge:
     image: testing-farm-sse-bridge:latest
     build:
-      context: ./testing-farm-sse-bridge
+      context: ../testing-farm-sse-bridge
       dockerfile: Containerfile
       target: ${BUILD_TARGET:-production}
       args:
@@ -57,8 +57,8 @@ services:
       mcp-testing-farm: { condition: service_healthy }
     image: goose-container
     build:
-      context: .
-      dockerfile: ./goose-container/Containerfile
+      context: ..
+      dockerfile: ./goose/container/Containerfile
       target: ${BUILD_TARGET:-production}
       args:
         BASE_IMAGE: registry.fedoraproject.org/fedora@sha256:3b94b23378c64850f5e2a83d0da4471fab0716d35a2662a794cfeb63b5e6fccd
@@ -67,9 +67,9 @@ services:
       - .secrets/goose.env
     volumes:
       - home-goose-persistent:/home/goose
-      - ./goose-recipes:/home/goose/recipes:ro,z
-      - ./goose-container/goose-config.yaml:/home/goose/.config/goose/config.yaml:ro,z
-      - ./scripts:/home/goose/scripts:ro,z
+      - ./recipes:/home/goose/recipes:ro,z
+      - ./container/goose-config.yaml:/home/goose/.config/goose/config.yaml:ro,z
+      - ../scripts:/home/goose/scripts:ro,z
     stdin_open: true
     tty: true
     restart: "no"

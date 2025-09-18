@@ -6,7 +6,7 @@
 #     production: Official goose builds installed on top of runtime-platform
 #
 #     source-build: Fedora base image with goose built from
-#     git on top. It applies all the patches in goose-container
+#     git on top. It applies all the patches in goose/container
 #     as well. This is useful for instrumenting goose with
 #     extra debug logging, etc.
 #
@@ -39,10 +39,10 @@ RUN useradd -m -G wheel goose \
  && chown -R goose:goose /home/goose
 
 COPY --chown=goose:goose \
-     goose-container/goose-config.yaml \
+     goose/container/goose-config.yaml \
      /home/goose/.config/goose/config.yaml
 COPY --chown=goose:goose \
-     goose-recipes/ \
+     goose/recipes/ \
      /home/goose/recipes/
 COPY --chown=goose:goose \
      scripts/ \
@@ -87,7 +87,7 @@ RUN git clone --depth 1 \
     goose-src
 
 WORKDIR /usr/src/goose-src
-COPY goose-container/*.patch patches/
+COPY goose/container/*.patch patches/
 
 RUN cargo fetch --locked
 

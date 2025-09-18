@@ -4,16 +4,16 @@ Date: Wed, 30 Jul 2025 00:00:00 +0000
 Subject: [PATCH] Placeholder for custom Goose changes
 
 This is a placeholder patch used to prevent build errors if no custom
-patches are placed in goose-container/.
+patches are placed in goose/container/.
 
 It can be overwritten locally to make changes to the goose source tree
 when running `make debug-build`, or additional patches can be placed in
-goose-container/ using the .patch extension. They will be applied
+goose/container/ using the .patch extension. They will be applied
 automatically by `git am`.
 
 To create a patch from a goose checkout, run:
 
-    git format-patch -1 -o /path/to/ai-workflows/goose-container
+    git format-patch -1 -o /path/to/ai-workflows/goose/container
 
 This file does not change any code and is safe to leave in place.
 

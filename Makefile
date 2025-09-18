@@ -8,7 +8,7 @@ COMPOSE_SUPERVISOR=$(COMPOSE) -f $(COMPOSE_FILE) --profile=supervisor
 
 .PHONY: build
 build: certs/Current-IT-Root-CAs.pem
-	$(COMPOSE) -f $(COMPOSE_FILE) build
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents --profile=supervisor build
 
 certs/Current-IT-Root-CAs.pem:
 	curl -o certs/Current-IT-Root-CAs.pem \

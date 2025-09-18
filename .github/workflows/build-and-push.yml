@@ -24,10 +24,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - dockerfile: "beeai/Containerfile.c9s"
+          - dockerfile: "Containerfile.c9s"
             tag: "c9s"
             description: "CentOS Stream 9"
-          - dockerfile: "beeai/Containerfile.c10s"
+          - dockerfile: "Containerfile.c10s"
             tag: "c10s"
             description: "CentOS Stream 10"
     steps:
@@ -39,7 +39,7 @@ jobs:
           registry_username: ${{ secrets.REGISTRY_LOGIN }}
           registry_token: ${{ secrets.REGISTRY_TOKEN }}
           dockerfile: ${{ matrix.dockerfile }}
-          docker_context: "beeai/"
+          docker_context: "."
           image_name: "beeai"
           tag: ${{ matrix.tag }}
 
@@ -53,8 +53,8 @@ jobs:
           registry_namespace: "jotnar"
           registry_username: ${{ secrets.REGISTRY_LOGIN }}
           registry_token: ${{ secrets.REGISTRY_TOKEN }}
-          dockerfile: "beeai/Containerfile.mcp"
-          docker_context: "beeai/"
+          dockerfile: "Containerfile.mcp"
+          docker_context: "."
           image_name: "mcp-server"
           # tag: "staging"
 
@@ -68,8 +68,8 @@ jobs:
           registry_namespace: "jotnar"
           registry_username: ${{ secrets.REGISTRY_LOGIN }}
           registry_token: ${{ secrets.REGISTRY_TOKEN }}
-          dockerfile: "testing-farm-sse-bridge/Containerfile"
-          docker_context: "testing-farm-sse-bridge/"
+          dockerfile: "goose/testing-farm-sse-bridge/Containerfile"
+          docker_context: "goose/testing-farm-sse-bridge/"
           image_name: "testing-farm-sse-bridge"
 
   build-and-push-jira-issue-fetcher:
@@ -82,7 +82,7 @@ jobs:
           registry_namespace: "jotnar"
           registry_username: ${{ secrets.REGISTRY_LOGIN }}
           registry_token: ${{ secrets.REGISTRY_TOKEN }}
-          dockerfile: "beeai/Containerfile.jira-issue-fetcher"
-          docker_context: "beeai/"
+          dockerfile: "Containerfile.jira-issue-fetcher"
+          docker_context: "."
           image_name: "jira-issue-fetcher"
           # tag: "staging"

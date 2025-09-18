@@ -19,5 +19,4 @@ jobs:
 
       - name: Run container builds
         run: |
-          cd beeai
           podman-compose -f compose.yaml build

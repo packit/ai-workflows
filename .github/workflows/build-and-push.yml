@@ -15,7 +15,7 @@ jobs:
           registry_namespace: "jotnar"
           registry_username: ${{ secrets.REGISTRY_LOGIN }}
           registry_token: ${{ secrets.REGISTRY_TOKEN }}
-          dockerfile: "goose-container/Containerfile"
+          dockerfile: "goose/container/Containerfile"
           docker_context: "."
           image_name: "goose"
 

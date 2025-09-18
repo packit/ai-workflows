@@ -6,7 +6,7 @@ from typing import Annotated
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from common.utils import init_kerberos_ticket, is_cs_branch
+from common.utils import KerberosError, init_kerberos_ticket, is_cs_branch
 from common.validators import AbsolutePath
 
 
@@ -45,8 +45,10 @@ async def upload_sources(
     if os.getenv("DRY_RUN", "False").lower() == "true":
         return "Dry run, not uploading sources (this is expected, not an error)"
     tool = "centpkg" if is_cs_branch(dist_git_branch) else "rhpkg"
-    if not await init_kerberos_ticket():
-        raise ToolError("Failed to initialize Kerberos ticket")
+    try:
+        await init_kerberos_ticket()
+    except KerberosError as e:
+        raise ToolError(f"Failed to initialize Kerberos ticket: {e}") from e
     proc = await asyncio.create_subprocess_exec(
         tool,
         f"--name={package}",

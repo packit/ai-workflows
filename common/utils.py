@@ -69,7 +69,11 @@ def is_cs_branch(dist_git_branch: str) -> bool:
     return CS_BRANCH_PATTERN.match(dist_git_branch) is not None
 
 
-async def extract_principal(keytab_file: str) -> str | None:
+class KerberosError(Exception):
+    pass
+
+
+async def extract_principal(keytab_file: str) -> str:
     """
     Extracts principal from the specified keytab file. Assumes that there is
     a single principal in the keytab.
@@ -90,46 +94,91 @@ async def extract_principal(keytab_file: str) -> str | None:
         stderr=subprocess.PIPE,
     )
     stdout, stderr = await proc.communicate()
-    print(stdout.decode(), flush=True)
     if proc.returncode:
+        print(stdout.decode(), flush=True)
         print(stderr.decode(), flush=True)
-        return None
+        raise KerberosError("klist command failed")
     key_pattern = re.compile(r"^\s*(\d+)\s+(\S+)\s+\((\S+)\)\s+\((\S+)\)$")
     for line in stdout.decode().splitlines():
         if not (match := key_pattern.match(line)):
             continue
         # just return the principal associated with the first key
         return match.group(2)
-    return None
+    raise KerberosError("No valid key found in the keytab file")
 
 
-async def init_kerberos_ticket() -> str | None:
+async def init_kerberos_ticket() -> str:
     """
     Initializes Kerberos ticket unless it's already present in a credentials cache.
-    On success, returns the associated principal.
+    On success, returns the associated principal. Raises an exception if a ticket
+    cannot be initialized or found.
     """
+    keytab_principal = None
     keytab_file = os.getenv("KEYTAB_FILE")
-    principal = await extract_principal(keytab_file)
-    if not principal:
-        print("Failed to extract principal", flush=True)
-        return None
-    proc = await asyncio.create_subprocess_exec(
-        "klist",
-        "-l",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
-    print(stdout.decode(), flush=True)
-    if proc.returncode:
-        print(stderr.decode(), flush=True)
-    elif any(
-        l for l in stdout.decode().splitlines() if principal in l and "Expired" not in l
-    ):
-        return principal
-    env = os.environ.copy()
-    env.update({"KRB5_TRACE": "/dev/stdout"})
-    proc = await asyncio.create_subprocess_exec(
-        "kinit", "-k", "-t", keytab_file, principal, env=env
-    )
-    return None if await proc.wait() else principal
+    if keytab_file is not None:
+        keytab_principal = await extract_principal(keytab_file)
+        if not keytab_principal:
+            raise KerberosError("Failed to extract principal from keytab file")
+
+    # klist exits with a status of 1 if no cache file exists, so we
+    # need to check for the file first.
+
+    ccache_file = os.getenv("KRB5CCNAME")
+    if not ccache_file:
+        raise KerberosError("KRB5CCNAME environment variable is not set")
+
+    if os.path.exists(ccache_file):
+        proc = await asyncio.create_subprocess_exec(
+            "klist",
+            "-l",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        # klist returns an exit status of 1 if
+        if proc.returncode:
+            print(stdout.decode(), flush=True)
+            print(stderr.decode(), flush=True)
+            raise KerberosError("Failed to list Kerberos tickets")
+
+        principals = [
+            parts[0]
+            for line in stdout.decode().splitlines()
+            if "Expired" not in line
+            for parts in (line.split(),)
+            if len(parts) >= 1 and "@" in parts[0]
+        ]
+    else:
+        principals = []
+
+    if keytab_file and keytab_principal:
+        if keytab_principal in principals:
+            logger.info("Using existing ticket for keytab principal %s", keytab_principal)
+            return keytab_principal
+
+        env = os.environ.copy()
+        env.update({"KRB5_TRACE": "/dev/stdout"})
+        proc = await asyncio.create_subprocess_exec(
+            "kinit",
+            "-k",
+            "-t",
+            keytab_file,
+            keytab_principal,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode:
+            print(stdout.decode(), flush=True)
+            print(stderr.decode(), flush=True)
+            raise KerberosError("kinit command failed")
+        logger.info("Initialized Kerberos ticket for %s", keytab_principal)
+        return keytab_principal
+
+    if principals:
+        logger.info("Using existing ticket for %s", principals[0])
+        return principals[0]
+    else:
+        raise KerberosError("No valid Kerberos ticket found and KEYTAB_FILE is not set")

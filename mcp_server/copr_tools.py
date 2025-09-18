@@ -13,7 +13,7 @@ from copr.v3 import BuildProxy, ProjectProxy
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, Field
 
-from common.utils import init_kerberos_ticket
+from common.utils import init_kerberos_ticket, KerberosError
 from common.validators import AbsolutePath
 
 COPR_CONFIG = {
@@ -70,8 +70,10 @@ async def build_package(
     jira_issue: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
 ) -> BuildResult:
     """Builds the specified SRPM in Copr."""
-    if not (principal := await init_kerberos_ticket()):
-        raise ToolError("Failed to initialize Kerberos ticket")
+    try:
+        principal = await init_kerberos_ticket()
+    except KerberosError as e:
+        raise ToolError(f"Failed to initialize Kerberos ticket: {e}") from e
     copr_user = principal.split("@", maxsplit=1)[0]
     try:
         exclusive_arches = await _get_exclusive_arches(srpm_path)

@@ -8,7 +8,7 @@ COMPOSE_SUPERVISOR=$(COMPOSE) -f $(COMPOSE_FILE) --profile=supervisor
 
 .PHONY: build
 build:
-	$(COMPOSE) -f $(COMPOSE_FILE) build
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents --profile=supervisor build
 
 .PHONY: run-beeai-bash
 run-beeai-bash:

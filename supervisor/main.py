@@ -200,7 +200,6 @@ def process_issue(
 
 @with_http_sessions()
 async def do_process_erratum(id: str):
-    check_env(chat=True, jira=True)
 
     erratum = get_erratum(id)
     result = await ErratumHandler(erratum, dry_run=app_state.dry_run).run()
@@ -216,6 +215,8 @@ async def do_process_erratum(id: str):
 
 @app.command()
 def process_erratum(id_or_url: str):
+    check_env(chat=True, jira=True)
+
     if id_or_url.startswith("http"):
         m = re.match(
             r"https://errata.engineering.redhat.com/advisory/(\d+)$", id_or_url

@@ -1,3 +1,40 @@
+# Python
+uv.lock
+*.py[cod]
+__pycache__/
+*$py.class
+dist/
+eggs/
+.eggs/
+*.egg-info/
+*.eggs
+build
+sdist/
+.installed.cfg
+
+# Testing and coverage
+.tox
+.coverage*
+
+# Virtual environments
 .env
+.venv
+env/
+venv/
+ENV/
+
+# IDEs
+*.idea
+*.vscode
+
+# Backup files
+*.bak
+*~
+
+# Package files
+*.rpm
+*.tar.gz
+noarch/
+
+# Project specific
 .secrets
-__pycache__

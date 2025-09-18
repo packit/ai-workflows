@@ -26,11 +26,12 @@ ai-workflows/
 │   ├── openshift/            # Production deployment configs
 │   └── ... (see beeai/README.md for details)
 ├── goose/                    # ⚠️ Legacy Goose AI (unmaintained)
+│   ├── container/            # Container build files
 │   ├── recipes/              # Historical automation recipes
+│   ├── templates/            # Configuration templates
+│   ├── testing-farm-sse-bridge/ # Testing Farm integration bridge
 │   └── ... (preserved for reference)
-├── scripts/                  # Utility scripts and tools
-├── templates/                # Shared configuration templates
-└── testing-farm-sse-bridge/ # Testing Farm integration bridge
+└── scripts/                  # Utility scripts and tools
 ```
 
 ## 🤝 Contributing

@@ -34,7 +34,7 @@ services:
   testing-farm-sse-bridge:
     image: testing-farm-sse-bridge:latest
     build:
-      context: ../testing-farm-sse-bridge
+      context: ./testing-farm-sse-bridge
       dockerfile: Containerfile
       target: ${BUILD_TARGET:-production}
       args:
@@ -69,7 +69,7 @@ services:
       - home-goose-persistent:/home/goose
       - ./recipes:/home/goose/recipes:ro,z
       - ./container/goose-config.yaml:/home/goose/.config/goose/config.yaml:ro,z
-      - ../scripts:/home/goose/scripts:ro,z
+      - ./scripts:/home/goose/scripts:ro,z
     stdin_open: true
     tty: true
     restart: "no"

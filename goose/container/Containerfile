@@ -45,7 +45,7 @@ COPY --chown=goose:goose \
      goose/recipes/ \
      /home/goose/recipes/
 COPY --chown=goose:goose \
-     scripts/ \
+     goose/scripts/ \
      /home/goose/scripts/
 
 USER goose

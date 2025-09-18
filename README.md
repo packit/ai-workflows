@@ -1,152 +1,42 @@
 # AI Workflows Platform
 
-An AI automation platform that leverages multiple AI agent frameworks for Red Hat engineering workflows. This repository uses **Goose AI** and **BeeAI** to provide automation for RHEL/CentOS package management, issue triage, and development workflows.
+An AI automation platform for Red Hat engineering workflows, primarily powered by the **BeeAI framework**. This repository provides automated solutions for RHEL/CentOS package management, issue triage, and development workflows.
 
-## 🏗️ Architecture Overview
+## BeeAI tooling
 
-This platform consists of several integrated components:
+**The main and actively maintained AI automation tooling is in the [BeeAI directory](./beeai/)**.
 
-### AI Agents
-- **[Goose AI](./goose/)** - Driven by human language instructions that call out to tools backed by MCP servers and the shell
-- **[BeeAI Framework](./beeai/)** - Driven by python scripts that call out to tools backed by MCP servers
+👉 For setup instructions, usage, and documentation, please see [beeai/README.md](./beeai/README.md)
 
-### MCP (Model Context Protocol) Servers
-- **Atlassian MCP Server** - Jira/Confluence integration for issue management
-- **Testing Farm MCP Server** - Integration with Testing Farm for running packaging tests
+BeeAI provides automated AI agents for RHEL engineering workflows, including issue triage, package management, and testing integration.
 
-### Package Analysis Tools
-- **[Package Dependency Analyzer](./scripts/find-package-dependents.py)** - Script for finding reverse dependencies
+👉 For detailed capabilities, architecture, and workflows, see [beeai/README-agents.md](./beeai/README-agents.md)
 
-### Automation Recipes
-- **[Goose Recipes](./goose/recipes/)** - Predefined workflows for common tasks
-- **Issue Triage** - Automated analysis and routing of RHEL issues
-- **Package Rebase** - Automated package version updates
-- **Backport Management** - Automated patch application workflows
-- **Reverse Dependency Testing** - Automated testing of select reverse dependencies based on context
+👉 For complete setup and usage instructions, see [beeai/README.md](./beeai/README.md)
 
-## 🚀 Quick Start
-
-### Prerequisites
-- Podman, podman-compose
-- Make
-- API tokens (see Configuration section)
-
-### Initial Setup
-1. **Configure environment:**
-   ```bash
-   ❯ cd goose && make config
-   ```
-   This copies template files to `.secrets/` for manual configuration.
-
-2. **Set up API tokens:**
-   - `GOOGLE_API_KEY` - From Google Cloud Console
-   - `JIRA_PERSONAL_TOKEN` - From Jira profile settings
-   - `GITLAB_TOKEN` - With appropriate read/write permissions
-   - `TESTING_FARM_API_TOKEN` - From https://testing-farm.io/tokens/
-
-3. **Build the platform:**
-   ```bash
-   ❯ cd goose && make build
-   ```
-
-### Running Different Components
-
-#### Interactive Goose AI Session
-```bash
-❯ cd goose && make run-goose
-```
-
-#### BeeAI Automated Workflows
-See beeai/README.md
-
-
-#### Goose Recipe Execution
-```bash
-# Run specific automation recipes
-❯ cd goose && make triage-issue ISSUE=RHEL-12345
-❯ cd goose && make backport-fix PACKAGE=systemd BACKPORT_FIX="Fix memory leak"
-❯ cd goose && make rebase-package PACKAGE=curl VERSION=8.0.1
-❯ cd goose && make test-reverse-dependencies PACKAGE=systemd CHANGE='Fix bug in hostnamed that caused avahi to crash'
-```
-
-## 📋 Available Workflows
-
-### Package Management
-- **Issue Triage** - Automatically analyze JIRA issues and determine resolution path
-- **Package Rebase** - Update packages to newer upstream versions
-- **Backport Fixes** - Apply specific patches to packages
-- **Dependency Analysis** - Package dependency mapping
-
-### Development Automation
-- **Repository Management** - Automated Git operations and merge requests
-- **Testing Integration** - Automated testing via Testing Farm
-- **Documentation Generation** - Automated documentation updates
-
-### Monitoring & Observability
-- **Phoenix Web Interface** - beeai agent tracing at http://localhost:6006/
-- **Redis Commander** - beeai queue monitoring at http://localhost:8081/
-
-## 🔧 Configuration
-
-### LLM Provider Configuration
-Edit `goose/container/goose-config.yaml` to configure:
-- `GOOSE_PROVIDER` - Your preferred LLM provider
-- `GOOSE_MODEL` - Specific model to use
-
-### Dry Run Mode
-Enable safe testing without actual changes:
-```bash
-❯ export DRY_RUN=true
-```
 
 ## 📁 Repository Structure
 
 ```
 ai-workflows/
-├── goose/                    # Goose AI agent framework
-│   ├── container/            # Container configuration and build files
-│   ├── recipes/              # Predefined automation workflows
-│   ├── templates/            # Configuration templates for Goose stack
-│   ├── compose.yaml          # Docker Compose for Goose infrastructure
-│   └── Makefile              # Goose-specific build and run targets
-├── beeai/                    # BeeAI framework with specialized agents
+├── beeai/                    # 🚀 BeeAI Framework (PRIMARY TOOLING)
+│   ├── agents/               # Specialized AI agents (triage, rebase, backport)
+│   ├── mcp_server/           # MCP server implementations
+│   ├── supervisor/           # Workflow orchestration
+│   ├── openshift/            # Production deployment configs
+│   └── ... (see beeai/README.md for details)
+├── goose/                    # ⚠️ Legacy Goose AI (unmaintained)
+│   ├── recipes/              # Historical automation recipes
+│   └── ... (preserved for reference)
 ├── scripts/                  # Utility scripts and tools
-└── templates/                # Shared configuration templates
+├── templates/                # Shared configuration templates
+└── testing-farm-sse-bridge/ # Testing Farm integration bridge
 ```
-
-## 🤖 Agent Capabilities
-
-### BeeAI Agents
-- **Triage Agent** - Analyzes JIRA issues and routes to appropriate resolution
-- **Rebase Agent** - Automatically updates packages to newer versions
-- **Backport Agent** - Applies targeted fixes and patches
-
-### Goose AI Integration
-- Check JIRA tickets for rebase requests
-- Get details of JIRA issues
-- Analyze JIRA ticket to decide what automation (if any) is appropriate
-- Backport fix from upstream
-- Test package in testing farm
-- Test reverse dependencies of package in testing farm
-
-## 🚢 Production Deployment
-
-### Container Images
-Available at [jotnar organization on quay.io](https://quay.io/organization/jotnar)
-
-### OpenShift Deployment
-- **Namespace**: `jotnar-prod` on Cyborg OpenShift cluster
-- **Access**: Members of `jotnar` LDAP group have admin access
-- **Monitoring**: Integrated observability and logging
-
-## 📖 Documentation
-
-- [BeeAI Framework Details](./beeai/README.md)
-- [Goose AI Documentation](./goose/README.md)
-- [Package Analysis Tools](./scripts/README.md)
 
 ## 🤝 Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
+
+**Development Focus**: All new development should target the [BeeAI framework](./beeai/). The Goose components are preserved for reference but are not actively maintained.
 
 **Merging Policy**: Prefer rebase-merging over merge commits unless preserving branch history is necessary.

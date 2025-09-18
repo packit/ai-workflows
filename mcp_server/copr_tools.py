@@ -13,8 +13,8 @@ from copr.v3 import BuildProxy, ProjectProxy
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, Field
 
+from common.utils import init_kerberos_ticket
 from common.validators import AbsolutePath
-from utils import init_kerberos_ticket
 
 COPR_CONFIG = {
     "copr_url": "https://copr.devel.redhat.com",

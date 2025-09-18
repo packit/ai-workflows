@@ -6,9 +6,8 @@ from typing import Annotated
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from common.utils import is_cs_branch
+from common.utils import init_kerberos_ticket, is_cs_branch
 from common.validators import AbsolutePath
-from utils import init_kerberos_ticket
 
 
 async def download_sources(

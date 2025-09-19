@@ -29,4 +29,3 @@ ENV/
 *.tar.gz
 
 .coverage*
-/certs/*.pem

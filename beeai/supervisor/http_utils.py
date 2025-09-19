@@ -1,29 +1,14 @@
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 import aiohttp
-import os
-import ssl
 
 import requests
-import requests.adapters
 
 
 # We use *both* aiohttp and requests in various places, so we need to
 # set up sessions for both libraries. (We can't convert everything to
 # aiohttp because of our usage of requests_gssapi, but aiohttp is nice
 # within code that is already async.)
-
-
-def _create_ssl_context_with_extra_ca() -> ssl.SSLContext:
-    """
-    Create an SSL context that includes extra CA certificates from the
-    REDHAT_IT_CA_BUNDLE environment variable, if set.
-    """
-    context = ssl.create_default_context()
-    redhat_it_ca_bundle = os.getenv("REDHAT_IT_CA_BUNDLE")
-    if redhat_it_ca_bundle:
-        context.load_verify_locations(cafile=redhat_it_ca_bundle)
-    return context
 
 
 _aiohttp_session = ContextVar[aiohttp.ClientSession | None](
@@ -35,17 +20,16 @@ _aiohttp_session = ContextVar[aiohttp.ClientSession | None](
 async def with_aiohttp_session():
     """
     Context manager that sets up a scoped aiohttp.ClientSession
-    appropriate for our usage, including using any extra CA certificates
-    specified in the REDHAT_IT_CA_BUNDLE environment variable.
+    appropriate for our usage; currently it's just a plain session,
+    but it could be extended in the future to, e.g, have retries
+    or timeouts.
 
     This can also be used as a decorator on async functions.
     """
     session = _aiohttp_session.get()
 
     if session is None:
-        connector = aiohttp.TCPConnector(ssl=_create_ssl_context_with_extra_ca())
-
-        async with aiohttp.ClientSession(connector=connector) as session:
+        async with aiohttp.ClientSession() as session:
             token = _aiohttp_session.set(session)
             try:
                 yield session
@@ -67,16 +51,6 @@ def aiohttp_session() -> aiohttp.ClientSession:
     return session
 
 
-class ExtraCAHTTPAdapter(requests.adapters.HTTPAdapter):
-    def __init__(self):
-        self._ssl_context = _create_ssl_context_with_extra_ca()
-        super().__init__()
-
-    def init_poolmanager(self, *args, **kwargs) -> None:
-        kwargs["ssl_context"] = self._ssl_context
-        return super().init_poolmanager(*args, **kwargs)
-
-
 _requests_session = ContextVar[requests.Session | None](
     "requests_session", default=None
 )
@@ -86,8 +60,9 @@ _requests_session = ContextVar[requests.Session | None](
 async def with_requests_session():
     """
     Context manager that sets up a scoped requests.Session
-    appropriate for our usage, including using any extra CA certificates
-    specified in the REDHAT_IT_CA_BUNDLE environment variable.
+    appropriate for our usage; currently it's just a plain session,
+    but it could be extended in the future to, e.g, have retries
+    or timeouts.
 
     This can also be used as a decorator on async functions.
     """
@@ -95,7 +70,6 @@ async def with_requests_session():
 
     if session is None:
         with requests.Session() as session:
-            session.mount("https://", ExtraCAHTTPAdapter())
             token = _requests_session.set(session)
             try:
                 yield session

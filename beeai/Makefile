@@ -7,12 +7,8 @@ COMPOSE_AGENTS=$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents
 COMPOSE_SUPERVISOR=$(COMPOSE) -f $(COMPOSE_FILE) --profile=supervisor
 
 .PHONY: build
-build: certs/Current-IT-Root-CAs.pem
+build:
 	$(COMPOSE) -f $(COMPOSE_FILE) build
-
-certs/Current-IT-Root-CAs.pem:
-	curl -o certs/Current-IT-Root-CAs.pem \
-	https://certs.corp.redhat.com/certs/Current-IT-Root-CAs.pem
 
 .PHONY: run-beeai-bash
 run-beeai-bash:

@@ -28,14 +28,13 @@ jobs:
         podman --version
     - name: Build Fedora test image from Containerfile.tests
       run: |
-        podman build --rm --tag beeai-tests -f Containerfile.tests ./beeai
+        podman build --rm --tag beeai-tests -f Containerfile.tests .
     - name: Build CentOS Stream 9 test image from Containerfile.c9s-tests
       run: |
-        podman build --rm --tag beeai-tests-c9s -f Containerfile.c9s-tests ./beeai
+        podman build --rm --tag beeai-tests-c9s -f Containerfile.c9s-tests .
     - name: Run ${{ matrix.target }} target
       env:
         CONTAINER_ENGINE: podman
         TEST_IMAGE: beeai-tests
         TEST_IMAGE_C9S: beeai-tests-c9s
-      working-directory: beeai/
       run: make ${{ matrix.target }}

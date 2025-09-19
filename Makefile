@@ -1,203 +1,213 @@
-## Public make targets
-.PHONY: # Help output
-.PHONY: help
-.PHONY:
-.PHONY: # Manage container image
-.PHONY: clean build debug-build config
-.PHONY:
-.PHONY: # Manage MCP server for JIRA
-.PHONY: stop-mcp-atlassian run-mcp-atlassian logs-mcp-atlassian
-.PHONY:
-.PHONY: # Manage MCP server for Testing Farm
-.PHONY: run-mcp-testing-farm stop-mcp-testing-farm logs-mcp-testing-farm
-.PHONY:
-.PHONY: # Start Goose container without a specific recipe
-.PHONY: run-goose run-goose-bash
-.PHONY:
-.PHONY: # Run Goose with specific recipes
-.PHONY: check-jira-tickets
-.PHONY: issue-details
-.PHONY: rebase-package
-.PHONY: reverse-dependencies
-.PHONY: test-package
-.PHONY: test-reverse-dependencies
-.PHONY: triage-issue
-.PHONY: backport-fix
-.PHONY:
-.PHONY: # Development and testing
-.PHONY: check check-find-package-dependents-script
+IMAGE_NAME ?= beeai-agent
+COMPOSE_FILE ?= compose.yaml
+DRY_RUN ?= false
 
-## Defaults
-COMPOSE ?= podman compose
+COMPOSE ?= $(shell command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker-compose")
+COMPOSE_AGENTS=$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents
+COMPOSE_SUPERVISOR=$(COMPOSE) -f $(COMPOSE_FILE) --profile=supervisor
 
-check-jira-tickets: PROJECT ?= RHEL
-check-jira-tickets: COMPONENT ?= cockpit
+.PHONY: build
+build: certs/Current-IT-Root-CAs.pem
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents --profile=supervisor build
 
-issue-details: ISSUE ?= RHEL-78418
+certs/Current-IT-Root-CAs.pem:
+	curl -o certs/Current-IT-Root-CAs.pem \
+	https://certs.corp.redhat.com/certs/Current-IT-Root-CAs.pem
 
-rebase-package: PACKAGE ?= cockpit
-rebase-package: VERSION ?= 339
-rebase-package: JIRA_ISSUES ?= "RHEL-123"
+.PHONY: run-beeai-bash
+run-beeai-bash:
+	$(COMPOSE_AGENTS) run --rm triage-agent /bin/bash
 
-reverse-dependencies: ARCH ?= x86_64
-reverse-dependencies: PACKAGE ?= podman
+.PHONY: run-triage-agent-standalone
+run-triage-agent-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e DRY_RUN=$(DRY_RUN) \
+		triage-agent
 
-test-package: PACKAGE ?= podman
-test-package: DIST_GIT_BRANCH ?= c10s
-test-package: GIT_URL ?= https://gitlab.com/redhat/centos-stream/rpms
-test-package: RPM_COMPOSE ?= CentOS-Stream-10
 
-test-reverse-dependencies: ARCH ?= x86_64
-test-reverse-dependencies: PACKAGE ?= podman
-test-reverse-dependencies: CHANGE ?=
-test-reverse-dependencies: DIST_GIT_BRANCH ?= c10s
-test-reverse-dependencies: GIT_URL ?= https://gitlab.com/redhat/centos-stream/rpms
-test-reverse-dependencies: RPM_COMPOSE ?= CentOS-Stream-10
 
-triage-issue: ISSUE ?= RHEL-78418
 
-## Operations
-build:
-	$(COMPOSE) build
+.PHONY: run-rebase-agent-c9s-standalone
+run-rebase-agent-c9s-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e VERSION=$(VERSION) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e DRY_RUN=$(DRY_RUN) \
+		rebase-agent-c9s
 
-debug-build:
-	BUILD_TARGET=debug $(COMPOSE) build
+.PHONY: run-rebase-agent-c10s-standalone
+run-rebase-agent-c10s-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e VERSION=$(VERSION) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e DRY_RUN=$(DRY_RUN) \
+		rebase-agent-c10s
 
-run-mcp-atlassian:
-	$(COMPOSE) up -d mcp-atlassian
+.PHONY: run-rebase-agent-standalone
+run-rebase-agent-standalone: run-rebase-agent-c10s-standalone
 
-stop-mcp-atlassian:
-	$(COMPOSE) down mcp-atlassian
 
-logs-mcp-atlassian:
-	$(COMPOSE) logs -f mcp-atlassian
 
-run-mcp-testing-farm:
-	$(COMPOSE) up -d mcp-testing-farm
 
-stop-mcp-testing-farm:
-	$(COMPOSE) down mcp-testing-farm
 
-logs-mcp-testing-farm:
-	$(COMPOSE) logs -f mcp-testing-farm
+.PHONY: run-backport-agent-c9s-standalone
+run-backport-agent-c9s-standalone:
+	$(COMPOSE_AGENTS)  run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e UPSTREAM_FIX=$(UPSTREAM_FIX) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e CVE_ID=$(CVE_ID) \
+		backport-agent-c9s
 
-run-goose:
-	- $(COMPOSE) up -d goose
-	$(COMPOSE) exec goose goose
+.PHONY: run-backport-agent-c10s-standalone
+run-backport-agent-c10s-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e UPSTREAM_FIX=$(UPSTREAM_FIX) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e CVE_ID=$(CVE_ID) \
+		backport-agent-c10s
 
-run-goose-bash:
-	- $(COMPOSE) up -d goose
-	$(COMPOSE) exec goose bash
+.PHONY: run-backport-agent-standalone
+run-backport-agent-standalone: run-backport-agent-c10s-standalone
 
-check-jira-tickets:
-	$(COMPOSE) run --rm \
-		--entrypoint /bin/sh goose \
-		-c "/usr/local/bin/goose run --recipe recipes/check-jira-tickets.yaml \
-			--params project=$(PROJECT) \
-			--params component=$(COMPONENT)"
+.PHONY: run-jira-issue-fetcher
+run-jira-issue-fetcher:
+	@echo "Running Jira Issue Fetcher..."
+	@if [ ! -f .secrets/jira-issue-fetcher.env ]; then \
+		echo "Error: .secrets/jira-issue-fetcher.env not found"; \
+		echo "Copy the template: cp templates/jira-issue-fetcher.env .secrets/jira-issue-fetcher.env"; \
+		echo "Then edit it with your credentials"; \
+		exit 1; \
+	fi
+	@echo "Ensuring Redis is available (don't use depends_on otherwise it will kill agents already running)..."
+	@$(COMPOSE) -f $(COMPOSE_FILE) up -d valkey || true  # Don't fail if valkey is already running
+	@echo "Running jira-issue-fetcher..."
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile manual run --rm jira-issue-fetcher
 
-issue-details:
-	$(COMPOSE) run --rm \
-		--entrypoint /bin/sh goose \
-		-c "/usr/local/bin/goose run --recipe recipes/issue-details.yaml \
-			--params issue=$(ISSUE)"
+.PHONY: build-jira-issue-fetcher
+build-jira-issue-fetcher:
+	$(COMPOSE) --profile manual build jira-issue-fetcher
 
-triage-issue:
-	$(COMPOSE) run --rm \
-		--entrypoint /bin/sh goose \
-		-c "/home/goose/wait_mcp_server.sh && /usr/local/bin/goose run --recipe recipes/triage-issue.yaml \
-			--params issue=$(ISSUE)"
 
-rebase-package:
-	$(COMPOSE) run --rm \
-		--entrypoint /bin/sh goose \
-		-c "set -e; \
-			set +x; \
-			askpass=\"\$$(mktemp)\"; \
-			echo '#!/bin/sh' > \"\$$askpass\"; \
-			echo 'echo \$$GITLAB_TOKEN' >> \"\$$askpass\"; \
-			chmod +x \"\$$askpass\"; \
-			export GIT_ASKPASS=\"\$$askpass\"; \
-			/usr/local/bin/goose run --recipe recipes/rebase-package.yaml \
-			--params package=$(PACKAGE) \
-			--params version=$(VERSION) \
-			--params jira_issues=$(JIRA_ISSUES) \
-			--params gitlab_user=$(GITLAB_USER) && echo 'Recipe completed. Dropping into shell...' && /bin/bash"
 
-backport-fix:
-	$(COMPOSE) run --rm \
-		--entrypoint /bin/sh goose \
-		-c "set -e; \
-			set +x; \
-			askpass=\"\$$(mktemp)\"; \
-			echo '#!/bin/sh' > \"\$$askpass\"; \
-			echo 'echo \$$GITLAB_TOKEN' >> \"\$$askpass\"; \
-			chmod +x \"\$$askpass\"; \
-			export GIT_ASKPASS=\"\$$askpass\"; \
-			/home/goose/wait_mcp_server.sh && /usr/local/bin/goose run --recipe recipes/backport-fix.yaml \
-			--params package=$(PACKAGE) \
-			--params upstream_fix=$(BACKPORT_FIX) \
-			--params jira_issue=$(JIRA_ISSUE) \
-			--params gitlab_user=$(GITLAB_USER) && echo 'Recipe completed. Dropping into shell...' && /bin/bash"
 
-reverse-dependencies:
-	$(COMPOSE) run --rm \
-		--entrypoint /bin/sh goose \
-		-c "/usr/local/bin/goose run --recipe recipes/reverse-dependencies.yaml \
-			--params arch=$(ARCH) \
-			--params package=$(PACKAGE)"
+# Essential 3-Agent Architecture Targets
 
-test-package:
-	$(COMPOSE) run --rm \
-		--entrypoint /bin/sh goose \
-		-c "/usr/local/bin/goose run --recipe recipes/test-package.yaml \
-			--params git_url=$(GIT_URL) \
-			--params package=$(PACKAGE) \
-			--params dist_git_branch=$(DIST_GIT_BRANCH) \
-			--params compose=$(RPM_COMPOSE)"
+.PHONY: start
+start:
+	DRY_RUN=$(DRY_RUN) $(COMPOSE_AGENTS) up
 
-test-reverse-dependencies:
-	$(COMPOSE) run --rm \
-		--entrypoint /bin/sh goose \
-		-c "/usr/local/bin/goose run --recipe recipes/test-reverse-dependencies.yaml \
-			--params arch=$(ARCH) \
-			--params package=$(PACKAGE) \
-			--params change='$(CHANGE)' \
-			--params git_url=$(GIT_URL) \
-			--params dist_git_branch=$(DIST_GIT_BRANCH) \
-			--params compose=$(RPM_COMPOSE)"
+.PHONY: start-detached
+start-detached:
+	DRY_RUN=$(DRY_RUN) $(COMPOSE_AGENTS) up -d
 
-config: GLOBAL_TEMPLATE = templates/compose.env
-config: SECRET_TEMPLATES = $(filter-out $(GLOBAL_TEMPLATE), $(wildcard templates/*))
-config:
-	mkdir -p .secrets
-	cp -n $(SECRET_TEMPLATES) .secrets/
-	cp -n $(GLOBAL_TEMPLATE) .env
+.PHONY: stop
+stop:
+	$(COMPOSE) -f $(COMPOSE_FILE) down
 
+.PHONY: clean
 clean:
-	$(COMPOSE) down
-	podman volume prune -f
+	$(COMPOSE) -f $(COMPOSE_FILE) down --volumes
 
-check: check-find-package-dependents-script
 
-check-find-package-dependents-script:
-	cd scripts && python tests/test-find-package-dependents.py
+.PHONY: logs-triage
+logs-triage:
+	$(COMPOSE_AGENTS) logs -f triage-agent
 
-help:
-	@echo "Available targets:"
-	@echo "  config                      - Copy config templates to .secrets/ and .env"
-	@echo "  build                       - Build all images"
-	@echo "  debug-build                 - Build all images and rebuild goose from source"
-	@echo "  run-mcp-atlassian           - Start Atlassian MCP server in background"
-	@echo "  stop-mcp-atlassian          - Stop Atlassian MCP server"
-	@echo "  logs-mcp-atlassian          - Show Atlassian MCP server logs"
-	@echo "  run-mcp-testing-farm        - Start testing-farm MCP server in background"
-	@echo "  stop-mcp-testing-farm       - Stop testing-farm MCP server"
-	@echo "  logs-mcp-testing-farm       - Show testing-farm MCP server logs"
-	@echo "  run-goose                   - Run goose interactively"
-	@echo "  run-goose-bash              - Run goose with bash shell"
-	@echo "  test-package                - Submit package testing request to testing farm"
-	@echo "  test-reverse-dependencies   - Test all reverse dependencies of a package"
-	@echo "  <recipe>                    - To run the recipes/<recipe>.yaml"
-	@echo "  check                       - Run all development tests"
-	@echo "  clean                       - Stop all services and clean volumes"
+.PHONY: logs-backport
+logs-backport:
+	$(COMPOSE_AGENTS) logs -f backport-agent
+
+.PHONY: logs-rebase
+logs-rebase:
+	$(COMPOSE_AGENTS) logs -f rebase-agent
+
+.PHONY: logs-jira-issue-fetcher
+logs-jira-issue-fetcher:
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile manual logs -f jira-issue-fetcher
+
+.PHONY: trigger-pipeline
+trigger-pipeline:
+	@if [ -z "$(JIRA_ISSUE)" ]; then \
+		echo "Usage: make trigger-pipeline JIRA_ISSUE=RHEL-12345"; \
+		exit 1; \
+	fi
+	@echo "Triggering pipeline for issue: $(JIRA_ISSUE)"
+	$(COMPOSE_AGENTS) exec valkey redis-cli LPUSH triage_queue '{"metadata": {"issue": "$(JIRA_ISSUE)"}}'
+
+
+# Testing and Release Supervisor
+
+.PHONY: supervisor-start
+supervisor-start:
+	DRY_RUN=$(DRY_RUN) $(COMPOSE_SUPERVISOR) up
+
+.PHONY: supervisor-start-detached
+supervisor-start-detached:
+	DRY_RUN=$(DRY_RUN) $(COMPOSE_SUPERVISOR) up -d
+
+.PHONY: supervisor-stop
+supervisor-stop:
+	$(COMPOSE_SUPERVISOR) down
+
+DEBUG_LOWER := $(shell echo $(DEBUG) | tr '[:upper:]' '[:lower:]')
+ifeq ($(DEBUG_LOWER),true)
+DEBUG_FLAG := --debug
+else
+DEBUG_FLAG :=
+endif
+
+DRY_RUN_LOWER := $(shell echo $(DRY_RUN) | tr '[:upper:]' '[:lower:]')
+ifeq ($(DRY_RUN_LOWER),true)
+DRY_RUN_FLAG := --dry-run
+else
+DRY_RUN_FLAG :=
+endif
+
+.PHONY: process-issue
+process-issue:
+	$(COMPOSE_SUPERVISOR) run --rm \
+		supervisor python -m supervisor.main $(DEBUG_FLAG) $(DRY_RUN_FLAG) process-issue $(JIRA_ISSUE)
+
+.PHONY: process-erratum
+process-erratum:
+	$(COMPOSE_SUPERVISOR) run --rm \
+		supervisor python -m supervisor.main $(DEBUG_FLAG) $(DRY_RUN_FLAG) process-erratum $(ERRATA_ID)
+
+
+# Common utility targets
+
+.PHONY: status
+status:
+	$(COMPOSE) -f $(COMPOSE_FILE) ps
+
+.PHONY: redis-cli
+redis-cli:
+	$(COMPOSE_AGENTS) exec valkey redis-cli
+
+
+.PHONY: build-test-image
+build-test-image:
+	$(MAKE) -f Makefile.tests build-test-image
+
+.PHONY: check-in-container check-agents-in-container check-mcp-server-in-container check-common-in-container
+check-in-container:
+	$(MAKE) -f Makefile.tests check-in-container
+check-agents-in-container:
+	$(MAKE) -f Makefile.tests check-agents-in-container
+check-mcp-server-in-container:
+	$(MAKE) -f Makefile.tests check-mcp-server-in-container
+check-jira-issue-fetcher-in-container:
+	$(MAKE) -f Makefile.tests check-jira-issue-fetcher-in-container
+check-common-in-container:
+	$(MAKE) -f Makefile.tests check-common-in-container

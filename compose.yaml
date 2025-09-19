@@ -1,78 +1,197 @@
-version: "2.4"
+# Environment variables shared by all agents
+x-beeai-env: &beeai-env
+  MCP_JIRA_URL: http://mcp-atlassian:9000/sse
+  MCP_GATEWAY_URL: http://mcp-gateway:8000/sse
+  REDIS_URL: redis://valkey:6379/0
+  COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
+  GIT_REPO_BASEPATH: /git-repos
+  MAX_RETRIES: 3
+  DRY_RUN: ${DRY_RUN:-false}
+
+# Base template for BeeAI agents
+x-beeai-agent: &beeai-agent
+  depends_on:
+    - mcp-atlassian
+    - mcp-gateway
+    - valkey
+    - phoenix
+  environment:
+    <<: *beeai-env
+  env_file:
+    - .secrets/beeai-agent.env
+  volumes:
+    - ./agents:/home/beeai/agents:ro,z
+    - ./common:/home/beeai/common:ro,z
+    - git-repos:/git-repos:rw,U
+    - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
+  restart: unless-stopped
+
+# C9S agent template
+x-beeai-agent-c9s: &beeai-agent-c9s
+  <<: *beeai-agent
+  image: beeai-agent:c9s
+  build:
+    context: .
+    dockerfile: Containerfile.c9s
+  environment:
+    <<: *beeai-env
+    CONTAINER_VERSION: c9s
+
+# C10S agent template
+x-beeai-agent-c10s: &beeai-agent-c10s
+  <<: *beeai-agent
+  image: beeai-agent:c10s
+  build:
+    context: .
+    dockerfile: Containerfile.c10s
+  environment:
+    <<: *beeai-env
+    CONTAINER_VERSION: c10s
+
+x-supervisor: &supervisor
+  depends_on:
+    - valkey
+    - phoenix
+  image: beeai-agent
+  build:
+    context: .
+    dockerfile: Containerfile.c10s
+  environment:
+    - REDIS_URL=redis://valkey:6379/0
+    - COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces
+    - GIT_REPO_BASEPATH=/git-repos
+    - "KRB5CCNAME=FILE:/home/beeai/ccache/krb5cc"
+    - REDHAT_IT_CA_BUNDLE=/home/beeai/certs/Current-IT-Root-CAs.pem
+  env_file:
+    - .secrets/supervisor.env
+  volumes:
+    - ./agents:/home/beeai/agents:ro,z
+    - ./supervisor:/home/beeai/supervisor:ro,z
+    - .secrets/ccache:/home/beeai/ccache:ro,z,U
+    - ./certs:/home/beeai/certs:ro,z,U
+  restart: unless-stopped
+
 services:
   mcp-atlassian:
     image: ghcr.io/sooperset/mcp-atlassian:latest
-    ports:
-      - published: "${MCP_ATLASSIAN_PORT}"
-        target: "${MCP_ATLASSIAN_PORT}"
     env_file:
       - .secrets/mcp-atlassian.env
-    command: ["--transport", "sse", "--port", "${MCP_ATLASSIAN_PORT}", "-vv"]
+    command: ["--transport", "sse", "--port", "9000", "-vv"]
     restart: unless-stopped
-    healthcheck:
-      test: wget --spider -q "http://127.0.0.1:${MCP_ATLASSIAN_PORT}/healthz"
-      interval: 2s
-      timeout: 2s
-      retries: 30
+    profiles: ["agents", "supervisor"]
 
-  mcp-testing-farm:
-    image: ghcr.io/thrix/testing-farm-mcp:latest
-    ports:
-      - published: "${MCP_TESTING_FARM_PORT}"
-        target: "${MCP_TESTING_FARM_PORT}"
-    env_file:
-      - .secrets/mcp-testing-farm.env
-    entrypoint: [ "fastmcp" ]
-    command: ["run", "/app/testing_farm_mcp/server.py:mcp", "--transport", "sse", "--port", "${MCP_TESTING_FARM_PORT}", "--host", "0.0.0.0", "--log-level", "DEBUG"]
-    restart: unless-stopped
-    healthcheck:
-      test: wget --spider -q "http://127.0.0.1:${MCP_TESTING_FARM_PORT}/sse"
-      interval: 2s
-      timeout: 2s
-      retries: 30
-
-  testing-farm-sse-bridge:
-    image: testing-farm-sse-bridge:latest
-    build:
-      context: ./testing-farm-sse-bridge
-      dockerfile: Containerfile
-      target: ${BUILD_TARGET:-production}
-      args:
-        BASE_IMAGE: registry.fedoraproject.org/fedora:42
-    ports:
-      - published: "${TESTING_FARM_SSE_BRIDGE_PORT:-10000}"
-        target: 10000
-    env_file:
-      - .secrets/testing-farm-sse-bridge.env
-    restart: unless-stopped
-    healthcheck:
-      test: wget --spider -q "http://127.0.0.1:10000/healthz"
-      interval: 2s
-      timeout: 2s
-      retries: 30
-
-  goose:
-    depends_on:
-      mcp-atlassian: { condition: service_healthy }
-      mcp-testing-farm: { condition: service_healthy }
-    image: goose-container
+  mcp-gateway:
+    image: mcp-gateway
     build:
       context: .
-      dockerfile: ./goose-container/Containerfile
-      target: ${BUILD_TARGET:-production}
-      args:
-        BASE_IMAGE: registry.fedoraproject.org/fedora@sha256:3b94b23378c64850f5e2a83d0da4471fab0716d35a2662a794cfeb63b5e6fccd
-        GOOSE_VERSION: v1.1.3
+      dockerfile: Containerfile.mcp
+    environment:
+      - SSE_PORT=8000
+      - KEYTAB_FILE=/home/mcp/keytab
+      # default cache location is a keyring
+      - KRB5CCNAME=FILE:/tmp/krb5cc
+      - DRY_RUN=${DRY_RUN:-false}
     env_file:
-      - .secrets/goose.env
+      - .secrets/mcp-gateway.env
     volumes:
-      - home-goose-persistent:/home/goose
-      - ./goose-recipes:/home/goose/recipes:ro,z
-      - ./goose-container/goose-config.yaml:/home/goose/.config/goose/config.yaml:ro,z
-      - ./scripts:/home/goose/scripts:ro,z
-    stdin_open: true
-    tty: true
+      - ./mcp_server:/home/mcp/mcp_server:ro,z
+      - ./common:/home/mcp/common:ro,z
+      - .secrets/keytab:/home/mcp/keytab:ro,z,U
+      - git-repos:/git-repos
+      - .secrets/rhel-config.json:/home/mcp/rhel-config.json:ro,z,U
+    command: ["python", "mcp_server/gateway.py"]
+    restart: unless-stopped
+    profiles: ["agents", "supervisor"]
+
+  valkey:
+    image: docker.io/valkey/valkey:8
+    volumes:
+      - valkey-data:/data
+    restart: unless-stopped
+    profiles: ["agents", "supervisor"]
+
+  phoenix:
+    image: docker.io/arizephoenix/phoenix:version-11.6.2
+    ports:
+      - "0.0.0.0:6006:6006"
+    environment:
+      - PHOENIX_WORKING_DIR=/mnt/data
+    volumes:
+      - phoenix-data:/mnt/data
+    restart: unless-stopped
+    profiles: ["agents", "supervisor"]
+
+  redis-commander:
+    image: ghcr.io/joeferner/redis-commander:0.9.0
+    environment:
+      - REDIS_HOSTS=local:valkey:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - valkey
+    restart: unless-stopped
+    profiles: ["agents", "supervisor"]
+
+  triage-agent:
+    <<: *beeai-agent-c10s
+    environment:
+      <<: *beeai-env
+    command: ["python", "agents/triage_agent.py"]
+    profiles: ["agents"]
+
+  backport-agent-c9s:
+    <<: *beeai-agent-c9s
+    command: ["python", "agents/backport_agent.py"]
+    profiles: ["agents"]
+
+  backport-agent-c10s:
+    <<: *beeai-agent-c10s
+    command: ["python", "agents/backport_agent.py"]
+    profiles: ["agents"]
+
+  rebase-agent-c9s:
+    <<: *beeai-agent-c9s
+    command: ["python", "agents/rebase_agent.py"]
+    profiles: ["agents"]
+
+  rebase-agent-c10s:
+    <<: *beeai-agent-c10s
+    command: ["python", "agents/rebase_agent.py"]
+    profiles: ["agents"]
+
+  supervisor-collector:
+    <<: *supervisor
+    command: ["python", "-m", "supervisor.main", "collect"]
+    profiles: ["supervisor"]
+
+  supervisor-processor:
+    <<: *supervisor
+    command: ["python", "-m", "supervisor.main", "process"]
+    profiles: ["supervisor"]
+
+  # This is here so we can use it for '$(COMPOSE) run'
+  supervisor:
+    <<: *supervisor
+    command: ["sh", "-c", "echo 'This service isn't run directly' && exit 1"]
+    profiles: []
+    restart: no
+
+
+  jira-issue-fetcher:
+    # No hard dependencies - will connect to existing services or fail gracefully
+    # otherwise it will kill agents already running
+    image: jira-issue-fetcher
+    build:
+      context: .
+      dockerfile: Containerfile.jira-issue-fetcher
+    environment:
+      - REDIS_URL=redis://valkey:6379/0
+    env_file:
+      - .secrets/jira-issue-fetcher.env
     restart: "no"
+    profiles: ["manual"]  # Don't start by default, run manually for testing
 
 volumes:
-  home-goose-persistent:
+  valkey-data:
+  phoenix-data:
+  git-repos:

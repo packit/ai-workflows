@@ -45,16 +45,16 @@ def render_prompt(input: InputSchema) -> str:
          comment: [explain what needs to be done to start tests]
 
       If the tests are complete and failed:
-         state: tests-failed:
-         comment: [list failed tests with URLs.t]
+         state: tests-failed
+         comment: [list failed tests with URLs]
 
       If the tests are complete and passed:
-         state: tests-passed:
+         state: tests-passed
          comment: [Give a brief summary of what was tested with a link to the result.]
 
-      If the tests will be started automatically without user intervention, but are not yet running::
+      If the tests will be started automatically without user intervention, but are not yet running:
          state: tests-pending
-         commnet: [Provide a brief description of what tests are expected to run and where the results will be]
+         comment: [Provide a brief description of what tests are expected to run and where the results will be]
 
       If the tests are currently running:
          state: tests-running

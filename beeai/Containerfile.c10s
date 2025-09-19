@@ -9,6 +9,7 @@ RUN dnf -y install --allowerasing \
       curl \
       gcc \
       git \
+      krb5-devel \
       python3 \
       python3-beautifulsoup4 \
       python3-pip \
@@ -16,6 +17,7 @@ RUN dnf -y install --allowerasing \
       python3-requests-gssapi \
       python3-rpm \
       python3-typer \
+      python3-koji \
       rpm-build \
       rpmdevtools \
       rpmlint \

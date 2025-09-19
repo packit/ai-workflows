@@ -1,6 +1,8 @@
 from enum import Enum
 from string import Template
 
+BREWHUB_URL = "https://brewhub.engineering.redhat.com/brewhub"
+
 BRANCH_PREFIX = "automated-package-update"
 
 AGENT_WARNING = (

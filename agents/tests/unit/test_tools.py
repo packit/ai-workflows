@@ -1,3 +1,4 @@
+import contextlib
 import datetime
 import subprocess
 from textwrap import dedent
@@ -5,6 +6,7 @@ from textwrap import dedent
 import pytest
 from flexmock import flexmock
 from specfile import specfile
+from specfile.utils import EVR
 
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import ToolError
@@ -75,7 +77,7 @@ async def test_run_shell_command(command, exit_code, stdout, stderr):
 
 @pytest.fixture
 def minimal_spec(tmp_path):
-    spec = tmp_path / "test.spec"
+    spec = tmp_path / "minimal.spec"
     spec.write_text(
         dedent(
             """
@@ -136,7 +138,7 @@ async def test_bump_release(minimal_spec):
 
 @pytest.fixture
 def autorelease_spec(tmp_path):
-    spec = tmp_path / "test.spec"
+    spec = tmp_path / "autorelease.spec"
     spec.write_text(
         dedent(
             """
@@ -158,16 +160,47 @@ def autorelease_spec(tmp_path):
     return spec
 
 
+@pytest.mark.parametrize(
+    "rebase",
+    [False, True],
+)
+@pytest.mark.parametrize(
+    "dist_git_branch, ystream_dist",
+    [
+        ("rhel-9.6.0", ".el9"),
+        ("rhel-10.0", ".el10"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_set_zstream_release(autorelease_spec):
-    latest_ystream_evr = "0.1-4.el10"
+async def test_set_zstream_release(rebase, dist_git_branch, ystream_dist, minimal_spec, autorelease_spec):
+    package = "test"
+    flexmock(SetZStreamReleaseTool).should_receive("_get_latest_ystream_build").and_return(
+        EVR(version="0.1", release="2" + ystream_dist),
+    )
     tool = SetZStreamReleaseTool()
-    output = await tool.run(
-        input=SetZStreamReleaseToolInput(spec=autorelease_spec, latest_ystream_evr=latest_ystream_evr)
-    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
-    result = output.result
-    assert result.startswith("Successfully")
-    assert autorelease_spec.read_text().splitlines()[3] == "Release:        4%{?dist}.%{autorelease -n}"
+
+    async def run_and_check(spec, expected_release, error=False):
+        with (pytest.raises(ToolError) if error else contextlib.nullcontext()) as e:
+            output = await tool.run(
+                input=SetZStreamReleaseToolInput(
+                    spec=spec, package=package, dist_git_branch=dist_git_branch, rebase=rebase
+                )
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+        if error:
+            return e.value.message
+        result = output.result
+        assert result.startswith("Successfully")
+        assert spec.read_text().splitlines()[3] == f"Release:        {expected_release}"
+        return result
+
+    await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "2%{?dist}.1")
+    await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
+    await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "2%{?dist}.2")
+    await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
+
+    if not rebase:
+        minimal_spec.write_text(minimal_spec.read_text().replace("%{?dist}.2", "%{?dist}.1.0.0.hotfix2.rhel12345"))
+        assert (await run_and_check(minimal_spec, None, error=True)).endswith("Unable to determine valid release")
 
 
 @pytest.mark.asyncio

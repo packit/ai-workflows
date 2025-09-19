@@ -10,9 +10,11 @@ RUN dnf -y install --allowerasing \
       gcc \
       gcc-c++ \
       git \
+      krb5-devel \
       python3-rpm \
       rpm-build \
       rpmdevtools \
+      rpmautospec-rpm-macros \
       rpmlint \
       python3.11 \
       python3.11-pip \
@@ -41,7 +43,8 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
        openinference-instrumentation-beeai \
        arize-phoenix-otel \
        redis \
-       specfile
+       specfile \
+       koji
 
 # Make venv Python the default
 ENV PATH=/opt/beeai-venv/bin:$PATH

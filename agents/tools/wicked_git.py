@@ -64,6 +64,14 @@ class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOption
                 exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input_path)
                 if exit_code != 0:
                     raise ToolError(f"Command git-commit failed: {stderr}")
+
+            cmd = ["git", "rev-parse", "HEAD"]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input_path)
+            if exit_code != 0:
+                raise ToolError(f"Command git-rev-parse failed: {stderr}")
+            # we will use this commit as the base for the patch
+            context.context["base_head_commit"] = stdout.strip()
+
             return StringToolOutput(
                 result=f"Successfully prepared the package sources at {tool_input_path}"
                         " for application of the upstream fix")
@@ -160,11 +168,15 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
                 else:
                     raise ToolError(f"Command git-am failed: {stderr} out={stdout}")
             # good, now we should have the patch committed, so let's get the file
+            base_commit_sha = context.context.get("base_head_commit")
+            if not base_commit_sha:
+                raise ToolError("`base_head_commit` not found in context. "
+                                "Ensure 'git_prepare_package_sources' is run before this tool.")
             cmd = [
                 "git", "format-patch",
                 "--output",
                 str(tool_input.patch_file_path),
-                "HEAD~1..HEAD"
+                f"{base_commit_sha}..HEAD"
             ]
             exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input_path)
             if exit_code != 0:

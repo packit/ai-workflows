@@ -42,7 +42,13 @@ from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.specfile import BumpReleaseTool, SetZStreamReleaseTool
 from tools.text import CreateTool, InsertAfterSubstringTool, InsertTool, StrReplaceTool, ViewTool
-from tools.wicked_git import GitLogSearchTool, GitPatchCreationTool, GitPreparePackageSources
+from tools.wicked_git import (
+    GitLogSearchTool,
+    GitPatchApplyTool,
+    GitPatchApplyFinishTool,
+    GitPatchCreationTool,
+    GitPreparePackageSources,
+)
 from triage_agent import BackportData, ErrorData
 from utils import check_subprocess, get_agent_execution_config, get_chat_model, mcp_tools, render_prompt
 from specfile import Specfile
@@ -65,10 +71,9 @@ def get_instructions() -> str:
 
       3. Backport the <UPSTREAM_FIX> patch:
 
-         - Navigate to <UNPACKED_SOURCES> and use `git am -3 --reject <UPSTREAM_FIX>` to apply the patch.
-         - Resolve all conflicts and leave the repository in a dirty state. Under any circumstances
-           do not run `git am --continue`.
-         - Delete all *.rej files.
+         - Use the `git_patch_apply` tool, with an absolute path to the patch, to apply the patch.
+         - Resolve all conflicts and leave the repository in a dirty state. Delete all *.rej files.
+         - Use the `git_apply_finish` tool to finish the patch application.
 
       4. Once there are no more conflicts, use the `git_patch_create` tool with <UPSTREAM_FIX>
          as an argument to update the patch file.
@@ -92,6 +97,7 @@ def get_instructions() -> str:
       - Preserve existing formatting and style conventions in spec files and patch headers.
       - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
       - When resolving conflicts, ignore all changes in .github/ workflows and .gitignore.
+      - Never apply the patches yourself, always use the `git_patch_apply` tool.
     """
 
 
@@ -128,6 +134,8 @@ def create_backport_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> 
             InsertAfterSubstringTool(options=local_tool_options),
             StrReplaceTool(options=local_tool_options),
             GitPatchCreationTool(options=local_tool_options),
+            GitPatchApplyTool(options=local_tool_options),
+            GitPatchApplyFinishTool(options=local_tool_options),
             GitLogSearchTool(options=local_tool_options),
             BumpReleaseTool(options=local_tool_options),
             SetZStreamReleaseTool(options=local_tool_options),

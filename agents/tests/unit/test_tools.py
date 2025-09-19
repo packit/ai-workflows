@@ -12,6 +12,10 @@ from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import ToolError
 
 from tools.wicked_git import (
+    GitPatchApplyFinishTool,
+    GitPatchApplyFinishToolInput,
+    GitPatchApplyTool,
+    GitPatchApplyToolInput,
     GitPatchCreationTool,
     GitPatchCreationToolInput,
     GitLogSearchTool,
@@ -404,7 +408,7 @@ def git_repo(tmp_path):
 
 @pytest.mark.asyncio
 async def test_git_patch_creation_tool_success(git_repo, tmp_path):
-    # Simulate a git-am session by creating a new commit and then using format-patch
+    # Simulate a git-am session with a conflict by creating a new commit and then using format-patch
     # Create a new file and stage it
     subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=git_repo, check=True)
     new_file = git_repo / "file.txt"
@@ -416,20 +420,38 @@ async def test_git_patch_creation_tool_success(git_repo, tmp_path):
     subprocess.run(["git", "format-patch", "-1", "HEAD", "--stdout"], cwd=git_repo, check=True, stdout=patch_file.open("w"))
 
     subprocess.run(["git", "switch", "line-2"], cwd=git_repo, check=True)
+    base_head_commit = subprocess.run(["git", "rev-parse", "HEAD"],
+        cwd=git_repo, check=True, capture_output=True, text=True).stdout.strip()
 
     # Now apply the patch with git am
     # This will fail with a merge conflict, but we don't care about that
-    subprocess.run(["git", "am", str(patch_file)], cwd=git_repo)
+    apply_tool = GitPatchApplyTool()
+    output = await apply_tool.run(
+        input=GitPatchApplyToolInput(
+            repository_path=str(git_repo),
+            patch_file_path=str(patch_file),
+        ),
+    )
+    assert "Patch application failed" in str(output.result)
 
+    # resolve the conflict:
     new_file.write_text("Line 1\nLine 2\nLine 3\n")
+    # remove rej file
+    (git_repo / "file.txt.rej").unlink()
+
+    # finish the patch application
+    finish_tool = GitPatchApplyFinishTool()
+    output = await finish_tool.run(
+        input=GitPatchApplyFinishToolInput(
+            repository_path=str(git_repo),
+            patch_file_path=str(patch_file),
+        ),
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
 
     # Now use the tool to create a patch file from the repo
     tool = GitPatchCreationTool(options={"this_cannot_be_empty": "sure-why-not"})
-    tool.options["base_head_commit"] = subprocess.run(["git", "rev-parse", "HEAD"],
-            cwd=git_repo, capture_output=True, text=True).stdout.strip()
+    tool.options["base_head_commit"] = base_head_commit
     output_patch = tmp_path / "output.patch"
-    # got inspired by bee's MCPTool test case:
-    #  https://github.com/i-am-bee/beeai-framework/blob/main/python/tests/tools/test_mcp_tool.py
     output = await tool.run(
         input=GitPatchCreationToolInput(
             repository_path=str(git_repo),
@@ -448,6 +470,8 @@ async def test_git_patch_creation_tool_with_hideous_patch_file(git_repo, tmp_pat
     """ Verifies that GitPatchCreationTool can recover from a `git am` failure
     caused by a patch file without a proper header (i.e., missing author identity).
     """
+    base_head_commit = subprocess.run(["git", "rev-parse", "HEAD"],
+        cwd=git_repo, check=True, capture_output=True, text=True).stdout.strip()
     patch_file = tmp_path / "hideous-patch.patch"
     patch_file.write_text(
         "\nRotten plums and apples\n\n"
@@ -460,16 +484,28 @@ async def test_git_patch_creation_tool_with_hideous_patch_file(git_repo, tmp_pat
         "--\n"
         "2.51.0\n"
     )
-    # Now apply the patch with git am
-    proc = subprocess.run(["git", "am", str(patch_file)], cwd=git_repo, capture_output=True, text=True)
-    assert proc.returncode != 0, "git am was expected to fail but succeeded"
+    # Now apply the patch
+    apply_tool = GitPatchApplyTool()
+    output = await apply_tool.run(
+        input=GitPatchApplyToolInput(
+            repository_path=str(git_repo),
+            patch_file_path=str(patch_file),
+        ),
+    )
     # verify the git-am fails with the expected error message
-    assert "fatal: empty ident name (for <>) not allowed" in proc.stderr
+    assert "fatal: empty ident name (for <>) not allowed" in str(output.result)
 
+    # finish the patch application
+    finish_tool = GitPatchApplyFinishTool()
+    output = await finish_tool.run(
+        input=GitPatchApplyFinishToolInput(
+            repository_path=str(git_repo),
+            patch_file_path=str(patch_file),
+        ),
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
     # Now use the tool to create a patch file from the repo
     tool = GitPatchCreationTool(options={"this_cannot_be_empty": "sure-why-not"})
-    tool.options["base_head_commit"] = subprocess.run(["git", "rev-parse", "HEAD"],
-            cwd=git_repo, capture_output=True, text=True).stdout.strip()
+    tool.options["base_head_commit"] = base_head_commit
     output_patch = tmp_path / "output.patch"
     output = await tool.run(
         input=GitPatchCreationToolInput(

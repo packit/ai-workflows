@@ -23,6 +23,9 @@ from beeai_framework.tools.mcp import MCPTool
 def get_chat_model() -> ChatModel:
     return ChatModel.from_name(
         os.environ["CHAT_MODEL"],
+        # lowering the temperature makes the model stop backporting too soon
+        # but should yield more predictable results
+        # similar for top_p (tried 0.5)
         options=ChatModelParameters(temperature=0.6),
         timeout=1200,
     )
@@ -31,7 +34,9 @@ def get_chat_model() -> ChatModel:
 def get_agent_execution_config() -> dict[str, int]:
     return dict(
         max_retries_per_step=int(os.getenv("BEEAI_MAX_RETRIES_PER_STEP", 5)),
-        total_max_retries=int(os.getenv("BEEAI_TOTAL_MAX_RETRIES", 10)),
+        # 10 can easily be depleted by one of our tools failing 10 times
+        # i.e. str_replace, view, etc.
+        total_max_retries=int(os.getenv("BEEAI_TOTAL_MAX_RETRIES", 25)),
         # 140 is not enough for a more complex rebase
         # 140 is not enough for a more complex rebase or for a backport
         # with 19 commits and numerous merge conflicts, so we have 255 now

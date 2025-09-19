@@ -111,14 +111,15 @@ class GitPatchCreationToolInput(BaseModel):
     patch_file_path: AbsolutePath = Field(description="Absolute path where the patch file should be saved")
 
 
-class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, StringToolOutput]):
-    name = "git_patch_create"
-    description = """
-    Creates a patch file from the specified git repository with an active git-am session.
-    The tool expects you resolved all conflicts. It generates a patch file that can be
-    applied later in the RPM build process.
-    """
-    input_schema = GitPatchCreationToolInput
+class GitPatchApplyToolInput(BaseModel):
+    repository_path: AbsolutePath = Field(description="Absolute path to the git repository")
+    patch_file_path: AbsolutePath = Field(description="Absolute path to the patch file to apply")
+
+
+class GitPatchApplyTool(Tool[GitPatchApplyToolInput, ToolRunOptions, StringToolOutput]):
+    name = "git_patch_apply"
+    description = "Applies provided patch file to the specified git repository using git-am."
+    input_schema = GitPatchApplyToolInput
 
     def _create_emitter(self) -> Emitter:
         return Emitter.root().child(
@@ -127,7 +128,49 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
         )
 
     async def _run(
-        self, tool_input: GitPatchCreationToolInput, options: ToolRunOptions | None, context: RunContext
+        self, tool_input: GitPatchApplyToolInput, options: ToolRunOptions | None, context: RunContext
+    ) -> StringToolOutput:
+        ensure_git_repository(tool_input.repository_path)
+        try:
+            cmd = ["git", "am", "-3", "--reject", str(tool_input.patch_file_path)]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
+            if exit_code != 0:
+                return StringToolOutput(
+                    result="Patch application failed, please resolve the conflicts "
+                    "and run the tool `git_apply_finish` after you resolved all the conflicts. "
+                    "Output from git-am follows:\n"
+                    f"stdout: {stdout}\n"
+                    f"stderr: {stderr}\n"
+                    f"Reject files: {await find_rej_files(tool_input.repository_path)}\n"
+                    f"Current patch: {await git_am_show_current_patch(tool_input.repository_path)}"
+                )
+            return StringToolOutput(result="Successfully applied the patch.")
+        except Exception as e:
+            raise ToolError(f"ERROR: {e}") from e
+
+
+class GitPatchApplyFinishToolInput(BaseModel):
+    repository_path: AbsolutePath = Field(description="Absolute path to the git repository")
+    patch_file_path: AbsolutePath = Field(description="Absolute path to the patch file to apply")
+
+
+class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions, StringToolOutput]):
+    name = "git_apply_finish"
+    description = """
+    Before calling this tool, you must resolve all merge conflicts and delete any `*.rej` files.
+    The tool continues a `git am` session that was paused due to conflicts.
+    After continuing, it will stage all your changes and attempt to complete the patch application.
+    """
+    input_schema = GitPatchApplyFinishToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "git", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self, tool_input: GitPatchApplyFinishToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
         ensure_git_repository(tool_input.repository_path)
         try:
@@ -188,7 +231,7 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
                 elif "Patch failed at" in stdout:
                     return StringToolOutput(
                         result="`git am --continue` resulted in more merge conflicts. "
-                        "Please resolve the conflicts and run the tool `git_patch_create` again."
+                        "Please resolve the conflicts and run the tool `git_apply_finish` again."
                         f"Output from git-am follows:\n"
                         f"stdout: {stdout}\n"
                         f"stderr: {stderr}\n"
@@ -209,12 +252,41 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
                     )
                 else:
                     raise ToolError(f"Command git-am failed: {stderr} out={stdout}")
+            # good, now we should have the patch committed, so let's get the file
+            return StringToolOutput(
+                result="Successfully finished the patch application. "
+                "You can use the tool `git_patch_create` to create the final patch file.")
+        except ToolError:
+            raise
+        except Exception as e:
+            raise ToolError(f"ERROR: {e}") from e
+
+
+class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, StringToolOutput]):
+    name = "git_patch_create"
+    description = """
+    Creates a patch file from commits made on top of the base HEAD commit.
+    This tool should be called after 'git_apply_finish' has successfully completed.
+    It generates a patch file that can be applied later in the RPM build process.
+    """
+    input_schema = GitPatchCreationToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "git", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self, tool_input: GitPatchCreationToolInput, options: ToolRunOptions | None, context: RunContext
+    ) -> StringToolOutput:
+        ensure_git_repository(tool_input.repository_path)
+        try:
             base_commit_sha = self.options.get("base_head_commit")
             if not base_commit_sha:
                 raise ToolError("`base_head_commit` not found in options. "
                                 "Ensure 'git_prepare_package_sources' is run before this tool. "
                                 f"Options: {self.options}")
-            # good, now we should have the patch committed, so let's get the patch file
             cmd = [
                 "git", "format-patch",
                 "--output",

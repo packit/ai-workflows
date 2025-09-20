@@ -40,7 +40,7 @@ from common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
-from tools.specfile import BumpReleaseTool
+from tools.specfile import BumpReleaseTool, SetZStreamReleaseTool
 from tools.text import CreateTool, InsertAfterSubstringTool, InsertTool, StrReplaceTool, ViewTool
 from tools.wicked_git import GitLogSearchTool, GitPatchCreationTool, GitPreparePackageSources
 from triage_agent import BackportData, ErrorData
@@ -73,9 +73,10 @@ def get_instructions() -> str:
       4. Once there are no more conflicts, use the `git_patch_create` tool with <UPSTREAM_FIX>
          as an argument to update the patch file.
 
-      5. Bump release in the spec file and add a new `Patch` tag pointing to the <UPSTREAM_FIX> patch file.
-         Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
-         make sure it has the highest number.
+      5. Update release in the spec file. If you are on a `rhel-*` branch, use the `set_zstream_release` tool,
+         otherwise use the `bump_release` tool. Add a new `Patch` tag pointing to the <UPSTREAM_FIX> patch file.
+         Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered, make sure
+         it has the highest number.
          Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
       6. Run `centpkg --release <DIST_GIT_BRANCH> prep` to see if the new patch applies cleanly.
@@ -126,6 +127,7 @@ def create_backport_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> 
             GitPatchCreationTool(options=local_tool_options),
             GitLogSearchTool(options=local_tool_options),
             BumpReleaseTool(options=local_tool_options),
+            SetZStreamReleaseTool(options=local_tool_options),
             GitPreparePackageSources(options=local_tool_options),
         ],
         memory=UnconstrainedMemory(),

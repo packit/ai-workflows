@@ -12,6 +12,7 @@ RUN dnf -y install --allowerasing \
       centpkg \
       curl \
       gcc \
+      gcc-c++ \
       git \
       python3 \
       python3-beautifulsoup4 \

@@ -3,8 +3,10 @@ FROM fedora:42
 # Install system dependencies
 RUN dnf -y install \
       gcc \
+      gcc-c++ \
       make \
       python3 \
+      python3-devel \
       python3-copr \
       python3-flexmock \
       python3-ogr \

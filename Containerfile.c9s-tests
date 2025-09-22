@@ -7,6 +7,7 @@ RUN dnf -y install epel-release \
 RUN dnf -y install --allowerasing \
       curl \
       gcc \
+      gcc-c++ \
       git \
       python3-rpm \
       rpm-build \

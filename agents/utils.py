@@ -33,7 +33,9 @@ def get_agent_execution_config() -> dict[str, int]:
         max_retries_per_step=int(os.getenv("BEEAI_MAX_RETRIES_PER_STEP", 5)),
         total_max_retries=int(os.getenv("BEEAI_TOTAL_MAX_RETRIES", 10)),
         # 140 is not enough for a more complex rebase
-        max_iterations=int(os.getenv("BEEAI_MAX_ITERATIONS", 180)),
+        # 140 is not enough for a more complex rebase or for a backport
+        # with 19 commits and numerous merge conflicts, so we have 255 now
+        max_iterations=int(os.getenv("BEEAI_MAX_ITERATIONS", 255)),
     )
 
 

@@ -225,12 +225,17 @@ def render_prompt(input: InputSchema) -> str:
          If your decision is rebase or backport, use set_jira_fields tool to update JIRA fields (Severity, Fix Version):
          1. Check all of the mentioned fields in the JIRA issue and don't modify those that are already set
          2. Extract the affected RHEL major version from the JIRA issue (look in Affects Version/s field or issue description)
-         3. Determine if this is a very critical issue requiring Z-stream (only for: privilege escalation, remote code execution, data loss/corruption, or system compromise; definitely not for: performance issues, usability improvements)
-         4. If the Fix Version is not set, use map_version tool with the major version and criticality to get the appropriate Fix Version
-             * If the tool raises MaintenanceVersionPolicyError, this means the issue shouldn't be fixed, change your decision to no-action with appropriate reasoning and don't set any fields.
-         5. Set non-empty JIRA fields:
+         3. If the Fix Version is not set, use map_version tool with the major version to get available streams and determine appropriate Fix Version:
+             * The tool will return both Y-stream and Z-stream versions (if available) and indicate if it's a maintenance version
+             * For maintenance versions (no Y-stream available):
+               - Critical issues should be fixed (privilege escalation, remote code execution, data loss/corruption, system compromise, regressions, CVEs)
+               - Non-critical issues should be marked as no-action with appropriate reasoning
+             * For non-maintenance versions (Y-stream available):
+               - Most critical issues (privilege escalation, RCE, data loss, regressions) should use Z-stream
+               - Other issues should use Y-stream (e.g. performance, usability issues)
+         4. Set non-empty JIRA fields:
              * Severity: default to 'moderate', for important issues use 'important', for most critical use 'critical' (privilege escalation, RCE, data loss)
-             * Fix Version: use the fix_version from map_version tool result
+             * Fix Version: use the appropriate stream version determined from map_version tool result
 
       **Output Format**
 

@@ -56,49 +56,84 @@ async def determine_target_branch(cve_eligibility_result: CVEEligibilityResult |
         return None
 
     # Check if CVE needs internal fix first
-    needs_internal_fix = (
+    cve_needs_internal_fix = (
         cve_eligibility_result
         and cve_eligibility_result.is_cve
         and cve_eligibility_result.needs_internal_fix
     )
 
-    return await _map_version_to_branch(triage_data.fix_version, needs_internal_fix)
+    package = triage_data.package if hasattr(triage_data, 'package') else None
+
+    return await _map_version_to_branch(triage_data.fix_version, cve_needs_internal_fix, package)
 
 
-async def _map_version_to_branch(version: str, needs_internal_fix: bool) -> str | None:
+def _construct_internal_branch_name(major_version: str, minor_version: str) -> str:
+    """Construct internal RHEL branch name."""
+    branch = f"rhel-{major_version}.{minor_version}"
+    if int(major_version) < 10:
+        branch += ".0"
+    return branch
+
+
+async def _map_version_to_branch(version: str, cve_needs_internal_fix: bool, package: str | None = None) -> str | None:
     """
     Map version string to target branch.
 
     Args:
-        version: Version string like 'rhel-9.8' or 'rhel-10.2'
-        needs_internal_fix: True if fix in internal RHEL is needed first
+        version: Version string like 'rhel-9.8' or 'rhel-10.2.z'
+        cve_needs_internal_fix: True if CVE fix in internal RHEL is needed first
+        package: Package name for checking internal branches (required for Z-stream)
 
     Returns:
         - RHEL internal fix: rhel-{major}.{minor}.0 (for RHEL 10, without .0 suffix)
         - CentOS Stream: c{major}s
     """
-    version_match = re.match(r"^rhel-(\d+)\.(\d+)", version.lower())
+    version_match = re.match(r"^rhel-(\d+)\.(\d+)(\.z)?", version.lower())
     if not version_match:
         logger.warning(f"Failed to parse version: {version}")
         return None
 
     major_version = version_match.group(1)
     minor_version = version_match.group(2)
+    is_zstream = version_match.group(3) is not None
 
     # Load rhel-config to check which major versions have Y-stream mappings
     config = await load_rhel_config()
     y_streams = config.get("current_y_streams", {})
 
-    # Major versions without Y-stream mappings are handled always in Stream
-    if needs_internal_fix and major_version in y_streams:
-        branch = f"rhel-{major_version}.{minor_version}"
-        if int(major_version) < 10:
-            branch += ".0"
-        logger.info(f"Mapped {version} -> {branch} (RHEL internal fix)")
-    else:
+
+    if cve_needs_internal_fix:
+        if major_version in y_streams:
+            branch = _construct_internal_branch_name(major_version, minor_version)
+            logger.info(f"Mapped {version} -> {branch} (CVE internal fix)")
+            return branch
+        # Default to CentOS Stream for CVEs when no Y-stream
         branch = f"c{major_version}s"
         logger.info(f"Mapped {version} -> {branch} (CentOS Stream)")
+        return branch
 
+    # For Z-stream bugs, check if internal RHEL branch exists
+    if is_zstream and package:
+        expected_branch = _construct_internal_branch_name(major_version, minor_version)
+
+        try:
+            async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
+                available_branches = await run_tool(
+                    "get_internal_rhel_branches",
+                    available_tools=gateway_tools,
+                    package=package
+                )
+
+                if expected_branch in available_branches:
+                    logger.info(f"Mapped {version} -> {expected_branch} (Z-stream with internal branch)")
+                    return expected_branch
+                logger.info(f"Internal branch {expected_branch} not found for package {package}, falling back to Stream")
+        except Exception as e:
+            logger.warning(f"Failed to check internal branches for package {package}: {e}, falling back to Stream")
+
+    # Default to CentOS Stream
+    branch = f"c{major_version}s"
+    logger.info(f"Mapped {version} -> {branch} (CentOS Stream)")
     return branch
 
 

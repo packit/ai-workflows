@@ -112,6 +112,29 @@ async def open_merge_request(
     return pr.url
 
 
+async def get_internal_rhel_branches(
+    package: Annotated[str, Field(description="Package name to check branches for")],
+) -> list[str]:
+    """
+    Gets the list of branches in the internal RHEL dist-git repository for the specified package.
+    Returns a list of branch names.
+    """
+    repository_url = f"https://gitlab.com/redhat/rhel/rpms/{package}"
+
+    try:
+        project = await asyncio.to_thread(get_project, url=repository_url, token=os.getenv("GITLAB_TOKEN"))
+        if not project:
+            raise ToolError(f"Failed to get repository for package: {package}")
+
+        branches = await asyncio.to_thread(project.get_branches)
+        logger.info(f"Found {len(branches)} branches for package {package}: {branches}")
+        return branches
+
+    except OgrException as ex:
+        logger.warning(f"Failed to get branches for package {package}: {ex}")
+        raise ToolError(f"Failed to get branches for package {package}: {ex}")
+
+
 async def push_to_remote_repository(
     repository: Annotated[str, Field(description="Repository URL")],
     clone_path: Annotated[AbsolutePath, Field(description="Absolute path to local clone of the repository")],

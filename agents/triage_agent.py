@@ -166,7 +166,7 @@ def render_prompt(input: InputSchema) -> str:
       2. Identify the package name that must be updated:
          * Determine the name of the package from the issue details (usually component name)
          * Confirm the package repository exists by running
-           `git ls-remote https://gitlab.com/redhat/centos-stream/rpms/<package_name>`
+           `GIT_TERMINAL_PROMPT=0 git ls-remote https://gitlab.com/redhat/centos-stream/rpms/<package_name>`
          * A successful command (exit code 0) confirms the package exists
          * If the package does not exist, re-examine the Jira issue for the correct package name and if it is not found,
            return error and explicitly state the reason

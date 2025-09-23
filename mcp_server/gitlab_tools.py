@@ -17,6 +17,16 @@ from common.validators import AbsolutePath
 logger = logging.getLogger(__name__)
 
 
+def _get_authenticated_url(repository_url: str) -> str:
+    """
+    Helper function to add GitLab token authentication to repository URLs.
+    """
+    if token := os.getenv("GITLAB_TOKEN"):
+        url = urlparse(repository_url)
+        return url._replace(netloc=f"oauth2:{token}@{url.hostname}").geturl()
+    return repository_url
+
+
 async def fork_repository(
     repository: Annotated[str, Field(description="Repository URL")],
 ) -> str:
@@ -135,6 +145,41 @@ async def get_internal_rhel_branches(
         raise ToolError(f"Failed to get branches for package {package}: {ex}")
 
 
+async def clone_repository(
+    repository: Annotated[str, Field(description="Repository URL to clone")],
+    clone_path: Annotated[str, Field(description="Absolute path where to clone the repository")],
+    branch: Annotated[str, Field(description="Branch to clone")] = None,
+) -> str:
+    """
+    Clones the specified repository to the given local path.
+    """
+    # Add authentication token to repository URL if available
+    authenticated_url = _get_authenticated_url(repository)
+
+    command = [
+        "git",
+        "clone",
+        "--single-branch",
+        "--branch",
+        branch,
+        authenticated_url,
+        clone_path,
+    ]
+
+    proc = await asyncio.create_subprocess_exec(command[0], *command[1:])
+    if await proc.wait():
+        raise ToolError(f"Failed to clone repository {repository}")
+
+    # Remove all remote references after cloning
+    command = ["git", "remote", "remove", "origin"]
+    proc = await asyncio.create_subprocess_exec(
+        command[0], *command[1:], cwd=clone_path
+    )
+    await proc.wait()  # Ignore errors if no remotes exist
+
+    return f"Successfully cloned {repository} to {clone_path}, and removed remote references to avoid token leakage"
+
+
 async def push_to_remote_repository(
     repository: Annotated[str, Field(description="Repository URL")],
     clone_path: Annotated[AbsolutePath, Field(description="Absolute path to local clone of the repository")],
@@ -144,9 +189,7 @@ async def push_to_remote_repository(
     """
     Pushes the specified branch from a local clone to the specified remote repository.
     """
-    url = urlparse(repository)
-    token = os.getenv("GITLAB_TOKEN")
-    remote = url._replace(netloc=f"oauth2:{token}@{url.hostname}").geturl()
+    remote = _get_authenticated_url(repository)
     command = ["git", "push", remote, branch]
     if force:
         command.append("--force")

@@ -31,9 +31,17 @@ async def fork_and_prepare_dist_git(
     )
     local_clone = working_dir / package
     shutil.rmtree(local_clone, ignore_errors=True)
-    await check_subprocess(
-        ["git", "clone", "--single-branch", "--branch", dist_git_branch, fork_url, package],
-        cwd=working_dir,
+
+    # Clone the repository using the clone_repository tool
+    # for this to work, local_clone should be inside a volume shared by the mcp server and the agents
+    # the volume is now mounted in /git-repos in both the mcp server and the agents
+    # and GIT_REPO_BASEPATH is set to /git-repos
+    await run_tool(
+        "clone_repository",
+        repository=fork_url,
+        clone_path=str(local_clone),
+        branch=dist_git_branch,
+        available_tools=available_tools,
     )
     update_branch = f"{BRANCH_PREFIX}-{jira_issue}"
     await check_subprocess(["git", "checkout", "-B", update_branch], cwd=local_clone)

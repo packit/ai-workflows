@@ -9,7 +9,7 @@ import pytest
 from flexmock import flexmock
 from ogr.services.gitlab import GitlabService
 
-from gitlab_tools import fork_repository, open_merge_request, push_to_remote_repository
+from gitlab_tools import fork_repository, open_merge_request, push_to_remote_repository, clone_repository
 
 
 @pytest.mark.parametrize(
@@ -118,6 +118,22 @@ async def test_open_merge_request_with_existing_mr():
 
 
 @pytest.mark.asyncio
+async def test_clone_repository():
+    repository = "https://gitlab.com/ai-bot/bash.git"
+    branch = "rhel-8"
+    clone_path = "/git-repos/bash"
+
+    async def create_subprocess_exec(cmd, *args, **kwargs):
+        async def wait():
+            return 0
+        return flexmock(wait=wait)
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").with_args("git", "clone", "--single-branch", "--branch", branch, repository, clone_path).replace_with(create_subprocess_exec)
+    flexmock(asyncio).should_receive("create_subprocess_exec").with_args("git", "remote", "remove", "origin", cwd=clone_path).replace_with(create_subprocess_exec)
+    result = await clone_repository(repository=repository, clone_path=clone_path, branch=branch)
+    assert result.startswith("Successfully")
+
+
 async def test_push_to_remote_repository():
     repository = "https://gitlab.com/ai-bot/bash.git"
     branch = "automated-package-update-RHEL-12345"

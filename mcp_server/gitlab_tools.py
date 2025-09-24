@@ -170,7 +170,7 @@ async def clone_repository(
     if await proc.wait():
         raise ToolError(f"Failed to clone repository {repository}")
 
-    # Remove all remote references after cloning
+    # Remove origin reference after cloning
     command = ["git", "remote", "remove", "origin"]
     proc = await asyncio.create_subprocess_exec(
         command[0], *command[1:], cwd=clone_path

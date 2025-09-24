@@ -32,10 +32,6 @@ async def fork_and_prepare_dist_git(
     local_clone = working_dir / package
     shutil.rmtree(local_clone, ignore_errors=True)
 
-    # Clone the repository using the clone_repository tool
-    # for this to work, local_clone should be inside a volume shared by the mcp server and the agents
-    # the volume is now mounted in /git-repos in both the mcp server and the agents
-    # and GIT_REPO_BASEPATH is set to /git-repos
     await run_tool(
         "clone_repository",
         repository=fork_url,

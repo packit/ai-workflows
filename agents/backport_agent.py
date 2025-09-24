@@ -212,8 +212,9 @@ async def main() -> None:
                     available_tools=gateway_tools,
                 )
                 local_tool_options["working_directory"] = state.local_clone
-                await check_subprocess(["centpkg", "sources"], cwd=state.local_clone)
-                await check_subprocess(["centpkg", "prep"], cwd=state.local_clone)
+                centpkg_cmd = ["centpkg", "--release", state.dist_git_branch, "--namespace", "rpms", "--name", f"{state.package}"]
+                await check_subprocess(centpkg_cmd + ["sources"], cwd=state.local_clone)
+                await check_subprocess(centpkg_cmd + ["prep"], cwd=state.local_clone)
                 state.unpacked_sources = get_unpacked_sources(state.local_clone, state.package)
                 timeout = aiohttp.ClientTimeout(total=30)
                 async with aiohttp.ClientSession(timeout=timeout) as session:

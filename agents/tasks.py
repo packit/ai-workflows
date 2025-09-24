@@ -31,7 +31,6 @@ async def fork_and_prepare_dist_git(
     )
     local_clone = working_dir / package
     shutil.rmtree(local_clone, ignore_errors=True)
-
     await run_tool(
         "clone_repository",
         repository=fork_url,

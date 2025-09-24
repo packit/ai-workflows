@@ -32,7 +32,8 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
        pytest \
        pytest-asyncio \
        flexmock \
-       koji
+       koji \
+       GitPython
 
 # Make venv Python the default
 ENV PATH=/opt/beeai-venv/bin:$PATH

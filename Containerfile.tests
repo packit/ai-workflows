@@ -19,6 +19,7 @@ RUN dnf -y install \
       python3-redis \
       python3-requests \
       python3-backoff \
+      python3-GitPython \
     && dnf clean all
 
 RUN git config --global user.email "jotnar-tests@example.com" \

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlparse
 
+import git
 from fastmcp.exceptions import ToolError
 from ogr.factory import get_project
 from ogr.exceptions import OgrException, GitlabAPIException
@@ -146,9 +147,9 @@ async def get_internal_rhel_branches(
 
 
 async def clone_repository(
-    repository: Annotated[str, Field(description="Repository URL to clone")],
-    clone_path: Annotated[str, Field(description="Absolute path where to clone the repository")],
-    branch: Annotated[str, Field(description="Branch to clone")] = None,
+    repository: Annotated[str, Field(description="Repository URL")],
+    clone_path: Annotated[AbsolutePath, Field(description="Absolute path where to clone the repository")],
+    branch: Annotated[str, Field(description="Branch to clone")],
 ) -> str:
     """
     Clones the specified repository to the given local path.
@@ -170,14 +171,14 @@ async def clone_repository(
     if await proc.wait():
         raise ToolError(f"Failed to clone repository {repository}")
 
-    # Remove origin reference after cloning
-    command = ["git", "remote", "remove", "origin"]
-    proc = await asyncio.create_subprocess_exec(
-        command[0], *command[1:], cwd=clone_path
-    )
-    await proc.wait()  # Ignore errors if no remotes exist
+    def remove_all_remotes():
+        with git.Repo(clone_path) as repo:
+            for remote in repo.remotes:
+                repo.delete_remote(remote)
 
-    return f"Successfully cloned {repository} to {clone_path}, and removed remote references to avoid token leakage"
+    await asyncio.to_thread(remove_all_remotes)
+
+    return f"Successfully cloned the specified repository to {clone_path}"
 
 
 async def push_to_remote_repository(

@@ -10,6 +10,7 @@ RUN dnf -y install \
       python3-pip \
       python3-redis \
       python3-requests \
+      python3-GitPython \
       krb5-libs \
       krb5-workstation \
       centpkg \

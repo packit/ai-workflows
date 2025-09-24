@@ -289,7 +289,7 @@ def render_prompt(input: InputSchema) -> str:
           PATCH_URL: [URL or reference to the source of the fix that was validated using PatchValidator tool]
           CVE_ID: [CVE identifier, leave blank if not applicable]
           JUSTIFICATION: [A brief but clear explanation of why this patch fixes the issue, linking it to the root cause.]
-          FIX_VERSION: [fix version set in JIRA (if this was already set, that one should be used)]
+          FIX_VERSION: [fix version set in JIRA (use existing value if already set)]
 
       If Clarification Needed:
           FINDINGS: [Summarize your understanding of the bug and what you investigated,

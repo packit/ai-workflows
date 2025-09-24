@@ -263,7 +263,7 @@ def render_prompt(input: InputSchema) -> str:
          3. If the Fix Version is not set, use map_version tool with the major version to get available streams and determine appropriate Fix Version:
              * The tool will return both Y-stream and Z-stream versions (if available) and indicate if it's a maintenance version
              * For maintenance versions (no Y-stream available):
-               - Critical issues should be fixed (privilege escalation, remote code execution, data loss/corruption, system compromise, regressions, CVEs)
+               - Critical issues should be fixed (privilege escalation, remote code execution, data loss/corruption, system compromise, regressions, moderate and higher severity CVEs)
                - Non-critical issues should be marked as no-action with appropriate reasoning
              * For non-maintenance versions (Y-stream available):
                - Most critical issues (privilege escalation, RCE, data loss, regressions) should use Z-stream
@@ -286,10 +286,10 @@ def render_prompt(input: InputSchema) -> str:
 
       If Backport:
           PACKAGE: [package name]
-          PATCH_URL: [URL or reference to the source of the fix]
+          PATCH_URL: [URL or reference to the source of the fix that was validated using PatchValidator tool]
           CVE_ID: [CVE identifier, leave blank if not applicable]
           JUSTIFICATION: [A brief but clear explanation of why this patch fixes the issue, linking it to the root cause.]
-          FIX_VERSION: [fix version set in JIRA]
+          FIX_VERSION: [fix version set in JIRA (if this was already set, that one should be used)]
 
       If Clarification Needed:
           FINDINGS: [Summarize your understanding of the bug and what you investigated,

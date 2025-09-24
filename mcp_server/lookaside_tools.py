@@ -13,13 +13,21 @@ from utils import init_kerberos_ticket
 
 async def download_sources(
     dist_git_path: Annotated[AbsolutePath, Field(description="Absolute path to cloned dist-git repository")],
+    package: Annotated[str, Field(description="Package name")],
     dist_git_branch: Annotated[str, Field(description="dist-git branch")],
 ) -> str:
     """
     Downloads sources from lookaside cache.
     """
     tool = "centpkg" if is_cs_branch(dist_git_branch) else "rhpkg"
-    proc = await asyncio.create_subprocess_exec(tool, "sources", cwd=dist_git_path)
+    proc = await asyncio.create_subprocess_exec(
+        tool,
+        f"--name={package}",
+        "--namespace=rpms",
+        f"--release={dist_git_branch}",
+        "sources",
+        cwd=dist_git_path,
+    )
     if await proc.wait():
         raise ToolError("Failed to download sources")
     return "Successfully downloaded sources from lookaside cache"
@@ -27,6 +35,7 @@ async def download_sources(
 
 async def upload_sources(
     dist_git_path: Annotated[AbsolutePath, Field(description="Absolute path to cloned dist-git repository")],
+    package: Annotated[str, Field(description="Package name")],
     dist_git_branch: Annotated[str, Field(description="dist-git branch")],
     new_sources: Annotated[list[str], Field(description="List of new sources (file names) to upload")],
 ) -> str:
@@ -39,7 +48,15 @@ async def upload_sources(
     tool = "centpkg" if is_cs_branch(dist_git_branch) else "rhpkg"
     if not await init_kerberos_ticket():
         raise ToolError("Failed to initialize Kerberos ticket")
-    proc = await asyncio.create_subprocess_exec(tool, "new-sources", *new_sources, cwd=dist_git_path)
+    proc = await asyncio.create_subprocess_exec(
+        tool,
+        f"--name={package}",
+        "--namespace=rpms",
+        f"--release={dist_git_branch}",
+        "new-sources",
+        *new_sources,
+        cwd=dist_git_path,
+    )
     if await proc.wait():
         raise ToolError("Failed to upload sources")
     return "Successfully uploaded the specified new sources to lookaside cache"

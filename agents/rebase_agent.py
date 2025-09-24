@@ -69,17 +69,19 @@ def get_instructions() -> str:
          You may need to get some information from the upstream repository, for example commit hashes.
          Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
-      4. Download upstream sources using `spectool -g -S <PACKAGE>.spec`. Run `centpkg --release <DIST_GIT_BRANCH> prep`
+      4. Download upstream sources using `spectool -g -S <PACKAGE>.spec`.
+         Run `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
          to see if everything is in order. It is possible that some *.patch files will fail to apply now
          that the spec file has been updated. Don't jump to conclusions - if one patch fails to apply, it doesn't mean
          all other patches fail to apply as well. Go through the errors one by one, fix them and verify the changes
-         by running `centpkg --release <DIST_GIT_BRANCH> prep` again. Repeat as necessary. Do not remove any patches
-         unless all their hunks have been already applied to the upstream sources.
+         by running `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` again.
+         Repeat as necessary. Do not remove any patches unless all their hunks have been already applied
+         to the upstream sources.
 
       5. Upload new upstream sources (files that the `spectool` command downloaded in the previous step)
          to lookaside cache using the `upload_sources` tool.
 
-      6. Generate a SRPM using `centpkg --release <DIST_GIT_BRANCH> srpm`.
+      6. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
 
       7. In your output, provide a "files_to_git_add" list containing all files that should be git added for this rebase.
          This typically includes the updated spec file and any new/modified/deleted patch files or other files you've changed

@@ -79,9 +79,10 @@ def get_instructions() -> str:
          it has the highest number.
          Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
-      6. Run `centpkg --release <DIST_GIT_BRANCH> prep` to see if the new patch applies cleanly.
+      6. Run `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` to see if the new patch
+         applies cleanly.
 
-      7. Generate a SRPM using `centpkg --release <DIST_GIT_BRANCH> srpm`.
+      7. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
 
 
       General instructions:
@@ -214,7 +215,7 @@ async def main() -> None:
                     available_tools=gateway_tools,
                 )
                 local_tool_options["working_directory"] = state.local_clone
-                centpkg_cmd = ["centpkg", "--release", state.dist_git_branch, "--namespace", "rpms", "--name", f"{state.package}"]
+                centpkg_cmd = ["centpkg", f"--name={state.package}", "--namespace=rpms", f"--release={state.dist_git_branch}"]
                 await check_subprocess(centpkg_cmd + ["sources"], cwd=state.local_clone)
                 await check_subprocess(centpkg_cmd + ["prep"], cwd=state.local_clone)
                 state.unpacked_sources = get_unpacked_sources(state.local_clone, state.package)

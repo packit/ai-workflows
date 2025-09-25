@@ -1,0 +1,23 @@
+services:
+  goose-team:
+    image: goose-team
+    build:
+      context: .
+      dockerfile: files/Containerfile.goose-team
+    ports:
+      - "3001:3001"
+
+  goose-agent:
+    image: goose
+    build:
+      context: .
+      dockerfile: files/Containerfile.goose
+    env_file:
+      - .env
+    volumes:
+      - ./recipes:/home/goose/recipes:ro,z
+      - ./files/goose-config.yaml:/home/goose/.config/goose/config.yaml:ro,z
+    stdin_open: true
+    tty: true
+    depends_on:
+      - goose-team

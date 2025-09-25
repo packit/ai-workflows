@@ -81,6 +81,33 @@ class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOption
             raise ToolError(f"ERROR: {e}") from e
 
 
+def ensure_git_repository(repository_path: AbsolutePath) -> None:
+    if not repository_path.exists():
+        raise ToolError(f"Repository path does not exist: {repository_path}")
+    if not (repository_path / ".git").exists():
+        raise ToolError(f"Not a git repository: {repository_path}")
+
+
+async def find_rej_files(repository_path: AbsolutePath) -> list[str]:
+    cmd = ["git", "ls-files", "--others", "--exclude-standard"]
+    exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repository_path)
+    if exit_code != 0:
+        raise ToolError(f"Git command failed: {stderr}")
+    if stdout:
+        return [file for file in stdout.splitlines() if file.endswith(".rej")]
+    return []
+
+
+async def git_am_show_current_patch(repository_path: AbsolutePath) -> str:
+    cmd = ["git", "am", "--show-current-patch=diff"]
+    exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repository_path)
+    if exit_code != 0:
+        raise ToolError(f"Git command failed: {stderr}")
+    if stdout:
+        return stdout
+    return ""
+
+
 class GitPatchCreationToolInput(BaseModel):
     repository_path: AbsolutePath = Field(description="Absolute path to the git repository")
     patch_file_path: AbsolutePath = Field(description="Absolute path where the patch file should be saved")
@@ -104,33 +131,26 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
     async def _run(
         self, tool_input: GitPatchCreationToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
+        ensure_git_repository(tool_input.repository_path)
         try:
-            # Ensure the repository path exists and is a git repository
-            tool_input_path = tool_input.repository_path
-            if not tool_input_path.exists():
-                raise ToolError(f"Repository path does not exist: {tool_input_path}")
-
-            git_dir = tool_input_path / ".git"
-            if not git_dir.exists():
-                raise ToolError(f"Not a git repository: {tool_input_path}")
-
             cmd = ["git", "status"]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input_path)
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
             if "am session" not in stdout:
                 # am session is not active, we can reuse the patch file
-                return StringToolOutput(result=f"The patch applied cleanly, you can use the patch file as is.")
+                return StringToolOutput(
+                    result=f"The patch applied cleanly, you can use the patch file as is.")
 
             # list all untracked files in the repository
             rej_candidates = []
             cmd = ["git", "ls-files", "--others", "--exclude-standard"]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input_path)
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
             if exit_code != 0:
                 raise ToolError(f"Git command failed: {stderr}")
             if stdout:  # none means no untracked files
                 rej_candidates.extend(stdout.splitlines())
             # list staged as well since that's what the agent usually does after it resolves conflicts
             cmd = ["git", "diff", "--name-only", "--cached"]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input_path)
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
             if exit_code != 0:
                 raise ToolError(f"Git command failed: {stderr}")
             if stdout:
@@ -147,24 +167,48 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
             # but the backport process could create new files or change new ones
             # so let's go the naive route: git add -A
             cmd = ["git", "add", "-A"]
-            exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input_path)
+            exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
             if exit_code != 0:
                 raise ToolError(f"Git command failed: {stderr}")
             # continue git-am process
-            cmd = ["git", "am", "--continue"]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input_path)
+            cmd = ["git", "am", "--reject", "-3", "--continue"]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
             if exit_code != 0:
                 # if the patch file doesn't have the header, this will fail
                 # let's verify in the error message
                 if "fatal: empty ident name " in stderr:
                     exit_code, stdout, stderr = await run_subprocess(
-                        ["git", "commit", "-m", f"Patch {tool_input.patch_file_path.name}"], cwd=tool_input_path)
+                        ["git", "commit", "-m", f"Patch {tool_input.patch_file_path.name}"], cwd=tool_input.repository_path)
                     if exit_code != 0:
                         raise ToolError(f"Command git-commit failed: {stderr}")
                     exit_code, stdout, stderr = await run_subprocess(
-                        ["git", "am", "--skip"], cwd=tool_input_path)
+                        ["git", "am", "--reject", "-3", "--skip"], cwd=tool_input.repository_path)
                     if exit_code != 0:
                         raise ToolError(f"Command git-am failed: {stderr}")
+                # FIXME: we need to find a more reliable way to detect this
+                # elif "error: Failed to merge in the changes" in stderr:
+                elif "Patch failed at" in stdout:
+                    return StringToolOutput(
+                        result="`git am --continue` resulted in more merge conflicts. "
+                        "Please resolve the conflicts and run the tool `git_patch_create` again."
+                        f"Output from git-am follows:\n"
+                        f"stdout: {stdout}\n"
+                        f"stderr: {stderr}\n"
+                        f"Reject files: {await find_rej_files(tool_input.repository_path)}\n"
+                        f"Current patch: {await git_am_show_current_patch(tool_input.repository_path)}"
+                    )
+                elif "No changes - did you forget" in stdout:
+                    exit_code, stdout, stderr = await run_subprocess(
+                        ["git", "am", "--reject", "-3", "--skip"], cwd=tool_input.repository_path)
+                    if exit_code != 0:
+                        raise ToolError(f"Command git-am failed: {stderr}")
+                    return StringToolOutput(
+                        result="No changes happened in the working tree. We have skipped that patch and continue. "
+                        f"Output from git-am follows:\n"
+                        f"stdout: {stdout}\n"
+                        f"stderr: {stderr}\n"
+                        f"Reject files: {await find_rej_files(tool_input.repository_path)}"
+                    )
                 else:
                     raise ToolError(f"Command git-am failed: {stderr} out={stdout}")
             # good, now we should have the patch committed, so let's get the file
@@ -178,7 +222,7 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
                 str(tool_input.patch_file_path),
                 f"{base_commit_sha}..HEAD"
             ]
-            exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input_path)
+            exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
             if exit_code != 0:
                 raise ToolError(f"Command git-format-patch failed: {stderr}")
             return StringToolOutput(result=f"Successfully created a patch file: {tool_input.patch_file_path}")

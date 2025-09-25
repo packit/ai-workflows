@@ -24,16 +24,14 @@ async def fork_and_prepare_dist_git(
     working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / jira_issue
     working_dir.mkdir(parents=True, exist_ok=True)
     namespace = "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
-    fork_url = await run_tool(
-        "fork_repository",
-        repository=f"https://gitlab.com/redhat/{namespace}/rpms/{package}",
-        available_tools=available_tools,
-    )
+    repository = f"https://gitlab.com/redhat/{namespace}/rpms/{package}"
+    fork_url = await run_tool("fork_repository", repository=repository, available_tools=available_tools)
     local_clone = working_dir / package
     shutil.rmtree(local_clone, ignore_errors=True)
     await run_tool(
-        "clone_repository",
-        repository=fork_url,
+        "clone_and_update_fork",
+        fork_url=fork_url,
+        parent=repository,
         clone_path=str(local_clone),
         branch=dist_git_branch,
         available_tools=available_tools,

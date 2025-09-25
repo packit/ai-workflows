@@ -10,7 +10,7 @@ import pytest
 from flexmock import flexmock
 from ogr.services.gitlab import GitlabService
 
-from gitlab_tools import fork_repository, open_merge_request, push_to_remote_repository, clone_repository
+from gitlab_tools import clone_and_update_fork, fork_repository, open_merge_request, push_to_remote_repository
 
 
 @pytest.mark.parametrize(
@@ -119,20 +119,31 @@ async def test_open_merge_request_with_existing_mr():
 
 
 @pytest.mark.asyncio
-async def test_clone_repository():
-    repository = "https://gitlab.com/ai-bot/bash.git"
-    branch = "rhel-8"
+async def test_clone_and_update_fork():
+    fork_url = "https://gitlab.com/ai-bot/centos_rpms_bash.git"
+    parent = "https://gitlab.com/centos-stream/rpms/bash"
+    branch = "rhel-8.10.0"
     clone_path = Path("/git-repos/bash")
 
     async def create_subprocess_exec(cmd, *args, **kwargs):
+        assert cmd == "git"
+        if args[0] == "clone":
+            assert args[3] == branch
+            assert args[4].endswith(fork_url.removeprefix("https://"))
+            assert args[5] == clone_path
+        elif args[0] == "pull":
+            assert args[2].endswith(parent.removeprefix("https://"))
+            assert args[3] == branch
+            assert kwargs.get("cwd") == clone_path
         async def wait():
             return 0
         return flexmock(wait=wait)
 
-    flexmock(asyncio).should_receive("create_subprocess_exec").with_args("git", "clone", "--single-branch", "--branch", branch, repository, clone_path).replace_with(create_subprocess_exec)
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+
     remote = flexmock()
     flexmock(git.Repo).new_instances(flexmock(remotes=[remote]).should_receive("delete_remote").with_args(remote).once().mock())
-    result = await clone_repository(repository=repository, clone_path=clone_path, branch=branch)
+    result = await clone_and_update_fork(fork_url=fork_url, parent=parent, clone_path=clone_path, branch=branch)
     assert result.startswith("Successfully")
 
 

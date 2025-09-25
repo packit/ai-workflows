@@ -146,30 +146,41 @@ async def get_internal_rhel_branches(
         raise ToolError(f"Failed to get branches for package {package}: {ex}")
 
 
-async def clone_repository(
-    repository: Annotated[str, Field(description="Repository URL")],
-    clone_path: Annotated[AbsolutePath, Field(description="Absolute path where to clone the repository")],
+async def clone_and_update_fork(
+    fork_url: Annotated[str, Field(description="URL of the fork of the repository")],
+    parent: Annotated[str, Field(description="Parent repository of the fork")],
+    clone_path: Annotated[AbsolutePath, Field(description="Absolute path where to clone the fork")],
     branch: Annotated[str, Field(description="Branch to clone")],
 ) -> str:
     """
-    Clones the specified repository to the given local path.
+    Clones the specified fork to the given local path and updates the cloned branch
+    to match the parent repository.
     """
-    # Add authentication token to repository URL if available
-    authenticated_url = _get_authenticated_url(repository)
-
     command = [
         "git",
         "clone",
         "--single-branch",
         "--branch",
         branch,
-        authenticated_url,
+        _get_authenticated_url(fork_url),
         clone_path,
     ]
 
     proc = await asyncio.create_subprocess_exec(command[0], *command[1:])
     if await proc.wait():
-        raise ToolError(f"Failed to clone repository {repository}")
+        raise ToolError(f"Failed to clone fork {fork_url}")
+
+    command = [
+        "git",
+        "pull",
+        "--ff-only",
+        _get_authenticated_url(parent),
+        branch,
+    ]
+
+    proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
+    if await proc.wait():
+        raise ToolError(f"Failed to update fork {fork_url}")
 
     def remove_all_remotes():
         with git.Repo(clone_path) as repo:
@@ -178,7 +189,7 @@ async def clone_repository(
 
     await asyncio.to_thread(remove_all_remotes)
 
-    return f"Successfully cloned the specified repository to {clone_path}"
+    return f"Successfully cloned the specified fork to {clone_path}"
 
 
 async def push_to_remote_repository(

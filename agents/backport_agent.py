@@ -73,7 +73,7 @@ def get_instructions() -> str:
       4. Once there are no more conflicts, use the `git_patch_create` tool with <UPSTREAM_FIX>
          as an argument to update the patch file.
 
-      5. Update release in the spec file. If you are on a `rhel-*` branch, use the `set_zstream_release` tool,
+      5. Update release in the spec file. If <DIST_GIT_BRANCH> starts with "rhel-", use the `set_zstream_release` tool,
          otherwise use the `bump_release` tool. Add a new `Patch` tag pointing to the <UPSTREAM_FIX> patch file.
          Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered, make sure
          it has the highest number.

@@ -64,7 +64,7 @@ def get_instructions() -> str:
          change `Version` and `Release` tags (or corresponding macros) and add a new changelog entry,
          but sometimes other things are changed - if that's the case, try to understand the logic behind it.
 
-      3. Update the spec file. Set <VERSION> and reset release. If you are on a `rhel-*` branch,
+      3. Update the spec file. Set <VERSION> and reset release. If <DIST_GIT_BRANCH> starts with "rhel-",
          use the `set_zstream_release` tool for resetting the release. Do any other usual changes.
          You may need to get some information from the upstream repository, for example commit hashes.
          Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.

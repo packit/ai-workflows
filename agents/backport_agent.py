@@ -91,6 +91,7 @@ def get_instructions() -> str:
       - Never change anything in the spec file changelog.
       - Preserve existing formatting and style conventions in spec files and patch headers.
       - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
+      - When resolving conflicts, ignore all changes in .github/ workflows and .gitignore.
     """
 
 

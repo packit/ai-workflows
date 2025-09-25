@@ -137,7 +137,7 @@ class SetZStreamReleaseTool(Tool[SetZStreamReleaseToolInput, ToolRunOptions, Str
     ) -> StringToolOutput:
         spec_path = get_absolute_path(tool_input.spec, self)
         try:
-            latest_ystream_build = self._get_latest_ystream_build(
+            latest_ystream_build = await self._get_latest_ystream_build(
                 tool_input.package,
                 tool_input.dist_git_branch,
             )

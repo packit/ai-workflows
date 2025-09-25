@@ -174,9 +174,12 @@ def autorelease_spec(tmp_path):
 @pytest.mark.asyncio
 async def test_set_zstream_release(rebase, dist_git_branch, ystream_dist, minimal_spec, autorelease_spec):
     package = "test"
-    flexmock(SetZStreamReleaseTool).should_receive("_get_latest_ystream_build").and_return(
-        EVR(version="0.1", release="2" + ystream_dist),
-    )
+
+    async def _get_latest_ystream_build(*_, **__):
+        return EVR(version="0.1", release="2" + ystream_dist)
+
+    flexmock(SetZStreamReleaseTool).should_receive("_get_latest_ystream_build").replace_with(_get_latest_ystream_build)
+
     tool = SetZStreamReleaseTool()
 
     async def run_and_check(spec, expected_release, error=False):

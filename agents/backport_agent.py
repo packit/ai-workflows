@@ -101,7 +101,8 @@ def get_prompt() -> str:
       {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
       {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
       {{^build_error}}
-      Backport upstream fix {{jira_issue}}.patch. Unpacked upstream sources are in {{unpacked_sources}}.
+      Backport upstream fix {{local_clone}}/{{jira_issue}}.patch.
+      Unpacked upstream sources are in {{unpacked_sources}}.
       {{/build_error}}
       {{#build_error}}
       This is a repeated backport, after the previous attempt the generated SRPM failed to build:

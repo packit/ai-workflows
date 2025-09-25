@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from pydantic import BaseModel, Field
 
 from beeai_framework.context import RunContext
@@ -70,11 +68,11 @@ class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOption
             if exit_code != 0:
                 raise ToolError(f"Command git-rev-parse failed: {stderr}")
             # we will use this commit as the base for the patch
-            context.context["base_head_commit"] = stdout.strip()
-
+            self.options["base_head_commit"] = stdout.strip()
             return StringToolOutput(
                 result=f"Successfully prepared the package sources at {tool_input_path}"
-                        " for application of the upstream fix")
+                        " for application of the upstream fix. "
+                        f"HEAD commit is: {self.options['base_head_commit']}")
         except ToolError:
             raise
         except Exception as e:
@@ -211,11 +209,12 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
                     )
                 else:
                     raise ToolError(f"Command git-am failed: {stderr} out={stdout}")
-            # good, now we should have the patch committed, so let's get the file
-            base_commit_sha = context.context.get("base_head_commit")
+            base_commit_sha = self.options.get("base_head_commit")
             if not base_commit_sha:
-                raise ToolError("`base_head_commit` not found in context. "
-                                "Ensure 'git_prepare_package_sources' is run before this tool.")
+                raise ToolError("`base_head_commit` not found in options. "
+                                "Ensure 'git_prepare_package_sources' is run before this tool. "
+                                f"Options: {self.options}")
+            # good, now we should have the patch committed, so let's get the patch file
             cmd = [
                 "git", "format-patch",
                 "--output",

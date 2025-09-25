@@ -404,7 +404,6 @@ def git_repo(tmp_path):
 
 @pytest.mark.asyncio
 async def test_git_patch_creation_tool_success(git_repo, tmp_path):
-    head_commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=git_repo, capture_output=True, text=True).stdout.strip()
     # Simulate a git-am session by creating a new commit and then using format-patch
     # Create a new file and stage it
     subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=git_repo, check=True)
@@ -425,18 +424,18 @@ async def test_git_patch_creation_tool_success(git_repo, tmp_path):
     new_file.write_text("Line 1\nLine 2\nLine 3\n")
 
     # Now use the tool to create a patch file from the repo
-    tool = GitPatchCreationTool()
+    tool = GitPatchCreationTool(options={"this_cannot_be_empty": "sure-why-not"})
+    tool.options["base_head_commit"] = subprocess.run(["git", "rev-parse", "HEAD"],
+            cwd=git_repo, capture_output=True, text=True).stdout.strip()
     output_patch = tmp_path / "output.patch"
     # got inspired by bee's MCPTool test case:
     #  https://github.com/i-am-bee/beeai-framework/blob/main/python/tests/tools/test_mcp_tool.py
-    output = await tool._run(
-        tool_input=GitPatchCreationToolInput(
+    output = await tool.run(
+        input=GitPatchCreationToolInput(
             repository_path=str(git_repo),
             patch_file_path=str(output_patch),
         ),
-        options=None,
-        context=flexmock(context={"base_head_commit": head_commit}),
-    )
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
     result = output.result
     assert "Successfully created a patch file" in result
     assert output_patch.exists()
@@ -461,7 +460,6 @@ async def test_git_patch_creation_tool_with_hideous_patch_file(git_repo, tmp_pat
         "--\n"
         "2.51.0\n"
     )
-    head_commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=git_repo, capture_output=True, text=True).stdout.strip()
     # Now apply the patch with git am
     proc = subprocess.run(["git", "am", str(patch_file)], cwd=git_repo, capture_output=True, text=True)
     assert proc.returncode != 0, "git am was expected to fail but succeeded"
@@ -469,16 +467,16 @@ async def test_git_patch_creation_tool_with_hideous_patch_file(git_repo, tmp_pat
     assert "fatal: empty ident name (for <>) not allowed" in proc.stderr
 
     # Now use the tool to create a patch file from the repo
-    tool = GitPatchCreationTool()
+    tool = GitPatchCreationTool(options={"this_cannot_be_empty": "sure-why-not"})
+    tool.options["base_head_commit"] = subprocess.run(["git", "rev-parse", "HEAD"],
+            cwd=git_repo, capture_output=True, text=True).stdout.strip()
     output_patch = tmp_path / "output.patch"
-    output = await tool._run(
-        tool_input=GitPatchCreationToolInput(
+    output = await tool.run(
+        input=GitPatchCreationToolInput(
             repository_path=str(git_repo),
             patch_file_path=str(output_patch),
         ),
-        options=None,
-        context=flexmock(context={"base_head_commit": head_commit}),
-    )
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
     result = output.result
     assert "Successfully created a patch file" in result
     assert output_patch.exists()

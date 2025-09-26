@@ -4,6 +4,10 @@ RUN dnf -y install epel-release \
     && dnf config-manager --set-enabled crb \
     && dnf -y update
 
+# Install RH IT Root CAs for access to internal services
+COPY files/Current-IT-Root-CAs.pem /etc/pki/ca-trust/source/anchors/
+RUN update-ca-trust
+
 RUN dnf -y install --allowerasing \
       centpkg \
       curl \

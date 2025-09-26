@@ -40,7 +40,7 @@ from common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
-from tools.specfile import SetZStreamReleaseTool
+from tools.specfile import UpdateReleaseTool
 from tools.text import CreateTool, InsertAfterSubstringTool, InsertTool, StrReplaceTool, ViewTool
 from triage_agent import RebaseData, ErrorData
 from utils import get_agent_execution_config, get_chat_model, mcp_tools, render_prompt, run_tool
@@ -64,9 +64,8 @@ def get_instructions() -> str:
          change `Version` and `Release` tags (or corresponding macros) and add a new changelog entry,
          but sometimes other things are changed - if that's the case, try to understand the logic behind it.
 
-      3. Update the spec file. Set <VERSION> and reset release. If <DIST_GIT_BRANCH> starts with "rhel-",
-         use the `set_zstream_release` tool for resetting the release. Do any other usual changes.
-         You may need to get some information from the upstream repository, for example commit hashes.
+      3. Update the spec file. Set <VERSION>, use the `update_release` tool to reset release and do any other
+         usual changes. You may need to get some information from the upstream repository, for example commit hashes.
          Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
       4. Download upstream sources using `spectool -g -S <PACKAGE>.spec`.
@@ -140,7 +139,7 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
             InsertTool(options=local_tool_options),
             InsertAfterSubstringTool(options=local_tool_options),
             StrReplaceTool(options=local_tool_options),
-            SetZStreamReleaseTool(options=local_tool_options),
+            UpdateReleaseTool(options=local_tool_options),
         ] + [t for t in mcp_tools if t.name == "upload_sources"],
         memory=UnconstrainedMemory(),
         requirements=[

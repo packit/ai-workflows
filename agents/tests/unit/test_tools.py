@@ -21,10 +21,8 @@ from tools.commands import RunShellCommandTool, RunShellCommandToolInput
 from tools.specfile import (
     AddChangelogEntryTool,
     AddChangelogEntryToolInput,
-    BumpReleaseTool,
-    BumpReleaseToolInput,
-    SetZStreamReleaseTool,
-    SetZStreamReleaseToolInput,
+    UpdateReleaseTool,
+    UpdateReleaseToolInput,
 )
 from tools.text import (
     CreateTool,
@@ -125,17 +123,6 @@ async def test_add_changelog_entry(minimal_spec):
     ]
 
 
-@pytest.mark.asyncio
-async def test_bump_release(minimal_spec):
-    tool = BumpReleaseTool()
-    output = await tool.run(input=BumpReleaseToolInput(spec=minimal_spec)).middleware(
-        GlobalTrajectoryMiddleware(pretty=True)
-    )
-    result = output.result
-    assert result.startswith("Successfully")
-    assert minimal_spec.read_text().splitlines()[3] == "Release:        3%{?dist}"
-
-
 @pytest.fixture
 def autorelease_spec(tmp_path):
     spec = tmp_path / "autorelease.spec"
@@ -167,25 +154,27 @@ def autorelease_spec(tmp_path):
 @pytest.mark.parametrize(
     "dist_git_branch, ystream_dist",
     [
+        ("c9s", ".el9"),
+        ("c10s", ".el10"),
         ("rhel-9.6.0", ".el9"),
         ("rhel-10.0", ".el10"),
     ],
 )
 @pytest.mark.asyncio
-async def test_set_zstream_release(rebase, dist_git_branch, ystream_dist, minimal_spec, autorelease_spec):
+async def test_update_release(rebase, dist_git_branch, ystream_dist, minimal_spec, autorelease_spec):
     package = "test"
 
     async def _get_latest_ystream_build(*_, **__):
         return EVR(version="0.1", release="2" + ystream_dist)
 
-    flexmock(SetZStreamReleaseTool).should_receive("_get_latest_ystream_build").replace_with(_get_latest_ystream_build)
+    flexmock(UpdateReleaseTool).should_receive("_get_latest_ystream_build").replace_with(_get_latest_ystream_build)
 
-    tool = SetZStreamReleaseTool()
+    tool = UpdateReleaseTool()
 
     async def run_and_check(spec, expected_release, error=False):
         with (pytest.raises(ToolError) if error else contextlib.nullcontext()) as e:
             output = await tool.run(
-                input=SetZStreamReleaseToolInput(
+                input=UpdateReleaseToolInput(
                     spec=spec, package=package, dist_git_branch=dist_git_branch, rebase=rebase
                 )
             ).middleware(GlobalTrajectoryMiddleware(pretty=True))
@@ -196,14 +185,17 @@ async def test_set_zstream_release(rebase, dist_git_branch, ystream_dist, minima
         assert spec.read_text().splitlines()[3] == f"Release:        {expected_release}"
         return result
 
-    await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "2%{?dist}.1")
-    await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
-    await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "2%{?dist}.2")
-    await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
-
-    if not rebase:
-        minimal_spec.write_text(minimal_spec.read_text().replace("%{?dist}.2", "%{?dist}.1.0.0.hotfix2.rhel12345"))
-        assert (await run_and_check(minimal_spec, None, error=True)).endswith("Unable to determine valid release")
+    if not dist_git_branch.startswith("rhel-"):
+        await run_and_check(minimal_spec, "1%{?dist}" if rebase else "3%{?dist}")
+        await run_and_check(autorelease_spec, "%autorelease")
+    else:
+        await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "2%{?dist}.1")
+        await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
+        await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "2%{?dist}.2")
+        await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
+        if not rebase:
+            minimal_spec.write_text(minimal_spec.read_text().replace("%{?dist}.2", "%{?dist}.1.0.0.hotfix2.rhel12345"))
+            assert (await run_and_check(minimal_spec, None, error=True)).endswith("Unable to determine valid release")
 
 
 @pytest.mark.asyncio

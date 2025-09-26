@@ -56,49 +56,19 @@ class AddChangelogEntryTool(Tool[AddChangelogEntryToolInput, ToolRunOptions, Str
         return StringToolOutput(result=f"Successfully added a new changelog entry to {spec_path}")
 
 
-class BumpReleaseToolInput(BaseModel):
-    spec: Path = Field(description="Path to a spec file")
-
-
-class BumpReleaseTool(Tool[BumpReleaseToolInput, ToolRunOptions, StringToolOutput]):
-    name = "bump_release"
-    description = """
-    Bumps (increments) the value of `Release` in the specified spec file.
-    """
-    input_schema = BumpReleaseToolInput
-
-    def _create_emitter(self) -> Emitter:
-        return Emitter.root().child(
-            namespace=["tool", "specfile", self.name],
-            creator=self,
-        )
-
-    async def _run(
-        self, tool_input: BumpReleaseToolInput, options: ToolRunOptions | None, context: RunContext
-    ) -> StringToolOutput:
-        spec_path = get_absolute_path(tool_input.spec, self)
-        try:
-            with Specfile(spec_path) as spec:
-                spec.bump_release()
-        except Exception as e:
-            raise ToolError(f"Failed to bump release: {e}") from e
-        return StringToolOutput(result=f"Successfully bumped release in {spec_path}")
-
-
-class SetZStreamReleaseToolInput(BaseModel):
+class UpdateReleaseToolInput(BaseModel):
     spec: Path = Field(description="Path to a spec file")
     package: str = Field(description="Package name")
     dist_git_branch: str = Field(description="dist-git branch")
     rebase: bool = Field(description="Whether the Release update is done as part of a rebase")
 
 
-class SetZStreamReleaseTool(Tool[SetZStreamReleaseToolInput, ToolRunOptions, StringToolOutput]):
-    name = "set_zstream_release"
+class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolOutput]):
+    name = "update_release"
     description = """
-    Sets the value of the `Release` field in the specified spec file to a Z-Stream release
-    based on the current release or the release of the latest Y-Stream build.
+    Updates the value of the `Release` field in the specified spec file.
     """
-    input_schema = SetZStreamReleaseToolInput
+    input_schema = UpdateReleaseToolInput
 
     def _create_emitter(self) -> Emitter:
         return Emitter.root().child(
@@ -106,16 +76,23 @@ class SetZStreamReleaseTool(Tool[SetZStreamReleaseToolInput, ToolRunOptions, Str
             creator=self,
         )
 
-    async def _get_latest_ystream_build(self, package: str, dist_git_branch: str) -> EVR:
-        if not (m := re.match(r"^(?P<prefix>rhel-\d+\.)(?P<y>\d+)(?P<suffix>\.\d+)?$", dist_git_branch)):
-            raise ValueError(f"Unexpected dist-git branch: {dist_git_branch}")
-        candidate_tag = (
+    @staticmethod
+    def _process_zstream_branch(dist_git_branch: str) -> tuple[str, str] | None:
+        if not (m := re.match(r"^(?P<prefix>rhel-(?P<x>\d+)\.)(?P<y>\d+)(?P<suffix>\.\d+)?$", dist_git_branch)):
+            # not a Z-Stream branch
+            return None
+        zstream_dist_tag = ".el" + m.group("x") + "_" + m.group("y")
+        ystream_candidate_tag = (
             m.group("prefix")
             # y++, up to 10 (highest RHEL minor version)
             + str(min(int(m.group("y")) + 1, 10))
             + (m.group("suffix") or "")
             + "-candidate"
         )
+        return zstream_dist_tag, ystream_candidate_tag
+
+    @staticmethod
+    async def _get_latest_ystream_build(package: str, candidate_tag: str) -> EVR:
         builds = await asyncio.to_thread(
             koji.ClientSession(BREWHUB_URL).listTagged,
             package=package,
@@ -125,93 +102,107 @@ class SetZStreamReleaseTool(Tool[SetZStreamReleaseToolInput, ToolRunOptions, Str
             strict=True,
         )
         if not builds:
-            raise RuntimeError(f"There are no Y-Stream builds for {package} and {dist_git_branch}")
+            raise RuntimeError(f"There are no Y-Stream builds of {package} in {candidate_tag}")
         [build] = builds
         return EVR(epoch=build["epoch"] or 0, version=build["version"], release=build["release"])
 
+    @staticmethod
+    async def _bump_or_reset_release(spec_path: Path, rebase: bool) -> None:
+        with Specfile(spec_path) as spec:
+            if rebase and not spec.has_autorelease:
+                spec.release = "1"
+            else:
+                spec.bump_release()
+
+    @classmethod
+    async def _set_zstream_release(
+        cls,
+        spec_path: Path,
+        package: str,
+        rebase: bool,
+        zstream_dist_tag: str,
+        ystream_candidate_tag: str,
+    ) -> None:
+        latest_ystream_build = await cls._get_latest_ystream_build(package, ystream_candidate_tag)
+        ystream_base_release, suffix = latest_ystream_build.release.rsplit(".el", maxsplit=1)
+        ystream_release_suffix = f".el{suffix}"
+        with Specfile(spec_path) as spec:
+            current_release = spec.raw_release
+        nodes = list(ValueParser.flatten(ValueParser.parse(current_release)))
+
+        def find_macro(name):
+            for index, node in reversed(list(enumerate(nodes))):
+                if (
+                    isinstance(node, (MacroSubstitution, EnclosedMacroSubstitution))
+                    and node.name == name
+                ):
+                    return index
+            return None
+
+        autorelease_index = find_macro("autorelease")
+        dist_index = find_macro("dist")
+        if autorelease_index is not None:
+            if rebase:
+                # %autorelease present, rebase, reset the release
+                release = "0%{?dist}.%{autorelease -n}"
+            elif dist_index is not None and autorelease_index > dist_index:
+                # %autorelease after %dist, most likely already a Z-Stream release, no change needed
+                release = current_release
+            else:
+                # no %dist or %autorelease before it, let's create a new release based on Y-Stream
+                release = ystream_base_release + "%{?dist}.%{autorelease -n}"
+        else:
+            if rebase:
+                # no %autorelease, rebase, reset the release
+                release = "0%{?dist}.1"
+            elif dist_index is None:
+                # no %autorelease and no %dist, add %dist and Z-Stream counter
+                release = current_release + "%{?dist}.1"
+            elif dist_index + 1 < len(nodes):
+                prefix = "".join(str(n) for n in nodes[: dist_index + 1])
+                suffix = "".join(str(n) for n in nodes[dist_index + 1 :])
+                if m := re.match(r"^\.(\d+)$", suffix):
+                    # no %autorelease and existing Z-Stream counter after %dist, increase it
+                    release = prefix + "." + str(int(m.group(1)) + 1)
+                else:
+                    # invalid Z-Stream counter, let's try to create a new release based on Y-Stream
+                    release = ystream_base_release + "%{?dist}.1"
+            else:
+                # no %autorelease, %dist present, add Z-Stream counter
+                release = current_release + ".1"
+
+        with Specfile(spec_path, macros=[("dist", zstream_dist_tag)]) as spec:
+            current_evr = EVR(
+                version=latest_ystream_build.version,
+                release=spec.expand(
+                    current_release, extra_macros=[("_rpmautospec_release_number", "1")]
+                ),
+            )
+            evr = EVR(
+                version=latest_ystream_build.version,
+                release=spec.expand(release, extra_macros=[("_rpmautospec_release_number", "2")]),
+            )
+            future_ystream_evr = EVR(
+                version=latest_ystream_build.version,
+                release = str(int(ystream_base_release) + 1) + ystream_release_suffix,
+            )
+            # sanity check
+            if not rebase and not (current_evr < evr < future_ystream_evr):
+                raise ToolError("Unable to determine valid release")
+            spec.raw_release = release
+
     async def _run(
         self,
-        tool_input: SetZStreamReleaseToolInput,
+        tool_input: UpdateReleaseToolInput,
         options: ToolRunOptions | None,
         context: RunContext,
     ) -> StringToolOutput:
         spec_path = get_absolute_path(tool_input.spec, self)
         try:
-            latest_ystream_build = await self._get_latest_ystream_build(
-                tool_input.package,
-                tool_input.dist_git_branch,
-            )
-            ystream_base_release, suffix = latest_ystream_build.release.rsplit(".el", maxsplit=1)
-            ystream_release_suffix = f".el{suffix}"
-            with Specfile(spec_path) as spec:
-                current_release = spec.raw_release
-            nodes = list(ValueParser.flatten(ValueParser.parse(current_release)))
-
-            def find_macro(name):
-                for index, node in reversed(list(enumerate(nodes))):
-                    if (
-                        isinstance(node, (MacroSubstitution, EnclosedMacroSubstitution))
-                        and node.name == name
-                    ):
-                        return index
-                return None
-
-            autorelease_index = find_macro("autorelease")
-            dist_index = find_macro("dist")
-            if autorelease_index is not None:
-                if tool_input.rebase:
-                    # %autorelease present, rebase, reset the release
-                    release = "0%{?dist}.%{autorelease -n}"
-                elif dist_index is not None and autorelease_index > dist_index:
-                    # %autorelease after %dist, most likely already a Z-Stream release, no change needed
-                    release = current_release
-                else:
-                    # no %dist or %autorelease before it, let's create a new release based on Y-Stream
-                    release = ystream_base_release + "%{?dist}.%{autorelease -n}"
+            if not (tags := self._process_zstream_branch(tool_input.dist_git_branch)):
+                await self._bump_or_reset_release(spec_path, tool_input.rebase)
             else:
-                if tool_input.rebase:
-                    # no %autorelease, rebase, reset the release
-                    release = "0%{?dist}.1"
-                elif dist_index is None:
-                    # no %autorelease and no %dist, add %dist and Z-Stream counter
-                    release = current_release + "%{?dist}.1"
-                elif dist_index + 1 < len(nodes):
-                    prefix = "".join(str(n) for n in nodes[: dist_index + 1])
-                    suffix = "".join(str(n) for n in nodes[dist_index + 1 :])
-                    if m := re.match(r"^\.(\d+)$", suffix):
-                        # no %autorelease and existing Z-Stream counter after %dist, increase it
-                        release = prefix + "." + str(int(m.group(1)) + 1)
-                    else:
-                        # invalid Z-Stream counter, let's try to create a new release based on Y-Stream
-                        release = ystream_base_release + "%{?dist}.1"
-                else:
-                    # no %autorelease, %dist present, add Z-Stream counter
-                    release = current_release + ".1"
-
-            def get_zstream_dist_tag():
-                if not (m := re.match(r"^rhel-(\d+)\.(\d+)(\.\d+)?$", tool_input.dist_git_branch)):
-                    raise ValueError(f"Unexpected dist-git branch: {tool_input.dist_git_branch}")
-                return ".el" + m.group(1) + "_" + m.group(2)
-
-            with Specfile(spec_path, macros=[("dist", get_zstream_dist_tag())]) as spec:
-                current_evr = EVR(
-                    version=latest_ystream_build.version,
-                    release=spec.expand(
-                        current_release, extra_macros=[("_rpmautospec_release_number", "1")]
-                    ),
-                )
-                evr = EVR(
-                    version=latest_ystream_build.version,
-                    release=spec.expand(release, extra_macros=[("_rpmautospec_release_number", "2")]),
-                )
-                future_ystream_evr = EVR(
-                    version=latest_ystream_build.version,
-                    release = str(int(ystream_base_release) + 1) + ystream_release_suffix,
-                )
-                # sanity check
-                if not tool_input.rebase and not (current_evr < evr < future_ystream_evr):
-                    raise ToolError("Unable to determine valid release")
-                spec.raw_release = release
+                await self._set_zstream_release(spec_path, tool_input.package, tool_input.rebase, *tags)
         except Exception as e:
-            raise ToolError(f"Failed to set Z-Stream release: {e}") from e
-        return StringToolOutput(result=f"Successfully set Z-Stream release in {spec_path}")
+            raise ToolError(f"Failed to update release: {e}") from e
+        return StringToolOutput(result=f"Successfully updated release in {spec_path}")

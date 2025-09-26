@@ -31,6 +31,27 @@ cp -r templates .secrets
 
 - Follow the comments to fill out the needed credentials.
 
+The agents verify that the package build would be successful before submitting a pull request and a keytab file is needed to submit builds to internal copr.
+
+Steps to generate kerberos keytab:
+
+```
+> kinit <REDHAT_KERBEROS_ID>@IPA.REDHAT.COM
+
+> kvno krbtgt/IPA.REDHAT.COM@IPA.REDHAT.COM
+krbtgt/IPA.REDHAT.COM@IPA.REDHAT.COM: kvno = 1 # Note `kvno` value for the next step
+
+> ktutil
+ktutil:  addent -password -p <REDHAT_KERBEROS_ID>@IPA.REDHAT.COM -k 1 -f
+Password for <REDHAT_KERBEROS_ID>@IPA.REDHAT.COM:
+ktutil:  wkt /tmp/keytab
+ktutil:  q
+
+> kinit -kt /tmp/keytab <REDHAT_KERBEROS_ID>@IPA.REDHAT.COM
+```
+
+If last command is successful, move `/tmp/keytab` file to `.secrets/keytab`.
+
 ## Running the System
 
 ### Full Pipeline (Production)

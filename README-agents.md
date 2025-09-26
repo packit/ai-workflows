@@ -31,6 +31,27 @@ cp -r templates .secrets
 
 - Follow the comments to fill out the needed credentials.
 
+The `mcp-gateway` requires a `keytab` file.
+
+Steps to generate a personal kerberos keytab file:
+
+```
+> kinit <REDHAT_KERBEROS_ID>@IPA.REDHAT.COM
+
+> kvno krbtgt/IPA.REDHAT.COM@IPA.REDHAT.COM
+krbtgt/IPA.REDHAT.COM@IPA.REDHAT.COM: kvno = 1 # Note `kvno` value for the next step
+
+> ktutil
+ktutil:  addent -password -p <REDHAT_KERBEROS_ID>@IPA.REDHAT.COM -k 1 -f
+Password for <REDHAT_KERBEROS_ID>@IPA.REDHAT.COM:
+ktutil:  wkt /tmp/keytab
+ktutil:  q
+
+> kinit -kt /tmp/keytab <REDHAT_KERBEROS_ID>@IPA.REDHAT.COM
+```
+
+If last command is successful, move `/tmp/keytab` file to `.secrets/keytab`. This file should be kept secure as it can be used as a replacement for password-less authentication and impersonate the user.
+
 ## Running the System
 
 ### Full Pipeline (Production)

@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cleanup-git-repos
+  labels:
+    app: mcp-gateway
+spec:
+  schedule: "0 2 * * *"  # Run daily at 2 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: mcp-gateway
+            job: cleanup-git-repos
+        spec:
+          containers:
+          - name: cleanup-git-repos
+            image: mcp-server:prod
+            imagePullPolicy: Always
+            command:
+            - /bin/bash
+            - -c
+            - |
+              #!/bin/bash
+              echo "Starting git-repos cleanup at $(date)"
+              cd /git-repos || exit 1
+              echo "Deleting directories in /git-repos older than 14 days:"
+              find . -maxdepth 1 -type d -iname "rhel-*" -mtime +13 -print0 | while IFS= read -r -d '' dir; do
+                echo "Deleting old directory: $dir"
+                rm -rf "$dir"
+              done
+              echo "Cleanup completed at $(date)"
+            resources:
+              limits:
+                cpu: "100m"
+                memory: "128Mi"
+              requests:
+                cpu: "50m"
+                memory: "64Mi"
+            volumeMounts:
+            - mountPath: /git-repos
+              name: mcp-server-git-repos
+          restartPolicy: OnFailure
+          volumes:
+          - name: mcp-server-git-repos
+            persistentVolumeClaim:
+              claimName: mcp-server-git-repos

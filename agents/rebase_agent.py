@@ -181,6 +181,7 @@ async def main() -> None:
         rebase_result: RebaseOutputSchema | None = Field(default=None)
         log_result: LogOutputSchema | None = Field(default=None)
         merge_request_url: str | None = Field(default=None)
+        all_files_git_to_add: set[str] = Field(default_factory=set)
 
     async def run_workflow(package, dist_git_branch, version, jira_issue):
         local_tool_options["working_directory"] = None
@@ -239,6 +240,9 @@ async def main() -> None:
                 state.rebase_result = RebaseOutputSchema.model_validate_json(response.last_message.text)
                 if state.rebase_result.success:
                     state.rebase_log.append(state.rebase_result.status)
+                    # Accumulate files from this rebase iteration
+                    if state.rebase_result.files_to_git_add:
+                        state.all_files_git_to_add.update(state.rebase_result.files_to_git_add)
                     return "run_build_agent"
                 return "comment_in_jira"
 
@@ -269,8 +273,8 @@ async def main() -> None:
                 return "run_rebase_agent"
 
             async def stage_changes(state):
-                # Use files specified by rebase agent, fallback to *.spec if none specified
-                files_to_git_add = state.rebase_result.files_to_git_add or ["*.spec"]
+                # Use accumulated files from all rebase iterations, fallback to *.spec if none specified
+                files_to_git_add = list(state.all_files_git_to_add) or ["*.spec"]
 
                 try:
                     await tasks.stage_changes(

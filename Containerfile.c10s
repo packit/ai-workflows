@@ -40,7 +40,8 @@ RUN dnf -y install --allowerasing \
     && dnf clean all
 
 RUN pip3 install --no-cache-dir \
-    beeai-framework[mcp,duckduckgo]==0.1.43 \
+    beeai-framework[vertexai,mcp,duckduckgo]==0.1.50 \
+    google-cloud-aiplatform \
     openinference-instrumentation-beeai \
     arize-phoenix-otel \
     redis \

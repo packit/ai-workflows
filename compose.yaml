@@ -25,6 +25,7 @@ x-beeai-agent: &beeai-agent
     - ./common:/home/beeai/common:ro,z
     - git-repos:/git-repos:rw,U
     - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
+    - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z,U
   restart: unless-stopped
 
 # C9S agent template

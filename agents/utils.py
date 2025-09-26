@@ -21,15 +21,15 @@ from beeai_framework.tools.mcp import MCPTool
 
 
 def get_chat_model() -> ChatModel:
-    return ChatModel.from_name(
+    model = ChatModel.from_name(
         os.environ["CHAT_MODEL"],
         # lowering the temperature makes the model stop backporting too soon
-        # but should yield more predictable results
-        # similar for top_p (tried 0.5)
-        options=ChatModelParameters(temperature=0.6),
+        # but should yield more predictable results, similar for top_p (tried 0.5)
+        # this the preferred way to set parameters, don't do options=...
+        ChatModelParameters(temperature=0.6),
         timeout=1200,
     )
-
+    return model
 
 def get_agent_execution_config() -> dict[str, int]:
     return dict(

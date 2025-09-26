@@ -68,6 +68,9 @@ spec:
             configMapKeyRef:
               key: MCP_GATEWAY_URL
               name: x-beeai-agent-configmap
+        - name: REQUESTS_CA_BUNDLE
+          value: /etc/pki/tls/certs/ca-bundle.crt
+
         image: 'beeai-agent:c10s'
         imagePullPolicy: Always
         name: triage-agent

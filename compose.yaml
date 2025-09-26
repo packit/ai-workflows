@@ -7,6 +7,7 @@ x-beeai-env: &beeai-env
   GIT_REPO_BASEPATH: /git-repos
   MAX_RETRIES: 3
   DRY_RUN: ${DRY_RUN:-false}
+  REQUESTS_CA_BUNDLE: /etc/pki/tls/certs/ca-bundle.crt
 
 # Base template for BeeAI agents
 x-beeai-agent: &beeai-agent

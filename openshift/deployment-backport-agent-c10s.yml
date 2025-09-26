@@ -60,6 +60,8 @@ spec:
               name: x-beeai-agent-configmap
         - name: CONTAINER_VERSION
           value: "c10s"
+        - name: REQUESTS_CA_BUNDLE
+          value: /etc/pki/tls/certs/ca-bundle.crt
 
         - name: GITLAB_USER
           valueFrom:

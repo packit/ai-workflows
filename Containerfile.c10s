@@ -16,12 +16,9 @@ RUN dnf -y install --allowerasing \
       git \
       krb5-devel \
       python3 \
-      python3-beautifulsoup4 \
       python3-pip \
       python3-devel \
-      python3-requests-gssapi \
       python3-rpm \
-      python3-typer \
       python3-koji \
       rpm-build \
       rpmdevtools \

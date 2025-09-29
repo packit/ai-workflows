@@ -53,10 +53,10 @@ x-supervisor: &supervisor
   depends_on:
     - valkey
     - phoenix
-  image: beeai-agent
+  image: supervisor
   build:
     context: .
-    dockerfile: Containerfile.c10s
+    dockerfile: Containerfile.supervisor
   environment:
     - REDIS_URL=redis://valkey:6379/0
     - COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces

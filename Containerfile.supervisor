@@ -1,0 +1,51 @@
+FROM quay.io/centos/centos:stream10
+
+RUN dnf -y install epel-release \
+    && dnf config-manager --set-enabled crb \
+    && dnf -y update
+
+# Install RH IT Root CAs for access to internal services
+COPY files/Current-IT-Root-CAs.pem /etc/pki/ca-trust/source/anchors/
+RUN update-ca-trust
+
+RUN dnf -y install --allowerasing \
+      # Run time dependencies
+      krb5-workstation \
+      python3 \
+      python3-beautifulsoup4 \
+      python3-pip \
+      python3-requests-gssapi \
+      python3-rpm \
+      python3-typer \
+      python3-koji \
+      # Build dependencies
+      gcc \
+      gcc-c++ \
+      python3-devel \
+    && pip3 install -v --no-cache-dir \
+      beeai-framework[mcp,duckduckgo]==0.1.43 \
+      openinference-instrumentation-beeai \
+      arize-phoenix-otel \
+      redis \
+      specfile \
+    && dnf -y remove gcc gcc-c++ python3-devel \
+    && dnf clean all
+
+# Create user
+RUN useradd -m -G wheel beeai
+
+# Copy required directories
+# Individual directories are mounted as volumes in development
+COPY agents/ /home/beeai/agents/
+COPY common/ /home/beeai/common/
+COPY supervisor/ /home/beeai/supervisor/
+RUN chgrp -R root /home/beeai && chmod -R g+rX /home/beeai
+
+USER beeai
+ENV HOME=/home/beeai
+WORKDIR $HOME
+
+# Set PYTHONPATH so agents module can be imported
+ENV PYTHONPATH=$HOME:$PYTHONPATH
+
+CMD ["/bin/bash"]

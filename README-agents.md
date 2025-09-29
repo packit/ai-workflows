@@ -50,7 +50,9 @@ ktutil:  q
 > kinit -kt /tmp/keytab <REDHAT_KERBEROS_ID>@IPA.REDHAT.COM
 ```
 
-If last command is successful, move `/tmp/keytab` file to `.secrets/keytab`. This file should be kept secure as it can be used as a replacement for password-less authentication and impersonate the user.
+If last command is successful, move `/tmp/keytab` file to `.secrets/keytab` and set permissions to `644` so the user inside the container can read it.
+
+This file should be kept secure as it can be used as a replacement for password-less authentication and impersonate the user.
 
 ## Running the System
 

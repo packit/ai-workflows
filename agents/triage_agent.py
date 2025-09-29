@@ -260,7 +260,9 @@ def render_prompt(input: InputSchema) -> str:
          If your decision is rebase or backport, use set_jira_fields tool to update JIRA fields (Severity, Fix Version):
          1. Check all of the mentioned fields in the JIRA issue and don't modify those that are already set
          2. Extract the affected RHEL major version from the JIRA issue (look in Affects Version/s field or issue description)
-         3. If the Fix Version is not set, use map_version tool with the major version to get available streams and determine appropriate Fix Version:
+         3. If the Fix Version field is set, do not change it and use its value in the output.
+         4. If the Fix Version field is not set, use the map_version tool with the major version to get available streams
+            and determine appropriate Fix Version:
              * The tool will return both Y-stream and Z-stream versions (if available) and indicate if it's a maintenance version
              * For maintenance versions (no Y-stream available):
                - Critical issues should be fixed (privilege escalation, remote code execution, data loss/corruption, system compromise, regressions, moderate and higher severity CVEs)
@@ -268,7 +270,7 @@ def render_prompt(input: InputSchema) -> str:
              * For non-maintenance versions (Y-stream available):
                - Most critical issues (privilege escalation, RCE, data loss, regressions) should use Z-stream
                - Other issues should use Y-stream (e.g. performance, usability issues)
-         4. Set non-empty JIRA fields:
+         5. Set non-empty JIRA fields:
              * Severity: default to 'moderate', for important issues use 'important', for most critical use 'critical' (privilege escalation, RCE, data loss)
              * Fix Version: use the appropriate stream version determined from map_version tool result
 
@@ -289,7 +291,7 @@ def render_prompt(input: InputSchema) -> str:
           PATCH_URL: [URL or reference to the source of the fix that was validated using PatchValidator tool]
           CVE_ID: [CVE identifier, leave blank if not applicable]
           JUSTIFICATION: [A brief but clear explanation of why this patch fixes the issue, linking it to the root cause.]
-          FIX_VERSION: [fix version set in JIRA (use existing value if already set)]
+          FIX_VERSION: [fix version set in JIRA]
 
       If Clarification Needed:
           FINDINGS: [Summarize your understanding of the bug and what you investigated,

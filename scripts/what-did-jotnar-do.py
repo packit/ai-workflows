@@ -85,14 +85,9 @@ async def get_jotnar_issues_basic_count() -> tuple[int, int]:
     return results[0], results[1]
 
 
-async def get_gitlab_stats(namespace: str = "redhat/centos-stream/rpms") -> dict[str, int]:
-    """Get GitLab statistics for merge requests created by Jötnar."""
-    gitlab_token = os.getenv("GITLAB_TOKEN")
+async def get_gitlab_stats_single(namespace: str, gitlab_token: str) -> dict[str, int]:
+    """Get GitLab statistics for merge requests created by Jötnar for a single namespace."""
     base_url = os.getenv("GITLAB_URL", "https://gitlab.com/api/v4/")
-
-    if not gitlab_token:
-        print("Warning: GITLAB_TOKEN not set, skipping GitLab queries", file=sys.stderr)
-        return {"mrs_opened": 0, "mrs_closed": 0, "mrs_merged": 0}
 
     # The project id or namespace must be url-encoded
     encoded_namespace = quote(namespace, safe="")
@@ -113,10 +108,14 @@ async def get_gitlab_stats(namespace: str = "redhat/centos-stream/rpms") -> dict
             "per_page": 1,
         }
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, params=params) as resp:
-                resp.raise_for_status()
-                # The total number is in the X-Total header
-                return int(resp.headers.get("X-Total", "0"))
+            try:
+                async with session.get(url, headers=headers, params=params) as resp:
+                    resp.raise_for_status()
+                    # The total number is in the X-Total header
+                    return int(resp.headers.get("X-Total", "0"))
+            except Exception as e:
+                print(f"Warning: Error querying GitLab namespace {namespace} for {state} MRs: {e}", file=sys.stderr)
+                return 0
 
     opened = await count_mrs("opened")
     closed = await count_mrs("closed")
@@ -129,18 +128,39 @@ async def get_gitlab_stats(namespace: str = "redhat/centos-stream/rpms") -> dict
     }
 
 
+async def get_gitlab_stats(namespaces: list[str]) -> dict[str, dict[str, int]]:
+    """Get GitLab statistics for merge requests created by Jötnar across multiple namespaces."""
+    gitlab_token = os.getenv("GITLAB_TOKEN")
+
+    if not gitlab_token:
+        print("Warning: GITLAB_TOKEN not set, skipping GitLab queries", file=sys.stderr)
+        return {ns: {"mrs_opened": 0, "mrs_closed": 0, "mrs_merged": 0} for ns in namespaces}
+
+    # Get stats for all namespaces concurrently
+    tasks = [get_gitlab_stats_single(namespace, gitlab_token) for namespace in namespaces]
+    results = await asyncio.gather(*tasks)
+
+    # Combine results with namespace keys
+    return {namespace: stats for namespace, stats in zip(namespaces, results)}
+
+
 async def main():
     """Main function to gather and display Jötnar statistics."""
     parser = argparse.ArgumentParser(description="Get Jötnar pilot statistics")
-    parser.add_argument("--namespace", default="redhat/centos-stream/rpms",
-                       help="GitLab namespace to query for merge requests "
-                       "(default: redhat/centos-stream/rpms)")
+    parser.add_argument("--namespace", action="append",
+                       help="GitLab namespace to query for merge requests. "
+                       "Can be used multiple times to query multiple namespaces. "
+                       "If not specified, defaults to redhat/centos-stream/rpms and redhat/rhel/rpms.")
     parser.add_argument("--jira-only", action="store_true",
                        help="Only query Jira statistics, skip GitLab")
     parser.add_argument("--gitlab-only", action="store_true",
                        help="Only query GitLab statistics, skip Jira")
 
     args = parser.parse_args()
+
+    # If no namespaces specified, use the requested defaults
+    if not args.namespace:
+        args.namespace = ["redhat/centos-stream/rpms", "redhat/rhel/rpms"]
 
     print("Jötnar Pilot Statistics")
     print("=" * 50)
@@ -162,14 +182,30 @@ async def main():
 
     # Get GitLab statistics (unless jira-only is specified)
     if not args.jira_only:
-        # Get GitLab statistics
+        # Get GitLab statistics for all namespaces
         gitlab_stats = await get_gitlab_stats(args.namespace)
 
-        # Display GitLab results
-        print(f"\nGitLab Statistics (namespace: {args.namespace})")
-        print(f"Merge requests opened: {gitlab_stats['mrs_opened']}")
-        print(f"Merge requests closed: {gitlab_stats['mrs_closed']}")
-        print(f"Merge requests merged: {gitlab_stats['mrs_merged']}")
+        # Display GitLab results for each namespace
+        print(f"\nGitLab Statistics:")
+        total_opened = 0
+        total_closed = 0
+        total_merged = 0
+
+        for namespace, stats in gitlab_stats.items():
+            print(f"\nNamespace: {namespace}")
+            print(f"  Merge requests opened: {stats['mrs_opened']}")
+            print(f"  Merge requests closed: {stats['mrs_closed']}")
+            print(f"  Merge requests merged: {stats['mrs_merged']}")
+
+            total_opened += stats['mrs_opened']
+            total_closed += stats['mrs_closed']
+            total_merged += stats['mrs_merged']
+
+        if len(args.namespace) > 1:
+            print(f"\nTotal across all namespaces:")
+            print(f"  Total merge requests opened: {total_opened}")
+            print(f"  Total merge requests closed: {total_closed}")
+            print(f"  Total merge requests merged: {total_merged}")
     else:
         print("\nGitLab statistics skipped (--jira-only flag)")
 

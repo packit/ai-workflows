@@ -91,8 +91,8 @@ def get_custom_fields() -> dict[str, str]:
 
 
 CURRENT_ISSUES_JQL = """
-filter = Jotnar_1000_packages
-AND status in ('In Progress', 'Integration', 'Release Pending')
+project = RHEL AND AssignedTeam = rhel-jotnar
+AND status in ('New', 'In Progress', 'Integration', 'Release Pending')
 AND 'Fixed in Build' is not EMPTY
 """
 

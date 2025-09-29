@@ -66,6 +66,7 @@ x-supervisor: &supervisor
     - .secrets/supervisor.env
   volumes:
     - ./agents:/home/beeai/agents:ro,z
+    - ./common:/home/beeai/common:ro,z
     - ./supervisor:/home/beeai/supervisor:ro,z
     - .secrets/ccache:/home/beeai/ccache:ro,z,U
   restart: unless-stopped

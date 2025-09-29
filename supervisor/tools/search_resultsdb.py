@@ -38,7 +38,7 @@ class ResultsDbResult(BaseModel):
 
     testcase_name: str
     outcome: ResultsdbOutput
-    ref_url: str
+    ref_url: str | None
     # Renamed from submit_time, since that sounds like when the test was
     # started, but it means when the result was submitted to resultsdb
     last_updated: datetime

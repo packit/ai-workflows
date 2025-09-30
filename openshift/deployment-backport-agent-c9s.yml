@@ -91,7 +91,7 @@ spec:
         volumeMounts:
         - mountPath: /git-repos  # NOTE: This path must match GIT_REPO_BASEPATH in x-beeai-agent-configmap
           name: mcp-server-git-repos
-        - mountPath: /home/mcp/rhel-config.json
+        - mountPath: /home/beeai/rhel-config.json
           name: rhel-config
           subPath: rhel-config.json
       dnsPolicy: ClusterFirst

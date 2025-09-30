@@ -86,3 +86,18 @@ jobs:
           docker_context: "."
           image_name: "jira-issue-fetcher"
           # tag: "staging"
+
+  build-and-push-supervisor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build and push supervisor to quay.io registry
+        uses: sclorg/build-and-push-action@v4
+        with:
+          registry: "quay.io"
+          registry_namespace: "jotnar"
+          registry_username: ${{ secrets.REGISTRY_LOGIN }}
+          registry_token: ${{ secrets.REGISTRY_TOKEN }}
+          dockerfile: "Containerfile.supervisor"
+          docker_context: "."
+          image_name: "supervisor"
+          # tag: "staging"

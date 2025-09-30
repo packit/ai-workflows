@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: supervisor-processor
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: supervisor-processor
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: supervisor-processor
+        deployment: supervisor-processor
+    spec:
+      containers:
+      - name: supervisor-processor
+        image: 'supervisor:prod'
+        imagePullPolicy: Always
+        command:
+        - /usr/bin/python
+        args:
+        - -m
+        - supervisor.main
+        - --debug
+        - process
+        envFrom:
+        - configMapRef:
+            name: chat-env
+        - configMapRef:
+            name: endpoints-env
+        - configMapRef:
+            name: jira-env
+        - secretRef:
+            name: jira-env
+        - configMapRef:
+            name: kerberos-env
+        resources:
+            limits:
+                cpu: "200m"
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /etc/secrets/jotnar-bot.keytab
+          name: jotnar-bot-keytab
+          subPath: jotnar-bot.keytab
+        - mountPath: /etc/secrets/jotnar-vertex-prod.json
+          name: vertex-key
+          subPath: jotnar-vertex-prod.json
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      # TODO: this should be reset when we have enough data.
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: jotnar-bot-keytab
+        secret:
+          secretName: jotnar-bot-keytab
+      - name: vertex-key
+        secret:
+          secretName: vertex-key

@@ -1,0 +1,81 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: supervisor-collector
+  labels:
+    app: supervisor-collector
+    component: scheduler
+spec:
+  schedule: "*/20 * * * *"  # Every 20 minutes
+  concurrencyPolicy: Forbid  # Prevent overlapping runs
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  suspend: false
+  jobTemplate:
+    metadata:
+      labels:
+        app: supervisor-collector
+        component: job
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900  # 15 minutes max runtime
+      template:
+        metadata:
+          labels:
+            app: supervisor-collector
+            component: pod
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: supervisor-collector
+            image: 'supervisor:prod'
+            imagePullPolicy: Always
+            command:
+            - /usr/bin/python
+            args:
+            - -m
+            - supervisor.main
+            - --debug
+            - collect
+            - --no-repeat
+            envFrom:
+            - configMapRef:
+                name: endpoints-env
+            - configMapRef:
+                name: jira-env
+            - secretRef:
+                name: jira-env
+            - configMapRef:
+                name: kerberos-env
+            resources:
+              limits:
+                cpu: "200m"
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+              capabilities:
+                drop:
+                - ALL
+            volumeMounts:
+            - mountPath: /etc/secrets/jotnar-bot.keytab
+              name: jotnar-bot-keytab
+              subPath: jotnar-bot.keytab
+            - mountPath: /etc/secrets/jotnar-vertex-prod.json
+              name: vertex-key
+              subPath: jotnar-vertex-prod.json
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          dnsPolicy: ClusterFirst
+          schedulerName: default-scheduler
+          terminationGracePeriodSeconds: 30
+          volumes:
+          - name: jotnar-bot-keytab
+            secret:
+              secretName: jotnar-bot-keytab
+          - name: vertex-key
+            secret:
+              secretName: vertex-key

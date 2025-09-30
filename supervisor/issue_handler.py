@@ -1,5 +1,6 @@
 import logging
 
+from .errata_utils import get_erratum_for_link
 from .work_item_handler import WorkItemHandler
 from .jira_utils import add_issue_label, change_issue_status
 from .supervisor_types import (
@@ -71,7 +72,10 @@ class IssueHandler(WorkItemHandler):
                 "Preliminary testing has passed, moving to Integration",
             )
         elif issue.status == IssueStatus.INTEGRATION:
-            testing_analysis = await analyze_issue(issue)
+            related_erratum = (
+                get_erratum_for_link(issue.errata_link) if issue.errata_link else None
+            )
+            testing_analysis = await analyze_issue(issue, related_erratum)
             if testing_analysis.state == TestingState.NOT_RUNNING:
                 return self.resolve_flag_attention(
                     testing_analysis.comment

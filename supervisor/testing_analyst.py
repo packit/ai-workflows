@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import logging
 import os
 
@@ -10,7 +11,7 @@ from beeai_framework.template import PromptTemplate, PromptTemplateInput
 
 from agents.utils import get_agent_execution_config
 from .qe_data import get_qe_data, TestLocationInfo
-from .supervisor_types import FullIssue, TestingState
+from .supervisor_types import Erratum, FullIssue, TestingState
 from .tools.read_readme import ReadReadmeTool
 from .tools.search_resultsdb import SearchResultsdbTool
 
@@ -22,6 +23,8 @@ class InputSchema(BaseModel):
     test_location_info: TestLocationInfo = Field(
         description="Information about where to find tests and test results"
     )
+    erratum: Erratum | None = Field(description="Details of the related ERRATUM")
+    current_time: datetime = Field(description="Current timestamp")
 
 
 class OutputSchema(BaseModel):
@@ -35,7 +38,9 @@ def render_prompt(input: InputSchema) -> str:
       the state and what needs to be done.
 
       JIRA_ISSUE_DATA: {{ issue }}
+      ERRATUM_DATA: {{ erratum }}
       TEST_LOCATION_INFO: {{ test_location_info }}
+      CURRENT_TIME: {{ current_time }}
 
       Call the final_answer tool passing in the state and a comment as follows.
       The comment should use JIRA comment syntax.
@@ -65,7 +70,7 @@ def render_prompt(input: InputSchema) -> str:
     ).render(input)
 
 
-async def analyze_issue(jira_issue: FullIssue) -> OutputSchema:
+async def analyze_issue(jira_issue: FullIssue, erratum: Erratum | None) -> OutputSchema:
     agent = ToolCallingAgent(
         llm=ChatModel.from_name(
             os.environ["CHAT_MODEL"],
@@ -89,6 +94,8 @@ async def analyze_issue(jira_issue: FullIssue) -> OutputSchema:
         InputSchema(
             issue=jira_issue,
             test_location_info=await get_qe_data(jira_issue.components[0]),
+            erratum=erratum,
+            current_time=datetime.now(timezone.utc),
         )
     )
     logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")

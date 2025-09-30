@@ -1,0 +1,7 @@
+apiVersion: v1
+data:
+  JIRA_URL: https://issues.redhat.com/
+immutable: false
+kind: ConfigMap
+metadata:
+  name: jira-env

@@ -28,66 +28,23 @@ spec:
         command:
         - python
         env:
-        - name: REDIS_URL
-          valueFrom:
-            configMapKeyRef:
-              key: REDIS_URL
-              name: x-beeai-agent-configmap
-        - name: COLLECTOR_ENDPOINT
-          valueFrom:
-            configMapKeyRef:
-              key: COLLECTOR_ENDPOINT
-              name: x-beeai-agent-configmap
-        - name: MAX_RETRIES
-          valueFrom:
-            configMapKeyRef:
-              key: MAX_RETRIES
-              name: x-beeai-agent-configmap
-        - name: MCP_GATEWAY_URL
-          valueFrom:
-            configMapKeyRef:
-              key: MCP_GATEWAY_URL
-              name: x-beeai-agent-configmap
-        - name: GIT_REPO_BASEPATH
-          valueFrom:
-            configMapKeyRef:
-              key: GIT_REPO_BASEPATH
-              name: x-beeai-agent-configmap
         - name: CONTAINER_VERSION
           value: "c9s"
+        - name: GITLAB_USER
+          # Not envFrom to avoid importing GITLAB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: gitlab-env
+              key: GITLAB_USER
         - name: REQUESTS_CA_BUNDLE
           value: /etc/pki/tls/certs/ca-bundle.crt
-
-        - name: GITLAB_USER
-          valueFrom:
-            secretKeyRef:
-              key: GITLAB_USER
-              name: beeai-agent-secrets
-        - name: CHAT_MODEL
-          valueFrom:
-            secretKeyRef:
-              key: CHAT_MODEL
-              name: beeai-agent-secrets
-        - name: GEMINI_API_KEY
-          valueFrom:
-            secretKeyRef:
-              key: GEMINI_API_KEY
-              name: beeai-agent-secrets
-        - name: GOOGLE_VERTEX_PROJECT
-          valueFrom:
-            configMapKeyRef:
-              key: GOOGLE_VERTEX_PROJECT
-              name: x-beeai-agent-configmap
-        - name: GOOGLE_APPLICATION_CREDENTIALS
-          valueFrom:
-            configMapKeyRef:
-              key: GOOGLE_APPLICATION_CREDENTIALS
-              name: x-beeai-agent-configmap
-        - name: GOOGLE_VERTEX_LOCATION
-          valueFrom:
-            configMapKeyRef:
-              key: GOOGLE_VERTEX_LOCATION
-              name: x-beeai-agent-configmap
+        envFrom:
+        - configMapRef:
+            name: agents-env
+        - configMapRef:
+            name: chat-env
+        - configMapRef:
+            name: endpoints-env
         image: 'beeai-agent:c9s'
         imagePullPolicy: Always
         name: backport-agent-c9s
@@ -99,12 +56,12 @@ spec:
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
         volumeMounts:
-        - mountPath: /git-repos  # NOTE: This path must match GIT_REPO_BASEPATH in x-beeai-agent-configmap
+        - mountPath: /git-repos  # NOTE: This path must match GIT_REPO_BASEPATH in configmap/agents-env
           name: mcp-server-git-repos
         - mountPath: /home/beeai/rhel-config.json
           name: rhel-config
           subPath: rhel-config.json
-        - mountPath: /home/beeai/jotnar-vertex-prod.json
+        - mountPath: /etc/secrets/jotnar-vertex-prod.json
           name: vertex-key
           subPath: jotnar-vertex-prod.json
       dnsPolicy: ClusterFirst

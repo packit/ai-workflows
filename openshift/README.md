@@ -4,23 +4,20 @@
 
 - Ensure secrets exist for the following values:
 
-  `beeai-agent-secrets`:
+  `gitlab-env`:
   ```
-    CHAT_MODEL
-    GEMINI_API_KEY
-    GITLAB_TOKEN
-    GITLAB_USER
+  GITLAB_TOKEN
+  GITLAB_USER
   ```
 
-  `mcp-atlassian-secret`:
+  `jira-env`:
   ```
-  JIRA_PERSONAL_TOKEN
-  JIRA_URL
+  JIRA_TOKEN
   ```
 
-  `mcp-server-keytab`:
+  `jotnar-bot-keytab`:
   ```
-  oc create secret generic mcp-server-keytab --from-file=jotnar-bot.keytab
+  oc create secret generic jotnar-bot-keytab --from-file=jotnar-bot.keytab
   ```
 
   Values of these secrets are documented in [README](https://github.com/packit/jotnar?tab=readme-ov-file#service-accounts--authentication).

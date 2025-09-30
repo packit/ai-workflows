@@ -1,9 +1,0 @@
-apiVersion: v1
-data:
-  SSE_PORT: "8000"
-  KEYTAB_FILE: "/home/mcp/mcp-server-keytab/jotnar-bot.keytab"
-  KRB5CCNAME: "FILE:/tmp/krb5cc"
-immutable: false
-kind: ConfigMap
-metadata:
-  name: mcp-gateway

@@ -1,0 +1,8 @@
+apiVersion: v1
+data:
+  MAX_RETRIES: "3"
+  GIT_REPO_BASEPATH: /git-repos
+immutable: false
+kind: ConfigMap
+metadata:
+  name: agents-env

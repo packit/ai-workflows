@@ -1,0 +1,10 @@
+apiVersion: v1
+data:
+  CHAT_MODEL: vertexai:gemini-2.5-pro
+  GOOGLE_APPLICATION_CREDENTIALS: /etc/secrets/jotnar-vertex-prod.json
+  GOOGLE_VERTEX_PROJECT: jotnar-bot
+  GOOGLE_VERTEX_LOCATION: global
+immutable: false
+kind: ConfigMap
+metadata:
+  name: chat-env

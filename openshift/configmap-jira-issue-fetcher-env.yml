@@ -5,4 +5,4 @@ data:
 immutable: false
 kind: ConfigMap
 metadata:
-  name: jira-issue-fetcher
+  name: jira-issue-fetcher-env

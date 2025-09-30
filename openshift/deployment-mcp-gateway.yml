@@ -28,47 +28,24 @@ spec:
         command:
         - /usr/bin/python
         env:
-        - name: SSE_PORT
-          valueFrom:
-            configMapKeyRef:
-              key: SSE_PORT
-              name: mcp-gateway
-        - name: KEYTAB_FILE
-          valueFrom:
-            configMapKeyRef:
-              key: KEYTAB_FILE
-              name: mcp-gateway
-        - name: KRB5CCNAME
-          valueFrom:
-            configMapKeyRef:
-              key: KRB5CCNAME
-              name: mcp-gateway
-
         - name: GIT_REPO_BASEPATH
           valueFrom:
             configMapKeyRef:
               key: GIT_REPO_BASEPATH
-              name: x-beeai-agent-configmap
-
-        - name: GITLAB_TOKEN
-          valueFrom:
-            secretKeyRef:
-              key: GITLAB_TOKEN
-              name: beeai-agent-secrets
-
-        - name: JIRA_TOKEN
-          valueFrom:
-            secretKeyRef:
-              key: JIRA_PERSONAL_TOKEN
-              name: mcp-atlassian-secret
-        - name: JIRA_URL
-          valueFrom:
-            secretKeyRef:
-              key: JIRA_URL
-              name: mcp-atlassian-secret
+              name: agents-env
+        - name: SSE_PORT
+          value: 8000
         - name: REQUESTS_CA_BUNDLE
           value: /etc/pki/tls/certs/ca-bundle.crt
-
+        envFrom:
+        - secretRef:
+            name: gitlab-env
+        - configMapRef:
+            name: jira-env
+        - secretRef:
+            name: jira-env
+        - configMapRef:
+            name: kerberos-env
         image: mcp-server:prod
         imagePullPolicy: Always
         name: mcp-gateway
@@ -81,10 +58,11 @@ spec:
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
         volumeMounts:
-        - mountPath: /git-repos  # NOTE: This path must match GIT_REPO_BASEPATH in x-beeai-agent-configmap
+        - mountPath: /git-repos  # NOTE: This path must match GIT_REPO_BASEPATH in configmap/agents-env
           name: mcp-server-git-repos
-        - mountPath: /home/mcp/mcp-server-keytab
-          name: mcp-server-keytab
+        - mountPath: /etc/secrets/jotnar-bot.keytab
+          name: jotnar-bot-keytab
+          subPath: jotnar-bot.keytab
         - mountPath: /home/mcp/rhel-config.json
           name: rhel-config
           subPath: rhel-config.json
@@ -97,9 +75,9 @@ spec:
       - name: mcp-server-git-repos
         persistentVolumeClaim:
           claimName: mcp-server-git-repos
-      - name: mcp-server-keytab
+      - name: jotnar-bot-keytab
         secret:
-          secretName: mcp-server-keytab
+          secretName: jotnar-bot-keytab
       - name: rhel-config
         configMap:
           name: rhel-config

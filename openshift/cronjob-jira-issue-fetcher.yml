@@ -27,35 +27,18 @@ spec:
         spec:
           restartPolicy: Never
           containers:
-          - name: jira-issue-fetcher
+          - name: jira-issue-fetcher-env
             image: 'jira-issue-fetcher:prod'
             imagePullPolicy: Always
-            env:
-            - name: JIRA_URL
-              valueFrom:
-                secretKeyRef:
-                  key: JIRA_URL
-                  name: mcp-atlassian-secret
-            - name: JIRA_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  key: JIRA_PERSONAL_TOKEN
-                  name: mcp-atlassian-secret
-            - name: REDIS_URL
-              valueFrom:
-                configMapKeyRef:
-                  key: REDIS_URL
-                  name: x-beeai-agent-configmap
-            - name: QUERY
-              valueFrom:
-                configMapKeyRef:
-                  key: QUERY
-                  name: jira-issue-fetcher
-            - name: LOGLEVEL
-              valueFrom:
-                configMapKeyRef:
-                  key: LOGLEVEL
-                  name: jira-issue-fetcher
+            envFrom:
+            - configMapRef:
+                name: endpoints-env
+            - configMapRef:
+                name: jira-env
+            - secretRef:
+                name: jira-env
+            - configMapRef:
+                name: jira-issue-fetcher-env
             resources:
               limits:
                 cpu: "200m"

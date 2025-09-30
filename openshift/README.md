@@ -35,6 +35,13 @@
 
   The `rhel-config.json` file is stored in [jotnar](https://github.com/packit/jotnar) repo.
 
+- Create Vertex AI secret:
+
+  ```bash
+  oc create secret generic vertex-key --from-file=jotnar-vertex-prod.json
+  ```
+  You can obtain the file from our bitwarden.
+
 - Run `make deploy`. This would apply all the existing configurations to the project.
 
 - Run `oc get route phoenix` and verify url listed in `HOST/PORT` column is accessible.

@@ -87,6 +87,9 @@ spec:
         - mountPath: /home/beeai/rhel-config.json
           name: rhel-config
           subPath: rhel-config.json
+        - mountPath: /home/beeai/jotnar-vertex-prod.json
+          name: vertex-key
+          subPath: jotnar-vertex-prod.json
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
@@ -100,3 +103,6 @@ spec:
       - name: rhel-config
         configMap:
           name: rhel-config
+      - name: vertex-key
+        secret:
+          secretName: vertex-key

@@ -6,6 +6,8 @@ data:
   REDIS_URL: redis://valkey:6379/0
   MCP_GATEWAY_URL: http://mcp-gateway:8000/sse
   GIT_REPO_BASEPATH: /git-repos
+  GOOGLE_APPLICATION_CREDENTIALS: /home/beeai/jotnar-vertex-prod.json
+  GOOGLE_VERTEX_PROJECT: jotnar-bot
 immutable: false
 kind: ConfigMap
 metadata:

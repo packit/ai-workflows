@@ -97,6 +97,7 @@ class IssueComment(BaseModel):
 
 
 class FullIssue(Issue):
+    description: str
     comments: list[IssueComment]
 
 

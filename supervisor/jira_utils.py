@@ -149,6 +149,7 @@ def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
     if full:
         return FullIssue(
             **issue.__dict__,
+            description=issue_data["fields"]["description"],
             comments=[
                 IssueComment(
                     authorName=c["author"]["displayName"],
@@ -180,7 +181,7 @@ def _fields(full: bool):
         custom_fields["Preliminary Testing"],
     ]
     if full:
-        return base_fields + ["comment"]
+        return base_fields + ["comment", "description"]
     else:
         return base_fields
 

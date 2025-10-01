@@ -52,7 +52,7 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
          koji \
     && sed -i \
       's/return {apply_child(v) for v in input}/return [apply_child(v) for v in input]/' \
-      /usr/local/lib/python3.11/site-packages/beeai_framework/utils/strings.py
+      /opt/beeai-venv/lib/python3.11/site-packages/beeai_framework/utils/strings.py
 
 # Make venv Python the default
 ENV PATH=/opt/beeai-venv/bin:$PATH

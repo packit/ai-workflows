@@ -244,7 +244,7 @@ async def test_verify_issue_author(user_groups, expected_result, use_account_id)
     reporter = {}
     expected_param_key = None
     expected_param_value = None
-    
+
     if use_account_id:
         reporter["accountId"] = "test-account-id-123"
         expected_param_key = "accountId"

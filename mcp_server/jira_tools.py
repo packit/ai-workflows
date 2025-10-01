@@ -369,11 +369,11 @@ async def verify_issue_author(
             raise ToolError(f"Failed to get Jira data: {e}") from e
 
         reporter = issue_data.get("fields", {}).get("reporter", {})
-        
+
         # Try both Jira Server (key) and Jira Cloud (accountId)
         author_key = reporter.get("key")
         author_account_id = reporter.get("accountId")
-        
+
         if not author_key and not author_account_id:
             return False
 
@@ -396,6 +396,6 @@ async def verify_issue_author(
             raise ToolError(f"Failed to get user groups: {e}") from e
 
         return any(
-            group.get("name") == RH_EMPLOYEE_GROUP 
+            group.get("name") == RH_EMPLOYEE_GROUP
             for group in user_data.get("groups", {}).get("items", [])
         )

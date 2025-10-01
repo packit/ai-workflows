@@ -78,6 +78,21 @@ spec:
             secretKeyRef:
               key: GEMINI_API_KEY
               name: beeai-agent-secrets
+        - name: GOOGLE_VERTEX_PROJECT
+          valueFrom:
+            configMapKeyRef:
+              key: GOOGLE_VERTEX_PROJECT
+              name: x-beeai-agent-configmap
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          valueFrom:
+            configMapKeyRef:
+              key: GOOGLE_APPLICATION_CREDENTIALS
+              name: x-beeai-agent-configmap
+        - name: GOOGLE_VERTEX_LOCATION
+          valueFrom:
+            configMapKeyRef:
+              key: GOOGLE_VERTEX_LOCATION
+              name: x-beeai-agent-configmap
         image: 'beeai-agent:c9s'
         imagePullPolicy: Always
         name: backport-agent-c9s

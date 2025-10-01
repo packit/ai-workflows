@@ -68,6 +68,21 @@ spec:
             configMapKeyRef:
               key: MCP_GATEWAY_URL
               name: x-beeai-agent-configmap
+        - name: GOOGLE_VERTEX_PROJECT
+          valueFrom:
+            configMapKeyRef:
+              key: GOOGLE_VERTEX_PROJECT
+              name: x-beeai-agent-configmap
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          valueFrom:
+            configMapKeyRef:
+              key: GOOGLE_APPLICATION_CREDENTIALS
+              name: x-beeai-agent-configmap
+        - name: GOOGLE_VERTEX_LOCATION
+          valueFrom:
+            configMapKeyRef:
+              key: GOOGLE_VERTEX_LOCATION
+              name: x-beeai-agent-configmap
         - name: REQUESTS_CA_BUNDLE
           value: /etc/pki/tls/certs/ca-bundle.crt
 

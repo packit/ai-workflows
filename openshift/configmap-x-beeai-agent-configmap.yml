@@ -8,6 +8,7 @@ data:
   GIT_REPO_BASEPATH: /git-repos
   GOOGLE_APPLICATION_CREDENTIALS: /home/beeai/jotnar-vertex-prod.json
   GOOGLE_VERTEX_PROJECT: jotnar-bot
+  GOOGLE_VERTEX_LOCATION: global
 immutable: false
 kind: ConfigMap
 metadata:

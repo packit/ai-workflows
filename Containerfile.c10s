@@ -40,12 +40,15 @@ RUN dnf -y install --allowerasing \
     && dnf clean all
 
 RUN pip3 install --no-cache-dir \
-    beeai-framework[vertexai,mcp,duckduckgo]==0.1.51 \
-    google-cloud-aiplatform \
-    openinference-instrumentation-beeai \
-    arize-phoenix-otel \
-    redis \
-    specfile
+      beeai-framework[vertexai,mcp,duckduckgo]==0.1.51 \
+      google-cloud-aiplatform \
+      openinference-instrumentation-beeai \
+      arize-phoenix-otel \
+      redis \
+      specfile \
+    && sed -i \
+      's/return {apply_child(v) for v in input}/return [apply_child(v) for v in input]/' \
+      /usr/local/lib/python3.12/site-packages/beeai_framework/utils/strings.py
 
 # Create user
 RUN useradd -m -G wheel beeai

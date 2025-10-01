@@ -345,7 +345,7 @@ async def main() -> None:
                     "Use the `think` tool to reason through complex decisions and document your approach.",
                     "Be proactive in your search for fixes and do not give up easily.",
                     "For any patch URL that you are proposing for backport, you need to validate it using PatchValidator tool.",
-                    "Don't modify the URL you provide in your final answer after the patch is validated using PatchValidator tool.",
+                    "Do not modify the patch URL in your final answer after it has been validated with the PatchValidator tool.",
                     "After completing your triage analysis, if your decision is backport or rebase, always set appropriate JIRA fields per the instructions using set_jira_fields tool.",
                 ]
             )

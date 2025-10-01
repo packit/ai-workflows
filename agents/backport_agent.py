@@ -11,9 +11,9 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel, Field
 
-from beeai_framework.agents.experimental import RequirementAgent
-from beeai_framework.agents.experimental.prompts import RequirementAgentSystemPrompt
-from beeai_framework.agents.experimental.requirements.conditional import (
+from beeai_framework.agents.requirement import RequirementAgent
+from beeai_framework.agents.requirement.prompts import RequirementAgentSystemPrompt
+from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
 )
 from beeai_framework.errors import FrameworkError

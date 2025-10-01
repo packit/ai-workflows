@@ -21,9 +21,8 @@ from beeai_framework.tools.mcp import MCPTool
 
 
 def get_chat_model() -> ChatModel:
-    chat_model_name = os.environ["CHAT_MODEL"]
-    model = ChatModel.from_name(
-        chat_model_name,
+    return ChatModel.from_name(
+        os.environ["CHAT_MODEL"],
         # this the preferred way to set parameters, don't do options=...
         # it was changed in beeai 0.1.48
         ChatModelParameters(
@@ -33,12 +32,6 @@ def get_chat_model() -> ChatModel:
         ),
         timeout=1200,
     )
-    if "vertex" in chat_model_name:
-        # workaround for https://github.com/i-am-bee/beeai-framework/issues/1144
-        # FIXME: drop this code once we migrate to >=0.1.51
-        model._settings['vertex_project'] = model._settings.pop('vertexai_project')
-        model._settings['vertex_location'] = model._settings.pop('vertexai_location')
-    return model
 
 def get_agent_execution_config() -> dict[str, int]:
     return dict(
@@ -122,6 +115,8 @@ async def run_tool(
         [result] = result
     if isinstance(result, TextContent):
         result = result.text
+    if isinstance(result, dict) and len(result) == 1 and "result" in result:
+        result = result["result"]
     return result
 
 

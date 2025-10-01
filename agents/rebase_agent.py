@@ -9,9 +9,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from beeai_framework.agents.experimental import RequirementAgent
-from beeai_framework.agents.experimental.prompts import RequirementAgentSystemPrompt
-from beeai_framework.agents.experimental.requirements.conditional import (
+from beeai_framework.agents.requirement import RequirementAgent
+from beeai_framework.agents.requirement.prompts import RequirementAgentSystemPrompt
+from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
 )
 from beeai_framework.errors import FrameworkError
@@ -44,7 +44,7 @@ from tools.commands import RunShellCommandTool
 from tools.specfile import UpdateReleaseTool
 from tools.text import CreateTool, InsertAfterSubstringTool, InsertTool, StrReplaceTool, ViewTool
 from triage_agent import RebaseData, ErrorData
-from utils import get_agent_execution_config, get_chat_model, mcp_tools, render_prompt, run_tool
+from utils import get_agent_execution_config, get_chat_model, mcp_tools, render_prompt
 
 logger = logging.getLogger(__name__)
 

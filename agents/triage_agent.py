@@ -10,8 +10,8 @@ from typing import Union
 
 from pydantic import BaseModel, Field
 
-from beeai_framework.agents.experimental import RequirementAgent
-from beeai_framework.agents.experimental.requirements.conditional import (
+from beeai_framework.agents.requirement import RequirementAgent
+from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
 )
 from beeai_framework.errors import FrameworkError
@@ -359,7 +359,7 @@ async def main() -> None:
                     available_tools=gateway_tools,
                     issue_key=state.jira_issue
                 )
-                state.cve_eligibility_result = CVEEligibilityResult.model_validate_json(result)
+                state.cve_eligibility_result = CVEEligibilityResult.model_validate(result)
 
                 logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
 

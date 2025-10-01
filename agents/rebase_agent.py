@@ -168,6 +168,7 @@ async def main() -> None:
 
     class State(PackageUpdateState):
         version: str
+        fedora_clone: Path | None = Field(default=None)
         rebase_log: list[str] = Field(default=[])
         rebase_result: RebaseOutputSchema | None = Field(default=None)
         attempts_remaining: int = Field(default=max_build_attempts)

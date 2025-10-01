@@ -1,6 +1,5 @@
 # Environment variables shared by all agents
 x-beeai-env: &beeai-env
-  MCP_JIRA_URL: http://mcp-atlassian:9000/sse
   MCP_GATEWAY_URL: http://mcp-gateway:8000/sse
   REDIS_URL: redis://valkey:6379/0
   COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
@@ -12,7 +11,6 @@ x-beeai-env: &beeai-env
 # Base template for BeeAI agents
 x-beeai-agent: &beeai-agent
   depends_on:
-    - mcp-atlassian
     - mcp-gateway
     - valkey
     - phoenix
@@ -73,14 +71,6 @@ x-supervisor: &supervisor
   restart: unless-stopped
 
 services:
-  mcp-atlassian:
-    image: ghcr.io/sooperset/mcp-atlassian:latest
-    env_file:
-      - .secrets/mcp-atlassian.env
-    command: ["--transport", "sse", "--port", "9000", "-vv"]
-    restart: unless-stopped
-    profiles: ["agents", "supervisor"]
-
   mcp-gateway:
     image: mcp-gateway
     build:

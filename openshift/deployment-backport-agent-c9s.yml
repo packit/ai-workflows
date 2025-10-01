@@ -28,11 +28,6 @@ spec:
         command:
         - python
         env:
-        - name: MCP_JIRA_URL
-          valueFrom:
-            configMapKeyRef:
-              key: MCP_JIRA_URL
-              name: x-beeai-agent-configmap
         - name: REDIS_URL
           valueFrom:
             configMapKeyRef:

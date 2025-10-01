@@ -30,12 +30,6 @@ spec:
         env:
         - name: CONTAINER_VERSION
           value: "c9s"
-        - name: GITLAB_USER
-          # Not envFrom to avoid importing GITLAB_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: gitlab-env
-              key: GITLAB_USER
         - name: REQUESTS_CA_BUNDLE
           value: /etc/pki/tls/certs/ca-bundle.crt
         envFrom:

@@ -7,7 +7,6 @@
   `gitlab-env`:
   ```
   GITLAB_TOKEN
-  GITLAB_USER
   ```
 
   `jira-env`:

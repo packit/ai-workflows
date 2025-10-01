@@ -353,6 +353,7 @@ async def verify_issue_author(
 ) -> bool:
     """
     Verifies if the author of the Jira issue is a Red Hat employee by checking their group membership.
+    Supports both Jira Server (using 'key') and Jira Cloud (using 'accountId').
     """
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
 
@@ -368,22 +369,33 @@ async def verify_issue_author(
             raise ToolError(f"Failed to get Jira data: {e}") from e
 
         reporter = issue_data.get("fields", {}).get("reporter", {})
-        author_account_id = reporter.get("accountId", "")
-
-        if not author_account_id:
+        
+        # Try both Jira Server (key) and Jira Cloud (accountId)
+        author_key = reporter.get("key")
+        author_account_id = reporter.get("accountId")
+        
+        if not author_key and not author_account_id:
             return False
+
+        # Build params based on what's available
+        params = {"expand": "groups"}
+        if author_account_id:
+            params["accountId"] = author_account_id
+        elif author_key:
+            params["key"] = author_key
 
         try:
             async with session.get(
-                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/user/groups"),
-                params={"accountId": author_account_id},
+                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/user"),
+                params=params,
                 headers=headers,
-            ) as groups_response:
-                groups_response.raise_for_status()
-                groups_data = await groups_response.json()
+            ) as user_response:
+                user_response.raise_for_status()
+                user_data = await user_response.json()
         except aiohttp.ClientError as e:
             raise ToolError(f"Failed to get user groups: {e}") from e
 
-        group_names = [group.get("name", "") for group in groups_data]
-
-        return RH_EMPLOYEE_GROUP in group_names
+        return any(
+            group.get("name") == RH_EMPLOYEE_GROUP 
+            for group in user_data.get("groups", {}).get("items", [])
+        )

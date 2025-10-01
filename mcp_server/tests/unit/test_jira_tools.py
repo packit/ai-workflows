@@ -225,27 +225,47 @@ async def test_edit_jira_labels(labels_to_add, labels_to_remove, expected_update
 
 
 @pytest.mark.parametrize(
-    "user_groups, expected_result",
+    "user_groups, expected_result, use_account_id",
     [
-        (["Red Hat Employee", "Other Group"], True),
-        (["Other Group", "Red Hat Employee"], True),
-        (["Some Group", "Other Group"], False),
-        ([], False),
+        # Jira Server (key-based)
+        (["Red Hat Employee", "Other Group"], True, False),
+        (["Other Group", "Red Hat Employee"], True, False),
+        (["Some Group", "Other Group"], False, False),
+        ([], False, False),
+        # Jira Cloud (accountId-based)
+        (["Red Hat Employee", "Other Group"], True, True),
+        (["Some Group", "Other Group"], False, True),
     ],
 )
 @pytest.mark.asyncio
-async def test_verify_issue_author(user_groups, expected_result):
+async def test_verify_issue_author(user_groups, expected_result, use_account_id):
     issue_key = "RHEL-12345"
+
+    reporter = {}
+    expected_param_key = None
+    expected_param_value = None
+    
+    if use_account_id:
+        reporter["accountId"] = "test-account-id-123"
+        expected_param_key = "accountId"
+        expected_param_value = "test-account-id-123"
+    else:
+        reporter["key"] = "test-user-key"
+        expected_param_key = "key"
+        expected_param_value = "test-user-key"
 
     issue_data = {
         "fields": {
-            "reporter": {
-                "accountId": "test-account-id-123",
-            }
+            "reporter": reporter
         }
     }
 
-    groups_data = [{"name": group} for group in user_groups]
+    user_data = {
+        "groups": {
+            "size": len(user_groups),
+            "items": [{"name": group} for group in user_groups]
+        }
+    }
 
     @asynccontextmanager
     async def get(url, params=None, headers=None):
@@ -253,10 +273,11 @@ async def test_verify_issue_author(user_groups, expected_result):
             async def json():
                 return issue_data
             yield flexmock(json=json, raise_for_status=lambda: None)
-        elif url.endswith("rest/api/2/user/groups"):
-            assert params.get("accountId") == "test-account-id-123"
+        elif url.endswith("rest/api/2/user"):
+            assert params.get(expected_param_key) == expected_param_value
+            assert params.get("expand") == "groups"
             async def json():
-                return groups_data
+                return user_data
             yield flexmock(json=json, raise_for_status=lambda: None)
         else:
             raise AssertionError(f"Unexpected URL: {url}")

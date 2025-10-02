@@ -41,6 +41,12 @@ class ErrataStatus(StrEnum):
     SHIPPED_LIVE = "SHIPPED_LIVE"
 
 
+class Comment(BaseModel):
+    authorName: str
+    authorEmail: str
+    created: datetime
+    body: str
+
 class Erratum(BaseModel):
     id: int
     full_advisory: str
@@ -49,6 +55,9 @@ class Erratum(BaseModel):
     status: ErrataStatus
     all_issues_release_pending: bool
     last_status_transition_timestamp: datetime
+
+class FullErratum(Erratum):
+    comments: list[Comment] | None = None
 
 
 class MergeRequestState(StrEnum):
@@ -89,16 +98,9 @@ class Issue(BaseModel):
     preliminary_testing: PreliminaryTesting | None = None  # RHEL only
 
 
-class IssueComment(BaseModel):
-    authorName: str
-    authorEmail: str
-    created: datetime
-    body: str
-
-
 class FullIssue(Issue):
     description: str
-    comments: list[IssueComment]
+    comments: list[Comment]
 
 
 class JotnarTag(BaseModel):

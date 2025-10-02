@@ -18,7 +18,7 @@ from .http_utils import requests_session
 from .supervisor_types import (
     FullIssue,
     Issue,
-    IssueComment,
+    Comment,
     IssueStatus,
     JotnarTag,
     TestCoverage,
@@ -151,7 +151,7 @@ def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
             **issue.__dict__,
             description=issue_data["fields"]["description"],
             comments=[
-                IssueComment(
+                Comment(
                     authorName=c["author"]["displayName"],
                     authorEmail=c["author"]["emailAddress"],
                     created=datetime.fromisoformat(c["created"]),

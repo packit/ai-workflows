@@ -73,7 +73,7 @@ class IssueHandler(WorkItemHandler):
             )
         elif issue.status == IssueStatus.INTEGRATION:
             related_erratum = (
-                get_erratum_for_link(issue.errata_link) if issue.errata_link else None
+                get_erratum_for_link(issue.errata_link, full=True) if issue.errata_link else None
             )
             testing_analysis = await analyze_issue(issue, related_erratum)
             if testing_analysis.state == TestingState.NOT_RUNNING:

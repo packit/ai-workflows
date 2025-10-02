@@ -1,6 +1,6 @@
-from datetime import datetime, timezone
 import logging
 import os
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
@@ -11,7 +11,7 @@ from beeai_framework.template import PromptTemplate, PromptTemplateInput
 
 from agents.utils import get_agent_execution_config
 from .qe_data import get_qe_data, TestLocationInfo
-from .supervisor_types import Erratum, FullIssue, TestingState
+from .supervisor_types import FullErratum, FullIssue, TestingState
 from .tools.read_readme import ReadReadmeTool
 from .tools.search_resultsdb import SearchResultsdbTool
 
@@ -23,7 +23,7 @@ class InputSchema(BaseModel):
     test_location_info: TestLocationInfo = Field(
         description="Information about where to find tests and test results"
     )
-    erratum: Erratum | None = Field(description="Details of the related ERRATUM")
+    erratum: FullErratum | None = Field(description="Details of the related ERRATUM")
     current_time: datetime = Field(description="Current timestamp")
 
 
@@ -41,6 +41,10 @@ def render_prompt(input: InputSchema) -> str:
       ERRATUM_DATA: {{ erratum }}
       TEST_LOCATION_INFO: {{ test_location_info }}
       CURRENT_TIME: {{ current_time }}
+
+      For components handled by the New Errata Workflow Automation(NEWA):
+      NEWA will post a comment to the erratum when it has started tests and when they finish.
+      Read the JIRA issue in those comments to find test results.
 
       Call the final_answer tool passing in the state and a comment as follows.
       The comment should use JIRA comment syntax.
@@ -70,7 +74,7 @@ def render_prompt(input: InputSchema) -> str:
     ).render(input)
 
 
-async def analyze_issue(jira_issue: FullIssue, erratum: Erratum | None) -> OutputSchema:
+async def analyze_issue(jira_issue: FullIssue, erratum: FullErratum | None) -> OutputSchema:
     agent = ToolCallingAgent(
         llm=ChatModel.from_name(
             os.environ["CHAT_MODEL"],

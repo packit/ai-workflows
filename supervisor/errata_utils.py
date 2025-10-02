@@ -1,15 +1,18 @@
 from datetime import datetime, timezone
 from enum import StrEnum
+from datetime import datetime
 from functools import cache
 import logging
 import os
+from typing import overload
+from typing_extensions import Literal
 
 from bs4 import BeautifulSoup, Tag  # type: ignore
 from pydantic import BaseModel
 from requests_gssapi import HTTPSPNEGOAuth
 
 from .http_utils import requests_session
-from .supervisor_types import Erratum, ErrataStatus
+from .supervisor_types import Erratum, FullErratum, ErrataStatus, Comment
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +60,15 @@ def ET_get_html(path: str):
     return response.text
 
 
-def get_erratum(erratum_id: str | int):
+@overload
+def get_erratum(erratum_id: str | int, full: Literal[False] = False) -> Erratum: ...
+
+
+@overload
+def get_erratum(erratum_id: str | int, full: Literal[True]) -> FullErratum: ...
+
+
+def get_erratum(erratum_id: str | int, full: bool = False) -> Erratum | FullErratum:
     logger.debug("Getting detailed information for erratum %s", erratum_id)
     data = ET_api_get(f"erratum/{erratum_id}")
     erratum_data = data["errata"]
@@ -82,7 +93,7 @@ def get_erratum(erratum_id: str | int):
         details["status_updated_at"], "%Y-%m-%dT%H:%M:%SZ"
     ).replace(tzinfo=timezone.utc)
 
-    return Erratum(
+    base_erratum = Erratum(
         id=details["id"],
         full_advisory=details["fulladvisory"],
         url=f"https://errata.engineering.redhat.com/advisory/{erratum_id}",
@@ -92,10 +103,46 @@ def get_erratum(erratum_id: str | int):
         last_status_transition_timestamp=last_status_transition_timestamp,
     )
 
+    if full:
+        # fetching comments for the erratum
+        comments = get_erratum_comments(erratum_id)
+        return FullErratum(
+            **base_erratum.__dict__,
+            comments=comments,
+        )
+    else:
+        return base_erratum
 
-def get_erratum_for_link(link: str):
+
+def get_erratum_comments(erratum_id: str | int) -> list[Comment] | None:
+    """Get all comments for an erratum with the given erratum_id"""
+    logger.debug("Getting comments for erratum %s", erratum_id)
+    data = ET_api_get(f"comments?filter[errata_id]={erratum_id}")
+
+    return [
+        Comment(
+            authorName=comment_data["attributes"]["who"]["realname"],
+            authorEmail=comment_data["attributes"]["who"]["login_name"],
+            created=datetime.fromisoformat(
+                comment_data["attributes"]["created_at"].replace("Z", "+00:00")
+            ),
+            body=comment_data["attributes"]["text"],
+        )
+        for comment_data in data["data"]
+    ]
+
+
+@overload
+def get_erratum_for_link(link: str, full: Literal[False] = False) -> Erratum: ...
+
+
+@overload
+def get_erratum_for_link(link: str, full: Literal[True]) -> FullErratum: ...
+
+
+def get_erratum_for_link(link: str, full: bool = True) -> Erratum | FullErratum:
     erratum_id = link.split("/")[-1]
-    return get_erratum(erratum_id)
+    return get_erratum(erratum_id, full=full)
 
 
 class RuleParseError(Exception):

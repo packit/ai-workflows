@@ -41,6 +41,14 @@ class ErrataStatus(StrEnum):
     SHIPPED_LIVE = "SHIPPED_LIVE"
 
 
+class ErrataComment(BaseModel):
+    id: int
+    type: str
+    created_at: datetime
+    errata_id: int
+    text: str
+    who: dict
+
 class Erratum(BaseModel):
     id: int
     full_advisory: str
@@ -49,6 +57,7 @@ class Erratum(BaseModel):
     status: ErrataStatus
     all_issues_release_pending: bool
     last_status_transition_timestamp: datetime
+    comments: list[ErrataComment] | None = None
 
 
 class MergeRequestState(StrEnum):

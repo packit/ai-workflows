@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from enum import StrEnum
+from datetime import datetime
 from functools import cache
 import logging
 import os
@@ -9,7 +10,7 @@ from pydantic import BaseModel
 from requests_gssapi import HTTPSPNEGOAuth
 
 from .http_utils import requests_session
-from .supervisor_types import Erratum, ErrataStatus
+from .supervisor_types import Erratum, ErrataStatus, ErrataComment
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,9 @@ def get_erratum(erratum_id: str | int):
         details["status_updated_at"], "%Y-%m-%dT%H:%M:%SZ"
     ).replace(tzinfo=timezone.utc)
 
+    # fetching comments for the erratum
+    comments = get_erratum_comments(erratum_id)
+
     return Erratum(
         id=details["id"],
         full_advisory=details["fulladvisory"],
@@ -90,8 +94,31 @@ def get_erratum(erratum_id: str | int):
         status=ErrataStatus(details["status"]),
         all_issues_release_pending=all_issues_release_pending,
         last_status_transition_timestamp=last_status_transition_timestamp,
+        comments=comments,
     )
 
+def get_erratum_comments(erratum_id: str | int) -> list[ErrataComment] | None:
+    """Get all comments for an erratum with the given erratum_id"""
+    logger.debug("Getting comments for erratum %s", erratum_id)
+    try:
+        data = ET_api_get(f"comments?filter[errata_id]={erratum_id}")
+
+        return [
+            ErrataComment(
+                id=comment_data["id"],
+                created_at=datetime.fromisoformat(
+                    comment_data["attributes"]["created_at"].replace("Z", "+00:00")
+                ),
+                errata_id=comment_data["attributes"]["errata_id"],
+                text=comment_data["attributes"]["text"],
+                who=comment_data["attributes"]["who"],
+                type=comment_data["type"],
+            )
+            for comment_data in data["data"]
+        ]
+    except Exception as e:
+        logger.warning(f"Failed to fetch erratum comments for {erratum_id}: {e}")
+        return None
 
 def get_erratum_for_link(link: str):
     erratum_id = link.split("/")[-1]

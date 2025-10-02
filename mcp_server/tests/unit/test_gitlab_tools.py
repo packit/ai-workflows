@@ -1,5 +1,5 @@
 import asyncio
-import git
+
 import gitlab
 import pytest
 
@@ -11,7 +11,7 @@ from ogr.services.gitlab.project import GitlabProject
 from flexmock import flexmock
 from ogr.services.gitlab import GitlabService
 
-from gitlab_tools import clone_and_update_fork, fork_repository, open_merge_request, push_to_remote_repository, add_merge_request_labels
+from gitlab_tools import clone_repository, fork_repository, open_merge_request, push_to_remote_repository, add_merge_request_labels
 from test_utils import mock_git_repo_basepath
 
 
@@ -122,31 +122,30 @@ async def test_open_merge_request_with_existing_mr():
 
 
 @pytest.mark.asyncio
-async def test_clone_and_update_fork(mock_git_repo_basepath):
-    fork_url = "https://gitlab.com/ai-bot/centos_rpms_bash.git"
-    parent = "https://gitlab.com/centos-stream/rpms/bash"
+async def test_clone_repository(mock_git_repo_basepath):
+    repository = "https://gitlab.com/centos-stream/rpms/bash"
     branch = "rhel-8.10.0"
     clone_path = Path("/git-repos/bash")
 
     async def create_subprocess_exec(cmd, *args, **kwargs):
         assert cmd == "git"
-        if args[0] == "clone":
-            assert args[3] == branch
-            assert args[4].endswith(fork_url.removeprefix("https://"))
-            assert args[5] == clone_path
-        elif args[0] == "pull":
-            assert args[2].endswith(parent.removeprefix("https://"))
-            assert args[3] == branch
-            assert kwargs.get("cwd") == clone_path
+        assert kwargs.get("cwd") == clone_path
+        if args[0] == "init":
+            assert len(args) == 1
+        elif args[0] == "fetch":
+            assert args[1].endswith(repository.removeprefix("https://"))
+            assert args[2] == f"{branch}:refs/heads/{branch}"
+        elif args[0] == "checkout":
+            assert args[1] == branch
+        else:
+            pytest.fail(f"Unexpected git command: {args}")
         async def wait():
             return 0
         return flexmock(wait=wait)
 
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
 
-    remote = flexmock()
-    flexmock(git.Repo).new_instances(flexmock(remotes=[remote]).should_receive("delete_remote").with_args(remote).once().mock())
-    result = await clone_and_update_fork(fork_url=fork_url, parent=parent, clone_path=clone_path, branch=branch)
+    result = await clone_repository(repository=repository, branch=branch, clone_path=clone_path)
     assert result.startswith("Successfully")
 
 

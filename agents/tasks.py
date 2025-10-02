@@ -29,11 +29,10 @@ async def fork_and_prepare_dist_git(
     local_clone = working_dir / package
     shutil.rmtree(local_clone, ignore_errors=True)
     await run_tool(
-        "clone_and_update_fork",
-        fork_url=fork_url,
-        parent=repository,
-        clone_path=str(local_clone),
+        "clone_repository",
+        repository=repository,
         branch=dist_git_branch,
+        clone_path=str(local_clone),
         available_tools=available_tools,
     )
     update_branch = f"{BRANCH_PREFIX}-{jira_issue}"

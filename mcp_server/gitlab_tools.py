@@ -5,7 +5,6 @@ import re
 from typing import Annotated
 from urllib.parse import urlparse
 
-import git
 from fastmcp.exceptions import ToolError
 from ogr.factory import get_project
 from ogr.exceptions import OgrException, GitlabAPIException
@@ -146,53 +145,45 @@ async def get_internal_rhel_branches(
         raise ToolError(f"Failed to get branches for package {package}: {ex}")
 
 
-async def clone_and_update_fork(
-    fork_url: Annotated[str, Field(description="URL of the fork of the repository")],
-    parent: Annotated[str, Field(description="Parent repository of the fork")],
-    clone_path: Annotated[AbsolutePath, Field(description="Absolute path where to clone the fork")],
+async def clone_repository(
+    repository: Annotated[str, Field(description="Repository to clone")],
     branch: Annotated[str, Field(description="Branch to clone")],
+    clone_path: Annotated[AbsolutePath, Field(description="Absolute path where to clone the repository")],
 ) -> str:
     """
-    Clones the specified fork to the given local path and updates the cloned branch
-    to match the parent repository.
+    Clones the specified repository to the given local path.
     """
     # Clean up old repositories before cloning
     await clean_stale_repositories()
 
+    clone_path.mkdir(parents=True, exist_ok=True)
+
+    proc = await asyncio.create_subprocess_exec("git", "init", cwd=clone_path)
+    if await proc.wait():
+        raise ToolError(f"Failed to initialize git repo at {clone_path}")
+
     command = [
         "git",
-        "clone",
-        "--single-branch",
-        "--branch",
-        branch,
-        _get_authenticated_url(fork_url),
-        clone_path,
+        "fetch",
+        _get_authenticated_url(repository),
+        f"{branch}:refs/heads/{branch}",
     ]
 
-    proc = await asyncio.create_subprocess_exec(command[0], *command[1:])
+    proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
     if await proc.wait():
-        raise ToolError(f"Failed to clone fork {fork_url}")
+        raise ToolError(f"Failed to fetch {branch} from {repository}")
 
     command = [
         "git",
-        "pull",
-        "--ff-only",
-        _get_authenticated_url(parent),
+        "checkout",
         branch,
     ]
 
     proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
     if await proc.wait():
-        raise ToolError(f"Failed to update fork {fork_url}")
+        raise ToolError(f"Failed to checkout branch {branch}")
 
-    def remove_all_remotes():
-        with git.Repo(clone_path) as repo:
-            for remote in repo.remotes:
-                repo.delete_remote(remote)
-
-    await asyncio.to_thread(remove_all_remotes)
-
-    return f"Successfully cloned the specified fork to {clone_path}"
+    return f"Successfully cloned the specified repository to {clone_path}"
 
 
 async def push_to_remote_repository(

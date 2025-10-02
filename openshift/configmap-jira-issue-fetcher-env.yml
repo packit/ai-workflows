@@ -1,6 +1,6 @@
 apiVersion: v1
 data:
-  QUERY: 'filter = "Jotnar_1000_packages"'
+  QUERY: 'filter in ("Jotnar-handpicked", "Jotnar-todo")'
   LOGLEVEL: "INFO"
 immutable: false
 kind: ConfigMap

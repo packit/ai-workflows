@@ -13,6 +13,7 @@ from agents.utils import get_agent_execution_config
 from .qe_data import get_qe_data, TestLocationInfo
 from .supervisor_types import FullErratum, FullIssue, TestingState
 from .tools.read_readme import ReadReadmeTool
+from .tools.read_issue import ReadIssueTool
 from .tools.search_resultsdb import SearchResultsdbTool
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,7 @@ async def analyze_issue(jira_issue: FullIssue, erratum: FullErratum | None) -> O
             allow_parallel_tool_calls=True,
         ),
         memory=UnconstrainedMemory(),
-        tools=[ReadReadmeTool(), SearchResultsdbTool()],
+        tools=[ReadReadmeTool(), ReadIssueTool(), SearchResultsdbTool()],
     )
 
     async def run(input: InputSchema):

@@ -1,6 +1,6 @@
-from datetime import datetime, timezone
 import logging
 import os
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
@@ -11,8 +11,9 @@ from beeai_framework.template import PromptTemplate, PromptTemplateInput
 
 from agents.utils import get_agent_execution_config
 from .qe_data import get_qe_data, TestLocationInfo
-from .supervisor_types import Erratum, FullIssue, TestingState
+from .supervisor_types import Erratum, FullIssue, TestingState, ErrataComment
 from .tools.read_readme import ReadReadmeTool
+from .tools.read_issue import ReadIssueTool
 from .tools.search_resultsdb import SearchResultsdbTool
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,12 @@ def render_prompt(input: InputSchema) -> str:
       ERRATUM_DATA: {{ erratum }}
       TEST_LOCATION_INFO: {{ test_location_info }}
       CURRENT_TIME: {{ current_time }}
+      ERRATUM_COMMENTS: {{ erratum.comments }}
+
+      For components handled by the New Errata Workflow Automation(NEWA):
+      - Look for NEWA comments in the erratum comments (erratum.comments)
+      - Extract RHELMISC issue keys from NEWA comments (e.g.: RHELMISC-12345)
+      - Look for JIRA issue URLs (https://issues.redhat.com/browse/RHELMISC-*) in the erratum comments
 
       Call the final_answer tool passing in the state and a comment as follows.
       The comment should use JIRA comment syntax.
@@ -77,7 +84,7 @@ async def analyze_issue(jira_issue: FullIssue, erratum: Erratum | None) -> Outpu
             allow_parallel_tool_calls=True,
         ),
         memory=UnconstrainedMemory(),
-        tools=[ReadReadmeTool(), SearchResultsdbTool()],
+        tools=[ReadReadmeTool(), ReadIssueTool(), SearchResultsdbTool()],
     )
 
     async def run(input: InputSchema):

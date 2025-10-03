@@ -106,6 +106,42 @@ async def git_am_show_current_patch(repository_path: AbsolutePath) -> str:
     return ""
 
 
+async def discover_patch_p(patch_file_path: AbsolutePath, repository_path: AbsolutePath) -> int:
+    """
+    Process the given patch file and figure out with which `-p` value the patch should be applied
+    in the given repository.
+
+    Using `git apply --stat` we parse the given patch and try to fit it into the given repository.
+    """
+    cmd = ["git", "apply", "--stat", str(patch_file_path)]
+    exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repository_path)
+    if exit_code != 0:
+        # this means the patch is borked
+        raise ToolError(f"Command git-apply --stat failed: {stderr}")
+    # expat/lib/xmlparse.c                        |    8 -
+    # .github/workflows/scripts/mass-cppcheck.sh  |    1
+    # .github/workflows/data/exported-symbols.txt |    2
+    # expat/lib/expat.h                           |   15 +
+    lines = stdout.splitlines()
+    files = [line.split("|")[0].strip() for line in lines if "|" in line]
+
+    # git-apply hates -p0:
+    #   "git diff header lacks filename information when removing 1 leading pathname component (line 5)"
+    # but /usr/bin/patch should be able to handle -p0, so this is a TODO
+    # Nikola checked Fedora spec files: 17 -p3, 10 -p4, 2 -p5
+    for n in range(1, 6):
+        split_this_many = n - 1
+        for fi in files:
+            stripped_fi = fi
+            if split_this_many > 0:
+                stripped_fi = fi.split("/", split_this_many)[-1]
+            if (repository_path / stripped_fi).exists():
+                # I know this is naive, but we certainly cannot check all files
+                # because some may be missing in the checkout
+                return n
+    raise ToolError(f"Failed to discover the value for `-p` for patch file: {patch_file_path}")
+
+
 class GitPatchCreationToolInput(BaseModel):
     repository_path: AbsolutePath = Field(description="Absolute path to the git repository")
     patch_file_path: AbsolutePath = Field(description="Absolute path where the patch file should be saved")
@@ -131,8 +167,9 @@ class GitPatchApplyTool(Tool[GitPatchApplyToolInput, ToolRunOptions, StringToolO
         self, tool_input: GitPatchApplyToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
         ensure_git_repository(tool_input.repository_path)
+        p = await discover_patch_p(tool_input.patch_file_path, tool_input.repository_path)
         try:
-            cmd = ["git", "am", "--reject", str(tool_input.patch_file_path)]
+            cmd = ["git", "am", "--reject", f"-p{p}", str(tool_input.patch_file_path)]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
             if exit_code != 0:
                 return StringToolOutput(

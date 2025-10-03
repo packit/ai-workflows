@@ -20,6 +20,7 @@ from tools.wicked_git import (
     GitPatchCreationToolInput,
     GitLogSearchTool,
     GitLogSearchToolInput,
+    discover_patch_p,
 )
 from tools.commands import RunShellCommandTool, RunShellCommandToolInput
 from tools.specfile import (
@@ -533,3 +534,36 @@ async def test_git_log_search_tool_found(git_repo, cve_id, jira_issue, expected)
     ).middleware(GlobalTrajectoryMiddleware(pretty=True))
     result = output.result
     assert expected in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "patch_content, expected_n",
+    [
+        (
+            "diff --git a/file.txt b/file.txt\n"
+            "index cb752151e..ceb5c5dca 100644\n"
+            "--- a/file.txt\n"
+            "+++ b/file.txt\n"
+            "@@ -1,2 +1,3 @@\n"
+            " Line 1\n"
+            " Line 2\n"
+            "+Line 3\n",
+            1),
+        (
+            "diff --git a/z/file.txt b/z/file.txt\n"
+            "index cb752151e..ceb5c5dca 100644\n"
+            "--- a/z/file.txt\n"
+            "+++ b/z/file.txt\n"
+            "@@ -1,2 +1,3 @@\n"
+            " Line 1\n"
+            " Line 2\n"
+            "+Line 3\n",
+            2),
+    ]
+)
+async def test_discover_patch_p(git_repo, tmp_path, patch_content, expected_n):
+    patch_file = tmp_path / f"{expected_n}.patch"
+    patch_file.write_text(patch_content)
+    n = await discover_patch_p(patch_file, git_repo)
+    assert n == expected_n

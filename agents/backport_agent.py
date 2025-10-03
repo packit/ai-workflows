@@ -86,7 +86,8 @@ def get_instructions() -> str:
          Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
       6. Run `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` to see if the new patch
-         applies cleanly.
+         applies cleanly. When `prep` command finishes with "exit 0", it's a success. Ignore errors from
+         libtoolize that warn about newer files: "use '--force' to overwrite".
 
       7. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
 
@@ -97,8 +98,10 @@ def get_instructions() -> str:
       - Never change anything in the spec file changelog.
       - Preserve existing formatting and style conventions in spec files and patch headers.
       - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
-      - When resolving conflicts, ignore all changes in .github/ workflows and .gitignore.
+      - Ignore all changes in .github/ workflows, .gitignore, news, changes that cause conflicts.
       - Never apply the patches yourself, always use the `git_patch_apply` tool.
+      - Never run `git am --skip`, always use the `git_patch_apply` tool.
+      - Never abort the existing git am session.
     """
 
 

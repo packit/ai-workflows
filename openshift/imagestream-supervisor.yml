@@ -1,0 +1,17 @@
+---
+kind: ImageStream
+apiVersion: image.openshift.io/v1
+metadata:
+  name: supervisor
+spec:
+  tags:
+    - name: prod
+      from:
+        kind: DockerImage
+        name: quay.io/jotnar/supervisor:latest
+      importPolicy:
+        # Periodically query registry to synchronize tag and image metadata.
+        scheduled: true
+  lookupPolicy:
+    # allows all resources pointing to this image stream to use it in the image field
+    local: true

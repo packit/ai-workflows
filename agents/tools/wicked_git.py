@@ -132,7 +132,7 @@ class GitPatchApplyTool(Tool[GitPatchApplyToolInput, ToolRunOptions, StringToolO
     ) -> StringToolOutput:
         ensure_git_repository(tool_input.repository_path)
         try:
-            cmd = ["git", "am", "-3", "--reject", str(tool_input.patch_file_path)]
+            cmd = ["git", "am", "--reject", str(tool_input.patch_file_path)]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
             if exit_code != 0:
                 return StringToolOutput(
@@ -157,9 +157,10 @@ class GitPatchApplyFinishToolInput(BaseModel):
 class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions, StringToolOutput]):
     name = "git_apply_finish"
     description = """
-    Before calling this tool, you must resolve all merge conflicts and delete any `*.rej` files.
+    Before calling this tool, you must resolve all merge conflicts and delete all `*.rej` files.
     The tool continues a `git am` session that was paused due to conflicts.
     After continuing, it will stage all your changes and attempt to complete the patch application.
+    If no changes are staged, the tool will skip the patch and continue.
     """
     input_schema = GitPatchApplyFinishToolInput
 
@@ -212,7 +213,7 @@ class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions,
             if exit_code != 0:
                 raise ToolError(f"Git command failed: {stderr}")
             # continue git-am process
-            cmd = ["git", "am", "--reject", "-3", "--continue"]
+            cmd = ["git", "am", "--reject", "--continue"]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
             if exit_code != 0:
                 # if the patch file doesn't have the header, this will fail
@@ -223,7 +224,7 @@ class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions,
                     if exit_code != 0:
                         raise ToolError(f"Command git-commit failed: {stderr}")
                     exit_code, stdout, stderr = await run_subprocess(
-                        ["git", "am", "--reject", "-3", "--skip"], cwd=tool_input.repository_path)
+                        ["git", "am", "--reject", "--skip"], cwd=tool_input.repository_path)
                     if exit_code != 0:
                         raise ToolError(f"Command git-am failed: {stderr}")
                 # FIXME: we need to find a more reliable way to detect this
@@ -240,16 +241,17 @@ class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions,
                     )
                 elif "No changes - did you forget" in stdout:
                     exit_code, stdout, stderr = await run_subprocess(
-                        ["git", "am", "--reject", "-3", "--skip"], cwd=tool_input.repository_path)
+                        ["git", "am", "--reject", "--skip"], cwd=tool_input.repository_path)
                     if exit_code != 0:
-                        raise ToolError(f"Command git-am failed: {stderr}")
-                    return StringToolOutput(
-                        result="No changes happened in the working tree. We have skipped that patch and continue. "
-                        f"Output from git-am follows:\n"
-                        f"stdout: {stdout}\n"
-                        f"stderr: {stderr}\n"
-                        f"Reject files: {await find_rej_files(tool_input.repository_path)}"
-                    )
+                        return StringToolOutput(
+                            result="No changes detected in the working tree nor in the staging area."
+                            " The patch was skipped and we have more conflicts to resolve. "
+                            f"Output from git-am follows:\n"
+                            f"stdout: {stdout}\n"
+                            f"stderr: {stderr}\n"
+                            f"Reject files: {await find_rej_files(tool_input.repository_path)}\n"
+                            f"Current patch: {await git_am_show_current_patch(tool_input.repository_path)}"
+                        )
                 else:
                     raise ToolError(f"Command git-am failed: {stderr} out={stdout}")
             # good, now we should have the patch committed, so let's get the file

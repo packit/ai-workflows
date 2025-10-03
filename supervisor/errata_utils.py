@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
 from enum import StrEnum
-from functools import cache
+from functools import cache, total_ordering
 import logging
 import os
+import re
 
 from bs4 import BeautifulSoup, Tag  # type: ignore
 from pydantic import BaseModel
@@ -15,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 ET_URL = "https://errata.engineering.redhat.com/"
+STREAM_ORDERING = {"Y": 0, "Z": 1, "GA": 0}
+CANDIDATE_ERRATUN_LIMIT = 15
 
 
 @cache
@@ -96,6 +99,128 @@ def get_erratum(erratum_id: str | int):
 def get_erratum_for_link(link: str):
     erratum_id = link.split("/")[-1]
     return get_erratum(erratum_id)
+
+
+@total_ordering
+class RHELStream(StrEnum):
+    Y = "Y"
+    Z = "Z"
+    GA = "GA"
+
+    def __eq__(self, other):
+        if not isinstance(other, RHELStream):
+            return NotImplemented
+
+        return STREAM_ORDERING[self.value] == STREAM_ORDERING[other.value]
+
+    def __hash__(self):
+        return hash(STREAM_ORDERING[self.value])
+
+    def __lt__(self, other):
+        if not isinstance(other, RHELStream):
+            return NotImplemented
+
+        return STREAM_ORDERING[self.value] < STREAM_ORDERING[other.value]
+
+
+@total_ordering
+class RHELVersion(BaseModel):
+    major_version: int
+    minor_version: int
+    stream: RHELStream
+
+    def __eq__(self, other):
+        if not isinstance(other, RHELVersion):
+            return NotImplemented
+
+        return (self.major_version, self.minor_version, self.stream) == (
+            other.major_version,
+            other.minor_version,
+            other.stream,
+        )
+
+    def __lt__(self, other):
+        if not isinstance(other, RHELVersion):
+            return NotImplemented
+
+        if self.major_version != other.major_version:
+            return self.major_version < other.major_version
+
+        if self.minor_version != other.minor_version:
+            return self.minor_version < other.minor_version
+
+        return self.stream < other.stream
+
+
+def get_RHEL_version(version_string: str):
+    pattern = r"RHEL-(\d+)\.(\d+)(\.\d+)?\.(Z|Y|GA)"
+    match = re.match(pattern, version_string)
+    if match is not None:
+        return RHELVersion(
+            major_version=int(match.group(1)),
+            minor_version=int(match.group(2)),
+            stream=RHELStream(match.group(4)),
+        )
+
+
+def get_package_name(build_name: str) -> str | None:
+    match = re.match(r"(.+?)(?<=\D)-\d", build_name)
+    if match is not None:
+        return match.group(1)
+
+
+def get_previous_erratum(current_erratum_id: str | int):
+    build = ET_api_get(f"erratum/{current_erratum_id}/builds_list")
+
+    # Parse RHEL version
+    rhel_version_string = list(build.keys())[0]
+    assert isinstance(rhel_version_string, str)
+    rhel_version = get_RHEL_version(rhel_version_string)
+    if rhel_version is None:
+        raise ValueError("Unknown RHEL version format")
+
+    # Get the package name
+    build_name = list(build[rhel_version_string]["builds"][0].keys())[0]
+    assert isinstance(build_name, str)
+    package_name = get_package_name(build_name)
+    if package_name is None:
+        raise ValueError("Can not find package name from build name")
+
+    # Get all the previous erratum related to this package
+    related_erratum = ET_api_get(f"packages/{package_name}")["data"]["relationships"][
+        "errata"
+    ]
+
+    assert isinstance(related_erratum, list)
+    shipped_erratum = []
+
+    for errata in related_erratum:
+        if errata["status"] != ErrataStatus.SHIPPED_LIVE:
+            continue
+
+        id = errata["id"]
+        cur_build = ET_api_get(f"erratum/{id}/builds_list")
+        cur_rhel_version_string = list(cur_build.keys())[0]
+        assert isinstance(cur_rhel_version_string, str)
+        if cur_rhel_version := get_RHEL_version(cur_rhel_version_string):
+            # Get the errata with same RHEL major version or one major version down (better than nothing)
+            if 0 <= rhel_version.major_version - cur_rhel_version.major_version <= 1:
+                shipped_erratum.append(
+                    (
+                        cur_rhel_version,
+                        datetime.strptime(
+                            errata["actual_ship_date"], "%Y-%m-%dT%H:%M:%SZ"
+                        ).replace(tzinfo=timezone.utc),
+                        id,
+                    )
+                )
+        # We should be able to get the closest version with the most recent release date within the limit
+        if len(shipped_erratum) >= CANDIDATE_ERRATUN_LIMIT:
+            break
+
+    shipped_erratum.sort(reverse=True)
+
+    return get_erratum(shipped_erratum[0][2]) if len(shipped_erratum) > 0 else None
 
 
 class RuleParseError(Exception):

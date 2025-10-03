@@ -602,6 +602,9 @@ async def main() -> None:
 
 if __name__ == "__main__":
     try:
+        # uncomment for debugging
+        # from utils import set_litellm_debug
+        # set_litellm_debug()
         asyncio.run(main())
     except FrameworkError as e:
         traceback.print_exc()

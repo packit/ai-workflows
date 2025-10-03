@@ -130,3 +130,13 @@ async def mcp_tools(
         if filter:
             tools = [t for t in tools if filter(t.name)]
         yield tools
+
+
+def set_litellm_debug() -> None:
+    """Set litellm to print collosal amount of debug information. This CAN LEAK TOKENS to the logs."""
+    # the following two modules call `litellm_debug(False)` on import
+    # import them explicitly now to ensure our call to `litellm_debug()` is not negated later
+    import beeai_framework.adapters.litellm.chat
+    import beeai_framework.adapters.litellm.embedding
+    from beeai_framework.adapters.litellm.utils import litellm_debug
+    litellm_debug(True)

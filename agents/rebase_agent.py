@@ -454,7 +454,11 @@ async def main() -> None:
                     await tasks.set_jira_labels(
                         jira_issue=rebase_data.jira_issue,
                         labels_to_add=[JiraLabels.REBASED.value],
-                        labels_to_remove=[JiraLabels.REBASE_IN_PROGRESS.value],
+                        labels_to_remove=[
+                            JiraLabels.REBASE_IN_PROGRESS.value,
+                            JiraLabels.REBASE_ERRORED.value,
+                            JiraLabels.REBASE_FAILED.value,
+                        ],
                         dry_run=dry_run
                     )
                     await fix_await(redis.lpush(RedisQueues.COMPLETED_REBASE_LIST.value, state.rebase_result.model_dump_json()))

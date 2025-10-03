@@ -473,7 +473,11 @@ async def main() -> None:
                     await tasks.set_jira_labels(
                         jira_issue=backport_data.jira_issue,
                         labels_to_add=[JiraLabels.BACKPORTED.value],
-                        labels_to_remove=[JiraLabels.BACKPORT_IN_PROGRESS.value],
+                        labels_to_remove=[
+                            JiraLabels.BACKPORT_IN_PROGRESS.value,
+                            JiraLabels.BACKPORT_ERRORED.value,
+                            JiraLabels.BACKPORT_FAILED.value,
+                        ],
                         dry_run=dry_run
                     )
                     await redis.lpush(RedisQueues.COMPLETED_BACKPORT_LIST.value, state.backport_result.model_dump_json())

@@ -355,3 +355,219 @@ class ApplyPatchesTool(Tool[ApplyPatchesToolInput, ToolRunOptions, StringToolOut
             raise
         except Exception as e:
             raise ToolError(f"ERROR: {e}") from e
+
+
+class CherryPickCommitToolInput(BaseModel):
+    repo_path: str = Field(description="Path to the upstream repository")
+    commit_hash: str = Field(description="Commit hash to cherry-pick")
+
+
+class CherryPickCommitTool(Tool[CherryPickCommitToolInput, ToolRunOptions, StringToolOutput]):
+    name = "cherry_pick_commit"
+    description = """
+    Cherry-pick a specific commit in the upstream repository.
+    
+    This applies the new fix on top of the existing patches. If there are no conflicts,
+    the commit is applied successfully. If there are conflicts, the tool returns an error
+    with information about the conflicting files so the agent can resolve them.
+    """
+    input_schema = CherryPickCommitToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "upstream", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self, tool_input: CherryPickCommitToolInput, options: ToolRunOptions | None, context: RunContext
+    ) -> StringToolOutput:
+        try:
+            repo_path = Path(tool_input.repo_path)
+            
+            # Verify it's a git repository
+            if not (repo_path / ".git").exists():
+                raise ToolError(f"Not a git repository: {repo_path}")
+            
+            # Try to cherry-pick the commit
+            cmd = ["git", "cherry-pick", tool_input.commit_hash]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            
+            if exit_code == 0:
+                # Success - no conflicts
+                return StringToolOutput(
+                    result=f"Successfully cherry-picked commit {tool_input.commit_hash}"
+                )
+            
+            # Check if it's a conflict or other error
+            cmd = ["git", "status", "--porcelain"]
+            exit_code_status, stdout_status, stderr_status = await run_subprocess(cmd, cwd=repo_path)
+            
+            if exit_code_status == 0 and stdout_status:
+                # Get list of conflicting files
+                conflict_files = []
+                for line in stdout_status.strip().split('\n'):
+                    if line.startswith('UU ') or line.startswith('AA ') or line.startswith('DD '):
+                        # UU = both modified, AA = both added, DD = both deleted
+                        conflict_files.append(line[3:].strip())
+                
+                if conflict_files:
+                    return StringToolOutput(
+                        result=f"Cherry-pick has conflicts in the following files: {', '.join(conflict_files)}. "
+                        f"Resolve the conflicts manually, then use cherry_pick_continue tool. "
+                        f"Git error: {stderr}"
+                    )
+            
+            # Some other error
+            raise ToolError(
+                f"Cherry-pick failed with error: {stderr}. "
+                f"This may indicate the commit doesn't exist or is not compatible. "
+                "Abort cherry-pick approach, use git am workflow."
+            )
+            
+        except ToolError:
+            raise
+        except Exception as e:
+            raise ToolError(f"ERROR: {e}") from e
+
+
+class CherryPickContinueToolInput(BaseModel):
+    repo_path: str = Field(description="Path to the upstream repository")
+
+
+class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, StringToolOutput]):
+    name = "cherry_pick_continue"
+    description = """
+    Continue a cherry-pick operation after conflicts have been resolved.
+    
+    Before calling this tool, all conflicts must be resolved and changes staged with 'git add'.
+    This tool will complete the cherry-pick and create the commit.
+    """
+    input_schema = CherryPickContinueToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "upstream", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self, tool_input: CherryPickContinueToolInput, options: ToolRunOptions | None, context: RunContext
+    ) -> StringToolOutput:
+        try:
+            repo_path = Path(tool_input.repo_path)
+            
+            # Verify it's a git repository
+            if not (repo_path / ".git").exists():
+                raise ToolError(f"Not a git repository: {repo_path}")
+            
+            # Check if there are still conflicts
+            cmd = ["git", "status", "--porcelain"]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            
+            if exit_code != 0:
+                raise ToolError(f"Failed to check git status: {stderr}")
+            
+            # Check for unresolved conflicts
+            for line in stdout.strip().split('\n') if stdout.strip() else []:
+                if line.startswith('UU ') or line.startswith('AA ') or line.startswith('DD '):
+                    conflict_file = line[3:].strip()
+                    raise ToolError(
+                        f"Unresolved conflicts still exist in: {conflict_file}. "
+                        "Resolve all conflicts before continuing."
+                    )
+            
+            # Stage all resolved files
+            cmd = ["git", "add", "-A"]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            
+            if exit_code != 0:
+                raise ToolError(f"Failed to stage resolved files: {stderr}")
+            
+            # Continue the cherry-pick
+            cmd = ["git", "cherry-pick", "--continue"]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            
+            if exit_code != 0:
+                raise ToolError(
+                    f"Failed to continue cherry-pick: {stderr}. "
+                    "Abort cherry-pick approach, use git am workflow."
+                )
+            
+            return StringToolOutput(
+                result="Successfully completed cherry-pick after resolving conflicts"
+            )
+            
+        except ToolError:
+            raise
+        except Exception as e:
+            raise ToolError(f"ERROR: {e}") from e
+
+
+class GeneratePatchFromCommitToolInput(BaseModel):
+    repo_path: str = Field(description="Path to the upstream repository")
+    output_directory: str = Field(description="Directory where to save the generated patch file")
+    patch_filename: str = Field(description="Name for the generated patch file (e.g., 'fix-cve-2024-1234.patch')")
+
+
+class GeneratePatchFromCommitTool(Tool[GeneratePatchFromCommitToolInput, ToolRunOptions, StringToolOutput]):
+    name = "generate_patch_from_commit"
+    description = """
+    Generate a patch file from the most recent commit (the cherry-picked fix).
+    
+    This uses 'git format-patch' to create a proper patch file from the last commit.
+    The patch will include the commit message and all changes.
+    """
+    input_schema = GeneratePatchFromCommitToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "upstream", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self, tool_input: GeneratePatchFromCommitToolInput, options: ToolRunOptions | None, context: RunContext
+    ) -> StringToolOutput:
+        try:
+            repo_path = Path(tool_input.repo_path)
+            output_dir = Path(tool_input.output_directory)
+            
+            # Verify it's a git repository
+            if not (repo_path / ".git").exists():
+                raise ToolError(f"Not a git repository: {repo_path}")
+            
+            # Verify output directory exists
+            if not output_dir.exists():
+                raise ToolError(f"Output directory does not exist: {output_dir}")
+            
+            # Generate patch from HEAD commit using git format-patch
+            # -1 means only the last commit
+            # --stdout outputs to stdout instead of creating a file
+            cmd = ["git", "format-patch", "-1", "HEAD", "--stdout"]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            
+            if exit_code != 0:
+                raise ToolError(f"Failed to generate patch: {stderr}")
+            
+            if not stdout:
+                raise ToolError("Generated patch is empty")
+            
+            # Write the patch to the specified file
+            patch_path = output_dir / tool_input.patch_filename
+            
+            # Check if file already exists
+            if patch_path.exists():
+                raise ToolError(f"Patch file already exists: {patch_path}")
+            
+            with open(patch_path, 'w') as f:
+                f.write(stdout)
+            
+            return StringToolOutput(
+                result=f"Successfully generated patch file: {patch_path.absolute()}"
+            )
+            
+        except ToolError:
+            raise
+        except Exception as e:
+            raise ToolError(f"ERROR: {e}") from e

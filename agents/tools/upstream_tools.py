@@ -10,6 +10,7 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, StringToolOutput, Tool, ToolError, ToolRunOptions
 
+from common.validators import AbsolutePath
 from utils import run_subprocess
 
 
@@ -104,7 +105,7 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
 
 class CloneUpstreamRepositoryToolInput(BaseModel):
     repo_url: str = Field(description="Git clone URL of the upstream repository")
-    clone_directory: str = Field(description="Directory path where to clone the repository")
+    clone_directory: AbsolutePath = Field(description="Absolute directory path where to clone the repository")
 
 
 class CloneUpstreamRepositoryTool(Tool[CloneUpstreamRepositoryToolInput, ToolRunOptions, StringToolOutput]):
@@ -132,8 +133,7 @@ class CloneUpstreamRepositoryTool(Tool[CloneUpstreamRepositoryToolInput, ToolRun
     ) -> StringToolOutput:
         try:
             # Always append -upstream suffix to avoid conflicts with dist-git
-            requested_path = Path(tool_input.clone_directory)
-            clone_path = requested_path.parent / f"{requested_path.name}-upstream"
+            clone_path = tool_input.clone_directory.parent / f"{tool_input.clone_directory.name}-upstream"
             
             # Check if directory already exists
             if clone_path.exists():
@@ -164,7 +164,7 @@ class CloneUpstreamRepositoryTool(Tool[CloneUpstreamRepositoryToolInput, ToolRun
 
 
 class FindBaseCommitToolInput(BaseModel):
-    repo_path: str = Field(description="Path to the cloned upstream repository")
+    repo_path: AbsolutePath = Field(description="Absolute path to the cloned upstream repository")
     version: str = Field(description="Version string to find (e.g., '2.5.3')")
 
 
@@ -194,15 +194,13 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
         self, tool_input: FindBaseCommitToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
         try:
-            repo_path = Path(tool_input.repo_path)
-            
             # Verify it's a git repository
-            if not (repo_path / ".git").exists():
-                raise ToolError(f"Not a git repository: {repo_path}")
+            if not (tool_input.repo_path / ".git").exists():
+                raise ToolError(f"Not a git repository: {tool_input.repo_path}")
             
             # Fetch all tags to ensure we have the latest
             cmd = ["git", "fetch", "--tags"]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
             if exit_code != 0:
                 # Non-fatal, continue anyway (might work with existing tags)
                 pass
@@ -224,7 +222,7 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
             for tag in tag_patterns:
                 # Check if tag exists
                 cmd = ["git", "rev-parse", "--verify", f"refs/tags/{tag}"]
-                exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+                exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
                 
                 if exit_code == 0:
                     found_tag = tag
@@ -233,7 +231,7 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
             if not found_tag:
                 # Get list of available tags for debugging
                 cmd = ["git", "tag", "-l"]
-                exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+                exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
                 
                 available_tags = stdout.strip().split('\n') if stdout.strip() else []
                 tag_info = f"Available tags: {', '.join(available_tags[:10])}" if available_tags else "No tags found in repository"
@@ -249,14 +247,14 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
             
             # Checkout the found tag
             cmd = ["git", "checkout", found_tag]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
             
             if exit_code != 0:
                 raise ToolError(f"Failed to checkout tag {found_tag}: {stderr}")
             
             # Get the commit hash
             cmd = ["git", "rev-parse", "HEAD"]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
             
             if exit_code != 0:
                 raise ToolError(f"Failed to get commit hash: {stderr}")
@@ -274,9 +272,9 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
 
 
 class ApplyPatchesToolInput(BaseModel):
-    repo_path: str = Field(description="Path to the upstream repository where patches will be applied")
+    repo_path: AbsolutePath = Field(description="Absolute path to the upstream repository where patches will be applied")
     patch_files: list[str] = Field(description="List of patch filenames to apply in order")
-    patches_directory: str = Field(description="Directory containing the patch files (usually the dist-git clone)")
+    patches_directory: AbsolutePath = Field(description="Absolute directory path containing the patch files (usually the dist-git clone)")
 
 
 class ApplyPatchesTool(Tool[ApplyPatchesToolInput, ToolRunOptions, StringToolOutput]):
@@ -303,16 +301,13 @@ class ApplyPatchesTool(Tool[ApplyPatchesToolInput, ToolRunOptions, StringToolOut
         self, tool_input: ApplyPatchesToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
         try:
-            repo_path = Path(tool_input.repo_path)
-            patches_dir = Path(tool_input.patches_directory)
-            
             # Verify it's a git repository
-            if not (repo_path / ".git").exists():
-                raise ToolError(f"Not a git repository: {repo_path}")
+            if not (tool_input.repo_path / ".git").exists():
+                raise ToolError(f"Not a git repository: {tool_input.repo_path}")
             
             # Verify patches directory exists
-            if not patches_dir.exists():
-                raise ToolError(f"Patches directory does not exist: {patches_dir}")
+            if not tool_input.patches_directory.exists():
+                raise ToolError(f"Patches directory does not exist: {tool_input.patches_directory}")
             
             if not tool_input.patch_files:
                 return StringToolOutput(
@@ -323,7 +318,7 @@ class ApplyPatchesTool(Tool[ApplyPatchesToolInput, ToolRunOptions, StringToolOut
             
             # Apply each patch in order
             for patch_file in tool_input.patch_files:
-                patch_path = patches_dir / patch_file
+                patch_path = tool_input.patches_directory / patch_file
                 
                 # Check if patch file exists
                 if not patch_path.exists():
@@ -335,7 +330,7 @@ class ApplyPatchesTool(Tool[ApplyPatchesToolInput, ToolRunOptions, StringToolOut
                 
                 # Try to apply the patch with git am
                 cmd = ["git", "am", str(patch_path)]
-                exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+                exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
                 
                 if exit_code != 0:
                     raise ToolError(
@@ -358,7 +353,7 @@ class ApplyPatchesTool(Tool[ApplyPatchesToolInput, ToolRunOptions, StringToolOut
 
 
 class CherryPickCommitToolInput(BaseModel):
-    repo_path: str = Field(description="Path to the upstream repository")
+    repo_path: AbsolutePath = Field(description="Absolute path to the upstream repository")
     commit_hash: str = Field(description="Commit hash to cherry-pick")
 
 
@@ -383,15 +378,13 @@ class CherryPickCommitTool(Tool[CherryPickCommitToolInput, ToolRunOptions, Strin
         self, tool_input: CherryPickCommitToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
         try:
-            repo_path = Path(tool_input.repo_path)
-            
             # Verify it's a git repository
-            if not (repo_path / ".git").exists():
-                raise ToolError(f"Not a git repository: {repo_path}")
+            if not (tool_input.repo_path / ".git").exists():
+                raise ToolError(f"Not a git repository: {tool_input.repo_path}")
             
             # Try to cherry-pick the commit
             cmd = ["git", "cherry-pick", tool_input.commit_hash]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
             
             if exit_code == 0:
                 # Success - no conflicts
@@ -401,7 +394,7 @@ class CherryPickCommitTool(Tool[CherryPickCommitToolInput, ToolRunOptions, Strin
             
             # Check if it's a conflict or other error
             cmd = ["git", "status", "--porcelain"]
-            exit_code_status, stdout_status, stderr_status = await run_subprocess(cmd, cwd=repo_path)
+            exit_code_status, stdout_status, stderr_status = await run_subprocess(cmd, cwd=tool_input.repo_path)
             
             if exit_code_status == 0 and stdout_status:
                 # Get list of conflicting files
@@ -432,7 +425,7 @@ class CherryPickCommitTool(Tool[CherryPickCommitToolInput, ToolRunOptions, Strin
 
 
 class CherryPickContinueToolInput(BaseModel):
-    repo_path: str = Field(description="Path to the upstream repository")
+    repo_path: AbsolutePath = Field(description="Absolute path to the upstream repository")
 
 
 class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, StringToolOutput]):
@@ -455,15 +448,13 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
         self, tool_input: CherryPickContinueToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
         try:
-            repo_path = Path(tool_input.repo_path)
-            
             # Verify it's a git repository
-            if not (repo_path / ".git").exists():
-                raise ToolError(f"Not a git repository: {repo_path}")
+            if not (tool_input.repo_path / ".git").exists():
+                raise ToolError(f"Not a git repository: {tool_input.repo_path}")
             
             # Check if there are still conflicts
             cmd = ["git", "status", "--porcelain"]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
             
             if exit_code != 0:
                 raise ToolError(f"Failed to check git status: {stderr}")
@@ -479,14 +470,14 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
             
             # Stage all resolved files
             cmd = ["git", "add", "-A"]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
             
             if exit_code != 0:
                 raise ToolError(f"Failed to stage resolved files: {stderr}")
             
             # Continue the cherry-pick
             cmd = ["git", "cherry-pick", "--continue"]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
             
             if exit_code != 0:
                 raise ToolError(
@@ -505,8 +496,8 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
 
 
 class GeneratePatchFromCommitToolInput(BaseModel):
-    repo_path: str = Field(description="Path to the upstream repository")
-    output_directory: str = Field(description="Directory where to save the generated patch file")
+    repo_path: AbsolutePath = Field(description="Absolute path to the upstream repository")
+    output_directory: AbsolutePath = Field(description="Absolute directory path where to save the generated patch file")
     patch_filename: str = Field(description="Name for the generated patch file (e.g., 'fix-cve-2024-1234.patch')")
 
 
@@ -530,22 +521,19 @@ class GeneratePatchFromCommitTool(Tool[GeneratePatchFromCommitToolInput, ToolRun
         self, tool_input: GeneratePatchFromCommitToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
         try:
-            repo_path = Path(tool_input.repo_path)
-            output_dir = Path(tool_input.output_directory)
-            
             # Verify it's a git repository
-            if not (repo_path / ".git").exists():
-                raise ToolError(f"Not a git repository: {repo_path}")
+            if not (tool_input.repo_path / ".git").exists():
+                raise ToolError(f"Not a git repository: {tool_input.repo_path}")
             
             # Verify output directory exists
-            if not output_dir.exists():
-                raise ToolError(f"Output directory does not exist: {output_dir}")
+            if not tool_input.output_directory.exists():
+                raise ToolError(f"Output directory does not exist: {tool_input.output_directory}")
             
             # Generate patch from HEAD commit using git format-patch
             # -1 means only the last commit
             # --stdout outputs to stdout instead of creating a file
             cmd = ["git", "format-patch", "-1", "HEAD", "--stdout"]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
             
             if exit_code != 0:
                 raise ToolError(f"Failed to generate patch: {stderr}")
@@ -554,7 +542,7 @@ class GeneratePatchFromCommitTool(Tool[GeneratePatchFromCommitToolInput, ToolRun
                 raise ToolError("Generated patch is empty")
             
             # Write the patch to the specified file
-            patch_path = output_dir / tool_input.patch_filename
+            patch_path = tool_input.output_directory / tool_input.patch_filename
             
             # Check if file already exists
             if patch_path.exists():

@@ -233,7 +233,7 @@ async def test_view(tmp_path):
     )
     result = output.result
     assert result == content
-    output = await tool.run(input=ViewToolInput(path=test_file, view_range=[2, -1])).middleware(
+    output = await tool.run(input=ViewToolInput(path=test_file, offset=1)).middleware(
         GlobalTrajectoryMiddleware(pretty=True)
     )
     result = output.result
@@ -246,7 +246,7 @@ async def test_view(tmp_path):
             """
         )[1:]
     )
-    output = await tool.run(input=ViewToolInput(path=test_file, view_range=[1, 2])).middleware(
+    output = await tool.run(input=ViewToolInput(path=test_file, offset=1, limit=1)).middleware(
         GlobalTrajectoryMiddleware(pretty=True)
     )
     result = output.result
@@ -254,7 +254,6 @@ async def test_view(tmp_path):
         result
         == dedent(
             """
-            Line 1
             Line 2
             """
         )[1:]

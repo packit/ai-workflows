@@ -7,7 +7,7 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 
-from common.validators import NonEmptyString, Range
+from common.validators import NonEmptyString
 from utils import get_absolute_path
 
 
@@ -42,12 +42,14 @@ class CreateTool(Tool[CreateToolInput, ToolRunOptions, StringToolOutput]):
 
 class ViewToolInput(BaseModel):
     path: Path = Field(description="Path to a file or directory to view")
-    view_range: Range | None = Field(
-        description="""
-        List of two integers specifying the start and end line numbers to view.
-        Line numbers are 1-indexed, and -1 for the end line means read to the end of the file.
-        This argument only applies when viewing files, not directories.
-        """,
+    offset: int | None = Field(
+        description="For text files only: 0-based line number to start viewing from",
+        ge=0,
+        default=None,
+    )
+    limit: int | None = Field(
+        description="For text files only: Maximum number of lines to view",
+        gt=0,
         default=None,
     )
 
@@ -73,11 +75,12 @@ class ViewTool(Tool[ViewToolInput, ToolRunOptions, StringToolOutput]):
         try:
             if path.is_file():
                 content = await asyncio.to_thread(path.read_text)
-                if tool_input.view_range is not None:
-                    start, end = tool_input.view_range
-                    lines = content.splitlines(keepends=True)
-                    content = "".join(lines[start - 1 : None if end < 0 else end])
-                return StringToolOutput(result=content)
+                lines = content.splitlines(keepends=True)
+                start = tool_input.offset
+                end = None
+                if tool_input.limit is not None:
+                    end = (start or 0) + tool_input.limit
+                return StringToolOutput(result="".join(lines[start:end]))
             return StringToolOutput(result="\n".join(e.name for e in path.iterdir()) + "\n")
         except Exception as e:
             raise ToolError(f"Failed to view path: {e}") from e
@@ -159,9 +162,7 @@ class InsertAfterSubstringTool(Tool[InsertAfterSubstringToolInput, ToolRunOption
 
 class StrReplaceToolInput(BaseModel):
     file: Path = Field(description="Path to a file to edit")
-    old_string: str = Field(
-        description="Text to replace (must match exactly, including whitespace and indentation)"
-    )
+    old_string: str = Field(description="The exact literal text to replace")
     new_string: str = Field(description="New text to insert in place of the old text")
 
 
@@ -169,6 +170,10 @@ class StrReplaceTool(Tool[StrReplaceToolInput, ToolRunOptions, StringToolOutput]
     name = "str_replace"
     description = """
     Replaces a specific string in the specified file with a new string.
+
+    CRITICAL: The `old_string` argument must uniquely identify the single instance to change.
+    It should include at least 3 lines of context before and after the target text,
+    matching whitespace and indentation precisely.
     """
     input_schema = StrReplaceToolInput
 
@@ -184,8 +189,13 @@ class StrReplaceTool(Tool[StrReplaceToolInput, ToolRunOptions, StringToolOutput]
         file_path = get_absolute_path(tool_input.file, self)
         try:
             content = await asyncio.to_thread(file_path.read_text)
-            if tool_input.old_string not in content:
+            if (count := content.count(tool_input.old_string)) == 0:
                 raise ToolError("No replacement was done because the specified text to replace wasn't present")
+            elif count > 1:
+                raise ToolError(
+                    "No replacement was done because the specified text is not unique."
+                    "Please provide more context!"
+                )
             await asyncio.to_thread(
                 file_path.write_text, content.replace(tool_input.old_string, tool_input.new_string)
             )

@@ -11,11 +11,73 @@ from specfile.value_parser import EnclosedMacroSubstitution, MacroSubstitution, 
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import JSONToolOutput, StringToolOutput, Tool, ToolError, ToolRunOptions
 
 from common.constants import BREWHUB_URL
 from common.validators import NonEmptyString
 from utils import get_absolute_path
+
+
+class GetPackageInfoToolInput(BaseModel):
+    spec: Path = Field(description="Path to a spec file")
+
+
+class PackageInfo(BaseModel):
+    """Package information extracted from spec file."""
+    version: str = Field(description="Package version from Version field")
+    patch_files: list[str] = Field(description="List of patch filenames in order (Patch0, Patch1, etc.)")
+
+
+class GetPackageInfoToolOutput(JSONToolOutput[PackageInfo]):
+    pass
+
+
+class GetPackageInfoTool(Tool[GetPackageInfoToolInput, ToolRunOptions, GetPackageInfoToolOutput]):
+    name = "get_package_info"
+    description = """
+    Extract package version and patch files from a spec file.
+    
+    Returns:
+    - version: The package version (from Version: field)
+    - patch_files: List of patch filenames in the order they appear (Patch0:, Patch1:, etc.)
+    
+    This is useful for determining the base version to checkout in upstream repository
+    and which existing patches need to be applied before cherry-picking a new fix.
+    """
+    input_schema = GetPackageInfoToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "specfile", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: GetPackageInfoToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> GetPackageInfoToolOutput:
+        spec_path = get_absolute_path(tool_input.spec, self)
+        
+        try:
+            with Specfile(spec_path) as spec:
+                version = spec.version
+                with spec.patches() as patches:
+                    patch_files = []
+                    for patch in patches:
+                        if patch.location:
+                            patch_files.append(patch.location)
+                
+                return GetPackageInfoToolOutput(
+                    result=PackageInfo(
+                        version=version,
+                        patch_files=patch_files
+                    )
+                )
+                
+        except Exception as e:
+            raise ToolError(f"Failed to extract package info from {spec_path}: {e}") from e
 
 
 class AddChangelogEntryToolInput(BaseModel):

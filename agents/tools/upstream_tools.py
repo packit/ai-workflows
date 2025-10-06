@@ -161,3 +161,113 @@ class CloneUpstreamRepositoryTool(Tool[CloneUpstreamRepositoryToolInput, ToolRun
             raise
         except Exception as e:
             raise ToolError(f"ERROR: {e}") from e
+
+
+class FindBaseCommitToolInput(BaseModel):
+    repo_path: str = Field(description="Path to the cloned upstream repository")
+    version: str = Field(description="Version string to find (e.g., '2.5.3')")
+
+
+class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToolOutput]):
+    name = "find_base_commit"
+    description = """
+    Find and checkout a git tag matching the specified version in an upstream repository.
+    
+    This tool tries common tag naming patterns:
+    - v{version} (e.g., v2.5.3)
+    - {version} (e.g., 2.5.3)
+    - release-{version} (e.g., release-2.5.3)
+    - {version}-release (e.g., 2.5.3-release)
+    
+    If a matching tag is found, it checks out that tag and returns the commit hash.
+    If no matching tag is found, it returns an error to trigger fallback to git am approach.
+    """
+    input_schema = FindBaseCommitToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "upstream", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self, tool_input: FindBaseCommitToolInput, options: ToolRunOptions | None, context: RunContext
+    ) -> StringToolOutput:
+        try:
+            repo_path = Path(tool_input.repo_path)
+            
+            # Verify it's a git repository
+            if not (repo_path / ".git").exists():
+                raise ToolError(f"Not a git repository: {repo_path}")
+            
+            # Fetch all tags to ensure we have the latest
+            cmd = ["git", "fetch", "--tags"]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            if exit_code != 0:
+                # Non-fatal, continue anyway (might work with existing tags)
+                pass
+            
+            # Common tag patterns to try
+            tag_patterns = [
+                f"v{tool_input.version}",
+                f"{tool_input.version}",
+                f"release-{tool_input.version}",
+                f"{tool_input.version}-release",
+                f"rel-{tool_input.version}",
+                f"{tool_input.version}.0",  # Sometimes .0 is added
+                f"v{tool_input.version}.0",
+            ]
+            
+            found_tag = None
+            
+            # Try each pattern
+            for tag in tag_patterns:
+                # Check if tag exists
+                cmd = ["git", "rev-parse", "--verify", f"refs/tags/{tag}"]
+                exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+                
+                if exit_code == 0:
+                    found_tag = tag
+                    break
+            
+            if not found_tag:
+                # Get list of available tags for debugging
+                cmd = ["git", "tag", "-l"]
+                exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+                
+                available_tags = stdout.strip().split('\n') if stdout.strip() else []
+                tag_info = f"Available tags: {', '.join(available_tags[:10])}" if available_tags else "No tags found in repository"
+                if len(available_tags) > 10:
+                    tag_info += f" (and {len(available_tags) - 10} more)"
+                
+                raise ToolError(
+                    f"Could not find tag matching version {tool_input.version}. "
+                    f"Tried patterns: {', '.join(tag_patterns)}. "
+                    f"{tag_info}. "
+                    "Fallback to git am approach recommended."
+                )
+            
+            # Checkout the found tag
+            cmd = ["git", "checkout", found_tag]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            
+            if exit_code != 0:
+                raise ToolError(f"Failed to checkout tag {found_tag}: {stderr}")
+            
+            # Get the commit hash
+            cmd = ["git", "rev-parse", "HEAD"]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            
+            if exit_code != 0:
+                raise ToolError(f"Failed to get commit hash: {stderr}")
+            
+            commit_hash = stdout.strip()
+            
+            return StringToolOutput(
+                result=f"Successfully checked out tag '{found_tag}' at commit {commit_hash}"
+            )
+            
+        except ToolError:
+            raise
+        except Exception as e:
+            raise ToolError(f"ERROR: {e}") from e

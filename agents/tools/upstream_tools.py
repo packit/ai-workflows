@@ -271,3 +271,87 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
             raise
         except Exception as e:
             raise ToolError(f"ERROR: {e}") from e
+
+
+class ApplyPatchesToolInput(BaseModel):
+    repo_path: str = Field(description="Path to the upstream repository where patches will be applied")
+    patch_files: list[str] = Field(description="List of patch filenames to apply in order")
+    patches_directory: str = Field(description="Directory containing the patch files (usually the dist-git clone)")
+
+
+class ApplyPatchesTool(Tool[ApplyPatchesToolInput, ToolRunOptions, StringToolOutput]):
+    name = "apply_existing_patches"
+    description = """
+    Apply existing patches from the dist-git spec file to the upstream repository.
+    
+    This recreates the current package state in the upstream repository by applying
+    all the patches that are already part of the package. After this, we can cherry-pick
+    the new fix on top.
+    
+    The patches are applied in order using 'git am'. If a patch fails to apply,
+    the tool returns an error indicating which patch failed.
+    """
+    input_schema = ApplyPatchesToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "upstream", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self, tool_input: ApplyPatchesToolInput, options: ToolRunOptions | None, context: RunContext
+    ) -> StringToolOutput:
+        try:
+            repo_path = Path(tool_input.repo_path)
+            patches_dir = Path(tool_input.patches_directory)
+            
+            # Verify it's a git repository
+            if not (repo_path / ".git").exists():
+                raise ToolError(f"Not a git repository: {repo_path}")
+            
+            # Verify patches directory exists
+            if not patches_dir.exists():
+                raise ToolError(f"Patches directory does not exist: {patches_dir}")
+            
+            if not tool_input.patch_files:
+                return StringToolOutput(
+                    result="No patches to apply (patch list is empty)"
+                )
+            
+            applied_patches = []
+            
+            # Apply each patch in order
+            for patch_file in tool_input.patch_files:
+                patch_path = patches_dir / patch_file
+                
+                # Check if patch file exists
+                if not patch_path.exists():
+                    raise ToolError(
+                        f"Patch file not found: {patch_path}. "
+                        f"Successfully applied: {', '.join(applied_patches) if applied_patches else 'none'}. "
+                        "Abort cherry-pick approach, use git am workflow."
+                    )
+                
+                # Try to apply the patch with git am
+                cmd = ["git", "am", str(patch_path)]
+                exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+                
+                if exit_code != 0:
+                    raise ToolError(
+                        f"Failed to apply existing patch '{patch_file}' to upstream base version. "
+                        f"Git am error: {stderr}. "
+                        f"Successfully applied: {', '.join(applied_patches) if applied_patches else 'none'}. "
+                        "Abort cherry-pick approach, use git am workflow."
+                    )
+                
+                applied_patches.append(patch_file)
+            
+            return StringToolOutput(
+                result=f"Successfully applied {len(applied_patches)} patches: {', '.join(applied_patches)}"
+            )
+            
+        except ToolError:
+            raise
+        except Exception as e:
+            raise ToolError(f"ERROR: {e}") from e

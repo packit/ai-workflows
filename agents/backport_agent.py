@@ -42,6 +42,7 @@ from common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
+from tools.specfile import GetPackageInfoTool
 from tools.filesystem import GetCWDTool, RemoveTool
 from tools.text import (
     CreateTool,
@@ -50,6 +51,15 @@ from tools.text import (
     StrReplaceTool,
     ViewTool,
     SearchTextTool,
+)
+from tools.upstream_tools import (
+    ApplyPatchesTool,
+    CherryPickCommitTool,
+    CherryPickContinueTool,
+    CloneUpstreamRepositoryTool,
+    ExtractUpstreamRepositoryTool,
+    FindBaseCommitTool,
+    GeneratePatchFromCommitTool,
 )
 from tools.wicked_git import (
     GitLogSearchTool,
@@ -166,6 +176,15 @@ def create_backport_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> 
             GitPatchApplyFinishTool(options=local_tool_options),
             GitLogSearchTool(options=local_tool_options),
             GitPreparePackageSources(options=local_tool_options),
+            # Upstream cherry-pick workflow tools
+            GetPackageInfoTool(options=local_tool_options),
+            ExtractUpstreamRepositoryTool(options=local_tool_options),
+            CloneUpstreamRepositoryTool(options=local_tool_options),
+            FindBaseCommitTool(options=local_tool_options),
+            ApplyPatchesTool(options=local_tool_options),
+            CherryPickCommitTool(options=local_tool_options),
+            CherryPickContinueTool(options=local_tool_options),
+            GeneratePatchFromCommitTool(options=local_tool_options),
         ],
         memory=UnconstrainedMemory(),
         requirements=[

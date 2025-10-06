@@ -1,13 +1,16 @@
 """Tools for working with upstream repositories and fix URLs."""
 
 import re
+from pathlib import Path
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import JSONToolOutput, StringToolOutput, Tool, ToolError, ToolRunOptions
+
+from utils import run_subprocess
 
 
 class ExtractUpstreamRepositoryInput(BaseModel):
@@ -97,3 +100,64 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
             raise
         except Exception as e:
             raise ToolError(f"Error parsing upstream fix URL: {e}") from e
+
+
+class CloneUpstreamRepositoryToolInput(BaseModel):
+    repo_url: str = Field(description="Git clone URL of the upstream repository")
+    clone_directory: str = Field(description="Directory path where to clone the repository")
+
+
+class CloneUpstreamRepositoryTool(Tool[CloneUpstreamRepositoryToolInput, ToolRunOptions, StringToolOutput]):
+    name = "clone_upstream_repository"
+    description = """
+    Clone an upstream git repository to a specified directory.
+    
+    This is used to get a local copy of the upstream repository so we can:
+    - Checkout a specific version/tag
+    - Apply existing patches
+    - Cherry-pick new fixes
+    
+    The directory will be created with '-upstream' suffix automatically to avoid conflicts.
+    """
+    input_schema = CloneUpstreamRepositoryToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "upstream", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self, tool_input: CloneUpstreamRepositoryToolInput, options: ToolRunOptions | None, context: RunContext
+    ) -> StringToolOutput:
+        try:
+            # Always append -upstream suffix to avoid conflicts with dist-git
+            requested_path = Path(tool_input.clone_directory)
+            clone_path = requested_path.parent / f"{requested_path.name}-upstream"
+            
+            # Check if directory already exists
+            if clone_path.exists():
+                raise ToolError(f"Clone directory already exists: {clone_path}")
+            
+            # Create parent directory if needed
+            clone_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Clone the repository
+            cmd = ["git", "clone", tool_input.repo_url, str(clone_path)]
+            exit_code, stdout, stderr = await run_subprocess(cmd)
+            
+            if exit_code != 0:
+                raise ToolError(f"Git clone failed: {stderr}")
+            
+            # Verify the clone was successful
+            if not (clone_path / ".git").exists():
+                raise ToolError(f"Clone completed but .git directory not found in {clone_path}")
+            
+            return StringToolOutput(
+                result=f"Successfully cloned repository to {clone_path.absolute()}"
+            )
+            
+        except ToolError:
+            raise
+        except Exception as e:
+            raise ToolError(f"ERROR: {e}") from e

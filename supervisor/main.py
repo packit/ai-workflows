@@ -117,6 +117,11 @@ def collect(
 @with_http_sessions()
 async def process_once(queue: WorkQueue):
     work_item = await queue.wait_first_ready_work_item()
+
+    # Calling this on every work item is a little inefficient, but it makes
+    # sure that we'll get a new ticket if the old one expires.
+    await init_kerberos_ticket()
+
     if work_item.item_type == WorkItemType.PROCESS_ISSUE:
         issue = get_issue(work_item.item_data, full=True)
         result = await IssueHandler(issue, dry_run=app_state.dry_run).run()
@@ -132,10 +137,6 @@ async def process_once(queue: WorkQueue):
             result.reschedule_in if result.reschedule_in >= 0 else "never",
         )
     elif work_item.item_type == WorkItemType.PROCESS_ERRATUM:
-        # Calling this on every work item is a little inefficient, but it makes
-        # sure that we'll get a new ticket if the old one expires.
-        await init_kerberos_ticket()
-
         erratum = get_erratum(work_item.item_data)
         result = await ErratumHandler(erratum, dry_run=app_state.dry_run).run()
         if result.reschedule_in >= 0:
@@ -175,6 +176,8 @@ def process(repeat: bool = typer.Option(True)):
 
 @with_http_sessions()
 async def do_process_issue(key: str):
+    await init_kerberos_ticket()
+
     issue = get_issue(key, full=True)
     result = await IssueHandler(issue, dry_run=app_state.dry_run).run()
     logger.info(

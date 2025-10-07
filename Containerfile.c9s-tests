@@ -24,7 +24,7 @@ RUN dnf -y install --allowerasing \
 RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
     && /opt/beeai-venv/bin/pip install --upgrade pip \
     && /opt/beeai-venv/bin/pip install --no-cache-dir \
-       beeai-framework[mcp,duckduckgo]==0.1.43 \
+       beeai-framework[vertexai,mcp,duckduckgo]==0.1.53 \
        openinference-instrumentation-beeai \
        arize-phoenix-otel \
        redis \

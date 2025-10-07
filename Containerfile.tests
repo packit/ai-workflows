@@ -29,6 +29,8 @@ RUN git config --global user.email "jotnar-tests@example.com" \
 ENV PYTHONPATH=/src:$PYTHONPATH
 
 # Install BeeAI Framework and FastMCP
-RUN pip3 install --no-cache-dir beeai-framework fastmcp redis backoff
+RUN pip3 install --no-cache-dir \
+      beeai-framework[vertexai,mcp,duckduckgo]==0.1.53 \
+      fastmcp redis backoff
 
 WORKDIR /src

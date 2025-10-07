@@ -244,6 +244,44 @@ jotnar-bot@IPA.REDHAT.COM    KCM:1000
         with pytest.raises(KerberosError, match="Failed to extract principal from keytab file"):
             await init_kerberos_ticket()
 
+    @pytest.mark.parametrize(
+        ("ccache_name", "path_to_check", "expect_exists_call"),
+        [
+            ("KCM:1000", None, False),
+            ("FILE:/path/to/ccache", "/path/to/ccache", True),
+            ("/path/to/ccache", "/path/to/ccache", True),
+        ],
+        ids=["kcm_type", "file_type", "legacy_format"],
+    )
+    @pytest.mark.asyncio
+    async def test_krb5ccname_type_handling(
+        self, monkeypatch, ccache_name, path_to_check, expect_exists_call
+    ):
+        """Test that KRB5CCNAME is handled correctly for different types."""
+        klist_output = b"""Principal name                 Cache name
+--------------                 ----------
+user@EXAMPLE.COM         KCM:1000
+"""
+        mock_proc = flexmock(returncode=0)
+        mock_proc.should_receive("communicate").and_return(
+            AsyncMock(return_value=(klist_output, b""))()
+        )
+
+        monkeypatch.delenv("KEYTAB_FILE", raising=False)
+        monkeypatch.setenv("KRB5CCNAME", ccache_name)
+
+        if expect_exists_call:
+            flexmock(os.path).should_receive("exists").with_args(path_to_check).and_return(True)
+        else:
+            flexmock(os.path).should_receive("exists").never()
+
+        flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
+            "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        ).and_return(AsyncMock(return_value=mock_proc)())
+
+        result = await init_kerberos_ticket()
+        assert result == "user@EXAMPLE.COM"
+
     @pytest.mark.asyncio
     async def test_multiple_valid_principals_returns_first(self, monkeypatch):
         """Test that first valid principal is returned when multiple exist."""

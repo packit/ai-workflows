@@ -127,7 +127,19 @@ async def init_kerberos_ticket() -> str:
     if not ccache_file:
         raise KerberosError("KRB5CCNAME environment variable is not set")
 
-    if os.path.exists(ccache_file):
+    # Parse KRB5CCNAME which can be in the format TYPE:value (e.g., FILE:/path, KCM:1000)
+    # Only check file existence if TYPE is FILE and the file doesn't exist
+    should_run_klist = True
+    if ":" in ccache_file:
+        cache_type, cache_path = ccache_file.split(":", 1)
+        if cache_type == "FILE" and not os.path.exists(cache_path):
+            should_run_klist = False
+    else:
+        # Legacy format without type prefix - treat as a file path
+        if not os.path.exists(ccache_file):
+            should_run_klist = False
+
+    if should_run_klist:
         proc = await asyncio.create_subprocess_exec(
             "klist",
             "-l",

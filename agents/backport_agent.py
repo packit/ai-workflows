@@ -95,27 +95,90 @@ def get_instructions() -> str:
       2. Use the `git_prepare_package_sources` tool to prepare package sources in directory <UNPACKED_SOURCES>
          for application of the upstream fix.
 
-      3. Backport the <UPSTREAM_FIX> patch:
+      3. Determine which backport approach to use:
 
-         - Use the `git_patch_apply` tool, with an absolute path to the patch, to apply the patch.
-         - Resolve all conflicts and leave the repository in a dirty state. Delete all *.rej files.
-         - Use the `git_apply_finish` tool to finish the patch application.
+         A. CHERRY-PICK WORKFLOW (Preferred - try this first if <UPSTREAM_FIX> is a URL):
+            
+            IMPORTANT: This workflow uses TWO separate git repositories:
+            - <UNPACKED_SOURCES>: The dist-git repository (from Step 2) containing the spec file and existing patches
+            - <UPSTREAM_REPO>: A temporary upstream repository clone (created in step 3c with -upstream suffix)
+            
+            When to use this workflow:
+            - <UPSTREAM_FIX> is a URL (http:// or https://)
+            - URLs ending in .patch or .diff are still URLs (e.g., https://github.com/.../commit/abc123.patch)
+            - If <UPSTREAM_FIX> is a local file path (not a URL), skip to approach B
+            
+            3a. Extract upstream repository information:
+                - Use `extract_upstream_repository` tool with the upstream fix URL
+                - This extracts the repository URL and commit hash
+                - If extraction fails, fall back to approach B
+            
+            3b. Get package information from dist-git:
+                - Use `get_package_info` tool with the spec file path from <UNPACKED_SOURCES>
+                - This provides the package version and list of existing patch filenames
+            
+            3c. Clone the upstream repository to a SEPARATE directory:
+                - Use `clone_upstream_repository` tool with:
+                  * repository_url: from step 3a
+                  * clone_directory: use <UNPACKED_SOURCES> path
+                  * Tool automatically creates <UNPACKED_SOURCES>-upstream as <UPSTREAM_REPO>
+                - Steps 3d-3g work in <UPSTREAM_REPO>, NOT in <UNPACKED_SOURCES>
+            
+            3d. Find and checkout the base version in upstream:
+                - Use `find_base_commit` tool with <UPSTREAM_REPO> path and package version from 3b
+                - This checks out the tag matching the package version in <UPSTREAM_REPO>
+                - If no matching tag found, fall back to approach B
+            
+            3e. Apply existing patches from dist-git to upstream:
+                - Use `apply_patches` tool with:
+                  * repo_path: <UPSTREAM_REPO> (where to apply)
+                  * patches_directory: <UNPACKED_SOURCES> (where patch files are located)
+                  * patch_files: list from step 3b
+                - This recreates the current package state in <UPSTREAM_REPO>
+                - If any patch fails to apply, immediately fall back to approach B
+            
+            3f. Cherry-pick the fix in upstream:
+                - Use `cherry_pick_commit` tool with <UPSTREAM_REPO> path and commit hash from 3a
+                - If there are conflicts:
+                  * View the conflicting files in <UPSTREAM_REPO> using `view` tool
+                  * Resolve conflicts by editing files in <UPSTREAM_REPO> with `str_replace` tool
+                  * Delete conflict markers and choose the correct resolution
+                  * Use `cherry_pick_continue` tool on <UPSTREAM_REPO> to complete
+                - If cherry-pick fails with an error (not conflicts), fall back to approach B
+            
+            3g. Generate the final patch file from upstream:
+                - Use `generate_patch_from_commit` tool on <UPSTREAM_REPO>
+                - Specify output_directory as the dist-git repository root (parent of <UNPACKED_SOURCES>)
+                - Use a descriptive name (e.g., RHEL-xxxxx.patch)
+                - This patch file is now ready to be added to the spec file
+            
+            3h. The cherry-pick workflow is complete! The generated patch file contains the cleanly
+                cherry-picked fix. Continue with steps 4-6 below to add this patch to the spec file,
+                verify it with `centpkg prep`, and build the SRPM.
+                
+                Note: You do NOT need to apply this patch to <UNPACKED_SOURCES>. The patch file
+                will be automatically applied during the RPM build process when you run `centpkg prep`.
 
-      4. Once there are no more conflicts, use the `git_patch_create` tool with <UPSTREAM_FIX>
-         as an argument to update the patch file.
+         B. GIT AM WORKFLOW (Fallback approach):
+            
+            3a. Backport the <UPSTREAM_FIX> patch:
+                - Use the `git_patch_apply` tool, with an absolute path to the patch, to apply the patch.
+                - Resolve all conflicts and leave the repository in a dirty state. Delete all *.rej files.
+                - Use the `git_apply_finish` tool to finish the patch application.
+            
+            3b. Once there are no more conflicts, use the `git_patch_create` tool with <UPSTREAM_FIX>
+                as an argument to update the patch file.
 
-      5. Update the spec file. Add a new `Patch` tag pointing to the <UPSTREAM_FIX> patch file.
+      4. Update the spec file. Add a new `Patch` tag pointing to the <UPSTREAM_FIX> patch file.
          Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
          make sure it has the highest number. Make sure the patch is applied in the "%prep" section
          and the `-p` argument is correct.
 
-      6. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
-
-      7. Run `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` to see if the new patch
+      5. Run `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` to see if the new patch
          applies cleanly. When `prep` command finishes with "exit 0", it's a success. Ignore errors from
          libtoolize that warn about newer files: "use '--force' to overwrite".
 
-      8. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+      6. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
 
 
       General instructions:
@@ -128,6 +191,10 @@ def get_instructions() -> str:
       - Apply all changes that modify the core library of the package, and all binaries, manpages, and user-facing documentation.
       - For more information how the package is being built, inspect the RPM spec file and read sections `%prep` and `%build`.
       - If there is a complex conflict, you are required to properly resolve it by applying the core functionality of the proposed patch.
+      - When a tool explicitly says "Abort cherry-pick approach, use git am workflow", immediately switch to approach B.
+      - When using the cherry-pick workflow, you have access to <UPSTREAM_REPO> (the cloned upstream repository).
+        You can explore it to find clues for resolving conflicts: examine commit history, related changes,
+        documentation, test files, or similar fixes that might help understand the proper resolution.
       - Never apply the patches yourself, always use the `git_patch_apply` tool.
       - Never run `git am --skip`, always use the `git_apply_finish` tool instead.
       - Never abort the existing git am session.

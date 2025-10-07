@@ -120,8 +120,8 @@ def get_instructions() -> str:
             3c. Clone the upstream repository to a SEPARATE directory:
                 - Use `clone_upstream_repository` tool with:
                   * repository_url: from step 3a
-                  * clone_directory: use <UNPACKED_SOURCES> path
-                  * Tool automatically creates <UNPACKED_SOURCES>-upstream as <UPSTREAM_REPO>
+                  * clone_directory: {{local_clone}} (the dist-git repository root)
+                  * Tool automatically creates {{local_clone}}-upstream as <UPSTREAM_REPO>
                 - Steps 3d-3g work in <UPSTREAM_REPO>, NOT in <UNPACKED_SOURCES>
             
             3d. Find and checkout the base version in upstream:
@@ -132,7 +132,7 @@ def get_instructions() -> str:
             3e. Apply existing patches from dist-git to upstream:
                 - Use `apply_patches` tool with:
                   * repo_path: <UPSTREAM_REPO> (where to apply)
-                  * patches_directory: <UNPACKED_SOURCES> (where patch files are located)
+                  * patches_directory: {{local_clone}} (dist-git root where patch files are located)
                   * patch_files: list from step 3b
                 - This recreates the current package state in <UPSTREAM_REPO>
                 - If any patch fails to apply, immediately fall back to approach B
@@ -148,7 +148,7 @@ def get_instructions() -> str:
             
             3g. Generate the final patch file from upstream:
                 - Use `generate_patch_from_commit` tool on <UPSTREAM_REPO>
-                - Specify output_directory as the dist-git repository root (parent of <UNPACKED_SOURCES>)
+                - Specify output_directory as {{local_clone}} (the dist-git repository root)
                 - Use a descriptive name (e.g., RHEL-xxxxx.patch)
                 - This patch file is now ready to be added to the spec file
             
@@ -161,13 +161,15 @@ def get_instructions() -> str:
 
          B. GIT AM WORKFLOW (Fallback approach):
             
-            3a. Backport the <UPSTREAM_FIX> patch:
-                - Use the `git_patch_apply` tool, with an absolute path to the patch, to apply the patch.
+            Note: For this workflow, use the pre-downloaded patch file at {{local_clone}}/{{jira_issue}}.patch
+            
+            3a. Backport the patch:
+                - Use the `git_patch_apply` tool with the patch file: {{local_clone}}/{{jira_issue}}.patch
                 - Resolve all conflicts and leave the repository in a dirty state. Delete all *.rej files.
                 - Use the `git_apply_finish` tool to finish the patch application.
             
-            3b. Once there are no more conflicts, use the `git_patch_create` tool with <UPSTREAM_FIX>
-                as an argument to update the patch file.
+            3b. Once there are no more conflicts, use the `git_patch_create` tool with the patch file path
+                {{local_clone}}/{{jira_issue}}.patch to update the patch file.
 
       4. Update the spec file. Add a new `Patch` tag pointing to the <UPSTREAM_FIX> patch file.
          Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
@@ -207,7 +209,7 @@ def get_prompt() -> str:
       {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
       {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
       {{^build_error}}
-      Backport upstream fix {{local_clone}}/{{jira_issue}}.patch.
+      Backport upstream fix {{upstream_fix}}.
       Unpacked upstream sources are in {{unpacked_sources}}.
       {{/build_error}}
       {{#build_error}}
@@ -370,6 +372,7 @@ async def main() -> None:
                             dist_git_branch=state.dist_git_branch,
                             jira_issue=state.jira_issue,
                             cve_id=state.cve_id,
+                            upstream_fix=state.upstream_fix,
                             build_error=state.build_error,
                         ),
                     ),

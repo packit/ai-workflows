@@ -78,31 +78,6 @@ async def test_run_shell_command(command, exit_code, stdout, stderr):
     assert result.stderr == stderr
 
 
-@pytest.fixture
-def minimal_spec(tmp_path):
-    spec = tmp_path / "minimal.spec"
-    spec.write_text(
-        dedent(
-            """
-            Name:           test
-            Version:        0.1
-            Release:        2%{?dist}
-            Summary:        Test package
-
-            License:        MIT
-
-            %description
-            Test package
-
-            %changelog
-            * Thu Jun 07 2018 Nikola Forró <nforro@redhat.com> - 0.1-1
-            - first version
-            """
-        )
-    )
-    return spec
-
-
 @pytest.mark.asyncio
 async def test_add_changelog_entry(minimal_spec):
     content = ["- some change", "  second line"]

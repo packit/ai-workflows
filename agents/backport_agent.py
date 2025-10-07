@@ -161,8 +161,18 @@ def create_backport_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> 
 
 
 def get_unpacked_sources(local_clone: Path, package: str) -> Path:
+    """
+    Get a path to the root of extracted archive directory tree (referenced as TLD
+    in RPM documentation) for a given package.
+
+    That's the place where we'll initiate the backporting process.
+    """
     with Specfile(local_clone / f"{package}.spec") as spec:
         buildsubdir = spec.expand("%{buildsubdir}")
+    if "/" in buildsubdir:
+        # Sooner or later we'll run into a package where this will break. Sorry.
+        # More details: https://github.com/packit/jotnar/issues/217
+        buildsubdir = buildsubdir.split("/")[0]
     sources_dir = local_clone / buildsubdir
 
     if not sources_dir.exists():

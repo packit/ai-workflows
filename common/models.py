@@ -95,6 +95,7 @@ class BackportInputSchema(BaseModel):
     dist_git_branch: str = Field(description="Git branch in dist-git to be updated")
     jira_issue: str = Field(description="Jira issue to reference as resolved")
     cve_id: str | None = Field(default=None, description="CVE ID if the jira issue is a CVE")
+    upstream_fix: str = Field(description="URL to the upstream fix (commit URL or patch URL)")
     build_error: str | None = Field(description="Error encountered during package build")
 
 

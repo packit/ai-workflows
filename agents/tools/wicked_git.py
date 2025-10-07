@@ -96,16 +96,6 @@ async def find_rej_files(repository_path: AbsolutePath) -> list[str]:
     return []
 
 
-async def git_am_show_current_patch(repository_path: AbsolutePath) -> str:
-    cmd = ["git", "am", "--show-current-patch=diff"]
-    exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repository_path)
-    if exit_code != 0:
-        raise ToolError(f"Git command failed: {stderr}")
-    if stdout:
-        return stdout
-    return ""
-
-
 async def discover_patch_p(patch_file_path: AbsolutePath, repository_path: AbsolutePath) -> int:
     """
     Process the given patch file and figure out with which `-p` value the patch should be applied
@@ -179,7 +169,6 @@ class GitPatchApplyTool(Tool[GitPatchApplyToolInput, ToolRunOptions, StringToolO
                     f"stdout: {stdout}\n"
                     f"stderr: {stderr}\n"
                     f"Reject files: {await find_rej_files(tool_input.repository_path)}\n"
-                    f"Current patch: {await git_am_show_current_patch(tool_input.repository_path)}"
                 )
             return StringToolOutput(result="Successfully applied the patch.")
         except Exception as e:
@@ -274,7 +263,6 @@ class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions,
                         f"stdout: {stdout}\n"
                         f"stderr: {stderr}\n"
                         f"Reject files: {await find_rej_files(tool_input.repository_path)}\n"
-                        f"Current patch: {await git_am_show_current_patch(tool_input.repository_path)}"
                     )
                 elif "No changes - did you forget" in stdout:
                     exit_code, stdout, stderr = await run_subprocess(
@@ -287,7 +275,6 @@ class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions,
                             f"stdout: {stdout}\n"
                             f"stderr: {stderr}\n"
                             f"Reject files: {await find_rej_files(tool_input.repository_path)}\n"
-                            f"Current patch: {await git_am_show_current_patch(tool_input.repository_path)}"
                         )
                 else:
                     raise ToolError(f"Command git-am failed: {stderr} out={stdout}")

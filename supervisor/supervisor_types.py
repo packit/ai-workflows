@@ -54,6 +54,8 @@ class Erratum(BaseModel):
     synopsis: str
     status: ErrataStatus
     all_issues_release_pending: bool
+    group_id: int
+    publish_date: datetime | None
     last_status_transition_timestamp: datetime
 
 class FullErratum(Erratum):

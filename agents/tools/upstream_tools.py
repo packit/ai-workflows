@@ -1,8 +1,11 @@
 """Tools for working with upstream repositories and fix URLs."""
 
+import json
 import re
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 from pydantic import BaseModel, Field
 
@@ -32,12 +35,14 @@ class ExtractUpstreamRepositoryOutput(JSONToolOutput[UpstreamRepository]):
 class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRunOptions, ExtractUpstreamRepositoryOutput]):
     name = "extract_upstream_repository"
     description = """
-    Extract upstream repository URL and commit hash from a commit URL.
+    Extract upstream repository URL and commit hash from a commit or pull request URL.
     
     Supports common formats:
-    - GitHub/GitLab: https://domain.com/owner/repo/commit/hash or /-/commit/hash
+    - GitHub/GitLab commit: https://domain.com/owner/repo/commit/hash or /-/commit/hash
+    - GitHub/GitLab PR: https://domain.com/owner/repo/pull/123 or /merge_requests/123
     - Query param formats: ?id=hash or ?h=hash (for cgit/gitweb)
     
+    For pull requests, fetches the head commit SHA from the PR.
     Returns the git clone URL and commit hash needed for cherry-picking.
     """
     input_schema = ExtractUpstreamRepositoryInput
@@ -54,40 +59,93 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
         try:
             parsed = urlparse(tool_input.upstream_fix_url)
             
-            # Try to find commit hash - first in path, then in query params
-            commit_hash = None
+            # Check if this is a pull request URL
+            pr_match = re.search(r'/pull/(\d+)(?:\.patch)?', parsed.path)
+            mr_match = re.search(r'/merge_requests/(\d+)(?:\.patch)?', parsed.path)
             
-            # Pattern 1: /commit/hash or /-/commit/hash in the path
-            commit_match = re.search(r'/(?:-/)?commit(?:s)?/([a-f0-9]{7,40})(?:\.patch)?', parsed.path)
-            if commit_match:
-                commit_hash = commit_match.group(1)
-            
-            # Pattern 2: query parameters (?id=hash or &h=hash for cgit/gitweb)
-            if not commit_hash and parsed.query:
-                query_match = re.search(r'(?:id|h)=([a-f0-9]{7,40})', parsed.query)
-                if query_match:
-                    commit_hash = query_match.group(1)
-            
-            if not commit_hash:
-                raise ToolError(f"Could not extract commit hash from URL: {tool_input.upstream_fix_url}")
-            
-            # Extract repository path (everything before /commit or /-/commit)
-            repo_match = re.match(r'(.*?)(?:/(?:-/)?commit)', parsed.path)
-            if not repo_match:
-                # For query-based URLs, try to extract repo from ?p= parameter
-                repo_query_match = re.search(r'[?&]p=([^;&]+)', parsed.query)
-                if repo_query_match:
-                    repo_path = repo_query_match.group(1)
+            if pr_match or mr_match:
+                # Handle GitHub Pull Request or GitLab Merge Request
+                pr_number = pr_match.group(1) if pr_match else mr_match.group(1)
+                
+                # Extract owner/repo from path
+                if pr_match:
+                    repo_path_match = re.match(r'/([\w\-\.]+)/([\w\-\.]+)/pull/', parsed.path)
                 else:
-                    raise ToolError(f"Could not extract repository path from URL: {tool_input.upstream_fix_url}")
+                    repo_path_match = re.match(r'/([\w\-\.]+)/([\w\-\.]+)/-/merge_requests/', parsed.path)
+                
+                if not repo_path_match:
+                    raise ToolError(f"Could not extract repository path from PR/MR URL: {tool_input.upstream_fix_url}")
+                
+                owner, repo = repo_path_match.group(1), repo_path_match.group(2)
+                
+                # Fetch PR/MR information to get the head commit
+                if pr_match:
+                    # GitHub API
+                    api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
+                else:
+                    # GitLab API
+                    api_url = f"https://{parsed.netloc}/api/v4/projects/{owner}%2F{repo}/merge_requests/{pr_number}"
+                
+                try:
+                    req = Request(api_url)
+                    req.add_header('Accept', 'application/json')
+                    req.add_header('User-Agent', 'RHEL-Backport-Agent')
+                    
+                    with urlopen(req, timeout=10) as response:
+                        data = json.loads(response.read().decode('utf-8'))
+                        
+                        # Extract commit hash from API response
+                        if pr_match:
+                            # GitHub: get head.sha
+                            commit_hash = data['head']['sha']
+                        else:
+                            # GitLab: get sha
+                            commit_hash = data['sha']
+                        
+                except (HTTPError, URLError, KeyError) as e:
+                    raise ToolError(
+                        f"Failed to fetch PR/MR information from {api_url}. "
+                        f"The PR/MR might be private, deleted, or the API is unavailable. Error: {e}"
+                    )
+                
+                # Construct repository URL
+                repo_url = f"https://{parsed.netloc}/{owner}/{repo}.git"
+                
             else:
-                repo_path = repo_match.group(1).strip('/')
-            
-            # Construct clone URL
-            scheme = parsed.scheme or 'https'
-            repo_url = f"{scheme}://{parsed.netloc}/{repo_path}"
-            if not repo_url.endswith('.git'):
-                repo_url += '.git'
+                # Handle regular commit URLs
+                commit_hash = None
+                
+                # Pattern 1: /commit/hash or /-/commit/hash in the path
+                commit_match = re.search(r'/(?:-/)?commit(?:s)?/([a-f0-9]{7,40})(?:\.patch)?', parsed.path)
+                if commit_match:
+                    commit_hash = commit_match.group(1)
+                
+                # Pattern 2: query parameters (?id=hash or &h=hash for cgit/gitweb)
+                if not commit_hash and parsed.query:
+                    query_match = re.search(r'(?:id|h)=([a-f0-9]{7,40})', parsed.query)
+                    if query_match:
+                        commit_hash = query_match.group(1)
+                
+                if not commit_hash:
+                    raise ToolError(f"Could not extract commit hash from URL: {tool_input.upstream_fix_url}")
+                
+                # Extract repository path (everything before /commit or /-/commit)
+                repo_match = re.match(r'(.*?)(?:/(?:-/)?commit)', parsed.path)
+                if not repo_match:
+                    # For query-based URLs, try to extract repo from ?p= parameter
+                    repo_query_match = re.search(r'[?&]p=([^;&]+)', parsed.query)
+                    if repo_query_match:
+                        repo_path = repo_query_match.group(1)
+                    else:
+                        raise ToolError(f"Could not extract repository path from URL: {tool_input.upstream_fix_url}")
+                else:
+                    repo_path = repo_match.group(1).strip('/')
+                
+                # Construct clone URL
+                scheme = parsed.scheme or 'https'
+                repo_url = f"{scheme}://{parsed.netloc}/{repo_path}"
+                if not repo_url.endswith('.git'):
+                    repo_url += '.git'
             
             return ExtractUpstreamRepositoryOutput(
                 result=UpstreamRepository(
@@ -286,7 +344,7 @@ class ApplyPatchesTool(Tool[ApplyPatchesToolInput, ToolRunOptions, StringToolOut
     all the patches that are already part of the package. After this, we can cherry-pick
     the new fix on top.
     
-    The patches are applied in order using 'git am'. If a patch fails to apply,
+    The patches are applied in order using 'git apply' and committed. If a patch fails to apply,
     the tool returns an error indicating which patch failed.
     """
     input_schema = ApplyPatchesToolInput
@@ -328,17 +386,32 @@ class ApplyPatchesTool(Tool[ApplyPatchesToolInput, ToolRunOptions, StringToolOut
                         "Abort cherry-pick approach, use git am workflow."
                     )
                 
-                # Try to apply the patch with git am
-                cmd = ["git", "am", str(patch_path)]
+                # Try to apply the patch with git apply and commit
+                # Use git apply instead of git am because dist-git patches can be plain diffs, not mbox format
+                cmd = ["git", "apply", str(patch_path)]
                 exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
                 
                 if exit_code != 0:
                     raise ToolError(
                         f"Failed to apply existing patch '{patch_file}' to upstream base version. "
-                        f"Git am error: {stderr}. "
+                        f"Git apply error: {stderr}. "
                         f"Successfully applied: {', '.join(applied_patches) if applied_patches else 'none'}. "
                         "Abort cherry-pick approach, use git am workflow."
                     )
+                
+                # Stage the changes
+                cmd = ["git", "add", "-A"]
+                exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
+                
+                if exit_code != 0:
+                    raise ToolError(f"Failed to stage changes after applying {patch_file}: {stderr}")
+                
+                # Commit the patch
+                cmd = ["git", "commit", "-m", f"Apply {patch_file}"]
+                exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
+                
+                if exit_code != 0:
+                    raise ToolError(f"Failed to commit patch {patch_file}: {stderr}")
                 
                 applied_patches.append(patch_file)
             

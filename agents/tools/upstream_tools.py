@@ -455,6 +455,27 @@ class CherryPickCommitTool(Tool[CherryPickCommitToolInput, ToolRunOptions, Strin
             if not (tool_input.repo_path / ".git").exists():
                 raise ToolError(f"Not a git repository: {tool_input.repo_path}")
             
+            # Check if commit exists locally
+            cmd = ["git", "cat-file", "-t", tool_input.commit_hash]
+            exit_code_check, _, _ = await run_subprocess(cmd, cwd=tool_input.repo_path)
+            
+            # If commit doesn't exist, try to fetch it
+            if exit_code_check != 0:
+                # Try to fetch the specific commit from origin
+                cmd = ["git", "fetch", "origin", tool_input.commit_hash]
+                exit_code_fetch, stdout_fetch, stderr_fetch = await run_subprocess(cmd, cwd=tool_input.repo_path)
+                
+                # Check again if commit exists after fetch
+                cmd = ["git", "cat-file", "-t", tool_input.commit_hash]
+                exit_code_check2, _, _ = await run_subprocess(cmd, cwd=tool_input.repo_path)
+                
+                if exit_code_check2 != 0:
+                    raise ToolError(
+                        f"Commit {tool_input.commit_hash} not found in repository even after fetch attempt. "
+                        f"Fetch result: {stderr_fetch if exit_code_fetch != 0 else 'succeeded but commit still unavailable'}. "
+                        "Abort cherry-pick approach, use git am workflow."
+                    )
+            
             # Try to cherry-pick the commit
             cmd = ["git", "cherry-pick", tool_input.commit_hash]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)

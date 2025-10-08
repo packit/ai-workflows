@@ -54,6 +54,11 @@ class IssueHandler(WorkItemHandler):
 
         logger.info("Running workflow for issue %s", issue.url)
 
+        if "jotnar_needs_attention" in issue.labels:
+            return self.resolve_remove_work_item(
+                "Issue has the jotnar_needs_attention label"
+            )
+
         if issue.fixed_in_build is None:
             return self.resolve_remove_work_item("Issue has no fixed_in_build")
 

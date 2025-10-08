@@ -27,6 +27,13 @@ def get_instructions() -> str:
       just return the error message. Otherwise, start with `builder-live.log` and try to identify
       the build failure. If not found, try the same with `root.log`. Summarize the findings
       and return them as `error`.
+
+
+      General instructions:
+
+      - Always perform the build, even if you have already built a SRPM with the same name.
+      - Your job is to build a package and analyze build failures if necessary, nothing else.
+        Do not run any commands except for those needed to examine the downloaded log files.
     """
 
 

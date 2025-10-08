@@ -91,6 +91,7 @@ class Issue(BaseModel):
     summary: str
     components: list[str]
     status: IssueStatus
+    labels: list[str]
     fix_versions: list[str]
     errata_link: Optional[str]  # RHEL only
     fixed_in_build: str | None = None  # RHEL only

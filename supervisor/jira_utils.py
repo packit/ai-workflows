@@ -124,6 +124,7 @@ CURRENT_ISSUES_JQL = """
 project = RHEL AND AssignedTeam = rhel-jotnar
 AND status in ('New', 'In Progress', 'Integration', 'Release Pending')
 AND 'Fixed in Build' is not EMPTY
+AND labels != jotnar_needs_attention
 """
 
 
@@ -169,6 +170,7 @@ def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
         summary=issue_data["fields"]["summary"],
         status=issue_data["fields"]["status"]["name"],
         components=issue_components,
+        labels=issue_data["fields"]["labels"],
         fix_versions=[v["name"] for v in issue_data["fields"]["fixVersions"]],
         errata_link=errata_link,
         fixed_in_build=custom("Fixed in Build"),
@@ -202,6 +204,7 @@ def _fields(full: bool):
     custom_fields = get_custom_fields()
     base_fields = [
         "components",
+        "labels",
         "summary",
         "status",
         "fixVersions",

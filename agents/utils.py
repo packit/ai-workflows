@@ -21,8 +21,9 @@ from beeai_framework.tools.mcp import MCPTool
 
 
 def get_chat_model() -> ChatModel:
-    return ChatModel.from_name(
-        os.environ["CHAT_MODEL"],
+    chat_model = os.environ["CHAT_MODEL"]
+    model = ChatModel.from_name(
+        chat_model,
         # this the preferred way to set parameters, don't do options=...
         # it was changed in beeai 0.1.48
         ChatModelParameters(
@@ -32,6 +33,10 @@ def get_chat_model() -> ChatModel:
         ),
         timeout=1200,
     )
+    if "gemini" in chat_model:
+        # disable `required` for Gemini models
+        model.tool_choice_support = {"single", "none", "auto"}
+    return model
 
 def get_agent_execution_config() -> dict[str, int]:
     return dict(

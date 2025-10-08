@@ -13,7 +13,15 @@ from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 
 from tools.commands import RunShellCommandTool
-from tools.text import CreateTool, InsertTool, InsertAfterSubstringTool, StrReplaceTool, ViewTool
+from tools.filesystem import GetCWDTool
+from tools.text import (
+    CreateTool,
+    InsertTool,
+    InsertAfterSubstringTool,
+    StrReplaceTool,
+    ViewTool,
+    SearchTextTool,
+)
 from utils import get_chat_model
 
 
@@ -56,6 +64,8 @@ def create_build_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]
             InsertTool(options=local_tool_options),
             InsertAfterSubstringTool(options=local_tool_options),
             StrReplaceTool(options=local_tool_options),
+            SearchTextTool(options=local_tool_options),
+            GetCWDTool(options=local_tool_options),
         ] + [t for t in mcp_tools if t.name in ["build_package", "download_artifacts"]],
         memory=UnconstrainedMemory(),
         requirements=[

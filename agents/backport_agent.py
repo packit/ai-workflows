@@ -43,7 +43,15 @@ from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.specfile import UpdateReleaseTool
-from tools.text import CreateTool, InsertAfterSubstringTool, InsertTool, StrReplaceTool, ViewTool
+from tools.filesystem import GetCWDTool, RemoveTool
+from tools.text import (
+    CreateTool,
+    InsertAfterSubstringTool,
+    InsertTool,
+    StrReplaceTool,
+    ViewTool,
+    SearchTextTool,
+)
 from tools.wicked_git import (
     GitLogSearchTool,
     GitPatchApplyTool,
@@ -139,6 +147,9 @@ def create_backport_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> 
             InsertTool(options=local_tool_options),
             InsertAfterSubstringTool(options=local_tool_options),
             StrReplaceTool(options=local_tool_options),
+            SearchTextTool(options=local_tool_options),
+            GetCWDTool(options=local_tool_options),
+            RemoveTool(options=local_tool_options),
             GitPatchCreationTool(options=local_tool_options),
             GitPatchApplyTool(options=local_tool_options),
             GitPatchApplyFinishTool(options=local_tool_options),

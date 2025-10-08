@@ -42,7 +42,15 @@ from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.specfile import UpdateReleaseTool
-from tools.text import CreateTool, InsertAfterSubstringTool, InsertTool, StrReplaceTool, ViewTool
+from tools.filesystem import GetCWDTool, RemoveTool
+from tools.text import (
+    CreateTool,
+    InsertAfterSubstringTool,
+    InsertTool,
+    StrReplaceTool,
+    ViewTool,
+    SearchTextTool,
+)
 from triage_agent import RebaseData, ErrorData
 from utils import get_agent_execution_config, get_chat_model, mcp_tools, render_prompt
 
@@ -140,6 +148,9 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
             InsertTool(options=local_tool_options),
             InsertAfterSubstringTool(options=local_tool_options),
             StrReplaceTool(options=local_tool_options),
+            SearchTextTool(options=local_tool_options),
+            GetCWDTool(options=local_tool_options),
+            RemoveTool(options=local_tool_options),
             UpdateReleaseTool(options=local_tool_options),
         ] + [t for t in mcp_tools if t.name == "upload_sources"],
         memory=UnconstrainedMemory(),

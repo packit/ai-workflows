@@ -14,7 +14,15 @@ from beeai_framework.tools.think import ThinkTool
 
 from tools.commands import RunShellCommandTool
 from tools.specfile import AddChangelogEntryTool
-from tools.text import CreateTool, InsertTool, InsertAfterSubstringTool, StrReplaceTool, ViewTool
+from tools.filesystem import GetCWDTool
+from tools.text import (
+    CreateTool,
+    InsertTool,
+    InsertAfterSubstringTool,
+    StrReplaceTool,
+    ViewTool,
+    SearchTextTool,
+)
 from utils import get_chat_model
 
 
@@ -70,6 +78,8 @@ def create_log_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> Requi
             InsertTool(options=local_tool_options),
             InsertAfterSubstringTool(options=local_tool_options),
             StrReplaceTool(options=local_tool_options),
+            SearchTextTool(options=local_tool_options),
+            GetCWDTool(options=local_tool_options),
             AddChangelogEntryTool(options=local_tool_options),
         ],
         memory=UnconstrainedMemory(),

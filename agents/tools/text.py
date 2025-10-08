@@ -1,4 +1,5 @@
 import asyncio
+import re
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -204,3 +205,45 @@ class StrReplaceTool(Tool[StrReplaceToolInput, ToolRunOptions, StringToolOutput]
         except Exception as e:
             raise ToolError(f"Failed to replace text: {e}") from e
         return StringToolOutput(result=f"Successfully replaced the specified text in {file_path}")
+
+
+class SearchTextToolInput(BaseModel):
+    file: Path = Field(description="Path to a file to search in")
+    pattern: str = Field(description="Regular expression pattern to search for")
+
+
+class SearchTextTool(Tool[SearchTextToolInput, ToolRunOptions, StringToolOutput]):
+    name = "search_text"
+    description = """
+    Search for a specific regex pattern in the specified file. Returns lines matching the pattern
+    along with their line numbers. Line numbers are 1-indexed.
+    """
+    input_schema = SearchTextToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "text", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self, tool_input: SearchTextToolInput, options: ToolRunOptions | None, context: RunContext
+    ) -> StringToolOutput:
+        file_path = get_absolute_path(tool_input.file, self)
+        try:
+            pattern = re.compile(tool_input.pattern)
+            content = await asyncio.to_thread(file_path.read_text)
+            result = [
+                f"{num + 1}:{line}"
+                for num, line in enumerate(content.splitlines(keepends=True))
+                if pattern.search(line)
+            ]
+            if not result:
+                raise ToolError("No matches found")
+            return StringToolOutput(result="".join(result))
+        except re.error as e:
+            raise ToolError(f"Invalid regular expression: {e}") from e
+        except ToolError:
+            raise
+        except Exception as e:
+            raise ToolError(f"Failed to search text: {e}") from e

@@ -1,6 +1,7 @@
 import contextlib
 import datetime
 import subprocess
+from pathlib import Path
 from textwrap import dedent
 
 import pytest
@@ -40,7 +41,10 @@ from tools.text import (
     InsertToolInput,
     StrReplaceTool,
     StrReplaceToolInput,
+    SearchTextTool,
+    SearchTextToolInput,
 )
+from tools.filesystem import GetCWDTool, GetCWDToolInput, RemoveTool, RemoveToolInput
 
 
 @pytest.mark.parametrize(
@@ -176,6 +180,34 @@ async def test_update_release(rebase, dist_git_branch, ystream_dist, minimal_spe
         if not rebase:
             minimal_spec.write_text(minimal_spec.read_text().replace("%{?dist}.2", "%{?dist}.1.0.0.hotfix2.rhel12345"))
             assert (await run_and_check(minimal_spec, None, error=True)).endswith("Unable to determine valid release")
+
+
+@pytest.mark.asyncio
+async def test_get_cwd(tmp_path):
+    tool = GetCWDTool(options={"working_directory": tmp_path})
+    output = await tool.run(input=GetCWDToolInput()).middleware(
+        GlobalTrajectoryMiddleware(pretty=True)
+    )
+    result = output.result
+    assert Path(result) == tmp_path
+
+
+@pytest.mark.asyncio
+async def test_remove(tmp_path):
+    test_file = tmp_path / "test.txt"
+    test_file.touch()
+    tool = RemoveTool()
+    output = await tool.run(input=RemoveToolInput(file=test_file)).middleware(
+        GlobalTrajectoryMiddleware(pretty=True)
+    )
+    result = output.result
+    assert result.startswith("Successfully")
+    assert not test_file.is_file()
+    with pytest.raises(ToolError) as e:
+        output = await tool.run(input=RemoveToolInput(file=test_file)).middleware(
+            GlobalTrajectoryMiddleware(pretty=True)
+        )
+    assert e.value.message.startswith("Failed to remove file")
 
 
 @pytest.mark.asyncio
@@ -338,6 +370,44 @@ async def test_str_replace(tmp_path):
             """
         )[1:]
     )
+
+
+@pytest.mark.parametrize(
+    "pattern, expected_output",
+    [
+        (
+            "^Line",
+            "1:Line 1\n2:Line 2\n3:Line 3\n",
+        ),
+        (
+            "2$",
+            "2:Line 2\n",
+        ),
+        (
+            "Line 3",
+            "3:Line 3\n",
+        ),
+        (
+            "somethingelse",
+            None,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_search_text(tmp_path, pattern, expected_output):
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("Line 1\nLine 2\nLine 3\n")
+    tool = SearchTextTool()
+    with (pytest.raises(ToolError) if expected_output is None else contextlib.nullcontext()) as e:
+        output = await tool.run(
+            input=SearchTextToolInput(file=test_file, pattern=pattern)
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    if expected_output is not None:
+        result = output.result
+        assert result == expected_output
+    else:
+        assert e.value.message.endswith("No matches found")
+
 
 @pytest.mark.asyncio
 async def test_git_patch_creation_tool_nonexistent_repo(tmp_path):

@@ -339,9 +339,7 @@ class CommentVisibility(StrEnum):
 CommentSpec = None | str | tuple[str, CommentVisibility]
 
 
-def _add_comment_update(
-    update: dict[str, Any], comment: CommentSpec
-) -> dict[str, Any] | None:
+def _comment_to_dict(comment: CommentSpec) -> dict[str, Any] | None:
     if comment is None:
         return
 
@@ -352,16 +350,36 @@ def _add_comment_update(
         comment_value, visibility = comment
 
     if visibility == CommentVisibility.PUBLIC:
-        comment_update = {"add": {"body": comment_value}}
+        return {"body": comment_value}
     else:
-        comment_update = {
-            "add": {
-                "body": comment_value,
-                "visibility": {"type": "group", "value": str(visibility)},
-            }
+        return {
+            "body": comment_value,
+            "visibility": {"type": "group", "value": str(visibility)},
         }
 
-    update["comment"] = [comment_update]
+
+def _add_comment_update(update: dict[str, Any], comment: CommentSpec) -> None:
+    comment_dict = _comment_to_dict(comment)
+    if comment_dict is None:
+        return
+
+    update["comment"] = [{"add": comment_dict}]
+
+
+def add_issue_comment(
+    issue_key: str, comment: CommentSpec, *, dry_run: bool = False
+) -> None:
+    body = _comment_to_dict(comment)
+    if body is None:
+        return
+
+    path = f"issue/{urlquote(issue_key)}/comment"
+    if dry_run:
+        logger.info("Dry run: would add comment to issue %s: %s", issue_key, comment)
+        logger.debug("Dry run: would post %s to %s", body, path)
+        return
+
+    jira_api_post(path, json=body)
 
 
 def change_issue_status(
@@ -391,7 +409,10 @@ def change_issue_status(
 
     path = f"issue/{urlquote(issue_key)}/transitions"
     body: dict[str, Any] = {"transition": {"id": transition["id"]}, "update": {}}
-    if comment is not None:
+
+    can_transition_with_comment = "comment" in transition.get("fields", {})
+
+    if comment is not None and can_transition_with_comment:
         _add_comment_update(body["update"], comment)
 
     if dry_run:
@@ -399,9 +420,12 @@ def change_issue_status(
             "Dry run: would change issue %s status to %s", issue_key, new_status
         )
         logger.debug("Dry run: would post %s to %s", body, path)
-        return
 
-    jira_api_post(path, json=body)
+    if not dry_run:
+        jira_api_post(path, json=body)
+
+    if comment is not None and not can_transition_with_comment:
+        add_issue_comment(issue_key, comment, dry_run=dry_run)
 
 
 def add_issue_label(

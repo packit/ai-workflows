@@ -36,11 +36,11 @@ class GetPackageInfoTool(Tool[GetPackageInfoToolInput, ToolRunOptions, GetPackag
     name = "get_package_info"
     description = """
     Extract package version and patch files from a spec file.
-    
+
     Returns:
     - version: The package version (from Version: field)
     - patch_files: List of patch filenames in the order they appear (Patch0:, Patch1:, etc.)
-    
+
     This is useful for determining the base version to checkout in upstream repository
     and which existing patches need to be applied before cherry-picking a new fix.
     """
@@ -59,7 +59,7 @@ class GetPackageInfoTool(Tool[GetPackageInfoToolInput, ToolRunOptions, GetPackag
         context: RunContext,
     ) -> GetPackageInfoToolOutput:
         spec_path = get_absolute_path(tool_input.spec, self)
-        
+
         try:
             with Specfile(spec_path) as spec:
                 version = spec.version
@@ -68,14 +68,14 @@ class GetPackageInfoTool(Tool[GetPackageInfoToolInput, ToolRunOptions, GetPackag
                     for patch in patches:
                         if patch.location:
                             patch_files.append(patch.location)
-                
+
                 return GetPackageInfoToolOutput(
                     result=PackageInfo(
                         version=version,
                         patch_files=patch_files
                     )
                 )
-                
+
         except Exception as e:
             raise ToolError(f"Failed to extract package info from {spec_path}: {e}") from e
 

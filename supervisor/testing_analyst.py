@@ -24,7 +24,7 @@ class InputSchema(BaseModel):
     test_location_info: TestLocationInfo = Field(
         description="Information about where to find tests and test results"
     )
-    erratum: FullErratum | None = Field(description="Details of the related ERRATUM")
+    erratum: FullErratum = Field(description="Details of the related ERRATUM")
     current_time: datetime = Field(description="Current timestamp")
 
 
@@ -75,7 +75,7 @@ def render_prompt(input: InputSchema) -> str:
     ).render(input)
 
 
-async def analyze_issue(jira_issue: FullIssue, erratum: FullErratum | None) -> OutputSchema:
+async def analyze_issue(jira_issue: FullIssue, erratum: FullErratum) -> OutputSchema:
     agent = ToolCallingAgent(
         llm=ChatModel.from_name(
             os.environ["CHAT_MODEL"],

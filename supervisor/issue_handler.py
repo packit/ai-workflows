@@ -60,8 +60,13 @@ class IssueHandler(WorkItemHandler):
                 "Issue has the jotnar_needs_attention label"
             )
 
+        if issue.errata_link is None:
+            return self.resolve_remove_work_item("Issue has no errata_link")
+
         if issue.fixed_in_build is None:
-            return self.resolve_remove_work_item("Issue has no fixed_in_build")
+            return self.resolve_flag_attention(
+                "Issue has errata_link but no fixed_in_build"
+            )
 
         if issue.preliminary_testing != PreliminaryTesting.PASS:
             return self.resolve_flag_attention(
@@ -85,9 +90,7 @@ class IssueHandler(WorkItemHandler):
                 "Preliminary testing has passed, moving to Integration",
             )
         elif issue.status == IssueStatus.INTEGRATION:
-            related_erratum = (
-                get_erratum_for_link(issue.errata_link, full=True) if issue.errata_link else None
-            )
+            related_erratum = get_erratum_for_link(issue.errata_link, full=True)
             testing_analysis = await analyze_issue(issue, related_erratum)
             if testing_analysis.state == TestingState.NOT_RUNNING:
                 return self.resolve_flag_attention(

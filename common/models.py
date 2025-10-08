@@ -122,7 +122,7 @@ class Resolution(Enum):
 class RebaseData(BaseModel):
     """Data for rebase resolution."""
     package: str = Field(description="Package name")
-    version: str = Field(description="Target upstream package version (e.g., '2.4.1')")
+    version: str = Field(description="Target upstream package version to rebase to (e.g., '2.4.1')")
     jira_issue: str = Field(description="Jira issue identifier")
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
 
@@ -130,8 +130,8 @@ class RebaseData(BaseModel):
 class BackportData(BaseModel):
     """Data for backport resolution."""
     package: str = Field(description="Package name")
-    patch_url: str = Field(description="URL or reference to the source of the fix")
-    justification: str = Field(description="Clear explanation of why this patch fixes the issue")
+    patch_url: str = Field(description="URL to the source of the fix that was validated using PatchValidator tool")
+    justification: str = Field(description="Clear explanation of why this patch fixes the issue, linking it to the root cause")
     jira_issue: str = Field(description="Jira issue identifier")
     cve_id: str = Field(description="CVE identifier")
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
@@ -139,26 +139,42 @@ class BackportData(BaseModel):
 
 class ClarificationNeededData(BaseModel):
     """Data for clarification needed resolution."""
-    findings: str = Field(description="Summary of the investigation")
-    additional_info_needed: str = Field(description="Summary of missing information")
+    findings: str = Field(
+        description="Summarize your understanding of the bug and what you investigated, "
+        "e.g., \"The CVE-2025-XXXX describes a buffer overflow in the parse_input() function. "
+        "I have scanned the upstream and Fedora git history for related commits but could not find a definitive fix.\""
+    )
+    additional_info_needed: str = Field(
+        description="State what information you are missing, e.g., \"A link to the upstream commit "
+        "that fixes this issue, or a patch file, is required to proceed.\""
+    )
     jira_issue: str = Field(description="Jira issue identifier")
 
 
 class NoActionData(BaseModel):
     """Data for no action resolution."""
-    reasoning: str = Field(description="Reason why the issue is intentionally non-actionable")
+    reasoning: str = Field(
+        description="The reasoning why the issue is intentionally non-actionable, "
+            "e.g., \"The request is for a new feature ('add dark mode') "
+            "which is not appropriate for a bugfix update in RHEL.\""
+    )
     jira_issue: str = Field(description="Jira issue identifier")
 
 
 class ErrorData(BaseModel):
     """Data for error resolution."""
-    details: str = Field(description="Specific details about an error")
+    details: str = Field(
+        description="Provide specific details about the error, e.g.,"
+            " \"Package 'invalid-package-name' not found "
+            "in GitLab repository after examining issue details.\""
+    )
     jira_issue: str = Field(description="Jira issue identifier")
 
 
 class TriageOutputSchema(BaseModel):
     """Output schema for the triage agent."""
-    resolution: Resolution = Field(description="Triage resolution")
+    resolution: Resolution = Field(
+        description="Triage resolution, one of rebase, backport, clarification-needed, no-action, error")
     data: Union[RebaseData, BackportData, ClarificationNeededData, NoActionData, ErrorData] = Field(
         description="Associated data"
     )

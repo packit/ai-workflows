@@ -273,40 +273,6 @@ def render_prompt(input: InputSchema) -> str:
          5. Set non-empty JIRA fields:
              * Severity: default to 'moderate', for important issues use 'important', for most critical use 'critical' (privilege escalation, RCE, data loss)
              * Fix Version: use the appropriate stream version determined from map_version tool result
-
-      **Output Format**
-
-      Your output must strictly follow the format below.
-
-      JIRA_ISSUE: {{issue}}
-      DECISION: rebase | backport | clarification-needed | no-action | error
-
-      If Rebase:
-          PACKAGE: [package name]
-          VERSION: [target version]
-          FIX_VERSION: [fix version set in JIRA]
-
-      If Backport:
-          PACKAGE: [package name]
-          PATCH_URL: [URL or reference to the source of the fix that was validated using PatchValidator tool]
-          CVE_ID: [CVE identifier, leave blank if not applicable]
-          JUSTIFICATION: [A brief but clear explanation of why this patch fixes the issue, linking it to the root cause.]
-          FIX_VERSION: [fix version set in JIRA]
-
-      If Clarification Needed:
-          FINDINGS: [Summarize your understanding of the bug and what you investigated,
-            e.g., "The CVE-2025-XXXX describes a buffer overflow in the parse_input() function.
-            I have scanned the upstream and Fedora git history for related commits but could not find a definitive fix."]
-          ADDITIONAL_INFO_NEEDED: [State what information you are missing. e.g., "A link to the upstream commit
-            that fixes this issue, or a patch file, is required to proceed."]
-
-      If Error:
-          DETAILS: [Provide specific details about the error. e.g., "Package 'invalid-package-name' not found
-            in GitLab repository after examining issue details."]
-
-      If No Action:
-          REASONING: [Provide a concise reason why the issue is intentionally non-actionable,
-            e.g., "The request is for a new feature ('add dark mode') which is not appropriate for a bugfix update in RHEL."]
     """
     return PromptTemplate(schema=InputSchema, template=template).render(input)
 

@@ -70,18 +70,48 @@ def jira_api_get(path: str, *, params: dict | None = None) -> Any:
     return response.json()
 
 
-def jira_api_post(path: str, json: dict[str, Any]) -> Any:
+@overload
+def jira_api_post(
+    path: str, json: dict[str, Any], *, decode_response: Literal[False] = False
+) -> None: ...
+
+
+@overload
+def jira_api_post(
+    path: str, json: dict[str, Any], *, decode_response: Literal[True]
+) -> Any: ...
+
+
+def jira_api_post(
+    path: str, json: dict[str, Any], *, decode_response: bool = False
+) -> Any | None:
     url = f"{jira_url()}/rest/api/2/{path}"
     response = requests_session().post(url, headers=jira_headers(), json=json)
     response.raise_for_status()
-    return response.json()
+    if decode_response:
+        return response.json()
 
 
-def jira_api_put(path: str, json: dict[str, Any]) -> Any:
+@overload
+def jira_api_put(
+    path: str, json: dict[str, Any], *, decode_response: Literal[False] = False
+) -> None: ...
+
+
+@overload
+def jira_api_put(
+    path: str, json: dict[str, Any], *, decode_response: Literal[True]
+) -> Any: ...
+
+
+def jira_api_put(
+    path: str, json: dict[str, Any], *, decode_response: bool = False
+) -> Any | None:
     url = f"{jira_url()}/rest/api/2/{path}"
     response = requests_session().put(url, headers=jira_headers(), json=json)
     response.raise_for_status()
-    return response.json()
+    if decode_response:
+        return response.json()
 
 
 @cache
@@ -227,7 +257,7 @@ def get_current_issues(
         }
 
         logger.debug("Fetching JIRA issues, start=%d, max=%d", start_at, max_results)
-        response_data = jira_api_post("search", json=body)
+        response_data = jira_api_post("search", json=body, decode_response=True)
         logger.debug("Got %d issues", len(response_data["issues"]))
 
         for issue_data in response_data["issues"]:
@@ -273,7 +303,7 @@ def get_issue_by_jotnar_tag(
     }
 
     logger.debug("Fetching JIRA issues, start=%d, max=%d", start_at, max_results)
-    response_data = jira_api_post("search", json=body)
+    response_data = jira_api_post("search", json=body, decode_response=True)
 
     if len(response_data["issues"]) == 0:
         return None
@@ -293,7 +323,7 @@ def get_issues_statuses(issue_keys: Collection[str]) -> dict[str, IssueStatus]:
         "fields": ["status"],
     }
 
-    response_data = jira_api_post("search", json=body)
+    response_data = jira_api_post("search", json=body, decode_response=True)
 
     return {
         issue_data["key"]: IssueStatus(issue_data["fields"]["status"]["name"])
@@ -485,7 +515,7 @@ def create_issue(
         logger.debug("Dry run: would post %s to %s", body, path)
         return
 
-    response_data = jira_api_post(path, json=body)
+    response_data = jira_api_post(path, json=body, decode_response=True)
     key = response_data["key"]
     logger.info("Created new issue %s", key)
 

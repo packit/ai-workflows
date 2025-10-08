@@ -329,14 +329,14 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
             raise ToolError(f"ERROR: {e}") from e
 
 
-class ApplyPatchesToolInput(BaseModel):
+class ApplyDownstreamPatchesToolInput(BaseModel):
     repo_path: AbsolutePath = Field(description="Absolute path to the upstream repository where patches will be applied")
     patch_files: list[str] = Field(description="List of patch filenames to apply in order")
     patches_directory: AbsolutePath = Field(description="Absolute directory path containing the patch files (usually the dist-git clone)")
 
 
-class ApplyPatchesTool(Tool[ApplyPatchesToolInput, ToolRunOptions, StringToolOutput]):
-    name = "apply_existing_patches"
+class ApplyDownstreamPatchesTool(Tool[ApplyDownstreamPatchesToolInput, ToolRunOptions, StringToolOutput]):
+    name = "apply_downstream_patches"
     description = """
     Apply existing patches from the dist-git spec file to the upstream repository.
     
@@ -347,7 +347,7 @@ class ApplyPatchesTool(Tool[ApplyPatchesToolInput, ToolRunOptions, StringToolOut
     The patches are applied in order using 'git apply' and committed. If a patch fails to apply,
     the tool returns an error indicating which patch failed.
     """
-    input_schema = ApplyPatchesToolInput
+    input_schema = ApplyDownstreamPatchesToolInput
 
     def _create_emitter(self) -> Emitter:
         return Emitter.root().child(
@@ -356,7 +356,7 @@ class ApplyPatchesTool(Tool[ApplyPatchesToolInput, ToolRunOptions, StringToolOut
         )
 
     async def _run(
-        self, tool_input: ApplyPatchesToolInput, options: ToolRunOptions | None, context: RunContext
+        self, tool_input: ApplyDownstreamPatchesToolInput, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
         try:
             # Verify it's a git repository

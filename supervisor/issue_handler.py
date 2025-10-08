@@ -7,6 +7,7 @@ from .supervisor_types import (
     FullIssue,
     IssueStatus,
     PreliminaryTesting,
+    TestCoverage,
     TestingState,
     WorkflowResult,
 )
@@ -63,8 +64,15 @@ class IssueHandler(WorkItemHandler):
             return self.resolve_remove_work_item("Issue has no fixed_in_build")
 
         if issue.preliminary_testing != PreliminaryTesting.PASS:
-            return self.resolve_remove_work_item(
-                "Issue has not passed preliminary_testing"
+            return self.resolve_flag_attention(
+                "Issue does not have Preliminary Testing set to Pass - this should have "
+                "happened before the gitlab pull request was merged"
+            )
+
+        if issue.test_coverage is None or len(issue.test_coverage) == 0:
+            return self.resolve_flag_attention(
+                "Issue does not have Test Coverage set - this should have "
+                "happened before the gitlab pull request was merged"
             )
 
         if issue.status in (

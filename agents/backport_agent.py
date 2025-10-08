@@ -53,7 +53,7 @@ from tools.text import (
     SearchTextTool,
 )
 from tools.upstream_tools import (
-    ApplyPatchesTool,
+    ApplyDownstreamPatchesTool,
     CherryPickCommitTool,
     CherryPickContinueTool,
     CloneUpstreamRepositoryTool,
@@ -130,7 +130,7 @@ def get_instructions() -> str:
                 - If no matching tag found, fall back to approach B
             
             3e. Apply existing patches from dist-git to upstream:
-                - Use `apply_patches` tool with:
+                - Use `apply_downstream_patches` tool with:
                   * repo_path: <UPSTREAM_REPO> (where to apply)
                   * patches_directory: {{local_clone}} (dist-git root where patch files are located)
                   * patch_files: list from step 3b
@@ -250,7 +250,7 @@ def create_backport_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> 
             ExtractUpstreamRepositoryTool(options=local_tool_options),
             CloneUpstreamRepositoryTool(options=local_tool_options),
             FindBaseCommitTool(options=local_tool_options),
-            ApplyPatchesTool(options=local_tool_options),
+            ApplyDownstreamPatchesTool(options=local_tool_options),
             CherryPickCommitTool(options=local_tool_options),
             CherryPickContinueTool(options=local_tool_options),
             GeneratePatchFromCommitTool(options=local_tool_options),

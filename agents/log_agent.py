@@ -84,7 +84,13 @@ def create_log_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> Requi
         ],
         memory=UnconstrainedMemory(),
         requirements=[
-            ConditionalRequirement(ThinkTool, force_at_step=1, force_after=Tool, consecutive_allowed=False),
+            ConditionalRequirement(
+                ThinkTool,
+                force_at_step=1,
+                force_after=Tool,
+                consecutive_allowed=False,
+                only_success_invocations=False,
+            ),
         ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         role="Red Hat Enterprise Linux developer",

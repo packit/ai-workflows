@@ -1,11 +1,13 @@
+from __future__ import annotations
+from collections import defaultdict
 from datetime import datetime, timezone
 from enum import StrEnum
-from datetime import datetime
 from functools import cache
+from typing import DefaultDict, overload
+from typing_extensions import Literal
 import logging
 import os
-from typing import overload
-from typing_extensions import Literal
+import re
 
 from bs4 import BeautifulSoup, Tag  # type: ignore
 from pydantic import BaseModel
@@ -29,11 +31,12 @@ def ET_verify() -> bool | str:
         return True
 
 
-def ET_api_get(path: str):
+def ET_api_get(path: str, *, params: dict | None = None):
     response = requests_session().get(
         f"{ET_URL}/api/v1/{path}",
         auth=HTTPSPNEGOAuth(opportunistic_auth=True),
         verify=ET_verify(),
+        params=params,
     )
     response.raise_for_status()
     return response.json()
@@ -58,6 +61,12 @@ def ET_get_html(path: str):
     )
     response.raise_for_status()
     return response.text
+
+
+def get_utc_timestamp_from_str(timestamp_string: str):
+    return datetime.strptime(timestamp_string, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
 
 
 @overload
@@ -89,9 +98,14 @@ def get_erratum(erratum_id: str | int, full: bool = False) -> Erratum | FullErra
         for jira_issue_data in jira_issues
     )
 
-    last_status_transition_timestamp = datetime.strptime(
-        details["status_updated_at"], "%Y-%m-%dT%H:%M:%SZ"
-    ).replace(tzinfo=timezone.utc)
+    last_status_transition_timestamp = get_utc_timestamp_from_str(
+        details["status_updated_at"]
+    )
+    publish_date = (
+        get_utc_timestamp_from_str(details["publish_date"])
+        if details["publish_date"] is not None
+        else None
+    )
 
     base_erratum = Erratum(
         id=details["id"],
@@ -100,6 +114,8 @@ def get_erratum(erratum_id: str | int, full: bool = False) -> Erratum | FullErra
         synopsis=details["synopsis"],
         status=ErrataStatus(details["status"]),
         all_issues_release_pending=all_issues_release_pending,
+        group_id=details["group_id"],
+        publish_date=publish_date,
         last_status_transition_timestamp=last_status_transition_timestamp,
     )
 
@@ -143,6 +159,171 @@ def get_erratum_for_link(link: str, full: Literal[True]) -> FullErratum: ...
 def get_erratum_for_link(link: str, full: bool = True) -> Erratum | FullErratum:
     erratum_id = link.split("/")[-1]
     return get_erratum(erratum_id, full=full)
+
+
+class RHELStream(StrEnum):
+    Z = "Z"
+    GA = "GA"
+
+
+class RHELVersion(BaseModel):
+    major_version: int
+    minor_version: int
+    micro: int | None
+    stream: str
+
+    def __str__(self):
+        match self.major_version:
+            case 10:
+                return f"RHEL-{self.major_version}.{self.minor_version}.{self.stream}"
+            case 9 | 8:
+                if self.stream == RHELStream.Z:
+                    if self.minor_version % 2 == 1:
+                        return (
+                            f"RHEL-{self.major_version}.{self.minor_version}.0.Z.MAIN"
+                        )
+                    else:
+                        return f"RHEL-{self.major_version}.{self.minor_version}.0.Z.MAIN+EUS"
+                return f"RHEL-{self.major_version}.{self.minor_version}.0.GA"
+            case _:
+                return NotImplemented
+
+    @property
+    def parent(self) -> RHELVersion | None:
+        if self.stream == "Z":
+            return RHELVersion(
+                major_version=self.major_version,
+                minor_version=self.minor_version,
+                micro=self.micro,
+                stream="GA",
+            )
+
+        if self.minor_version > 0:
+            return RHELVersion(
+                major_version=self.major_version,
+                minor_version=self.minor_version - 1,
+                micro=self.micro,
+                stream="Z",
+            )
+
+        return None
+
+    @staticmethod
+    def from_str(version_string: str) -> RHELVersion | None:
+        pattern = r"RHEL-(\d+)\.(\d+)(?:\.(\d+))?\.(Z|GA)"
+        match = re.match(pattern, version_string)
+        if match is not None:
+            return RHELVersion(
+                major_version=int(match.group(1)),
+                minor_version=int(match.group(2)),
+                micro=int(match.group(3)) if match.group(3) else None,
+                stream=RHELStream(match.group(4)),
+            )
+
+
+class RHELRelease(BaseModel):
+    version: str
+    # None means already shipped
+    ship_date: datetime | None
+    shipped: bool
+
+
+class RelPrepErratum(BaseModel):
+    id: str | int
+    publish_date: datetime | None
+
+
+def get_RHEL_release(param: int | str):
+    response = (
+        ET_api_get("releases", params={"filter[id]": param})
+        if isinstance(param, int)
+        else ET_api_get("releases", params={"filter[name]": param})
+    )
+    release_data = response["data"][0]
+
+    ship_date_string = release_data["attributes"]["ship_date"]
+    ship_date = (
+        get_utc_timestamp_from_str(ship_date_string)
+        if ship_date_string is not None
+        else None
+    )
+
+    cur_time = datetime.now(tz=timezone.utc)
+
+    return RHELRelease(
+        version=release_data["attributes"]["name"],
+        ship_date=ship_date,
+        shipped=True if ship_date is None or ship_date < cur_time else False,
+    )
+
+
+def get_rel_prep_lookup(package_name: str) -> DefaultDict[str, list[RelPrepErratum]]:
+    rel_prep_lookup: DefaultDict[str, list[RelPrepErratum]] = defaultdict(list)
+    related_errata = ET_api_get(f"packages/{package_name}")["data"]["relationships"][
+        "errata"
+    ]
+    assert isinstance(related_errata, list)
+    for erratum_info in related_errata:
+        if erratum_info["status"] != ErrataStatus.REL_PREP:
+            continue
+
+        id = erratum_info["id"]
+        cur_erratum = get_erratum(id)
+        cur_release = get_RHEL_release(cur_erratum.group_id)
+
+        rel_prep_lookup[cur_release.version].append(
+            RelPrepErratum(id=id, publish_date=cur_erratum.publish_date)
+        )
+
+    return rel_prep_lookup
+
+
+def get_previous_erratum(current_erratum_id: str | int, package_name: str):
+    erratum = get_erratum(current_erratum_id)
+
+    target_release = get_RHEL_release(erratum.group_id)
+    cur_version = RHELVersion.from_str(target_release.version)
+    if cur_version is None:
+        logger.info(f"Unknown RHEL release format: {target_release.version}")
+        return None
+
+    rel_prep_lookup = get_rel_prep_lookup(package_name)
+    # If the target release of REL_PREP is as same as current target release
+    # Pick the latest one without checking whether publish date is before ship date or not
+    if target_release.version in rel_prep_lookup:
+        rel_prep_errata = rel_prep_lookup[target_release.version]
+        latest_erratum = max(
+            rel_prep_errata,
+            key=lambda e: e.publish_date
+            if e.publish_date is not None
+            else datetime.min,
+        )
+        return get_erratum(latest_erratum.id)
+
+    while cur_version:
+        rel_prep_errata = rel_prep_lookup[str(cur_version)]
+        rel_prep = [
+            e
+            for e in rel_prep_errata
+            if e.publish_date is not None
+            and (
+                target_release.ship_date is None
+                or e.publish_date < target_release.ship_date
+            )
+        ]
+
+        if rel_prep:
+            latest_erratum = max(rel_prep, key=lambda e: e.publish_date)  # type: ignore
+            return get_erratum(latest_erratum.id)
+
+        release = get_RHEL_release(str(cur_version))
+        if release.shipped:
+            released_build = ET_api_get(
+                f"product_versions/{release.version}/released_builds/{package_name}"
+            )
+            return get_erratum(released_build["errata_id"])
+
+        cur_version = cur_version.parent
 
 
 class RuleParseError(Exception):

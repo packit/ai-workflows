@@ -18,6 +18,7 @@ from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.template import PromptTemplate
 from beeai_framework.tools import Tool
 from beeai_framework.tools.mcp import MCPTool
+from beeai_framework.tools.types import StringToolOutput, JSONToolOutput
 
 
 def get_chat_model() -> ChatModel:
@@ -115,7 +116,13 @@ async def run_tool(
     if isinstance(tool, str):
         tool = next(t for t in available_tools or [] if t.name == tool)
     output = await tool.run(input=kwargs).middleware(GlobalTrajectoryMiddleware(pretty=True))
-    result = output.to_json_safe()
+    match output:
+        case StringToolOutput():
+            result = output.get_text_content()
+        case JSONToolOutput():
+            result = output.to_json_safe()
+        case _:
+            result = str(output)
     if isinstance(result, list):
         [result] = result
     if isinstance(result, TextContent):

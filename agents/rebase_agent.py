@@ -191,7 +191,9 @@ async def main() -> None:
         attempts_remaining: int = Field(default=max_build_attempts)
         all_files_git_to_add: set[str] = Field(default_factory=set)
 
-    async def run_workflow(package, dist_git_branch, version, jira_issue):
+    async def run_workflow(
+        package, dist_git_branch, version, jira_issue, redis_conn=None
+    ):
         local_tool_options["working_directory"] = None
 
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
@@ -325,7 +327,22 @@ async def main() -> None:
                     expected_output=LogOutputSchema,
                     **get_agent_execution_config(),
                 )
-                state.log_result = LogOutputSchema.model_validate_json(response.last_message.text)
+                log_output = LogOutputSchema.model_validate_json(response.last_message.text)
+
+                if redis_conn and not dry_run:
+                    # Cache MR metadata for sharing MR titles
+                    # for the same package version across different streams if redis
+                    # is available.
+                    # Do not modify the cache during a dry run.
+                    log_output = await tasks.cache_mr_metadata(
+                        redis_conn,
+                        log_output=log_output,
+                        operation_type="rebase",
+                        package=state.package,
+                        details=state.version,
+                    )
+                state.log_result = log_output
+
                 return "stage_changes"
 
             async def commit_push_and_open_mr(state):
@@ -412,6 +429,7 @@ async def main() -> None:
             dist_git_branch=branch,
             version=version,
             jira_issue=jira_issue,
+            redis_conn=None,
         )
         logger.info(f"Direct run completed: {state.rebase_result.model_dump_json(indent=4)}")
         return
@@ -472,6 +490,7 @@ async def main() -> None:
                     dist_git_branch=dist_git_branch,
                     version=rebase_data.version,
                     jira_issue=rebase_data.jira_issue,
+                    redis_conn=redis,
                 )
                 logger.info(
                     f"Rebase processing completed for {rebase_data.jira_issue}, " f"success: {state.rebase_result.success}"

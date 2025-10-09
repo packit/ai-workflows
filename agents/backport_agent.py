@@ -42,7 +42,6 @@ from common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
-from tools.specfile import UpdateReleaseTool
 from tools.filesystem import GetCWDTool, RemoveTool
 from tools.text import (
     CreateTool,
@@ -88,10 +87,10 @@ def get_instructions() -> str:
       4. Once there are no more conflicts, use the `git_patch_create` tool with <UPSTREAM_FIX>
          as an argument to update the patch file.
 
-      5. Update release in the spec file using the `update_release` tool. Add a new `Patch` tag pointing to
-         the <UPSTREAM_FIX> patch file. Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags
-         are numbered, make sure it has the highest number. Make sure the patch is applied in the "%prep" section and
-         the `-p` argument is correct.
+      5. Update the spec file. Add a new `Patch` tag pointing to the <UPSTREAM_FIX> patch file.
+         Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
+         make sure it has the highest number. Make sure the patch is applied in the "%prep" section
+         and the `-p` argument is correct.
 
       6. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
@@ -154,7 +153,6 @@ def create_backport_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> 
             GitPatchApplyTool(options=local_tool_options),
             GitPatchApplyFinishTool(options=local_tool_options),
             GitLogSearchTool(options=local_tool_options),
-            UpdateReleaseTool(options=local_tool_options),
             GitPreparePackageSources(options=local_tool_options),
         ],
         memory=UnconstrainedMemory(),
@@ -294,7 +292,7 @@ async def main() -> None:
                 )
                 build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
                 if build_result.success:
-                    return "stage_changes"
+                    return "update_release"
                 state.attempts_remaining -= 1
                 if state.attempts_remaining <= 0:
                     state.backport_result.success = False
@@ -304,6 +302,21 @@ async def main() -> None:
                     return "comment_in_jira"
                 state.build_error = build_result.error
                 return "run_backport_agent"
+
+            async def update_release(state):
+                try:
+                    await tasks.update_release(
+                        local_clone=state.local_clone,
+                        package=state.package,
+                        dist_git_branch=state.dist_git_branch,
+                        rebase=False,
+                    )
+                except Exception as e:
+                    logger.warning(f"Error updating release: {e}")
+                    state.backport_result.success = False
+                    state.backport_result.error = f"Could not update release: {e}"
+                    return "comment_in_jira"
+                return "stage_changes"
 
             async def stage_changes(state):
                 try:
@@ -393,6 +406,7 @@ async def main() -> None:
             workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
             workflow.add_step("run_backport_agent", run_backport_agent)
             workflow.add_step("run_build_agent", run_build_agent)
+            workflow.add_step("update_release", update_release)
             workflow.add_step("stage_changes", stage_changes)
             workflow.add_step("run_log_agent", run_log_agent)
             workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)

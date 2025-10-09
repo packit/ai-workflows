@@ -10,6 +10,7 @@ from beeai_framework.tools import Tool
 from common.utils import is_cs_branch
 from constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
 from utils import check_subprocess, run_subprocess, run_tool, mcp_tools
+from tools.specfile import UpdateReleaseTool
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,21 @@ async def fork_and_prepare_dist_git(
             fedora_clone = None
 
     return local_clone, update_branch, fork_url, fedora_clone
+
+
+async def update_release(
+    local_clone: Path,
+    package: str,
+    dist_git_branch: str,
+    rebase: bool,
+) -> None:
+    await run_tool(
+        UpdateReleaseTool(options={"working_directory": local_clone}),
+        spec=f"{package}.spec",
+        package=package,
+        dist_git_branch=dist_git_branch,
+        rebase=rebase,
+    )
 
 
 async def stage_changes(

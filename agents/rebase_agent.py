@@ -41,7 +41,6 @@ from common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
-from tools.specfile import UpdateReleaseTool
 from tools.filesystem import GetCWDTool, RemoveTool
 from tools.text import (
     CreateTool,
@@ -73,11 +72,13 @@ def get_instructions() -> str:
          change `Version` and `Release` tags (or corresponding macros) and add a new changelog entry,
          but sometimes other things are changed - if that's the case, try to understand the logic behind it.
 
-      3. Update the spec file. Set <VERSION>, use the `update_release` tool to reset release and do any other
-         usual changes. You may need to get some information from the upstream repository, for example commit hashes.
-         Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
+      3. Update the spec file. Set <VERSION> but do not change release, that will be taken care of later.
+         Do any other usual changes. You may need to get some information from the upstream repository,
+         for example commit hashes.
 
-      4. Download upstream sources using `spectool -g -S <PACKAGE>.spec`.
+      4. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
+
+      5. Download upstream sources using `spectool -g -S <PACKAGE>.spec`.
          Run `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
          to see if everything is in order. It is possible that some *.patch files will fail to apply now
          that the spec file has been updated. Don't jump to conclusions - if one patch fails to apply, it doesn't mean
@@ -86,12 +87,12 @@ def get_instructions() -> str:
          Repeat as necessary. Do not remove any patches unless all their hunks have been already applied
          to the upstream sources.
 
-      5. Upload new upstream sources (files that the `spectool` command downloaded in the previous step)
+      6. Upload new upstream sources (files that the `spectool` command downloaded in the previous step)
          to lookaside cache using the `upload_sources` tool.
 
-      6. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+      7. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
 
-      7. In your output, provide a "files_to_git_add" list containing all files that should be git added for this rebase.
+      8. In your output, provide a "files_to_git_add" list containing all files that should be git added for this rebase.
          This typically includes the updated spec file and any new/modified/deleted patch files or other files you've changed
          or added/removed during the rebase. Do not include files that were automatically generated or downloaded by spectool.
 
@@ -151,7 +152,6 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
             SearchTextTool(options=local_tool_options),
             GetCWDTool(options=local_tool_options),
             RemoveTool(options=local_tool_options),
-            UpdateReleaseTool(options=local_tool_options),
         ] + [t for t in mcp_tools if t.name == "upload_sources"],
         memory=UnconstrainedMemory(),
         requirements=[
@@ -263,7 +263,7 @@ async def main() -> None:
                 )
                 build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
                 if build_result.success:
-                    return "stage_changes"
+                    return "update_release"
                 state.attempts_remaining -= 1
                 if state.attempts_remaining <= 0:
                     state.rebase_result.success = False
@@ -273,6 +273,21 @@ async def main() -> None:
                     return "comment_in_jira"
                 state.build_error = build_result.error
                 return "run_rebase_agent"
+
+            async def update_release(state):
+                try:
+                    await tasks.update_release(
+                        local_clone=state.local_clone,
+                        package=state.package,
+                        dist_git_branch=state.dist_git_branch,
+                        rebase=True,
+                    )
+                except Exception as e:
+                    logger.warning(f"Error updating release: {e}")
+                    state.rebase_result.success = False
+                    state.rebase_result.error = f"Could not update release: {e}"
+                    return "comment_in_jira"
+                return "stage_changes"
 
             async def stage_changes(state):
                 # Use accumulated files from all rebase iterations, fallback to *.spec if none specified
@@ -362,6 +377,7 @@ async def main() -> None:
             workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
             workflow.add_step("run_rebase_agent", run_rebase_agent)
             workflow.add_step("run_build_agent", run_build_agent)
+            workflow.add_step("update_release", update_release)
             workflow.add_step("stage_changes", stage_changes)
             workflow.add_step("run_log_agent", run_log_agent)
             workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)

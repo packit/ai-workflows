@@ -58,10 +58,14 @@ DRY_RUN=true # Don't actually make any changes to issues/errata, just show what 
 DEBUG=true   # Use more detailed logging (shows exactly what would happen for dry run items)
 ```
 
-## Starting the collector and processor
+## Testing the collector
+
+You can test the collection process with:
 
 ```
-make supervisor-start
+make supervisor-clear-queue
+make supervisor-collect
 ```
 
-This runs the services in the foreground, showing logs for monitoring and debugging. If you prefer to run the services in the background, use `make supervisor-start-detached` instead.
+That will clear any existing queue items, collect items from scratch,
+and log what gets added to the queue.

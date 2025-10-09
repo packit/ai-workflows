@@ -173,18 +173,6 @@ trigger-pipeline:
 
 # Testing and Release Supervisor
 
-.PHONY: supervisor-start
-supervisor-start:
-	DRY_RUN=$(DRY_RUN) $(COMPOSE_SUPERVISOR) up
-
-.PHONY: supervisor-start-detached
-supervisor-start-detached:
-	DRY_RUN=$(DRY_RUN) $(COMPOSE_SUPERVISOR) up -d
-
-.PHONY: supervisor-stop
-supervisor-stop:
-	$(COMPOSE_SUPERVISOR) down
-
 DEBUG_LOWER := $(shell echo $(DEBUG) | tr '[:upper:]' '[:lower:]')
 ifeq ($(DEBUG_LOWER),true)
 DEBUG_FLAG := --debug
@@ -198,6 +186,16 @@ DRY_RUN_FLAG := --dry-run
 else
 DRY_RUN_FLAG :=
 endif
+
+.PHONY: supervisor-clear-queue
+supervisor-clear-queue:
+	$(COMPOSE_SUPERVISOR) run --rm \
+		supervisor python -m supervisor.main $(DEBUG_FLAG) clear-queue
+
+.PHONY: supervisor-collect
+supervisor-collect:
+	$(COMPOSE_SUPERVISOR) run --rm \
+		supervisor python -m supervisor.main $(DEBUG_FLAG) collect --no-repeat
 
 .PHONY: process-issue
 process-issue:

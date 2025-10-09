@@ -151,16 +151,6 @@ services:
     command: ["python", "agents/rebase_agent.py"]
     profiles: ["agents"]
 
-  supervisor-collector:
-    <<: *supervisor
-    command: ["python", "-m", "supervisor.main", "collect"]
-    profiles: ["supervisor"]
-
-  supervisor-processor:
-    <<: *supervisor
-    command: ["python", "-m", "supervisor.main", "process"]
-    profiles: ["supervisor"]
-
   # This is here so we can use it for '$(COMPOSE) run'
   supervisor:
     <<: *supervisor

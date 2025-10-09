@@ -135,7 +135,7 @@ def get_erratum_for_link(link: str, full: Literal[False] = False) -> Erratum: ..
 def get_erratum_for_link(link: str, full: Literal[True]) -> FullErratum: ...
 
 
-def get_erratum_for_link(link: str, full: bool = True) -> Erratum | FullErratum:
+def get_erratum_for_link(link: str, full: bool = False) -> Erratum | FullErratum:
     erratum_id = link.split("/")[-1]
     return get_erratum(erratum_id, full=full)
 

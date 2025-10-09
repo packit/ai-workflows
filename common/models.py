@@ -242,3 +242,15 @@ class LogOutputSchema(BaseModel):
     """Output schema for the log agent."""
     title: str = Field(description="Title to use for commit message and MR")
     description: str = Field(description="Description of changes for commit message and MR")
+
+
+# ============================================================================
+# Merge Request Metadata Cache Schema
+# ============================================================================
+
+class CachedMRMetadata(BaseModel):
+    """Cached merge request metadata for reuse across streams."""
+    operation_type: str = Field(description="Type of operation (backport or rebase)")
+    title: str = Field(description="Merge request title")
+    package: str = Field(description="Package name")
+    details: str = Field(description="Operation-specific identifier (upstream_fix URL for backport, version for rebase)")

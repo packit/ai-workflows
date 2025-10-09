@@ -47,14 +47,16 @@ class Comment(BaseModel):
     created: datetime
     body: str
 
+
 class Erratum(BaseModel):
     id: int
     full_advisory: str
     url: str
     synopsis: str
     status: ErrataStatus
-    all_issues_release_pending: bool
+    jira_issues: list[str]
     last_status_transition_timestamp: datetime
+
 
 class FullErratum(Erratum):
     comments: list[Comment] | None = None

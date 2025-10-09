@@ -123,7 +123,7 @@ def get_custom_fields() -> dict[str, str]:
 CURRENT_ISSUES_JQL = """
 project = RHEL AND AssignedTeam = rhel-jotnar
 AND status in ('New', 'In Progress', 'Integration', 'Release Pending')
-AND 'Fixed in Build' is not EMPTY
+AND 'Errata Link' is not EMPTY
 """
 
 

@@ -128,6 +128,8 @@ class SearchResultsdbTool(
     """
     Tool to search for results for a specific package build in resultsdb.
     https://github.com/release-engineering/resultsdb
+
+    Only use this tool if test_result_location indicates that test results will be in resultsdb.
     """
 
     name = "search_resultsdb"  # type: ignore

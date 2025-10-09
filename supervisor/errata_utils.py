@@ -99,14 +99,34 @@ def get_erratum(erratum_id: str | int, full: bool = False) -> Erratum | FullErra
     )
 
     if full:
-        # fetching comments for the erratum
+        builds = get_erratum_builds(erratum_id)
         comments = get_erratum_comments(erratum_id)
         return FullErratum(
             **base_erratum.__dict__,
+            builds=builds,
             comments=comments,
         )
     else:
         return base_erratum
+
+
+def get_erratum_builds(erratum_id: str | int) -> list[str]:
+    """Get all builds (NVRs) attached to an erratum."""
+    logger.debug("Getting builds for erratum %s", erratum_id)
+    data = ET_api_get(f"erratum/{erratum_id}/builds")
+
+    builds_set = set()
+    for product_data in data.values():
+        if isinstance(product_data, dict) and "builds" in product_data:
+            build_list = product_data["builds"]
+            if isinstance(build_list, list):
+                for build_item in build_list:
+                    if isinstance(build_item, dict):
+                        for nvr in build_item.keys():
+                            if nvr:
+                                builds_set.add(nvr)
+
+    return list(builds_set)
 
 
 def get_erratum_comments(erratum_id: str | int) -> list[Comment] | None:

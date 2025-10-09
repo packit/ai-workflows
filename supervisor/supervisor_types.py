@@ -59,6 +59,7 @@ class Erratum(BaseModel):
 
 
 class FullErratum(Erratum):
+    builds: list[str] | None = None  # list of nvr attached to erratum
     comments: list[Comment] | None = None
 
 

@@ -299,7 +299,13 @@ async def main() -> None:
                 + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields"]],
                 memory=UnconstrainedMemory(),
                 requirements=[
-                    ConditionalRequirement(ThinkTool, force_at_step=1, force_after=Tool, consecutive_allowed=False),
+                    ConditionalRequirement(
+                        ThinkTool,
+                        force_at_step=1,
+                        force_after=Tool,
+                        consecutive_allowed=False,
+                        only_success_invocations=False,
+                    ),
                     ConditionalRequirement("get_jira_details", min_invocations=1),
                     ConditionalRequirement(RunShellCommandTool, only_after="get_jira_details"),
                     ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),

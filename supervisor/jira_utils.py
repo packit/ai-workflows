@@ -1,3 +1,4 @@
+import backoff
 from datetime import datetime
 from enum import Enum, StrEnum
 from functools import cache
@@ -13,6 +14,8 @@ from typing import (
     overload,
 )
 from urllib.parse import quote as urlquote
+
+import requests
 
 from .http_utils import requests_session
 from .supervisor_types import (
@@ -63,10 +66,39 @@ def jira_headers() -> dict[str, str]:
     }
 
 
+class RateLimitError(Exception):
+    pass
+
+
+def raise_for_status(response: requests.Response) -> None:
+    if response.status_code == 429:
+        # JIRA sets a Retry-After header, but at least for JIRA Server
+        # it appears always to be 0s, which is not very useful, so
+        # we ignore it and use the backoff library to handle it.
+        raise RateLimitError()
+    response.raise_for_status()
+
+
+# Define a custom decorator for our specific retry policy. You might
+# thing you could do retry-on_rate_limit = backoff.on_exception(...)
+# but that doesn't because of implementation details of backoff.
+# See: https://github.com/litl/backoff/issues/179
+
+
+def retry_on_rate_limit(func):
+    return backoff.on_exception(
+        backoff.expo,
+        RateLimitError,
+        max_time=300,
+        jitter=backoff.full_jitter,
+    )(func)
+
+
+@retry_on_rate_limit
 def jira_api_get(path: str, *, params: dict | None = None) -> Any:
     url = f"{jira_url()}/rest/api/2/{path}"
     response = requests_session().get(url, headers=jira_headers(), params=params)
-    response.raise_for_status()
+    raise_for_status(response)
     return response.json()
 
 
@@ -82,12 +114,13 @@ def jira_api_post(
 ) -> Any: ...
 
 
+@retry_on_rate_limit
 def jira_api_post(
     path: str, json: dict[str, Any], *, decode_response: bool = False
 ) -> Any | None:
     url = f"{jira_url()}/rest/api/2/{path}"
     response = requests_session().post(url, headers=jira_headers(), json=json)
-    response.raise_for_status()
+    raise_for_status(response)
     if decode_response:
         return response.json()
 
@@ -104,12 +137,13 @@ def jira_api_put(
 ) -> Any: ...
 
 
+@retry_on_rate_limit
 def jira_api_put(
     path: str, json: dict[str, Any], *, decode_response: bool = False
 ) -> Any | None:
     url = f"{jira_url()}/rest/api/2/{path}"
     response = requests_session().put(url, headers=jira_headers(), json=json)
-    response.raise_for_status()
+    raise_for_status(response)
     if decode_response:
         return response.json()
 

@@ -12,6 +12,7 @@ RUN dnf -y install --allowerasing \
       # Run time dependencies
       krb5-workstation \
       python3 \
+      python3-backoff \
       python3-beautifulsoup4 \
       python3-pip \
       python3-requests-gssapi \

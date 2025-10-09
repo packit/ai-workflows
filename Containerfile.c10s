@@ -69,6 +69,7 @@ RUN mkdir ~/.ssh \
       && chmod 0700 ~/.ssh \
       && ssh-keyscan gitlab.com >> ~/.ssh/known_hosts \
       && git config --global user.email "jotnar@redhat.com" \
-      && git config --global user.name "RHEL Packaging Agent"
+      && git config --global user.name "RHEL Packaging Agent" \
+      && git config --global core.editor "true" \
 
 CMD ["/bin/bash"]

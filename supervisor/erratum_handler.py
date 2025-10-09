@@ -15,8 +15,16 @@ from .jira_utils import (
     add_issue_label,
     create_issue,
     get_issue_by_jotnar_tag,
+    get_issues_statuses,
 )
-from .supervisor_types import ErrataStatus, Erratum, JotnarTag, WorkflowResult
+from .supervisor_types import (
+    ErrataStatus,
+    Erratum,
+    Issue,
+    IssueStatus,
+    JotnarTag,
+    WorkflowResult,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -40,6 +48,28 @@ def erratum_needs_attention(erratum_id: int) -> bool:
         with_label="jotnar_needs_attention",
     )
     return issue is not None
+
+
+def erratum_all_issues_are_release_pending(
+    erratum: Erratum, issue_cache: dict[str, Issue]
+) -> bool:
+    # The errata data we fetch from errata-tool includes details
+    # of the errata beyond the ID - in particular it has the status
+    # of the issue - but due to a bug in errata tool that is returning
+    # stale data, so we need to fetch the status from JIRA directly.
+    # https://issues.redhat.com/browse/RHELWF-13481
+
+    # Start with the statuses we have in the cache
+    statuses = {
+        key: issue.status if (issue := issue_cache.get(key)) else None
+        for key in erratum.jira_issues
+    }
+    # Then fetch any that were missing
+    to_fetch = [key for key, status in statuses.items() if status is None]
+    if to_fetch:
+        statuses.update(get_issues_statuses(to_fetch))
+
+    return all(status == IssueStatus.RELEASE_PENDING for status in statuses.values())
 
 
 class ErratumHandler(WorkItemHandler):
@@ -159,7 +189,7 @@ class ErratumHandler(WorkItemHandler):
         if erratum.status == ErrataStatus.NEW_FILES:
             return self.try_to_advance_erratum(ErrataStatus.QE)
         elif erratum.status == ErrataStatus.QE:
-            if not erratum.all_issues_release_pending:
+            if not erratum_all_issues_are_release_pending(erratum, {}):
                 return self.resolve_remove_work_item(
                     "Not all issues are release pending"
                 )

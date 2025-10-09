@@ -82,12 +82,7 @@ def get_erratum(erratum_id: str | int, full: bool = False) -> Erratum | FullErra
     else:
         raise ValueError("Unknown erratum type")
 
-    jira_issues = data["jira_issues"]["jira_issues"]
-
-    all_issues_release_pending = all(
-        jira_issue_data["jira_issue"]["status"] == "Release Pending"
-        for jira_issue_data in jira_issues
-    )
+    jira_issues = [i["jira_issue"]["key"] for i in data["jira_issues"]["jira_issues"]]
 
     last_status_transition_timestamp = datetime.strptime(
         details["status_updated_at"], "%Y-%m-%dT%H:%M:%SZ"
@@ -99,7 +94,7 @@ def get_erratum(erratum_id: str | int, full: bool = False) -> Erratum | FullErra
         url=f"https://errata.engineering.redhat.com/advisory/{erratum_id}",
         synopsis=details["synopsis"],
         status=ErrataStatus(details["status"]),
-        all_issues_release_pending=all_issues_release_pending,
+        jira_issues=jira_issues,
         last_status_transition_timestamp=last_status_transition_timestamp,
     )
 

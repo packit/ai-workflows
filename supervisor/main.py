@@ -9,7 +9,11 @@ import typer
 from agents.observability import setup_observability
 from common.utils import init_kerberos_ticket
 from .errata_utils import get_erratum, get_erratum_for_link
-from .erratum_handler import ErratumHandler, erratum_needs_attention
+from .erratum_handler import (
+    ErratumHandler,
+    erratum_all_issues_are_release_pending,
+    erratum_needs_attention,
+)
 from .issue_handler import IssueHandler
 from .jira_utils import get_current_issues, get_issue
 from .supervisor_types import ErrataStatus, IssueStatus
@@ -62,14 +66,16 @@ async def collect_once(queue: WorkQueue):
     await init_kerberos_ticket()
 
     logger.info("Getting all relevant issues from JIRA")
-    issues = [i for i in get_current_issues()]
+    issues = {i.key: i for i in get_current_issues()}
 
-    erratum_links = set(i.errata_link for i in issues if i.errata_link is not None)
+    erratum_links = set(
+        i.errata_link for i in issues.values() if i.errata_link is not None
+    )
     errata = [get_erratum_for_link(link) for link in erratum_links]
 
     work_items = set(
         WorkItem(item_type=WorkItemType.PROCESS_ISSUE, item_data=i.key)
-        for i in issues
+        for i in issues.values()
         if i.status != IssueStatus.RELEASE_PENDING
     ) | set(
         WorkItem(item_type=WorkItemType.PROCESS_ERRATUM, item_data=str(e.id))
@@ -77,7 +83,10 @@ async def collect_once(queue: WorkQueue):
         if (
             (
                 e.status == ErrataStatus.NEW_FILES
-                or (e.status == ErrataStatus.QE and e.all_issues_release_pending)
+                or (
+                    e.status == ErrataStatus.QE
+                    and erratum_all_issues_are_release_pending(e, issues)
+                )
             )
             and not erratum_needs_attention(e.id)
         )

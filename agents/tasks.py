@@ -1,3 +1,4 @@
+import hashlib
 import itertools
 import logging
 import os
@@ -7,6 +8,7 @@ from typing import Tuple
 
 from beeai_framework.tools import Tool
 
+from common.models import LogOutputSchema, CachedMRMetadata
 from common.utils import is_cs_branch
 from constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
 from utils import check_subprocess, run_subprocess, run_tool, mcp_tools
@@ -155,3 +157,56 @@ async def set_jira_labels(
 
     except Exception as e:
         logger.warning(f"Failed to update labels for {jira_issue}: {e}")
+
+
+async def cache_mr_metadata(
+    redis_conn,
+    log_output: LogOutputSchema,
+    operation_type: str,
+    package: str,
+    details: str,
+) -> LogOutputSchema:
+    """
+    Cache MR metadata for sharing across streams.
+
+    Returns cached metadata if it exists, otherwise stores and returns the provided one.
+
+    Args:
+        redis_conn: Redis client connection
+        operation_type: Type of operation ("backport" or "rebase")
+        package: Package name
+        details: Operation-specific identifier (upstream_fix URL for backport, version for rebase)
+        log_output: LogOutputSchema to store if not cached
+
+    Returns:
+        LogOutputSchema: With cached title if available, otherwise original title
+    """
+    # As the upstream_fix URL can be quite long, use only the hash
+    details_hash = hashlib.sha256(details.encode()).hexdigest()[:16]
+    cache_key = f"mr_metadata:{operation_type}:{package}:{details_hash}"
+
+    # Try to get previously cached metadata
+    cached = await redis_conn.get(cache_key)
+    if cached is not None:
+        logger.info(f"MR metadata cache HIT for {operation_type}/{package}/{details} (key: {cache_key})")
+        try:
+            metadata = CachedMRMetadata.model_validate_json(cached)
+            # Override the title by value stored in the cache
+            return LogOutputSchema(
+                title=metadata.title,
+                description=log_output.description
+            )
+        except ValueError as e:
+            logger.warning(f"Error validating cached MR metadata for key {cache_key}: {e}")
+
+    # Store new metadata on cache miss or validation error
+    metadata = CachedMRMetadata(
+        operation_type=operation_type,
+        title=log_output.title,
+        package=package,
+        details=details
+    )
+    await redis_conn.set(cache_key, metadata.model_dump_json())
+    logger.info(f"MR metadata cache stored for {operation_type}/{package}/{details} (key: {cache_key})")
+
+    return log_output

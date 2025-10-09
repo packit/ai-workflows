@@ -210,7 +210,9 @@ async def main() -> None:
         backport_result: BackportOutputSchema | None = Field(default=None)
         attempts_remaining: int = Field(default=max_build_attempts)
 
-    async def run_workflow(package, dist_git_branch, upstream_fix, jira_issue, cve_id):
+    async def run_workflow(
+        package, dist_git_branch, upstream_fix, jira_issue, cve_id, redis_conn=None
+    ):
         local_tool_options["working_directory"] = None
 
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
@@ -484,6 +486,7 @@ async def main() -> None:
                     upstream_fix=backport_data.patch_url,
                     jira_issue=backport_data.jira_issue,
                     cve_id=backport_data.cve_id,
+                    redis_conn=redis,
                 )
                 logger.info(
                     f"Backport processing completed for {backport_data.jira_issue}, " f"success: {state.backport_result.success}"

@@ -214,7 +214,9 @@ async def main() -> None:
         backport_result: BackportOutputSchema | None = Field(default=None)
         attempts_remaining: int = Field(default=max_build_attempts)
 
-    async def run_workflow(package, dist_git_branch, upstream_fix, jira_issue, cve_id):
+    async def run_workflow(
+        package, dist_git_branch, upstream_fix, jira_issue, cve_id, redis_conn=None
+    ):
         local_tool_options["working_directory"] = None
 
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
@@ -351,7 +353,22 @@ async def main() -> None:
                     expected_output=LogOutputSchema,
                     **get_agent_execution_config(),
                 )
-                state.log_result = LogOutputSchema.model_validate_json(response.last_message.text)
+                log_output = LogOutputSchema.model_validate_json(response.last_message.text)
+
+                if redis_conn and not dry_run:
+                    # Cache MR metadata for sharing MR titles
+                    # for the same upstream fix across different streams if redis
+                    # is available.
+                    # Do not modify the cache during a dry run.
+                    log_output = await tasks.cache_mr_metadata(
+                        redis_conn,
+                        log_output=log_output,
+                        operation_type="backport",
+                        package=state.package,
+                        details=state.upstream_fix,
+                    )
+                state.log_result = log_output
+
                 return "stage_changes"
 
             async def commit_push_and_open_mr(state):
@@ -443,6 +460,7 @@ async def main() -> None:
             upstream_fix=upstream_fix,
             jira_issue=jira_issue,
             cve_id=os.getenv("CVE_ID", ""),
+            redis_conn=None,
         )
         logger.info(f"Direct run completed: {state.backport_result.model_dump_json(indent=4)}")
         return
@@ -504,6 +522,7 @@ async def main() -> None:
                     upstream_fix=backport_data.patch_url,
                     jira_issue=backport_data.jira_issue,
                     cve_id=backport_data.cve_id,
+                    redis_conn=redis,
                 )
                 logger.info(
                     f"Backport processing completed for {backport_data.jira_issue}, " f"success: {state.backport_result.success}"

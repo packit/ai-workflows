@@ -126,8 +126,9 @@ def get_instructions() -> str:
 
             3d. Find and checkout the base version in upstream:
                 - Use `find_base_commit` tool with <UPSTREAM_REPO> path and package version from 3b
-                - This checks out the tag matching the package version in <UPSTREAM_REPO>
-                - If no matching tag found, fall back to approach B
+                - If no matching tag found, try to find the base commit manually using `view` and `run_shell_command` tools
+                - Look for any tags or commits that might correspond to the package version
+                - Only fall back to approach B if you cannot find any reasonable base commit
 
             3e. Apply existing patches from dist-git to upstream:
                 - Use `apply_downstream_patches` tool with:

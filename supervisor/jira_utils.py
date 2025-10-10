@@ -328,10 +328,16 @@ def get_issues_statuses(issue_keys: Collection[str]) -> dict[str, IssueStatus]:
 
     response_data = jira_api_post("search", json=body, decode_response=True)
 
-    return {
+    result = {
         issue_data["key"]: IssueStatus(issue_data["fields"]["status"]["name"])
         for issue_data in response_data["issues"]
     }
+
+    missing_keys = set(issue_keys) - result.keys()
+    if missing_keys:
+        raise KeyError(f"Can't find issues in JIRA: {', '.join(missing_keys)}")
+
+    return result
 
 
 class CommentVisibility(StrEnum):

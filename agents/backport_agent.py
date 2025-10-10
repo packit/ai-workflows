@@ -88,6 +88,10 @@ def get_instructions() -> str:
 
       To backport upstream fix <UPSTREAM_FIX> to package <PACKAGE> in dist-git branch <DIST_GIT_BRANCH>, do the following:
 
+      CRITICAL: Do NOT modify, delete, or touch any existing patches in the dist-git repository.
+      Only add new patches for the current backport. Existing patches are there for a reason
+      and must remain unchanged.
+
       1. Knowing Jira issue <JIRA_ISSUE>, CVE ID <CVE_ID> or both, use the `git_log_search` tool to check
          in the dist-git repository whether the issue/CVE has already been resolved. If it has,
          end the process with `success=True` and `status="Backport already applied"`.
@@ -139,21 +143,34 @@ def get_instructions() -> str:
                 - If any patch fails to apply, immediately fall back to approach B
 
             3f. Cherry-pick the fix in upstream:
-                - Use `cherry_pick_commit` tool with <UPSTREAM_REPO> path and commit hash from 3a
-                - If there are conflicts:
-                  * View the conflicting files in <UPSTREAM_REPO> using `view` tool
-                  * Resolve conflicts by editing files in <UPSTREAM_REPO> with `str_replace` tool
-                  * Delete conflict markers and choose the correct resolution
-                  * Use `cherry_pick_continue` tool on <UPSTREAM_REPO> to complete
-                - If cherry-pick fails with an error (not conflicts), fall back to approach B
+                - If <UPSTREAM_FIX> is a PR URL:
+                  * Use `run_shell_command` to get the PR branch: `git fetch origin pull/PR_NUMBER/head:pr-branch`
+                  * Use `run_shell_command` to get the commit list: `git log --oneline base_commit..pr-branch --reverse`
+                  * Cherry-pick each commit individually from oldest to newest:
+                    - Use `cherry_pick_commit` tool with each commit hash
+                    - If there are conflicts:
+                      * View the conflicting files in <UPSTREAM_REPO> using `view` tool
+                      * Resolve conflicts by editing files in <UPSTREAM_REPO> with `str_replace` tool
+                      * Delete conflict markers and choose the correct resolution
+                      * Use `cherry_pick_continue` tool on <UPSTREAM_REPO> to complete
+                    - Only proceed to the next commit after the current one is fully resolved
+                - If <UPSTREAM_FIX> is a single commit URL, use `cherry_pick_commit` tool with that commit hash
+                - If any cherry-pick fails with an error (not conflicts), fall back to approach B
 
-            3g. Generate the final patch file from upstream:
+            3g. Squash all cherry-picked commits into one clean commit:
+                - Use `run_shell_command` to count cherry-picked commits: `git log --oneline base_commit..HEAD`
+                - Use `run_shell_command` to squash all commits: `git reset --soft base_commit`
+                - Use `run_shell_command` to create one clean commit: `git commit -m "Backport: [CVE-XXXX] Description of the fix"`
+                - This creates a single, clean commit with all the changes from the PR
+
+            3h. Generate the final patch file from upstream:
                 - Use `generate_patch_from_commit` tool on <UPSTREAM_REPO>
                 - Specify output_directory as {{local_clone}} (the dist-git repository root)
                 - Use a descriptive name (e.g., RHEL-xxxxx.patch)
+                - IMPORTANT: Only create NEW patch files. Do NOT modify existing patches in the dist-git repository
                 - This patch file is now ready to be added to the spec file
 
-            3h. The cherry-pick workflow is complete! The generated patch file contains the cleanly
+            3i. The cherry-pick workflow is complete! The generated patch file contains the cleanly
                 cherry-picked fix. Continue with steps 4-6 below to add this patch to the spec file,
                 verify it with `centpkg prep`, and build the SRPM.
 
@@ -176,6 +193,7 @@ def get_instructions() -> str:
          Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
          make sure it has the highest number. Make sure the patch is applied in the "%prep" section
          and the `-p` argument is correct.
+         IMPORTANT: Only ADD new patches. Do NOT modify existing Patch tags or their order.
 
       5. Run `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` to see if the new patch
          applies cleanly. When `prep` command finishes with "exit 0", it's a success. Ignore errors from

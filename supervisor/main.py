@@ -30,7 +30,9 @@ class State:
 app_state = State()
 
 
-def check_env(chat: bool = False, jira: bool = False, redis: bool = False):
+def check_env(
+    chat: bool = False, jira: bool = False, redis: bool = False, gitlab: bool = False
+):
     required_vars = []
     if chat:
         required_vars.append(
@@ -44,6 +46,8 @@ def check_env(chat: bool = False, jira: bool = False, redis: bool = False):
         required_vars.append(
             ("REDIS_URL", "Redis connection URL (e.g., redis://localhost:6379)")
         )
+    if gitlab:
+        required_vars.append(("GITLAB_TOKEN", "Gitlab authentication token"))
 
     missing_vars = [var for var in required_vars if not os.getenv(var[0])]
 

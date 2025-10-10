@@ -42,6 +42,7 @@ from common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
+from tools.specfile import GetPackageInfoTool
 from tools.filesystem import GetCWDTool, RemoveTool
 from tools.text import (
     CreateTool,
@@ -50,6 +51,15 @@ from tools.text import (
     StrReplaceTool,
     ViewTool,
     SearchTextTool,
+)
+from tools.upstream_tools import (
+    ApplyDownstreamPatchesTool,
+    CherryPickCommitTool,
+    CherryPickContinueTool,
+    CloneUpstreamRepositoryTool,
+    ExtractUpstreamRepositoryTool,
+    FindBaseCommitTool,
+    GeneratePatchFromCommitTool,
 )
 from tools.wicked_git import (
     GitLogSearchTool,
@@ -71,6 +81,10 @@ def get_instructions() -> str:
 
       To backport upstream fix <UPSTREAM_FIX> to package <PACKAGE> in dist-git branch <DIST_GIT_BRANCH>, do the following:
 
+      CRITICAL: Do NOT modify, delete, or touch any existing patches in the dist-git repository.
+      Only add new patches for the current backport. Existing patches are there for a reason
+      and must remain unchanged.
+
       1. Knowing Jira issue <JIRA_ISSUE>, CVE ID <CVE_ID> or both, use the `git_log_search` tool to check
          whether the issue/CVE has already been resolved. If it has, end the process with `success=True`
          and `status="Backport already applied"`.
@@ -78,27 +92,107 @@ def get_instructions() -> str:
       2. Use the `git_prepare_package_sources` tool to prepare package sources in directory <UNPACKED_SOURCES>
          for application of the upstream fix.
 
-      3. Backport the <UPSTREAM_FIX> patch:
+      3. Determine which backport approach to use:
 
-         - Use the `git_patch_apply` tool, with an absolute path to the patch, to apply the patch.
-         - Resolve all conflicts and leave the repository in a dirty state. Delete all *.rej files.
-         - Use the `git_apply_finish` tool to finish the patch application.
+         A. CHERRY-PICK WORKFLOW (Preferred - try this first if <UPSTREAM_FIX> is a URL):
 
-      4. Once there are no more conflicts, use the `git_patch_create` tool with <UPSTREAM_FIX>
-         as an argument to update the patch file.
+            IMPORTANT: This workflow uses TWO separate git repositories:
+            - <UNPACKED_SOURCES>: The dist-git repository (from Step 2) containing the spec file and existing patches
+            - <UPSTREAM_REPO>: A temporary upstream repository clone (created in step 3c with -upstream suffix)
 
-      5. Update the spec file. Add a new `Patch` tag pointing to the <UPSTREAM_FIX> patch file.
+            When to use this workflow:
+            - <UPSTREAM_FIX> is a URL (http:// or https://)
+            - URLs ending in .patch or .diff are still URLs (e.g., https://github.com/.../commit/abc123.patch)
+            - If <UPSTREAM_FIX> is a local file path (not a URL), skip to approach B
+
+            3a. Extract upstream repository information:
+                - Use `extract_upstream_repository` tool with the upstream fix URL
+                - This extracts the repository URL and commit hash
+                - If extraction fails, fall back to approach B
+
+            3b. Get package information from dist-git:
+                - Use `get_package_info` tool with the spec file path from <UNPACKED_SOURCES>
+                - This provides the package version and list of existing patch filenames
+
+            3c. Clone the upstream repository to a SEPARATE directory:
+                - Use `clone_upstream_repository` tool with:
+                  * repository_url: from step 3a
+                  * clone_directory: {{local_clone}} (the dist-git repository root)
+                  * Tool automatically creates {{local_clone}}-upstream as <UPSTREAM_REPO>
+                - Steps 3d-3g work in <UPSTREAM_REPO>, NOT in <UNPACKED_SOURCES>
+
+            3d. Find and checkout the base version in upstream:
+                - Use `find_base_commit` tool with <UPSTREAM_REPO> path and package version from 3b
+                - If no matching tag found, try to find the base commit manually using `view` and `run_shell_command` tools
+                - Look for any tags or commits that might correspond to the package version
+                - Only fall back to approach B if you cannot find any reasonable base commit
+
+            3e. Apply existing patches from dist-git to upstream:
+                - Use `apply_downstream_patches` tool with:
+                  * repo_path: <UPSTREAM_REPO> (where to apply)
+                  * patches_directory: {{local_clone}} (dist-git root where patch files are located)
+                  * patch_files: list from step 3b
+                - This recreates the current package state in <UPSTREAM_REPO>
+                - If any patch fails to apply, immediately fall back to approach B
+
+            3f. Cherry-pick the fix in upstream:
+                - If <UPSTREAM_FIX> is a PR URL:
+                  * Use `run_shell_command` to get the PR branch: `git fetch origin pull/PR_NUMBER/head:pr-branch`
+                  * Use `run_shell_command` to get the commit list: `git log --oneline base_commit..pr-branch --reverse`
+                  * Cherry-pick each commit individually from oldest to newest:
+                    - Use `cherry_pick_commit` tool with each commit hash
+                    - If there are conflicts:
+                      * View the conflicting files in <UPSTREAM_REPO> using `view` tool
+                      * Resolve conflicts by editing files in <UPSTREAM_REPO> with `str_replace` tool
+                      * Delete conflict markers and choose the correct resolution
+                      * Use `cherry_pick_continue` tool on <UPSTREAM_REPO> to complete
+                    - Only proceed to the next commit after the current one is fully resolved
+                - If <UPSTREAM_FIX> is a single commit URL, use `cherry_pick_commit` tool with that commit hash
+                - If any cherry-pick fails with an error (not conflicts), fall back to approach B
+
+            3g. Squash all cherry-picked commits into one clean commit:
+                - Use `run_shell_command` to count cherry-picked commits: `git log --oneline base_commit..HEAD`
+                - Use `run_shell_command` to squash all commits: `git reset --soft base_commit`
+                - Use `run_shell_command` to create one clean commit: `git commit -m "Backport: [CVE-XXXX] Description of the fix"`
+                - This creates a single, clean commit with all the changes from the PR
+
+            3h. Generate the final patch file from upstream:
+                - Use `generate_patch_from_commit` tool on <UPSTREAM_REPO>
+                - Specify output_directory as {{local_clone}} (the dist-git repository root)
+                - Use a descriptive name (e.g., RHEL-xxxxx.patch)
+                - IMPORTANT: Only create NEW patch files. Do NOT modify existing patches in the dist-git repository
+                - This patch file is now ready to be added to the spec file
+
+            3i. The cherry-pick workflow is complete! The generated patch file contains the cleanly
+                cherry-picked fix. Continue with steps 4-6 below to add this patch to the spec file,
+                verify it with `centpkg prep`, and build the SRPM.
+
+                Note: You do NOT need to apply this patch to <UNPACKED_SOURCES>. The patch file
+                will be automatically applied during the RPM build process when you run `centpkg prep`.
+
+         B. GIT AM WORKFLOW (Fallback approach):
+
+            Note: For this workflow, use the pre-downloaded patch file at {{local_clone}}/{{jira_issue}}.patch
+
+            3a. Backport the patch:
+                - Use the `git_patch_apply` tool with the patch file: {{local_clone}}/{{jira_issue}}.patch
+                - Resolve all conflicts and leave the repository in a dirty state. Delete all *.rej files.
+                - Use the `git_apply_finish` tool to finish the patch application.
+
+            3b. Once there are no more conflicts, use the `git_patch_create` tool with the patch file path
+                {{local_clone}}/{{jira_issue}}.patch to update the patch file.
+
+      4. Update the spec file. Add a new `Patch` tag pointing to the <UPSTREAM_FIX> patch file.
          Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
          make sure it has the highest number. Make sure the patch is applied in the "%prep" section
          and the `-p` argument is correct.
+         IMPORTANT: Only ADD new patches. Do NOT modify existing Patch tags or their order.
 
-      6. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
-
-      7. Run `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` to see if the new patch
+      5. Run `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` to see if the new patch
          applies cleanly. When `prep` command finishes with "exit 0", it's a success. Ignore errors from
          libtoolize that warn about newer files: "use '--force' to overwrite".
 
-      8. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+      6. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
 
 
       General instructions:
@@ -108,6 +202,10 @@ def get_instructions() -> str:
       - Preserve existing formatting and style conventions in spec files and patch headers.
       - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
       - Ignore all changes that cause conflicts in the following kinds of files: .github/ workflows, .gitignore, news, changes, and internal documentation.
+      - When a tool explicitly says "Abort cherry-pick approach, use git am workflow", immediately switch to approach B.
+      - When using the cherry-pick workflow, you have access to <UPSTREAM_REPO> (the cloned upstream repository).
+        You can explore it to find clues for resolving conflicts: examine commit history, related changes,
+        documentation, test files, or similar fixes that might help understand the proper resolution.
       - Never apply the patches yourself, always use the `git_patch_apply` tool.
       - Never run `git am --skip`, always use the `git_apply_finish` tool instead.
       - Never abort the existing git am session.
@@ -120,7 +218,7 @@ def get_prompt() -> str:
       {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
       {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
       {{^build_error}}
-      Backport upstream fix {{local_clone}}/{{jira_issue}}.patch.
+      Backport upstream fix {{upstream_fix}}.
       Unpacked upstream sources are in {{unpacked_sources}}.
       {{/build_error}}
       {{#build_error}}
@@ -154,6 +252,15 @@ def create_backport_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> 
             GitPatchApplyFinishTool(options=local_tool_options),
             GitLogSearchTool(options=local_tool_options),
             GitPreparePackageSources(options=local_tool_options),
+            # Upstream cherry-pick workflow tools
+            GetPackageInfoTool(options=local_tool_options),
+            ExtractUpstreamRepositoryTool(options=local_tool_options),
+            CloneUpstreamRepositoryTool(options=local_tool_options),
+            FindBaseCommitTool(options=local_tool_options),
+            ApplyDownstreamPatchesTool(options=local_tool_options),
+            CherryPickCommitTool(options=local_tool_options),
+            CherryPickContinueTool(options=local_tool_options),
+            GeneratePatchFromCommitTool(options=local_tool_options),
         ],
         memory=UnconstrainedMemory(),
         requirements=[
@@ -270,6 +377,7 @@ async def main() -> None:
                             dist_git_branch=state.dist_git_branch,
                             jira_issue=state.jira_issue,
                             cve_id=state.cve_id,
+                            upstream_fix=state.upstream_fix,
                             build_error=state.build_error,
                         ),
                     ),

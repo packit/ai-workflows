@@ -238,7 +238,7 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
     - {version}-release (e.g., 2.5.3-release)
 
     If a matching tag is found, it checks out that tag and returns the commit hash.
-    If no matching tag is found, it returns an error to trigger fallback to git am approach.
+    If no matching tag is found, it returns an error.
     """
     input_schema = FindBaseCommitToolInput
 
@@ -300,7 +300,6 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
                     f"Could not find tag matching version {tool_input.version}. "
                     f"Tried patterns: {', '.join(tag_patterns)}. "
                     f"{tag_info}. "
-                    "Fallback to git am approach recommended."
                 )
 
             # Checkout the found tag

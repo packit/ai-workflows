@@ -123,6 +123,19 @@ def collect(
     asyncio.run(do_collect(repeat, repeat_delay))
 
 
+async def do_clear_queue():
+    async with work_queue(os.environ["REDIS_URL"]) as queue:
+        await queue.remove_all_work_items()
+        logger.info("Cleared the work item queue")
+
+
+@app.command()
+def clear_queue():
+    check_env(redis=True)
+
+    asyncio.run(do_clear_queue())
+
+
 @with_http_sessions()
 async def process_once(queue: WorkQueue):
     work_item = await queue.wait_first_ready_work_item()

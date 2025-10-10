@@ -98,6 +98,9 @@ class WorkQueue:
 
         await self.client.zrem("supervisor_work_queue", *to_remove)
 
+    async def remove_all_work_items(self) -> None:
+        await self.client.delete("supervisor_work_queue")
+
     async def get_all_work_items(self) -> list[WorkItem]:
         work_items = await self.client.zrange("supervisor_work_queue", 0, -1)
         return [

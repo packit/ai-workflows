@@ -576,6 +576,17 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
                         "Resolve all conflicts before continuing."
                     )
 
+            # Use git to check for unresolved conflicts
+            # This is much more reliable than parsing files manually
+            cmd = ["git", "diff", "--check"]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
+            if exit_code != 0:
+                # git diff --check returns non-zero if there are conflict markers
+                raise ToolError(
+                    f"Unresolved conflict markers detected by git: {stderr}. "
+                    "Please resolve all conflicts before continuing."
+                )
+
             # Stage all resolved files
             cmd = ["git", "add", "-A"]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)

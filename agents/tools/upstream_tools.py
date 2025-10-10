@@ -544,16 +544,31 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
             # Verify it's a git repository
             if not (tool_input.repo_path / ".git").exists():
                 raise ToolError(f"Not a git repository: {tool_input.repo_path}")
+            # Log current git state for debugging
+            cmd = ["git", "status", "--short"]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
+            if exit_code == 0:
+                print(f"DEBUG: Git status before cherry-pick continue: {stdout}")
+            else:
+                print(f"DEBUG: Failed to get git status: {stderr}")
 
-            # Check if there are still conflicts
+            # Check if we're in a cherry-pick state
             cmd = ["git", "status", "--porcelain"]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
 
             if exit_code != 0:
                 raise ToolError(f"Failed to check git status: {stderr}")
 
+            # Validate stdout is not None
+            if stdout is None:
+                raise ToolError("Git status command returned no output")
+
+            # Check if we're actually in a cherry-pick state by looking for .git/CHERRY_PICK_HEAD
+            if not (tool_input.repo_path / ".git" / "CHERRY_PICK_HEAD").exists():
+                raise ToolError("Not in a cherry-pick state. Cannot continue cherry-pick.")
+
             # Check for unresolved conflicts
-            for line in stdout.strip().split('\n') if stdout.strip() else []:
+            for line in (stdout or "").strip().split('\n') if (stdout or "").strip() else []:
                 if line.startswith('UU ') or line.startswith('AA ') or line.startswith('DD '):
                     conflict_file = line[3:].strip()
                     raise ToolError(
@@ -621,6 +636,12 @@ class GeneratePatchFromCommitTool(Tool[GeneratePatchFromCommitToolInput, ToolRun
             # Verify output directory exists
             if not tool_input.output_directory.exists():
                 raise ToolError(f"Output directory does not exist: {tool_input.output_directory}")
+
+            # Check if there are any commits to generate patch from
+            cmd = ["git", "log", "--oneline", "-1"]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
+            if exit_code != 0 or not stdout:
+                raise ToolError("No commits found to generate patch from")
 
             # Generate patch from HEAD commit using git format-patch
             # -1 means only the last commit

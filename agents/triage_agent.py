@@ -6,6 +6,7 @@ import re
 import sys
 import traceback
 from enum import Enum
+from textwrap import dedent
 from typing import Union
 
 from pydantic import BaseModel, Field
@@ -21,6 +22,7 @@ from beeai_framework.template import PromptTemplate
 from beeai_framework.tools import Tool
 from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
+from beeai_framework.utils.strings import to_json
 
 import tasks
 from common.config import load_rhel_config
@@ -365,9 +367,44 @@ async def main() -> None:
                 """Run the main triage analysis"""
                 logger.info(f"Running triage analysis for {state.jira_issue}")
                 input_data = InputSchema(issue=state.jira_issue)
+                output_schema_json = to_json(
+                    OutputSchema.model_json_schema(mode="validation"),
+                    indent=2,
+                    sort_keys=False,
+                )
                 response = await triage_agent.run(
                     render_prompt(input_data),
-                    expected_output=OutputSchema,
+                    # `OutputSchema` alone is not enough here, some models (cough cough, Claude Sonnet 4.5)
+                    # really stuggle with the nesting, let's provide some more hints
+                    expected_output=dedent(
+                        f"""
+                        The final answer must fulfill the following.
+
+                        **Important Formatting Rules:**
+                        - The top-level output must be a JSON object with two keys: `resolution` (a string) and `data` (an object).
+                        - The `data` field MUST be a nested JSON object. **It must not be a stringified JSON object.**
+                        - The structure of the `data` object must match the schema corresponding to the chosen `resolution`.
+
+                        **Correct example for a 'backport' resolution:**
+                        ```json
+                        {{
+                          "resolution": "backport",
+                          "data": {{
+                            "package": "some-package",
+                            "patch_url": "https://example.com/some.patch",
+                            "justification": "This patch fixes the bug by doing X, Y, and Z.",
+                            "jira_issue": "RHEL-12345",
+                            "cve_id": "CVE-1234-98765",
+                            "fix_version": "rhel-X.Y.Z"
+                          }}
+                        }}
+                        ```
+
+                        ```json
+                        {output_schema_json}
+                        ```
+                        """
+                    ),
                     **get_agent_execution_config(),
                 )
                 state.triage_result = OutputSchema.model_validate_json(response.last_message.text)

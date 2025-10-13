@@ -54,6 +54,9 @@ async def get_jotnar_issues_basic_count() -> tuple[int, int]:
         "jotnar_rebase_failed",
         "jotnar_backport_failed",
         "jotnar_needs_attention",
+        "jotnar_upstream_patch_missing",
+        "jotnar_retry_blocked",
+        "jotnar_cant_do"
     ]
     # Build a JQL clause for all jotnar_* labels
     jql_labels = ", ".join(jotnar_labels)

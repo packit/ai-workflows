@@ -59,7 +59,14 @@ from tools.wicked_git import (
     GitPreparePackageSources,
 )
 from triage_agent import BackportData, ErrorData
-from utils import check_subprocess, get_agent_execution_config, get_chat_model, mcp_tools, render_prompt
+from utils import (
+    check_subprocess,
+    get_agent_execution_config,
+    get_chat_model,
+    get_tool_call_checker_config,
+    mcp_tools,
+    render_prompt,
+)
 from specfile import Specfile
 
 logger = logging.getLogger(__name__)
@@ -140,6 +147,7 @@ def create_backport_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> 
     return RequirementAgent(
         name="BackportAgent",
         llm=get_chat_model(),
+        tool_call_checker=get_tool_call_checker_config(),
         tools=[
             ThinkTool(),
             DuckDuckGoSearchTool(),

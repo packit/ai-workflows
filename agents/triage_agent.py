@@ -44,7 +44,7 @@ from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.patch_validator import PatchValidatorTool
 from tools.version_mapper import VersionMapperTool
-from utils import get_agent_execution_config, get_chat_model, mcp_tools, run_tool
+from utils import get_agent_execution_config, get_chat_model, get_tool_call_checker_config, mcp_tools, run_tool
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +297,7 @@ async def main() -> None:
             triage_agent = RequirementAgent(
                 name="TriageAgent",
                 llm=get_chat_model(),
+                tool_call_checker=get_tool_call_checker_config(),
                 tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool(), VersionMapperTool()]
                 + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields"]],
                 memory=UnconstrainedMemory(),

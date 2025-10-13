@@ -22,7 +22,7 @@ from tools.text import (
     ViewTool,
     SearchTextTool,
 )
-from utils import get_chat_model
+from utils import get_chat_model, get_tool_call_checker_config
 
 
 def get_instructions() -> str:
@@ -55,6 +55,7 @@ def create_build_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]
     return RequirementAgent(
         name="BuildAgent",
         llm=get_chat_model(),
+        tool_call_checker=get_tool_call_checker_config(),
         tools=[
             ThinkTool(),
             DuckDuckGoSearchTool(),

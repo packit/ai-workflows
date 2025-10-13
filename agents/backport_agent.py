@@ -108,6 +108,9 @@ def get_instructions() -> str:
       - Preserve existing formatting and style conventions in spec files and patch headers.
       - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
       - Ignore all changes that cause conflicts in the following kinds of files: .github/ workflows, .gitignore, news, changes, and internal documentation.
+      - Apply all changes that modify the core library of the package, and all binaries, manpages, and user-facing documentation.
+      - For more information how the package is being built, inspect the RPM spec file and read sections `%prep` and `%build`.
+      - If there is a complex conflict, you are required to properly resolve it by applying the core functionality of the proposed patch.
       - Never apply the patches yourself, always use the `git_patch_apply` tool.
       - Never run `git am --skip`, always use the `git_apply_finish` tool instead.
       - Never abort the existing git am session.

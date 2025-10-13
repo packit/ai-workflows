@@ -131,7 +131,8 @@ def get_prompt() -> str:
 
       {{.}}
 
-      Do your best to fix the issue and then generate a new SRPM.
+      Everything from the previous attempt has been reset. Start over, follow the instructions from the start
+      and don't forget to fix the issue.
       {{/build_error}}
     """
 
@@ -281,7 +282,7 @@ async def main() -> None:
                     )
                     return "comment_in_jira"
                 state.build_error = build_result.error
-                return "run_rebase_agent"
+                return "fork_and_prepare_dist_git"
 
             async def update_release(state):
                 try:

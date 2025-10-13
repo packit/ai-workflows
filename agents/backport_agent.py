@@ -72,8 +72,8 @@ def get_instructions() -> str:
       To backport upstream fix <UPSTREAM_FIX> to package <PACKAGE> in dist-git branch <DIST_GIT_BRANCH>, do the following:
 
       1. Knowing Jira issue <JIRA_ISSUE>, CVE ID <CVE_ID> or both, use the `git_log_search` tool to check
-         whether the issue/CVE has already been resolved. If it has, end the process with `success=True`
-         and `status="Backport already applied"`.
+         in the dist-git repository whether the issue/CVE has already been resolved. If it has,
+         end the process with `success=True` and `status="Backport already applied"`.
 
       2. Use the `git_prepare_package_sources` tool to prepare package sources in directory <UNPACKED_SOURCES>
          for application of the upstream fix.

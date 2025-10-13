@@ -87,13 +87,12 @@ def ensure_git_repository(repository_path: AbsolutePath) -> None:
 
 
 async def find_rej_files(repository_path: AbsolutePath) -> list[str]:
-    cmd = ["git", "ls-files", "--others", "--exclude-standard"]
+    # we want to be sure that a .gitignore rule wouldn't filter out `.rej` files
+    cmd = ["git", "ls-files", "--others", "-X", "/dev/null", "--", "*.rej"]
     exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repository_path)
     if exit_code != 0:
         raise ToolError(f"Git command failed: {stderr}")
-    if stdout:
-        return [file for file in stdout.splitlines() if file.endswith(".rej")]
-    return []
+    return stdout.splitlines() if stdout else []
 
 
 async def discover_patch_p(patch_file_path: AbsolutePath, repository_path: AbsolutePath) -> int:
@@ -162,13 +161,14 @@ class GitPatchApplyTool(Tool[GitPatchApplyToolInput, ToolRunOptions, StringToolO
             cmd = ["git", "am", "--reject", f"-p{p}", str(tool_input.patch_file_path)]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
             if exit_code != 0:
+                reject_files = await find_rej_files(tool_input.repository_path)
                 return StringToolOutput(
                     result="Patch application failed, please resolve the conflicts "
                     "and run the tool `git_apply_finish` after you resolved all the conflicts. "
                     "Output from git-am follows:\n"
                     f"stdout: {stdout}\n"
                     f"stderr: {stderr}\n"
-                    f"Reject files: {await find_rej_files(tool_input.repository_path)}\n"
+                    f"Reject files: {reject_files}\n"
                 )
             return StringToolOutput(result="Successfully applied the patch.")
         except Exception as e:
@@ -256,25 +256,27 @@ class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions,
                 # FIXME: we need to find a more reliable way to detect this
                 # elif "error: Failed to merge in the changes" in stderr:
                 elif "Patch failed at" in stdout:
+                    reject_files = await find_rej_files(tool_input.repository_path)
                     return StringToolOutput(
                         result="`git am --continue` resulted in more merge conflicts. "
                         "Please resolve the conflicts and run the tool `git_apply_finish` again."
                         f"Output from git-am follows:\n"
                         f"stdout: {stdout}\n"
                         f"stderr: {stderr}\n"
-                        f"Reject files: {await find_rej_files(tool_input.repository_path)}\n"
+                        f"Reject files: {reject_files}\n"
                     )
                 elif "No changes - did you forget" in stdout:
                     exit_code, stdout, stderr = await run_subprocess(
                         ["git", "am", "--reject", "--skip"], cwd=tool_input.repository_path)
                     if exit_code != 0:
+                        reject_files = await find_rej_files(tool_input.repository_path)
                         return StringToolOutput(
                             result="No changes detected in the working tree nor in the staging area."
                             " The patch was skipped and we have more conflicts to resolve. "
                             f"Output from git-am follows:\n"
                             f"stdout: {stdout}\n"
                             f"stderr: {stderr}\n"
-                            f"Reject files: {await find_rej_files(tool_input.repository_path)}\n"
+                            f"Reject files: {reject_files}\n"
                         )
                 else:
                     raise ToolError(f"Command git-am failed: {stderr} out={stdout}")

@@ -22,6 +22,7 @@ from tools.wicked_git import (
     GitLogSearchTool,
     GitLogSearchToolInput,
     discover_patch_p,
+    find_rej_files,
 )
 from tools.commands import RunShellCommandTool, RunShellCommandToolInput
 from tools.specfile import (
@@ -611,3 +612,12 @@ async def test_discover_patch_p(git_repo, tmp_path, patch_content, expected_n):
     patch_file.write_text(patch_content)
     n = await discover_patch_p(patch_file, git_repo)
     assert n == expected_n
+
+
+@pytest.mark.asyncio
+async def test_find_rej_files(git_repo):
+    (git_repo / ".gitignore").write_text("*.rej\n")
+    (git_repo / "file.txt.rej").write_text("rej content")
+    (git_repo / "foo-bar.rej").write_text("rej content 2")
+    result = await find_rej_files(git_repo)
+    assert sorted(result) == sorted(["file.txt.rej", "foo-bar.rej"])

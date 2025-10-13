@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncGenerator, Awaitable, Callable, TypeVar, Tuple
 
+from beeai_framework.agents.tool_calling.utils import ToolCallCheckerConfig
 from beeai_framework.backend import ChatModel, ChatModelParameters
 from mcp import ClientSession
 from mcp.client.sse import sse_client
@@ -49,6 +50,14 @@ def get_agent_execution_config() -> dict[str, int]:
         # 140 is not enough for a more complex rebase or for a backport
         # with 19 commits and numerous merge conflicts, so we have 255 now
         max_iterations=int(os.getenv("BEEAI_MAX_ITERATIONS", 255)),
+    )
+
+def get_tool_call_checker_config() -> ToolCallCheckerConfig:
+    return ToolCallCheckerConfig(
+        # allow two consecutive identical tool calls
+        max_strike_length=2,
+        max_total_occurrences=5,
+        window_size=10,
     )
 
 

@@ -23,7 +23,7 @@ from tools.text import (
     ViewTool,
     SearchTextTool,
 )
-from utils import get_chat_model
+from utils import get_chat_model, get_tool_call_checker_config
 
 
 def get_instructions() -> str:
@@ -69,6 +69,7 @@ def create_log_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> Requi
     return RequirementAgent(
         name="LogAgent",
         llm=get_chat_model(),
+        tool_call_checker=get_tool_call_checker_config(),
         tools=[
             ThinkTool(),
             DuckDuckGoSearchTool(),

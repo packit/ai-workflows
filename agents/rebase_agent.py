@@ -51,7 +51,7 @@ from tools.text import (
     SearchTextTool,
 )
 from triage_agent import RebaseData, ErrorData
-from utils import get_agent_execution_config, get_chat_model, mcp_tools, render_prompt
+from utils import get_agent_execution_config, get_chat_model, get_tool_call_checker_config, mcp_tools, render_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,7 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
     return RequirementAgent(
         name="RebaseAgent",
         llm=get_chat_model(),
+        tool_call_checker=get_tool_call_checker_config(),
         tools=[
             ThinkTool(),
             DuckDuckGoSearchTool(),

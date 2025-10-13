@@ -20,6 +20,13 @@ from urllib.parse import quote
 import aiohttp
 
 
+DEFAULT_DICTIONARY = {
+    "mrs_opened": 0,
+    "mrs_closed": 0,
+    "mrs_merged": 0,
+    "mrs_all_opened": 0
+}
+
 def _get_jira_headers(token: str) -> dict[str, str]:
     """Get headers for Jira API requests."""
     return {
@@ -124,10 +131,14 @@ async def get_gitlab_stats_single(namespace: str, gitlab_token: str) -> dict[str
     closed = await count_mrs("closed")
     merged = await count_mrs("merged")
 
+    # Count all MRs ever opened (regardless of current state)
+    all_opened = await count_mrs("all")
+
     return {
         "mrs_opened": opened,
         "mrs_closed": closed,
         "mrs_merged": merged,
+        "mrs_all_opened": all_opened,
     }
 
 
@@ -137,14 +148,22 @@ async def get_gitlab_stats(namespaces: list[str]) -> dict[str, dict[str, int]]:
 
     if not gitlab_token:
         print("Warning: GITLAB_TOKEN not set, skipping GitLab queries", file=sys.stderr)
-        return {ns: {"mrs_opened": 0, "mrs_closed": 0, "mrs_merged": 0} for ns in namespaces}
+        return {ns: DEFAULT_DICTIONARY for ns in namespaces}
 
     # Get stats for all namespaces concurrently
     tasks = [get_gitlab_stats_single(namespace, gitlab_token) for namespace in namespaces]
-    results = await asyncio.gather(*tasks)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # Combine results with namespace keys
-    return {namespace: stats for namespace, stats in zip(namespaces, results)}
+    combined_results = {}
+    for namespace, result in zip(namespaces, results):
+        if isinstance(result, Exception):
+            print(f"Error processing namespace {namespace}: {result}", file=sys.stderr)
+            combined_results[namespace] = DEFAULT_DICTIONARY
+        else:
+            combined_results[namespace] = result
+
+    return combined_results
 
 
 async def main():
@@ -193,22 +212,26 @@ async def main():
         total_opened = 0
         total_closed = 0
         total_merged = 0
+        total_all_opened = 0
 
         for namespace, stats in gitlab_stats.items():
             print(f"\nNamespace: {namespace}")
-            print(f"  Merge requests opened: {stats['mrs_opened']}")
+            print(f"  Merge requests currently opened: {stats['mrs_opened']}")
             print(f"  Merge requests closed: {stats['mrs_closed']}")
             print(f"  Merge requests merged: {stats['mrs_merged']}")
+            print(f"  Merge requests ever opened: {stats['mrs_all_opened']}")
 
             total_opened += stats['mrs_opened']
             total_closed += stats['mrs_closed']
             total_merged += stats['mrs_merged']
+            total_all_opened += stats['mrs_all_opened']
 
         if len(args.namespace) > 1:
             print(f"\nTotal across all namespaces:")
-            print(f"  Total merge requests opened: {total_opened}")
-            print(f"  Total merge requests closed: {total_closed}")
-            print(f"  Total merge requests merged: {total_merged}")
+            print(f"  Merge requests currently opened: {total_opened}")
+            print(f"  Merge requests closed: {total_closed}")
+            print(f"  Merge requests merged: {total_merged}")
+            print(f"  Merge requests ever opened: {total_all_opened}")
     else:
         print("\nGitLab statistics skipped (--jira-only flag)")
 

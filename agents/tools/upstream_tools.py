@@ -26,6 +26,8 @@ class UpstreamRepository(BaseModel):
     repo_url: str = Field(description="Git clone URL of the upstream repository")
     commit_hash: str = Field(description="Commit hash to cherry-pick")
     original_url: str = Field(description="Original upstream fix URL")
+    pr_number: str | None = Field(default=None, description="Pull request or merge request number if this is a PR/MR URL, None otherwise")
+    is_pr: bool = Field(default=False, description="True if this is a pull request or merge request URL")
 
 
 class ExtractUpstreamRepositoryOutput(JSONToolOutput[UpstreamRepository]):
@@ -111,6 +113,17 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
                 # Construct repository URL
                 repo_url = f"https://{parsed.netloc}/{owner}/{repo}.git"
 
+                # Return with PR information
+                return ExtractUpstreamRepositoryOutput(
+                    result=UpstreamRepository(
+                        repo_url=repo_url,
+                        commit_hash=commit_hash,
+                        original_url=tool_input.upstream_fix_url,
+                        pr_number=pr_number,
+                        is_pr=True
+                    )
+                )
+
             else:
                 # Handle regular commit URLs
                 commit_hash = None
@@ -147,11 +160,14 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
                 if not repo_url.endswith('.git'):
                     repo_url += '.git'
 
+            # Return for non-PR commits
             return ExtractUpstreamRepositoryOutput(
                 result=UpstreamRepository(
                     repo_url=repo_url,
                     commit_hash=commit_hash,
-                    original_url=tool_input.upstream_fix_url
+                    original_url=tool_input.upstream_fix_url,
+                    pr_number=None,
+                    is_pr=False
                 )
             )
 

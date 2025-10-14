@@ -323,7 +323,7 @@ async def main() -> None:
                         template=get_log_prompt(),
                         input=LogInputSchema(
                             jira_issue=state.jira_issue,
-                            changes_summary="\n".join(state.rebase_log),
+                            changes_summary=state.rebase_log[-1],
                         ),
                     ),
                     expected_output=LogOutputSchema,
@@ -367,8 +367,7 @@ async def main() -> None:
                             f"{CAREFULLY_REVIEW_CHANGES}\n\n"
                             f"{state.log_result.description}\n\n"
                             f"Resolves: {state.jira_issue}\n\n"
-                            "Status of the rebase:\n\n"
-                            + '\n'.join(state.rebase_log)
+                            f"Status of the rebase:\n\n{state.rebase_log[-1]}"
                         ),
                         available_tools=gateway_tools,
                         commit_only=dry_run,

@@ -44,6 +44,7 @@ from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.patch_validator import PatchValidatorTool
 from tools.version_mapper import VersionMapperTool
+from tools.upstream_search import UpstreamSearchTool
 from utils import get_agent_execution_config, get_chat_model, get_tool_call_checker_config, mcp_tools, run_tool
 
 logger = logging.getLogger(__name__)
@@ -201,6 +202,17 @@ def render_prompt(input: InputSchema) -> str:
 
          * Even if the Jira issue provides a direct link to a fix, you need to validate it
          * When no direct link is provided, you must proactively search for fixes - do not give up easily
+         * Try to use upstream_search tool to find out commits related to the issue.
+           - The description you will use should be 1-2 sentences long and include implementation
+             details, keywords, function names or any other helpful information.
+           - The description should be like a command for example `Fix`, `Add` etc.
+           - If the tool gives you list of URLs use them without any change.
+           - Use release date of upstream version used in RHEL if you know it.
+           - If the tool says it can not be used for this project, or it encounters internal error,
+             do not try to use it again and proceed with different approach.
+           - If you run out of commits to check, use different approach, do not give up. Inability
+             of the tool to find proper fix does not mean it does not exist, search bug trackers
+             and version control system.
          * Using the details from your analysis, search these sources:
            - Bug Trackers (for fixed bugs matching the issue summary and description)
            - Git / Version Control (for commit messages, using keywords, CVE IDs, function names, etc.)
@@ -298,7 +310,8 @@ async def main() -> None:
                 name="TriageAgent",
                 llm=get_chat_model(),
                 tool_call_checker=get_tool_call_checker_config(),
-                tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool(), VersionMapperTool()]
+                tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool(),
+                       VersionMapperTool(), UpstreamSearchTool()]
                 + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields"]],
                 memory=UnconstrainedMemory(),
                 requirements=[
@@ -310,6 +323,7 @@ async def main() -> None:
                         only_success_invocations=False,
                     ),
                     ConditionalRequirement("get_jira_details", min_invocations=1),
+                    ConditionalRequirement(UpstreamSearchTool, only_after="get_jira_details"),
                     ConditionalRequirement(RunShellCommandTool, only_after="get_jira_details"),
                     ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),
                     ConditionalRequirement("set_jira_fields", only_after="get_jira_details"),

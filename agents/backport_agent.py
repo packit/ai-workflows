@@ -359,7 +359,7 @@ async def main() -> None:
                         template=get_log_prompt(),
                         input=LogInputSchema(
                             jira_issue=state.jira_issue,
-                            changes_summary="\n".join(state.backport_log),
+                            changes_summary=state.backport_log[-1],
                         ),
                     ),
                     expected_output=LogOutputSchema,
@@ -406,8 +406,7 @@ async def main() -> None:
                             f"{state.log_result.description}\n\n"
                             f"Upstream patch: {state.upstream_fix}\n\n"
                             f"Resolves: {state.jira_issue}\n\n"
-                            "Backporting steps:\n\n"
-                            + '\n'.join(state.backport_log)
+                            f"Backporting steps:\n\n{state.backport_log[-1]}"
                         ),
                         available_tools=gateway_tools,
                         commit_only=dry_run,

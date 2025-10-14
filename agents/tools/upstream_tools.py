@@ -634,15 +634,19 @@ class GeneratePatchFromCommitToolInput(BaseModel):
     repo_path: AbsolutePath = Field(description="Absolute path to the upstream repository")
     output_directory: AbsolutePath = Field(description="Absolute directory path where to save the generated patch file")
     patch_filename: str = Field(description="Name for the generated patch file (e.g., 'fix-cve-2024-1234.patch')")
+    base_commit: str | None = Field(default=None, description="Base commit hash to generate patch from (generates patch for base_commit..HEAD). If not provided, generates patch for only HEAD commit.")
 
 
 class GeneratePatchFromCommitTool(Tool[GeneratePatchFromCommitToolInput, ToolRunOptions, StringToolOutput]):
     name = "generate_patch_from_commit"
     description = """
-    Generate a patch file from the most recent commit (the cherry-picked fix).
+    Generate a patch file from cherry-picked commits.
 
-    This uses 'git format-patch' to create a proper patch file from the last commit.
-    The patch will include the commit message and all changes.
+    This uses 'git format-patch' to create a proper patch file.
+    - If base_commit is provided: generates ONE patch file containing all commits from base_commit..HEAD
+    - If base_commit is not provided: generates a patch for only the last commit (HEAD)
+
+    The patch will include commit messages and all changes.
     """
     input_schema = GeneratePatchFromCommitToolInput
 
@@ -670,10 +674,13 @@ class GeneratePatchFromCommitTool(Tool[GeneratePatchFromCommitToolInput, ToolRun
             if exit_code != 0 or not stdout:
                 raise ToolError("No commits found to generate patch from")
 
-            # Generate patch from HEAD commit using git format-patch
-            # -1 means only the last commit
-            # --stdout outputs to stdout instead of creating a file
-            cmd = ["git", "format-patch", "-1", "HEAD", "--stdout"]
+            # Generate patch using git format-patch
+            # If base_commit is provided, generate patch for all commits from base_commit..HEAD
+            # Otherwise, generate patch for only HEAD commit (-1)
+            if tool_input.base_commit:
+                cmd = ["git", "format-patch", f"{tool_input.base_commit}..HEAD", "--stdout"]
+            else:
+                cmd = ["git", "format-patch", "-1", "HEAD", "--stdout"]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
 
             if exit_code != 0:

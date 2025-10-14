@@ -107,6 +107,25 @@ class BackportOutputSchema(BaseModel):
 
 
 # ============================================================================
+# Backport Verification Agent Schemas
+# ============================================================================
+
+class BackportVerificationInputSchema(BaseModel):
+    """Input schema for the backport verification agent."""
+    local_clone: Path = Field(description="Path to the local clone of the dist-git repository")
+    package: str = Field(description="Package name to verify")
+    jira_issue: str = Field(description="Jira issue identifier that the backport addresses")
+    upstream_fix: str = Field(description="URL to the upstream patch that should have been backported")
+
+
+class BackportVerificationOutputSchema(BaseModel):
+    """Output schema for the backport verification agent."""
+    findings: list[str] = Field(description="List of verification findings, both positive and negative")
+    issues_found: list[str] = Field(default_factory=list, description="List of issues or problems found during verification")
+    recommendations: list[str] = Field(default_factory=list, description="Recommendations for fixing any issues found")
+
+
+# ============================================================================
 # Triage Agent Schemas
 # ============================================================================
 

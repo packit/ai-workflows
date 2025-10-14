@@ -130,6 +130,8 @@ def get_instructions() -> str:
 
             3d. Find and checkout the base version in upstream:
                 - Use `find_base_commit` tool with <UPSTREAM_REPO> path and package version from 3b
+                - IMPORTANT: Save this base version commit hash using `run_shell_command`:
+                  `git -C <UPSTREAM_REPO> rev-parse HEAD` - store this as UPSTREAM_BASE
                 - If no matching tag found, try to find the base commit manually using `view` and `run_shell_command` tools
                 - Look for any tags or commits that might correspond to the package version
                 - Only fall back to approach B if you cannot find any reasonable base commit
@@ -140,37 +142,62 @@ def get_instructions() -> str:
                   * patches_directory: {{local_clone}} (dist-git root where patch files are located)
                   * patch_files: list from step 3b
                 - This recreates the current package state in <UPSTREAM_REPO>
+                - IMPORTANT: Save the current commit hash after applying patches using `run_shell_command`:
+                  `git -C <UPSTREAM_REPO> rev-parse HEAD` - store this as PATCHED_BASE for patch generation
                 - If any patch fails to apply, immediately fall back to approach B
 
             3f. Cherry-pick the fix in upstream:
-                - If <UPSTREAM_FIX> is a PR URL:
-                  * Use `run_shell_command` to get the PR branch: `git fetch origin pull/PR_NUMBER/head:pr-branch`
-                  * Use `run_shell_command` to get the commit list: `git log --oneline base_commit..pr-branch --reverse`
-                  * Cherry-pick each commit individually from oldest to newest:
-                    - Use `cherry_pick_commit` tool with each commit hash
-                    - If there are conflicts:
-                      * View the conflicting files in <UPSTREAM_REPO> using `view` tool
-                      * Resolve conflicts by editing files in <UPSTREAM_REPO> with `str_replace` tool
-                      * Delete conflict markers and choose the correct resolution
-                      * Use `cherry_pick_continue` tool on <UPSTREAM_REPO> to complete
-                    - Only proceed to the next commit after the current one is fully resolved
-                - If <UPSTREAM_FIX> is a single commit URL, use `cherry_pick_commit` tool with that commit hash
-                - If any cherry-pick fails with an error (not conflicts), fall back to approach B
+                FOR PULL REQUESTS (if is_pr is True from step 3a):
+                  * Download the PR patch to see all commits: `curl -L <original_url> -o /tmp/pr.patch`
+                  * Parse the patch file to extract commit hashes (lines starting with "From ")
+                    Each commit appears as "From <hash> Mon Sep DD ..." and has "[PATCH XX/YY]" in subject
+                  * You now have the exact list of commits that are part of the PR
+                  * Fetch PR branch: `git -C <UPSTREAM_REPO> fetch origin pull/<pr_number>/head:pr-branch`
+                  * Cherry-pick each commit from the list, starting from the first (oldest)
+                  * When conflicts occur (EXPECTED when backporting to older version):
+                    - Understand what the commit is trying to do and why it conflicts
+                    - Examine what's different between old and current version
+                    - Identify if the commit depends on changes that aren't in the dist-git version:
+                      * Missing helper functions, types, or macros
+                      * API changes that happened between versions
+                      * Structural changes to the codebase
+                    - If prerequisites are missing, you have options:
+                      * Cherry-pick the prerequisite commits first (from upstream history between dist-git version and PR)
+                      * Or adapt the code to work without them (rewrite to use older APIs)
+                      * Or manually backport just the needed helper functions
+                    - Intelligently adapt the changes to make them work with the older codebase
+                  * Continue until all PR commits are successfully cherry-picked and adapted
 
-            3g. Squash all cherry-picked commits into one clean commit:
-                - Use `run_shell_command` to count cherry-picked commits: `git log --oneline base_commit..HEAD`
-                - Use `run_shell_command` to squash all commits: `git reset --soft base_commit`
-                - Use `run_shell_command` to create one clean commit: `git commit -m "Backport: [CVE-XXXX] Description of the fix"`
-                - This creates a single, clean commit with all the changes from the PR
+                FOR SINGLE COMMITS (if is_pr is False):
+                  * Use commit_hash from step 3a
+                  * Cherry-pick this single commit
 
-            3h. Generate the final patch file from upstream:
+                CHERRY-PICKING PROCESS (ONE commit at a time - NEVER multiple at once):
+                  1. Cherry-pick ONE commit: `cherry_pick_commit` tool with ONE commit hash
+                  2. If conflicts occur (NORMAL for backporting):
+                     a. View conflicting files to understand what's needed
+                     b. Intelligently resolve by editing files with `str_replace`:
+                        - Understand what the commit does
+                        - Adapt to older codebase
+                        - Add missing helpers if needed
+                        - Rewrite to use older APIs if needed
+                     c. Stage ALL resolved files: `git -C <UPSTREAM_REPO> add <file>` for each file
+                     d. Complete cherry-pick: `cherry_pick_continue` tool
+                  3. CRITICAL: Only move to next commit after current one is FULLY COMPLETE
+                  4. NEVER try to cherry-pick multiple commits at once
+                  5. If a commit truly cannot be adapted (very rare), skip it and note why
+                  6. Do NOT fall back to approach B - keep cherry-picking through all PR commits
+
+            3g. Generate the final patch file from upstream:
                 - Use `generate_patch_from_commit` tool on <UPSTREAM_REPO>
                 - Specify output_directory as {{local_clone}} (the dist-git repository root)
-                - Use a descriptive name (e.g., RHEL-xxxxx.patch)
+                - Use a descriptive name like <JIRA_ISSUE>.patch (e.g., if JIRA is RHEL-114639, use RHEL-114639.patch)
+                - CRITICAL: Provide base_commit parameter with the PATCHED_BASE from step 3e
+                  This ensures the patch includes ALL cherry-picked commits, not just the last one
                 - IMPORTANT: Only create NEW patch files. Do NOT modify existing patches in the dist-git repository
                 - This patch file is now ready to be added to the spec file
 
-            3i. The cherry-pick workflow is complete! The generated patch file contains the cleanly
+            3h. The cherry-pick workflow is complete! The generated patch file contains the cleanly
                 cherry-picked fix. Continue with steps 4-6 below to add this patch to the spec file,
                 verify it with `centpkg prep`, and build the SRPM.
 

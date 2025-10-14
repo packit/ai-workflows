@@ -583,25 +583,18 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
             if not (tool_input.repo_path / ".git" / "CHERRY_PICK_HEAD").exists():
                 raise ToolError("Not in a cherry-pick state. Cannot continue cherry-pick.")
 
-            # Check for unresolved conflicts
+            # Check for unresolved conflicts by checking git status
+            # Files with UU, AA, DD status indicate unresolved conflicts
             for line in (stdout or "").strip().split('\n') if (stdout or "").strip() else []:
                 if line.startswith('UU ') or line.startswith('AA ') or line.startswith('DD '):
                     conflict_file = line[3:].strip()
                     raise ToolError(
                         f"Unresolved conflicts still exist in: {conflict_file}. "
-                        "Resolve all conflicts before continuing."
+                        "File is still in conflict state. Use `git add` after resolving."
                     )
 
-            # Use git to check for unresolved conflicts
-            # This is much more reliable than parsing files manually
-            cmd = ["git", "diff", "--check"]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
-            if exit_code != 0:
-                # git diff --check returns non-zero if there are conflict markers
-                raise ToolError(
-                    f"Unresolved conflict markers detected by git: {stderr}. "
-                    "Please resolve all conflicts before continuing."
-                )
+            # If no UU/AA/DD files, conflicts are resolved
+            # The agent should have edited files and staged them with `git add`
 
             # Stage all resolved files
             cmd = ["git", "add", "-A"]

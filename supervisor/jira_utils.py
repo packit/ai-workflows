@@ -496,7 +496,7 @@ def get_user_name(email: str) -> str:
         raise ValueError(f"No JIRA user with email {email}")
     elif len(users) > 1:
         raise ValueError(f"Multiple JIRA users with email {email}")
-    return users[0]["key"]
+    return users[0]["name"]
 
 
 @overload

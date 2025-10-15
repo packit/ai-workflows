@@ -38,7 +38,7 @@ RUN update-ca-trust
 COPY files/internal_dist-git_ssh.conf /etc/ssh/ssh_config.d/00-dist-git.conf
 # Set up internal dist-git and GitLab SSH host keys
 COPY files/internal_dist-git_host_keys /etc/ssh/ssh_known_hosts
-RUN ssh-keyscan bastion-iad2.corp.redhat.com gitlab.com >> /etc/ssh/ssh_known_hosts
+RUN ssh-keyscan gitlab.com >> /etc/ssh/ssh_known_hosts
 
 USER mcp
 ENV HOME=/home/mcp

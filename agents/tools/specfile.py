@@ -13,8 +13,8 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 
+from common.constants import BREWHUB_URL
 from common.validators import NonEmptyString
-from constants import BREWHUB_URL
 from utils import get_absolute_path
 
 

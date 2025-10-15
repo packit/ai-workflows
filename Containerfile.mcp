@@ -40,4 +40,8 @@ WORKDIR $HOME
 
 ENV PYTHONPATH=$HOME:$PYTHONPATH
 
+RUN mkdir ~/.ssh \
+      && chmod 0700 ~/.ssh \
+      && ssh-keyscan pkgs.devel.redhat.com >> ~/.ssh/known_hosts
+
 CMD ["/bin/bash"]

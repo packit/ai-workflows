@@ -220,7 +220,7 @@ async def main() -> None:
 
     class State(PackageUpdateState):
         upstream_fix: str
-        cve_id: str
+        cve_id: str | None
         unpacked_sources: Path | None = Field(default=None)
         backport_log: list[str] = Field(default=[])
         backport_result: BackportOutputSchema | None = Field(default=None)
@@ -471,7 +471,7 @@ async def main() -> None:
             dist_git_branch=branch,
             upstream_fix=upstream_fix,
             jira_issue=jira_issue,
-            cve_id=os.getenv("CVE_ID", ""),
+            cve_id=os.getenv("CVE_ID", None),
             redis_conn=None,
         )
         logger.info(f"Direct run completed: {state.backport_result.model_dump_json(indent=4)}")

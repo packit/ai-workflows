@@ -94,7 +94,7 @@ class BackportInputSchema(BaseModel):
     package: str = Field(description="Package to update")
     dist_git_branch: str = Field(description="Git branch in dist-git to be updated")
     jira_issue: str = Field(description="Jira issue to reference as resolved")
-    cve_id: str = Field(default="", description="CVE ID if the jira issue is a CVE")
+    cve_id: str | None = Field(default=None, description="CVE ID if the jira issue is a CVE")
     build_error: str | None = Field(description="Error encountered during package build")
 
 
@@ -133,7 +133,7 @@ class BackportData(BaseModel):
     patch_url: str = Field(description="URL to the source of the fix that was validated using PatchValidator tool")
     justification: str = Field(description="Clear explanation of why this patch fixes the issue, linking it to the root cause")
     jira_issue: str = Field(description="Jira issue identifier")
-    cve_id: str = Field(description="CVE identifier")
+    cve_id: str | None = Field(description="CVE identifier", default=None)
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
 
 

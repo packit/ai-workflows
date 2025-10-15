@@ -34,14 +34,22 @@ RUN mkdir /git-repos && chmod -R o+rwX /git-repos
 COPY files/Current-IT-Root-CAs.pem /etc/pki/ca-trust/source/anchors/
 RUN update-ca-trust
 
+# Configure jump host for internal dist-git
+COPY <<EOF /etc/ssh/ssh_config.d/00-dist-git.conf
+Host iad2
+   Hostname bastion-iad2.corp.redhat.com
+   GSSAPIAuthentication yes
+Host pkgs.devel.redhat.com
+   ProxyJump iad2
+EOF
+# Set up internal dist-git and GitLab SSH host keys
+COPY files/internal_dist-git_host_keys /etc/ssh/ssh_known_hosts
+RUN ssh-keyscan bastion-iad2.corp.redhat.com gitlab.com >> /etc/ssh/ssh_known_hosts
+
 USER mcp
 ENV HOME=/home/mcp
 WORKDIR $HOME
 
 ENV PYTHONPATH=$HOME:$PYTHONPATH
-
-RUN mkdir ~/.ssh \
-      && chmod 0700 ~/.ssh \
-      && ssh-keyscan pkgs.devel.redhat.com >> ~/.ssh/known_hosts
 
 CMD ["/bin/bash"]

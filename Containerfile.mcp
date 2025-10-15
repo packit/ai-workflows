@@ -35,7 +35,7 @@ COPY files/Current-IT-Root-CAs.pem /etc/pki/ca-trust/source/anchors/
 RUN update-ca-trust
 
 # Configure jump host for internal dist-git
-COPY <<EOF /etc/ssh/ssh_config.d/00-dist-git.conf
+RUN cat > /etc/ssh/ssh_config.d/00-dist-git.conf <<EOF
 Host iad2
    Hostname bastion-iad2.corp.redhat.com
    GSSAPIAuthentication yes

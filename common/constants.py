@@ -1,5 +1,8 @@
 from enum import Enum
 
+BREWHUB_URL = "https://brewhub.engineering.redhat.com/brewhub"
+
+
 class RedisQueues(Enum):
     """Constants for Redis queue names used by Jotnar agents"""
     TRIAGE_QUEUE = "triage_queue"

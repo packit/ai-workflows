@@ -31,6 +31,13 @@ async def fork_and_prepare_dist_git(
     fork_url = await run_tool("fork_repository", repository=repository, available_tools=available_tools)
     local_clone = working_dir / package
     shutil.rmtree(local_clone, ignore_errors=True)
+    if not is_cs_branch(dist_git_branch):
+        await run_tool(
+            "create_zstream_branch",
+            package=package,
+            branch=dist_git_branch,
+            available_tools=available_tools,
+        )
     await run_tool(
         "clone_repository",
         repository=repository,

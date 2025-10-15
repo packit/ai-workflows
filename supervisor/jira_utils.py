@@ -2,6 +2,7 @@ import backoff
 from datetime import datetime
 from enum import Enum, StrEnum
 from functools import cache
+from json import dumps as json_dumps
 import logging
 import os
 from typing import (
@@ -98,6 +99,13 @@ def retry_on_rate_limit(func):
 def jira_api_get(path: str, *, params: dict | None = None) -> Any:
     url = f"{jira_url()}/rest/api/2/{path}"
     response = requests_session().get(url, headers=jira_headers(), params=params)
+    if not response.ok:
+        logger.error(
+            "GET %s%s failed.\nerror:\n%s",
+            url,
+            f" (params={params})" if params else "",
+            response.text,
+        )
     raise_for_status(response)
     return response.json()
 
@@ -120,6 +128,13 @@ def jira_api_post(
 ) -> Any | None:
     url = f"{jira_url()}/rest/api/2/{path}"
     response = requests_session().post(url, headers=jira_headers(), json=json)
+    if not response.ok:
+        logger.error(
+            "POST to %s failed\nbody:\n%s\nerror:\n%s",
+            url,
+            json_dumps(json, indent=2),
+            response.text,
+        )
     raise_for_status(response)
     if decode_response:
         return response.json()
@@ -143,6 +158,13 @@ def jira_api_put(
 ) -> Any | None:
     url = f"{jira_url()}/rest/api/2/{path}"
     response = requests_session().put(url, headers=jira_headers(), json=json)
+    if not response.ok:
+        logger.error(
+            "PUT to %s failed\nbody:\n%s\nerror:\n%s",
+            url,
+            json_dumps(json, indent=2),
+            response.text,
+        )
     raise_for_status(response)
     if decode_response:
         return response.json()

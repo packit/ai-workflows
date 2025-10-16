@@ -30,8 +30,6 @@ spec:
         env:
         - name: REQUESTS_CA_BUNDLE
           value: /etc/pki/tls/certs/ca-bundle.crt
-        - name: CHAT_MODEL
-          value: vertexai:gemini-2.5-pro
         envFrom:
         - configMapRef:
             name: agents-env

@@ -55,6 +55,8 @@ class Erratum(BaseModel):
     synopsis: str
     status: ErrataStatus
     jira_issues: list[str]
+    release_id: int
+    publish_date: datetime | None
     last_status_transition_timestamp: datetime
 
 

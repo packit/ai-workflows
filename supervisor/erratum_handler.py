@@ -95,10 +95,12 @@ class ErratumHandler(WorkItemHandler):
                 dry_run=self.dry_run,
             )
         else:
+            summary = f"{self.erratum.full_advisory} ({self.erratum.synopsis}) needs attention"
+            description = f"Erratum: {self.erratum.url}\n\n{why}"
             create_issue(
                 project="RHELMISC",
-                summary=f"Erratum {self.erratum.id} needs attention",
-                description=why,
+                summary=summary,
+                description=description,
                 tag=tag,
                 reporter_email="jotnar+bot@redhat.com",
                 assignee_email="jotnar+bot@redhat.com",

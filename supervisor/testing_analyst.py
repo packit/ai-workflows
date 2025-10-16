@@ -50,6 +50,10 @@ def render_prompt(input: InputSchema) -> str:
       Unless otherwise specified in TEST_LOCATION_INFO.test_trigger_method, NEWA tests are triggered
       when the erratum transitions to QE status. Tests are expected to start within 6 hours of the trigger.
 
+      If test_trigger_method indicates tests trigger when builds are attached, look for build attachment
+      comments in ERRATUM_DATA.comments and use the timestamp of the most recent build attachment to
+      calculate time elapsed.
+
       Call the final_answer tool passing in the state and a comment as follows.
       The comment should use JIRA comment syntax.
 

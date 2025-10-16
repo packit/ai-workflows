@@ -1,3 +1,4 @@
+from datetime import datetime
 from functools import cache
 from urllib.parse import quote as urlquote
 import logging
@@ -68,3 +69,10 @@ def search_gitlab_project_mrs(
             state=mr["state"],
             description=mr["description"],
         )
+
+
+def get_project_mr_merged_timestamp(project: str, iid: str | int) -> datetime:
+    """Get the timestamp of a specific MR with given project and iid"""
+    path = f"projects/{urlquote(project, safe='')}/merge_requests/{iid}"
+    response = gitlab_api_get(path)
+    return datetime.fromisoformat(response["merged_at"].replace("Z", "+00:00"))

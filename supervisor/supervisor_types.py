@@ -123,6 +123,13 @@ class JotnarTag(BaseModel):
         return f"::: JOTNAR {self.type} E: {self.id.strip()} :::"
 
 
+class JotnarLabel(StrEnum):
+    NEEDS_ATTENTION = "jotnar_needs_attention"
+    MERGED = "jotnar_merged"
+    BACKPORTED = "jotnar_backported"
+    REBASED = "jotnar_rebased"
+
+
 class TestingState(StrEnum):
     NOT_RUNNING = "tests-not-running"
     PENDING = "tests-pending"

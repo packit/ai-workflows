@@ -18,14 +18,20 @@ The `goose/` directory contains some automation components that were used in the
 
 ## Development environment
 
-A stub pyproject.toml is provided to set up a development environment:
+You need to have the following packages installed on your system:
+
+```
+python3-devel podman-compose gcc krb5-devel
+```
+
+Then, use the provided stub pyproject.toml file to set up the development environment:
 
 ```
 uv sync
 uv run make -f Makefile.tests check
 ```
 
-You'll need to have `python3-rpm` installed on the host system -
+You'll also need to have `python3-rpm` installed on the host system -
 the `rpm` module installed from PyPI is [rpm-shim](https://github.com/packit/rpm-shim)
 and just pulls the files from python3-rpm into the venv.
 In an IDE, select .venv/bin/python as the Python interpreter.

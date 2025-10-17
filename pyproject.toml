@@ -41,4 +41,6 @@ test = [
     "pytest-xdist>=3.6.0",
     "pytest-html>=4.1.1",
     "httpx>=0.28.0",
+    "koji",
+    "pyforgejo==2.0.4",
 ]

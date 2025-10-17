@@ -27,6 +27,10 @@ async def create_zstream_branch(
     except KerberosError as e:
         raise ToolError(f"Failed to initialize Kerberos ticket: {e}") from e
     username = principal.split("@", maxsplit=1)[0]
+    token = os.environ["GITLAB_TOKEN"]
+    gitlab_repo_url = f"https://oauth2:{token}@gitlab.com/redhat/rhel/rpms/{package}"
+    if await asyncio.to_thread(git.cmd.Git().ls_remote, gitlab_repo_url, branch, branches=True):
+        return f"Z-Stream branch {branch} already exists, no need to create it"
     try:
         with tempfile.TemporaryDirectory() as path:
             repo = await asyncio.to_thread(
@@ -35,7 +39,7 @@ async def create_zstream_branch(
                 path,
             )
             if branch in [ref.name.split("/")[-1] for ref in repo.remotes.origin.refs]:
-                return f"Z-Stream branch {branch} already exists, no need to create it"
+                raise RuntimeError(f"Z-Stream branch {branch} exists in dist-git but not on GitLab")
             # find the correct base for our new branch:
             # - get candidate tag corresponding to the branch
             # - get the latest build the candidate tag inherited (from Y-Stream or previous Z-Stream)
@@ -59,15 +63,9 @@ async def create_zstream_branch(
             ref = metadata["source"].split("#")[-1]
             await asyncio.to_thread(repo.remotes.origin.push, f"{ref}:refs/heads/{branch}")
             # wait until the new branch is synced to GitLab
-            token = os.environ["GITLAB_TOKEN"]
             start_time = time.monotonic()
             while time.monotonic() - start_time < SYNC_TIMEOUT:
-                if await asyncio.to_thread(
-                    repo.git.ls_remote,
-                    f"https://oauth2:{token}@gitlab.com/redhat/rhel/rpms/{package}",
-                    branch,
-                    branches=True,
-                ):
+                if await asyncio.to_thread(repo.git.ls_remote, gitlab_repo_url, branch, branches=True):
                     return f"Succesfully created Z-Stream branch {branch}"
                 await asyncio.sleep(30)
             raise RuntimeError(f"The {branch} branch wasn't synced to GitLab after {SYNC_TIMEOUT} seconds")

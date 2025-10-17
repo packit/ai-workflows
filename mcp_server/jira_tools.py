@@ -8,6 +8,7 @@ from typing import Annotated, Any
 from urllib.parse import urljoin
 
 import aiohttp
+import aiofiles
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
@@ -45,6 +46,19 @@ def _get_jira_headers(token: str) -> dict[str, str]:
         "Accept": "application/json",
     }
 
+async def _read_jira_mock(issue_key: str) -> dict:
+    try:
+        async with aiofiles.open(f"{os.environ['JIRA_MOCK_FILES']}/{issue_key}", "r") as jira_file:
+            return json.loads(await jira_file.read())
+    except (FileNotFoundError, json.JSONDecodeError, IOError) as e:
+        raise ToolError(f"Error while reading mock up Jira issue {e}") from e
+
+async def _write_jira_mock(issue_key: str, data: dict):
+    try:
+        async with aiofiles.open(f"{os.environ['JIRA_MOCK_FILES']}/{issue_key}", "w") as jira_file:
+            await jira_file.write(json.dumps(data, indent=2))
+    except IOError as e:
+        raise ToolError(f"Error while writing mock up Jira issue {e}") from e
 
 async def get_jira_details(
     issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
@@ -53,6 +67,10 @@ async def get_jira_details(
     Gets details about the specified Jira issue, including all comments and remote links.
     Returns a dictionary with issue details and comments.
     """
+
+    if os.getenv("MOCK_JIRA", "False").lower() == "true":
+        return await _read_jira_mock(issue_key)
+
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
 
     async with aiohttp.ClientSession() as session:
@@ -99,21 +117,7 @@ async def set_jira_fields(
     if os.getenv("DRY_RUN", "False").lower() == "true":
         return "Dry run, not updating Jira fields (this is expected, not an error)"
 
-    async with aiohttp.ClientSession() as session:
-        # First, get the current issue to check existing field values
-        try:
-            async with session.get(
-                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
-                headers=_get_jira_headers(os.getenv("JIRA_TOKEN")),
-            ) as response:
-                response.raise_for_status()
-                current_issue = await response.json()
-        except aiohttp.ClientError as e:
-            raise ToolError(f"Failed to get current issue details: {e}") from e
-
-        fields = {}
-        current_fields = current_issue.get("fields", {})
-
+    def update_fields(fields: dict, current_fields: dict):
         if fix_versions is not None:
             current_fix_versions = current_fields.get("fixVersions", [])
             if not current_fix_versions:
@@ -129,9 +133,32 @@ async def set_jira_fields(
             if current_target_end is None or not current_target_end.get("value"):
                 fields[TARGET_END_CUSTOM_FIELD] = target_end.strftime("%Y-%m-%d")
 
-        if not fields:
-            return f"No fields needed updating in {issue_key}"
+    if os.getenv("MOCK_JIRA", "False").lower() == "true":
+        current_issue = await _read_jira_mock(issue_key)
+    else:
+        async with aiohttp.ClientSession() as session:
+            # First, get the current issue to check existing field values
+            try:
+                async with session.get(
+                    urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+                    headers=_get_jira_headers(os.getenv("JIRA_TOKEN")),
+                ) as response:
+                    response.raise_for_status()
+                    current_issue = await response.json()
+            except aiohttp.ClientError as e:
+                raise ToolError(f"Failed to get current issue details: {e}") from e
 
+    fields = {}
+    update_fields(fields, current_issue.get("fields", {}))
+    if not fields:
+        return f"No fields needed updating in {issue_key}"
+
+    current_issue["fields"].update(fields)
+    if os.getenv("MOCK_JIRA", "False").lower() == "true":
+        await _write_jira_mock(issue_key, current_issue)
+        return f"Successfully updated mock up of {issue_key}"
+
+    async with aiohttp.ClientSession() as session:
         try:
             async with session.put(
                 urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
@@ -141,7 +168,6 @@ async def set_jira_fields(
                 response.raise_for_status()
         except aiohttp.ClientError as e:
             raise ToolError(f"Failed to set the specified fields: {e}") from e
-
     return f"Successfully updated {issue_key}"
 
 
@@ -153,14 +179,35 @@ async def add_jira_comment(
     """
     Adds a comment to the specified Jira issue.
     """
+    if os.getenv("DRY_RUN", "False").lower() == "true":
+        return f"Dry run, not adding comment to {issue_key} (this is expected, not an error)"
+
+    def construct_comment(text: str, private: bool):
+        comment = {"body": text}
+        if private:
+            comment["visibility"] = {"type": "group", "value": RH_EMPLOYEE_GROUP}
+        return comment
+
+    if os.getenv("MOCK_JIRA", "False").lower() == "true":
+        current_issue = await _read_jira_mock(issue_key)
+
+        comment_dict = construct_comment(comment, private)
+        comment_dict["created"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        comment_dict["updated"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        comment_dict["author"] = {"name": "jotnar-project",
+                                  "key": "JIRAUSER288184",
+                                  "displayName": "Jotnar Project"}
+        current_issue["fields"]["comment"]["comments"].append(comment_dict)
+        current_issue["fields"]["comment"]["maxResults"] += 1
+        current_issue["fields"]["comment"]["total"] += 1
+        await _write_jira_mock(issue_key, current_issue)
+        return f"Successfully added the specified comment to mock up of {issue_key}"
+
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(
                 urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/comment"),
-                json={
-                    "body": comment,
-                    **({"visibility": {"type": "group", "value": RH_EMPLOYEE_GROUP}} if private else {}),
-                },
+                json=construct_comment(comment, private),
                 headers=_get_jira_headers(os.getenv("JIRA_TOKEN")),
             ) as response:
                 response.raise_for_status()
@@ -178,18 +225,20 @@ async def check_cve_triage_eligibility(
 
     Returns CVEEligibilityResult model with eligibility decision and reasoning.
     """
-    headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
 
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(
-                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
-                headers=headers,
-            ) as response:
-                response.raise_for_status()
-                jira_data = await response.json()
-        except aiohttp.ClientError as e:
-            raise ToolError(f"Failed to get Jira data: {e}") from e
+    if os.getenv("MOCK_JIRA", "False").lower() == "true":
+        jira_data = await _read_jira_mock(issue_key)
+    else:
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(
+                    urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+                    headers=_get_jira_headers(os.getenv("JIRA_TOKEN")),
+                ) as response:
+                    response.raise_for_status()
+                    jira_data = await response.json()
+            except aiohttp.ClientError as e:
+                raise ToolError(f"Failed to get Jira data: {e}") from e
 
     fields = jira_data.get("fields", {})
     labels = fields.get("labels", [])
@@ -261,6 +310,18 @@ async def change_jira_status(
     if os.getenv("DRY_RUN", "False").lower() == "true":
         return f"Dry run, not changing status of {issue_key} to {status}  (this is expected, not an error)"
 
+    if os.getenv("MOCK_JIRA", "False").lower() == "true":
+        jira_data = await _read_jira_mock(issue_key)
+        jira_data["fields"]["status"] = {"name": status}
+        if status == "In Progress":
+            jira_data["fields"]["status"]["description"] = "Work has started"
+        elif status == "Closed":
+            jira_data["fields"]["status"]["description"] = "The issue is closed. See the" \
+            "resolution for context regarding why (for example Done, Abandoned, Duplicate, etc)"
+
+        await _write_jira_mock(issue_key, jira_data)
+        return f"Successfully changed status of mock up Jira issue {issue_key} to {status}"
+
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
     jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/transitions")
 
@@ -323,6 +384,18 @@ async def edit_jira_labels(
     if os.getenv("DRY_RUN", "False").lower() == "true":
         return f"Dry run, not editing labels on {issue_key} (this is expected, not an error)"
 
+    if os.getenv("MOCK_JIRA", "False").lower() == "true":
+        jira_data = await _read_jira_mock(issue_key)
+        current_labels = set(jira_data["fields"]["labels"])
+        if labels_to_remove:
+            current_labels.difference_update(labels_to_remove)
+        if labels_to_add:
+            current_labels.update(labels_to_add)
+        jira_data["fields"]["labels"] = list(current_labels)
+
+        await _write_jira_mock(issue_key, jira_data)
+        return f"Successfully edited labels on mock up of {issue_key}."
+
     jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}")
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
 
@@ -356,6 +429,11 @@ async def verify_issue_author(
     Supports both Jira Server (using 'key') and Jira Cloud (using 'accountId').
     """
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
+
+    if os.getenv("MOCK_JIRA", "False").lower() == "true":
+        jira_data = await _read_jira_mock(issue_key)
+        # For mocking of Jira issue this should be sufficient
+        return jira_data["fields"]["reporter"]["emailAddress"].endswith("@redhat.com")
 
     async with aiohttp.ClientSession() as session:
         try:

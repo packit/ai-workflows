@@ -218,7 +218,14 @@ def render_prompt(input: InputSchema) -> str:
              - For CVEs, use the CVE publication date to narrow down the timeframe for fixes
              - Check upstream release notes and changelogs after the RHEL package version date
 
-         2.3. Validate the Fix and URL
+         2.3. Verify the fix does not come from an unmerged pull request
+         * When you find a potential fix in a pull request or merge request, check its merge status
+         * If a pull request containing a fix is not yet merged:
+           - Do NOT extract the patch URL from it.
+           - Do NOT use it for backport.
+           - You MUST discard it and continue searching for alternative fixes.
+
+         2.4. Validate the Fix and URL
          * Use the PatchValidator tool to fetch content from any patch/commit URL you intend to use
          * The tool will verify the URL is accessible and not an issue reference, then return the content
          * Once you have the content, you must validate two things:
@@ -234,8 +241,8 @@ def render_prompt(input: InputSchema) -> str:
          * Only proceed with URLs that contain valid patch content AND address the specific issue
          * If the content is not a proper patch or doesn't fix the issue, continue searching for other fixes
 
-         2.4. Decide the Outcome
-         * If your investigation successfully identifies a specific fix that passes both validations in step 2.3, your decision is backport
+         2.5. Decide the Outcome
+         * If your investigation successfully identifies a specific fix that passes all validations in steps 2.3 and 2.4, your decision is backport
          * You must be able to justify why the patch is correct and how it addresses the issue
          * If your investigation confirms a valid bug/CVE but fails to locate a specific fix, your decision
            is clarification-needed

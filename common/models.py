@@ -242,6 +242,7 @@ class BuildOutputSchema(BaseModel):
     """Output schema for the build agent."""
     success: bool = Field(description="Whether the build was successfully completed")
     error: str | None = Field(description="Specific details about an error")
+    is_timeout: bool = Field(default=False, description="Whether the build failed due to a timeout")
 
 
 # ============================================================================

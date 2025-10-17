@@ -66,7 +66,7 @@ async def create_zstream_branch(
             start_time = time.monotonic()
             while time.monotonic() - start_time < SYNC_TIMEOUT:
                 if await asyncio.to_thread(repo.git.ls_remote, gitlab_repo_url, branch, branches=True):
-                    return f"Succesfully created Z-Stream branch {branch}"
+                    return f"Successfully created Z-Stream branch {branch}"
                 await asyncio.sleep(30)
             raise RuntimeError(f"The {branch} branch wasn't synced to GitLab after {SYNC_TIMEOUT} seconds")
     except Exception as e:

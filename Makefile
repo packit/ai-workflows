@@ -66,6 +66,14 @@ run-backport-agent-c9s-standalone:
 		-e CVE_ID=$(CVE_ID) \
 		backport-agent-c9s
 
+run-backport-verification-agent-c9s-standalone:
+	$(COMPOSE_AGENTS)  run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e UPSTREAM_FIX=$(UPSTREAM_FIX) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e DRY_RUN=$(DRY_RUN) \
+		backport-verification-agent-c9s
+
 .PHONY: run-backport-agent-c10s-standalone
 run-backport-agent-c10s-standalone:
 	$(COMPOSE_AGENTS) run --rm \

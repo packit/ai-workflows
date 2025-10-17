@@ -136,6 +136,11 @@ services:
     command: ["python", "agents/backport_agent.py"]
     profiles: ["agents"]
 
+  backport-verification-agent-c9s:
+    <<: *beeai-agent-c9s
+    command: ["python", "agents/backport_verification_agent.py"]
+    profiles: ["agents"]
+
   backport-agent-c10s:
     <<: *beeai-agent-c10s
     command: ["python", "agents/backport_agent.py"]

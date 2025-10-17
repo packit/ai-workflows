@@ -313,6 +313,9 @@ async def main() -> None:
                 build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
                 if build_result.success:
                     return "update_release"
+                if build_result.is_timeout:
+                    logger.info(f"Build timed out for {state.jira_issue}, proceeding")
+                    return "update_release"
                 state.attempts_remaining -= 1
                 if state.attempts_remaining <= 0:
                     state.backport_result.success = False

@@ -341,7 +341,9 @@ def get_previous_erratum(current_erratum_id: str | int, package_name: str):
         if rel_prep:
             latest_erratum = max(
                 rel_prep,
-                key=lambda e: e.publish_date if e.publish_date else datetime.min,
+                key=lambda e: e.publish_date
+                if e.publish_date
+                else datetime.min.replace(tzinfo=timezone.utc),
             )
             return latest_erratum
 

@@ -37,6 +37,7 @@ RUN dnf -y install --allowerasing \
       which \
       sed \
       gawk \
+      rsync \
     && dnf clean all
 
 RUN pip3 install --no-cache-dir \

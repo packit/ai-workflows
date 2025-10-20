@@ -37,6 +37,7 @@ RUN dnf -y install --allowerasing \
       which \
       sed \
       gawk \
+      rsync \
     && dnf clean all
 
 # Create Python 3.11 virtual environment and install Python packages

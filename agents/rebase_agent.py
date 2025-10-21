@@ -73,8 +73,8 @@ def get_instructions() -> str:
          but sometimes other things are changed - if that's the case, try to understand the logic behind it.
 
       3. Update the spec file. Set <VERSION> but do not change release, that will be taken care of later.
-         Do any other usual changes. You may need to get some information from the upstream repository,
-         for example commit hashes.
+         Do any other usual changes. Do not modify changelog, a new changelog entry will be added later.
+         You may need to get some information from the upstream repository, for example commit hashes.
 
       4. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 

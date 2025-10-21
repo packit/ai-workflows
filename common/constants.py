@@ -68,6 +68,7 @@ class JiraLabels(Enum):
 
     REBASED = "jotnar_rebased"
     BACKPORTED = "jotnar_backported"
+    MERGED = "jotnar_merged"
 
     REBASE_ERRORED = "jotnar_rebase_errored"
     BACKPORT_ERRORED = "jotnar_backport_errored"

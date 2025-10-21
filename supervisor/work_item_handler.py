@@ -15,8 +15,11 @@ class WorkItemHandler(ABC):
     def resolve_remove_work_item(self, why: str):
         return WorkflowResult(status=why, reschedule_in=-1)
 
-    def resolve_wait(self, why: str):
-        return WorkflowResult(status=why, reschedule_in=WAIT_DELAY)
+    def resolve_wait(self, why: str, *, reschedule_in: float = WAIT_DELAY):
+        return WorkflowResult(
+            status=why,
+            reschedule_in=reschedule_in,
+        )
 
     @abstractmethod
     async def run(self) -> WorkflowResult:

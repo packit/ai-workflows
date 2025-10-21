@@ -77,6 +77,7 @@ class MergeRequest(BaseModel):
     title: str
     description: str
     state: MergeRequestState
+    merged_at: datetime | None
 
 
 class Issue(BaseModel):

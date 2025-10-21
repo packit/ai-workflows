@@ -11,7 +11,7 @@ import aiohttp
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from common import CVEEligibilityResult
+from common import CVEEligibilityResult, load_rhel_config
 
 # Jira custom field IDs
 SEVERITY_CUSTOM_FIELD = "customfield_12316142"
@@ -229,22 +229,30 @@ async def check_cve_triage_eligibility(
             reason="CVE is embargoed"
         )
 
-    # Determine if internal fix is needed based on severity and priority
-    severity = fields.get(SEVERITY_CUSTOM_FIELD, {}).get("value", "")
-    priority_labels = [label for label in labels if label in PRIORITY_LABELS]
+    rhel_config = await load_rhel_config()
+    current_z_streams = rhel_config.get("current_z_streams", {})
 
-    needs_internal_fix = (
-        severity not in [Severity.LOW.value, Severity.MODERATE.value] or
-        bool(priority_labels)
-    )
-
-    if needs_internal_fix:
-        if severity not in [Severity.LOW.value, Severity.MODERATE.value]:
-            reason = f"High severity CVE ({severity}) eligible for Z-stream, needs RHEL fix first"
-        else:
-            reason = f"Priority CVE with labels {priority_labels} eligible for Z-stream, needs RHEL fix first"
+    # Check if z-stream is not in current z-streams - always needs internal fix
+    if target_version.lower() not in [v.lower() for v in current_z_streams.values()]:
+        needs_internal_fix = True
+        reason = f"Z-stream CVE ({target_version}) not in current z-streams, needs RHEL fix first"
     else:
-        reason = "CVE eligible for Z-stream fix in CentOS Stream"
+        # Determine if internal fix is needed based on severity and priority
+        severity = fields.get(SEVERITY_CUSTOM_FIELD, {}).get("value", "")
+        priority_labels = [label for label in labels if label in PRIORITY_LABELS]
+
+        needs_internal_fix = (
+            severity not in [Severity.LOW.value, Severity.MODERATE.value] or
+            bool(priority_labels)
+        )
+
+        if needs_internal_fix:
+            if severity not in [Severity.LOW.value, Severity.MODERATE.value]:
+                reason = f"High severity CVE ({severity}) eligible for Z-stream, needs RHEL fix first"
+            else:
+                reason = f"Priority CVE with labels {priority_labels} eligible for Z-stream, needs RHEL fix first"
+        else:
+            reason = "CVE eligible for Z-stream fix in CentOS Stream"
 
     return CVEEligibilityResult(
         is_cve=True,

@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup, Tag  # type: ignore
 from pydantic import BaseModel
 from requests_gssapi import HTTPSPNEGOAuth
 
+from .constants import DATETIME_MIN_UTC
 from .http_utils import requests_session
 from .supervisor_types import Erratum, FullErratum, ErrataStatus, Comment
 
@@ -341,7 +342,7 @@ def get_previous_erratum(current_erratum_id: str | int, package_name: str):
         if rel_prep:
             latest_erratum = max(
                 rel_prep,
-                key=lambda e: e.publish_date if e.publish_date else datetime.min,
+                key=lambda e: e.publish_date if e.publish_date else DATETIME_MIN_UTC,
             )
             return latest_erratum
 

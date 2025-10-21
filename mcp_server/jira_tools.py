@@ -17,8 +17,10 @@ from common import CVEEligibilityResult
 SEVERITY_CUSTOM_FIELD = "customfield_12316142"
 TARGET_END_CUSTOM_FIELD = "customfield_12313942"
 EMBARGO_CUSTOM_FIELD = "customfield_12324750"
+SPECIAL_HANDLING_CUSTOM_FIELD = "customfield_12324753"
 
 PRIORITY_LABELS = ["compliance-priority", "contract-priority"]
+PRIORITY_SPECIAL_HANDLING_LABELS = PRIORITY_LABELS + ["KEV (active exploit case)", "Major Incident", "security-select", "support-exception"]
 
 RH_EMPLOYEE_GROUP = "Red Hat Employee"
 
@@ -233,16 +235,21 @@ async def check_cve_triage_eligibility(
     severity = fields.get(SEVERITY_CUSTOM_FIELD, {}).get("value", "")
     priority_labels = [label for label in labels if label in PRIORITY_LABELS]
 
+    special_handlings = fields.get(SPECIAL_HANDLING_CUSTOM_FIELD, [])
+    special_handling_labels = [special_handling.get("value", "") for special_handling in special_handlings]
+    priority_special_handling_labels = [label for label in special_handling_labels if label in PRIORITY_SPECIAL_HANDLING_LABELS]
+
     needs_internal_fix = (
         severity not in [Severity.LOW.value, Severity.MODERATE.value] or
-        bool(priority_labels)
+        bool(priority_labels) or
+        bool(priority_special_handling_labels)
     )
 
     if needs_internal_fix:
         if severity not in [Severity.LOW.value, Severity.MODERATE.value]:
             reason = f"High severity CVE ({severity}) eligible for Z-stream, needs RHEL fix first"
         else:
-            reason = f"Priority CVE with labels {priority_labels} eligible for Z-stream, needs RHEL fix first"
+            reason = f"Priority CVE with labels {priority_labels} or special handling labels {priority_special_handling_labels} eligible for Z-stream, needs RHEL fix first"
     else:
         reason = "CVE eligible for Z-stream fix in CentOS Stream"
 

@@ -131,7 +131,11 @@ class SearchResultsdbTool(
     """
 
     name = "search_resultsdb"  # type: ignore
-    description = "Search for results for a specific package build in resultsdb"  # type: ignore
+    description = (
+        "Search for results for a specific package build in resultsdb. "
+        "Only use this tool if the test_result_location field of "
+        "TEST_LOCATION_INFO indicates that test results will be in resultsdb."
+    )  # type: ignore
     input_schema = SearchResultsdbInput  # type: ignore
 
     def _create_emitter(self) -> Emitter:

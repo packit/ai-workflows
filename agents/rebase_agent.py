@@ -95,6 +95,7 @@ def get_instructions() -> str:
       8. In your output, provide a "files_to_git_add" list containing all files that should be git added for this rebase.
          This typically includes the updated spec file and any new/modified/deleted patch files or other files you've changed
          or added/removed during the rebase. Do not include files that were automatically generated or downloaded by spectool.
+         Make sure to include patch files that were also removed from the spec file.
 
 
       General instructions:

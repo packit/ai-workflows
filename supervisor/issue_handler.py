@@ -27,8 +27,10 @@ class IssueHandler(WorkItemHandler):
     This includes changing the issue status, adding comments, and adding labels.
     """
 
-    def __init__(self, issue: FullIssue, *, dry_run: bool):
-        super().__init__(dry_run=dry_run)
+    def __init__(
+        self, issue: FullIssue, *, dry_run: bool, ignore_needs_attention: bool
+    ):
+        super().__init__(dry_run=dry_run, ignore_needs_attention=ignore_needs_attention)
         self.issue = issue
 
     def resolve_set_status(self, status: IssueStatus, why: str):
@@ -225,7 +227,10 @@ class IssueHandler(WorkItemHandler):
 
         logger.info("Running workflow for issue %s", issue.url)
 
-        if JiraLabels.NEEDS_ATTENTION.value in issue.labels:
+        if (
+            JiraLabels.NEEDS_ATTENTION.value in issue.labels
+            and not self.ignore_needs_attention
+        ):
             return self.resolve_remove_work_item(
                 "Issue has the jotnar_needs_attention label"
             )

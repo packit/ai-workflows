@@ -8,17 +8,15 @@ import typer
 
 from agents.observability import setup_observability
 from common.utils import init_kerberos_ticket
-from .errata_utils import get_erratum, get_erratum_for_link
+from .collect import collect_and_schedule_work_items
+from .errata_utils import get_erratum
 from .erratum_handler import (
     ErratumHandler,
-    erratum_all_issues_are_release_pending,
-    erratum_needs_attention,
 )
 from .issue_handler import IssueHandler
-from .jira_utils import get_current_issues, get_issue
-from .supervisor_types import ErrataStatus, IssueStatus
+from .jira_utils import get_issue
 from .http_utils import with_http_sessions
-from .work_queue import WorkItem, WorkQueue, WorkItemType, work_queue
+from .work_queue import WorkQueue, WorkItemType, work_queue
 
 logger = logging.getLogger(__name__)
 
@@ -65,56 +63,16 @@ def check_env(
         raise typer.Exit(1)
 
 
-@with_http_sessions()
-async def collect_once(queue: WorkQueue):
-    await init_kerberos_ticket()
-
-    logger.info("Getting all relevant issues from JIRA")
-    issues = {i.key: i for i in get_current_issues()}
-
-    erratum_links = set(
-        i.errata_link for i in issues.values() if i.errata_link is not None
-    )
-    errata = [get_erratum_for_link(link) for link in erratum_links]
-
-    work_items = set(
-        WorkItem(item_type=WorkItemType.PROCESS_ISSUE, item_data=i.key)
-        for i in issues.values()
-        if i.status != IssueStatus.RELEASE_PENDING
-    ) | set(
-        WorkItem(item_type=WorkItemType.PROCESS_ERRATUM, item_data=str(e.id))
-        for e in errata
-        if (
-            (
-                e.status == ErrataStatus.NEW_FILES
-                or (
-                    e.status == ErrataStatus.QE
-                    and erratum_all_issues_are_release_pending(e, issues)
-                )
-            )
-            and not erratum_needs_attention(e.id)
-        )
-    )
-
-    new_work_items = work_items - set(await queue.get_all_work_items())
-    await queue.schedule_work_items(new_work_items)
-
-    for new_work_item in new_work_items:
-        logger.info("New work item: %s", new_work_item)
-
-    logger.info("Scheduled %d new work items", len(new_work_items))
-
-
 async def do_collect(repeat: bool, repeat_delay: int):
     async with work_queue(os.environ["REDIS_URL"]) as queue:
         while repeat:
             try:
-                await collect_once(queue)
+                await collect_and_schedule_work_items(queue)
             except Exception:
                 logger.exception("Error while collecting work items")
             await asyncio.sleep(repeat_delay)
         else:
-            await collect_once(queue)
+            await collect_and_schedule_work_items(queue)
 
 
 @app.command()

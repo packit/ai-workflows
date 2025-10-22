@@ -176,14 +176,6 @@ def get_custom_fields() -> dict[str, str]:
     return {field["name"]: field["id"] for field in response}
 
 
-CURRENT_ISSUES_JQL = """
-project = RHEL AND AssignedTeam = rhel-jotnar
-AND status in ('New', 'In Progress', 'Integration', 'Release Pending')
-AND 'Errata Link' is not EMPTY
-AND labels != jotnar_needs_attention
-"""
-
-
 @overload
 def decode_issue(issue_data: Any, full: Literal[False] = False) -> Issue: ...
 
@@ -294,22 +286,26 @@ def get_issue(issue_key: str, full: bool = False) -> Issue | FullIssue:
 
 @overload
 def get_current_issues(
+    jql: str,
     full: Literal[False] = False,
 ) -> Generator[Issue, None, None]: ...
 
 
 @overload
-def get_current_issues(full: Literal[True]) -> Generator[FullIssue, None, None]: ...
+def get_current_issues(
+    jql: str, full: Literal[True]
+) -> Generator[FullIssue, None, None]: ...
 
 
 def get_current_issues(
+    jql: str,
     full: bool = False,
 ) -> Generator[Issue, None, None] | Generator[FullIssue, None, None]:
     start_at = 0
     max_results = 1000
     while True:
         body = {
-            "jql": CURRENT_ISSUES_JQL,
+            "jql": jql,
             "startAt": start_at,
             "maxResults": max_results,
             "fields": _fields(full),

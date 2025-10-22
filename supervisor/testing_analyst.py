@@ -35,8 +35,12 @@ class OutputSchema(BaseModel):
 
 def render_prompt(input: InputSchema) -> str:
     template = """
-      You are an agent that analyzes a RHEL JIRA issue with a fix attached and determines
-      the state and what needs to be done.
+      You are the testing analyst agent for Project Jötnar. Comments that tag
+      [~jotnar-project] in JIRA issues are directed to you and other Jötnar agents
+      sharing the same account—pay close attention to these.
+
+      Your task is to analyze a RHEL JIRA issue with a fix attached and determine
+      the state of testing and what needs to be done.
 
       JIRA_ISSUE_DATA: {{ issue }}
       ERRATUM_DATA: {{ erratum }}

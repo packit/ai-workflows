@@ -292,3 +292,26 @@ class FailedPipelineJob(BaseModel):
     artifacts_url: str = Field(
         description="URL to browse job artifacts, empty string if no artifacts"
     )
+
+
+# ============================================================================
+# Clones Analyzer Agent Schemas
+# ============================================================================
+
+class ClonesInputSchema(BaseModel):
+    """Input schema for the clones analyzer agent."""
+    jira_issue: str = Field(description="Jira issue key to identify clones of")
+
+class Clone(BaseModel):
+    """A clone of a Jira issue."""
+    jira_issue: str = Field(description="Jira issue key")
+    branch: str = Field(description="Branch")
+
+class Link(BaseModel):
+    """A link between two Jira issues."""
+    source: str = Field(description="Source Jira issue key")
+    target: str = Field(description="Target Jira issue key")
+class ClonesOutputSchema(BaseModel):
+    """Output schema for the clones analyzer agent."""
+    clones: list[Clone] = Field(description="List of Jira issue keys and branches that are clones of the given Jira issue or the given Jira issue is a clone of the found Jira issues")
+    links: list[Link] = Field(description="List of links between the given Jira issue and the found Jira issues or the found Jira issues and the given Jira issue")

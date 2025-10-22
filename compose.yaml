@@ -135,6 +135,11 @@ services:
     command: ["python", "agents/triage_agent.py"]
     profiles: ["agents"]
 
+  clones-analyzer-agent:
+    <<: *beeai-agent-c10s
+    command: ["python", "agents/clones_analyzer_agent.py"]
+    profiles: ["agents"]
+
   backport-agent-c9s:
     <<: *beeai-agent-c9s
     command: ["python", "agents/backport_agent.py"]

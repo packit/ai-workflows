@@ -18,7 +18,6 @@ SEVERITY_CUSTOM_FIELD = "customfield_12316142"
 TARGET_END_CUSTOM_FIELD = "customfield_12313942"
 EMBARGO_CUSTOM_FIELD = "customfield_12324750"
 
-PRIORITY_LABELS = ["compliance-priority", "contract-priority"]
 
 RH_EMPLOYEE_GROUP = "Red Hat Employee"
 
@@ -232,27 +231,19 @@ async def check_cve_triage_eligibility(
     rhel_config = await load_rhel_config()
     current_z_streams = rhel_config.get("current_z_streams", {})
 
+    needs_internal_fix = False
+    severity = fields.get(SEVERITY_CUSTOM_FIELD, {}).get("value", "")
+
     # Check if z-stream is not in current z-streams - always needs internal fix
     if target_version.lower() not in [v.lower() for v in current_z_streams.values()]:
         needs_internal_fix = True
         reason = f"Z-stream CVE ({target_version}) not in current z-streams, needs RHEL fix first"
+    # Determine if internal fix is needed based on severity
+    elif severity not in [Severity.LOW.value, Severity.MODERATE.value]:
+        needs_internal_fix = True
+        reason = f"High severity CVE ({severity}) eligible for Z-stream, needs RHEL fix first"
     else:
-        # Determine if internal fix is needed based on severity and priority
-        severity = fields.get(SEVERITY_CUSTOM_FIELD, {}).get("value", "")
-        priority_labels = [label for label in labels if label in PRIORITY_LABELS]
-
-        needs_internal_fix = (
-            severity not in [Severity.LOW.value, Severity.MODERATE.value] or
-            bool(priority_labels)
-        )
-
-        if needs_internal_fix:
-            if severity not in [Severity.LOW.value, Severity.MODERATE.value]:
-                reason = f"High severity CVE ({severity}) eligible for Z-stream, needs RHEL fix first"
-            else:
-                reason = f"Priority CVE with labels {priority_labels} eligible for Z-stream, needs RHEL fix first"
-        else:
-            reason = "CVE eligible for Z-stream fix in CentOS Stream"
+        reason = "CVE eligible for Z-stream fix in CentOS Stream"
 
     return CVEEligibilityResult(
         is_cve=True,

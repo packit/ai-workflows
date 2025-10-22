@@ -15,6 +15,7 @@ RUN dnf -y install --allowerasing \
       python3-backoff \
       python3-beautifulsoup4 \
       python3-pip \
+      python3-nitrate \
       python3-requests-gssapi \
       python3-rpm \
       python3-tomli-w \
@@ -43,6 +44,13 @@ COPY agents/ /home/beeai/agents/
 COPY common/ /home/beeai/common/
 COPY supervisor/ /home/beeai/supervisor/
 RUN chgrp -R root /home/beeai && chmod -R g+rX /home/beeai
+
+COPY <<EOF /etc/nitrate.conf
+[nitrate]
+url = https://tcms.engineering.redhat.com/xmlrpc/
+username=anon
+password=whatever
+EOF
 
 USER beeai
 ENV HOME=/home/beeai

@@ -30,6 +30,7 @@ dependencies = [
     "backoff>=2.2.1",
     "tomli-w>=1.2.0",
     "flexmock>=0.12.2",
+    "nitrate>=1.9.0",
 ]
 
 [project.optional-dependencies]

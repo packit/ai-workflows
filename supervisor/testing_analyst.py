@@ -18,6 +18,7 @@ from .tools.read_readme import ReadReadmeTool
 from .tools.read_issue import ReadIssueTool
 from .tools.read_logfile import ReadLogfileTool
 from .tools.search_resultsdb import SearchResultsdbTool
+from .tools.analyze_ewa_testrun import AnalyzeEwaTestRunTool
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +59,22 @@ TEMPLATE_NORMAL = (
     + """
 For components handled by the New Errata Workflow Automation(NEWA):
 NEWA will post a comment to the erratum when it has started tests and when they finish.
-Read the JIRA issue in those comments to find test results. Ignore any comments
-with links to TCMS or Beaker; older EWA automation may have run in parallel
-with NEWA, but should be ignored.
+Read the JIRA issue in those comments to find test results.
+For components handled by Errata Workflow Automation (EWA):
+EWA will post a comment to the erratum when it has started tests and when they finish.
+Read the comment to find the test results in TCMS Test Run.
+
+If the test location data says that tests are started by NEWA, but there are no comments
+from NEWA providing links to JIRA issues, then this component may be a component where
+NEWA is only used for RHEL10, and not earlier versions - in that case, you may read the
+results from the TCMS test run posted by EWA.
+
+In all other cases, if the tests are supposed to be started by NEWA, ignore any comments with
+links to TCMS or Beaker.
 
 You cannot assume that tests have passed just because a comment says they have
-finished, it is mandatory to check the actual test results in the JIRA issue.
-Make sure that the JIRA issue is the correct issue for the latest build in the
+finished, it is mandatory to check the actual test results in the JIRA issue or TCMS.
+Make sure that the JIRA issue or TCMS Test Run is the correct one for the latest build in the
 erratum.
 
 Tests can trigger at various points in an issue's lifecycle depending on component
@@ -88,6 +98,10 @@ If the tests are complete and failed:
 If the tests are complete and passed:
     state: tests-passed
     comment: [Give a brief summary of what was tested with a link to the result.]
+
+If there are *some* test failures, but you are sure they are not regressions and most tests complete successfully:
+    state: tests-waived
+    comment: [Explain which tests failed and why they are not considered regressions]
 
 If the tests will be started automatically without user intervention, but are not yet running:
     state: tests-pending
@@ -169,6 +183,7 @@ async def analyze_issue(
         ReadReadmeTool(),
         ReadIssueTool(),
         SearchResultsdbTool(),
+        AnalyzeEwaTestRunTool(),
     ]
 
     agent = ToolCallingAgent(

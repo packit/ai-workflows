@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 CURRENT_ISSUES_JQL = """
 project = RHEL AND AssignedTeam = rhel-jotnar
 AND status in ('New', 'In Progress', 'Integration', 'Release Pending')
-AND 'Errata Link' is not EMPTY
+AND ('Errata Link' is not EMPTY OR labels in ('jotnar_backported', 'jotnar_rebased', 'jotnar_merged'))
 AND labels != jotnar_needs_attention
 """
 

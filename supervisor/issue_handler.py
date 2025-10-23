@@ -7,7 +7,7 @@ from .constants import DATETIME_MIN_UTC, GITLAB_GROUPS
 from .errata_utils import get_erratum_for_link
 from .gitlab_utils import search_gitlab_project_mrs
 from .work_item_handler import WorkItemHandler
-from .jira_utils import add_issue_label, change_issue_status
+from .jira_utils import add_issue_label, change_issue_status, format_attention_message
 from .supervisor_types import (
     FullIssue,
     IssueStatus,
@@ -41,11 +41,18 @@ class IssueHandler(WorkItemHandler):
 
         return WorkflowResult(status=why, reschedule_in=reschedule_delay)
 
-    def resolve_flag_attention(self, why: str):
+    def resolve_flag_attention(self, why: str, *, details_comment: str | None = None):
+
+        if details_comment:
+            #panel first and testing analysis after that
+            full_comment = f"{format_attention_message(why)}\n\n{details_comment}"
+        else:
+            full_comment = format_attention_message(why)
+
         add_issue_label(
             self.issue.key,
             JiraLabels.NEEDS_ATTENTION.value,
-            why,
+            full_comment,
             dry_run=self.dry_run,
         )
 
@@ -189,9 +196,8 @@ class IssueHandler(WorkItemHandler):
             testing_analysis = await analyze_issue(issue, related_erratum)
             if testing_analysis.state == TestingState.NOT_RUNNING:
                 return self.resolve_flag_attention(
-                    testing_analysis.comment
-                    or "Tests aren't running, and can't figure out how to run them. "
-                    "(The testing analysis agent returned an empty comment)",
+                    "Tests aren't running - see details below",
+                    details_comment=testing_analysis.comment,
                 )
             elif testing_analysis.state == TestingState.PENDING:
                 return self.resolve_wait("Tests are pending")
@@ -199,9 +205,8 @@ class IssueHandler(WorkItemHandler):
                 return self.resolve_wait("Tests are running")
             elif testing_analysis.state == TestingState.FAILED:
                 return self.resolve_flag_attention(
-                    testing_analysis.comment
-                    or "Tests failed. "
-                    "(The testing analysis agent returned an empty comment)",
+                    "Tests failed - see details below",
+                    details_comment=testing_analysis.comment,
                 )
             elif testing_analysis.state == TestingState.PASSED:
                 return self.resolve_set_status(

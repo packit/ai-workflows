@@ -161,10 +161,22 @@ def get_instructions() -> str:
                       * Missing helper functions, types, or macros
                       * API changes that happened between versions
                       * Structural changes to the codebase
+                      * Test file reorganization (tests split/merged into different files)
                     - If prerequisites are missing, you have options:
                       * Cherry-pick the prerequisite commits first (from upstream history between dist-git version and PR)
                       * Or adapt the code to work without them (rewrite to use older APIs)
                       * Or manually backport just the needed helper functions
+                    - For test file conflicts due to reorganization:
+                      * NEVER SKIP TEST COMMITS - tests validate that your fix actually works!
+                      * Check if test files exist in different locations in the old version
+                      * Use git log in upstream repo to trace test file movements: `git -C <UPSTREAM_REPO> log --follow --all -- path/to/test_file`
+                      * Merge test changes into existing test files that match the old structure
+                      * Adapt test code to work with older test frameworks or patterns
+                      * Don't skip tests just because file paths don't match - adapt them!
+                      * For CVE fixes: tests often demonstrate the vulnerability - they're CRITICAL
+                    - If adding NEW test files, ensure they're integrated into the build system:
+                        check Makefile/CMakeLists.txt/meson.build and add to test lists if needed,
+                        or verify they follow auto-discovery naming conventions (test_*.py, *_test.c)
                     - Intelligently adapt the changes to make them work with the older codebase
                   * Continue until all PR commits are successfully cherry-picked and adapted
 
@@ -269,38 +281,160 @@ def get_prompt() -> str:
     """
 
 
-def create_backport_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> RequirementAgent:
+def get_fix_build_error_prompt() -> str:
+    return """
+      Your working directory is {{local_clone}}, a clone of dist-git repository of package {{package}}.
+      {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
+      {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
+
+      The backport of {{upstream_fix}} was initially successful using the cherry-pick workflow,
+      but the build failed with the following error:
+
+      {{build_error}}
+
+      CRITICAL: The upstream repository ({{local_clone}}-upstream) still exists with all your previous work intact.
+      DO NOT clone it again. DO NOT reset to base commit. DO NOT modify anything in {{local_clone}} dist-git repository.
+      Your cherry-picked commits are still there in {{local_clone}}-upstream.
+
+      Your task is to fix this build error by exploring the upstream repository and finding the best solution.
+      Make ONE attempt to fix the issue - you will be called again if the build still fails.
+
+      Follow these steps:
+
+      STEP 1: Analyze the build error
+      - Identify what's missing: undefined functions, types, macros, symbols, headers, or API changes
+      - Look for patterns like "undefined reference", "implicit declaration", "undeclared identifier", etc.
+      - Note the specific names of missing symbols
+
+      STEP 2: Explore the upstream repository for solutions
+      You have FULL ACCESS to the upstream repository ({{local_clone}}-upstream) as a reference:
+
+      - Examine the history between versions:
+        * `git -C {{local_clone}}-upstream log --oneline <base_version>..<target_commit>`
+
+      - Search for how missing symbols are implemented:
+        * Search in commit messages: `git -C {{local_clone}}-upstream log --all --grep="function_name" --oneline`
+        * Search in code changes: `git -C {{local_clone}}-upstream log --all -S"function_name" --oneline`
+        * Show commit details: `git -C {{local_clone}}-upstream show <commit_hash>`
+
+      - Look at current implementation in newer versions:
+        * View files to see how things work: `view` tool on files in {{local_clone}}-upstream
+        * Understand the context and dependencies
+        * See how the code evolved over time
+
+      - Explore related changes:
+        * Check header files, documentation, tests
+        * Look for API changes, refactorings, helper functions
+        * Understand the bigger picture
+
+      STEP 3: Choose the best fix approach
+      You have TWO options for fixing the issue:
+
+      OPTION A: Cherry-pick prerequisite commits
+      - If you find clean, self-contained commits that add what's missing
+      - Use `cherry_pick_commit` tool ONE commit at a time (chronological order, oldest first)
+      - Resolve conflicts using `str_replace` tool
+      - Stage resolved files: `git -C {{local_clone}}-upstream add <file>`
+      - Complete cherry-pick: use `cherry_pick_continue` tool
+
+      OPTION B: Manually adapt the code
+      - If cherry-picking would pull in too many dependencies
+      - If the commit doesn't apply cleanly and needs significant adaptation
+      - If you need to backport just a small piece of functionality
+      - Directly edit files in {{local_clone}}-upstream using `str_replace` or `insert` tools
+      - Make minimal changes to fix the specific build error
+      - Commit your changes: `git -C {{local_clone}}-upstream add <files>` then
+        `git -C {{local_clone}}-upstream commit -m "Manually backport: <description>"`
+
+      You can MIX both approaches:
+      - Cherry-pick some commits, then manually adapt code where needed
+      - Use the upstream repo as a reference while writing your own backport
+
+      STEP 4: Regenerate the patch
+      - After making your fixes (cherry-picked or manual), regenerate the patch file
+      - Use `generate_patch_from_commit` tool with the PATCHED_BASE commit
+      - This creates a single patch with all changes: original commits + prerequisites/fixes
+      - Overwrite {{jira_issue}}.patch in {{local_clone}}
+
+      STEP 5: Test the build
+      - The spec file should already reference {{jira_issue}}.patch
+      - Run `centpkg --name={{package}} --namespace=rpms --release={{dist_git_branch}} prep` to verify patch applies
+      - Run `centpkg --name={{package}} --namespace=rpms --release={{dist_git_branch}} srpm` to generate SRPM
+      - Test if the SRPM builds successfully using the `build_package` tool:
+        * Call build_package with the SRPM path, dist_git_branch, and jira_issue
+        * Wait for build results
+        * If build PASSES: Report success=true with the SRPM path
+        * If build FAILS: Use `download_artifacts` to get build logs if available
+        * Extract the new error message from the logs and report success=false with the error
+
+      Report your results:
+      - If build passes → Report success=true with the SRPM path
+      - If build fails → Report success=false with the extracted error message
+      - If you can't find a fix → Report success=false explaining why
+
+      IMPORTANT RULES:
+      - Work in the EXISTING {{local_clone}}-upstream directory (don't clone again)
+      - Don't modify anything in {{local_clone}} dist-git except regenerating {{jira_issue}}.patch
+      - You can freely explore, edit, commit in the upstream repo - it's your workspace
+      - Use the upstream repo as a rich source of information and examples
+      - Be creative and pragmatic - the goal is a working build, not perfect git history
+      - Make ONE solid attempt to fix the issue - if the build fails, report the error clearly
+      - Your work will persist in the upstream repo for the next attempt if needed
+
+      Remember: Unpacked upstream sources are in {{unpacked_sources}}.
+      The upstream repository at {{local_clone}}-upstream is your playground - explore it freely!
+    """
+
+
+def create_backport_agent(
+    mcp_tools: list[Tool], local_tool_options: dict[str, Any], include_build_tools: bool = False
+) -> RequirementAgent:
+    """
+    Create a backport agent.
+
+    Args:
+        mcp_tools: List of MCP gateway tools
+        local_tool_options: Options for local tools
+        include_build_tools: If True, include build_package and download_artifacts tools
+                           for iterative build testing during error fixing
+    """
+    base_tools = [
+        ThinkTool(),
+        DuckDuckGoSearchTool(),
+        RunShellCommandTool(options=local_tool_options),
+        CreateTool(options=local_tool_options),
+        ViewTool(options=local_tool_options),
+        InsertTool(options=local_tool_options),
+        InsertAfterSubstringTool(options=local_tool_options),
+        StrReplaceTool(options=local_tool_options),
+        SearchTextTool(options=local_tool_options),
+        GetCWDTool(options=local_tool_options),
+        RemoveTool(options=local_tool_options),
+        GitPatchCreationTool(options=local_tool_options),
+        GitPatchApplyTool(options=local_tool_options),
+        GitPatchApplyFinishTool(options=local_tool_options),
+        GitLogSearchTool(options=local_tool_options),
+        GitPreparePackageSources(options=local_tool_options),
+        # Upstream cherry-pick workflow tools
+        GetPackageInfoTool(options=local_tool_options),
+        ExtractUpstreamRepositoryTool(options=local_tool_options),
+        CloneUpstreamRepositoryTool(options=local_tool_options),
+        FindBaseCommitTool(options=local_tool_options),
+        ApplyDownstreamPatchesTool(options=local_tool_options),
+        CherryPickCommitTool(options=local_tool_options),
+        CherryPickContinueTool(options=local_tool_options),
+        GeneratePatchFromCommitTool(options=local_tool_options),
+    ]
+
+    # Add build tools if requested (for iterative build error fixing)
+    if include_build_tools:
+        base_tools.extend([t for t in mcp_tools if t.name in ["build_package", "download_artifacts"]])
+
     return RequirementAgent(
         name="BackportAgent",
         llm=get_chat_model(),
         tool_call_checker=get_tool_call_checker_config(),
-        tools=[
-            ThinkTool(),
-            DuckDuckGoSearchTool(),
-            RunShellCommandTool(options=local_tool_options),
-            CreateTool(options=local_tool_options),
-            ViewTool(options=local_tool_options),
-            InsertTool(options=local_tool_options),
-            InsertAfterSubstringTool(options=local_tool_options),
-            StrReplaceTool(options=local_tool_options),
-            SearchTextTool(options=local_tool_options),
-            GetCWDTool(options=local_tool_options),
-            RemoveTool(options=local_tool_options),
-            GitPatchCreationTool(options=local_tool_options),
-            GitPatchApplyTool(options=local_tool_options),
-            GitPatchApplyFinishTool(options=local_tool_options),
-            GitLogSearchTool(options=local_tool_options),
-            GitPreparePackageSources(options=local_tool_options),
-            # Upstream cherry-pick workflow tools
-            GetPackageInfoTool(options=local_tool_options),
-            ExtractUpstreamRepositoryTool(options=local_tool_options),
-            CloneUpstreamRepositoryTool(options=local_tool_options),
-            FindBaseCommitTool(options=local_tool_options),
-            ApplyDownstreamPatchesTool(options=local_tool_options),
-            CherryPickCommitTool(options=local_tool_options),
-            CherryPickContinueTool(options=local_tool_options),
-            GeneratePatchFromCommitTool(options=local_tool_options),
-        ],
+        tools=base_tools,
         memory=UnconstrainedMemory(),
         requirements=[
             ConditionalRequirement(
@@ -349,6 +483,9 @@ async def main() -> None:
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
+    # When using cherry-pick workflow, allow the same number of incremental fix attempts as build attempts
+    # since the agent iterates internally to fix build errors
+    max_incremental_fix_attempts = int(os.getenv("MAX_INCREMENTAL_FIX_ATTEMPTS", str(max_build_attempts)))
 
     local_tool_options = {"working_directory": None}
 
@@ -359,6 +496,8 @@ async def main() -> None:
         backport_log: list[str] = Field(default=[])
         backport_result: BackportOutputSchema | None = Field(default=None)
         attempts_remaining: int = Field(default=max_build_attempts)
+        used_cherry_pick_workflow: bool = Field(default=False)  # Track if cherry-pick was used
+        incremental_fix_attempts: int = Field(default=0)  # Track how many times we tried incremental fix
 
     async def run_workflow(
         package, dist_git_branch, upstream_fix, jira_issue, cve_id, redis_conn=None
@@ -387,6 +526,10 @@ async def main() -> None:
                 return "fork_and_prepare_dist_git"
 
             async def fork_and_prepare_dist_git(state):
+                # Reset workflow flags since we're starting fresh
+                state.used_cherry_pick_workflow = False
+                state.incremental_fix_attempts = 0
+
                 state.local_clone, state.update_branch, state.fork_url, _ = await tasks.fork_and_prepare_dist_git(
                     jira_issue=state.jira_issue,
                     package=state.package,
@@ -428,12 +571,117 @@ async def main() -> None:
                 state.backport_result = BackportOutputSchema.model_validate_json(response.last_message.text)
                 if state.backport_result.success:
                     state.backport_log.append(state.backport_result.status)
+
+                    # Detect if cherry-pick workflow was used by checking for upstream repo with commits
+                    upstream_repo = Path(f"{state.local_clone}-upstream")
+                    if upstream_repo.exists():
+                        try:
+                            result = await check_subprocess(
+                                ["git", "-C", str(upstream_repo), "rev-list", "--count", "HEAD"],
+                                capture_output=True
+                            )
+                            commit_count = int(result.stdout.strip())
+                            if commit_count > 1:  # More than just initial commit
+                                state.used_cherry_pick_workflow = True
+                                logger.info(f"Cherry-pick workflow detected: {commit_count} commits in upstream repo")
+                            else:
+                                state.used_cherry_pick_workflow = False
+                                logger.info("Git am workflow detected: no commits in upstream repo")
+                        except Exception as e:
+                            logger.warning(f"Could not determine workflow type: {e}")
+                            state.used_cherry_pick_workflow = False
+                    else:
+                        state.used_cherry_pick_workflow = False
+                        logger.info("Git am workflow detected: no upstream repo exists")
+
                     return "run_build_agent"
                 else:
                     return "comment_in_jira"
 
+            async def fix_build_error(state):
+                """Try to fix build errors by finding and cherry-picking prerequisite commits.
+
+                The agent will be called iteratively, with each attempt trying to fix the build error.
+                The workflow loop ensures we keep trying until we succeed or exhaust attempts.
+                """
+                # We only reach here if cherry-pick workflow was used (state.used_cherry_pick_workflow == True)
+                logger.info(f"Attempting incremental fix for cherry-pick workflow (attempt {state.incremental_fix_attempts}/{max_incremental_fix_attempts})")
+
+                try:
+                    # Create a fresh backport agent with build tools enabled for iterative testing
+                    fix_agent = create_backport_agent(gateway_tools, local_tool_options, include_build_tools=True)
+
+                    # Give the agent the current build error and let it try to fix it
+                    response = await fix_agent.run(
+                        render_prompt(
+                            template=get_fix_build_error_prompt(),
+                            input=BackportInputSchema(
+                                local_clone=state.local_clone,
+                                unpacked_sources=state.unpacked_sources,
+                                package=state.package,
+                                dist_git_branch=state.dist_git_branch,
+                                jira_issue=state.jira_issue,
+                                cve_id=state.cve_id,
+                                upstream_fix=state.upstream_fix,
+                                build_error=state.build_error,
+                            ),
+                        ),
+                        expected_output=BackportOutputSchema,
+                        **get_agent_execution_config(),
+                    )
+
+                    fix_result = BackportOutputSchema.model_validate_json(response.last_message.text)
+
+                    if fix_result.success:
+                        # Build passed! Update state and proceed
+                        state.backport_result = fix_result
+                        state.backport_log.append(fix_result.status)
+                        logger.info("Incremental fix succeeded with passing build")
+                        state.incremental_fix_attempts = 0  # Reset for potential future failures
+                        return "update_release"
+
+                    # Build still failing - update the error for next iteration
+                    logger.info(f"Build still failing after fix attempt: {fix_result.error}")
+                    state.build_error = fix_result.error
+                    state.backport_result = fix_result
+
+                    # Check if we should try again
+                    state.incremental_fix_attempts += 1
+                    if state.incremental_fix_attempts < max_incremental_fix_attempts:
+                        logger.info(f"Will retry incremental fix (attempt {state.incremental_fix_attempts + 1}/{max_incremental_fix_attempts})")
+                        return "fix_build_error"  # Try again with the new error
+                    else:
+                        # Exhausted all incremental fix attempts - give up
+                        logger.error(f"Exhausted all {max_incremental_fix_attempts} incremental fix attempts, giving up")
+                        state.backport_result.success = False
+                        state.backport_result.error = (
+                            f"Unable to fix build errors after {max_incremental_fix_attempts} incremental fix attempts. "
+                            f"Last error: {fix_result.error}"
+                        )
+                        return "comment_in_jira"
+
+                except Exception as e:
+                    # If anything goes wrong in fix_build_error, give up
+                    logger.error(f"Exception during incremental fix: {e}", exc_info=True)
+                    state.backport_result.success = False
+                    state.backport_result.error = f"Exception during incremental fix: {str(e)}"
+                    return "comment_in_jira"
+
             async def run_build_agent(state):
-                response = await build_agent.run(
+                # Ensure we have a valid backport result with SRPM path
+                if not state.backport_result or not state.backport_result.srpm_path:
+                    logger.error("Cannot run build agent: no valid backport result or SRPM path")
+                    state.backport_result = state.backport_result or BackportOutputSchema(
+                        success=False,
+                        srpm_path=None,
+                        status="",
+                        error="No SRPM generated by backport agent"
+                    )
+                    return "comment_in_jira"
+
+                # Create a fresh build agent instance to avoid state issues when called multiple times
+                fresh_build_agent = create_build_agent(gateway_tools, local_tool_options)
+                response = await fresh_build_agent.run(
                     render_prompt(
                         template=get_build_prompt(),
                         input=BuildInputSchema(
@@ -447,6 +695,8 @@ async def main() -> None:
                 )
                 build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
                 if build_result.success:
+                    # Build succeeded - reset incremental fix counter for potential future failures
+                    state.incremental_fix_attempts = 0
                     return "update_release"
                 if build_result.is_timeout:
                     logger.info(f"Build timed out for {state.jira_issue}, proceeding")
@@ -459,7 +709,14 @@ async def main() -> None:
                     )
                     return "comment_in_jira"
                 state.build_error = build_result.error
-                return "fork_and_prepare_dist_git"
+                # Try to fix build error incrementally if cherry-pick workflow was used
+                if state.used_cherry_pick_workflow:
+                    logger.info(f"Cherry-pick workflow was used - starting incremental fix")
+                    return "fix_build_error"
+                else:
+                    # Git am workflow was used - reset and try again
+                    logger.info("Git am workflow was used - resetting for retry")
+                    return "fork_and_prepare_dist_git"
 
             async def update_release(state):
                 try:
@@ -577,6 +834,7 @@ async def main() -> None:
             workflow.add_step("change_jira_status", change_jira_status)
             workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
             workflow.add_step("run_backport_agent", run_backport_agent)
+            workflow.add_step("fix_build_error", fix_build_error)
             workflow.add_step("run_build_agent", run_build_agent)
             workflow.add_step("update_release", update_release)
             workflow.add_step("stage_changes", stage_changes)

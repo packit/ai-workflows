@@ -554,6 +554,16 @@ def change_issue_status(
         add_issue_comment(issue_key, comment, dry_run=dry_run)
 
 
+def format_attention_message(why: str) -> str:
+    return (
+        "{panel:title=Project Jötnar: ATTENTION NEEDED|"
+        "borderStyle=solid|borderColor=#CC0000|titleBGColor=#FFF5F5|bgColor=#FFFEF0}\n"
+        f"{why}\n\n"
+        "Please resolve this and remove the {{jotnar_needs_attention}} flag.\n"
+        "{panel}"
+    )
+
+
 def add_issue_label(
     issue_key: str, label: str, comment: CommentSpec = None, *, dry_run: bool = False
 ) -> None:

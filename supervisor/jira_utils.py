@@ -141,6 +141,49 @@ def jira_api_post(
 
 
 @overload
+def jira_api_upload(
+    path: str,
+    attachments: list[tuple[str, bytes, str]],
+    *,
+    decode_response: Literal[False] = False,
+) -> None: ...
+
+
+@overload
+def jira_api_upload(
+    path: str,
+    attachments: list[tuple[str, bytes, str]],
+    *,
+    decode_response: Literal[True],
+) -> Any: ...
+
+
+@retry_on_rate_limit
+def jira_api_upload(
+    path: str,
+    attachments: list[tuple[str, bytes, str]],
+    *,
+    decode_response: bool = False,
+) -> Any | None:
+    url = f"{jira_url()}/rest/api/2/{path}"
+    files = [("file", a) for a in attachments]
+    headers = dict(jira_headers())
+    del headers["Content-Type"]  # requests will set this correctly for multipart
+    headers["X-Atlassian-Token"] = "no-check"
+    response = requests_session().post(url, headers=headers, files=files)
+    if not response.ok:
+        logger.error(
+            "POST of %s to %s failed\n\nerror:\n%s",
+            ", ".join(filename for filename, _, _ in attachments),
+            url,
+            response.text,
+        )
+    raise_for_status(response)
+    if decode_response:
+        return response.json()
+
+
+@overload
 def jira_api_put(
     path: str, json: dict[str, Any], *, decode_response: Literal[False] = False
 ) -> None: ...
@@ -527,6 +570,42 @@ def add_issue_label(
         return
 
     jira_api_put(path, json=body)
+
+
+def add_issue_attachments(
+    issue_key: str,
+    attachments: list[tuple[str, bytes, str]],
+    *,
+    comment: CommentSpec = None,
+    dry_run: bool = False,
+) -> None:
+    """
+    Adds attachments to a JIRA issue.
+
+    Args:
+        issue_key: The key of the issue to add attachments to.
+        attachments: A list of tuples of (filename, file bytes, mime type).
+        comment: An optional comment to add to the issue along with the attachments.
+        dry_run: If True, don't actually add the attachments.
+    """
+    path = f"issue/{urlquote(issue_key)}/attachments"
+
+    if dry_run:
+        logger.info(
+            "Dry run: would add attachment(s) %s to issue %s",
+            ", ".join(filename for filename, _, _ in attachments),
+            issue_key,
+        )
+        logger.debug("Dry run: would post attachment to %s", path)
+
+    jira_api_upload(path, attachments=attachments)
+
+    # The result is a list of attachment metadata dicts, each with an "id" field.
+    # But we can't use that ID for anything useful - in comments we can only
+    # reference attachments by filename, not ID.
+
+    if comment is not None:
+        add_issue_comment(issue_key, comment, dry_run=dry_run)
 
 
 @cache

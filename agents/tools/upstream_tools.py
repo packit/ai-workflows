@@ -471,9 +471,9 @@ class CherryPickCommitTool(Tool[CherryPickCommitToolInput, ToolRunOptions, Strin
 
                 # Check again if commit exists after fetch
                 cmd = ["git", "cat-file", "-t", tool_input.commit_hash]
-                exit_code_check2, _, _ = await run_subprocess(cmd, cwd=tool_input.repo_path)
+                exit_code_check, _, _ = await run_subprocess(cmd, cwd=tool_input.repo_path)
 
-                if exit_code_check2 != 0:
+                if exit_code_check != 0:
                     raise ToolError(
                         f"Commit {tool_input.commit_hash} not found in repository even after fetch attempt. "
                         f"Fetch result: {stderr_fetch if exit_code_fetch != 0 else 'succeeded but commit still unavailable'}. "

@@ -81,7 +81,6 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         if not (m := re.match(r"^(?P<prefix>rhel-(?P<x>\d+)\.)(?P<y>\d+)(?P<suffix>\.\d+)?$", dist_git_branch)):
             # not a Z-Stream branch
             return None
-        zstream_dist_tag = ".el" + m.group("x") + "_" + m.group("y")
         ystream_candidate_tag = (
             m.group("prefix")
             # y++, up to 10 (highest RHEL minor version)
@@ -89,7 +88,7 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
             + (m.group("suffix") or "")
             + "-candidate"
         )
-        return zstream_dist_tag, ystream_candidate_tag
+        return ystream_candidate_tag
 
     @staticmethod
     async def _get_latest_ystream_build(package: str, candidate_tag: str) -> EVR:
@@ -120,7 +119,6 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         spec_path: Path,
         package: str,
         rebase: bool,
-        zstream_dist_tag: str,
         ystream_candidate_tag: str,
     ) -> None:
         latest_ystream_build = await cls._get_latest_ystream_build(package, ystream_candidate_tag)
@@ -171,24 +169,7 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                 # no %autorelease, %dist present, add Z-Stream counter
                 release = current_release + ".1"
 
-        with Specfile(spec_path, macros=[("dist", zstream_dist_tag)]) as spec:
-            current_evr = EVR(
-                version=latest_ystream_build.version,
-                release=spec.expand(
-                    current_release, extra_macros=[("_rpmautospec_release_number", "1")]
-                ),
-            )
-            evr = EVR(
-                version=latest_ystream_build.version,
-                release=spec.expand(release, extra_macros=[("_rpmautospec_release_number", "2")]),
-            )
-            future_ystream_evr = EVR(
-                version=latest_ystream_build.version,
-                release = str(int(ystream_base_release) + 1) + ystream_release_suffix,
-            )
-            # sanity check
-            if not rebase and not (current_evr < evr < future_ystream_evr):
-                raise ToolError("Unable to determine valid release")
+        with Specfile(spec_path) as spec:
             spec.raw_release = release
 
     async def _run(
@@ -199,10 +180,10 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
     ) -> StringToolOutput:
         spec_path = get_absolute_path(tool_input.spec, self)
         try:
-            if not (tags := self._process_zstream_branch(tool_input.dist_git_branch)):
+            if not (ystream_candidate_tag := self._process_zstream_branch(tool_input.dist_git_branch)):
                 await self._bump_or_reset_release(spec_path, tool_input.rebase)
             else:
-                await self._set_zstream_release(spec_path, tool_input.package, tool_input.rebase, *tags)
+                await self._set_zstream_release(spec_path, tool_input.package, tool_input.rebase, ystream_candidate_tag)
         except Exception as e:
             raise ToolError(f"Failed to update release: {e}") from e
         return StringToolOutput(result=f"Successfully updated release in {spec_path}")

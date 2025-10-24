@@ -178,9 +178,6 @@ async def test_update_release(rebase, dist_git_branch, ystream_dist, minimal_spe
         await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
         await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "2%{?dist}.2")
         await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
-        if not rebase:
-            minimal_spec.write_text(minimal_spec.read_text().replace("%{?dist}.2", "%{?dist}.1.0.0.hotfix2.rhel12345"))
-            assert (await run_and_check(minimal_spec, None, error=True)).endswith("Unable to determine valid release")
 
 
 @pytest.mark.asyncio

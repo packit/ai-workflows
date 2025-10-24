@@ -81,17 +81,17 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         if not (m := re.match(r"^(?P<prefix>rhel-(?P<x>\d+)\.)(?P<y>\d+)(?P<suffix>\.\d+)?$", dist_git_branch)):
             # not a Z-Stream branch
             return None
-        ystream_candidate_tag = (
+        higher_stream_candidate_tag = (
             m.group("prefix")
             # y++, up to 10 (highest RHEL minor version)
             + str(min(int(m.group("y")) + 1, 10))
             + (m.group("suffix") or "")
             + "-candidate"
         )
-        return ystream_candidate_tag
+        return higher_stream_candidate_tag
 
     @staticmethod
-    async def _get_latest_ystream_build(package: str, candidate_tag: str) -> EVR:
+    async def _get_latest_higher_stream_build(package: str, candidate_tag: str) -> EVR:
         builds = await asyncio.to_thread(
             koji.ClientSession(BREWHUB_URL).listTagged,
             package=package,
@@ -101,7 +101,7 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
             strict=True,
         )
         if not builds:
-            raise RuntimeError(f"There are no Y-Stream builds of {package} in {candidate_tag}")
+            raise RuntimeError(f"There are no builds of {package} in {candidate_tag}")
         [build] = builds
         return EVR(epoch=build["epoch"] or 0, version=build["version"], release=build["release"])
 
@@ -119,11 +119,10 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         spec_path: Path,
         package: str,
         rebase: bool,
-        ystream_candidate_tag: str,
+        higher_stream_candidate_tag: str,
     ) -> None:
-        latest_ystream_build = await cls._get_latest_ystream_build(package, ystream_candidate_tag)
-        ystream_base_release, suffix = latest_ystream_build.release.rsplit(".el", maxsplit=1)
-        ystream_release_suffix = f".el{suffix}"
+        latest_higher_stream_build = await cls._get_latest_higher_stream_build(package, higher_stream_candidate_tag)
+        higher_stream_base_release, _ = latest_higher_stream_build.release.rsplit(".el", maxsplit=1)
         with Specfile(spec_path) as spec:
             current_release = spec.raw_release
         nodes = list(ValueParser.flatten(ValueParser.parse(current_release)))
@@ -147,8 +146,8 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                 # %autorelease after %dist, most likely already a Z-Stream release, no change needed
                 release = current_release
             else:
-                # no %dist or %autorelease before it, let's create a new release based on Y-Stream
-                release = ystream_base_release + "%{?dist}.%{autorelease -n}"
+                # no %dist or %autorelease before it, let's create a new release based on the higher stream
+                release = higher_stream_base_release + "%{?dist}.%{autorelease -n}"
         else:
             if rebase:
                 # no %autorelease, rebase, reset the release
@@ -163,8 +162,8 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                     # no %autorelease and existing Z-Stream counter after %dist, increase it
                     release = prefix + "." + str(int(m.group(1)) + 1)
                 else:
-                    # invalid Z-Stream counter, let's try to create a new release based on Y-Stream
-                    release = ystream_base_release + "%{?dist}.1"
+                    # invalid Z-Stream counter, let's try to create a new release based on the higher stream
+                    release = higher_stream_base_release + "%{?dist}.1"
             else:
                 # no %autorelease, %dist present, add Z-Stream counter
                 release = current_release + ".1"
@@ -180,10 +179,15 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
     ) -> StringToolOutput:
         spec_path = get_absolute_path(tool_input.spec, self)
         try:
-            if not (ystream_candidate_tag := self._process_zstream_branch(tool_input.dist_git_branch)):
+            if not (higher_stream_candidate_tag := self._process_zstream_branch(tool_input.dist_git_branch)):
                 await self._bump_or_reset_release(spec_path, tool_input.rebase)
             else:
-                await self._set_zstream_release(spec_path, tool_input.package, tool_input.rebase, ystream_candidate_tag)
+                await self._set_zstream_release(
+                    spec_path,
+                    tool_input.package,
+                    tool_input.rebase,
+                    higher_stream_candidate_tag,
+                )
         except Exception as e:
             raise ToolError(f"Failed to update release: {e}") from e
         return StringToolOutput(result=f"Successfully updated release in {spec_path}")

@@ -572,6 +572,24 @@ def add_issue_label(
     jira_api_put(path, json=body)
 
 
+def remove_issue_label(
+    issue_key: str, label: str, comment: CommentSpec = None, *, dry_run: bool = False
+) -> None:
+    path = f"issue/{urlquote(issue_key)}"
+    body: dict[str, Any] = {
+        "update": {"labels": [{"remove": label}]},
+    }
+    if comment is not None:
+        _add_comment_update(body["update"], comment)
+
+    if dry_run:
+        logger.info("Dry run: would remove label %s from issue %s", label, issue_key)
+        logger.debug("Dry run: would post %s to %s", body, path)
+        return
+
+    jira_api_put(path, json=body)
+
+
 def add_issue_attachments(
     issue_key: str,
     attachments: list[tuple[str, bytes, str]],

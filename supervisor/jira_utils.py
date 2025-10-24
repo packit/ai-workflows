@@ -630,4 +630,12 @@ def create_issue(
 
 
 if __name__ == "__main__":
-    print(get_issue(os.environ["JIRA_ISSUE"], full=True).model_dump_json())
+    import asyncio
+    from .http_utils import with_requests_session
+
+    @with_requests_session()
+    async def main():
+        logging.basicConfig(level=logging.DEBUG)
+        print(get_issue(os.environ["JIRA_ISSUE"], full=True).model_dump_json())
+
+    asyncio.run(main())

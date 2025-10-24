@@ -1,12 +1,10 @@
 """Tools for working with upstream repositories and fix URLs."""
 
-import json
 import re
 from pathlib import Path
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
 
+import aiohttp
 from pydantic import BaseModel, Field
 
 from beeai_framework.context import RunContext
@@ -80,23 +78,26 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
                     # GitLab API
                     api_url = f"https://{parsed.netloc}/api/v4/projects/{owner}%2F{repo}/merge_requests/{pr_number}"
 
+                headers = {
+                    'Accept': 'application/json',
+                    'User-Agent': 'RHEL-Backport-Agent'
+                }
+
                 try:
-                    req = Request(api_url)
-                    req.add_header('Accept', 'application/json')
-                    req.add_header('User-Agent', 'RHEL-Backport-Agent')
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(api_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                            response.raise_for_status()
+                            data = await response.json()
 
-                    with urlopen(req, timeout=10) as response:
-                        data = json.loads(response.read().decode('utf-8'))
+                            # Extract commit hash from API response
+                            if pr_match:
+                                # GitHub: get head.sha
+                                commit_hash = data['head']['sha']
+                            else:
+                                # GitLab: get sha
+                                commit_hash = data['sha']
 
-                        # Extract commit hash from API response
-                        if pr_match:
-                            # GitHub: get head.sha
-                            commit_hash = data['head']['sha']
-                        else:
-                            # GitLab: get sha
-                            commit_hash = data['sha']
-
-                except (HTTPError, URLError, KeyError) as e:
+                except (aiohttp.ClientError, KeyError) as e:
                     raise ToolError(
                         f"Failed to fetch PR/MR information from {api_url}. "
                         f"The PR/MR might be private, deleted, or the API is unavailable. Error: {e}"

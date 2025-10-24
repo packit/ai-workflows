@@ -356,6 +356,31 @@ def get_previous_erratum(current_erratum_id: str | int, package_name: str):
         cur_version = cur_version.parent
 
 
+def get_erratum_build_nvr(erratum_id: str | int, package_name: str) -> str | None:
+    """
+    Gets the build NVR for a package in an erratum.
+
+    Args:
+        erratum_id: The ID of the erratum.
+        package_name: The name of the package for which to find the build NVR.
+
+    Returns:
+        The build NVR for the package in the erratum, or None if not found. If
+        the package is included in multiple releases within the erratum, returns
+        the first one found. We do not expect builds for multiple product
+        versions for the errata we are dealing with - that functionality is for
+        products layered on top of RHEL that release to multiple RHEL versions.
+    """
+    builds_by_release = ET_api_get(f"erratum/{erratum_id}/builds_list")
+    for release_info in builds_by_release.values():
+        for builds_map in release_info["builds"]:
+            for build_nvr in builds_map:
+                if build_nvr.rsplit("-", 2)[0] == package_name:
+                    return build_nvr
+
+    return None
+
+
 class RuleParseError(Exception):
     pass
 

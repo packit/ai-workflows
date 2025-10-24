@@ -332,7 +332,9 @@ async def test_run_full_workflow_with_labeled_issues(fetcher, mock_redis_context
         "jira_issue": "ISSUE-3",
         "triage_result": {
             "resolution": "backport",
-            "data": BackportData(jira_issue="ISSUE-3", package="test-package", patch_url="https://example.com/patch", justification="Security fix", cve_id="CVE-2023-1234").model_dump()
+            "data": BackportData(jira_issue="ISSUE-3", package="test-package",
+            patch_urls=["https://example.com/patch"], justification="Security fix",
+            cve_id="CVE-2023-1234").model_dump()
         }
     }
     task_for_backport = Task(metadata=triage_state_for_backport).model_dump_json()

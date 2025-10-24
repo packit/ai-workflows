@@ -15,6 +15,7 @@ class PatchValidatorInput(BaseModel):
 
 
 class PatchValidatorResult(BaseModel):
+    url: str = Field(description="URL of the patch/commit")
     is_accessible: bool = Field(description="Whether the URL is accessible and not an issue reference")
     status_code: int | None = Field(description="HTTP status code")
     content: str | None = Field(description="Content of the URL (truncated if too long)")
@@ -65,7 +66,6 @@ class PatchValidatorTool(Tool[PatchValidatorInput, ToolRunOptions, PatchValidato
     async def _run(
         self, tool_input: PatchValidatorInput, options: ToolRunOptions | None, context: RunContext
     ) -> PatchValidatorOutput:
-
         url = tool_input.url.strip()
 
         is_issue, reason = self._is_issue_reference(url)
@@ -103,6 +103,7 @@ class PatchValidatorTool(Tool[PatchValidatorInput, ToolRunOptions, PatchValidato
                 reason = f"Not an issue reference but raised exception: {str(e)}"
 
         result = PatchValidatorResult(
+            url=url,
             is_accessible=is_accessible,
             status_code=status_code,
             content=content,

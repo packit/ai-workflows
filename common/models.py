@@ -131,7 +131,8 @@ class RebaseData(BaseModel):
 class BackportData(BaseModel):
     """Data for backport resolution."""
     package: str = Field(description="Package name")
-    patch_url: str = Field(description="URL to the source of the fix that was validated using PatchValidator tool")
+    patch_urls: list[str] = Field(
+        description="A list of URLs to the sources of the fixes that were validated using the PatchValidator tool")
     justification: str = Field(description="Clear explanation of why this patch fixes the issue, linking it to the root cause")
     jira_issue: str = Field(description="Jira issue identifier")
     cve_id: str | None = Field(description="CVE identifier", default=None)
@@ -188,9 +189,10 @@ class TriageOutputSchema(BaseModel):
             case BackportData():
                 fix_version_text = f"\n*Fix Version*: {self.data.fix_version}" if self.data.fix_version else ""
 
+                patch_urls_text = "\n".join([f"*Patch URL {i+1}*: {url}" for i, url in enumerate(self.data.patch_urls)])
                 return (
                     f"{resolution}"
-                    f"*Patch URL*: {self.data.patch_url}\n"
+                    f"{patch_urls_text}\n"
                     f"*Justification*: {self.data.justification}"
                     f"{fix_version_text}"
                 )

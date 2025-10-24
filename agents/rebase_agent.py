@@ -90,9 +90,12 @@ def get_instructions() -> str:
       6. Upload new upstream sources (files that the `spectool` command downloaded in the previous step)
          to lookaside cache using the `upload_sources` tool.
 
-      7. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+      7. If you removed any patch files from the spec file (e.g. because they were already applied upstream),
+         you must delete those patch files using `rm` command from the repository as well.
 
-      8. In your output, provide a "files_to_git_add" list containing all files that should be git added for this rebase.
+      8. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+
+      9. In your output, provide a "files_to_git_add" list containing all files that should be git added for this rebase.
          This typically includes the updated spec file and any new/modified/deleted patch files or other files you've changed
          or added/removed during the rebase. Do not include files that were automatically generated or downloaded by spectool.
          Make sure to include patch files that were also removed from the spec file.
@@ -305,7 +308,7 @@ async def main() -> None:
 
             async def stage_changes(state):
                 # Use accumulated files from all rebase iterations, fallback to *.spec if none specified
-                files_to_git_add = list(state.all_files_git_to_add) or ["*.spec"]
+                files_to_git_add = list(state.all_files_git_to_add) or [f"{state.package}.spec"]
 
                 try:
                     await tasks.stage_changes(

@@ -1,5 +1,4 @@
 import hashlib
-import itertools
 import logging
 import os
 import shutil
@@ -84,8 +83,27 @@ async def stage_changes(
 ) -> None:
     if isinstance(files_to_commit, str):
         files_to_commit = [files_to_commit]
-    for path in itertools.chain(*(local_clone.glob(pat) for pat in files_to_commit)):
-        await check_subprocess(["git", "add", str(path)], cwd=local_clone)
+
+    # Get currently staged files
+    _, stdout, _ = await run_subprocess(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=local_clone
+    )
+    already_staged = set(stdout.strip().split('\n')) if stdout and stdout.strip() else set()
+
+    # Stage each file
+    for file in files_to_commit:
+        if file in already_staged:
+            logger.info(f"Skipping already staged: {file}")
+            continue
+
+        logger.info(f"Staging: {file}")
+        exit_code, _, stderr = await run_subprocess(
+            ["git", "add", "--all", file],
+            cwd=local_clone
+        )
+        if exit_code != 0:
+            logger.warning(f"Failed to stage {file}: {stderr}")
 
 
 async def commit_push_and_open_mr(

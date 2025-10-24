@@ -84,24 +84,13 @@ async def stage_changes(
     if isinstance(files_to_commit, str):
         files_to_commit = [files_to_commit]
 
-    # Get currently staged files
-    _, stdout, _ = await run_subprocess(
-        ["git", "diff", "--cached", "--name-only"],
-        cwd=local_clone
-    )
-    already_staged = set(stdout.strip().split('\n')) if stdout and stdout.strip() else set()
-
-    # Stage each file
     for file in files_to_commit:
-        if file in already_staged:
-            logger.info(f"Skipping already staged: {file}")
-            continue
-
         logger.info(f"Staging: {file}")
         exit_code, _, stderr = await run_subprocess(
             ["git", "add", "--all", file],
             cwd=local_clone
         )
+        # for the case agent already staged deleted file which leads to error
         if exit_code != 0:
             logger.warning(f"Failed to stage {file}: {stderr}")
 

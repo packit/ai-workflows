@@ -32,7 +32,8 @@ class IssueHandler(WorkItemHandler):
         self.issue = issue
 
     def resolve_set_status(self, status: IssueStatus, why: str):
-        change_issue_status(self.issue.key, status, why, dry_run=self.dry_run)
+        comment = f"*Changing status from {self.issue.status} => {status}*\n\n{why}"
+        change_issue_status(self.issue.key, status, comment, dry_run=self.dry_run)
 
         if status in (IssueStatus.RELEASE_PENDING, IssueStatus.CLOSED):
             reschedule_delay = -1
@@ -211,9 +212,7 @@ class IssueHandler(WorkItemHandler):
             elif testing_analysis.state == TestingState.PASSED:
                 return self.resolve_set_status(
                     IssueStatus.RELEASE_PENDING,
-                    testing_analysis.comment
-                    or "Final testing has passed, moving to Release Pending. "
-                    "(The testing analysis agent returned an empty comment)",
+                    testing_analysis.comment or "Final testing has passed.",
                 )
             else:
                 raise ValueError(f"Unknown testing state: {testing_analysis.state}")

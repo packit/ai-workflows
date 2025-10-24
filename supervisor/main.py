@@ -34,7 +34,11 @@ app_state = State()
 
 
 def check_env(
-    chat: bool = False, jira: bool = False, redis: bool = False, gitlab: bool = False
+    chat: bool = False,
+    jira: bool = False,
+    redis: bool = False,
+    gitlab: bool = False,
+    testing_farm: bool = False,
 ):
     required_vars = []
     if chat:
@@ -51,6 +55,8 @@ def check_env(
         )
     if gitlab:
         required_vars.append(("GITLAB_TOKEN", "Gitlab authentication token"))
+    if testing_farm:
+        required_vars.append(("TESTING_FARM_API_TOKEN", "Testing Farm API token"))
 
     missing_vars = [var for var in required_vars if not os.getenv(var[0])]
 

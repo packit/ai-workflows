@@ -13,7 +13,7 @@ from copr.v3 import BuildProxy, ProjectProxy
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, Field
 
-from common.utils import init_kerberos_ticket, KerberosError
+from common.utils import init_kerberos_ticket, KerberosError, is_cs_branch
 from common.validators import AbsolutePath
 
 COPR_CONFIG = {
@@ -61,7 +61,9 @@ def _branch_to_chroot(dist_git_branch: str) -> str:
     if not m:
         raise ValueError(f"Unsupported branch name: {dist_git_branch}")
     majorver = next(g for g in m.groups() if g is not None)
-    return f"rhel-{majorver}.dev"
+    # build only cNs against target with .dev suffix
+    suffix = ".dev" if is_cs_branch(dist_git_branch) else ""
+    return f"rhel-{majorver}{suffix}"
 
 
 async def build_package(

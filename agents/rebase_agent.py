@@ -90,8 +90,8 @@ def get_instructions() -> str:
       6. Upload new upstream sources (files that the `spectool` command downloaded in the previous step)
          to lookaside cache using the `upload_sources` tool.
 
-      7. If you removed any patch files from the spec file (e.g. because they were already applied upstream),
-         you must delete those patch files using `rm` command from the repository as well.
+      7. If you removed any patch file references from the spec file (e.g. because they were already applied upstream),
+         you must remove all the corresponding patch files from the repository as well.
 
       8. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
 

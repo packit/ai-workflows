@@ -187,6 +187,13 @@ else
 DRY_RUN_FLAG :=
 endif
 
+IGNORE_NEEDS_ATTENTION_LOWER := $(shell echo $(IGNORE_NEEDS_ATTENTION) | tr '[:upper:]' '[:lower:]')
+ifeq ($(IGNORE_NEEDS_ATTENTION_LOWER),true)
+IGNORE_NEEDS_ATTENTION_FLAG := --ignore-needs-attention
+else
+IGNORE_NEEDS_ATTENTION_FLAG :=
+endif
+
 .PHONY: supervisor-clear-queue
 supervisor-clear-queue:
 	$(COMPOSE_SUPERVISOR) run --rm \
@@ -200,12 +207,12 @@ supervisor-collect:
 .PHONY: process-issue
 process-issue:
 	$(COMPOSE_SUPERVISOR) run --rm \
-		supervisor python -m supervisor.main $(DEBUG_FLAG) $(DRY_RUN_FLAG) process-issue $(JIRA_ISSUE)
+		supervisor python -m supervisor.main $(DEBUG_FLAG) $(IGNORE_NEEDS_ATTENTION_FLAG) $(DRY_RUN_FLAG) process-issue $(JIRA_ISSUE)
 
 .PHONY: process-erratum
 process-erratum:
 	$(COMPOSE_SUPERVISOR) run --rm \
-		supervisor python -m supervisor.main $(DEBUG_FLAG) $(DRY_RUN_FLAG) process-erratum $(ERRATA_ID)
+		supervisor python -m supervisor.main $(DEBUG_FLAG) $(IGNORE_NEEDS_ATTENTION_FLAG) $(DRY_RUN_FLAG) process-erratum $(ERRATA_ID)
 
 
 # Common utility targets

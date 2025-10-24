@@ -27,6 +27,7 @@ app = typer.Typer()
 @dataclass
 class State:
     dry_run: bool = False
+    ignore_needs_attention: bool = False
 
 
 app_state = State()
@@ -108,7 +109,11 @@ async def process_once(queue: WorkQueue):
 
     if work_item.item_type == WorkItemType.PROCESS_ISSUE:
         issue = get_issue(work_item.item_data, full=True)
-        result = await IssueHandler(issue, dry_run=app_state.dry_run).run()
+        result = await IssueHandler(
+            issue,
+            dry_run=app_state.dry_run,
+            ignore_needs_attention=app_state.ignore_needs_attention,
+        ).run()
         if result.reschedule_in >= 0:
             await queue.schedule_work_items([work_item], delay=result.reschedule_in)
         else:
@@ -122,7 +127,11 @@ async def process_once(queue: WorkQueue):
         )
     elif work_item.item_type == WorkItemType.PROCESS_ERRATUM:
         erratum = get_erratum(work_item.item_data)
-        result = await ErratumHandler(erratum, dry_run=app_state.dry_run).run()
+        result = await ErratumHandler(
+            erratum,
+            dry_run=app_state.dry_run,
+            ignore_needs_attention=app_state.ignore_needs_attention,
+        ).run()
         if result.reschedule_in >= 0:
             await queue.schedule_work_items([work_item], delay=result.reschedule_in)
         else:
@@ -163,7 +172,11 @@ async def do_process_issue(key: str):
     await init_kerberos_ticket()
 
     issue = get_issue(key, full=True)
-    result = await IssueHandler(issue, dry_run=app_state.dry_run).run()
+    result = await IssueHandler(
+        issue,
+        dry_run=app_state.dry_run,
+        ignore_needs_attention=app_state.ignore_needs_attention,
+    ).run()
     logger.info(
         "Issue %s processed, status=%s, reschedule_in=%s",
         key,
@@ -197,7 +210,11 @@ async def do_process_erratum(id: str):
     await init_kerberos_ticket()
 
     erratum = get_erratum(id)
-    result = await ErratumHandler(erratum, dry_run=app_state.dry_run).run()
+    result = await ErratumHandler(
+        erratum,
+        dry_run=app_state.dry_run,
+        ignore_needs_attention=app_state.ignore_needs_attention,
+    ).run()
 
     logger.info(
         "Erratum %s (%s) processed, status=%s, reschedule_in=%s",
@@ -228,8 +245,9 @@ def process_erratum(id_or_url: str):
 @app.callback()
 def main(
     debug: bool = typer.Option(False, help="Enable debug mode."),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Don't actually change anything."
+    dry_run: bool = typer.Option(False, help="Don't actually change anything."),
+    ignore_needs_attention: bool = typer.Option(
+        False, help="Process issues or errata flagged with jotnar_needs_attention."
     ),
 ):
     if debug:
@@ -240,6 +258,7 @@ def main(
         logging.basicConfig(level=logging.INFO)
 
     app_state.dry_run = dry_run
+    app_state.ignore_needs_attention = ignore_needs_attention
 
     collector_endpoint = os.environ.get("COLLECTOR_ENDPOINT")
     if collector_endpoint is not None:

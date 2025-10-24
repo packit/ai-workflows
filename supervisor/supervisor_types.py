@@ -104,9 +104,13 @@ class Issue(BaseModel):
     preliminary_testing: PreliminaryTesting | None = None  # RHEL only
 
 
+class JiraComment(Comment):
+    id: str
+
+
 class FullIssue(Issue):
     description: str
-    comments: list[Comment]
+    comments: list[JiraComment]
 
 
 class JotnarTag(BaseModel):

@@ -189,6 +189,7 @@ class IssueHandler(WorkItemHandler):
         ):
             return self.resolve_set_status(
                 IssueStatus.INTEGRATION,
+                f"Changing status from {issue.status} => Integration\n\n"
                 "Preliminary testing has passed, moving to Integration",
             )
         elif issue.status == IssueStatus.INTEGRATION:
@@ -209,11 +210,13 @@ class IssueHandler(WorkItemHandler):
                     details_comment=testing_analysis.comment,
                 )
             elif testing_analysis.state == TestingState.PASSED:
+                comment = (
+                    f"Changing status from {self.issue.status} => Release Pending\n\n"
+                    f"{testing_analysis.comment or 'Final testing has passed.'}"
+                )
                 return self.resolve_set_status(
                     IssueStatus.RELEASE_PENDING,
-                    testing_analysis.comment
-                    or "Final testing has passed, moving to Release Pending. "
-                    "(The testing analysis agent returned an empty comment)",
+                    comment,
                 )
             else:
                 raise ValueError(f"Unknown testing state: {testing_analysis.state}")

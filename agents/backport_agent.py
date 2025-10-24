@@ -345,7 +345,7 @@ async def main() -> None:
                 try:
                     await tasks.stage_changes(
                         local_clone=state.local_clone,
-                        files_to_commit=["*.spec", f"{state.jira_issue}.patch"],
+                        files_to_commit=[f"{state.package}.spec", f"{state.jira_issue}.patch"],
                     )
                 except Exception as e:
                     logger.warning(f"Error staging changes: {e}")

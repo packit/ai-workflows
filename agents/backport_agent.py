@@ -101,16 +101,16 @@ def get_instructions() -> str:
 
       3. Determine which backport approach to use:
 
-         A. CHERRY-PICK WORKFLOW (Preferred - try this first if <UPSTREAM_FIX> is a URL):
+         A. CHERRY-PICK WORKFLOW (Preferred - try this first):
 
             IMPORTANT: This workflow uses TWO separate git repositories:
             - <UNPACKED_SOURCES>: The dist-git repository (from Step 2) containing the spec file and existing patches
             - <UPSTREAM_REPO>: A temporary upstream repository clone (created in step 3c with -upstream suffix)
 
             When to use this workflow:
-            - <UPSTREAM_FIX> is a URL (http:// or https://)
-            - URLs ending in .patch or .diff are still URLs (e.g., https://github.com/.../commit/abc123.patch)
-            - If <UPSTREAM_FIX> is a local file path (not a URL), skip to approach B
+            - <UPSTREAM_FIX> is a commit or pull request URL
+            - This includes URLs with .patch suffix (e.g., https://github.com/.../commit/abc123.patch)
+            - If URL extraction fails, fall back to approach B
 
             3a. Extract upstream repository information:
                 - Use `extract_upstream_repository` tool with the upstream fix URL

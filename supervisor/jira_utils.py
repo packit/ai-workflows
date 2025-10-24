@@ -22,8 +22,8 @@ from .http_utils import requests_session
 from .supervisor_types import (
     FullIssue,
     Issue,
-    Comment,
     IssueStatus,
+    JiraComment,
     JotnarTag,
     TestCoverage,
     PreliminaryTesting,
@@ -231,11 +231,12 @@ def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
             **issue.__dict__,
             description=issue_data["fields"]["description"],
             comments=[
-                Comment(
+                JiraComment(
                     authorName=c["author"]["displayName"],
                     authorEmail=c["author"]["emailAddress"],
                     created=datetime.fromisoformat(c["created"]),
                     body=c["body"],
+                    id=c["id"],
                 )
                 for c in issue_data["fields"]["comment"]["comments"]
             ],
@@ -441,6 +442,27 @@ def add_issue_comment(
         return
 
     jira_api_post(path, json=body)
+
+
+def update_issue_comment(
+    issue_key: str, comment_id: str, comment: CommentSpec, *, dry_run: bool = False
+) -> None:
+    body = _comment_to_dict(comment)
+    if body is None:
+        return
+
+    path = f"issue/{urlquote(issue_key)}/comment/{urlquote(comment_id)}"
+    if dry_run:
+        logger.info(
+            "Dry run: would update comment %s on issue %s: %s",
+            comment_id,
+            issue_key,
+            comment,
+        )
+        logger.debug("Dry run: would put %s to %s", body, path)
+        return
+
+    jira_api_put(path, json=body)
 
 
 def change_issue_status(

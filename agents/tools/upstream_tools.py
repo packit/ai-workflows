@@ -61,24 +61,16 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
         try:
             parsed = urlparse(tool_input.upstream_fix_url)
 
-            # Check if this is a pull request URL
-            pr_match = re.search(r'/pull/(\d+)(?:\.patch)?', parsed.path)
-            mr_match = re.search(r'/merge_requests/(\d+)(?:\.patch)?', parsed.path)
+            # Check if this is a pull request URL and extract owner/repo/PR number in one match
+            pr_match = re.search(r'/([\w\-\.]+)/([\w\-\.]+)/pull/(\d+)(?:\.patch)?', parsed.path)
+            mr_match = re.search(r'/([\w\-\.]+)/([\w\-\.]+)/-/merge_requests/(\d+)(?:\.patch)?', parsed.path)
 
             if pr_match or mr_match:
                 # Handle GitHub Pull Request or GitLab Merge Request
-                pr_number = pr_match.group(1) if pr_match else mr_match.group(1)
-
-                # Extract owner/repo from path
-                if pr_match:
-                    repo_path_match = re.match(r'/([\w\-\.]+)/([\w\-\.]+)/pull/', parsed.path)
-                else:
-                    repo_path_match = re.match(r'/([\w\-\.]+)/([\w\-\.]+)/-/merge_requests/', parsed.path)
-
-                if not repo_path_match:
-                    raise ToolError(f"Could not extract repository path from PR/MR URL: {tool_input.upstream_fix_url}")
-
-                owner, repo = repo_path_match.group(1), repo_path_match.group(2)
+                match = pr_match if pr_match else mr_match
+                owner = match.group(1)
+                repo = match.group(2)
+                pr_number = match.group(3)
 
                 # Fetch PR/MR information to get the head commit
                 if pr_match:
@@ -127,32 +119,29 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
             else:
                 # Handle regular commit URLs
                 commit_hash = None
+                repo_path = None
 
-                # Pattern 1: /commit/hash or /-/commit/hash in the path
-                commit_match = re.search(r'/(?:-/)?commit(?:s)?/([a-f0-9]{7,40})(?:\.patch)?', parsed.path)
+                # Pattern 1: /commit/hash or /-/commit/hash in the path (capture repo path and commit hash together)
+                commit_match = re.search(r'^(.*?)(?:/(?:-/)?commit(?:s)?/([a-f0-9]{7,40})(?:\.patch)?)', parsed.path)
                 if commit_match:
-                    commit_hash = commit_match.group(1)
+                    repo_path = commit_match.group(1).strip('/')
+                    commit_hash = commit_match.group(2)
 
-                # Pattern 2: query parameters (?id=hash or &h=hash for cgit/gitweb)
+                # Pattern 2: query parameters (?id=hash or &h=hash for cgit/gitweb, ?p=repo for repo path)
                 if not commit_hash and parsed.query:
                     query_match = re.search(r'(?:id|h)=([a-f0-9]{7,40})', parsed.query)
                     if query_match:
                         commit_hash = query_match.group(1)
+                        # Extract repo from ?p= parameter
+                        repo_query_match = re.search(r'[?&]p=([^;&]+)', parsed.query)
+                        if repo_query_match:
+                            repo_path = repo_query_match.group(1)
 
                 if not commit_hash:
                     raise ToolError(f"Could not extract commit hash from URL: {tool_input.upstream_fix_url}")
 
-                # Extract repository path (everything before /commit or /-/commit)
-                repo_match = re.match(r'(.*?)(?:/(?:-/)?commit)', parsed.path)
-                if not repo_match:
-                    # For query-based URLs, try to extract repo from ?p= parameter
-                    repo_query_match = re.search(r'[?&]p=([^;&]+)', parsed.query)
-                    if repo_query_match:
-                        repo_path = repo_query_match.group(1)
-                    else:
-                        raise ToolError(f"Could not extract repository path from URL: {tool_input.upstream_fix_url}")
-                else:
-                    repo_path = repo_match.group(1).strip('/')
+                if not repo_path:
+                    raise ToolError(f"Could not extract repository path from URL: {tool_input.upstream_fix_url}")
 
                 # Construct clone URL
                 scheme = parsed.scheme or 'https'

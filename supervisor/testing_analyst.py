@@ -31,6 +31,9 @@ class InputSchema(BaseModel):
 class OutputSchema(BaseModel):
     state: TestingState = Field(description="State of tests")
     comment: str | None = Field(description="Comment to add to the JIRA issue")
+    failed_test_ids: list[str] | None = Field(
+        description="List of Testing Farm run IDs with failures"
+    )
 
 
 def render_prompt(input: InputSchema) -> str:
@@ -68,6 +71,7 @@ def render_prompt(input: InputSchema) -> str:
       If the tests are complete and failed:
          state: tests-failed
          comment: [list failed tests with URLs]
+         failed_test_ids: [list of IDs for testing farm runs that failed]
 
       If the tests are complete and passed:
          state: tests-passed

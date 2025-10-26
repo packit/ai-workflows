@@ -1,14 +1,28 @@
 from datetime import datetime, timezone, timedelta
 import logging
+from urllib.error import HTTPError
+
+from supervisor.baseline_tests import BaselineTests
 
 from common.constants import JiraLabels
 
 from .constants import DATETIME_MIN_UTC, GITLAB_GROUPS
-from .errata_utils import get_erratum_for_link
+from .errata_utils import (
+    get_erratum_build_nvr,
+    get_erratum_for_link,
+    get_previous_erratum,
+)
 from .gitlab_utils import search_gitlab_project_mrs
 from .work_item_handler import WorkItemHandler
-from .jira_utils import add_issue_label, change_issue_status, format_attention_message
+from .jira_utils import (
+    add_issue_label,
+    change_issue_status,
+    format_attention_message,
+    remove_issue_label,
+    update_issue_comment,
+)
 from .supervisor_types import (
+    Erratum,
     FullIssue,
     IssueStatus,
     MergeRequestState,
@@ -47,7 +61,7 @@ class IssueHandler(WorkItemHandler):
     def resolve_flag_attention(self, why: str, *, details_comment: str | None = None):
 
         if details_comment:
-            #panel first and testing analysis after that
+            # panel first and testing analysis after that
             full_comment = f"{format_attention_message(why)}\n\n{details_comment}"
         else:
             full_comment = format_attention_message(why)
@@ -60,6 +74,94 @@ class IssueHandler(WorkItemHandler):
         )
 
         return WorkflowResult(status=why, reschedule_in=-1)
+
+    async def resolve_start_reproduction(
+        self, related_erratum: Erratum, comment: str, failed_test_ids: list[str]
+    ) -> WorkflowResult:
+        assert self.issue.errata_link is not None
+
+        def resolve_on_error(error_message: str) -> WorkflowResult:
+            return self.resolve_flag_attention(
+                "Tests failed - see details below. " + error_message,
+                details_comment=comment,
+            )
+
+        previous_erratum = get_previous_erratum(
+            related_erratum.id, self.issue.components[0]
+        )
+        if previous_erratum is None:
+            return resolve_on_error(
+                "Cannot start reproduction with previous build - no previous erratum found to get build from."
+            )
+
+        previous_build_nvr = get_erratum_build_nvr(
+            previous_erratum.id, self.issue.components[0]
+        )
+        if previous_build_nvr is None:
+            return resolve_on_error(
+                "Cannot start reproduction with previous build - error finding previous build NVR."
+            )
+
+        try:
+            baseline_tests = BaselineTests.create(
+                failure_comment=comment,
+                failed_request_ids=failed_test_ids,
+                previous_build_nvr=previous_build_nvr,
+                dry_run=self.dry_run,
+            )
+        except Exception as e:
+            if isinstance(e, HTTPError):
+                logger.error("%s", e)
+            else:
+                logger.exception("%s", e)
+
+            return resolve_on_error(str(e))
+
+        issue_comment = baseline_tests.format_issue_comment()
+
+        add_issue_label(
+            self.issue.key,
+            "jotnar_reproducing_tests",
+            issue_comment,
+            dry_run=self.dry_run,
+        )
+
+        return self.resolve_wait("Waiting to reproduce tests with previous build")
+
+    async def resolve_check_reproduction(self) -> WorkflowResult:
+        baseline_tests = BaselineTests.load_from_issue(self.issue)
+        if baseline_tests is None:
+            return self.resolve_flag_attention(
+                "Issue has jotnar_reproducing_tests label but cannot parse baseline tests from comments"
+            )
+
+        if not baseline_tests.settled():
+            return self.resolve_wait("Waiting for baseline tests to complete")
+
+        await baseline_tests.create_attachments(
+            issue_key=self.issue.key, dry_run=self.dry_run
+        )
+
+        issue_comment = baseline_tests.format_issue_comment(include_attachments=True)
+        remove_issue_label(
+            self.issue.key,
+            "jotnar_reproducing_tests",
+            dry_run=self.dry_run,
+        )
+
+        # Is always set by load_from_issue
+        assert baseline_tests.comment_id is not None
+
+        update_issue_comment(
+            self.issue.key,
+            baseline_tests.comment_id,
+            issue_comment,
+            dry_run=self.dry_run,
+        )
+
+        return self.resolve_flag_attention(
+            "Testing has failed, please investigate failed tests"
+        )
 
     def label_merge_if_needed(self):
         """Add the jotnar_merged label to the issue
@@ -195,6 +297,9 @@ class IssueHandler(WorkItemHandler):
                 "Preliminary testing has passed, moving to Integration",
             )
         elif issue.status == IssueStatus.INTEGRATION:
+            if "jotnar_reproducing_tests" in issue.labels:
+                return await self.resolve_check_reproduction()
+
             related_erratum = get_erratum_for_link(issue.errata_link, full=True)
             testing_analysis = await analyze_issue(issue, related_erratum)
             if testing_analysis.state == TestingState.NOT_RUNNING:
@@ -207,10 +312,17 @@ class IssueHandler(WorkItemHandler):
             elif testing_analysis.state == TestingState.RUNNING:
                 return self.resolve_wait("Tests are running")
             elif testing_analysis.state == TestingState.FAILED:
-                return self.resolve_flag_attention(
-                    "Tests failed - see details below",
-                    details_comment=testing_analysis.comment,
-                )
+                if testing_analysis.failed_test_ids:
+                    return await self.resolve_start_reproduction(
+                        related_erratum,
+                        testing_analysis.comment or "",
+                        testing_analysis.failed_test_ids,
+                    )
+                else:
+                    return self.resolve_flag_attention(
+                        "Tests failed - see details below",
+                        details_comment=testing_analysis.comment,
+                    )
             elif testing_analysis.state == TestingState.PASSED:
                 return self.resolve_set_status(
                     IssueStatus.RELEASE_PENDING,

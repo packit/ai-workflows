@@ -159,8 +159,9 @@ class IssueHandler(WorkItemHandler):
             dry_run=self.dry_run,
         )
 
-        return self.resolve_flag_attention(
-            "Testing has failed, please investigate failed tests"
+        return WorkflowResult(
+            status="Baseline tests are complete, will analyze results",
+            reschedule_in=0.0,
         )
 
     def label_merge_if_needed(self):
@@ -301,7 +302,14 @@ class IssueHandler(WorkItemHandler):
                 return await self.resolve_check_reproduction()
 
             related_erratum = get_erratum_for_link(issue.errata_link, full=True)
-            testing_analysis = await analyze_issue(issue, related_erratum)
+
+            baseline_tests = BaselineTests.load_from_issue(self.issue)
+            if baseline_tests is not None:
+                testing_analysis = await analyze_issue(
+                    issue, related_erratum, after_baseline=True
+                )
+            else:
+                testing_analysis = await analyze_issue(issue, related_erratum)
             if testing_analysis.state == TestingState.NOT_RUNNING:
                 return self.resolve_flag_attention(
                     "Tests aren't running - see details below",
@@ -327,6 +335,12 @@ class IssueHandler(WorkItemHandler):
                 return self.resolve_set_status(
                     IssueStatus.RELEASE_PENDING,
                     testing_analysis.comment or "Final testing has passed.",
+                )
+            elif testing_analysis.state == TestingState.WAIVED:
+                return self.resolve_set_status(
+                    IssueStatus.RELEASE_PENDING,
+                    testing_analysis.comment
+                    or "Final testing has been waived, moving to Release Pending.",
                 )
             else:
                 raise ValueError(f"Unknown testing state: {testing_analysis.state}")

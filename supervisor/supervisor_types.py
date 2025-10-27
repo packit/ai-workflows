@@ -184,6 +184,7 @@ class TestingState(StrEnum):
     RUNNING = "tests-running"
     FAILED = "tests-failed"
     PASSED = "tests-passed"
+    WAIVED = "tests-waived"
 
 
 class WorkflowResult(BaseModel):

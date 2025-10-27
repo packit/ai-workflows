@@ -637,6 +637,36 @@ def add_issue_attachments(
         add_issue_comment(issue_key, comment, dry_run=dry_run)
 
 
+def get_issue_attachment(issue_key: str, filename: str) -> bytes:
+    """
+    Retrieve the content of a specific attachment from a JIRA issue.
+
+    Args:
+        issue_key: The key of the JIRA issue.
+        filename: The name of the attachment file to retrieve.
+
+    Returns:
+        The content of the attachment as bytes.
+
+    Raises:
+        KeyError: If the attachment with the specified filename is not found
+           or if multiple attachments with the same filename exist.
+    """
+    path = f"issue/{urlquote(issue_key)}?fields=attachment"
+    attachments = jira_api_get(path)["fields"]["attachment"]
+
+    attachments = [a for a in attachments if a["filename"] == filename]
+    if len(attachments) == 0:
+        raise KeyError(f"Issue {issue_key} has no attachment named {filename}")
+    if len(attachments) > 1:
+        raise KeyError(f"Issue {issue_key} has multiple attachments named {filename}")
+
+    url = attachments[0]["content"]
+    response = requests_session().get(url, headers=jira_headers())
+    raise_for_status(response)
+    return response.content
+
+
 @cache
 def get_user_name(email: str) -> str:
     users = jira_api_get("user/search", params={"username": email})

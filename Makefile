@@ -241,3 +241,5 @@ check-jira-issue-fetcher-in-container:
 	$(MAKE) -f Makefile.tests check-jira-issue-fetcher-in-container
 check-common-in-container:
 	$(MAKE) -f Makefile.tests check-common-in-container
+check-supervisor-in-container:
+	$(MAKE) -f Makefile.tests check-supervisor-in-container

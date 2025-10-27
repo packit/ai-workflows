@@ -27,13 +27,15 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
        beeai-framework[vertexai,mcp,duckduckgo]==0.1.55 \
        openinference-instrumentation-beeai \
        arize-phoenix-otel \
+       aiohttp \
        redis \
        specfile \
        pytest \
        pytest-asyncio \
        flexmock \
        koji \
-       GitPython
+       GitPython \
+       tomli-w
 
 # Make venv Python the default
 ENV PATH=/opt/beeai-venv/bin:$PATH

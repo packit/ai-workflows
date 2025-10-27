@@ -57,7 +57,14 @@ TEMPLATE_NORMAL = (
     + """
 For components handled by the New Errata Workflow Automation(NEWA):
 NEWA will post a comment to the erratum when it has started tests and when they finish.
-Read the JIRA issue in those comments to find test results.
+Read the JIRA issue in those comments to find test results. Ignore any comments
+with links to TCMS or Beaker; older EWA automation may have run in parallel
+with NEWA, but should be ignored.
+
+You cannot assume that tests have passed just because a comment says they have
+finished, it is mandatory to check the actual test results in the JIRA issue.
+Make sure that the JIRA issue is the correct issue for the latest build in the
+erratum.
 
 Tests can trigger at various points in an issue's lifecycle depending on component
 configuration, but always by the time the erratum moves to QE status. If the erratum

@@ -615,6 +615,7 @@ def add_issue_attachments(
             issue_key,
         )
         logger.debug("Dry run: would post attachment to %s", path)
+        return
 
     jira_api_upload(path, attachments=attachments)
 

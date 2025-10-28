@@ -10,6 +10,7 @@ from textwrap import dedent
 from typing import Union
 
 from pydantic import BaseModel, Field
+from typing import List
 
 from beeai_framework.agents.requirement import RequirementAgent
 from beeai_framework.agents.requirement.requirements.conditional import (
@@ -25,6 +26,7 @@ from beeai_framework.workflows import Workflow
 from beeai_framework.utils.strings import to_json
 
 import tasks
+from agents import clones_analyzer_agent
 from common.config import load_rhel_config
 from common.models import (
     Task,
@@ -37,6 +39,9 @@ from common.models import (
     NoActionData,
     ErrorData,
     CVEEligibilityResult,
+    WhenEligibility,
+    ClonesOutputSchema,
+    Clone,
 )
 from common.utils import redis_client, fix_await
 from common.constants import JiraLabels, RedisQueues
@@ -300,6 +305,7 @@ async def main() -> None:
 
     class State(BaseModel):
         jira_issue: str
+        clones: List[Clone] | None = Field(default=None)
         cve_eligibility_result: CVEEligibilityResult | None = Field(default=None)
         triage_result: OutputSchema | None = Field(default=None)
         target_branch: str | None = Field(default=None)
@@ -341,6 +347,21 @@ async def main() -> None:
 
             workflow = Workflow(State, name="TriageWorkflow")
 
+            async def run_clones_analyzer_agent(state):
+                """Run the clones analyzer agent"""
+                logger.info(f"Running clones analyzer agent for {state.jira_issue}")
+                clones_analyzer_agent_definition = RequirementAgent(
+                    **clones_analyzer_agent.get_agent_definition(gateway_tools),
+                )
+
+                response = await clones_analyzer_agent_definition.run(
+                    clones_analyzer_agent.get_prompt(clones_analyzer_agent.ClonesInputSchema(jira_issue=state.jira_issue)),
+                    expected_output=clones_analyzer_agent.WORKFLOW_STEP_INSTRUCTIONS,
+                    **clones_analyzer_agent.get_agent_execution_config(),
+                    )
+                state.clones = ClonesOutputSchema.model_validate_json(response.last_message.text).clones
+                return "check_cve_eligibility"
+
             async def check_cve_eligibility(state):
                 """Check CVE eligibility for the issue"""
                 logger.info(f"Checking CVE eligibility for {state.jira_issue}")
@@ -354,28 +375,49 @@ async def main() -> None:
                 logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
 
                 # If not eligible for triage, end workflow
-                if not state.cve_eligibility_result.is_eligible_for_triage:
-                    logger.info(f"Issue {state.jira_issue} not eligible for triage: {state.cve_eligibility_result.reason}")
-                    if state.cve_eligibility_result.error:
-                        state.triage_result = OutputSchema(
-                        resolution=Resolution.ERROR,
-                        data=ErrorData(
-                            details=f"CVE eligibility check error: {state.cve_eligibility_result.error}",
-                            jira_issue=state.jira_issue
-                        )
-                    )
-                    else:
-                        state.triage_result = OutputSchema(
-                            resolution=Resolution.NO_ACTION,
-                            data=NoActionData(
-                                reasoning=f"CVE eligibility check decided to skip triaging: {state.cve_eligibility_result.reason}",
+                match state.cve_eligibility_result.when_eligible_for_triage:
+                    case WhenEligibility.NEVER:
+                        logger.info(f"Issue {state.jira_issue} not eligible for triage: {state.cve_eligibility_result.reason}")
+                        if state.cve_eligibility_result.error:
+                            state.triage_result = OutputSchema(
+                            resolution=Resolution.ERROR,
+                            data=ErrorData(
+                                details=f"CVE eligibility check error: {state.cve_eligibility_result.error}",
                                 jira_issue=state.jira_issue
                             )
                         )
-                    return "comment_in_jira"
+                        return "comment_in_jira"
+                    case WhenEligibility.LATER:
+                        logger.info(f"Issue {state.jira_issue} is eligible for triage, but could be postponed: {state.cve_eligibility_result.reason}")
+                        return "run_postponed_triage_analysis"
+                    case WhenEligibility.IMMEDIATELY:
+                        logger.info(f"Issue {state.jira_issue} is eligible for triage: {state.cve_eligibility_result.reason}")
+                        return "run_triage_analysis"
 
-                reason = state.cve_eligibility_result.reason
-                logger.info(f"Issue {state.jira_issue} is eligible for triage: {reason}")
+            async def run_postponed_triage_analysis(state):
+                """Run the postponed triage analysis,
+                check if the Z-stream errata has been shipped
+                before proceeding with the triage analysis in a Y-stream"""
+                logger.info(f"Running postponed triage analysis for {state.jira_issue}")
+                for clone in state.clones:
+                    z_streams_errata_shipped = await run_tool(
+                        "check_z_stream_errata_shipped",
+                        available_tools=gateway_tools,
+                        issue_key=clone.jira_issue,
+                        branch=clone.branch)
+                    if not z_streams_errata_shipped:
+                        msg = f"Z-stream errata not shipped yet for issue {clone.jira_issue} for branch {clone.branch}, postponing triage analysis"
+                        logger.info(msg)
+                        state.triage_result = OutputSchema(
+                            resolution=Resolution.POSTPONED,
+                            data=NoActionData(
+                                reasoning=msg,
+                                jira_issue=state.jira_issue
+                            )
+                        )
+                        return "comment_in_jira"
+
+                logger.info(f"All z-stream erratas shipped, proceeding with triage analysis")
                 return "run_triage_analysis"
 
             async def run_triage_analysis(state):
@@ -499,9 +541,17 @@ async def main() -> None:
                     comment_text=comment_text,
                     available_tools=gateway_tools,
                 )
+                if state.triage_result.resolution == Resolution.POSTPONED:
+                    await tasks.set_jira_labels(
+                        jira_issue=state.jira_issue,
+                        labels_to_add=[JiraLabels.POSTPONED.value],
+                        dry_run=dry_run
+                    )
                 return Workflow.END
 
+            workflow.add_step("run_clones_analyzer_agent", run_clones_analyzer_agent)
             workflow.add_step("check_cve_eligibility", check_cve_eligibility)
+            workflow.add_step("run_postponed_triage_analysis", run_postponed_triage_analysis)
             workflow.add_step("run_triage_analysis", run_triage_analysis)
             workflow.add_step("verify_rebase_author", verify_rebase_author)
             workflow.add_step("determine_target_branch", determine_target_branch_step)

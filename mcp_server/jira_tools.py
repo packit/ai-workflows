@@ -17,7 +17,7 @@ else:
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from common import CVEEligibilityResult, load_rhel_config
+from common import CVEEligibilityResult, WhenEligibility, load_rhel_config
 
 # Jira custom field IDs
 SEVERITY_CUSTOM_FIELD = "customfield_12316142"
@@ -204,7 +204,7 @@ async def check_cve_triage_eligibility(
     if "SecurityTracking" not in labels:
         return CVEEligibilityResult(
             is_cve=False,
-            is_eligible_for_triage=True,
+            when_eligible_for_triage=WhenEligibility.IMMEDIATELY,
             reason="Not a CVE"
         )
 
@@ -212,7 +212,7 @@ async def check_cve_triage_eligibility(
     if not fix_versions:
         return CVEEligibilityResult(
             is_cve=True,
-            is_eligible_for_triage=False,
+            when_eligible_for_triage=WhenEligibility.NEVER,
             reason="CVE has no target release specified",
             error="CVE has no target release specified"
         )
@@ -223,7 +223,7 @@ async def check_cve_triage_eligibility(
     if re.match(r"^rhel-\d+\.\d+$", target_version.lower()):
         return CVEEligibilityResult(
             is_cve=True,
-            is_eligible_for_triage=False,
+            when_eligible_for_triage=WhenEligibility.LATER,
             reason="Y-stream CVEs will be handled in Z-stream"
         )
 
@@ -231,7 +231,7 @@ async def check_cve_triage_eligibility(
     if embargo == "True":
         return CVEEligibilityResult(
             is_cve=True,
-            is_eligible_for_triage=False,
+            when_eligible_for_triage=WhenEligibility.NEVER,
             reason="CVE is embargoed"
         )
 
@@ -256,7 +256,7 @@ async def check_cve_triage_eligibility(
 
     return CVEEligibilityResult(
         is_cve=True,
-        is_eligible_for_triage=True,
+        when_eligible_for_triage=WhenEligibility.IMMEDIATELY,
         reason=reason,
         needs_internal_fix=needs_internal_fix
     )
@@ -407,3 +407,39 @@ async def verify_issue_author(
             group.get("name") == RH_EMPLOYEE_GROUP
             for group in user_data.get("groups", {}).get("items", [])
         )
+
+async def check_z_stream_errata_shipped(
+    issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
+    branch: Annotated[str, Field(description="Branch name (e.g. 'rhel-9.8')")],
+) -> bool:
+    """
+    Checks if the issue is for the Z-stream, if so, it checks if the issue is closed
+    (it means the errata has been shipped). If the issue is not for the Z-stream, it returns True.
+    """
+    if not re.match(r"^rhel-\d+\.\d+$", branch.lower()):
+        return True
+
+    headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(
+                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+                params={"fields": "status, assignee"},
+                headers=headers,
+            ) as response:
+                response.raise_for_status()
+                current_issue = await response.json()
+                current_status = current_issue.get("fields", {}).get("status", {}).get("name", "")
+                current_assignee = current_issue.get("fields", {}).get("assignee", {}).get("name", "")
+        except aiohttp.ClientError as e:
+            raise ToolError(f"Failed to get Jira data: {e}") from e
+
+    # If the issue is not assigned to the Jötnar project,
+    # don't wait for it
+    # @TODO: is this ok??? for example https://issues.redhat.com/browse/RHEL-110692
+    # will wait on https://issues.redhat.com/browse/RHEL-110689
+    # without this check.
+    if current_assignee.lower() != "jötnar project":
+        return True
+
+    return current_status.lower() == "closed"

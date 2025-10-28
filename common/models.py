@@ -10,6 +10,11 @@ from pydantic import BaseModel, Field
 from pathlib import Path
 from enum import Enum
 
+class WhenEligibility(Enum):
+    """When eligibility for triage."""
+    IMMEDIATELY = "immediately"
+    LATER = "later"
+    NEVER = "never"
 
 class CVEEligibilityResult(BaseModel):
     """
@@ -21,8 +26,8 @@ class CVEEligibilityResult(BaseModel):
     is_cve: bool = Field(
         description="Whether this is a CVE (identified by SecurityTracking label)"
     )
-    is_eligible_for_triage: bool = Field(
-        description="Whether triage agent should process this CVE"
+    when_eligible_for_triage: WhenEligibility = Field(
+        description="Whether triage agent should process this issue immediately, later or never"
     )
     reason: str = Field(
         description="Explanation of the eligibility decision"
@@ -118,6 +123,7 @@ class Resolution(Enum):
     BACKPORT = "backport"
     CLARIFICATION_NEEDED = "clarification-needed"
     NO_ACTION = "no-action"
+    POSTPONED = "postponed"
     ERROR = "error"
 
 

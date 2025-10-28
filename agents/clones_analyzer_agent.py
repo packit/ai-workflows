@@ -82,6 +82,20 @@ def get_agent_definition(gateway_tools: list[Tool]) -> dict[str, Any]:
 def create_clones_analyzer_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> RequirementAgent:
     return RequirementAgent(**get_agent_definition(mcp_tools))
 
+WORKFLOW_STEP_INSTRUCTIONS = dedent("""
+                            The final answer must be a JSON object with the following fields:
+                            - `clones`: a list of Jira issue keys and branches that are clones of the given Jira issue or the given Jira issue is a clone of the found Jira issues
+                            - `links`: a list of links you have added between the given Jira issue and the found Jira issues or the found Jira issues and the given Jira issue
+                            ```json
+                            {
+                            "clones": [{"jira_issue": "RHEL-12345", "branch": "rhel-9.6z"},
+                                       {"jira_issue": "RHEL-12346", "branch": "rhel-9.7"}],
+                            "links": [{"source": "RHEL-12345", "target": "RHEL-12346"},
+                                      {"source": "RHEL-12346", "target": "RHEL-12345"}]
+                            }
+                            ```
+""")
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
@@ -104,20 +118,7 @@ async def main() -> None:
                 logger.info(f"Identifying and linking clones of {state.jira_issue}")
                 response = await clones_analyzer_agent.run(
                     get_prompt(ClonesInputSchema(jira_issue=state.jira_issue)),
-                    expected_output=dedent(
-                        """
-                            The final answer must be a JSON object with the following fields:
-                            - `clones`: a list of Jira issue keys and branches that are clones of the given Jira issue or the given Jira issue is a clone of the found Jira issues
-                            - `links`: a list of links you have added between the given Jira issue and the found Jira issues or the found Jira issues and the given Jira issue
-                            ```json
-                            {
-                            "clones": [{"jira_issue": "RHEL-12345", "branch": "rhel-9.6z"},
-                                       {"jira_issue": "RHEL-12346", "branch": "rhel-9.7"}],
-                            "links": [{"source": "RHEL-12345", "target": "RHEL-12346"},
-                                      {"source": "RHEL-12346", "target": "RHEL-12345"}]
-                            }
-                            ```
-                        """),
+                    expected_output=WORKFLOW_STEP_INSTRUCTIONS,
                     **get_agent_execution_config(),
                     )
 

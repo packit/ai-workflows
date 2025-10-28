@@ -212,12 +212,20 @@ async def check_cve_triage_eligibility(
 
     target_version = fix_versions[0].get("name", "")
 
-    # Only process Z-stream CVEs (reject Y-stream)
+    # Process Z-stream CVEs (postpone Y-stream CVEs)
     if re.match(r"^rhel-\d+\.\d+$", target_version.lower()):
         return CVEEligibilityResult(
             is_cve=True,
             when_eligible_for_triage=WhenEligibility.LATER,
             reason="Y-stream CVEs will be handled in Z-stream"
+        )
+
+    # Process maintenance streams CVEs (X.10.z) after all the z-streams are processed
+    if re.match(r"^rhel-\d+\.10\.z$", target_version.lower()):
+        return CVEEligibilityResult(
+            is_cve=True,
+            when_eligible_for_triage=WhenEligibility.LATER,
+            reason="Maintenance stream CVEs (X.10.z) will be handled after all the z-streams are processed"
         )
 
     embargo = fields.get(EMBARGO_CUSTOM_FIELD, {}).get("value", "")
@@ -433,4 +441,5 @@ async def check_z_stream_errata_shipped(
     if current_assignee.lower() != "jötnar project":
         return True
 
+    # @TODO: is this ok??? Or should I check something else?
     return current_status.lower() == "closed"

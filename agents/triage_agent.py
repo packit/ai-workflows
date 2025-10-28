@@ -393,6 +393,16 @@ async def main() -> None:
                     case WhenEligibility.IMMEDIATELY:
                         logger.info(f"Issue {state.jira_issue} is eligible for triage: {state.cve_eligibility_result.reason}")
                         return "run_triage_analysis"
+                    case _:
+                        logger.error(f"Unknown eligibility result: {state.cve_eligibility_result}")
+                        state.triage_result = OutputSchema(
+                            resolution=Resolution.ERROR,
+                            data=ErrorData(
+                                details=f"Unknown eligibility result: {state.cve_eligibility_result}",
+                                jira_issue=state.jira_issue
+                            )
+                        )
+                        return "comment_in_jira"
 
             async def run_postponed_triage_analysis(state):
                 """Run the postponed triage analysis,

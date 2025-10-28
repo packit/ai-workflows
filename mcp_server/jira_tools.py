@@ -1,4 +1,5 @@
 import datetime
+import logging
 import os
 import json
 import re
@@ -49,6 +50,9 @@ def _get_jira_headers(token: str) -> dict[str, str]:
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+
+
+logger = logging.getLogger(__name__)
 
 
 async def get_jira_details(
@@ -219,12 +223,25 @@ async def check_cve_triage_eligibility(
 
     target_version = fix_versions[0].get("name", "")
 
-    # Only process Z-stream CVEs (reject Y-stream)
+    # Process Z-stream CVEs (postpone Y-stream CVEs)
     if re.match(r"^rhel-\d+\.\d+$", target_version.lower()):
+        logger.info(f"Y-stream CVE {issue_key} will be handled after "
+        "all the z-streams related CVEs are processed")
         return CVEEligibilityResult(
             is_cve=True,
             when_eligible_for_triage=WhenEligibility.LATER,
-            reason="Y-stream CVEs will be handled in Z-stream"
+            reason="Y-stream CVEs will be handled after all the z-streams are processed"
+        )
+
+
+    # Process maintenance streams CVEs (X.10.z) after all the z-streams are processed
+    if re.match(r"^rhel-\d+\.10\.z$", target_version.lower()):
+        logger.info(f"Maintenance stream CVE {issue_key} will be handled after "
+        "all the z-streams related CVEs are processed")
+        return CVEEligibilityResult(
+            is_cve=True,
+            when_eligible_for_triage=WhenEligibility.LATER,
+            reason="Maintenance stream CVEs (X.10.z) will be handled after all the z-streams are processed"
         )
 
     embargo = fields.get(EMBARGO_CUSTOM_FIELD, {}).get("value", "")
@@ -433,13 +450,5 @@ async def check_z_stream_errata_shipped(
                 current_assignee = current_issue.get("fields", {}).get("assignee", {}).get("name", "")
         except aiohttp.ClientError as e:
             raise ToolError(f"Failed to get Jira data: {e}") from e
-
-    # If the issue is not assigned to the Jötnar project,
-    # don't wait for it
-    # @TODO: is this ok??? for example https://issues.redhat.com/browse/RHEL-110692
-    # will wait on https://issues.redhat.com/browse/RHEL-110689
-    # without this check.
-    if current_assignee.lower() != "jötnar project":
-        return True
 
     return current_status.lower() == "closed"

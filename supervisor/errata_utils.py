@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 ET_URL = "https://errata.engineering.redhat.com/"
 
+# regex pattern for extracting timestamps from push logs
+_TIMESTAMP_PATTERN = re.compile(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \+0000')
+
 
 @cache
 def ET_verify() -> bool | str:
@@ -603,19 +606,38 @@ class ErratumPushStatus(StrEnum):
     FAILED = "FAILED"
 
 
-def erratum_get_latest_stage_push_status(erratum_id) -> ErratumPushStatus | None:
+class ErratumPushDetails(BaseModel):
+    status: ErratumPushStatus | None
+    updated_at: datetime | None
+
+
+def erratum_get_latest_stage_push_details(erratum_id) -> ErratumPushDetails:
     pushes = ET_api_get(
         f"erratum/{erratum_id}/push",
     )
 
     highest_push_id = 0
     status = None
+    log = None
     for push in pushes:
         if push["target"]["name"] == "cdn_stage" and push["id"] > highest_push_id:
             highest_push_id = push["id"]
             status = push["status"]
+            log = push.get("log", "")
 
-    return ErratumPushStatus(status) if status else None
+    updated_at = None
+    if log:
+        timestamps = _TIMESTAMP_PATTERN.findall(log)
+
+        if timestamps:
+            # last timestamp from logs
+            last_timestamp = timestamps[-1]
+            updated_at = datetime.strptime(last_timestamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+
+    return ErratumPushDetails(
+        status=ErratumPushStatus(status) if status else None,
+        updated_at=updated_at
+    )
 
 
 def erratum_push_to_stage(erratum_id, *, dry_run: bool = False):

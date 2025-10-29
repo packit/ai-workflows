@@ -157,7 +157,20 @@ def get_erratum_for_link(link: str, full: bool = False) -> Erratum | FullErratum
     return get_erratum(erratum_id, full=full)
 
 
-class ErratumBuilds(RootModel):
+class ErratumFileList(RootModel):
+    # Map package to a package file list
+    # {
+    #   "llibtiff": ErrataPackageFileList({
+    #       "AppStream":
+    #           "SRPMS": {"libtiff"}
+    #           "aarch64": {"libtiff", "libtiff-devel", ...}
+    #   }),
+    #   "libjpeg": ....
+    # }
+    root: dict[str, ErratumPackageFileList]
+
+
+class ErratumPackageFileList(RootModel):
     # Map variant and architecture to a set of subpackage names
     # we ship for that architecture
     # {
@@ -177,33 +190,52 @@ def nvr_to_package_name(nvr: str) -> str:
     return nvr.rsplit("-", 2)[0]
 
 
-def get_erratum_builds(id: int | str) -> ErratumBuilds:
-    data = ET_api_get(f"erratum/{id}/builds_list")
+def get_erratum_build_file_list(erratum_id: int | str) -> ErratumFileList:
+    """Create a file list for the given erratum
+
+    The file list can be used to compare if the subpackages
+    match with the other file list for a given package name
+
+    Throws an exception if either errata has more than one build
+    attached to it.
+    """
+    data = ET_api_get(f"erratum/{erratum_id}/builds_list")
 
     if len(data) != 1:
         raise ValueError("Expected JSON object to have a single product version key.")
+
     detail = next(iter(data.values()))
-
     builds = detail.get("builds", [])
-    if len(builds) != 1:
-        raise ValueError("Expected a single build in the 'builds' list.")
+    file_list = dict()
 
-    build = builds[0]
-    if len(build) != 1:
-        raise ValueError("Expected build to have a single NVR key.")
-    build_detail = next(iter(build.values()))
+    for build in builds:
+        if len(build) != 1:
+            raise ValueError("Expected build to have a single NVR key.")
 
-    variant_arch = build_detail["variant_arch"]
+        (nvr, build_detail) = next(iter(build.items()))
+        variant_arch = build_detail["variant_arch"]
 
-    file_list_map = {
-        variant_to_base_variant(variant): {
-            arch: set([nvr_to_package_name(rpm["filename"]) for rpm in rmps])
-            for arch, rmps in arches.items()
+        package_file_map = {
+            variant_to_base_variant(variant): {
+                arch: set(
+                    [
+                        nvr_to_package_name(
+                            # builds_list API's response has two variant formats
+                            rpm["filename"] if not isinstance(rpm, str) else rpm
+                        )
+                        for rpm in rpms
+                    ]
+                )
+                for arch, rpms in arches.items()
+            }
+            for variant, arches in variant_arch.items()
         }
-        for variant, arches in variant_arch.items()
-    }
 
-    return ErratumBuilds(root=file_list_map)
+        file_list[nvr_to_package_name(nvr)] = ErratumPackageFileList(
+            root=package_file_map
+        )
+
+    return ErratumFileList(root=file_list)
 
 
 class RHELVersion(BaseModel):
@@ -430,17 +462,23 @@ def get_erratum_build_nvr(erratum_id: str | int, package_name: str) -> str | Non
     return None
 
 
-def errata_have_same_file_lists(errata_id1: int | str, errata_id2: int | str):
-    """Check if the given errata have the same file lists
+def errata_have_same_file_lists_for_package(
+    file_list_a: ErratumFileList, file_list_b: ErratumFileList, package_name: str
+) -> bool:
+    """Check if the given errata file lists have the same package file lists
+    for the given package name.
 
     After stripping package versions and RHEL release versions,
     do the two errata ship the same subpackages for each
     variant and architecture?
 
-    Throws an exception if either errata has more than one build
-    attached to it.
+    Returns false if the given package name doesn't exist in either one of the
+    file list.
     """
-    return get_erratum_builds(errata_id1) == get_erratum_builds(errata_id2)
+    if package_name in file_list_a.root and package_name in file_list_b.root:
+        return file_list_a.root[package_name] == file_list_b.root[package_name]
+
+    return False
 
 
 class RuleParseError(Exception):

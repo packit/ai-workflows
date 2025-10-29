@@ -144,6 +144,16 @@ def get_erratum_comments(erratum_id: str | int) -> list[Comment] | None:
     ]
 
 
+def erratum_has_magic_string_in_comments(
+    erratum_id: int | str, magic_string: str
+) -> bool:
+    comments = get_erratum_comments(erratum_id)
+    if comments is None:
+        return False
+
+    return any(magic_string in comment.body for comment in comments)
+
+
 @overload
 def get_erratum_for_link(link: str, full: Literal[False] = False) -> Erratum: ...
 
@@ -157,17 +167,26 @@ def get_erratum_for_link(link: str, full: bool = False) -> Erratum | FullErratum
     return get_erratum(erratum_id, full=full)
 
 
-class ErratumFileList(RootModel):
-    # Map package to a package file list
+class ErratumBuild(BaseModel):
+    nvr: str
+    package_file_list: ErratumPackageFileList
+
+
+class ErratumBuildMap(RootModel):
+    # Map package to a build with nvr and package file list
     # {
-    #   "llibtiff": ErrataPackageFileList({
-    #       "AppStream":
-    #           "SRPMS": {"libtiff"}
-    #           "aarch64": {"libtiff", "libtiff-devel", ...}
+    #   "libtiff": ErratumBuild({
+    #       nvr: libtiff-4.0.9-35.el8_10
+    #       package_file_list: {
+    #           "AppStream": {
+    #               "SRPMS": {"libtiff"}
+    #               "aarch64": {"libtiff", "libtiff-devel", ...
+    #           }
+    #       }
     #   }),
     #   "libjpeg": ....
     # }
-    root: dict[str, ErratumPackageFileList]
+    root: dict[str, ErratumBuild]
 
 
 class ErratumPackageFileList(RootModel):
@@ -190,14 +209,14 @@ def nvr_to_package_name(nvr: str) -> str:
     return nvr.rsplit("-", 2)[0]
 
 
-def get_erratum_build_file_list(erratum_id: int | str) -> ErratumFileList:
-    """Create a file list for the given erratum
+def get_erratum_build_map(erratum_id: int | str) -> ErratumBuildMap:
+    """Create a build map for the given erratum
 
-    The file list can be used to compare if the subpackages
-    match with the other file list for a given package name
+    The build map can be used to compare if the subpackages
+    match with the other build map for a given package name.
 
-    Throws an exception if either errata has more than one build
-    attached to it.
+    Throws an exception if more than one RHEL version build
+    attached.
     """
     data = ET_api_get(f"erratum/{erratum_id}/builds_list")
 
@@ -206,7 +225,7 @@ def get_erratum_build_file_list(erratum_id: int | str) -> ErratumFileList:
 
     detail = next(iter(data.values()))
     builds = detail.get("builds", [])
-    file_list = dict()
+    build_map = dict()
 
     for build in builds:
         if len(build) != 1:
@@ -231,11 +250,11 @@ def get_erratum_build_file_list(erratum_id: int | str) -> ErratumFileList:
             for variant, arches in variant_arch.items()
         }
 
-        file_list[nvr_to_package_name(nvr)] = ErratumPackageFileList(
-            root=package_file_map
+        build_map[nvr_to_package_name(nvr)] = ErratumBuild(
+            nvr=nvr, package_file_list=ErratumPackageFileList(root=package_file_map)
         )
 
-    return ErratumFileList(root=file_list)
+    return ErratumBuildMap(root=build_map)
 
 
 class RHELVersion(BaseModel):
@@ -462,25 +481,6 @@ def get_erratum_build_nvr(erratum_id: str | int, package_name: str) -> str | Non
     return None
 
 
-def errata_have_same_file_lists_for_package(
-    file_list_a: ErratumFileList, file_list_b: ErratumFileList, package_name: str
-) -> bool:
-    """Check if the given errata file lists have the same package file lists
-    for the given package name.
-
-    After stripping package versions and RHEL release versions,
-    do the two errata ship the same subpackages for each
-    variant and architecture?
-
-    Returns false if the given package name doesn't exist in either one of the
-    file list.
-    """
-    if package_name in file_list_a.root and package_name in file_list_b.root:
-        return file_list_a.root[package_name] == file_list_b.root[package_name]
-
-    return False
-
-
 class RuleParseError(Exception):
     pass
 
@@ -648,6 +648,16 @@ def erratum_change_state(erratum_id, new_state: ErrataStatus, *, dry_run: bool =
         f"erratum/{erratum_id}/change_state",
         data={"new_state": new_state},
     )
+
+
+def erratum_add_comment(erratum_id: int | str, content: str, *, dry_run: bool = False):
+    if dry_run:
+        logger.info(
+            "Dry run: Would add '%s' as a comment for erratum %s", content, erratum_id
+        )
+        return
+
+    ET_api_post(f"erratum/{erratum_id}/add_comment", data={"comment": content})
 
 
 if __name__ == "__main__":

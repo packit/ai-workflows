@@ -3,13 +3,18 @@ from textwrap import dedent
 
 from .work_item_handler import WorkItemHandler
 from .errata_utils import (
+    ErratumBuild,
     ErratumPushStatus,
     TransitionRuleOutcome,
+    erratum_add_comment,
     erratum_change_state,
     erratum_get_latest_stage_push_status,
+    erratum_has_magic_string_in_comments,
     erratum_push_to_stage,
     erratum_refresh_security_alerts,
+    get_erratum_build_map,
     get_erratum_transition_rules,
+    get_previous_erratum,
 )
 from .jira_utils import (
     add_issue_label,
@@ -72,6 +77,33 @@ def erratum_all_issues_are_release_pending(
     return all(status == IssueStatus.RELEASE_PENDING for status in statuses.values())
 
 
+def compare_file_lists(
+    current_build: ErratumBuild,
+    previous_build: ErratumBuild,
+    previous_erratum: Erratum,
+) -> tuple[bool, str]:
+    is_matched = current_build.package_file_list == previous_build.package_file_list
+
+    comment = (
+        f"jotnar-product-listings-checked({current_build.nvr})\n\n"
+        f"Compared the file lists for {current_build.nvr} to the file lists for\n"
+        f"{previous_build.nvr} in {previous_erratum.url} -\n"
+    )
+
+    if is_matched:
+        comment += "the same subpackages are shipped to each variant. Proceeding with the errata workflow."
+    else:
+        comment += (
+            "differences were found.\n\n"
+            "Old file list:\n"
+            f"{previous_build.model_dump_json(indent=2)}\n\n"
+            "New file list:\n"
+            f"{current_build.model_dump_json(indent=2)}\n\n"
+            "Flagging for human attention."
+        )
+    return is_matched, comment
+
+
 class ErratumHandler(WorkItemHandler):
     """
     Perform a single step in the lifecycle of an erratum. This might involve
@@ -131,6 +163,44 @@ class ErratumHandler(WorkItemHandler):
             )
 
         if rule_set.all_ok:
+            if new_status == ErrataStatus.REL_PREP:
+                cur_build_map = get_erratum_build_map(self.erratum.id)
+
+                mismatch_packages = []
+                for package, cur_build in cur_build_map.root.items():
+                    nvr = cur_build.nvr
+                    if not erratum_has_magic_string_in_comments(
+                        self.erratum.id, f"jotnar-product-listings-checked({nvr})"
+                    ):
+                        prev_erratum = get_previous_erratum(self.erratum.id, package)
+
+                        if prev_erratum:
+                            other_build_map = get_erratum_build_map(prev_erratum.id)
+                            prev_build = other_build_map.root[package]
+
+                            is_matched, comment = compare_file_lists(
+                                cur_build, prev_build, prev_erratum
+                            )
+
+                            if not is_matched:
+                                mismatch_packages.append(package)
+
+                            erratum_add_comment(
+                                self.erratum.id, comment, dry_run=self.dry_run
+                            )
+                        else:
+                            erratum_add_comment(
+                                self.erratum.id,
+                                f"jotnar-product-listings-checked({nvr})\n\n"
+                                "New package - no need to check package file list change.",
+                                dry_run=self.dry_run,
+                            )
+                if mismatch_packages:
+                    return self.resolve_flag_attention(
+                        f"The package file lists of this build don't match all of their previous builds - mismatch packages: {mismatch_packages}.\n"
+                        "See erratum comments for details."
+                    )
+
             return self.resolve_set_status(
                 new_status, f"Moving to {new_status}, since all rules are OK"
             )

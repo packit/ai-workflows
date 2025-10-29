@@ -58,11 +58,13 @@ class VersionMapperTool(Tool[VersionMapperInput, ToolRunOptions, VersionMapperOu
 
         config = await load_rhel_config()
 
-        z_streams = config.get("current_z_streams", {})
-        y_streams = config.get("current_y_streams", {})
+        upcoming_z_streams = config.get("upcoming_z_streams", {})
+        current_z_streams = config.get("current_z_streams", {})
+        current_y_streams = config.get("current_y_streams", {})
 
-        y_stream = y_streams.get(major_version_str)
-        z_stream = z_streams.get(major_version_str)
+        y_stream = current_y_streams.get(major_version_str)
+        # 0-day Z-Stream during stabilization phase, regular Z-Stream otherwise
+        z_stream = upcoming_z_streams.get(major_version_str) or current_z_streams.get(major_version_str)
         is_maintenance_version = y_stream is None
 
         return VersionMapperOutput(VersionMapperResult(

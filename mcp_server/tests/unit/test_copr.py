@@ -26,17 +26,27 @@ from copr_tools import (
     "exclusive_arch",
     [None, "ppc64le"],
 )
+@pytest.mark.parametrize(
+    "dist_git_branch",
+    ["c10s", "rhel-10.1", "rhel-10.0"],
+)
 @pytest.mark.asyncio
-async def test_build_package(build_failure, exclusive_arch):
+async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
     ownername = "jotnar-bot"
     srpm_path = Path("test.src.rpm")
-    dist_git_branch = "c10s"
     jira_issue = "RHEL-12345"
-    chroot = f"rhel-10.dev-{exclusive_arch or 'x86_64'}"
-    existing_chroot = f"rhel-9.dev-{exclusive_arch or 'x86_64'}"
+    suffix = "" if dist_git_branch == "rhel-10.0" else ".dev"
+    chroot = f"rhel-10{suffix}-{exclusive_arch or 'x86_64'}"
+    existing_chroot = "rhel-9.dev-x86_64"
 
     async def init_kerberos_ticket():
         return f"{ownername}@EXAMPLE.COM"
+
+    async def load_rhel_config():
+        return {
+            "current_z_streams": {"10": "rhel-10.0.z"},
+            "upcoming_z_streams": {"10": "rhel-10.1.z"},
+        }
 
     async def _get_exclusive_arches(*_):
         return {exclusive_arch} if exclusive_arch else set()
@@ -46,6 +56,7 @@ async def test_build_package(build_failure, exclusive_arch):
         return
 
     flexmock(copr_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
+    flexmock(copr_tools).should_receive("load_rhel_config").replace_with(load_rhel_config).once()
     flexmock(copr_tools).should_receive("_get_exclusive_arches").replace_with(_get_exclusive_arches).once()
     flexmock(asyncio).should_receive("sleep").replace_with(sleep)
 

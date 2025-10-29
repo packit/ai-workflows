@@ -97,7 +97,8 @@ def get_instructions() -> str:
       5. Update the spec file. Add a new `Patch` tag pointing to the <UPSTREAM_FIX> patch file.
          Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
          make sure it has the highest number. Make sure the patch is applied in the "%prep" section
-         and the `-p` argument is correct.
+         and the `-p` argument is correct. Add the upstream URL as a comment above the `Patch:` tag.
+         The comment should be in the form of the URL to the commit that this patch is coming from.
 
       6. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 

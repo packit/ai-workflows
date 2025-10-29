@@ -57,6 +57,9 @@ COPY agents/ /home/beeai/agents/
 COPY common/ /home/beeai/common/
 RUN chgrp -R root /home/beeai && chmod -R g+rwX /home/beeai
 
+# Set up GitLab SSH host keys
+COPY files/gitlab_host_keys /etc/ssh/ssh_known_hosts
+
 USER beeai
 ENV HOME=/home/beeai
 WORKDIR $HOME
@@ -65,10 +68,7 @@ WORKDIR $HOME
 ENV PYTHONPATH=$HOME:$PYTHONPATH
 
 # so that we can start working with gitlab.com immediately
-RUN mkdir ~/.ssh \
-      && chmod 0700 ~/.ssh \
-      && ssh-keyscan gitlab.com >> ~/.ssh/known_hosts \
-      && git config --global user.email "jotnar@redhat.com" \
-      && git config --global user.name "RHEL Packaging Agent"
+RUN git config --global user.email "jotnar@redhat.com" \
+    && git config --global user.name "RHEL Packaging Agent"
 
 CMD ["/bin/bash"]

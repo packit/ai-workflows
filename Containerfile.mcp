@@ -37,8 +37,9 @@ RUN update-ca-trust
 # Configure jump host for internal dist-git
 COPY files/internal_dist-git_ssh.conf /etc/ssh/ssh_config.d/00-dist-git.conf
 # Set up internal dist-git and GitLab SSH host keys
-COPY files/internal_dist-git_host_keys /etc/ssh/ssh_known_hosts
-RUN ssh-keyscan gitlab.com >> /etc/ssh/ssh_known_hosts
+COPY files/internal_dist-git_host_keys files/gitlab_host_keys /tmp/
+RUN cat /tmp/internal_dist-git_host_keys /tmp/gitlab_host_keys > /etc/ssh/ssh_known_hosts \
+    && rm /tmp/internal_dist-git_host_keys /tmp/gitlab_host_keys
 
 USER mcp
 ENV HOME=/home/mcp

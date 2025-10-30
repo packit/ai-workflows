@@ -17,6 +17,7 @@ RUN dnf -y install --allowerasing \
       python3-pip \
       python3-requests-gssapi \
       python3-rpm \
+      python3-tomli-w \
       python3-typer \
       python3-koji \
       # Build dependencies

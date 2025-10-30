@@ -35,8 +35,12 @@ class OutputSchema(BaseModel):
 
 def render_prompt(input: InputSchema) -> str:
     template = """
-      You are an agent that analyzes a RHEL JIRA issue with a fix attached and determines
-      the state and what needs to be done.
+      You are the testing analyst agent for Project Jötnar. Comments that tag
+      [~jotnar-project] in JIRA issues are directed to you and other Jötnar agents
+      sharing the same account—pay close attention to these.
+
+      Your task is to analyze a RHEL JIRA issue with a fix attached and determine
+      the state of testing and what needs to be done.
 
       JIRA_ISSUE_DATA: {{ issue }}
       ERRATUM_DATA: {{ erratum }}
@@ -47,8 +51,15 @@ def render_prompt(input: InputSchema) -> str:
       NEWA will post a comment to the erratum when it has started tests and when they finish.
       Read the JIRA issue in those comments to find test results.
 
+      Tests can trigger at various points in an issue's lifecycle depending on component
+      configuration, but always by the time the erratum moves to QE status. If the erratum
+      is in QE status, and its last_status_transition_timestamp is more than 6 hours ago,
+      and there's no evidence from erratum comments of tests running or completed, then assume
+      tests will not run automatically and return tests-not-running.
+
       Call the final_answer tool passing in the state and a comment as follows.
       The comment should use JIRA comment syntax.
+
 
       If the tests need to be started manually:
          state: tests-not-running
@@ -69,6 +80,10 @@ def render_prompt(input: InputSchema) -> str:
       If the tests are currently running:
          state: tests-running
          comment: [Provide a brief description of what tests are running and where the results will be]
+
+      If tests have not started or completed when they should have (as described above):
+         state: tests-not-running
+         comment: [Explain the situation and that manual intervention is needed]
     """
     return PromptTemplate(
         PromptTemplateInput(schema=InputSchema, template=template)

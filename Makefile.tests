@@ -28,8 +28,11 @@ check-jira-issue-fetcher:
 check-common:
 	cd ./common && \
 	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+check-supervisor:
+	cd ./supervisor && \
+	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
 
-check: check-agents check-mcp-server check-jira-issue-fetcher check-common
+check: check-agents check-mcp-server check-jira-issue-fetcher check-common check-supervisor
 
 check-agents-in-container:
 	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE_C9S) make -f Makefile.tests check-agents
@@ -39,5 +42,8 @@ check-jira-issue-fetcher-in-container:
 	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE) make -f Makefile.tests check-jira-issue-fetcher
 check-common-in-container:
 	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE_C9S) make -f Makefile.tests check-common
+check-supervisor-in-container:
+	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE_C9S) make -f Makefile.tests check-supervisor
 
-check-in-container: check-agents-in-container check-mcp-server-in-container check-jira-issue-fetcher-in-container check-common-in-container
+check-in-container: check-agents-in-container check-mcp-server-in-container \
+	check-jira-issue-fetcher-in-container check-common-in-container check-supervisor-in-container

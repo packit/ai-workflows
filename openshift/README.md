@@ -19,6 +19,11 @@
   oc create secret generic jotnar-bot-keytab --from-file=jotnar-bot.keytab
   ```
 
+  `testing-farm-env`:
+  ```
+  TESTING_FARM_API_TOKEN
+  ```
+
   Values of these secrets are documented in [README](https://github.com/packit/jotnar?tab=readme-ov-file#service-accounts--authentication).
 
 - Create RHEL configuration ConfigMap manually:

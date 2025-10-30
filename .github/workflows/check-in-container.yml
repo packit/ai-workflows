@@ -18,6 +18,7 @@ jobs:
           - target: check-mcp-server-in-container
           - target: check-jira-issue-fetcher-in-container
           - target: check-common-in-container
+          - target: check-supervisor-in-container
     steps:
     - name: Checkout code
       uses: actions/checkout@v4

@@ -8,17 +8,15 @@ import typer
 
 from agents.observability import setup_observability
 from common.utils import init_kerberos_ticket
-from .errata_utils import get_erratum, get_erratum_for_link
+from .collect import collect_and_schedule_work_items
+from .errata_utils import get_erratum
 from .erratum_handler import (
     ErratumHandler,
-    erratum_all_issues_are_release_pending,
-    erratum_needs_attention,
 )
 from .issue_handler import IssueHandler
-from .jira_utils import get_current_issues, get_issue
-from .supervisor_types import ErrataStatus, IssueStatus
+from .jira_utils import get_issue
 from .http_utils import with_http_sessions
-from .work_queue import WorkItem, WorkQueue, WorkItemType, work_queue
+from .work_queue import WorkQueue, WorkItemType, work_queue
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +27,18 @@ app = typer.Typer()
 @dataclass
 class State:
     dry_run: bool = False
+    ignore_needs_attention: bool = False
 
 
 app_state = State()
 
 
 def check_env(
-    chat: bool = False, jira: bool = False, redis: bool = False, gitlab: bool = False
+    chat: bool = False,
+    jira: bool = False,
+    redis: bool = False,
+    gitlab: bool = False,
+    testing_farm: bool = False,
 ):
     required_vars = []
     if chat:
@@ -52,6 +55,8 @@ def check_env(
         )
     if gitlab:
         required_vars.append(("GITLAB_TOKEN", "Gitlab authentication token"))
+    if testing_farm:
+        required_vars.append(("TESTING_FARM_API_TOKEN", "Testing Farm API token"))
 
     missing_vars = [var for var in required_vars if not os.getenv(var[0])]
 
@@ -65,56 +70,16 @@ def check_env(
         raise typer.Exit(1)
 
 
-@with_http_sessions()
-async def collect_once(queue: WorkQueue):
-    await init_kerberos_ticket()
-
-    logger.info("Getting all relevant issues from JIRA")
-    issues = {i.key: i for i in get_current_issues()}
-
-    erratum_links = set(
-        i.errata_link for i in issues.values() if i.errata_link is not None
-    )
-    errata = [get_erratum_for_link(link) for link in erratum_links]
-
-    work_items = set(
-        WorkItem(item_type=WorkItemType.PROCESS_ISSUE, item_data=i.key)
-        for i in issues.values()
-        if i.status != IssueStatus.RELEASE_PENDING
-    ) | set(
-        WorkItem(item_type=WorkItemType.PROCESS_ERRATUM, item_data=str(e.id))
-        for e in errata
-        if (
-            (
-                e.status == ErrataStatus.NEW_FILES
-                or (
-                    e.status == ErrataStatus.QE
-                    and erratum_all_issues_are_release_pending(e, issues)
-                )
-            )
-            and not erratum_needs_attention(e.id)
-        )
-    )
-
-    new_work_items = work_items - set(await queue.get_all_work_items())
-    await queue.schedule_work_items(new_work_items)
-
-    for new_work_item in new_work_items:
-        logger.info("New work item: %s", new_work_item)
-
-    logger.info("Scheduled %d new work items", len(new_work_items))
-
-
 async def do_collect(repeat: bool, repeat_delay: int):
     async with work_queue(os.environ["REDIS_URL"]) as queue:
         while repeat:
             try:
-                await collect_once(queue)
+                await collect_and_schedule_work_items(queue)
             except Exception:
                 logger.exception("Error while collecting work items")
             await asyncio.sleep(repeat_delay)
         else:
-            await collect_once(queue)
+            await collect_and_schedule_work_items(queue)
 
 
 @app.command()
@@ -150,7 +115,11 @@ async def process_once(queue: WorkQueue):
 
     if work_item.item_type == WorkItemType.PROCESS_ISSUE:
         issue = get_issue(work_item.item_data, full=True)
-        result = await IssueHandler(issue, dry_run=app_state.dry_run).run()
+        result = await IssueHandler(
+            issue,
+            dry_run=app_state.dry_run,
+            ignore_needs_attention=app_state.ignore_needs_attention,
+        ).run()
         if result.reschedule_in >= 0:
             await queue.schedule_work_items([work_item], delay=result.reschedule_in)
         else:
@@ -164,7 +133,11 @@ async def process_once(queue: WorkQueue):
         )
     elif work_item.item_type == WorkItemType.PROCESS_ERRATUM:
         erratum = get_erratum(work_item.item_data)
-        result = await ErratumHandler(erratum, dry_run=app_state.dry_run).run()
+        result = await ErratumHandler(
+            erratum,
+            dry_run=app_state.dry_run,
+            ignore_needs_attention=app_state.ignore_needs_attention,
+        ).run()
         if result.reschedule_in >= 0:
             await queue.schedule_work_items([work_item], delay=result.reschedule_in)
         else:
@@ -205,7 +178,11 @@ async def do_process_issue(key: str):
     await init_kerberos_ticket()
 
     issue = get_issue(key, full=True)
-    result = await IssueHandler(issue, dry_run=app_state.dry_run).run()
+    result = await IssueHandler(
+        issue,
+        dry_run=app_state.dry_run,
+        ignore_needs_attention=app_state.ignore_needs_attention,
+    ).run()
     logger.info(
         "Issue %s processed, status=%s, reschedule_in=%s",
         key,
@@ -239,7 +216,11 @@ async def do_process_erratum(id: str):
     await init_kerberos_ticket()
 
     erratum = get_erratum(id)
-    result = await ErratumHandler(erratum, dry_run=app_state.dry_run).run()
+    result = await ErratumHandler(
+        erratum,
+        dry_run=app_state.dry_run,
+        ignore_needs_attention=app_state.ignore_needs_attention,
+    ).run()
 
     logger.info(
         "Erratum %s (%s) processed, status=%s, reschedule_in=%s",
@@ -270,8 +251,9 @@ def process_erratum(id_or_url: str):
 @app.callback()
 def main(
     debug: bool = typer.Option(False, help="Enable debug mode."),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Don't actually change anything."
+    dry_run: bool = typer.Option(False, help="Don't actually change anything."),
+    ignore_needs_attention: bool = typer.Option(
+        False, help="Process issues or errata flagged with jotnar_needs_attention."
     ),
 ):
     if debug:
@@ -282,6 +264,7 @@ def main(
         logging.basicConfig(level=logging.INFO)
 
     app_state.dry_run = dry_run
+    app_state.ignore_needs_attention = ignore_needs_attention
 
     collector_endpoint = os.environ.get("COLLECTOR_ENDPOINT")
     if collector_endpoint is not None:

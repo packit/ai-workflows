@@ -79,8 +79,10 @@ class ErratumHandler(WorkItemHandler):
     adding comments, or flagging it for human attention.
     """
 
-    def __init__(self, erratum: Erratum, *, dry_run: bool):
-        super().__init__(dry_run=dry_run)
+    def __init__(
+        self, erratum: Erratum, *, dry_run: bool, ignore_needs_attention: bool
+    ):
+        super().__init__(dry_run=dry_run, ignore_needs_attention=ignore_needs_attention)
         self.erratum = erratum
 
     def resolve_flag_attention(self, why: str):
@@ -183,7 +185,7 @@ class ErratumHandler(WorkItemHandler):
             erratum.full_advisory,
         )
 
-        if erratum_needs_attention(erratum.id):
+        if (not self.ignore_needs_attention) and erratum_needs_attention(erratum.id):
             return self.resolve_remove_work_item(
                 "Erratum already flagged for human attention"
             )

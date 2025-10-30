@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 from typing_extensions import Literal
@@ -77,6 +77,7 @@ class MergeRequest(BaseModel):
     title: str
     description: str
     state: MergeRequestState
+    merged_at: datetime | None
 
 
 class Issue(BaseModel):
@@ -103,9 +104,61 @@ class Issue(BaseModel):
     preliminary_testing: PreliminaryTesting | None = None  # RHEL only
 
 
+class JiraComment(Comment):
+    id: str
+
+
 class FullIssue(Issue):
     description: str
-    comments: list[Comment]
+    comments: list[JiraComment]
+
+
+class TestingFarmRequestState(StrEnum):
+    NEW = "new"
+    QUEUED = "queued"
+    RUNNING = "running"
+    ERROR = "error"
+    CANCELED = "canceled"
+    CANCEL_REQUESTED = "cancel-requested"
+    COMPLETE = "complete"
+
+
+class TestingFarmRequestResult(StrEnum):
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    UNKNOWN = "unknown"
+    ERROR = "error"
+
+
+class TestingFarmRequest(BaseModel):
+    id: str
+    url: str
+    state: TestingFarmRequestState
+    result: TestingFarmRequestResult = TestingFarmRequestResult.UNKNOWN
+    result_xunit_url: str | None = None
+    created: datetime
+    updated: datetime
+
+    # We save the raw data to use during test reproduction
+    test_data: dict[str, Any]
+    environments_data: list[dict[str, Any]]
+
+    @property
+    def arches(self) -> list[str]:
+        return [env["arch"] for env in self.environments_data]
+
+    @property
+    def build_nvr(self) -> str:
+        versions = {
+            variables["BUILDS"]
+            for env in self.environments_data
+            if (variables := env.get("variables")) and "BUILDS" in variables
+        }
+        if len(versions) != 1:
+            raise ValueError("Can't determine package version for request")
+
+        return versions.pop()
 
 
 class JotnarTag(BaseModel):

@@ -229,15 +229,17 @@ async def check_cve_triage_eligibility(
         )
 
     rhel_config = await load_rhel_config()
+    upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
     current_z_streams = rhel_config.get("current_z_streams", {})
+    latest_z_streams = current_z_streams | upcoming_z_streams
 
     needs_internal_fix = False
     severity = fields.get(SEVERITY_CUSTOM_FIELD, {}).get("value", "")
 
-    # Check if z-stream is not in current z-streams - always needs internal fix
-    if target_version.lower() not in [v.lower() for v in current_z_streams.values()]:
+    # Check if z-stream is not in latest z-streams - always needs internal fix
+    if target_version.lower() not in [v.lower() for v in latest_z_streams.values()]:
         needs_internal_fix = True
-        reason = f"Z-stream CVE ({target_version}) not in current z-streams, needs RHEL fix first"
+        reason = f"Z-stream CVE ({target_version}) not in latest z-streams, needs RHEL fix first"
     # Determine if internal fix is needed based on severity
     elif severity not in [Severity.LOW.value, Severity.MODERATE.value]:
         needs_internal_fix = True

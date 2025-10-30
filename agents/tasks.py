@@ -1,5 +1,4 @@
 import hashlib
-import itertools
 import logging
 import os
 import shutil
@@ -84,8 +83,16 @@ async def stage_changes(
 ) -> None:
     if isinstance(files_to_commit, str):
         files_to_commit = [files_to_commit]
-    for path in itertools.chain(*(local_clone.glob(pat) for pat in files_to_commit)):
-        await check_subprocess(["git", "add", str(path)], cwd=local_clone)
+
+    for file in files_to_commit:
+        logger.info(f"Staging: {file}")
+        exit_code, _, stderr = await run_subprocess(
+            ["git", "add", "--all", file],
+            cwd=local_clone
+        )
+        # for the case agent already staged deleted file which leads to error
+        if exit_code != 0:
+            logger.warning(f"Failed to stage {file}: {stderr}")
 
 
 async def commit_push_and_open_mr(

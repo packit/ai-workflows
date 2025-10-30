@@ -53,7 +53,7 @@ def search_gitlab_project_mrs(
     logger.debug("Searching for MRs for %s in %s", issue_key, project)
     path = f"projects/{urlquote(project, safe='')}/merge_requests"
 
-    params = {"search": issue_key, "view": "simple"}
+    params = {"search": issue_key}
     if state is not None:
         params["state"] = state
 
@@ -67,4 +67,5 @@ def search_gitlab_project_mrs(
             title=mr["title"],
             state=mr["state"],
             description=mr["description"],
+            merged_at=mr["merged_at"],
         )

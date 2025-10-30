@@ -137,22 +137,17 @@ def autorelease_spec(tmp_path):
     [False, True],
 )
 @pytest.mark.parametrize(
-    "dist_git_branch, ystream_dist",
-    [
-        ("c9s", ".el9"),
-        ("c10s", ".el10"),
-        ("rhel-9.6.0", ".el9"),
-        ("rhel-10.0", ".el10"),
-    ],
+    "dist_git_branch",
+    ["c9s", "c10s", "rhel-9.6.0", "rhel-10.0"],
 )
 @pytest.mark.asyncio
-async def test_update_release(rebase, dist_git_branch, ystream_dist, minimal_spec, autorelease_spec):
+async def test_update_release(rebase, dist_git_branch, minimal_spec, autorelease_spec):
     package = "test"
 
-    async def _get_latest_ystream_build(*_, **__):
-        return EVR(version="0.1", release="2" + ystream_dist)
+    async def _get_latest_higher_stream_build(*_, **__):
+        return EVR(version="0.1", release="2.elX")
 
-    flexmock(UpdateReleaseTool).should_receive("_get_latest_ystream_build").replace_with(_get_latest_ystream_build)
+    flexmock(UpdateReleaseTool).should_receive("_get_latest_higher_stream_build").replace_with(_get_latest_higher_stream_build)
 
     tool = UpdateReleaseTool()
 
@@ -178,9 +173,6 @@ async def test_update_release(rebase, dist_git_branch, ystream_dist, minimal_spe
         await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
         await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "2%{?dist}.2")
         await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
-        if not rebase:
-            minimal_spec.write_text(minimal_spec.read_text().replace("%{?dist}.2", "%{?dist}.1.0.0.hotfix2.rhel12345"))
-            assert (await run_and_check(minimal_spec, None, error=True)).endswith("Unable to determine valid release")
 
 
 @pytest.mark.asyncio

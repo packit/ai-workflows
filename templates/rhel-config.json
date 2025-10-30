@@ -5,6 +5,10 @@
     },
     "current_z_streams": {
       "8": "rhel-8.10.z",
+      "9": "rhel-9.6.z",
+      "10": "rhel-10.0.z"
+    },
+    "upcoming_z_streams": {
       "9": "rhel-9.7.z",
       "10": "rhel-10.1.z"
     },

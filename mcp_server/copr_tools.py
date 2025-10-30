@@ -13,6 +13,7 @@ from copr.v3 import BuildProxy, ProjectProxy
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, Field
 
+from common import load_rhel_config
 from common.utils import init_kerberos_ticket, KerberosError
 from common.validators import AbsolutePath
 
@@ -56,12 +57,23 @@ async def _get_exclusive_arches(srpm_path: Path) -> set[str]:
     return (COPR_ARCHES - exclude_arches) & exclusive_arches
 
 
-def _branch_to_chroot(dist_git_branch: str) -> str:
-    m = re.match(r"^c(\d+)s|rhel-(\d+)-main|rhel-(\d+)\.\d+.*$", dist_git_branch)
-    if not m:
+async def _branch_to_chroot(dist_git_branch: str) -> str:
+    if not (m := re.match(r"^(?:c(\d+)s|rhel-(\d+)-main|rhel-(\d+)\.(\d+).*)$", dist_git_branch)):
         raise ValueError(f"Unsupported branch name: {dist_git_branch}")
-    majorver = next(g for g in m.groups() if g is not None)
-    return f"rhel-{majorver}.dev"
+    majorver, minorver = m.group(1) or m.group(2) or m.group(3), m.group(4)
+    rhel_config = await load_rhel_config()
+    upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
+    # build Y-Streams and 0-day Z-Streams against the dev chroot
+    if minorver is not None:
+        if (ver := upcoming_z_streams.get(majorver)) and ver.startswith(
+            f"rhel-{majorver}.{minorver}"
+        ):
+            suffix = ".dev"
+        else:
+            suffix = ""
+    else:
+        suffix = ".dev"
+    return f"rhel-{majorver}{suffix}"
 
 
 async def build_package(
@@ -83,7 +95,7 @@ async def build_package(
     # in such case build for either of them
     build_arch = exclusive_arches.pop() if exclusive_arches else "x86_64"
     try:
-        chroot = _branch_to_chroot(dist_git_branch) + f"-{build_arch}"
+        chroot = (await _branch_to_chroot(dist_git_branch)) + f"-{build_arch}"
     except ValueError as e:
         raise ToolError(f"Failed to deduce Copr chroot: {e}") from e
     project_proxy = ProjectProxy({"username": copr_user, **COPR_CONFIG})

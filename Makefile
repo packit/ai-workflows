@@ -25,7 +25,12 @@ run-triage-agent-standalone:
 		-e DRY_RUN=$(DRY_RUN) \
 		triage-agent
 
-
+.PHONY: run-clones-analyzer-agent-standalone
+run-clones-analyzer-agent-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e DRY_RUN=$(DRY_RUN) \
+		clones-analyzer-agent
 
 
 .PHONY: run-rebase-agent-c9s-standalone

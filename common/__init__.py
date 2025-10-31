@@ -2,5 +2,6 @@
 
 from .config import load_rhel_config
 from .models import CVEEligibilityResult
+from .models import WhenEligibility
 
-__all__ = ["load_rhel_config", "CVEEligibilityResult"]
+__all__ = ["load_rhel_config", "CVEEligibilityResult", "WhenEligibility"]

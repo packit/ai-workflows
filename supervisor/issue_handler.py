@@ -59,7 +59,6 @@ class IssueHandler(WorkItemHandler):
         return WorkflowResult(status=why, reschedule_in=reschedule_delay)
 
     def resolve_flag_attention(self, why: str, *, details_comment: str | None = None):
-
         if details_comment:
             # panel first and testing analysis after that
             full_comment = f"{format_attention_message(why)}\n\n{details_comment}"
@@ -288,66 +287,67 @@ class IssueHandler(WorkItemHandler):
         # the merged merge request in the pre-errata-creation state.
         self.label_merge_if_needed()
 
-        if issue.status in (
-            IssueStatus.NEW,
-            IssueStatus.PLANNING,
-            IssueStatus.IN_PROGRESS,
-        ):
-            return self.resolve_set_status(
-                IssueStatus.INTEGRATION,
-                "Preliminary testing has passed, moving to Integration",
-            )
-        elif issue.status == IssueStatus.INTEGRATION:
-            if "jotnar_reproducing_tests" in issue.labels:
-                return await self.resolve_check_reproduction()
-
-            related_erratum = get_erratum_for_link(issue.errata_link, full=True)
-
-            baseline_tests = BaselineTests.load_from_issue(self.issue)
-            if baseline_tests is not None:
-                testing_analysis = await analyze_issue(
-                    issue, related_erratum, after_baseline=True
+        match issue.status:
+            case IssueStatus.NEW | IssueStatus.PLANNING | IssueStatus.IN_PROGRESS:
+                return self.resolve_set_status(
+                    IssueStatus.INTEGRATION,
+                    "Preliminary testing has passed, moving to Integration",
                 )
-            else:
-                testing_analysis = await analyze_issue(issue, related_erratum)
-            if testing_analysis.state == TestingState.NOT_RUNNING:
-                return self.resolve_flag_attention(
-                    "Tests aren't running - see details below",
-                    details_comment=testing_analysis.comment,
-                )
-            elif testing_analysis.state == TestingState.PENDING:
-                return self.resolve_wait("Tests are pending")
-            elif testing_analysis.state == TestingState.RUNNING:
-                return self.resolve_wait("Tests are running")
-            elif testing_analysis.state == TestingState.FAILED:
-                if testing_analysis.failed_test_ids:
-                    return await self.resolve_start_reproduction(
-                        related_erratum,
-                        testing_analysis.comment or "",
-                        testing_analysis.failed_test_ids,
+            case IssueStatus.INTEGRATION:
+                if "jotnar_reproducing_tests" in issue.labels:
+                    return await self.resolve_check_reproduction()
+
+                related_erratum = get_erratum_for_link(issue.errata_link, full=True)
+
+                baseline_tests = BaselineTests.load_from_issue(self.issue)
+                if baseline_tests is not None:
+                    testing_analysis = await analyze_issue(
+                        issue, related_erratum, after_baseline=True
                     )
                 else:
-                    return self.resolve_flag_attention(
-                        "Tests failed - see details below",
-                        details_comment=testing_analysis.comment,
-                    )
-            elif testing_analysis.state == TestingState.PASSED:
-                return self.resolve_set_status(
-                    IssueStatus.RELEASE_PENDING,
-                    testing_analysis.comment or "Final testing has passed.",
-                )
-            elif testing_analysis.state == TestingState.WAIVED:
-                return self.resolve_set_status(
-                    IssueStatus.RELEASE_PENDING,
-                    testing_analysis.comment
-                    or "Final testing has been waived, moving to Release Pending.",
-                )
-            else:
-                raise ValueError(f"Unknown testing state: {testing_analysis.state}")
-        elif issue.status in (IssueStatus.RELEASE_PENDING, IssueStatus.CLOSED):
-            return self.resolve_remove_work_item(f"Issue status is {issue.status}")
-        else:
-            raise ValueError(f"Unknown issue status: {issue.status}")
+                    testing_analysis = await analyze_issue(issue, related_erratum)
+
+                match testing_analysis.state:
+                    case TestingState.NOT_RUNNING:
+                        return self.resolve_flag_attention(
+                            "Tests aren't running - see details below",
+                            details_comment=testing_analysis.comment,
+                        )
+                    case TestingState.PENDING:
+                        return self.resolve_wait("Tests are pending")
+                    case TestingState.RUNNING:
+                        return self.resolve_wait("Tests are running")
+                    case TestingState.FAILED:
+                        if testing_analysis.failed_test_ids:
+                            return await self.resolve_start_reproduction(
+                                related_erratum,
+                                testing_analysis.comment or "",
+                                testing_analysis.failed_test_ids,
+                            )
+                        else:
+                            return self.resolve_flag_attention(
+                                "Tests failed - see details below",
+                                details_comment=testing_analysis.comment,
+                            )
+                    case TestingState.PASSED:
+                        return self.resolve_set_status(
+                            IssueStatus.RELEASE_PENDING,
+                            testing_analysis.comment or "Final testing has passed.",
+                        )
+                    case TestingState.WAIVED:
+                        return self.resolve_set_status(
+                            IssueStatus.RELEASE_PENDING,
+                            testing_analysis.comment
+                            or "Final testing has been waived, moving to Release Pending.",
+                        )
+                    case _:
+                        raise ValueError(
+                            f"Unknown testing state: {testing_analysis.state}"
+                        )
+            case IssueStatus.RELEASE_PENDING | IssueStatus.CLOSED:
+                return self.resolve_remove_work_item(f"Issue status is {issue.status}")
+            case _:
+                raise ValueError(f"Unknown issue status: {issue.status}")
 
     async def run(self) -> WorkflowResult:
         """

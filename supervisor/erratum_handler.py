@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from .constants import POST_PUSH_TESTING_TIMEOUT, POST_PUSH_TESTING_TIMEOUT_STR
 from .work_item_handler import WorkItemHandler
@@ -156,7 +156,9 @@ class ErratumHandler(WorkItemHandler):
 
         return WorkflowResult(status=why, reschedule_in=reschedule_delay)
 
-    def resolve_wait_for_cat_tests(self, new_status: ErrataStatus, rule_set) -> WorkflowResult:
+    def resolve_wait_for_cat_tests(
+        self, new_status: ErrataStatus, rule_set
+    ) -> WorkflowResult:
         # get stage push details to check completion time
         push_details = erratum_get_latest_stage_push_details(self.erratum.id)
 
@@ -232,7 +234,9 @@ class ErratumHandler(WorkItemHandler):
         else:
             # list of blocking rule names
             blocking_outcomes = [
-                rule.name for rule in rule_set.rules if rule.outcome != TransitionRuleOutcome.OK
+                rule.name
+                for rule in rule_set.rules
+                if rule.outcome != TransitionRuleOutcome.OK
             ]
 
             # check blocking rules in order of priority
@@ -262,19 +266,20 @@ class ErratumHandler(WorkItemHandler):
             elif "Cat" in blocking_outcomes:
                 return self.resolve_wait_for_cat_tests(new_status, rule_set)
             elif "Securityalert" in blocking_outcomes:
-                erratum_refresh_security_alerts(
-                    self.erratum.id, dry_run=self.dry_run
-                )
+                erratum_refresh_security_alerts(self.erratum.id, dry_run=self.dry_run)
                 return self.resolve_wait(
                     f"Refreshing security alerts for erratum {self.erratum.id} before moving to {new_status}"
                 )
             else:
                 # unknown blocking rules, flag for attention with details
                 blocking_rules_details = "\n".join(
-                    f"{r.name}: {r.details}" for r in rule_set.rules if r.outcome == TransitionRuleOutcome.BLOCK
+                    f"{r.name}: {r.details}"
+                    for r in rule_set.rules
+                    if r.outcome == TransitionRuleOutcome.BLOCK
                 )
                 return self.resolve_flag_attention(
-                    f"Transition to {new_status} is blocked by:\n" + blocking_rules_details,
+                    f"Transition to {new_status} is blocked by:\n"
+                    + blocking_rules_details,
                 )
 
     async def run(self) -> WorkflowResult:
@@ -291,13 +296,14 @@ class ErratumHandler(WorkItemHandler):
                 "Erratum already flagged for human attention"
             )
 
-        if erratum.status == ErrataStatus.NEW_FILES:
-            return self.try_to_advance_erratum(ErrataStatus.QE)
-        elif erratum.status == ErrataStatus.QE:
-            if not erratum_all_issues_are_release_pending(erratum, {}):
-                return self.resolve_remove_work_item(
-                    "Not all issues are release pending"
-                )
-            return self.try_to_advance_erratum(ErrataStatus.REL_PREP)
-        else:
-            return self.resolve_remove_work_item(f"status is {erratum.status}")
+        match erratum.status:
+            case ErrataStatus.NEW_FILES:
+                return self.try_to_advance_erratum(ErrataStatus.QE)
+            case ErrataStatus.QE:
+                if not erratum_all_issues_are_release_pending(erratum, {}):
+                    return self.resolve_remove_work_item(
+                        "Not all issues are release pending"
+                    )
+                return self.try_to_advance_erratum(ErrataStatus.REL_PREP)
+            case _:
+                return self.resolve_remove_work_item(f"status is {erratum.status}")

@@ -57,14 +57,32 @@ def jira_url() -> str:
     return url.rstrip("/")
 
 
+class JiraNotLoggedInError(Exception):
+    pass
+
+
 @cache
 def jira_headers() -> dict[str, str]:
     jira_token = os.environ["JIRA_TOKEN"]
 
-    return {
+    headers = {
         "Authorization": f"Bearer {jira_token}",
         "Content-Type": "application/json",
     }
+
+    # Test if the token can log in successfully
+    response = requests_session().get(
+        f"{jira_url()}/rest/api/2/myself", headers=headers
+    )
+
+    if response.status_code == 401:
+        raise JiraNotLoggedInError(
+            "Jira login authentication failed. Please check if the Jira token is valid."
+        )
+
+    response.raise_for_status()
+
+    return headers
 
 
 class RateLimitError(Exception):

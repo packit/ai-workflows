@@ -291,13 +291,14 @@ class ErratumHandler(WorkItemHandler):
                 "Erratum already flagged for human attention"
             )
 
-        if erratum.status == ErrataStatus.NEW_FILES:
-            return self.try_to_advance_erratum(ErrataStatus.QE)
-        elif erratum.status == ErrataStatus.QE:
-            if not erratum_all_issues_are_release_pending(erratum, {}):
-                return self.resolve_remove_work_item(
-                    "Not all issues are release pending"
-                )
-            return self.try_to_advance_erratum(ErrataStatus.REL_PREP)
-        else:
-            return self.resolve_remove_work_item(f"status is {erratum.status}")
+        match erratum.status:
+            case ErrataStatus.NEW_FILES:
+                return self.try_to_advance_erratum(ErrataStatus.QE)
+            case ErrataStatus.QE:
+                if not erratum_all_issues_are_release_pending(erratum, {}):
+                    return self.resolve_remove_work_item(
+                        "Not all issues are release pending"
+                    )
+                return self.try_to_advance_erratum(ErrataStatus.REL_PREP)
+            case _:
+                return self.resolve_remove_work_item(f"status is {erratum.status}")

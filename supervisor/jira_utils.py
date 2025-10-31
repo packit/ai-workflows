@@ -276,7 +276,7 @@ def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
             comments=[
                 JiraComment(
                     authorName=c["author"]["displayName"],
-                    authorEmail=c["author"]["emailAddress"],
+                    authorEmail=c["author"].get("emailAddress"),
                     created=datetime.fromisoformat(c["created"]),
                     body=c["body"],
                     id=c["id"],

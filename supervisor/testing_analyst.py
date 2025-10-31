@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 from beeai_framework.agents.tool_calling import ToolCallingAgent
+from beeai_framework.agents.types import AgentMeta
 from beeai_framework.backend import ChatModel
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.template import PromptTemplate, PromptTemplateInput
@@ -156,19 +157,26 @@ def render_prompt(input: InputSchema, after_baseline: bool) -> str:
 async def analyze_issue(
     jira_issue: FullIssue, erratum: FullErratum, after_baseline=False
 ) -> OutputSchema:
+    tools = [
+        ReadAttachmentTool(),
+        ReadLogfileTool(),
+        ReadReadmeTool(),
+        ReadIssueTool(),
+        SearchResultsdbTool(),
+    ]
+
     agent = ToolCallingAgent(
         llm=ChatModel.from_name(
             os.environ["CHAT_MODEL"],
             allow_parallel_tool_calls=True,
         ),
         memory=UnconstrainedMemory(),
-        tools=[
-            ReadAttachmentTool(),
-            ReadLogfileTool(),
-            ReadReadmeTool(),
-            ReadIssueTool(),
-            SearchResultsdbTool(),
-        ],
+        tools=tools,
+        meta=AgentMeta(
+            name="TestingAnalyst",
+            description="Agent that analyzes JIRA issues and determines the state of testing for RHEL errata",
+            tools=tools,
+        ),
     )
 
     async def run(input: InputSchema):

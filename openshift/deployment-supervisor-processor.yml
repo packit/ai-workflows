@@ -36,12 +36,16 @@ spec:
             name: chat-env
         - configMapRef:
             name: endpoints-env
+        - secretRef:
+            name: gitlab-env
         - configMapRef:
             name: jira-env
         - secretRef:
             name: jira-env
         - configMapRef:
             name: kerberos-env
+        - secretRef:
+            name: testing-farm-env
         resources:
             limits:
                 cpu: "200m"

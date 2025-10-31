@@ -168,7 +168,7 @@ async def do_process(repeat: bool):
 
 @app.command()
 def process(repeat: bool = typer.Option(True)):
-    check_env(chat=True, jira=True, redis=True, testing_farm=True)
+    check_env(chat=True, gitlab=True, jira=True, redis=True, testing_farm=True)
 
     asyncio.run(do_process(repeat))
 
@@ -195,7 +195,7 @@ async def do_process_issue(key: str):
 def process_issue(
     key_or_url: str,
 ):
-    check_env(chat=True, jira=True, testing_farm=True)
+    check_env(chat=True, gitlab=True, jira=True, testing_farm=True)
 
     if key_or_url.startswith("http"):
         m = re.match(r"https://issues.redhat.com/browse/([^/?]+)(?:\?.*)?$", key_or_url)

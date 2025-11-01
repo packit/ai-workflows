@@ -43,7 +43,7 @@ class ErrataStatus(StrEnum):
 
 class Comment(BaseModel):
     authorName: str
-    authorEmail: str
+    authorEmail: str | None
     created: datetime
     body: str
 

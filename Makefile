@@ -59,7 +59,7 @@ run-rebase-agent-standalone: run-rebase-agent-c10s-standalone
 run-backport-agent-c9s-standalone:
 	$(COMPOSE_AGENTS)  run --rm \
 		-e PACKAGE=$(PACKAGE) \
-		-e UPSTREAM_FIX=$(UPSTREAM_FIX) \
+		-e UPSTREAM_PATCHES=$(UPSTREAM_PATCHES) \
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
@@ -70,7 +70,7 @@ run-backport-agent-c9s-standalone:
 run-backport-agent-c10s-standalone:
 	$(COMPOSE_AGENTS) run --rm \
 		-e PACKAGE=$(PACKAGE) \
-		-e UPSTREAM_FIX=$(UPSTREAM_FIX) \
+		-e UPSTREAM_PATCHES=$(UPSTREAM_PATCHES) \
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \

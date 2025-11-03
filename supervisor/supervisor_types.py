@@ -183,6 +183,7 @@ class TestingState(StrEnum):
     NOT_RUNNING = "tests-not-running"
     PENDING = "tests-pending"
     RUNNING = "tests-running"
+    ERROR = "tests-error"
     FAILED = "tests-failed"
     PASSED = "tests-passed"
     WAIVED = "tests-waived"

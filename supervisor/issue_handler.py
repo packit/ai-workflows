@@ -329,6 +329,11 @@ class IssueHandler(WorkItemHandler):
                                 "Tests failed - see details below",
                                 details_comment=testing_analysis.comment,
                             )
+                    case TestingState.ERROR:
+                        return self.resolve_flag_attention(
+                            "An error occurred during testing - see details below",
+                            details_comment=testing_analysis.comment,
+                        )
                     case TestingState.PASSED:
                         return self.resolve_set_status(
                             IssueStatus.RELEASE_PENDING,

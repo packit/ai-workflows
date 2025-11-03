@@ -95,7 +95,8 @@ class BackportInputSchema(BaseModel):
     dist_git_branch: str = Field(description="Git branch in dist-git to be updated")
     jira_issue: str = Field(description="Jira issue to reference as resolved")
     cve_id: str | None = Field(default=None, description="CVE ID if the jira issue is a CVE")
-    upstream_fix: str = Field(description="URL to the upstream fix (commit URL or patch URL)")
+    upstream_patches: list[str] = Field(
+        description="List of URLs to upstream patches that were validated using the PatchValidator tool")
     build_error: str | None = Field(description="Error encountered during package build")
 
 
@@ -273,4 +274,4 @@ class CachedMRMetadata(BaseModel):
     operation_type: str = Field(description="Type of operation (backport or rebase)")
     title: str = Field(description="Merge request title")
     package: str = Field(description="Package name")
-    details: str = Field(description="Operation-specific identifier (upstream_fix URL for backport, version for rebase)")
+    details: str = Field(description="Operation-specific identifier (list of upstream patch URLs for backport, version for rebase)")

@@ -3,7 +3,11 @@ from functools import cached_property
 import logging
 import re
 
-from supervisor.compare_xunit import compare_xunit_files
+from supervisor.compare_xunit import (
+    XUnitComparison,
+    XUnitComparisonStatus,
+    compare_xunit_files,
+)
 from supervisor.jira_utils import add_issue_attachments
 
 
@@ -131,28 +135,56 @@ class BaselineTests:
             failed_request = comparison.failed.request
             baseline_request = comparison.baseline.request
 
-            if failed_request.result_xunit_url and baseline_request.result_xunit_url:
-                metadata = {
-                    "build_1": baseline_request.build_nvr,
-                    "testing_farm_request_id_1": baseline_request.id,
-                    "build_2": failed_request.build_nvr,
-                    "testing_farm_request_id_2": failed_request.id,
-                }
+            metadata = {}
 
-                attachment_bytes = (
-                    (
-                        await compare_xunit_files(
-                            baseline_request.result_xunit_url,
-                            failed_request.result_xunit_url,
-                            metadata=metadata,
-                        )
+            metadata |= {
+                "build_a": baseline_request.build_nvr,
+                "testing_farm_request_id_a": baseline_request.id,
+            }
+            if baseline_request.error_reason:
+                metadata["error_reason_a"] = baseline_request.error_reason
+
+            metadata |= {
+                "build_b": failed_request.build_nvr,
+                "testing_farm_request_id_b": failed_request.id,
+            }
+            if failed_request.error_reason:
+                metadata["error_reason_b"] = failed_request.error_reason
+
+            def create_not_generated_comparison(reason: str) -> XUnitComparison:
+                return XUnitComparison(
+                    status=XUnitComparisonStatus(
+                        generated=False,
+                        reason=reason,
+                    ),
+                    metadata=metadata,
+                )
+
+            match (baseline_request.result_xunit_url, failed_request.result_xunit_url):
+                case (None, None):
+                    comparison_result = create_not_generated_comparison(
+                        "XUnit results missing for runs A and B"
                     )
-                    .to_toml()
-                    .encode("utf-8")
-                )
-                attachments.append(
-                    (comparison.attachment_name, attachment_bytes, "text/plain")
-                )
+                case (None, _):
+                    comparison_result = create_not_generated_comparison(
+                        "XUnit results missing for run A"
+                    )
+                case (_, None):
+                    comparison_result = create_not_generated_comparison(
+                        "XUnit results missing for run B"
+                    )
+                case _:
+                    comparison_result = await compare_xunit_files(
+                        baseline_request.result_xunit_url,
+                        failed_request.result_xunit_url,
+                        metadata=metadata,
+                    )
+
+            attachment_bytes = comparison_result.to_toml().encode("utf-8")
+            logger.info("About to attach %s", attachment_bytes.decode("utf-8"))
+            attachments.append(
+                (comparison.attachment_name, attachment_bytes, "text/plain")
+            )
 
         add_issue_attachments(issue_key, attachments, dry_run=dry_run)
 

@@ -136,6 +136,7 @@ class TestingFarmRequest(BaseModel):
     url: str
     state: TestingFarmRequestState
     result: TestingFarmRequestResult = TestingFarmRequestResult.UNKNOWN
+    error_reason: str | None = None
     result_xunit_url: str | None = None
     created: datetime
     updated: datetime

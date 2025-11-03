@@ -8,6 +8,11 @@ import tomli_w
 from .http_utils import aiohttp_session
 
 
+class XUnitComparisonStatus(BaseModel):
+    generated: bool
+    reason: str | None = None
+
+
 class XUnitTestCaseResult(StrEnum):
     PASS = "pass"
     FAIL = "fail"
@@ -78,6 +83,7 @@ TOML_HEADER = """\
 
 
 class XUnitComparison(BaseModel):
+    status: XUnitComparisonStatus
     metadata: dict[str, str] = Field(default_factory=dict)
     total_counts: XUnitComparisonCounts = Field(default_factory=XUnitComparisonCounts)
     regression: list[XUnitTestCaseComparison] = Field(default_factory=list)
@@ -88,7 +94,10 @@ class XUnitComparison(BaseModel):
     def to_toml(self) -> str:
         dict_output = self.model_dump()
 
-        # Clean up the output by removing empty lists
+        # Clean up the output
+        if sum(c for c in dict_output["total_counts"].values()) == 0:
+            del dict_output["total_counts"]
+
         empty_lists = [
             k for k, v in dict_output.items() if isinstance(v, list) and not v
         ]
@@ -293,7 +302,13 @@ async def compare_xunit_files(
             )
         )
 
-    output: XUnitComparison = XUnitComparison(metadata=dict(metadata))
+    output: XUnitComparison = XUnitComparison(
+        status=XUnitComparisonStatus(
+            generated=True,  # If we return this object, comparison was successful
+            reason="Comparison generated successfully",
+        ),
+        metadata=dict(metadata),
+    )
 
     # Iterate over each test suite by matching (name, arch) pairs; if a test
     # suite has multiple suites with the same (name, arch), the first one

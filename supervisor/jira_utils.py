@@ -636,6 +636,11 @@ def add_issue_attachments(
     """
     path = f"issue/{urlquote(issue_key)}/attachments"
 
+    if len(attachments) == 0:
+        # This an API error; don't try to call it.
+        logger.info("No attachments to add to issue %s", issue_key)
+        return
+
     if dry_run:
         logger.info(
             "Dry run: would add attachment(s) %s to issue %s",

@@ -231,7 +231,9 @@ def get_instructions() -> str:
       4. Update the spec file. Add a new `Patch` tag pointing to the <UPSTREAM_FIX> patch file.
          Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
          make sure it has the highest number. Make sure the patch is applied in the "%prep" section
-         and the `-p` argument is correct.
+         and the `-p` argument is correct. Add an upstream URL as a comment above
+         the `Patch:` tag - this URL references the related upstream commit or a pull/merge request.
+         Default to <UPSTREAM_FIX> if it is an URL.
          IMPORTANT: Only ADD new patches. Do NOT modify existing Patch tags or their order.
 
       5. Run `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` to see if the new patch

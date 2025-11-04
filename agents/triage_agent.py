@@ -462,7 +462,14 @@ async def main() -> None:
                     issue_key=state.jira_issue
                 )
 
-                if not is_rh_employee:
+                issue_status = await run_tool(
+                    "get_jira_details",
+                    available_tools=gateway_tools,
+                    issue_key=state.jira_issue
+                )
+                issue_status = issue_status.get("fields", {}).get("status", {}).get("name")
+
+                if not is_rh_employee and issue_status == "New":
                     logger.warning(f"Issue author for {state.jira_issue} is not verified as RH employee - ending triage with clarification needed")
 
                     # override triage result with clarification needed so that it gets reviewed by us
@@ -477,7 +484,8 @@ async def main() -> None:
 
                     return "comment_in_jira"
 
-                logger.info(f"Issue author for {state.jira_issue} verified as RH employee - proceeding with rebase")
+                logger.info(f"Issue author for {state.jira_issue} verified as RH employee or issue is not in new status - proceeding with rebase")
+
                 return "determine_target_branch"
 
             async def comment_in_jira(state):

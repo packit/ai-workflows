@@ -54,6 +54,8 @@ If last command is successful, move `/tmp/keytab` file to `.secrets/keytab` and 
 
 This file should be kept secure as it can be used as a replacement for password-less authentication and impersonate the user.
 
+To be able to access internal RHEL dist-git with your identity, update the `User` field in `files/internal_dist-git_ssh.conf` to match your `<REDHAT_KERBEROS_ID>` used in the keytab.
+
 ## Running the System
 
 ### Full Pipeline (Production)

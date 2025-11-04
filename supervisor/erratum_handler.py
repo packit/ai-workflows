@@ -162,6 +162,13 @@ class ErratumHandler(WorkItemHandler):
         # get stage push details to check completion time
         push_details = erratum_get_latest_stage_push_details(self.erratum.id)
 
+        # only apply timeout if push is complete
+        if push_details.status != ErratumPushStatus.COMPLETE:
+            return self.resolve_wait(
+                f"Stage push status is {push_details.status} for erratum {self.erratum.id},"
+                f" waiting for push to complete before moving to {new_status}"
+            )
+
         # get completion time from the log to apply the timeout
         if push_details.updated_at is None:
             return self.resolve_flag_attention(

@@ -63,7 +63,8 @@ class GetPackageInfoTool(Tool[GetPackageInfoToolInput, ToolRunOptions, GetPackag
         try:
             with Specfile(spec_path) as spec:
                 version = spec.version
-                patch_files = [p.location for p in spec.patches if p.location]
+                with spec.patches() as patches:
+                    patch_files = [p.location for p in patches if p.location]
 
                 return GetPackageInfoToolOutput(
                     result=PackageInfo(

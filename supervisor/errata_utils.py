@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 ET_URL = "https://errata.engineering.redhat.com/"
 
+# regex pattern for extracting timestamps from push logs
+_TIMESTAMP_PATTERN = re.compile(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \+0000')
+
 
 @cache
 def ET_verify() -> bool | str:
@@ -144,6 +147,16 @@ def get_erratum_comments(erratum_id: str | int) -> list[Comment] | None:
     ]
 
 
+def erratum_has_magic_string_in_comments(
+    erratum_id: int | str, magic_string: str
+) -> bool:
+    comments = get_erratum_comments(erratum_id)
+    if comments is None:
+        return False
+
+    return any(magic_string in comment.body for comment in comments)
+
+
 @overload
 def get_erratum_for_link(link: str, full: Literal[False] = False) -> Erratum: ...
 
@@ -157,7 +170,29 @@ def get_erratum_for_link(link: str, full: bool = False) -> Erratum | FullErratum
     return get_erratum(erratum_id, full=full)
 
 
-class ErratumBuilds(RootModel):
+class ErratumBuild(BaseModel):
+    nvr: str
+    package_file_list: ErratumPackageFileList
+
+
+class ErratumBuildMap(RootModel):
+    # Map package to a build with nvr and package file list
+    # {
+    #   "libtiff": ErratumBuild({
+    #       nvr: libtiff-4.0.9-35.el8_10
+    #       package_file_list: {
+    #           "AppStream": {
+    #               "SRPMS": {"libtiff"}
+    #               "aarch64": {"libtiff", "libtiff-devel", ...
+    #           }
+    #       }
+    #   }),
+    #   "libjpeg": ....
+    # }
+    root: dict[str, ErratumBuild]
+
+
+class ErratumPackageFileList(RootModel):
     # Map variant and architecture to a set of subpackage names
     # we ship for that architecture
     # {
@@ -177,33 +212,52 @@ def nvr_to_package_name(nvr: str) -> str:
     return nvr.rsplit("-", 2)[0]
 
 
-def get_erratum_builds(id: int | str) -> ErratumBuilds:
-    data = ET_api_get(f"erratum/{id}/builds_list")
+def get_erratum_build_map(erratum_id: int | str) -> ErratumBuildMap:
+    """Create a build map for the given erratum
+
+    The build map can be used to compare if the subpackages
+    match with the other build map for a given package name.
+
+    Throws an exception if more than one RHEL version build
+    attached.
+    """
+    data = ET_api_get(f"erratum/{erratum_id}/builds_list")
 
     if len(data) != 1:
         raise ValueError("Expected JSON object to have a single product version key.")
+
     detail = next(iter(data.values()))
-
     builds = detail.get("builds", [])
-    if len(builds) != 1:
-        raise ValueError("Expected a single build in the 'builds' list.")
+    build_map = dict()
 
-    build = builds[0]
-    if len(build) != 1:
-        raise ValueError("Expected build to have a single NVR key.")
-    build_detail = next(iter(build.values()))
+    for build in builds:
+        if len(build) != 1:
+            raise ValueError("Expected build to have a single NVR key.")
 
-    variant_arch = build_detail["variant_arch"]
+        (nvr, build_detail) = next(iter(build.items()))
+        variant_arch = build_detail["variant_arch"]
 
-    file_list_map = {
-        variant_to_base_variant(variant): {
-            arch: set([nvr_to_package_name(rpm["filename"]) for rpm in rmps])
-            for arch, rmps in arches.items()
+        package_file_map = {
+            variant_to_base_variant(variant): {
+                arch: set(
+                    [
+                        nvr_to_package_name(
+                            # builds_list API's response has two variant formats
+                            rpm["filename"] if not isinstance(rpm, str) else rpm
+                        )
+                        for rpm in rpms
+                    ]
+                )
+                for arch, rpms in arches.items()
+            }
+            for variant, arches in variant_arch.items()
         }
-        for variant, arches in variant_arch.items()
-    }
 
-    return ErratumBuilds(root=file_list_map)
+        build_map[nvr_to_package_name(nvr)] = ErratumBuild(
+            nvr=nvr, package_file_list=ErratumPackageFileList(root=package_file_map)
+        )
+
+    return ErratumBuildMap(root=build_map)
 
 
 class RHELVersion(BaseModel):
@@ -430,19 +484,6 @@ def get_erratum_build_nvr(erratum_id: str | int, package_name: str) -> str | Non
     return None
 
 
-def errata_have_same_file_lists(errata_id1: int | str, errata_id2: int | str):
-    """Check if the given errata have the same file lists
-
-    After stripping package versions and RHEL release versions,
-    do the two errata ship the same subpackages for each
-    variant and architecture?
-
-    Throws an exception if either errata has more than one build
-    attached to it.
-    """
-    return get_erratum_builds(errata_id1) == get_erratum_builds(errata_id2)
-
-
 class RuleParseError(Exception):
     pass
 
@@ -565,19 +606,38 @@ class ErratumPushStatus(StrEnum):
     FAILED = "FAILED"
 
 
-def erratum_get_latest_stage_push_status(erratum_id) -> ErratumPushStatus | None:
+class ErratumPushDetails(BaseModel):
+    status: ErratumPushStatus | None
+    updated_at: datetime | None
+
+
+def erratum_get_latest_stage_push_details(erratum_id) -> ErratumPushDetails:
     pushes = ET_api_get(
         f"erratum/{erratum_id}/push",
     )
 
     highest_push_id = 0
     status = None
+    log = None
     for push in pushes:
         if push["target"]["name"] == "cdn_stage" and push["id"] > highest_push_id:
             highest_push_id = push["id"]
             status = push["status"]
+            log = push.get("log", "")
 
-    return ErratumPushStatus(status) if status else None
+    updated_at = None
+    if log:
+        timestamps = _TIMESTAMP_PATTERN.findall(log)
+
+        if timestamps:
+            # last timestamp from logs
+            last_timestamp = timestamps[-1]
+            updated_at = datetime.strptime(last_timestamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+
+    return ErratumPushDetails(
+        status=ErratumPushStatus(status) if status else None,
+        updated_at=updated_at
+    )
 
 
 def erratum_push_to_stage(erratum_id, *, dry_run: bool = False):
@@ -610,6 +670,16 @@ def erratum_change_state(erratum_id, new_state: ErrataStatus, *, dry_run: bool =
         f"erratum/{erratum_id}/change_state",
         data={"new_state": new_state},
     )
+
+
+def erratum_add_comment(erratum_id: int | str, content: str, *, dry_run: bool = False):
+    if dry_run:
+        logger.info(
+            "Dry run: Would add '%s' as a comment for erratum %s", content, erratum_id
+        )
+        return
+
+    ET_api_post(f"erratum/{erratum_id}/add_comment", data={"comment": content})
 
 
 if __name__ == "__main__":

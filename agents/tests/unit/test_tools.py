@@ -28,6 +28,8 @@ from tools.commands import RunShellCommandTool, RunShellCommandToolInput
 from tools.specfile import (
     AddChangelogEntryTool,
     AddChangelogEntryToolInput,
+    GetPackageInfoTool,
+    GetPackageInfoToolInput,
     UpdateReleaseTool,
     UpdateReleaseToolInput,
 )
@@ -108,6 +110,31 @@ async def test_add_changelog_entry(minimal_spec):
     ]
 
 
+@pytest.mark.parametrize(
+    "spec_fixture, expected_version, expected_patches",
+    [
+        ("spec_with_patches", "1.2.3", [
+            "fix-cve-2024-1234.patch",
+            "fix-memory-leak.patch",
+            "update-documentation.patch"
+        ]),
+        ("minimal_spec", "0.1", []),
+    ],
+)
+@pytest.mark.asyncio
+async def test_get_package_info(spec_fixture, expected_version, expected_patches, request):
+    spec = request.getfixturevalue(spec_fixture)
+    tool = GetPackageInfoTool()
+
+    output = await tool.run(
+        input=GetPackageInfoToolInput(spec=spec)
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.to_json_safe()
+
+    assert result.version == expected_version
+    assert result.patch_files == expected_patches
+
+
 @pytest.fixture
 def autorelease_spec(tmp_path):
     spec = tmp_path / "autorelease.spec"
@@ -126,6 +153,41 @@ def autorelease_spec(tmp_path):
 
             %changelog
             %autochangelog
+            """
+        )
+    )
+    return spec
+
+
+@pytest.fixture
+def spec_with_patches(tmp_path):
+    spec = tmp_path / "with_patches.spec"
+    source_file = tmp_path / "source.tar.gz"
+    source_file.touch()
+    spec.write_text(
+        dedent(
+            """
+            Name:           test
+            Version:        1.2.3
+            Release:        1%{?dist}
+            Summary:        Test package
+
+            License:        MIT
+
+            Source0:        source.tar.gz
+            Patch0:         fix-cve-2024-1234.patch
+            Patch1:         fix-memory-leak.patch
+            Patch2:         update-documentation.patch
+
+            %description
+            Test package with patches
+
+            %prep
+            %autosetup -p1
+
+            %changelog
+            * Thu Jan 13 3770 Test User <test@redhat.com> - 1.2.3-1
+            - first version
             """
         )
     )

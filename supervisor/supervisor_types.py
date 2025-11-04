@@ -43,7 +43,7 @@ class ErrataStatus(StrEnum):
 
 class Comment(BaseModel):
     authorName: str
-    authorEmail: str
+    authorEmail: str | None
     created: datetime
     body: str
 
@@ -184,6 +184,7 @@ class TestingState(StrEnum):
     RUNNING = "tests-running"
     FAILED = "tests-failed"
     PASSED = "tests-passed"
+    WAIVED = "tests-waived"
 
 
 class WorkflowResult(BaseModel):

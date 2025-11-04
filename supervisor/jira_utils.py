@@ -57,14 +57,32 @@ def jira_url() -> str:
     return url.rstrip("/")
 
 
+class JiraNotLoggedInError(Exception):
+    pass
+
+
 @cache
 def jira_headers() -> dict[str, str]:
     jira_token = os.environ["JIRA_TOKEN"]
 
-    return {
+    headers = {
         "Authorization": f"Bearer {jira_token}",
         "Content-Type": "application/json",
     }
+
+    # Test if the token can log in successfully
+    response = requests_session().get(
+        f"{jira_url()}/rest/api/2/myself", headers=headers
+    )
+
+    if response.status_code == 401:
+        raise JiraNotLoggedInError(
+            "Jira login authentication failed. Please check if the Jira token is valid."
+        )
+
+    response.raise_for_status()
+
+    return headers
 
 
 class RateLimitError(Exception):
@@ -276,7 +294,7 @@ def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
             comments=[
                 JiraComment(
                     authorName=c["author"]["displayName"],
-                    authorEmail=c["author"]["emailAddress"],
+                    authorEmail=c["author"].get("emailAddress"),
                     created=datetime.fromisoformat(c["created"]),
                     body=c["body"],
                     id=c["id"],
@@ -635,6 +653,36 @@ def add_issue_attachments(
 
     if comment is not None:
         add_issue_comment(issue_key, comment, dry_run=dry_run)
+
+
+def get_issue_attachment(issue_key: str, filename: str) -> bytes:
+    """
+    Retrieve the content of a specific attachment from a JIRA issue.
+
+    Args:
+        issue_key: The key of the JIRA issue.
+        filename: The name of the attachment file to retrieve.
+
+    Returns:
+        The content of the attachment as bytes.
+
+    Raises:
+        KeyError: If the attachment with the specified filename is not found
+           or if multiple attachments with the same filename exist.
+    """
+    path = f"issue/{urlquote(issue_key)}?fields=attachment"
+    attachments = jira_api_get(path)["fields"]["attachment"]
+
+    attachments = [a for a in attachments if a["filename"] == filename]
+    if len(attachments) == 0:
+        raise KeyError(f"Issue {issue_key} has no attachment named {filename}")
+    if len(attachments) > 1:
+        raise KeyError(f"Issue {issue_key} has multiple attachments named {filename}")
+
+    url = attachments[0]["content"]
+    response = requests_session().get(url, headers=jira_headers())
+    raise_for_status(response)
+    return response.content
 
 
 @cache

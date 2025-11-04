@@ -108,6 +108,8 @@ def get_instructions() -> str:
       - Preserve existing formatting and style conventions in spec files and patch headers.
       - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
       - If there are package-specific instructions, incorporate them into your work.
+      - If the package calls `autoreconf` in `%prep` and the rebase fails because of a version constraint,
+        try removing that constraint, but never remove the `autoreconf` call.
     """
 
 

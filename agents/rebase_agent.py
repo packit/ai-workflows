@@ -394,14 +394,18 @@ async def main() -> None:
             async def comment_in_jira(state):
                 if dry_run:
                     return Workflow.END
+                if state.rebase_result.success:
+                    comment_text = (
+                        state.merge_request_url
+                        if state.merge_request_url
+                        else state.rebase_result.status
+                    )
+                else:
+                    comment_text = f"Agent failed to perform a rebase: {state.rebase_result.error}"
                 await tasks.comment_in_jira(
                     jira_issue=state.jira_issue,
                     agent_type="Rebase",
-                    comment_text=(
-                        state.merge_request_url
-                        if state.rebase_result.success
-                        else f"Agent failed to perform a rebase: {state.rebase_result.error}"
-                    ),
+                    comment_text=comment_text,
                     available_tools=gateway_tools,
                 )
                 return Workflow.END

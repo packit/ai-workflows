@@ -837,14 +837,19 @@ async def main() -> None:
             async def comment_in_jira(state):
                 if dry_run:
                     return Workflow.END
+                if state.backport_result.success:
+                    comment_text = (
+                        state.merge_request_url
+                        if state.merge_request_url
+                        else state.backport_result.status
+                    )
+                else:
+                    comment_text = f"Agent failed to perform a backport: {state.backport_result.error}"
+                logger.info(f"Result to be put in Jira comment: {comment_text}")
                 await tasks.comment_in_jira(
                     jira_issue=state.jira_issue,
                     agent_type="Backport",
-                    comment_text=(
-                        state.merge_request_url
-                        if state.backport_result.success
-                        else f"Agent failed to perform a backport: {state.backport_result.error}"
-                    ),
+                    comment_text=comment_text,
                     available_tools=gateway_tools,
                 )
                 return Workflow.END

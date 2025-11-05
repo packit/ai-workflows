@@ -83,11 +83,14 @@ services:
       # default cache location is a keyring
       - KRB5CCNAME=FILE:/tmp/krb5cc
       - DRY_RUN=${DRY_RUN:-false}
+      - MOCK_JIRA=${MOCK_JIRA:-false}
       - GIT_REPO_BASEPATH=/git-repos
+      - JIRA_MOCK_FILES=mcp_server/tests/data
     env_file:
       - .secrets/mcp-gateway.env
     volumes:
       - ./mcp_server:/home/mcp/mcp_server:ro,z
+      - ./mcp_server/tests/data:/home/mcp/mcp_server/tests/data:rw,z
       - ./common:/home/mcp/common:ro,z
       - .secrets/keytab:/home/mcp/keytab:ro,z,U
       - git-repos:/git-repos

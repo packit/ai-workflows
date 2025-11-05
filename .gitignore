@@ -38,3 +38,6 @@ noarch/
 
 # Project specific
 .secrets
+
+# Testing Jira files
+mcp_server/tests/data/*

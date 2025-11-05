@@ -124,8 +124,8 @@ def get_instructions() -> str:
             3c. Clone the upstream repository to a SEPARATE directory:
                 - Use `clone_upstream_repository` tool with:
                   * repository_url: from step 3a
-                  * clone_directory: {{local_clone}} (the dist-git repository root)
-                  * Tool automatically creates {{local_clone}}-upstream as <UPSTREAM_REPO>
+                  * clone_directory: current working directory (the dist-git repository root)
+                  * The tool automatically creates a directory with -upstream suffix as <UPSTREAM_REPO>
                 - Steps 3d-3g work in <UPSTREAM_REPO>, NOT in <UNPACKED_SOURCES>
 
             3d. Find and checkout the base version in upstream:
@@ -139,7 +139,7 @@ def get_instructions() -> str:
             3e. Apply existing patches from dist-git to upstream:
                 - Use `apply_downstream_patches` tool with:
                   * repo_path: <UPSTREAM_REPO> (where to apply)
-                  * patches_directory: {{local_clone}} (dist-git root where patch files are located)
+                  * patches_directory: current working directory (dist-git root where patch files are located)
                   * patch_files: list from step 3b
                 - This recreates the current package state in <UPSTREAM_REPO>
                 - IMPORTANT: Save the current commit hash after applying patches using `run_shell_command`:
@@ -202,7 +202,7 @@ def get_instructions() -> str:
 
             3g. Generate the final patch file from upstream:
                 - Use `generate_patch_from_commit` tool on <UPSTREAM_REPO>
-                - Specify output_directory as {{local_clone}} (the dist-git repository root)
+                - Specify output_directory as current working directory (the dist-git repository root)
                 - Use a descriptive name like <JIRA_ISSUE>.patch (e.g., if JIRA is RHEL-114639, use RHEL-114639.patch)
                 - CRITICAL: Provide base_commit parameter with the PATCHED_BASE from step 3e
                   This ensures the patch includes ALL cherry-picked commits, not just the last one

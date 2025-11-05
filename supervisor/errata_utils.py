@@ -6,7 +6,7 @@ from functools import cache
 import logging
 import os
 import re
-from typing import DefaultDict, overload
+from typing import Any, DefaultDict, overload
 from typing_extensions import Literal
 
 from bs4 import BeautifulSoup, Tag  # type: ignore
@@ -46,7 +46,21 @@ def ET_api_get(path: str, *, params: dict | None = None):
     return response.json()
 
 
-def ET_api_post(path: str, data: dict):
+@overload
+def ET_api_post(
+    path: str, data: dict[str, Any], *, decode_response: Literal[False] = False
+) -> None: ...
+
+
+@overload
+def ET_api_post(
+    path: str, data: dict[str, Any], *, decode_response: Literal[True]
+) -> Any: ...
+
+
+def ET_api_post(
+    path: str, data: dict[str, Any], *, decode_response: bool = False
+) -> Any | None:
     response = requests_session().post(
         f"{ET_URL}/api/v1/{path}",
         data=data,
@@ -54,7 +68,37 @@ def ET_api_post(path: str, data: dict):
         verify=ET_verify(),
     )
     response.raise_for_status()
-    return response.json()
+
+    if decode_response:
+        return response.json()
+
+
+@overload
+def ET_api_put(
+    path: str, data: dict[str, Any], *, decode_response: Literal[False] = False
+) -> None: ...
+
+
+@overload
+def ET_api_put(
+    path: str, data: dict[str, Any], *, decode_response: Literal[True]
+) -> Any: ...
+
+
+def ET_api_put(
+    path: str, data: dict[str, Any], *, decode_response: bool = False
+) -> Any | None:
+    response = requests_session().put(
+        f"{ET_URL}/api/v1/{path}",
+        data=data,
+        auth=HTTPSPNEGOAuth(opportunistic_auth=True),
+        verify=ET_verify(),
+    )
+
+    response.raise_for_status()
+
+    if decode_response:
+        return response.json()
 
 
 def ET_get_html(path: str):

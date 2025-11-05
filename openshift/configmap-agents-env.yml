@@ -2,6 +2,13 @@ apiVersion: v1
 data:
   MAX_RETRIES: "3"
   GIT_REPO_BASEPATH: /git-repos
+  # The maximum number of retries for a single step in the agent execution.
+  BEEAI_MAX_RETRIES_PER_STEP: "5"
+  # The total maximum number of retries across all steps in the agent execution.
+  BEEAI_TOTAL_MAX_RETRIES: "25"
+  # The maximum number of iterations for the agent execution.
+  # This was increased from 140 to handle complex rebases and backports.
+  BEEAI_MAX_ITERATIONS: "255"
 immutable: false
 kind: ConfigMap
 metadata:

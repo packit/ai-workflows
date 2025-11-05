@@ -149,6 +149,8 @@ def get_erratum(erratum_id: str | int, full: bool = False) -> Erratum | FullErra
         if details["publish_date"] is not None
         else None
     )
+    assigned_to_email = get_errata_user_email(details["assigned_to_id"])
+    package_owner_email = get_errata_user_email(details["package_owner_id"])
 
     base_erratum = Erratum(
         id=details["id"],
@@ -160,6 +162,8 @@ def get_erratum(erratum_id: str | int, full: bool = False) -> Erratum | FullErra
         release_id=details["group_id"],
         publish_date=publish_date,
         last_status_transition_timestamp=last_status_transition_timestamp,
+        assigned_to_email=assigned_to_email,
+        package_owner_email=package_owner_email,
     )
 
     if full:
@@ -212,6 +216,16 @@ def get_erratum_for_link(link: str, full: Literal[True]) -> FullErratum: ...
 def get_erratum_for_link(link: str, full: bool = False) -> Erratum | FullErratum:
     erratum_id = link.split("/")[-1]
     return get_erratum(erratum_id, full=full)
+
+
+@cache
+def get_errata_user_email(id: int | str) -> str:
+    response = ET_api_get(f"user/{id}")
+    # Using login_name rather than email_address here is intentional - this matches
+    # the handling in get_erratum_comments() where only login_name is available,
+    # and also when we set assigned_to_email when updating an erratum, it expects
+    # the login_name, not the email. (usually they are the same).
+    return response["login_name"]
 
 
 class ErratumBuild(BaseModel):
@@ -714,6 +728,26 @@ def erratum_change_state(erratum_id, new_state: ErrataStatus, *, dry_run: bool =
     ET_api_post(
         f"erratum/{erratum_id}/change_state",
         data={"new_state": new_state},
+    )
+
+
+def erratum_change_ownership(
+    erratum_id: int | str, new_owner_email: str, *, dry_run: bool = False
+):
+    if dry_run:
+        logger.info(
+            "Dry run: Would change the ownership of erratum %s to %s",
+            erratum_id,
+            new_owner_email,
+        )
+        return
+
+    ET_api_put(
+        f"erratum/{erratum_id}",
+        {
+            "advisory[assigned_to_email]": new_owner_email,
+            "advisory[package_owner_email]": new_owner_email,
+        },
     )
 
 

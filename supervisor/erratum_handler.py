@@ -1,13 +1,19 @@
 import logging
 from datetime import datetime, timezone
 
-from .constants import POST_PUSH_TESTING_TIMEOUT, POST_PUSH_TESTING_TIMEOUT_STR
+from .constants import (
+    ERRATA_JOTNAR_BOT_EMAIL,
+    JIRA_JOTNAR_BOT_EMAIL,
+    POST_PUSH_TESTING_TIMEOUT,
+    POST_PUSH_TESTING_TIMEOUT_STR,
+)
 from .work_item_handler import WorkItemHandler
 from .errata_utils import (
     ErratumBuild,
     ErratumPushStatus,
     TransitionRuleOutcome,
     erratum_add_comment,
+    erratum_change_ownership,
     erratum_change_state,
     erratum_get_latest_stage_push_details,
     erratum_has_magic_string_in_comments,
@@ -20,8 +26,8 @@ from .errata_utils import (
 from .jira_utils import (
     add_issue_label,
     create_issue,
+    get_issue,
     get_issue_by_jotnar_tag,
-    get_issues_statuses,
 )
 from .supervisor_types import (
     ErrataStatus,
@@ -56,26 +62,27 @@ def erratum_needs_attention(erratum_id: int) -> bool:
     return issue is not None
 
 
-def erratum_all_issues_are_release_pending(
-    erratum: Erratum, issue_cache: dict[str, Issue]
-) -> bool:
+def all_issues_are_release_pending(issues: list[Issue]) -> bool:
+    return all(issue.status == IssueStatus.RELEASE_PENDING for issue in issues)
+
+
+def erratum_get_issues(
+    erratum: Erratum, *, issue_cache: dict[str, Issue] = {}, full: bool = False
+):
     # The errata data we fetch from errata-tool includes details
     # of the errata beyond the ID - in particular it has the status
     # of the issue - but due to a bug in errata tool that is returning
     # stale data, so we need to fetch the status from JIRA directly.
     # https://issues.redhat.com/browse/RHELWF-13481
 
-    # Start with the statuses we have in the cache
-    statuses = {
-        key: issue.status if (issue := issue_cache.get(key)) else None
-        for key in erratum.jira_issues
-    }
-    # Then fetch any that were missing
-    to_fetch = [key for key, status in statuses.items() if status is None]
-    if to_fetch:
-        statuses.update(get_issues_statuses(to_fetch))
+    return [
+        issue_cache.get(issue_key) or get_issue(issue_key, full=full)
+        for issue_key in erratum.jira_issues
+    ]
 
-    return all(status == IssueStatus.RELEASE_PENDING for status in statuses.values())
+
+def jotnar_owns_all_issues(issues: list[Issue]) -> bool:
+    return all(issue.assignee_email == JIRA_JOTNAR_BOT_EMAIL for issue in issues)
 
 
 def compare_file_lists(
@@ -303,11 +310,24 @@ class ErratumHandler(WorkItemHandler):
                 "Erratum already flagged for human attention"
             )
 
+        related_issues = erratum_get_issues(erratum)
+        # Try to change the ownership to Jotnar if the erratum was not owned by Jotnar
+        if (
+            erratum.assigned_to_email != ERRATA_JOTNAR_BOT_EMAIL
+            or erratum.package_owner_email != ERRATA_JOTNAR_BOT_EMAIL
+        ):
+            if jotnar_owns_all_issues(related_issues):
+                erratum_change_ownership(erratum.id, ERRATA_JOTNAR_BOT_EMAIL)
+                return WorkflowResult(
+                    status=f"Changed ownership of erratum {erratum.id} to Jotnar bot, re-processing",
+                    reschedule_in=0,
+                )
+
         match erratum.status:
             case ErrataStatus.NEW_FILES:
                 return self.try_to_advance_erratum(ErrataStatus.QE)
             case ErrataStatus.QE:
-                if not erratum_all_issues_are_release_pending(erratum, {}):
+                if not all_issues_are_release_pending(related_issues):
                     return self.resolve_remove_work_item(
                         "Not all issues are release pending"
                     )

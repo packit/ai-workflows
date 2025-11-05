@@ -8,6 +8,12 @@ from typing import Annotated, Any
 from urllib.parse import urljoin
 
 import aiohttp
+
+if os.getenv("MOCK_JIRA", "False").lower() == "true":
+    from aiohttp_client_session_mock import aiohttpClientSessionMock as aiohttpClientSession
+else:
+    from aiohttp import ClientSession as aiohttpClientSession
+
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
@@ -54,7 +60,7 @@ async def get_jira_details(
     """
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttpClientSession() as session:
         # Get main issue data
         try:
             async with session.get(
@@ -98,7 +104,7 @@ async def set_jira_fields(
     if os.getenv("DRY_RUN", "False").lower() == "true":
         return "Dry run, not updating Jira fields (this is expected, not an error)"
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttpClientSession() as session:
         # First, get the current issue to check existing field values
         try:
             async with session.get(
@@ -131,6 +137,7 @@ async def set_jira_fields(
         if not fields:
             return f"No fields needed updating in {issue_key}"
 
+    async with aiohttpClientSession() as session:
         try:
             async with session.put(
                 urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
@@ -152,7 +159,7 @@ async def add_jira_comment(
     """
     Adds a comment to the specified Jira issue.
     """
-    async with aiohttp.ClientSession() as session:
+    async with aiohttpClientSession() as session:
         try:
             async with session.post(
                 urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/comment"),
@@ -179,7 +186,7 @@ async def check_cve_triage_eligibility(
     """
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttpClientSession() as session:
         try:
             async with session.get(
                 urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
@@ -265,7 +272,7 @@ async def change_jira_status(
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
     jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/transitions")
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttpClientSession() as session:
         try:
             async with session.get(
                 urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
@@ -335,7 +342,7 @@ async def edit_jira_labels(
 
     payload = {"update": {"labels": update_payload}}
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttpClientSession() as session:
         try:
             async with session.put(
                 jira_url,
@@ -358,7 +365,7 @@ async def verify_issue_author(
     """
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttpClientSession() as session:
         try:
             async with session.get(
                 urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),

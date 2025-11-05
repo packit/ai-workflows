@@ -389,6 +389,36 @@ async def main() -> None:
                     state.merge_request_url = None
                     state.rebase_result.success = False
                     state.rebase_result.error = f"Could not commit and open MR: {e}"
+                return "add_blocking_comment"
+
+            async def add_blocking_comment(state):
+                """Add a blocking comment to the MR to prevent merge until Jotnar members approve."""
+                if dry_run:
+                    return "add_fusa_label"
+
+                if not state.merge_request_url:
+                    return "add_fusa_label"
+
+                blocking_comment = (
+                    "⚠️ **Blocking Merge Request**\n\n"
+                    "This MR should only be approved and merged by Jotnar team members.\n\n"
+                    "**Reason**: There are automated processes that run after merge, and this MR "
+                    "may need to wait before being merged to avoid conflicts with ongoing automation.\n\n"
+                    "Please wait for approval from a Jotnar member before merging."
+                )
+
+                try:
+                    await tasks.run_tool(
+                        "add_blocking_merge_request_comment",
+                        merge_request_url=state.merge_request_url,
+                        comment=blocking_comment,
+                        available_tools=gateway_tools,
+                    )
+                    logger.info(f"Added blocking comment to MR {state.merge_request_url}")
+                except Exception as e:
+                    logger.warning(f"Failed to add blocking comment to MR: {e}")
+                    # Don't fail the workflow if comment addition fails
+
                 return "add_fusa_label"
 
             async def add_fusa_label(state):
@@ -421,6 +451,7 @@ async def main() -> None:
             workflow.add_step("stage_changes", stage_changes)
             workflow.add_step("run_log_agent", run_log_agent)
             workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
+            workflow.add_step("add_blocking_comment", add_blocking_comment)
             workflow.add_step("add_fusa_label", add_fusa_label)
             workflow.add_step("comment_in_jira", comment_in_jira)
 

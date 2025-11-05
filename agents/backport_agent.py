@@ -104,7 +104,7 @@ def get_instructions() -> str:
          A. CHERRY-PICK WORKFLOW (Preferred - try this first):
 
             IMPORTANT: This workflow uses TWO separate git repositories:
-            - <UNPACKED_SOURCES>: The dist-git repository (from Step 2) containing the spec file and existing patches
+            - <UNPACKED_SOURCES>: Git repository (from Step 2) containing unpacked and committed upstream sources
             - <UPSTREAM_REPO>: A temporary upstream repository clone (created in step 3c with -upstream suffix)
 
             When to use this workflow:

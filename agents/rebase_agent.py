@@ -110,6 +110,8 @@ def get_instructions() -> str:
       - If there are package-specific instructions, incorporate them into your work.
       - If the package calls `autoreconf` in `%prep` and the rebase fails because of a version constraint,
         try removing that constraint, but never remove the `autoreconf` call.
+      - If a rebase to <VERSION> was done in Fedora, use that as the primary reference and include all changes,
+        even if they may seem irrelevant - they are there for a reason.
     """
 
 
@@ -121,7 +123,8 @@ def get_prompt() -> str:
 
       {{#fedora_clone}}
       Additionally, you have access to the corresponding Fedora repository (rawhide branch) at {{.}}.
-      This can be used as a reference for comparing package versions, spec files, patches, and other packaging details when explicitly instructed to do so.
+      This can be used as a reference for comparing package versions, spec files, patches, and other packaging details
+      when explicitly instructed to do so.
       {{/fedora_clone}}
 
       {{^build_error}}

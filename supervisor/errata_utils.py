@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 ET_URL = "https://errata.engineering.redhat.com/"
 
 # regex pattern for extracting timestamps from push logs
-_TIMESTAMP_PATTERN = re.compile(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \+0000')
+_TIMESTAMP_PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \+0000")
 
 
 @cache
@@ -632,11 +632,12 @@ def erratum_get_latest_stage_push_details(erratum_id) -> ErratumPushDetails:
         if timestamps:
             # last timestamp from logs
             last_timestamp = timestamps[-1]
-            updated_at = datetime.strptime(last_timestamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            updated_at = datetime.strptime(last_timestamp, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
 
     return ErratumPushDetails(
-        status=ErratumPushStatus(status) if status else None,
-        updated_at=updated_at
+        status=ErratumPushStatus(status) if status else None, updated_at=updated_at
     )
 
 

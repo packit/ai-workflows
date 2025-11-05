@@ -11,7 +11,14 @@ from ogr.services.gitlab.project import GitlabProject
 from flexmock import flexmock
 from ogr.services.gitlab import GitlabService
 
-from gitlab_tools import clone_repository, fork_repository, open_merge_request, push_to_remote_repository, add_merge_request_labels
+from gitlab_tools import (
+    clone_repository,
+    fork_repository,
+    open_merge_request,
+    push_to_remote_repository,
+    add_merge_request_labels,
+    add_blocking_merge_request_comment,
+)
 from test_utils import mock_git_repo_basepath
 
 
@@ -212,6 +219,61 @@ async def test_add_merge_request_labels_invalid_url():
         await add_merge_request_labels(
             merge_request_url=merge_request_url,
             labels=labels
+        )
+
+    assert "Could not parse merge request URL" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "merge_request_url",
+    [
+        "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123",
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_blocking_merge_request_comment(merge_request_url):
+    comment = "**Blocking Merge Request**\n\nTest comment"
+
+    discussion = flexmock(id=1)
+
+    discussions_mock = flexmock()
+    discussions_mock.should_receive("create").with_args({"body": comment}).and_return(discussion)
+
+    gitlab_mr = flexmock(discussions=discussions_mock)
+
+    mr_mock = flexmock(id=123)
+
+    mergerequests_mock = flexmock()
+    mergerequests_mock.should_receive("get").with_args(123).and_return(gitlab_mr)
+
+    # Extract project URL from merge request URL
+    project_url = merge_request_url.rsplit("/-/merge_requests/", 1)[0]
+
+    project_mock = flexmock()
+    project_mock.should_receive("get_pr").and_return(mr_mock)
+    project_mock.gitlab_repo = flexmock(mergerequests=mergerequests_mock)
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url=project_url
+    ).and_return(project_mock)
+
+    result = await add_blocking_merge_request_comment(
+        merge_request_url=merge_request_url,
+        comment=comment
+    )
+
+    assert result == f"Successfully added blocking comment to merge request {merge_request_url}"
+
+
+@pytest.mark.asyncio
+async def test_add_blocking_merge_request_comment_invalid_url():
+    merge_request_url = "https://github.com/user/repo/pull/123"
+    comment = "Test comment"
+
+    with pytest.raises(Exception) as exc_info:
+        await add_blocking_merge_request_comment(
+            merge_request_url=merge_request_url,
+            comment=comment
         )
 
     assert "Could not parse merge request URL" in str(exc_info.value)

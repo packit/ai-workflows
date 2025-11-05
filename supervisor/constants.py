@@ -7,3 +7,6 @@ GITLAB_GROUPS = ["rhel/rpms", "centos-stream/rpms"]
 # Timeout for post-push testing (e.g., CAT tests) after stage push completes
 POST_PUSH_TESTING_TIMEOUT = timedelta(hours=3)
 POST_PUSH_TESTING_TIMEOUT_STR = "3 hours"
+# Defines the Jotnar bot's user identity for Errata and Jira
+ERRATA_JOTNAR_BOT_EMAIL = "jotnar-bot@IPA.REDHAT.COM"
+JIRA_JOTNAR_BOT_EMAIL = "jotnar+bot@redhat.com"

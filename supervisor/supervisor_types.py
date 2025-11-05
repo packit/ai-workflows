@@ -58,6 +58,8 @@ class Erratum(BaseModel):
     release_id: int
     publish_date: datetime | None
     last_status_transition_timestamp: datetime
+    assigned_to_email: str
+    package_owner_email: str
 
 
 class FullErratum(Erratum):
@@ -93,6 +95,7 @@ class Issue(BaseModel):
 
     key: str
     url: str
+    assignee_email: str | None = None
     summary: str
     components: list[str]
     status: IssueStatus

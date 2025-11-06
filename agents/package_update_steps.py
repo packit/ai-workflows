@@ -107,16 +107,16 @@ class PackageUpdateStep():
               before being merged to avoid conflicts with ongoing automation.
           """
 
-        try:
-            await tasks.run_tool(
-                "add_blocking_merge_request_comment",
-                merge_request_url=state.merge_request_url,
-                comment=blocking_comment,
-                available_tools=gateway_tools,
-            )
-            logger.info(f"Added blocking comment to MR {state.merge_request_url}")
-        except Exception as e:
-            logger.warning(f"Failed to add blocking comment to MR: {e}")
-            # Don't fail the workflow if comment addition fails
+          try:
+              await tasks.run_tool(
+                  "add_blocking_merge_request_comment",
+                  merge_request_url=state.merge_request_url,
+                  comment=blocking_comment,
+                  available_tools=gateway_tools,
+              )
+              logger.info(f"Added blocking comment to MR {state.merge_request_url}")
+          except Exception as e:
+              logger.warning(f"Failed to add blocking comment to MR: {e}")
+              # Don't fail the workflow if comment addition fails
 
       return next_step

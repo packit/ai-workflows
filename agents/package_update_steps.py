@@ -100,13 +100,12 @@ class PackageUpdateStep():
           return next_step
 
       if state.merge_request_url:
-        blocking_comment = (
-            "**⚠️ Blocking Merge Request ⚠️**\n\n"
-            "This MR should only be merged by Jotnar team members. Feel free to approve and review the changes.\n\n"
-            "**Reason**: There are automated processes that run after merge, and this MR "
-            "may need to wait before being merged to avoid conflicts with ongoing automation.\n\n"
-            "Please wait for approval from a Jotnar member before merging."
-        )
+          blocking_comment = """
+              **⚠️ Do not merge this merge request ⚠️**\n\n
+              Anyone is welcome to review and approve the changes, but please leave the merging on Jötnar team members.\n
+              There are automated processes that run after merge, and this MR may need to wait
+              before being merged to avoid conflicts with ongoing automation.
+          """
 
         try:
             await tasks.run_tool(

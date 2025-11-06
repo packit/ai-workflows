@@ -257,10 +257,9 @@ async def add_blocking_merge_request_comment(
     """
     try:
         mr = await _get_merge_request_from_url(merge_request_url)
-        gitlab_mr = mr._raw_pr
         # Discussions are created unresolved by default, which blocks the MR
         await asyncio.to_thread(
-            gitlab_mr.discussions.create,
+            mr._raw_pr.discussions.create,
             {"body": comment},
         )
 

@@ -322,6 +322,13 @@ class ErratumHandler(WorkItemHandler):
                     status=f"Changed ownership of erratum {erratum.id} to Jotnar bot, re-processing",
                     reschedule_in=0,
                 )
+            else:
+                return self.resolve_flag_attention(
+                    "Erratum has issues not owned by Project Jötnar. Please coordinate with QA Contact for these "
+                    "issues to move those issues to Release Pending or change the Assigned Team for the issue to "
+                    "rhel-jotnar. No further action will be taken on the erratum until jotnar_needs_attention is "
+                    "cleared on this issue."
+                )
 
         match erratum.status:
             case ErrataStatus.NEW_FILES:

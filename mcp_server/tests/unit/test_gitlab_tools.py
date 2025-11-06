@@ -229,24 +229,21 @@ async def test_add_blocking_merge_request_comment():
     merge_request_url = "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123"
     comment = "**Blocking Merge Request**\n\nTest comment"
 
-    discussion1_mock = flexmock(id=1)
-
-    discussions_mock = flexmock()
-    discussions_mock.should_receive("create").with_args({"body": comment}).and_return(discussion1_mock)
-
-    gitlab_mr = flexmock(discussions=discussions_mock)
-
-    mr_mock = flexmock(id=123, _raw_pr=gitlab_mr)
-
-    # Extract project URL from merge request URL
-    project_url = merge_request_url.rsplit("/-/merge_requests/", 1)[0]
-
-    project_mock = flexmock()
-    project_mock.should_receive("get_pr").and_return(mr_mock)
-
     flexmock(GitlabService).should_receive("get_project_from_url").with_args(
-        url=project_url
-    ).and_return(project_mock)
+        # Extract project URL from merge request URL
+        url=merge_request_url.rsplit("/-/merge_requests/", 1)[0],
+    ).and_return(
+        flexmock().should_receive("get_pr").and_return(
+            flexmock(
+                id=123,
+                _raw_pr=flexmock(
+                    discussions=flexmock().should_receive("create").with_args({"body": comment}).and_return(
+                        flexmock(id=1),
+                    ).mock(),
+                ),
+            ),
+        ).mock()
+    )
 
     result = await add_blocking_merge_request_comment(
         merge_request_url=merge_request_url,

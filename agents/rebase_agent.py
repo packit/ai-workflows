@@ -392,34 +392,9 @@ async def main() -> None:
                 return "add_blocking_comment"
 
             async def add_blocking_comment(state):
-                """Add a blocking comment to the MR to prevent merge until Jotnar members approve."""
-                if dry_run:
-                    return "add_fusa_label"
-
-                if not state.merge_request_url:
-                    return "add_fusa_label"
-
-                blocking_comment = (
-                    "⚠️ **Blocking Merge Request**\n\n"
-                    "This MR should only be approved and merged by Jotnar team members.\n\n"
-                    "**Reason**: There are automated processes that run after merge, and this MR "
-                    "may need to wait before being merged to avoid conflicts with ongoing automation.\n\n"
-                    "Please wait for approval from a Jotnar member before merging."
+                return await PackageUpdateStep.add_blocking_comment(
+                    state, "add_fusa_label", dry_run=dry_run, gateway_tools=gateway_tools
                 )
-
-                try:
-                    await tasks.run_tool(
-                        "add_blocking_merge_request_comment",
-                        merge_request_url=state.merge_request_url,
-                        comment=blocking_comment,
-                        available_tools=gateway_tools,
-                    )
-                    logger.info(f"Added blocking comment to MR {state.merge_request_url}")
-                except Exception as e:
-                    logger.warning(f"Failed to add blocking comment to MR: {e}")
-                    # Don't fail the workflow if comment addition fails
-
-                return "add_fusa_label"
 
             async def add_fusa_label(state):
                 return await PackageUpdateStep.add_fusa_label(state, "comment_in_jira", dry_run=dry_run, gateway_tools=gateway_tools)

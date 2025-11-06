@@ -829,7 +829,12 @@ async def main() -> None:
                     state.merge_request_url = None
                     state.backport_result.success = False
                     state.backport_result.error = f"Could not commit and open MR: {e}"
-                return "add_fusa_label"
+                return "add_blocking_comment"
+
+            async def add_blocking_comment(state):
+                return await PackageUpdateStep.add_blocking_comment(
+                    state, "add_fusa_label", dry_run=dry_run, gateway_tools=gateway_tools
+                )
 
             async def add_fusa_label(state):
                 return await PackageUpdateStep.add_fusa_label(state, "comment_in_jira", dry_run=dry_run, gateway_tools=gateway_tools)
@@ -863,6 +868,7 @@ async def main() -> None:
             workflow.add_step("stage_changes", stage_changes)
             workflow.add_step("run_log_agent", run_log_agent)
             workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
+            workflow.add_step("add_blocking_comment", add_blocking_comment)
             workflow.add_step("add_fusa_label", add_fusa_label)
             workflow.add_step("comment_in_jira", comment_in_jira)
 

@@ -224,34 +224,25 @@ async def test_add_merge_request_labels_invalid_url():
     assert "Could not parse merge request URL" in str(exc_info.value)
 
 
-@pytest.mark.parametrize(
-    "merge_request_url",
-    [
-        "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123",
-    ],
-)
 @pytest.mark.asyncio
-async def test_add_blocking_merge_request_comment(merge_request_url):
+async def test_add_blocking_merge_request_comment():
+    merge_request_url = "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123"
     comment = "**Blocking Merge Request**\n\nTest comment"
 
-    discussion = flexmock(id=1)
+    discussion1_mock = flexmock(id=1)
 
     discussions_mock = flexmock()
-    discussions_mock.should_receive("create").with_args({"body": comment}).and_return(discussion)
+    discussions_mock.should_receive("create").with_args({"body": comment}).and_return(discussion1_mock)
 
     gitlab_mr = flexmock(discussions=discussions_mock)
 
-    mr_mock = flexmock(id=123)
-
-    mergerequests_mock = flexmock()
-    mergerequests_mock.should_receive("get").with_args(123).and_return(gitlab_mr)
+    mr_mock = flexmock(id=123, _raw_pr=gitlab_mr)
 
     # Extract project URL from merge request URL
     project_url = merge_request_url.rsplit("/-/merge_requests/", 1)[0]
 
     project_mock = flexmock()
     project_mock.should_receive("get_pr").and_return(mr_mock)
-    project_mock.gitlab_repo = flexmock(mergerequests=mergerequests_mock)
 
     flexmock(GitlabService).should_receive("get_project_from_url").with_args(
         url=project_url

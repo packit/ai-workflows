@@ -9,6 +9,7 @@ from fastmcp.exceptions import ToolError
 from ogr.factory import get_project
 from ogr.exceptions import OgrException, GitlabAPIException
 from ogr.services.gitlab.project import GitlabProject
+from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import Field
 
 from common.validators import AbsolutePath
@@ -27,20 +28,19 @@ def _get_authenticated_url(repository_url: str) -> str:
     return repository_url
 
 
-async def _get_merge_request_from_url(merge_request_url: str):
+async def _get_merge_request_from_url(merge_request_url: str) -> GitlabPullRequest:
     """
-    Helper function to parse a merge request URL and return the MR object and project.
+    Helper function to parse a merge request URL and return the MR object.
 
     Returns:
-        Tuple of (merge request object, project object)
+        The GitLab merge request (PullRequest) object
     """
     # Extract project and MR ID from the URL
     # URL format examples:
     # `https://gitlab.com/namespace/project/-/merge_requests/123`
     # `https://gitlab.com/redhat/rhel/rpms/package/-/merge_requests/123`
-    pattern = r'gitlab\.com/([^/]+(?:/[^/]+){1,3})/-/merge_requests/(\d+)'
-    if not (match := re.search(pattern, merge_request_url)):
-        raise ToolError(f"Could not parse merge request URL: {merge_request_url}")
+    if not (match := re.search(r'gitlab\.com/([^/]+(?:/[^/]+){1,3})/-/merge_requests/(\d+)', merge_request_url)):
+        raise ValueError(f"Could not parse merge request URL: {merge_request_url}")
 
     project_path = match.group(1)
     mr_id = int(match.group(2))
@@ -49,11 +49,8 @@ async def _get_merge_request_from_url(merge_request_url: str):
     project = await asyncio.to_thread(
         get_project, url=project_url, token=os.getenv("GITLAB_TOKEN")
     )
-    if not project:
-        raise ToolError(f"Failed to get project: {project_url}")
 
-    mr = await asyncio.to_thread(project.get_pr, mr_id)
-    return mr, project
+    return await asyncio.to_thread(project.get_pr, mr_id)
 
 
 async def fork_repository(
@@ -242,7 +239,7 @@ async def add_merge_request_labels(
     Adds labels to an existing merge request.
     """
     try:
-        mr, _ = await _get_merge_request_from_url(merge_request_url)
+        mr = await _get_merge_request_from_url(merge_request_url)
         for label in labels:
             await asyncio.to_thread(mr.add_label, label)
         return f"Successfully added labels {labels} to merge request {merge_request_url}"
@@ -259,11 +256,8 @@ async def add_blocking_merge_request_comment(
     This will block the MR from being merged until the discussion is resolved.
     """
     try:
-        mr, project = await _get_merge_request_from_url(merge_request_url)
-        # Access the underlying GitLab merge request object through the project's gitlab_repo
-        gitlab_mr = await asyncio.to_thread(
-            project.gitlab_repo.mergerequests.get, mr.id
-        )
+        mr = await _get_merge_request_from_url(merge_request_url)
+        gitlab_mr = mr._raw_pr
         # Discussions are created unresolved by default, which blocks the MR
         await asyncio.to_thread(
             gitlab_mr.discussions.create,

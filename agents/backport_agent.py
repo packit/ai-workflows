@@ -197,8 +197,8 @@ def get_instructions() -> str:
                      d. Complete cherry-pick: `cherry_pick_continue` tool
                   3. CRITICAL: Only move to next commit after current one is FULLY COMPLETE
                   4. NEVER try to cherry-pick multiple commits at once
-                  5. If a commit truly cannot be adapted (very rare), skip it and note why
-                  6. Do NOT fall back to approach B - keep cherry-picking through all PR commits
+                  5. Do NOT fall back to approach B - keep cherry-picking through all PR commits
+                  6. NEVER skip any commits - all commits must be adapted and cherry-picked
 
             3g. Generate the final patch file from upstream:
                 - Use `generate_patch_from_commit` tool on <UPSTREAM_REPO>

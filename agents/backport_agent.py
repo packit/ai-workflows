@@ -193,6 +193,7 @@ def get_instructions() -> str:
                         - Adapt to older codebase
                         - Add missing helpers if needed
                         - Rewrite to use older APIs if needed
+                        - Prioritize preserving the patch's original logic. The final backport must still fix the original bug.
                      c. Stage ALL resolved files: `git -C <UPSTREAM_REPO> add <file>` for each file
                      d. Complete cherry-pick: `cherry_pick_continue` tool
                   3. CRITICAL: Only move to next commit after current one is FULLY COMPLETE

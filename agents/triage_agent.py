@@ -1,13 +1,10 @@
 import asyncio
-import json
 import logging
 import os
 import re
 import sys
 import traceback
-from enum import Enum
 from textwrap import dedent
-from typing import Union
 
 from pydantic import BaseModel, Field
 
@@ -31,8 +28,6 @@ from common.models import (
     TriageInputSchema as InputSchema,
     TriageOutputSchema as OutputSchema,
     Resolution,
-    RebaseData,
-    BackportData,
     ClarificationNeededData,
     NoActionData,
     ErrorData,

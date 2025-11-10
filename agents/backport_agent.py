@@ -37,6 +37,8 @@ from common.models import (
     LogInputSchema,
     LogOutputSchema,
     Task,
+    BackportData,
+    ErrorData,
 )
 from common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
@@ -68,7 +70,6 @@ from tools.wicked_git import (
     GitPatchCreationTool,
     GitPreparePackageSources,
 )
-from triage_agent import BackportData, ErrorData
 from utils import (
     check_subprocess,
     get_agent_execution_config,

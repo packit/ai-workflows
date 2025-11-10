@@ -19,6 +19,23 @@ Three agents process tasks through Redis queues:
 - **Modify JIRA issues** (add comments, update fields, apply labels)
 - **Create GitLab merge requests** and push commits
 
+## Jira mocking
+
+If you clone testing Jira files from
+`git@gitlab.cee.redhat.com:jotnar-project/testing-jiras.git`
+you can use them to work with instead of real Jira server.
+
+Example:
+
+`make run-triage-agent-standalone JIRA_ISSUE=RHEL-15216 MOCK_JIRA=true`
+
+If used together with `DRY_RUN`, the agents won't edit the Jira files,
+otherwise they will.
+
+Example:
+
+`make run-triage-agent-standalone JIRA_ISSUE=RHEL-15216 DRY_RUN=true MOCK_JIRA=true`
+
 ## Setup
 
 ### Required API Tokens & Authentication

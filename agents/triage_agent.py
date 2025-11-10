@@ -286,6 +286,220 @@ def render_prompt(input: InputSchema) -> str:
     return PromptTemplate(schema=InputSchema, template=template).render(input)
 
 
+class TriageState(BaseModel):
+    jira_issue: str
+    cve_eligibility_result: CVEEligibilityResult | None = Field(default=None)
+    triage_result: OutputSchema | None = Field(default=None)
+    target_branch: str | None = Field(default=None)
+
+
+async def run_workflow(jira_issue, dry_run):
+    async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
+        triage_agent = RequirementAgent(
+            name="TriageAgent",
+            llm=get_chat_model(),
+            tool_call_checker=get_tool_call_checker_config(),
+            tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool(),
+                    VersionMapperTool(), UpstreamSearchTool()]
+            + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields"]],
+            memory=UnconstrainedMemory(),
+            requirements=[
+                ConditionalRequirement(
+                    ThinkTool,
+                    force_at_step=1,
+                    force_after=Tool,
+                    consecutive_allowed=False,
+                    only_success_invocations=False,
+                ),
+                ConditionalRequirement("get_jira_details", min_invocations=1),
+                ConditionalRequirement(UpstreamSearchTool, only_after="get_jira_details"),
+                ConditionalRequirement(RunShellCommandTool, only_after="get_jira_details"),
+                ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),
+                ConditionalRequirement("set_jira_fields", only_after="get_jira_details"),
+            ],
+            middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
+            role="Red Hat Enterprise Linux developer",
+            instructions=[
+                "Use the `think` tool to reason through complex decisions and document your approach.",
+                "Be proactive in your search for fixes and do not give up easily.",
+                "For any patch URL that you are proposing for backport, you need to validate it using PatchValidator tool.",
+                "Do not modify the patch URL in your final answer after it has been validated with the PatchValidator tool.",
+                "After completing your triage analysis, if your decision is backport or rebase, always set appropriate JIRA fields per the instructions using set_jira_fields tool.",
+            ]
+        )
+
+        workflow = Workflow(TriageState, name="TriageWorkflow")
+
+        async def check_cve_eligibility(state):
+            """Check CVE eligibility for the issue"""
+            logger.info(f"Checking CVE eligibility for {state.jira_issue}")
+            result = await run_tool(
+                "check_cve_triage_eligibility",
+                available_tools=gateway_tools,
+                issue_key=state.jira_issue
+            )
+            state.cve_eligibility_result = CVEEligibilityResult.model_validate(result)
+
+            logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
+
+            # If not eligible for triage, end workflow
+            if not state.cve_eligibility_result.is_eligible_for_triage:
+                logger.info(f"Issue {state.jira_issue} not eligible for triage: {state.cve_eligibility_result.reason}")
+                if state.cve_eligibility_result.error:
+                    state.triage_result = OutputSchema(
+                    resolution=Resolution.ERROR,
+                    data=ErrorData(
+                        details=f"CVE eligibility check error: {state.cve_eligibility_result.error}",
+                        jira_issue=state.jira_issue
+                    )
+                )
+                else:
+                    state.triage_result = OutputSchema(
+                        resolution=Resolution.NO_ACTION,
+                        data=NoActionData(
+                            reasoning=f"CVE eligibility check decided to skip triaging: {state.cve_eligibility_result.reason}",
+                            jira_issue=state.jira_issue
+                        )
+                    )
+                return "comment_in_jira"
+
+            reason = state.cve_eligibility_result.reason
+            logger.info(f"Issue {state.jira_issue} is eligible for triage: {reason}")
+            return "run_triage_analysis"
+
+        async def run_triage_analysis(state):
+            """Run the main triage analysis"""
+            logger.info(f"Running triage analysis for {state.jira_issue}")
+            input_data = InputSchema(issue=state.jira_issue)
+            output_schema_json = to_json(
+                OutputSchema.model_json_schema(mode="validation"),
+                indent=2,
+                sort_keys=False,
+            )
+            response = await triage_agent.run(
+                render_prompt(input_data),
+                # `OutputSchema` alone is not enough here, some models (cough cough, Claude Sonnet 4.5)
+                # really stuggle with the nesting, let's provide some more hints
+                expected_output=dedent(
+                    f"""
+                    The final answer must fulfill the following.
+
+                    **Important Formatting Rules:**
+                    - The top-level output must be a JSON object with two keys: `resolution` (a string) and `data` (an object).
+                    - The `data` field MUST be a nested JSON object. **It must not be a stringified JSON object.**
+                    - The structure of the `data` object must match the schema corresponding to the chosen `resolution`.
+
+                    **Correct example for a 'backport' resolution:**
+                    ```json
+                    {{
+                        "resolution": "backport",
+                        "data": {{
+                        "package": "some-package",
+                        "patch_url": "https://example.com/some.patch",
+                        "justification": "This patch fixes the bug by doing X, Y, and Z.",
+                        "jira_issue": "RHEL-12345",
+                        "cve_id": "CVE-1234-98765",
+                        "fix_version": "rhel-X.Y.Z"
+                        }}
+                    }}
+                    ```
+
+                    ```json
+                    {output_schema_json}
+                    ```
+                    """
+                ),
+                **get_agent_execution_config(),
+            )
+            state.triage_result = OutputSchema.model_validate_json(response.last_message.text)
+
+            # Jira issue key in resolution data has been generated by LLM, make sure it's upper-case
+            state.triage_result.data.jira_issue = state.triage_result.data.jira_issue.upper()
+
+            if state.triage_result.resolution == Resolution.REBASE:
+                return "verify_rebase_author"
+            elif state.triage_result.resolution == Resolution.BACKPORT:
+                return "determine_target_branch"
+            elif state.triage_result.resolution in [Resolution.CLARIFICATION_NEEDED, Resolution.NO_ACTION]:
+                return "comment_in_jira"
+            else:
+                return Workflow.END
+
+        async def determine_target_branch_step(state):
+            """Determine target branch for rebase/backport decisions"""
+            logger.info(f"Determining target branch for {state.jira_issue}")
+
+            state.target_branch = await determine_target_branch(
+                cve_eligibility_result=state.cve_eligibility_result,
+                triage_data=state.triage_result.data
+            )
+
+            if state.target_branch:
+                logger.info(f"Target branch determined: {state.target_branch}")
+            else:
+                logger.warning(f"Could not determine target branch for {state.jira_issue}")
+
+            return "comment_in_jira"
+
+        async def verify_rebase_author(state):
+            """Verify that the issue author is a Red Hat employee"""
+            logger.info(f"Verifying issue author for {state.jira_issue}")
+
+            is_rh_employee = await run_tool(
+                "verify_issue_author",
+                available_tools=gateway_tools,
+                issue_key=state.jira_issue
+            )
+
+            issue_status = await run_tool(
+                "get_jira_details",
+                available_tools=gateway_tools,
+                issue_key=state.jira_issue
+            )
+            issue_status = issue_status.get("fields", {}).get("status", {}).get("name")
+
+            if not is_rh_employee and issue_status == "New":
+                logger.warning(f"Issue author for {state.jira_issue} is not verified as RH employee - ending triage with clarification needed")
+
+                # override triage result with clarification needed so that it gets reviewed by us
+                state.triage_result = OutputSchema(
+                    resolution=Resolution.CLARIFICATION_NEEDED,
+                    data=ClarificationNeededData(
+                        findings="The rebase resolution was determined, but author verification failed.",
+                        additional_info_needed="Needs human review, as the issue author is not verified as a Red Hat employee.",
+                        jira_issue=state.jira_issue
+                    )
+                )
+
+                return "comment_in_jira"
+
+            logger.info(f"Issue author for {state.jira_issue} verified as RH employee or issue is not in new status - proceeding with rebase")
+
+            return "determine_target_branch"
+
+        async def comment_in_jira(state):
+            comment_text = state.triage_result.format_for_comment()
+            logger.info(f"Result to be put in Jira comment: {comment_text}")
+            if dry_run:
+                return Workflow.END
+            await tasks.comment_in_jira(
+                jira_issue=state.jira_issue,
+                agent_type="Triage",
+                comment_text=comment_text,
+                available_tools=gateway_tools,
+            )
+            return Workflow.END
+
+        workflow.add_step("check_cve_eligibility", check_cve_eligibility)
+        workflow.add_step("run_triage_analysis", run_triage_analysis)
+        workflow.add_step("verify_rebase_author", verify_rebase_author)
+        workflow.add_step("determine_target_branch", determine_target_branch_step)
+        workflow.add_step("comment_in_jira", comment_in_jira)
+
+        response = await workflow.run(TriageState(jira_issue=jira_issue))
+        return response.state
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
@@ -293,221 +507,9 @@ async def main() -> None:
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
 
-    class State(BaseModel):
-        jira_issue: str
-        cve_eligibility_result: CVEEligibilityResult | None = Field(default=None)
-        triage_result: OutputSchema | None = Field(default=None)
-        target_branch: str | None = Field(default=None)
-
-    async def run_workflow(jira_issue):
-        async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
-            triage_agent = RequirementAgent(
-                name="TriageAgent",
-                llm=get_chat_model(),
-                tool_call_checker=get_tool_call_checker_config(),
-                tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool(),
-                       VersionMapperTool(), UpstreamSearchTool()]
-                + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields"]],
-                memory=UnconstrainedMemory(),
-                requirements=[
-                    ConditionalRequirement(
-                        ThinkTool,
-                        force_at_step=1,
-                        force_after=Tool,
-                        consecutive_allowed=False,
-                        only_success_invocations=False,
-                    ),
-                    ConditionalRequirement("get_jira_details", min_invocations=1),
-                    ConditionalRequirement(UpstreamSearchTool, only_after="get_jira_details"),
-                    ConditionalRequirement(RunShellCommandTool, only_after="get_jira_details"),
-                    ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),
-                    ConditionalRequirement("set_jira_fields", only_after="get_jira_details"),
-                ],
-                middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
-                role="Red Hat Enterprise Linux developer",
-                instructions=[
-                    "Use the `think` tool to reason through complex decisions and document your approach.",
-                    "Be proactive in your search for fixes and do not give up easily.",
-                    "For any patch URL that you are proposing for backport, you need to validate it using PatchValidator tool.",
-                    "Do not modify the patch URL in your final answer after it has been validated with the PatchValidator tool.",
-                    "After completing your triage analysis, if your decision is backport or rebase, always set appropriate JIRA fields per the instructions using set_jira_fields tool.",
-                ]
-            )
-
-            workflow = Workflow(State, name="TriageWorkflow")
-
-            async def check_cve_eligibility(state):
-                """Check CVE eligibility for the issue"""
-                logger.info(f"Checking CVE eligibility for {state.jira_issue}")
-                result = await run_tool(
-                    "check_cve_triage_eligibility",
-                    available_tools=gateway_tools,
-                    issue_key=state.jira_issue
-                )
-                state.cve_eligibility_result = CVEEligibilityResult.model_validate(result)
-
-                logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
-
-                # If not eligible for triage, end workflow
-                if not state.cve_eligibility_result.is_eligible_for_triage:
-                    logger.info(f"Issue {state.jira_issue} not eligible for triage: {state.cve_eligibility_result.reason}")
-                    if state.cve_eligibility_result.error:
-                        state.triage_result = OutputSchema(
-                        resolution=Resolution.ERROR,
-                        data=ErrorData(
-                            details=f"CVE eligibility check error: {state.cve_eligibility_result.error}",
-                            jira_issue=state.jira_issue
-                        )
-                    )
-                    else:
-                        state.triage_result = OutputSchema(
-                            resolution=Resolution.NO_ACTION,
-                            data=NoActionData(
-                                reasoning=f"CVE eligibility check decided to skip triaging: {state.cve_eligibility_result.reason}",
-                                jira_issue=state.jira_issue
-                            )
-                        )
-                    return "comment_in_jira"
-
-                reason = state.cve_eligibility_result.reason
-                logger.info(f"Issue {state.jira_issue} is eligible for triage: {reason}")
-                return "run_triage_analysis"
-
-            async def run_triage_analysis(state):
-                """Run the main triage analysis"""
-                logger.info(f"Running triage analysis for {state.jira_issue}")
-                input_data = InputSchema(issue=state.jira_issue)
-                output_schema_json = to_json(
-                    OutputSchema.model_json_schema(mode="validation"),
-                    indent=2,
-                    sort_keys=False,
-                )
-                response = await triage_agent.run(
-                    render_prompt(input_data),
-                    # `OutputSchema` alone is not enough here, some models (cough cough, Claude Sonnet 4.5)
-                    # really stuggle with the nesting, let's provide some more hints
-                    expected_output=dedent(
-                        f"""
-                        The final answer must fulfill the following.
-
-                        **Important Formatting Rules:**
-                        - The top-level output must be a JSON object with two keys: `resolution` (a string) and `data` (an object).
-                        - The `data` field MUST be a nested JSON object. **It must not be a stringified JSON object.**
-                        - The structure of the `data` object must match the schema corresponding to the chosen `resolution`.
-
-                        **Correct example for a 'backport' resolution:**
-                        ```json
-                        {{
-                          "resolution": "backport",
-                          "data": {{
-                            "package": "some-package",
-                            "patch_url": "https://example.com/some.patch",
-                            "justification": "This patch fixes the bug by doing X, Y, and Z.",
-                            "jira_issue": "RHEL-12345",
-                            "cve_id": "CVE-1234-98765",
-                            "fix_version": "rhel-X.Y.Z"
-                          }}
-                        }}
-                        ```
-
-                        ```json
-                        {output_schema_json}
-                        ```
-                        """
-                    ),
-                    **get_agent_execution_config(),
-                )
-                state.triage_result = OutputSchema.model_validate_json(response.last_message.text)
-
-                # Jira issue key in resolution data has been generated by LLM, make sure it's upper-case
-                state.triage_result.data.jira_issue = state.triage_result.data.jira_issue.upper()
-
-                if state.triage_result.resolution == Resolution.REBASE:
-                    return "verify_rebase_author"
-                elif state.triage_result.resolution == Resolution.BACKPORT:
-                    return "determine_target_branch"
-                elif state.triage_result.resolution in [Resolution.CLARIFICATION_NEEDED, Resolution.NO_ACTION]:
-                    return "comment_in_jira"
-                else:
-                    return Workflow.END
-
-            async def determine_target_branch_step(state):
-                """Determine target branch for rebase/backport decisions"""
-                logger.info(f"Determining target branch for {state.jira_issue}")
-
-                state.target_branch = await determine_target_branch(
-                    cve_eligibility_result=state.cve_eligibility_result,
-                    triage_data=state.triage_result.data
-                )
-
-                if state.target_branch:
-                    logger.info(f"Target branch determined: {state.target_branch}")
-                else:
-                    logger.warning(f"Could not determine target branch for {state.jira_issue}")
-
-                return "comment_in_jira"
-
-            async def verify_rebase_author(state):
-                """Verify that the issue author is a Red Hat employee"""
-                logger.info(f"Verifying issue author for {state.jira_issue}")
-
-                is_rh_employee = await run_tool(
-                    "verify_issue_author",
-                    available_tools=gateway_tools,
-                    issue_key=state.jira_issue
-                )
-
-                issue_status = await run_tool(
-                    "get_jira_details",
-                    available_tools=gateway_tools,
-                    issue_key=state.jira_issue
-                )
-                issue_status = issue_status.get("fields", {}).get("status", {}).get("name")
-
-                if not is_rh_employee and issue_status == "New":
-                    logger.warning(f"Issue author for {state.jira_issue} is not verified as RH employee - ending triage with clarification needed")
-
-                    # override triage result with clarification needed so that it gets reviewed by us
-                    state.triage_result = OutputSchema(
-                        resolution=Resolution.CLARIFICATION_NEEDED,
-                        data=ClarificationNeededData(
-                            findings="The rebase resolution was determined, but author verification failed.",
-                            additional_info_needed="Needs human review, as the issue author is not verified as a Red Hat employee.",
-                            jira_issue=state.jira_issue
-                        )
-                    )
-
-                    return "comment_in_jira"
-
-                logger.info(f"Issue author for {state.jira_issue} verified as RH employee or issue is not in new status - proceeding with rebase")
-
-                return "determine_target_branch"
-
-            async def comment_in_jira(state):
-                comment_text = state.triage_result.format_for_comment()
-                logger.info(f"Result to be put in Jira comment: {comment_text}")
-                if dry_run:
-                    return Workflow.END
-                await tasks.comment_in_jira(
-                    jira_issue=state.jira_issue,
-                    agent_type="Triage",
-                    comment_text=comment_text,
-                    available_tools=gateway_tools,
-                )
-                return Workflow.END
-
-            workflow.add_step("check_cve_eligibility", check_cve_eligibility)
-            workflow.add_step("run_triage_analysis", run_triage_analysis)
-            workflow.add_step("verify_rebase_author", verify_rebase_author)
-            workflow.add_step("determine_target_branch", determine_target_branch_step)
-            workflow.add_step("comment_in_jira", comment_in_jira)
-
-            response = await workflow.run(State(jira_issue=jira_issue))
-            return response.state
-
     if jira_issue := os.getenv("JIRA_ISSUE", None):
         logger.info("Running in direct mode with environment variable")
-        state = await run_workflow(jira_issue)
+        state = await run_workflow(jira_issue, dry_run)
         logger.info(f"Direct run completed: {state.triage_result.model_dump_json(indent=4)}")
         if state.cve_eligibility_result:
             logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
@@ -562,7 +564,7 @@ async def main() -> None:
                 logger.info(f"Cleaned up existing labels for {input.issue}")
 
                 logger.info(f"Starting triage processing for {input.issue}")
-                state = await run_workflow(input.issue)
+                state = await run_workflow(input.issue, dry_run)
                 output = state.triage_result
                 logger.info(
                     f"Triage processing completed for {input.issue}, " f"resolution: {output.resolution.value}"

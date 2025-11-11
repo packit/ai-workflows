@@ -12,6 +12,7 @@ from ogr.services.gitlab.project import GitlabProject
 from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import Field
 
+from common.models import FailedPipelineJob
 from common.validators import AbsolutePath
 from utils import clean_stale_repositories
 
@@ -289,3 +290,80 @@ async def create_merge_request_checklist(
         return f"Successfully created checklist for merge request {merge_request_url}"
     except Exception as e:
         raise ToolError(f"Failed to create checklist for merge request: {e}")
+
+
+async def retry_pipeline_job(
+    project_url: Annotated[str, Field(description="GitLab project URL")],
+    job_id: Annotated[int, Field(description="Job ID to retry")],
+) -> str:
+    """
+    Retries a specific job in a GitLab pipeline.
+    """
+    try:
+        project = await asyncio.to_thread(
+            get_project, url=project_url, token=os.getenv("GITLAB_TOKEN")
+        )
+
+        def retry_gitlab_job():
+            job = project.gitlab_repo.jobs.get(job_id)
+            job.retry()
+            return job
+
+        job = await asyncio.to_thread(retry_gitlab_job)
+
+        logger.info(f"Successfully retried job {job_id} for project {project_url}")
+        return f"Successfully retried job {job_id}. Status: {job.status}"
+
+    except Exception as e:
+        logger.error(f"Failed to retry job {job_id} for project {project_url}: {e}")
+        raise ToolError(f"Failed to retry job: {e}") from e
+
+
+async def get_failed_pipeline_jobs_from_merge_request(
+    merge_request_url: Annotated[str, Field(description="URL of the merge request")],
+) -> list[FailedPipelineJob]:
+    """
+    Gets the failed pipeline jobs from the latest pipeline of a merge request.
+    Returns a list of failed pipeline jobs with their details.
+    """
+    try:
+        mr = await _get_merge_request_from_url(merge_request_url)
+
+        def get_latest_pipeline_jobs():
+            # Use head_pipeline to get the latest pipeline for this MR
+            if not hasattr(mr._raw_pr, "head_pipeline") or not mr._raw_pr.head_pipeline:
+                return []
+
+            pipeline_id = mr._raw_pr.head_pipeline["id"]
+            pipeline = mr.target_project.gitlab_repo.pipelines.get(pipeline_id)
+            jobs = pipeline.jobs.list(get_all=True)
+
+            namespace = mr.target_project.namespace
+            repo = mr.target_project.repo
+            failed_jobs = [
+                FailedPipelineJob(
+                    id=str(job.id),
+                    name=job.name,
+                    url=f"https://gitlab.com/{namespace}/{repo}/-/jobs/{job.id}",
+                    status=job.status,
+                    stage=job.stage,
+                    artifacts_url=(
+                        f"https://gitlab.com/{namespace}/{repo}/-/jobs/{job.id}/artifacts/browse"
+                        if hasattr(job, "artifacts_file") and job.artifacts_file
+                        else ""
+                    ),
+                )
+                for job in jobs
+                if job.status == "failed"
+            ]
+
+            return failed_jobs
+
+        failed_jobs = await asyncio.to_thread(get_latest_pipeline_jobs)
+
+        logger.info(f"Found {len(failed_jobs)} failed jobs in latest pipeline for MR {merge_request_url}")
+        return failed_jobs
+
+    except Exception as e:
+        logger.error(f"Failed to get failed jobs from MR {merge_request_url}: {e}")
+        raise ToolError(f"Failed to get failed jobs from merge request: {e}") from e

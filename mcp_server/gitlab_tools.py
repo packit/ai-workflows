@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import re
-from typing import Annotated
+from typing import Annotated, Tuple
 from urllib.parse import urlparse
 
 from fastmcp.exceptions import ToolError
@@ -17,6 +17,7 @@ from utils import clean_stale_repositories
 
 
 logger = logging.getLogger(__name__)
+
 
 def _get_authenticated_url(repository_url: str) -> str:
     """
@@ -102,14 +103,18 @@ async def open_merge_request(
     description: Annotated[str, Field(description="MR description")],
     target: Annotated[str, Field(description="Target branch (in the original repository)")],
     source: Annotated[str, Field(description="Source branch (in the fork)")],
-) -> str:
+) -> Tuple[str, bool]:
     """
     Opens a new merge request from the specified fork against its original repository.
-    Returns URL of the opened merge request.
+
+    Returns:
+        - str: The URL of the merge request if it was created successfully
+        - bool: True if the merge request was created, False otherwise (i.e. MR was reused)
     """
     project = await asyncio.to_thread(get_project, url=fork_url, token=os.getenv("GITLAB_TOKEN"))
     if not project:
         raise ToolError("Failed to get the specified fork")
+    is_brand_new_mr = True
     try:
         pr = await asyncio.to_thread(project.create_pr, title, description, target, source)
     except GitlabAPIException as ex:
@@ -124,6 +129,7 @@ async def open_merge_request(
                     # this is an active API call via PR's setter method
                     pr.description = description
                     pr.title = title
+                    is_brand_new_mr = False
                     break
             else:
                 raise
@@ -135,6 +141,7 @@ async def open_merge_request(
     for attempt in range(5):
         try:
             # First, verify the MR exists before trying to add the label
+            # It can take some time for the MR to be available via API
             pr = await asyncio.to_thread(project.parent.get_pr, pr.id)
             # by default, set this label on a newly created MR so we can inspect it ASAP
             await asyncio.to_thread(pr.add_label, "jotnar_needs_attention")
@@ -145,7 +152,7 @@ async def open_merge_request(
     else:
         logger.error("MR %s does not appear to exist after creation", pr)
         logger.error("Unable to set label 'jotnar_needs_attention' on the MR")
-    return pr.url
+    return pr.url, is_brand_new_mr
 
 
 async def get_internal_rhel_branches(
@@ -266,3 +273,19 @@ async def add_blocking_merge_request_comment(
         return f"Successfully added blocking comment to merge request {merge_request_url}"
     except Exception as e:
         raise ToolError(f"Failed to add blocking comment to merge request: {e}")
+
+
+async def create_merge_request_checklist(
+    merge_request_url: Annotated[str, Field(description="URL of the merge request")],
+    note_body: Annotated[str, Field(description="Body of the note to create")],
+) -> str:
+    """
+    Creates our pre/post merge checklist for our dist-git merge requests.
+    """
+    try:
+        mr = await _get_merge_request_from_url(merge_request_url)
+        # internal note docs: https://docs.gitlab.com/api/notes/#create-new-issue-note
+        await asyncio.to_thread(mr._raw_pr.notes.create, {"body": note_body}, internal=True)
+        return f"Successfully created checklist for merge request {merge_request_url}"
+    except Exception as e:
+        raise ToolError(f"Failed to create checklist for merge request: {e}")

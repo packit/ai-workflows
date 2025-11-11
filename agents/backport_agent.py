@@ -385,7 +385,7 @@ def get_fix_build_error_prompt() -> str:
           - If a log file has more than 2000 lines, use the view tool with offset and limit
             parameters to read only the LAST 1000 lines (calculate offset as total_lines - 1000, limit as 1000)
           - Build failures are almost always at the end of logs, avoiding context overflow
-          - Alternatively, use `grep` to search for error patterns (e.g., "ERROR", "FAILED", "error:", "fatal:")
+          - Alternatively, use the `search_text` tool to search for error patterns (e.g., "ERROR", "FAILED", "error:", "fatal:")
             and then use the view tool to read targeted sections around the matching line numbers
           - Combine strategies as needed to understand the failure without reading the entire file
         * Report success=false with the extracted error

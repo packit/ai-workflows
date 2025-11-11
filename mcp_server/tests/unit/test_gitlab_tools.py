@@ -20,6 +20,7 @@ from gitlab_tools import (
     push_to_remote_repository,
     add_merge_request_labels,
     add_blocking_merge_request_comment,
+    retry_pipeline_job,
 )
 from test_utils import mock_git_repo_basepath
 
@@ -295,3 +296,40 @@ async def test_create_merge_request_checklist():
     )
 
     assert result == f"Successfully created checklist for merge request {merge_request_url}"
+
+
+@pytest.mark.asyncio
+async def test_retry_pipeline_job():
+    project_url = "https://gitlab.com/redhat/rhel/rpms/bash"
+    job_id = 12345678
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url=project_url
+    ).and_return(
+        flexmock(
+            gitlab_repo=flexmock(
+                jobs=flexmock().should_receive("get").with_args(job_id).and_return(
+                    flexmock(id=job_id, status="pending").should_receive("retry").once().mock()
+                ).mock()
+            )
+        )
+    )
+
+    result = await retry_pipeline_job(project_url=project_url, job_id=job_id)
+
+    assert result == f"Successfully retried job {job_id}. Status: pending"
+
+
+@pytest.mark.asyncio
+async def test_retry_pipeline_job_invalid_project():
+    project_url = "https://gitlab.com/nonexistent/project"
+    job_id = 12345678
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url=project_url
+    ).and_raise(Exception("Project not found"))
+
+    with pytest.raises(Exception) as exc_info:
+        await retry_pipeline_job(project_url=project_url, job_id=job_id)
+
+    assert "Failed to retry job" in str(exc_info.value)

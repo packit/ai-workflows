@@ -289,3 +289,30 @@ async def create_merge_request_checklist(
         return f"Successfully created checklist for merge request {merge_request_url}"
     except Exception as e:
         raise ToolError(f"Failed to create checklist for merge request: {e}")
+
+
+async def retry_pipeline_job(
+    project_url: Annotated[str, Field(description="GitLab project URL")],
+    job_id: Annotated[int, Field(description="Job ID to retry")],
+) -> str:
+    """
+    Retries a specific job in a GitLab pipeline.
+    """
+    try:
+        project = await asyncio.to_thread(
+            get_project, url=project_url, token=os.getenv("GITLAB_TOKEN")
+        )
+
+        def retry_gitlab_job():
+            job = project.gitlab_repo.jobs.get(job_id)
+            job.retry()
+            return job
+
+        job = await asyncio.to_thread(retry_gitlab_job)
+
+        logger.info(f"Successfully retried job {job_id} for project {project_url}")
+        return f"Successfully retried job {job_id}. Status: {job.status}"
+
+    except Exception as e:
+        logger.error(f"Failed to retry job {job_id} for project {project_url}: {e}")
+        raise ToolError(f"Failed to retry job: {e}") from e

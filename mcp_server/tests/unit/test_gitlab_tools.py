@@ -21,6 +21,7 @@ from gitlab_tools import (
     add_merge_request_labels,
     add_blocking_merge_request_comment,
     retry_pipeline_job,
+    get_failed_pipeline_jobs_from_merge_request,
 )
 from test_utils import mock_git_repo_basepath
 
@@ -333,3 +334,78 @@ async def test_retry_pipeline_job_invalid_project():
         await retry_pipeline_job(project_url=project_url, job_id=job_id)
 
     assert "Failed to retry job" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_get_failed_pipeline_jobs_from_merge_request():
+    merge_request_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/123"
+    pipeline_id = 789
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url="https://gitlab.com/redhat/centos-stream/rpms/bash"
+    ).and_return(
+        flexmock().should_receive("get_pr").with_args(123).and_return(
+            flexmock(
+                _raw_pr=flexmock(head_pipeline={"id": pipeline_id}),
+                target_project=flexmock(
+                    namespace="redhat/centos-stream/rpms",
+                    repo="bash",
+                    gitlab_repo=flexmock(
+                        pipelines=flexmock().should_receive("get").with_args(pipeline_id).and_return(
+                            flexmock(
+                                jobs=flexmock().should_receive("list").with_args(get_all=True).and_return([
+                                    flexmock(id=11111, name="check-tickets", status="failed", stage="build", artifacts_file={"filename": "debug.log"}),
+                                    flexmock(id=22222, name="build_rpm", status="failed", stage="test", artifacts_file=None),
+                                    flexmock(id=33333, name="trigger_tests", status="success", stage="test", artifacts_file=None),
+                                ]).mock()
+                            )
+                        ).mock()
+                    )
+                ),
+            )
+        ).mock()
+    )
+
+    result = await get_failed_pipeline_jobs_from_merge_request(merge_request_url=merge_request_url)
+
+    assert len(result) == 2
+    assert result[0]["id"] == "11111"
+    assert result[0]["name"] == "check-tickets"
+    assert result[0]["status"] == "failed"
+    assert result[0]["stage"] == "build"
+    assert "/-/jobs/11111" in result[0]["url"]
+    assert result[0]["artifacts_url"] == "https://gitlab.com/redhat/centos-stream/rpms/bash/-/jobs/11111/artifacts/browse"
+
+    assert result[1]["id"] == "22222"
+    assert result[1]["name"] == "build_rpm"
+    assert result[1]["status"] == "failed"
+    assert result[1]["stage"] == "test"
+    assert "/-/jobs/22222" in result[1]["url"]
+    assert result[1]["artifacts_url"] == ""
+
+
+@pytest.mark.asyncio
+async def test_get_failed_pipeline_jobs_from_merge_request_no_pipelines():
+    merge_request_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/123"
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url="https://gitlab.com/redhat/centos-stream/rpms/bash"
+    ).and_return(
+        flexmock().should_receive("get_pr").with_args(123).and_return(
+            flexmock(_raw_pr=flexmock(head_pipeline=None))
+        ).mock()
+    )
+
+    result = await get_failed_pipeline_jobs_from_merge_request(merge_request_url=merge_request_url)
+
+    assert len(result) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_failed_pipeline_jobs_from_merge_request_invalid_url():
+    merge_request_url = "https://github.com/user/repo/pull/123"
+
+    with pytest.raises(Exception) as exc_info:
+        await get_failed_pipeline_jobs_from_merge_request(merge_request_url=merge_request_url)
+
+    assert "Could not parse merge request URL" in str(exc_info.value)

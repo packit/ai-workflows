@@ -316,3 +316,53 @@ async def retry_pipeline_job(
     except Exception as e:
         logger.error(f"Failed to retry job {job_id} for project {project_url}: {e}")
         raise ToolError(f"Failed to retry job: {e}") from e
+
+
+async def get_failed_pipeline_jobs_from_merge_request(
+    merge_request_url: Annotated[str, Field(description="URL of the merge request")],
+) -> list[dict[str, str]]:
+    """
+    Gets the failed pipeline jobs from the latest pipeline of a merge request.
+    Returns a list of failed jobs with their details (id, name, url, status).
+    """
+    try:
+        mr = await _get_merge_request_from_url(merge_request_url)
+
+        def get_latest_pipeline_jobs():
+            # Use head_pipeline to get the latest pipeline for this MR
+            if not hasattr(mr._raw_pr, "head_pipeline") or not mr._raw_pr.head_pipeline:
+                return []
+
+            pipeline_id = mr._raw_pr.head_pipeline["id"]
+            pipeline = mr.target_project.gitlab_repo.pipelines.get(pipeline_id)
+            jobs = pipeline.jobs.list(get_all=True)
+
+            namespace = mr.target_project.namespace
+            repo = mr.target_project.repo
+            failed_jobs = [
+                {
+                    "id": str(job.id),
+                    "name": job.name,
+                    "url": f"https://gitlab.com/{namespace}/{repo}/-/jobs/{job.id}",
+                    "status": job.status,
+                    "stage": job.stage,
+                    "artifacts_url": (
+                        f"https://gitlab.com/{namespace}/{repo}/-/jobs/{job.id}/artifacts/browse"
+                        if hasattr(job, "artifacts_file") and job.artifacts_file
+                        else ""
+                    ),
+                }
+                for job in jobs
+                if job.status == "failed"
+            ]
+
+            return failed_jobs
+
+        failed_jobs = await asyncio.to_thread(get_latest_pipeline_jobs)
+
+        logger.info(f"Found {len(failed_jobs)} failed jobs in latest pipeline for MR {merge_request_url}")
+        return failed_jobs
+
+    except Exception as e:
+        logger.error(f"Failed to get failed jobs from MR {merge_request_url}: {e}")
+        raise ToolError(f"Failed to get failed jobs from merge request: {e}") from e

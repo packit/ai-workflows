@@ -275,3 +275,20 @@ class CachedMRMetadata(BaseModel):
     title: str = Field(description="Merge request title")
     package: str = Field(description="Package name")
     details: str = Field(description="Operation-specific identifier (list of upstream patch URLs for backport, version for rebase)")
+
+
+# ============================================================================
+# GitLab Failed Pipeline Jobs Schemas
+# ============================================================================
+
+class FailedPipelineJob(BaseModel):
+    """Represents a failed job in a GitLab pipeline."""
+
+    id: str = Field(description="Pipeline job ID as a string")
+    name: str = Field(description="Name of the job")
+    url: str = Field(description="Full URL to the job in GitLab")
+    status: str = Field(description="Job status")
+    stage: str = Field(description="Pipeline stage the job belongs to")
+    artifacts_url: str = Field(
+        description="URL to browse job artifacts, empty string if no artifacts"
+    )

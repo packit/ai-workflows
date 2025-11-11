@@ -369,19 +369,19 @@ async def test_get_failed_pipeline_jobs_from_merge_request():
     result = await get_failed_pipeline_jobs_from_merge_request(merge_request_url=merge_request_url)
 
     assert len(result) == 2
-    assert result[0]["id"] == "11111"
-    assert result[0]["name"] == "check-tickets"
-    assert result[0]["status"] == "failed"
-    assert result[0]["stage"] == "build"
-    assert "/-/jobs/11111" in result[0]["url"]
-    assert result[0]["artifacts_url"] == "https://gitlab.com/redhat/centos-stream/rpms/bash/-/jobs/11111/artifacts/browse"
+    assert result[0].id == "11111"
+    assert result[0].name == "check-tickets"
+    assert result[0].status == "failed"
+    assert result[0].stage == "build"
+    assert "/-/jobs/11111" in result[0].url
+    assert result[0].artifacts_url == "https://gitlab.com/redhat/centos-stream/rpms/bash/-/jobs/11111/artifacts/browse"
 
-    assert result[1]["id"] == "22222"
-    assert result[1]["name"] == "build_rpm"
-    assert result[1]["status"] == "failed"
-    assert result[1]["stage"] == "test"
-    assert "/-/jobs/22222" in result[1]["url"]
-    assert result[1]["artifacts_url"] == ""
+    assert result[1].id == "22222"
+    assert result[1].name == "build_rpm"
+    assert result[1].status == "failed"
+    assert result[1].stage == "test"
+    assert "/-/jobs/22222" in result[1].url
+    assert result[1].artifacts_url == ""
 
 
 @pytest.mark.asyncio

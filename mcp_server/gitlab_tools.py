@@ -12,6 +12,7 @@ from ogr.services.gitlab.project import GitlabProject
 from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import Field
 
+from common.models import FailedPipelineJob
 from common.validators import AbsolutePath
 from utils import clean_stale_repositories
 
@@ -320,10 +321,10 @@ async def retry_pipeline_job(
 
 async def get_failed_pipeline_jobs_from_merge_request(
     merge_request_url: Annotated[str, Field(description="URL of the merge request")],
-) -> list[dict[str, str]]:
+) -> list[FailedPipelineJob]:
     """
     Gets the failed pipeline jobs from the latest pipeline of a merge request.
-    Returns a list of failed jobs with their details (id, name, url, status).
+    Returns a list of failed pipeline jobs with their details.
     """
     try:
         mr = await _get_merge_request_from_url(merge_request_url)
@@ -340,18 +341,18 @@ async def get_failed_pipeline_jobs_from_merge_request(
             namespace = mr.target_project.namespace
             repo = mr.target_project.repo
             failed_jobs = [
-                {
-                    "id": str(job.id),
-                    "name": job.name,
-                    "url": f"https://gitlab.com/{namespace}/{repo}/-/jobs/{job.id}",
-                    "status": job.status,
-                    "stage": job.stage,
-                    "artifacts_url": (
+                FailedPipelineJob(
+                    id=str(job.id),
+                    name=job.name,
+                    url=f"https://gitlab.com/{namespace}/{repo}/-/jobs/{job.id}",
+                    status=job.status,
+                    stage=job.stage,
+                    artifacts_url=(
                         f"https://gitlab.com/{namespace}/{repo}/-/jobs/{job.id}/artifacts/browse"
                         if hasattr(job, "artifacts_file") and job.artifacts_file
                         else ""
                     ),
-                }
+                )
                 for job in jobs
                 if job.status == "failed"
             ]

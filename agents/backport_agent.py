@@ -799,7 +799,7 @@ async def main() -> None:
             async def commit_push_and_open_mr(state):
                 try:
                     formatted_patches = "\n".join(f" - {p}" for p in state.upstream_patches)
-                    state.merge_request_url = await tasks.commit_push_and_open_mr(
+                    state.merge_request_url, state.merge_request_newly_created = await tasks.commit_push_and_open_mr(
                         local_clone=state.local_clone,
                         commit_message=(
                             f"{state.log_result.title}\n\n"
@@ -834,8 +834,12 @@ async def main() -> None:
 
             async def add_blocking_comment(state):
                 return await PackageUpdateStep.add_blocking_comment(
-                    state, "add_fusa_label", dry_run=dry_run, gateway_tools=gateway_tools
+                    state, "create_merge_request_checklist", dry_run=dry_run, gateway_tools=gateway_tools
                 )
+
+            async def create_merge_request_checklist(state):
+                return await PackageUpdateStep.create_merge_request_checklist(
+                    state, "add_fusa_label", dry_run=dry_run, gateway_tools=gateway_tools)
 
             async def add_fusa_label(state):
                 return await PackageUpdateStep.add_fusa_label(state, "comment_in_jira", dry_run=dry_run, gateway_tools=gateway_tools)
@@ -870,6 +874,7 @@ async def main() -> None:
             workflow.add_step("run_log_agent", run_log_agent)
             workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
             workflow.add_step("add_blocking_comment", add_blocking_comment)
+            workflow.add_step("create_merge_request_checklist", create_merge_request_checklist)
             workflow.add_step("add_fusa_label", add_fusa_label)
             workflow.add_step("comment_in_jira", comment_in_jira)
 

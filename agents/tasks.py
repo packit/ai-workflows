@@ -105,7 +105,14 @@ async def commit_push_and_open_mr(
     mr_description: str,
     available_tools: list[Tool],
     commit_only: bool = False,
-) -> str | None:
+) -> Tuple[str | None, bool]:
+    """
+    Commits the changes to the local clone and opens a merge request.
+
+    Returns:
+        - str: The URL of the merge request if it was created successfully
+        - bool: True if the merge request was created, False otherwise (i.e. MR was reused)
+    """
     # Check if any files are staged before committing, if none, bail
     exit_code, _, _ = await run_subprocess(
         ["git", "diff", "--cached", "--quiet"],
@@ -117,7 +124,7 @@ async def commit_push_and_open_mr(
         raise RuntimeError("No files staged for commit, halting.")
     await check_subprocess(["git", "commit", "-m", commit_message], cwd=local_clone)
     if commit_only:
-        return None
+        return None, False
     await run_tool(
         "push_to_remote_repository",
         repository=fork_url,

@@ -11,8 +11,10 @@ from ogr.services.gitlab.project import GitlabProject
 from flexmock import flexmock
 from ogr.services.gitlab import GitlabService
 
+from common.constants import GITLAB_MR_CHECKLIST
 from gitlab_tools import (
     clone_repository,
+    create_merge_request_checklist,
     fork_repository,
     open_merge_request,
     push_to_remote_repository,
@@ -87,7 +89,7 @@ async def test_open_merge_request():
             target=target,
             source=source,
         )
-        == mr_url
+        == mr_url, True
     )
 
 
@@ -124,7 +126,7 @@ async def test_open_merge_request_with_existing_mr():
             target=target,
             source=source,
         )
-        == mr_url
+        == mr_url, False
     )
 
 
@@ -265,3 +267,31 @@ async def test_add_blocking_merge_request_comment_invalid_url():
         )
 
     assert "Could not parse merge request URL" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_create_merge_request_checklist():
+    merge_request_url = "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123"
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        # Extract project URL from merge request URL
+        url=merge_request_url.rsplit("/-/merge_requests/", 1)[0],
+    ).and_return(
+        flexmock().should_receive("get_pr").and_return(
+            flexmock(
+                id=123,
+                _raw_pr=flexmock(
+                    notes=flexmock().should_receive("create").and_return(
+                        flexmock(id=1),
+                    ).mock(),
+                ),
+            ),
+        ).mock()
+    )
+
+    result = await create_merge_request_checklist(
+        merge_request_url=merge_request_url,
+        note_body=GITLAB_MR_CHECKLIST,
+    )
+
+    assert result == f"Successfully created checklist for merge request {merge_request_url}"

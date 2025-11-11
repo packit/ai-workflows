@@ -761,9 +761,14 @@ async def main() -> None:
 
             async def stage_changes(state):
                 try:
+                    # Find all patch files matching the jira issue pattern
+                    patch_files = list(state.local_clone.glob(f"{state.jira_issue}*.patch"))
+                    files_to_git_add = [f"{state.package}.spec"] + [p.name for p in patch_files]
+                    logger.info(f"Staging files: {files_to_git_add}")
+
                     await tasks.stage_changes(
                         local_clone=state.local_clone,
-                        files_to_commit=[f"{state.package}.spec", f"{state.jira_issue}.patch"],
+                        files_to_commit=files_to_git_add,
                     )
                 except Exception as e:
                     logger.warning(f"Error staging changes: {e}")

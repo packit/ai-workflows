@@ -760,10 +760,18 @@ async def main() -> None:
 
             async def stage_changes(state):
                 try:
-                    # Find all patch files matching the jira issue pattern
-                    patch_files = list(state.local_clone.glob(f"{state.jira_issue}*.patch"))
+                    # Find patch files to stage based on workflow type
+                    if state.used_cherry_pick_workflow:
+                        # Cherry-pick workflow: only stage the single consolidated patch
+                        # This avoids staging the pre-downloaded input patches (JIRA-12345-0.patch, etc.)
+                        patch_file = state.local_clone / f"{state.jira_issue}.patch"
+                        patch_files = [patch_file] if patch_file.exists() else []
+                    else:
+                        # Git am workflow: stage all numbered patches (JIRA-12345-0.patch, JIRA-12345-1.patch, etc.)
+                        patch_files = list(state.local_clone.glob(f"{state.jira_issue}-*.patch"))
+
                     files_to_git_add = [f"{state.package}.spec"] + [p.name for p in patch_files]
-                    logger.info(f"Staging files: {files_to_git_add}")
+                    logger.info(f"Staging files (cherry_pick={state.used_cherry_pick_workflow}): {files_to_git_add}")
 
                     await tasks.stage_changes(
                         local_clone=state.local_clone,

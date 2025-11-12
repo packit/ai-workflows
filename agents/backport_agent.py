@@ -602,11 +602,10 @@ async def main() -> None:
                     upstream_repo = Path(f"{state.local_clone}-upstream")
                     if upstream_repo.exists():
                         try:
-                            result = await check_subprocess(
-                                ["git", "-C", str(upstream_repo), "rev-list", "--count", "HEAD"],
-                                capture_output=True
+                            stdout, _ = await check_subprocess(
+                                ["git", "-C", str(upstream_repo), "rev-list", "--count", "HEAD"]
                             )
-                            commit_count = int(result.stdout.strip())
+                            commit_count = int(stdout.strip())
                             if commit_count > 1:  # More than just initial commit
                                 state.used_cherry_pick_workflow = True
                                 logger.info(f"Cherry-pick workflow detected: {commit_count} commits in upstream repo")

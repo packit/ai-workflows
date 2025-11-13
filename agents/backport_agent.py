@@ -311,7 +311,8 @@ def get_fix_build_error_prompt() -> str:
       DO NOT clone it again. DO NOT reset to base commit. DO NOT modify anything in {{local_clone}} dist-git repository.
       Your cherry-picked commits are still there in {{local_clone}}-upstream.
 
-      Your task is to fix this build error by exploring the upstream repository and finding the best solution.
+      The package built successfully before your patches were added - the spec file and build configuration are correct.
+      Your task is to fix this build error by improving the patches - NOT by modifying the spec file.
       Make ONE attempt to fix the issue - you will be called again if the build still fails.
 
       Follow these steps:
@@ -370,6 +371,7 @@ def get_fix_build_error_prompt() -> str:
       - Use `generate_patch_from_commit` tool with the PATCHED_BASE commit
       - This creates a single patch with all changes: original commits + prerequisites/fixes
       - Overwrite {{jira_issue}}.patch in {{local_clone}}
+      - This improved patch now includes all missing dependencies needed for a successful build
 
       STEP 5: Test the build
       - The spec file should already reference {{jira_issue}}.patch
@@ -397,8 +399,10 @@ def get_fix_build_error_prompt() -> str:
 
       IMPORTANT RULES:
       - Work in the EXISTING {{local_clone}}-upstream directory (don't clone again)
-      - Don't modify anything in {{local_clone}} dist-git except regenerating {{jira_issue}}.patch
-      - You can freely explore, edit, commit in the upstream repo - it's your workspace
+      - NEVER modify the spec file - build failures are caused by incomplete patches, not spec issues
+      - The ONLY dist-git file you can modify is {{jira_issue}}.patch (by regenerating it from upstream repo)
+      - Fix build errors by adding missing prerequisites/dependencies to your patches in upstream repo
+      - You can freely explore, edit, cherry-pick, and commit in the upstream repo - it's your workspace
       - Use the upstream repo as a rich source of information and examples
       - Be creative and pragmatic - the goal is a working build, not perfect git history
       - Make ONE solid attempt to fix the issue - if the build fails, report the error clearly

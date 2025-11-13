@@ -159,10 +159,20 @@ class TestingFarmRequest(BaseModel):
             for env in self.environments_data
             if (variables := env.get("variables")) and "BUILDS" in variables
         }
-        if len(versions) != 1:
-            raise ValueError("Can't determine package version for request")
+        if len(versions) == 1:
+            return versions.pop()
 
-        return versions.pop()
+        artifacts = {
+            id
+            for env in self.environments_data
+            for artifact in env.get("artifacts", [])
+            if artifact.get("type") == "redhat-brew-build"
+            and (id := artifact.get("id"))
+        }
+        if len(artifacts) == 1:
+            return artifacts.pop()
+
+        raise ValueError("Can't determine package version for request")
 
 
 class JotnarTag(BaseModel):

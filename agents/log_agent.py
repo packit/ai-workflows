@@ -46,6 +46,10 @@ def get_instructions() -> str:
          and a line referencing the Jira issue. Use "- Resolves: <JIRA_ISSUE>" unless
          the spec file has historically used a different style.
 
+         IMPORTANT: The changelog entry should focus on user-facing changes only. Do not mention
+         technical packaging details such as added/removed patches, changed BuildRequires,
+         or other spec file modifications that are not visible to end users.
+
       4. Generate a title for commit message and merge request. It should be descriptive
          but shouldn't be longer than 80 characters.
 

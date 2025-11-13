@@ -95,7 +95,8 @@ class BackportInputSchema(BaseModel):
     dist_git_branch: str = Field(description="Git branch in dist-git to be updated")
     jira_issue: str = Field(description="Jira issue to reference as resolved")
     cve_id: str | None = Field(default=None, description="CVE ID if the jira issue is a CVE")
-    upstream_fix: str = Field(description="URL to the upstream fix (commit URL or patch URL)")
+    upstream_patches: list[str] = Field(
+        description="List of URLs to upstream patches that were validated using the PatchValidator tool")
     build_error: str | None = Field(description="Error encountered during package build")
 
 
@@ -131,7 +132,8 @@ class RebaseData(BaseModel):
 class BackportData(BaseModel):
     """Data for backport resolution."""
     package: str = Field(description="Package name")
-    patch_url: str = Field(description="URL to the source of the fix that was validated using PatchValidator tool")
+    patch_urls: list[str] = Field(
+        description="A list of URLs to the sources of the fixes that were validated using the PatchValidator tool")
     justification: str = Field(description="Clear explanation of why this patch fixes the issue, linking it to the root cause")
     jira_issue: str = Field(description="Jira issue identifier")
     cve_id: str | None = Field(description="CVE identifier", default=None)
@@ -188,9 +190,10 @@ class TriageOutputSchema(BaseModel):
             case BackportData():
                 fix_version_text = f"\n*Fix Version*: {self.data.fix_version}" if self.data.fix_version else ""
 
+                patch_urls_text = "\n".join([f"*Patch URL {i+1}*: {url}" for i, url in enumerate(self.data.patch_urls)])
                 return (
                     f"{resolution}"
-                    f"*Patch URL*: {self.data.patch_url}\n"
+                    f"{patch_urls_text}\n"
                     f"*Justification*: {self.data.justification}"
                     f"{fix_version_text}"
                 )
@@ -271,4 +274,21 @@ class CachedMRMetadata(BaseModel):
     operation_type: str = Field(description="Type of operation (backport or rebase)")
     title: str = Field(description="Merge request title")
     package: str = Field(description="Package name")
-    details: str = Field(description="Operation-specific identifier (upstream_fix URL for backport, version for rebase)")
+    details: str = Field(description="Operation-specific identifier (list of upstream patch URLs for backport, version for rebase)")
+
+
+# ============================================================================
+# GitLab Failed Pipeline Jobs Schemas
+# ============================================================================
+
+class FailedPipelineJob(BaseModel):
+    """Represents a failed job in a GitLab pipeline."""
+
+    id: str = Field(description="Pipeline job ID as a string")
+    name: str = Field(description="Name of the job")
+    url: str = Field(description="Full URL to the job in GitLab")
+    status: str = Field(description="Job status")
+    stage: str = Field(description="Pipeline stage the job belongs to")
+    artifacts_url: str = Field(
+        description="URL to browse job artifacts, empty string if no artifacts"
+    )

@@ -108,6 +108,10 @@ def get_instructions() -> str:
       - Preserve existing formatting and style conventions in spec files and patch headers.
       - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
       - If there are package-specific instructions, incorporate them into your work.
+      - If the package calls `autoreconf` in `%prep` and the rebase fails because of a version constraint,
+        try removing that constraint, but never remove the `autoreconf` call.
+      - If a rebase to <VERSION> was done in Fedora, use that as the primary reference and include all changes,
+        even if they may seem irrelevant - they are there for a reason.
     """
 
 
@@ -119,7 +123,8 @@ def get_prompt() -> str:
 
       {{#fedora_clone}}
       Additionally, you have access to the corresponding Fedora repository (rawhide branch) at {{.}}.
-      This can be used as a reference for comparing package versions, spec files, patches, and other packaging details when explicitly instructed to do so.
+      This can be used as a reference for comparing package versions, spec files, patches, and other packaging details
+      when explicitly instructed to do so.
       {{/fedora_clone}}
 
       {{^build_error}}
@@ -356,7 +361,7 @@ async def main() -> None:
 
             async def commit_push_and_open_mr(state):
                 try:
-                    state.merge_request_url = await tasks.commit_push_and_open_mr(
+                    state.merge_request_url, state.merge_request_newly_created = await tasks.commit_push_and_open_mr(
                         local_clone=state.local_clone,
                         commit_message=(
                             f"{state.log_result.title}\n\n"
@@ -384,7 +389,16 @@ async def main() -> None:
                     state.merge_request_url = None
                     state.rebase_result.success = False
                     state.rebase_result.error = f"Could not commit and open MR: {e}"
-                return "add_fusa_label"
+                return "add_blocking_comment"
+
+            async def add_blocking_comment(state):
+                return await PackageUpdateStep.add_blocking_comment(
+                    state, "create_merge_request_checklist", dry_run=dry_run, gateway_tools=gateway_tools
+                )
+
+            async def create_merge_request_checklist(state):
+                return await PackageUpdateStep.create_merge_request_checklist(
+                    state, "add_fusa_label", dry_run=dry_run, gateway_tools=gateway_tools)
 
             async def add_fusa_label(state):
                 return await PackageUpdateStep.add_fusa_label(state, "comment_in_jira", dry_run=dry_run, gateway_tools=gateway_tools)
@@ -392,14 +406,18 @@ async def main() -> None:
             async def comment_in_jira(state):
                 if dry_run:
                     return Workflow.END
+                if state.rebase_result.success:
+                    comment_text = (
+                        state.merge_request_url
+                        if state.merge_request_url
+                        else state.rebase_result.status
+                    )
+                else:
+                    comment_text = f"Agent failed to perform a rebase: {state.rebase_result.error}"
                 await tasks.comment_in_jira(
                     jira_issue=state.jira_issue,
                     agent_type="Rebase",
-                    comment_text=(
-                        state.merge_request_url
-                        if state.rebase_result.success
-                        else f"Agent failed to perform a rebase: {state.rebase_result.error}"
-                    ),
+                    comment_text=comment_text,
                     available_tools=gateway_tools,
                 )
                 return Workflow.END
@@ -412,6 +430,8 @@ async def main() -> None:
             workflow.add_step("stage_changes", stage_changes)
             workflow.add_step("run_log_agent", run_log_agent)
             workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
+            workflow.add_step("add_blocking_comment", add_blocking_comment)
+            workflow.add_step("create_merge_request_checklist", create_merge_request_checklist)
             workflow.add_step("add_fusa_label", add_fusa_label)
             workflow.add_step("comment_in_jira", comment_in_jira)
 

@@ -272,10 +272,13 @@ def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
         str(v["name"]) for v in issue_data["fields"]["components"]
     ]
     errata_link = custom("Errata Link")
+    assignee = issue_data["fields"].get("assignee")
+    assignee_email = assignee.get("emailAddress") if assignee else None
 
     issue = Issue(
         key=key,
         url=f"https://issues.redhat.com/browse/{urlquote(key)}",
+        assignee_email=assignee_email,
         summary=issue_data["fields"]["summary"],
         status=issue_data["fields"]["status"]["name"],
         components=issue_components,
@@ -318,6 +321,7 @@ def _fields(full: bool):
         "summary",
         "status",
         "fixVersions",
+        "assignee",
         custom_fields["Errata Link"],
         custom_fields["Fixed in Build"],
         custom_fields["Test Coverage"],
@@ -635,6 +639,11 @@ def add_issue_attachments(
         dry_run: If True, don't actually add the attachments.
     """
     path = f"issue/{urlquote(issue_key)}/attachments"
+
+    if len(attachments) == 0:
+        # This an API error; don't try to call it.
+        logger.info("No attachments to add to issue %s", issue_key)
+        return
 
     if dry_run:
         logger.info(

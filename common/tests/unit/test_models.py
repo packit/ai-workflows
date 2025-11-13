@@ -12,7 +12,7 @@ from models import (
 def test_backport_formatting():
     data = BackportData(
         package="readline",
-        patch_url="https://example.com/patch.patch",
+        patch_urls=["https://example.com/patch.patch"],
         justification="Fixes the bug in bind.c",
         jira_issue="RHEL-12345",
         cve_id="CVE-2024-1234",
@@ -22,7 +22,7 @@ def test_backport_formatting():
 
     assert result.format_for_comment() == (
         "*Resolution*: backport\n"
-        "*Patch URL*: https://example.com/patch.patch\n"
+        "*Patch URL 1*: https://example.com/patch.patch\n"
         "*Justification*: Fixes the bug in bind.c\n"
         "*Fix Version*: rhel-10.0"
     )

@@ -9,7 +9,7 @@ from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import rpm
-from copr.v3 import BuildProxy, ProjectProxy
+from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, Field
 
@@ -57,12 +57,10 @@ async def _get_exclusive_arches(srpm_path: Path) -> set[str]:
     return (COPR_ARCHES - exclude_arches) & exclusive_arches
 
 
-async def _branch_to_chroot(dist_git_branch: str) -> str:
+async def _branch_to_chroot(dist_git_branch: str, upcoming_z_streams: dict[str, str]) -> str:
     if not (m := re.match(r"^(?:c(\d+)s|rhel-(\d+)-main|rhel-(\d+)\.(\d+).*)$", dist_git_branch)):
         raise ValueError(f"Unsupported branch name: {dist_git_branch}")
     majorver, minorver = m.group(1) or m.group(2) or m.group(3), m.group(4)
-    rhel_config = await load_rhel_config()
-    upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
     # build Y-Streams and 0-day Z-Streams against the dev chroot
     if minorver is not None:
         if (ver := upcoming_z_streams.get(majorver)) and ver.startswith(
@@ -94,8 +92,10 @@ async def build_package(
     # build for x86_64 unless the package is exclusive to other arch(es),
     # in such case build for either of them
     build_arch = exclusive_arches.pop() if exclusive_arches else "x86_64"
+    rhel_config = await load_rhel_config()
+    upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
     try:
-        chroot = (await _branch_to_chroot(dist_git_branch)) + f"-{build_arch}"
+        chroot = (await _branch_to_chroot(dist_git_branch, upcoming_z_streams)) + f"-{build_arch}"
     except ValueError as e:
         raise ToolError(f"Failed to deduce Copr chroot: {e}") from e
     project_proxy = ProjectProxy({"username": copr_user, **COPR_CONFIG})
@@ -116,6 +116,34 @@ async def build_package(
             await asyncio.to_thread(project_proxy.edit, **kwargs)
     except Exception as e:
         raise ToolError(f"Failed to create or update Copr project: {e}") from e
+    if not chroot.removesuffix(f"-{build_arch}").endswith(".dev"):
+        # make sure the chroot has access to corresponding buildroot repository
+        chroot_proxy = ProjectChrootProxy({"username": copr_user, **COPR_CONFIG})
+        if not (internal_repos_host := rhel_config.get("internal_repos_host")):
+            raise ToolError("Internal repos host not configured")
+        buildroot_repo_url = urljoin(
+            internal_repos_host,
+            f"brewroot/repos/{dist_git_branch}-z-build/latest/{build_arch}",
+        )
+        try:
+            chroot_config = await asyncio.to_thread(
+                chroot_proxy.get,
+                ownername=copr_user,
+                projectname=jira_issue,
+                chrootname=chroot,
+            )
+            if buildroot_repo_url not in chroot_config.additional_repos:
+                await asyncio.to_thread(
+                    chroot_proxy.edit,
+                    ownername=copr_user,
+                    projectname=jira_issue,
+                    chrootname=chroot,
+                    additional_repos=sorted(
+                        set(chroot_config.additional_repos) | {buildroot_repo_url},
+                    ),
+                )
+        except Exception as e:
+            raise ToolError(f"Failed to update Copr chroot: {e}") from e
     build_proxy = BuildProxy({"username": copr_user, **COPR_CONFIG})
     try:
         build = await asyncio.to_thread(

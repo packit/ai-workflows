@@ -156,14 +156,19 @@ def testing_farm_get_request(request_id: str) -> TestingFarmRequest:
     response = testing_farm_api_get(f"requests/{request_id}")
 
     result_data = response.get("result")
+    result = result_data["overall"] if result_data else TestingFarmRequestResult.UNKNOWN
+    # We have a specific error_reason field rather than a general summary field
+    # to avoid models relying on a summary rather than doing their own analysis.
+    error_reason = (
+        result_data.get("summary") if result == TestingFarmRequestResult.ERROR else None
+    )
 
     return TestingFarmRequest(
         id=response["id"],
         url=f"{TESTING_FARM_URL}/requests/{response['id']}",
         state=response["state"],
-        result=(
-            result_data["overall"] if result_data else TestingFarmRequestResult.UNKNOWN
-        ),
+        result=result,
+        error_reason=error_reason,
         result_xunit_url=result_data.get("xunit_url") if result_data else None,
         created=datetime.fromisoformat(response["created"]),
         updated=datetime.fromisoformat(response["updated"]),

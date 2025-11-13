@@ -4,7 +4,8 @@ from common.utils import init_kerberos_ticket
 
 from .errata_utils import get_erratum_for_link
 from .erratum_handler import (
-    erratum_all_issues_are_release_pending,
+    all_issues_are_release_pending,
+    erratum_get_issues,
     erratum_needs_attention,
 )
 from .http_utils import with_http_sessions
@@ -46,7 +47,9 @@ async def collect_and_schedule_work_items(queue: WorkQueue):
                 e.status == ErrataStatus.NEW_FILES
                 or (
                     e.status == ErrataStatus.QE
-                    and erratum_all_issues_are_release_pending(e, issues)
+                    and all_issues_are_release_pending(
+                        erratum_get_issues(e, issue_cache=issues)
+                    )
                 )
             )
             and not erratum_needs_attention(e.id)

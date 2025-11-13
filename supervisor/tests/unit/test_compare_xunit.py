@@ -6,6 +6,7 @@ from supervisor.compare_xunit import (
     XUnitTestCaseResult,
     XUnitComparison,
     XUnitComparisonCounts,
+    XUnitComparisonStatus,
     XUnitParseError,
     compare_xunit_files,
     parse_xunit,
@@ -487,7 +488,13 @@ class TestXUnitComparisonOutput:
 
     def test_xunit_comparison_default_values(self):
         """Test that XUnitComparison has correct default values."""
-        comparison = XUnitComparison()
+        comparison = XUnitComparison(
+            status=XUnitComparisonStatus(
+                generated=True, reason="Comparison generated successfully"
+            )
+        )
+        assert comparison.status.generated is True
+        assert comparison.status.reason == "Comparison generated successfully"
         assert comparison.total_counts.works == 0
         assert len(comparison.regression) == 0
         assert len(comparison.fixed) == 0
@@ -496,7 +503,11 @@ class TestXUnitComparisonOutput:
 
     def test_xunit_comparison_to_toml(self):
         """Test TOML output generation with multiple entries and empty list removal."""
-        comparison = XUnitComparison()
+        comparison = XUnitComparison(
+            status=XUnitComparisonStatus(
+                generated=True, reason="Comparison generated successfully"
+            )
+        )
         comparison.total_counts.works = 10
         comparison.total_counts.regression = 2
 
@@ -529,6 +540,9 @@ class TestXUnitComparisonOutput:
 
         # Basic structure
         assert "# XUnit Comparison Report" in toml_output
+        assert "[status]" in toml_output
+        assert "generated = true" in toml_output
+        assert 'reason = "Comparison generated successfully"' in toml_output
         assert "[total_counts]" in toml_output
         assert "works = 10" in toml_output
         assert "regression = 2" in toml_output
@@ -568,3 +582,25 @@ class TestXUnitComparisonOutput:
         assert comparison.result_b == XUnitTestCaseResult.FAIL
         assert comparison.log_url_a == "https://example.com/log1.txt"
         assert comparison.log_url_b == "https://example.com/log2.txt"
+
+    def test_xunit_comparison_empty_total_counts_removed_from_toml(self):
+        """Test that total_counts is removed from TOML when all counts are 0."""
+        comparison = XUnitComparison(
+            status=XUnitComparisonStatus(
+                generated=False, reason="XUnit results missing for runs A and B"
+            ),
+            metadata={"build_a": "build1", "build_b": "build2"},
+        )
+
+        toml_output = comparison.to_toml()
+
+        # Status and metadata should be present
+        assert "[status]" in toml_output
+        assert "generated = false" in toml_output
+        assert 'reason = "XUnit results missing for runs A and B"' in toml_output
+        assert "[metadata]" in toml_output
+        assert 'build_a = "build1"' in toml_output
+        assert 'build_b = "build2"' in toml_output
+
+        # total_counts should be removed when empty
+        assert "[total_counts]" not in toml_output

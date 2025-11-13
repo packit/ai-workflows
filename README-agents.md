@@ -73,11 +73,13 @@ make trigger-pipeline JIRA_ISSUE=RHEL-12345
 # Test specific agents standalone
 make JIRA_ISSUE=RHEL-12345 run-triage-agent-standalone
 make PACKAGE=httpd VERSION=2.4.62 JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-rebase-agent-standalone
-make PACKAGE=httpd UPSTREAM_FIX=https://github.com/... JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-backport-agent-standalone
+make PACKAGE=httpd UPSTREAM_PATCHES=https://github.com/... JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-backport-agent-standalone
 
 # Or with dry-run
 DRY_RUN=true make JIRA_ISSUE=RHEL-12345 run-triage-agent-standalone
 ```
+
+Use commas to delimit multiple patch/commit URLs in `UPSTREAM_PATCHES`.
 
 **Monitoring:**
 - Phoenix tracing: http://localhost:6006/

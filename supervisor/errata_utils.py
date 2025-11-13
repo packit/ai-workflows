@@ -6,7 +6,7 @@ from functools import cache
 import logging
 import os
 import re
-from typing import DefaultDict, overload
+from typing import Any, DefaultDict, overload
 from typing_extensions import Literal
 
 from bs4 import BeautifulSoup, Tag  # type: ignore
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 ET_URL = "https://errata.engineering.redhat.com/"
 
 # regex pattern for extracting timestamps from push logs
-_TIMESTAMP_PATTERN = re.compile(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \+0000')
+_TIMESTAMP_PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \+0000")
 
 
 @cache
@@ -46,7 +46,21 @@ def ET_api_get(path: str, *, params: dict | None = None):
     return response.json()
 
 
-def ET_api_post(path: str, data: dict):
+@overload
+def ET_api_post(
+    path: str, data: dict[str, Any], *, decode_response: Literal[False] = False
+) -> None: ...
+
+
+@overload
+def ET_api_post(
+    path: str, data: dict[str, Any], *, decode_response: Literal[True]
+) -> Any: ...
+
+
+def ET_api_post(
+    path: str, data: dict[str, Any], *, decode_response: bool = False
+) -> Any | None:
     response = requests_session().post(
         f"{ET_URL}/api/v1/{path}",
         data=data,
@@ -54,7 +68,37 @@ def ET_api_post(path: str, data: dict):
         verify=ET_verify(),
     )
     response.raise_for_status()
-    return response.json()
+
+    if decode_response:
+        return response.json()
+
+
+@overload
+def ET_api_put(
+    path: str, data: dict[str, Any], *, decode_response: Literal[False] = False
+) -> None: ...
+
+
+@overload
+def ET_api_put(
+    path: str, data: dict[str, Any], *, decode_response: Literal[True]
+) -> Any: ...
+
+
+def ET_api_put(
+    path: str, data: dict[str, Any], *, decode_response: bool = False
+) -> Any | None:
+    response = requests_session().put(
+        f"{ET_URL}/api/v1/{path}",
+        data=data,
+        auth=HTTPSPNEGOAuth(opportunistic_auth=True),
+        verify=ET_verify(),
+    )
+
+    response.raise_for_status()
+
+    if decode_response:
+        return response.json()
 
 
 def ET_get_html(path: str):
@@ -105,6 +149,8 @@ def get_erratum(erratum_id: str | int, full: bool = False) -> Erratum | FullErra
         if details["publish_date"] is not None
         else None
     )
+    assigned_to_email = get_errata_user_email(details["assigned_to_id"])
+    package_owner_email = get_errata_user_email(details["package_owner_id"])
 
     base_erratum = Erratum(
         id=details["id"],
@@ -116,6 +162,8 @@ def get_erratum(erratum_id: str | int, full: bool = False) -> Erratum | FullErra
         release_id=details["group_id"],
         publish_date=publish_date,
         last_status_transition_timestamp=last_status_transition_timestamp,
+        assigned_to_email=assigned_to_email,
+        package_owner_email=package_owner_email,
     )
 
     if full:
@@ -168,6 +216,16 @@ def get_erratum_for_link(link: str, full: Literal[True]) -> FullErratum: ...
 def get_erratum_for_link(link: str, full: bool = False) -> Erratum | FullErratum:
     erratum_id = link.split("/")[-1]
     return get_erratum(erratum_id, full=full)
+
+
+@cache
+def get_errata_user_email(id: int | str) -> str:
+    response = ET_api_get(f"user/{id}")
+    # Using login_name rather than email_address here is intentional - this matches
+    # the handling in get_erratum_comments() where only login_name is available,
+    # and also when we set assigned_to_email when updating an erratum, it expects
+    # the login_name, not the email. (usually they are the same).
+    return response["login_name"]
 
 
 class ErratumBuild(BaseModel):
@@ -632,11 +690,12 @@ def erratum_get_latest_stage_push_details(erratum_id) -> ErratumPushDetails:
         if timestamps:
             # last timestamp from logs
             last_timestamp = timestamps[-1]
-            updated_at = datetime.strptime(last_timestamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            updated_at = datetime.strptime(last_timestamp, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
 
     return ErratumPushDetails(
-        status=ErratumPushStatus(status) if status else None,
-        updated_at=updated_at
+        status=ErratumPushStatus(status) if status else None, updated_at=updated_at
     )
 
 
@@ -669,6 +728,26 @@ def erratum_change_state(erratum_id, new_state: ErrataStatus, *, dry_run: bool =
     ET_api_post(
         f"erratum/{erratum_id}/change_state",
         data={"new_state": new_state},
+    )
+
+
+def erratum_change_ownership(
+    erratum_id: int | str, new_owner_email: str, *, dry_run: bool = False
+):
+    if dry_run:
+        logger.info(
+            "Dry run: Would change the ownership of erratum %s to %s",
+            erratum_id,
+            new_owner_email,
+        )
+        return
+
+    ET_api_put(
+        f"erratum/{erratum_id}",
+        {
+            "advisory[assigned_to_email]": new_owner_email,
+            "advisory[package_owner_email]": new_owner_email,
+        },
     )
 
 

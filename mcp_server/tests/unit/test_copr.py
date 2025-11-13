@@ -5,7 +5,7 @@ from pathlib import Path
 
 import aiohttp
 import pytest
-from copr.v3 import ProjectProxy, BuildProxy
+from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
 from fastmcp.exceptions import ToolError
 from flexmock import flexmock
 
@@ -36,8 +36,10 @@ async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
     srpm_path = Path("test.src.rpm")
     jira_issue = "RHEL-12345"
     suffix = "" if dist_git_branch == "rhel-10.0" else ".dev"
-    chroot = f"rhel-10{suffix}-{exclusive_arch or 'x86_64'}"
+    build_arch = exclusive_arch or "x86_64"
+    chroot = f"rhel-10{suffix}-{build_arch}"
     existing_chroot = "rhel-9.dev-x86_64"
+    internal_repos_host = "http://example.com"
 
     async def init_kerberos_ticket():
         return f"{ownername}@EXAMPLE.COM"
@@ -46,6 +48,7 @@ async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
         return {
             "current_z_streams": {"10": "rhel-10.0.z"},
             "upcoming_z_streams": {"10": "rhel-10.1.z"},
+            "internal_repos_host": internal_repos_host,
         }
 
     async def _get_exclusive_arches(*_):
@@ -72,6 +75,19 @@ async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
     ).once()
     kwargs["chroots"] = sorted({existing_chroot} | {chroot})
     flexmock(ProjectProxy).should_receive("edit").with_args(**kwargs).once()
+    flexmock(ProjectChrootProxy).should_receive("get").with_args(
+        ownername=ownername,
+        projectname=jira_issue,
+        chrootname=chroot,
+    ).and_return(flexmock(additional_repos=[])).times(0 if suffix else 1)
+    flexmock(ProjectChrootProxy).should_receive("edit").with_args(
+        ownername=ownername,
+        projectname=jira_issue,
+        chrootname=chroot,
+        additional_repos=[
+            f"{internal_repos_host}/brewroot/repos/{dist_git_branch}-z-build/latest/{build_arch}",
+        ],
+    ).times(0 if suffix else 1)
     flexmock(BuildProxy).should_receive("create_from_file").with_args(
         ownername=ownername,
         projectname=jira_issue,

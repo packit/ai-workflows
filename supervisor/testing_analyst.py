@@ -131,6 +131,10 @@ Call the final_answer tool passing in the state and a comment as follows.
 The comment should use JIRA comment syntax. If it seems useful, please include
 a table in the output comment summarizing the results per architecture.
 
+If an error prevented tests from running on the new build:
+    state: tests-error
+    comment: explanation of why tests could not be run, if available
+
 If the tests failures seem to reflect a regression in the new build compared to the baseline:
     state: tests-failed
     comment: detailed description of the tests that are failing, and if known, possible reasons why
@@ -142,6 +146,8 @@ If you are uncertain whether the failures are due to a regression or not:
 If it seems highly likely that there are no regressions:
     state: tests-waived
     comment: description of why the failures are not likely to be regressions
+
+ Do not use tests-waived option if tests could not be run on the new build.
 """
 )
 

@@ -20,6 +20,7 @@ class PackageUpdateState(BaseModel):
         build_error: str | None = Field(default=None)
         log_result: LogOutputSchema | None = Field(default=None)
         merge_request_url: str | None = Field(default=None)
+        merge_request_newly_created: bool = Field(default=False)  # was the MR newly created?
 
 class PackageUpdateStep():
   """
@@ -80,5 +81,73 @@ class PackageUpdateStep():
               )
           except Exception as e:
               logger.warning(f"Failed to add FuSa label to GitLab MR: {e}")
+
+      return next_step
+
+  @staticmethod
+  async def add_blocking_comment(state, next_step, dry_run, gateway_tools):
+      """Add a blocking comment to the MR to prevent merge until Jotnar members approve.
+
+      Args:
+          state: The state of the workflow.
+          next_step: The next step to run.
+          dry_run: Whether to run the workflow in dry-run mode.
+          gateway_tools: The gateway tools to use.
+
+      Returns:
+          The next step to run.
+      """
+      if dry_run:
+          return next_step
+
+      if state.merge_request_url:
+          blocking_comment = """
+              **⚠️ Do not merge this merge request ⚠️**\n\n
+              Anyone is welcome to review and approve the changes, but please leave the merging on Jötnar team members.\n
+              There are automated processes that run after merge, and this MR may need to wait
+              before being merged to avoid conflicts with ongoing automation.
+          """
+
+          try:
+              await tasks.run_tool(
+                  "add_blocking_merge_request_comment",
+                  merge_request_url=state.merge_request_url,
+                  comment=blocking_comment,
+                  available_tools=gateway_tools,
+              )
+              logger.info(f"Added blocking comment to MR {state.merge_request_url}")
+          except Exception as e:
+              logger.warning(f"Failed to add blocking comment to MR: {e}")
+              # Don't fail the workflow if comment addition fails
+
+      return next_step
+
+  @staticmethod
+  async def create_merge_request_checklist(state, next_step, dry_run, gateway_tools):
+      """Create a checklist for the MR team to go through before merging.
+
+      Args:
+          state: The state of the workflow.
+          next_step: The next step to run.
+          dry_run: Whether to run the workflow in dry-run mode.
+          gateway_tools: The gateway tools to use.
+
+      Returns:
+          The next step to run.
+      """
+      if dry_run:
+          return next_step
+
+      if state.merge_request_url and state.merge_request_newly_created:
+          try:
+              await tasks.run_tool(
+                  "create_merge_request_checklist",
+                  merge_request_url=state.merge_request_url,
+                  available_tools=gateway_tools,
+              )
+              logger.info(f"Created checklist for MR {state.merge_request_url}")
+          except Exception as e:
+              logger.warning(f"Failed to create checklist for MR: {e}")
+              # Don't fail the workflow if checklist creation fails
 
       return next_step

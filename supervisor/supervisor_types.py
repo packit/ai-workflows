@@ -58,6 +58,8 @@ class Erratum(BaseModel):
     release_id: int
     publish_date: datetime | None
     last_status_transition_timestamp: datetime
+    assigned_to_email: str
+    package_owner_email: str
 
 
 class FullErratum(Erratum):
@@ -93,6 +95,7 @@ class Issue(BaseModel):
 
     key: str
     url: str
+    assignee_email: str | None = None
     summary: str
     components: list[str]
     status: IssueStatus
@@ -136,6 +139,7 @@ class TestingFarmRequest(BaseModel):
     url: str
     state: TestingFarmRequestState
     result: TestingFarmRequestResult = TestingFarmRequestResult.UNKNOWN
+    error_reason: str | None = None
     result_xunit_url: str | None = None
     created: datetime
     updated: datetime
@@ -182,6 +186,7 @@ class TestingState(StrEnum):
     NOT_RUNNING = "tests-not-running"
     PENDING = "tests-pending"
     RUNNING = "tests-running"
+    ERROR = "tests-error"
     FAILED = "tests-failed"
     PASSED = "tests-passed"
     WAIVED = "tests-waived"

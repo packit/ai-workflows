@@ -318,7 +318,7 @@ class IssueHandler(WorkItemHandler):
                     case TestingState.RUNNING:
                         return self.resolve_wait("Tests are running")
                     case TestingState.FAILED:
-                        if testing_analysis.failed_test_ids:
+                        if not baseline_tests and testing_analysis.failed_test_ids:
                             return await self.resolve_start_reproduction(
                                 related_erratum,
                                 testing_analysis.comment or "",
@@ -329,6 +329,11 @@ class IssueHandler(WorkItemHandler):
                                 "Tests failed - see details below",
                                 details_comment=testing_analysis.comment,
                             )
+                    case TestingState.ERROR:
+                        return self.resolve_flag_attention(
+                            "An error occurred during testing - see details below",
+                            details_comment=testing_analysis.comment,
+                        )
                     case TestingState.PASSED:
                         return self.resolve_set_status(
                             IssueStatus.RELEASE_PENDING,

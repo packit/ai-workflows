@@ -11,6 +11,7 @@ RUN dnf -y install \
       python3-redis \
       python3-requests \
       python3-GitPython \
+      python3-flexmock \
       krb5-libs \
       krb5-workstation \
       centpkg \

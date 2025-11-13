@@ -1,6 +1,7 @@
 IMAGE_NAME ?= beeai-agent
 COMPOSE_FILE ?= compose.yaml
 DRY_RUN ?= false
+MOCK_JIRA ?= false
 LOKI_URL ?= http://loki.tft.osci.redhat.com/
 LOKI_SINCE ?= 24h
 LOKI_LIMIT ?= 3000
@@ -23,6 +24,7 @@ run-triage-agent-standalone:
 	$(COMPOSE_AGENTS) run --rm \
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e DRY_RUN=$(DRY_RUN) \
+		-e MOCK_JIRA=$(MOCK_JIRA) \
 		triage-agent
 
 
@@ -36,6 +38,7 @@ run-rebase-agent-c9s-standalone:
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
+		-e MOCK_JIRA=$(MOCK_JIRA) \
 		rebase-agent-c9s
 
 .PHONY: run-rebase-agent-c10s-standalone
@@ -46,6 +49,7 @@ run-rebase-agent-c10s-standalone:
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
+		-e MOCK_JIRA=$(MOCK_JIRA) \
 		rebase-agent-c10s
 
 .PHONY: run-rebase-agent-standalone
@@ -59,10 +63,11 @@ run-rebase-agent-standalone: run-rebase-agent-c10s-standalone
 run-backport-agent-c9s-standalone:
 	$(COMPOSE_AGENTS)  run --rm \
 		-e PACKAGE=$(PACKAGE) \
-		-e UPSTREAM_FIX=$(UPSTREAM_FIX) \
+		-e UPSTREAM_PATCHES=$(UPSTREAM_PATCHES) \
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
+		-e MOCK_JIRA=$(MOCK_JIRA) \
 		-e CVE_ID=$(CVE_ID) \
 		backport-agent-c9s
 
@@ -70,10 +75,11 @@ run-backport-agent-c9s-standalone:
 run-backport-agent-c10s-standalone:
 	$(COMPOSE_AGENTS) run --rm \
 		-e PACKAGE=$(PACKAGE) \
-		-e UPSTREAM_FIX=$(UPSTREAM_FIX) \
+		-e UPSTREAM_PATCHES=$(UPSTREAM_PATCHES) \
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
+		-e MOCK_JIRA=$(MOCK_JIRA) \
 		-e CVE_ID=$(CVE_ID) \
 		backport-agent-c10s
 
@@ -105,11 +111,11 @@ build-jira-issue-fetcher:
 
 .PHONY: start
 start:
-	DRY_RUN=$(DRY_RUN) $(COMPOSE_AGENTS) up
+	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) $(COMPOSE_AGENTS) up
 
 .PHONY: start-detached
 start-detached:
-	DRY_RUN=$(DRY_RUN) $(COMPOSE_AGENTS) up -d
+	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) $(COMPOSE_AGENTS) up -d
 
 .PHONY: stop
 stop:

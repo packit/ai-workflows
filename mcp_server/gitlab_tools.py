@@ -2,20 +2,23 @@ import asyncio
 import logging
 import os
 import re
-from typing import Annotated
+from typing import Annotated, Tuple
 from urllib.parse import urlparse
 
 from fastmcp.exceptions import ToolError
 from ogr.factory import get_project
 from ogr.exceptions import OgrException, GitlabAPIException
 from ogr.services.gitlab.project import GitlabProject
+from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import Field
 
+from common.models import FailedPipelineJob
 from common.validators import AbsolutePath
 from utils import clean_stale_repositories
 
 
 logger = logging.getLogger(__name__)
+
 
 def _get_authenticated_url(repository_url: str) -> str:
     """
@@ -25,6 +28,31 @@ def _get_authenticated_url(repository_url: str) -> str:
         url = urlparse(repository_url)
         return url._replace(netloc=f"oauth2:{token}@{url.hostname}").geturl()
     return repository_url
+
+
+async def _get_merge_request_from_url(merge_request_url: str) -> GitlabPullRequest:
+    """
+    Helper function to parse a merge request URL and return the MR object.
+
+    Returns:
+        The GitLab merge request (PullRequest) object
+    """
+    # Extract project and MR ID from the URL
+    # URL format examples:
+    # `https://gitlab.com/namespace/project/-/merge_requests/123`
+    # `https://gitlab.com/redhat/rhel/rpms/package/-/merge_requests/123`
+    if not (match := re.search(r'gitlab\.com/([^/]+(?:/[^/]+){1,3})/-/merge_requests/(\d+)', merge_request_url)):
+        raise ValueError(f"Could not parse merge request URL: {merge_request_url}")
+
+    project_path = match.group(1)
+    mr_id = int(match.group(2))
+
+    project_url = f"https://gitlab.com/{project_path}"
+    project = await asyncio.to_thread(
+        get_project, url=project_url, token=os.getenv("GITLAB_TOKEN")
+    )
+
+    return await asyncio.to_thread(project.get_pr, mr_id)
 
 
 async def fork_repository(
@@ -76,14 +104,18 @@ async def open_merge_request(
     description: Annotated[str, Field(description="MR description")],
     target: Annotated[str, Field(description="Target branch (in the original repository)")],
     source: Annotated[str, Field(description="Source branch (in the fork)")],
-) -> str:
+) -> Tuple[str, bool]:
     """
     Opens a new merge request from the specified fork against its original repository.
-    Returns URL of the opened merge request.
+
+    Returns:
+        - str: The URL of the merge request if it was created successfully
+        - bool: True if the merge request was created, False otherwise (i.e. MR was reused)
     """
     project = await asyncio.to_thread(get_project, url=fork_url, token=os.getenv("GITLAB_TOKEN"))
     if not project:
         raise ToolError("Failed to get the specified fork")
+    is_brand_new_mr = True
     try:
         pr = await asyncio.to_thread(project.create_pr, title, description, target, source)
     except GitlabAPIException as ex:
@@ -98,6 +130,7 @@ async def open_merge_request(
                     # this is an active API call via PR's setter method
                     pr.description = description
                     pr.title = title
+                    is_brand_new_mr = False
                     break
             else:
                 raise
@@ -109,6 +142,7 @@ async def open_merge_request(
     for attempt in range(5):
         try:
             # First, verify the MR exists before trying to add the label
+            # It can take some time for the MR to be available via API
             pr = await asyncio.to_thread(project.parent.get_pr, pr.id)
             # by default, set this label on a newly created MR so we can inspect it ASAP
             await asyncio.to_thread(pr.add_label, "jotnar_needs_attention")
@@ -119,7 +153,7 @@ async def open_merge_request(
     else:
         logger.error("MR %s does not appear to exist after creation", pr)
         logger.error("Unable to set label 'jotnar_needs_attention' on the MR")
-    return pr.url
+    return pr.url, is_brand_new_mr
 
 
 async def get_internal_rhel_branches(
@@ -212,25 +246,124 @@ async def add_merge_request_labels(
     """
     Adds labels to an existing merge request.
     """
-    # Extract project and MR ID from the URL
-    # URL format examples:
-    # `https://gitlab.com/namespace/project/-/merge_requests/123`
-    # `https://gitlab.com/redhat/rhel/rpms/package/-/merge_requests/123`
-    match = re.search(r'gitlab\.com/([^/]+(?:/[^/]+){1,3})/-/merge_requests/(\d+)', merge_request_url)
-    if not match:
-        raise ToolError(f"Could not parse merge request URL: {merge_request_url}")
-
-    project_path = match.group(1)
-    mr_id = int(match.group(2))
-
-    project = await asyncio.to_thread(get_project, url=f"https://gitlab.com/{project_path}", token=os.getenv("GITLAB_TOKEN"))
-    if not project:
-        raise ToolError(f"Failed to get project: https://gitlab.com/{project_path}")
-
     try:
-        mr = await asyncio.to_thread(project.get_pr, mr_id)
+        mr = await _get_merge_request_from_url(merge_request_url)
         for label in labels:
             await asyncio.to_thread(mr.add_label, label)
         return f"Successfully added labels {labels} to merge request {merge_request_url}"
     except Exception as e:
         raise ToolError(f"Failed to add labels to merge request: {e}")
+
+
+async def add_blocking_merge_request_comment(
+    merge_request_url: Annotated[str, Field(description="URL of the merge request")],
+    comment: Annotated[str, Field(description="Comment text to add as a blocking discussion")],
+) -> str:
+    """
+    Adds a blocking (unresolved) comment/discussion to an existing merge request.
+    This will block the MR from being merged until the discussion is resolved.
+    """
+    try:
+        mr = await _get_merge_request_from_url(merge_request_url)
+        # Discussions are created unresolved by default, which blocks the MR
+        await asyncio.to_thread(
+            mr._raw_pr.discussions.create,
+            {"body": comment},
+        )
+
+        return f"Successfully added blocking comment to merge request {merge_request_url}"
+    except Exception as e:
+        raise ToolError(f"Failed to add blocking comment to merge request: {e}")
+
+
+async def create_merge_request_checklist(
+    merge_request_url: Annotated[str, Field(description="URL of the merge request")],
+    note_body: Annotated[str, Field(description="Body of the note to create")],
+) -> str:
+    """
+    Creates our pre/post merge checklist for our dist-git merge requests.
+    """
+    try:
+        mr = await _get_merge_request_from_url(merge_request_url)
+        # internal note docs: https://docs.gitlab.com/api/notes/#create-new-issue-note
+        await asyncio.to_thread(mr._raw_pr.notes.create, {"body": note_body}, internal=True)
+        return f"Successfully created checklist for merge request {merge_request_url}"
+    except Exception as e:
+        raise ToolError(f"Failed to create checklist for merge request: {e}")
+
+
+async def retry_pipeline_job(
+    project_url: Annotated[str, Field(description="GitLab project URL")],
+    job_id: Annotated[int, Field(description="Job ID to retry")],
+) -> str:
+    """
+    Retries a specific job in a GitLab pipeline.
+    """
+    try:
+        project = await asyncio.to_thread(
+            get_project, url=project_url, token=os.getenv("GITLAB_TOKEN")
+        )
+
+        def retry_gitlab_job():
+            job = project.gitlab_repo.jobs.get(job_id)
+            job.retry()
+            return job
+
+        job = await asyncio.to_thread(retry_gitlab_job)
+
+        logger.info(f"Successfully retried job {job_id} for project {project_url}")
+        return f"Successfully retried job {job_id}. Status: {job.status}"
+
+    except Exception as e:
+        logger.error(f"Failed to retry job {job_id} for project {project_url}: {e}")
+        raise ToolError(f"Failed to retry job: {e}") from e
+
+
+async def get_failed_pipeline_jobs_from_merge_request(
+    merge_request_url: Annotated[str, Field(description="URL of the merge request")],
+) -> list[FailedPipelineJob]:
+    """
+    Gets the failed pipeline jobs from the latest pipeline of a merge request.
+    Returns a list of failed pipeline jobs with their details.
+    """
+    try:
+        mr = await _get_merge_request_from_url(merge_request_url)
+
+        def get_latest_pipeline_jobs():
+            # Use head_pipeline to get the latest pipeline for this MR
+            if not hasattr(mr._raw_pr, "head_pipeline") or not mr._raw_pr.head_pipeline:
+                return []
+
+            pipeline_id = mr._raw_pr.head_pipeline["id"]
+            pipeline = mr.target_project.gitlab_repo.pipelines.get(pipeline_id)
+            jobs = pipeline.jobs.list(get_all=True)
+
+            namespace = mr.target_project.namespace
+            repo = mr.target_project.repo
+            failed_jobs = [
+                FailedPipelineJob(
+                    id=str(job.id),
+                    name=job.name,
+                    url=f"https://gitlab.com/{namespace}/{repo}/-/jobs/{job.id}",
+                    status=job.status,
+                    stage=job.stage,
+                    artifacts_url=(
+                        f"https://gitlab.com/{namespace}/{repo}/-/jobs/{job.id}/artifacts/browse"
+                        if hasattr(job, "artifacts_file") and job.artifacts_file
+                        else ""
+                    ),
+                )
+                for job in jobs
+                if job.status == "failed"
+            ]
+
+            return failed_jobs
+
+        failed_jobs = await asyncio.to_thread(get_latest_pipeline_jobs)
+
+        logger.info(f"Found {len(failed_jobs)} failed jobs in latest pipeline for MR {merge_request_url}")
+        return failed_jobs
+
+    except Exception as e:
+        logger.error(f"Failed to get failed jobs from MR {merge_request_url}: {e}")
+        raise ToolError(f"Failed to get failed jobs from merge request: {e}") from e

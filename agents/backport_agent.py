@@ -86,7 +86,7 @@ def get_instructions() -> str:
     return """
       You are an expert on backporting upstream patches to packages in RHEL ecosystem.
 
-      To backport upstream fix <UPSTREAM_FIX> to package <PACKAGE> in dist-git branch <DIST_GIT_BRANCH>, do the following:
+      To backport upstream patches <UPSTREAM_PATCHES> to package <PACKAGE> in dist-git branch <DIST_GIT_BRANCH>, do the following:
 
       CRITICAL: Do NOT modify, delete, or touch any existing patches in the dist-git repository.
       Only add new patches for the current backport. Existing patches are there for a reason
@@ -97,18 +97,18 @@ def get_instructions() -> str:
          end the process with `success=True` and `status="Backport already applied"`.
 
       2. Use the `git_prepare_package_sources` tool to prepare package sources in directory <UNPACKED_SOURCES>
-         for application of the upstream fix.
+         for application of the upstream patch.
 
       3. Determine which backport approach to use:
 
          A. CHERRY-PICK WORKFLOW (Preferred - try this first):
 
             IMPORTANT: This workflow uses TWO separate git repositories:
-            - <UNPACKED_SOURCES>: The dist-git repository (from Step 2) containing the spec file and existing patches
+            - <UNPACKED_SOURCES>: Git repository (from Step 2) containing unpacked and committed upstream sources
             - <UPSTREAM_REPO>: A temporary upstream repository clone (created in step 3c with -upstream suffix)
 
             When to use this workflow:
-            - <UPSTREAM_FIX> is a commit or pull request URL
+            - <UPSTREAM_PATCHES> is a list of commit or pull request URLs
             - This includes URLs with .patch suffix (e.g., https://github.com/.../commit/abc123.patch)
             - If URL extraction fails, fall back to approach B
 
@@ -124,8 +124,8 @@ def get_instructions() -> str:
             3c. Clone the upstream repository to a SEPARATE directory:
                 - Use `clone_upstream_repository` tool with:
                   * repository_url: from step 3a
-                  * clone_directory: {{local_clone}} (the dist-git repository root)
-                  * Tool automatically creates {{local_clone}}-upstream as <UPSTREAM_REPO>
+                  * clone_directory: current working directory (the dist-git repository root)
+                  * The tool automatically creates a directory with -upstream suffix as <UPSTREAM_REPO>
                 - Steps 3d-3g work in <UPSTREAM_REPO>, NOT in <UNPACKED_SOURCES>
 
             3d. Find and checkout the base version in upstream:
@@ -139,7 +139,7 @@ def get_instructions() -> str:
             3e. Apply existing patches from dist-git to upstream:
                 - Use `apply_downstream_patches` tool with:
                   * repo_path: <UPSTREAM_REPO> (where to apply)
-                  * patches_directory: {{local_clone}} (dist-git root where patch files are located)
+                  * patches_directory: current working directory (dist-git root where patch files are located)
                   * patch_files: list from step 3b
                 - This recreates the current package state in <UPSTREAM_REPO>
                 - IMPORTANT: Save the current commit hash after applying patches using `run_shell_command`:
@@ -193,16 +193,17 @@ def get_instructions() -> str:
                         - Adapt to older codebase
                         - Add missing helpers if needed
                         - Rewrite to use older APIs if needed
+                        - Prioritize preserving the patch's original logic. The final backport must still fix the original bug.
                      c. Stage ALL resolved files: `git -C <UPSTREAM_REPO> add <file>` for each file
                      d. Complete cherry-pick: `cherry_pick_continue` tool
                   3. CRITICAL: Only move to next commit after current one is FULLY COMPLETE
                   4. NEVER try to cherry-pick multiple commits at once
-                  5. If a commit truly cannot be adapted (very rare), skip it and note why
-                  6. Do NOT fall back to approach B - keep cherry-picking through all PR commits
+                  5. Do NOT fall back to approach B - keep cherry-picking through all PR commits
+                  6. NEVER skip any commits - all commits must be adapted and cherry-picked
 
             3g. Generate the final patch file from upstream:
                 - Use `generate_patch_from_commit` tool on <UPSTREAM_REPO>
-                - Specify output_directory as {{local_clone}} (the dist-git repository root)
+                - Specify output_directory as current working directory (the dist-git repository root)
                 - Use a descriptive name like <JIRA_ISSUE>.patch (e.g., if JIRA is RHEL-114639, use RHEL-114639.patch)
                 - CRITICAL: Provide base_commit parameter with the PATCHED_BASE from step 3e
                   This ensures the patch includes ALL cherry-picked commits, not just the last one
@@ -218,20 +219,26 @@ def get_instructions() -> str:
 
          B. GIT AM WORKFLOW (Fallback approach):
 
-            Note: For this workflow, use the pre-downloaded patch file at {{local_clone}}/{{jira_issue}}.patch
+            Note: For this workflow, use the pre-downloaded patch files in the current working directory.
+            They are called `<JIRA_ISSUE>-<N>.patch` where <N> is a 0-based index. For example,
+            for a `RHEL-12345` Jira issue the first patch would be called `RHEL-12345-0.patch`.
 
-            3a. Backport the patch:
-                - Use the `git_patch_apply` tool with the patch file: {{local_clone}}/{{jira_issue}}.patch
+            Backport all patches individually using the steps 3a and 3b below.
+
+            3a. Backport one patch at a time using the following steps:
+                - Use the `git_patch_apply` tool with the patch file: <JIRA_ISSUE>-<N>.patch
                 - Resolve all conflicts and leave the repository in a dirty state. Delete all *.rej files.
                 - Use the `git_apply_finish` tool to finish the patch application.
 
             3b. Once there are no more conflicts, use the `git_patch_create` tool with the patch file path
-                {{local_clone}}/{{jira_issue}}.patch to update the patch file.
+                <JIRA_ISSUE>-<N>.patch to update the patch file.
 
-      4. Update the spec file. Add a new `Patch` tag pointing to the <UPSTREAM_FIX> patch file.
+      4. Update the spec file. Add a new `Patch` tag for every patch in <UPSTREAM_PATCHES>.
          Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
          make sure it has the highest number. Make sure the patch is applied in the "%prep" section
-         and the `-p` argument is correct.
+         and the `-p` argument is correct. Add an upstream URL as a comment above
+         the `Patch:` tag - this URL references the related upstream commit or a pull/merge request.
+         Include every patch defined in <UPSTREAM_PATCHES> list.
          IMPORTANT: Only ADD new patches. Do NOT modify existing Patch tags or their order.
 
       5. Run `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` to see if the new patch
@@ -267,7 +274,10 @@ def get_prompt() -> str:
       {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
       {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
       {{^build_error}}
-      Backport upstream fix {{upstream_fix}}.
+      Backport upstream patches:
+      {{#upstream_patches}}
+      - {{.}}
+      {{/upstream_patches}}
       Unpacked upstream sources are in {{unpacked_sources}}.
       {{/build_error}}
       {{#build_error}}
@@ -287,7 +297,12 @@ def get_fix_build_error_prompt() -> str:
       {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
       {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
 
-      The backport of {{upstream_fix}} was initially successful using the cherry-pick workflow,
+      Upstream patches that were backported:
+      {{#upstream_patches}}
+      - {{.}}
+      {{/upstream_patches}}
+
+      The backport of upstream patches was initially successful using the cherry-pick workflow,
       but the build failed with the following error:
 
       {{build_error}}
@@ -296,7 +311,8 @@ def get_fix_build_error_prompt() -> str:
       DO NOT clone it again. DO NOT reset to base commit. DO NOT modify anything in {{local_clone}} dist-git repository.
       Your cherry-picked commits are still there in {{local_clone}}-upstream.
 
-      Your task is to fix this build error by exploring the upstream repository and finding the best solution.
+      The package built successfully before your patches were added - the spec file and build configuration are correct.
+      Your task is to fix this build error by improving the patches - NOT by modifying the spec file.
       Make ONE attempt to fix the issue - you will be called again if the build still fails.
 
       Follow these steps:
@@ -355,6 +371,7 @@ def get_fix_build_error_prompt() -> str:
       - Use `generate_patch_from_commit` tool with the PATCHED_BASE commit
       - This creates a single patch with all changes: original commits + prerequisites/fixes
       - Overwrite {{jira_issue}}.patch in {{local_clone}}
+      - This improved patch now includes all missing dependencies needed for a successful build
 
       STEP 5: Test the build
       - The spec file should already reference {{jira_issue}}.patch
@@ -365,7 +382,15 @@ def get_fix_build_error_prompt() -> str:
         * Wait for build results
         * If build PASSES: Report success=true with the SRPM path
         * If build FAILS: Use `download_artifacts` to get build logs if available
-        * Extract the new error message from the logs and report success=false with the error
+        * Extract the new error message from the logs:
+          - IMPORTANT: Before viewing log files, check their size using `wc -l` command
+          - If a log file has more than 2000 lines, use the view tool with offset and limit
+            parameters to read only the LAST 1000 lines (calculate offset as total_lines - 1000, limit as 1000)
+          - Build failures are almost always at the end of logs, avoiding context overflow
+          - Alternatively, use the `search_text` tool to search for error patterns (e.g., "ERROR", "FAILED", "error:", "fatal:")
+            and then use the view tool to read targeted sections around the matching line numbers
+          - Combine strategies as needed to understand the failure without reading the entire file
+        * Report success=false with the extracted error
 
       Report your results:
       - If build passes → Report success=true with the SRPM path
@@ -374,8 +399,10 @@ def get_fix_build_error_prompt() -> str:
 
       IMPORTANT RULES:
       - Work in the EXISTING {{local_clone}}-upstream directory (don't clone again)
-      - Don't modify anything in {{local_clone}} dist-git except regenerating {{jira_issue}}.patch
-      - You can freely explore, edit, commit in the upstream repo - it's your workspace
+      - NEVER modify the spec file - build failures are caused by incomplete patches, not spec issues
+      - The ONLY dist-git file you can modify is {{jira_issue}}.patch (by regenerating it from upstream repo)
+      - Fix build errors by adding missing prerequisites/dependencies to your patches in upstream repo
+      - You can freely explore, edit, cherry-pick, and commit in the upstream repo - it's your workspace
       - Use the upstream repo as a rich source of information and examples
       - Be creative and pragmatic - the goal is a working build, not perfect git history
       - Make ONE solid attempt to fix the issue - if the build fails, report the error clearly
@@ -490,7 +517,7 @@ async def main() -> None:
     local_tool_options = {"working_directory": None}
 
     class State(PackageUpdateState):
-        upstream_fix: str
+        upstream_patches: list[str]
         cve_id: str | None
         unpacked_sources: Path | None = Field(default=None)
         backport_log: list[str] = Field(default=[])
@@ -500,7 +527,7 @@ async def main() -> None:
         incremental_fix_attempts: int = Field(default=0)  # Track how many times we tried incremental fix
 
     async def run_workflow(
-        package, dist_git_branch, upstream_fix, jira_issue, cve_id, redis_conn=None
+        package, dist_git_branch, upstream_patches, jira_issue, cve_id, redis_conn=None
     ):
         local_tool_options["working_directory"] = None
 
@@ -543,11 +570,14 @@ async def main() -> None:
                 state.unpacked_sources = get_unpacked_sources(state.local_clone, state.package)
                 timeout = aiohttp.ClientTimeout(total=30)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(state.upstream_fix) as response:
-                        if response.status < 400:
-                            (state.local_clone / f"{state.jira_issue}.patch").write_text(await response.text())
-                        else:
-                            raise ValueError(f"Failed to fetch upstream fix: {response.status}")
+                    for idx, upstream_patch in enumerate(state.upstream_patches):
+                        # should we guess the patch name with log agent?
+                        patch_name = f"{state.jira_issue}-{idx}.patch"
+                        async with session.get(upstream_patch) as response:
+                            if response.status < 400:
+                                (state.local_clone / patch_name).write_text(await response.text())
+                            else:
+                                raise ValueError(f"Failed to fetch upstream patch: {response.status}")
                 return "run_backport_agent"
 
             async def run_backport_agent(state):
@@ -561,7 +591,7 @@ async def main() -> None:
                             dist_git_branch=state.dist_git_branch,
                             jira_issue=state.jira_issue,
                             cve_id=state.cve_id,
-                            upstream_fix=state.upstream_fix,
+                            upstream_patches=state.upstream_patches,
                             build_error=state.build_error,
                         ),
                     ),
@@ -576,11 +606,10 @@ async def main() -> None:
                     upstream_repo = Path(f"{state.local_clone}-upstream")
                     if upstream_repo.exists():
                         try:
-                            result = await check_subprocess(
-                                ["git", "-C", str(upstream_repo), "rev-list", "--count", "HEAD"],
-                                capture_output=True
+                            stdout, _ = await check_subprocess(
+                                ["git", "-C", str(upstream_repo), "rev-list", "--count", "HEAD"]
                             )
-                            commit_count = int(result.stdout.strip())
+                            commit_count = int(stdout.strip())
                             if commit_count > 1:  # More than just initial commit
                                 state.used_cherry_pick_workflow = True
                                 logger.info(f"Cherry-pick workflow detected: {commit_count} commits in upstream repo")
@@ -622,7 +651,7 @@ async def main() -> None:
                                 dist_git_branch=state.dist_git_branch,
                                 jira_issue=state.jira_issue,
                                 cve_id=state.cve_id,
-                                upstream_fix=state.upstream_fix,
+                                upstream_patches=state.upstream_patches,
                                 build_error=state.build_error,
                             ),
                         ),
@@ -735,9 +764,22 @@ async def main() -> None:
 
             async def stage_changes(state):
                 try:
+                    # Find patch files to stage based on workflow type
+                    if state.used_cherry_pick_workflow:
+                        # Cherry-pick workflow: only stage the single consolidated patch
+                        # This avoids staging the pre-downloaded input patches (JIRA-12345-0.patch, etc.)
+                        patch_file = state.local_clone / f"{state.jira_issue}.patch"
+                        patch_files = [patch_file] if patch_file.exists() else []
+                    else:
+                        # Git am workflow: stage all numbered patches (JIRA-12345-0.patch, JIRA-12345-1.patch, etc.)
+                        patch_files = list(state.local_clone.glob(f"{state.jira_issue}-*.patch"))
+
+                    files_to_git_add = [f"{state.package}.spec"] + [p.name for p in patch_files]
+                    logger.info(f"Staging files (cherry_pick={state.used_cherry_pick_workflow}): {files_to_git_add}")
+
                     await tasks.stage_changes(
                         local_clone=state.local_clone,
-                        files_to_commit=[f"{state.package}.spec", f"{state.jira_issue}.patch"],
+                        files_to_commit=files_to_git_add,
                     )
                 except Exception as e:
                     logger.warning(f"Error staging changes: {e}")
@@ -772,7 +814,7 @@ async def main() -> None:
                         log_output=log_output,
                         operation_type="backport",
                         package=state.package,
-                        details=state.upstream_fix,
+                        details=str(state.upstream_patches),
                     )
                 state.log_result = log_output
 
@@ -780,13 +822,14 @@ async def main() -> None:
 
             async def commit_push_and_open_mr(state):
                 try:
-                    state.merge_request_url = await tasks.commit_push_and_open_mr(
+                    formatted_patches = "\n".join(f" - {p}" for p in state.upstream_patches)
+                    state.merge_request_url, state.merge_request_newly_created = await tasks.commit_push_and_open_mr(
                         local_clone=state.local_clone,
                         commit_message=(
                             f"{state.log_result.title}\n\n"
                             f"{state.log_result.description}\n\n"
                             + (f"CVE: {state.cve_id}\n" if state.cve_id else "")
-                            + f"Upstream fix: {state.upstream_fix}\n"
+                            + "Upstream patches:\n" + formatted_patches + "\n"
                             + f"Resolves: {state.jira_issue}\n\n"
                             f"This commit was backported {I_AM_JOTNAR}\n\n"
                             "Assisted-by: Jotnar\n"
@@ -799,7 +842,7 @@ async def main() -> None:
                             f"This merge request was created {I_AM_JOTNAR}\n"
                             f"{CAREFULLY_REVIEW_CHANGES}\n\n"
                             f"{state.log_result.description}\n\n"
-                            f"Upstream patch: {state.upstream_fix}\n\n"
+                            + "Upstream patches:\n" + formatted_patches + "\n"
                             f"Resolves: {state.jira_issue}\n\n"
                             f"Backporting steps:\n\n{state.backport_log[-1]}"
                         ),
@@ -811,7 +854,16 @@ async def main() -> None:
                     state.merge_request_url = None
                     state.backport_result.success = False
                     state.backport_result.error = f"Could not commit and open MR: {e}"
-                return "add_fusa_label"
+                return "add_blocking_comment"
+
+            async def add_blocking_comment(state):
+                return await PackageUpdateStep.add_blocking_comment(
+                    state, "create_merge_request_checklist", dry_run=dry_run, gateway_tools=gateway_tools
+                )
+
+            async def create_merge_request_checklist(state):
+                return await PackageUpdateStep.create_merge_request_checklist(
+                    state, "add_fusa_label", dry_run=dry_run, gateway_tools=gateway_tools)
 
             async def add_fusa_label(state):
                 return await PackageUpdateStep.add_fusa_label(state, "comment_in_jira", dry_run=dry_run, gateway_tools=gateway_tools)
@@ -819,14 +871,19 @@ async def main() -> None:
             async def comment_in_jira(state):
                 if dry_run:
                     return Workflow.END
+                if state.backport_result.success:
+                    comment_text = (
+                        state.merge_request_url
+                        if state.merge_request_url
+                        else state.backport_result.status
+                    )
+                else:
+                    comment_text = f"Agent failed to perform a backport: {state.backport_result.error}"
+                logger.info(f"Result to be put in Jira comment: {comment_text}")
                 await tasks.comment_in_jira(
                     jira_issue=state.jira_issue,
                     agent_type="Backport",
-                    comment_text=(
-                        state.merge_request_url
-                        if state.backport_result.success
-                        else f"Agent failed to perform a backport: {state.backport_result.error}"
-                    ),
+                    comment_text=comment_text,
                     available_tools=gateway_tools,
                 )
                 return Workflow.END
@@ -840,6 +897,8 @@ async def main() -> None:
             workflow.add_step("stage_changes", stage_changes)
             workflow.add_step("run_log_agent", run_log_agent)
             workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
+            workflow.add_step("add_blocking_comment", add_blocking_comment)
+            workflow.add_step("create_merge_request_checklist", create_merge_request_checklist)
             workflow.add_step("add_fusa_label", add_fusa_label)
             workflow.add_step("comment_in_jira", comment_in_jira)
 
@@ -847,7 +906,7 @@ async def main() -> None:
                 State(
                     package=package,
                     dist_git_branch=dist_git_branch,
-                    upstream_fix=upstream_fix,
+                    upstream_patches=upstream_patches,
                     jira_issue=jira_issue,
                     cve_id=cve_id,
                 ),
@@ -857,14 +916,15 @@ async def main() -> None:
     if (
         (package := os.getenv("PACKAGE", None))
         and (branch := os.getenv("BRANCH", None))
-        and (upstream_fix := os.getenv("UPSTREAM_FIX", None))
+        and (upstream_patches_raw := os.getenv("UPSTREAM_PATCHES", None))
         and (jira_issue := os.getenv("JIRA_ISSUE", None))
     ):
+        upstream_patches = upstream_patches_raw.split(",")
         logger.info("Running in direct mode with environment variables")
         state = await run_workflow(
             package=package,
             dist_git_branch=branch,
-            upstream_fix=upstream_fix,
+            upstream_patches=upstream_patches,
             jira_issue=jira_issue,
             cve_id=os.getenv("CVE_ID", None),
             redis_conn=None,
@@ -926,7 +986,7 @@ async def main() -> None:
                 state = await run_workflow(
                     package=backport_data.package,
                     dist_git_branch=dist_git_branch,
-                    upstream_fix=backport_data.patch_url,
+                    upstream_patches=backport_data.patch_urls,
                     jira_issue=backport_data.jira_issue,
                     cve_id=backport_data.cve_id,
                     redis_conn=redis,

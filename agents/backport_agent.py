@@ -313,11 +313,13 @@ def get_fix_build_error_prompt() -> str:
 
       The package built successfully before your patches were added - the spec file and build configuration are correct.
       Your task is to fix this build error by improving the patches - NOT by modifying the spec file.
+      This includes BOTH compilation errors AND test failures during the check section.
       Make ONE attempt to fix the issue - you will be called again if the build still fails.
 
       Follow these steps:
 
       STEP 1: Analyze the build error
+      - Identify if it's a compilation error (undefined symbols, headers) or test failure (in check section)
       - Identify what's missing: undefined functions, types, macros, symbols, headers, or API changes
       - Look for patterns like "undefined reference", "implicit declaration", "undeclared identifier", etc.
       - Note the specific names of missing symbols
@@ -366,6 +368,13 @@ def get_fix_build_error_prompt() -> str:
       - Cherry-pick some commits, then manually adapt code where needed
       - Use the upstream repo as a reference while writing your own backport
 
+      SPECIAL CONSIDERATIONS FOR TEST FAILURES:
+      - Tests validate the fix - they MUST pass
+      - If tests use missing functions/helpers: backport ONLY the minimal necessary test helpers
+        (search upstream history for test utility commits and cherry-pick or manually add them)
+      - If tests fail due to API changes: adapt test code to work with older APIs
+      - NEVER skip or disable tests - fix them instead
+
       STEP 4: Regenerate the patch
       - After making your fixes (cherry-picked or manual), regenerate the patch file
       - Use `generate_patch_from_commit` tool with the PATCHED_BASE commit
@@ -401,10 +410,11 @@ def get_fix_build_error_prompt() -> str:
       - Work in the EXISTING {{local_clone}}-upstream directory (don't clone again)
       - NEVER modify the spec file - build failures are caused by incomplete patches, not spec issues
       - The ONLY dist-git file you can modify is {{jira_issue}}.patch (by regenerating it from upstream repo)
-      - Fix build errors by adding missing prerequisites/dependencies to your patches in upstream repo
+      - Fix build errors (compilation AND test failures) by adding missing prerequisites/dependencies to your patches in upstream repo
+      - For test failures: backport minimal necessary test helpers/functions to make tests pass
       - You can freely explore, edit, cherry-pick, and commit in the upstream repo - it's your workspace
       - Use the upstream repo as a rich source of information and examples
-      - Be creative and pragmatic - the goal is a working build, not perfect git history
+      - Be creative and pragmatic - the goal is a working build with passing tests, not perfect git history
       - Make ONE solid attempt to fix the issue - if the build fails, report the error clearly
       - Your work will persist in the upstream repo for the next attempt if needed
 

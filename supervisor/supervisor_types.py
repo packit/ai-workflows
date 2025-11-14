@@ -109,7 +109,6 @@ class Issue(BaseModel):
 
 class JiraComment(Comment):
     id: str
-    adf: dict[str, Any] | None = None
 
 
 class FullIssue(Issue):

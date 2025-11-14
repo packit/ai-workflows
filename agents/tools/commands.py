@@ -1,4 +1,5 @@
 import asyncio
+import math
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -10,10 +11,19 @@ from beeai_framework.tools import JSONToolOutput, Tool, ToolError, ToolRunOption
 from utils import run_subprocess
 
 TIMEOUT = 10 * 60  # seconds
+ELLIPSIZED_LINES = 200
 
 
 class RunShellCommandToolInput(BaseModel):
     command: str = Field(description="Command to run")
+    full_output: bool = Field(
+        default=False,
+        description=(
+            "Whether the content of stdout and stderr should be included in full. "
+            f"Only approximately {ELLIPSIZED_LINES // 2} lines from the beginning "
+            "and the end are included by default."
+        ),
+    )
 
 
 class RunShellCommandToolResult(BaseModel):
@@ -50,9 +60,24 @@ class RunShellCommandTool(Tool[RunShellCommandToolInput, ToolRunOptions, RunShel
             )
         except TimeoutError as e:
             raise ToolError(f"The specified command timed out after {TIMEOUT} seconds") from e
+
+        def ellipsize(output):
+            if output is None:
+                return None
+            if tool_input.full_output:
+                return output
+            lines = output.splitlines(keepends=True)
+            if len(lines) <= ELLIPSIZED_LINES:
+                return output
+            return "".join(
+                lines[: math.floor((ELLIPSIZED_LINES - 1) / 2)]
+                + ["[...]\n"]
+                + lines[-math.ceil((ELLIPSIZED_LINES - 1) / 2) :]
+            )
+
         result = {
             "exit_code": exit_code,
-            "stdout": stdout,
-            "stderr": stderr,
+            "stdout": ellipsize(stdout),
+            "stderr": ellipsize(stderr),
         }
         return RunShellCommandToolOutput(RunShellCommandToolResult.model_validate(result))

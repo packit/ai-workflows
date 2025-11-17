@@ -14,6 +14,13 @@ https://spaces.redhat.com/spaces/JiraAid/pages/553618479/Optimizing+scripts+that
 - Proper error handling and logging
 - Optimized API calls with field filtering
 - Timeouts
+
+Configuration:
+- QUERY: Custom JQL query (default: "project=RHEL and assignee = jotnar-project")
+- ONLY_POSTPONED_RETRY: If set to "true", "1", or "yes", only issues with
+  jotnar_postponed label will be removed from queues for retry. This mode is
+  intended for a secondary instance that runs less frequently to handle
+  postponed issues.
 """
 
 import asyncio
@@ -72,6 +79,9 @@ class JiraIssueFetcher:
 
         # Use constant page size
         self.max_results_per_page = self.MAX_RESULTS_PER_PAGE
+
+        # Configuration for retry behavior: if True, only remove issues for retry when they have POSTPONED label
+        self.only_postponed_retry = os.getenv("ONLY_POSTPONED_RETRY", "false").lower() in ("true", "1", "yes")
 
         self.headers = {
             "Authorization": f"Bearer {self.jira_token}",
@@ -289,6 +299,9 @@ class JiraIssueFetcher:
                     elif JiraLabels.RETRY_NEEDED.value in jotnar_labels:
                         logger.info(f"Issue {issue_key} has jotnar_retry_needed label - marking for retry")
                         remove_issues_for_retry.add(issue_key)
+                    elif JiraLabels.POSTPONED.value in jotnar_labels and self.only_postponed_retry:
+                        logger.info(f"Issue {issue_key} has jotnar_postponed label - re-processing it")
+                        remove_issues_for_retry.add(issue_key)
                     elif not jotnar_labels:
                         logger.info(f"Issue {issue_key} has no jötnar labels - marking for retry")
                         remove_issues_for_retry.add(issue_key)
@@ -327,7 +340,8 @@ class JiraIssueFetcher:
 
     async def run(self) -> None:
         try:
-            logger.info("Starting Jira issue fetcher")
+            mode_str = "POSTPONED-only retry mode" if self.only_postponed_retry else "default retry mode"
+            logger.info(f"Starting Jira issue fetcher ({mode_str})")
 
             issues = await self.search_issues()
 
@@ -370,5 +384,8 @@ if __name__ == "__main__":
 
     if os.getenv("QUERY"):
         logger.info("Using QUERY from environment variable")
+
+    if os.getenv("ONLY_POSTPONED_RETRY"):
+        logger.info("ONLY_POSTPONED_RETRY is set - using POSTPONED-only retry mode")
 
     asyncio.run(main())

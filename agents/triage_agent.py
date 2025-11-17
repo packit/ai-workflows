@@ -557,6 +557,12 @@ async def main() -> None:
                         labels_to_add=[JiraLabels.POSTPONED.value],
                         dry_run=dry_run
                     )
+                elif JiraLabels.POSTPONED.value in JiraLabels.all_labels():
+                    await tasks.set_jira_labels(
+                        jira_issue=state.jira_issue,
+                        labels_to_remove=[JiraLabels.POSTPONED.value],
+                        dry_run=dry_run
+                    )
                 return Workflow.END
 
             workflow.add_step("run_clones_analyzer_agent", run_clones_analyzer_agent)

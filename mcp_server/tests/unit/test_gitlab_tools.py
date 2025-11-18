@@ -241,9 +241,9 @@ async def test_add_blocking_merge_request_comment():
             flexmock(
                 id=123,
                 _raw_pr=flexmock(
-                    discussions=flexmock().should_receive("create").with_args({"body": comment}).and_return(
-                        flexmock(id=1),
-                    ).mock(),
+                    discussions=flexmock()
+                        .should_receive("list").with_args(get_all=True).and_return([]).mock()
+                        .should_receive("create").with_args({"body": comment}).and_return(flexmock(id=1)).mock(),
                 ),
             ),
         ).mock()
@@ -255,6 +255,43 @@ async def test_add_blocking_merge_request_comment():
     )
 
     assert result == f"Successfully added blocking comment to merge request {merge_request_url}"
+
+
+@pytest.mark.parametrize("resolved_status", [False, True])
+@pytest.mark.asyncio
+async def test_add_blocking_merge_request_comment_already_exists(resolved_status):
+    merge_request_url = "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123"
+    comment = "**Blocking Merge Request**\n\nTest comment"
+
+    existing_discussion = flexmock(
+        id="disc1",
+        attributes={
+            "notes": [{"body": "**Blocking Merge Request**\n\nTest comment"}],
+            "resolved": resolved_status,
+        }
+    )
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url=merge_request_url.rsplit("/-/merge_requests/", 1)[0],
+    ).and_return(
+        flexmock().should_receive("get_pr").and_return(
+            flexmock(
+                id=123,
+                _raw_pr=flexmock(
+                    discussions=flexmock()
+                        .should_receive("list").with_args(get_all=True).and_return([existing_discussion]).mock()
+                ),
+            ),
+        ).mock()
+    )
+
+    result = await add_blocking_merge_request_comment(
+        merge_request_url=merge_request_url,
+        comment=comment
+    )
+
+    assert "already exists" in result
+    assert merge_request_url in result
 
 
 @pytest.mark.asyncio

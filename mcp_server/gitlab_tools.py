@@ -262,9 +262,28 @@ async def add_blocking_merge_request_comment(
     """
     Adds a blocking (unresolved) comment/discussion to an existing merge request.
     This will block the MR from being merged until the discussion is resolved.
+    Checks if the exact same comment already exists (resolved or unresolved) before adding.
     """
     try:
         mr = await _get_merge_request_from_url(merge_request_url)
+
+        def check_existing_comment():
+            discussions = mr._raw_pr.discussions.list(get_all=True)
+
+            blocking_comment_message = comment.strip()
+
+            for discussion in discussions:
+                notes = discussion.attributes.get("notes", [])
+                # Check first note in discussion for exact match (regardless of resolved status)
+                if notes and notes[0].get("body", "").strip() == blocking_comment_message:
+                    return True
+
+            return False
+
+        exists = await asyncio.to_thread(check_existing_comment)
+        if exists: 
+            return f"Comment already exists in merge request {merge_request_url}, not adding duplicate"
+
         # Discussions are created unresolved by default, which blocks the MR
         await asyncio.to_thread(
             mr._raw_pr.discussions.create,

@@ -12,7 +12,7 @@ from ogr.services.gitlab.project import GitlabProject
 from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import Field
 
-from common.models import FailedPipelineJob
+from common.models import FailedPipelineJob, MergeRequestComment, CommentReply
 from common.validators import AbsolutePath
 from utils import clean_stale_repositories
 
@@ -386,3 +386,113 @@ async def get_failed_pipeline_jobs_from_merge_request(
     except Exception as e:
         logger.error(f"Failed to get failed jobs from MR {merge_request_url}: {e}")
         raise ToolError(f"Failed to get failed jobs from merge request: {e}") from e
+
+
+async def get_authorized_comments_from_merge_request(
+    merge_request_url: Annotated[str, Field(description="URL of the merge request")],
+) -> list[MergeRequestComment]:
+    """
+    Gets all comments from a merge request, filtered to only include
+    comments from authorized members with Developer role or higher.
+    Access levels: Guest (10), Reporter (20), Developer (30),
+    Maintainer (40), Owner (50).
+    """
+    try:
+        mr = await _get_merge_request_from_url(merge_request_url)
+
+        def get_authorized_comments():
+            # Get discussions instead of notes to capture thread context
+            discussions = mr._raw_pr.discussions.list(get_all=True)
+            project = mr.target_project.gitlab_repo
+
+            logger.info(f"Found {len(discussions)} discussions in MR")
+
+            authorized_comments = []
+            for discussion in discussions:
+                discussion_id = discussion.id
+                notes = discussion.attributes.get("notes", [])
+
+                if not notes:
+                    continue
+
+                # Process first note (thread starter)
+                first_note = notes[0]
+
+                # Skip system notes (like "added 1 commit")
+                if first_note.get("system", False): continue
+
+                first_author_id = first_note["author"]["id"]
+                first_author_username = first_note["author"]["username"]
+
+                try:
+                    first_member = project.members_all.get(first_author_id)
+
+                    # Only process thread if starter is Developer+
+                    if first_member.access_level >= 30:
+                        file_path = ""
+                        line_number = None
+                        line_type = ""
+
+                        position = first_note.get("position")
+
+                        if position:
+                            file_path = (position.get("new_path", "") or position.get("old_path", ""))
+                            new_line = position.get("new_line")
+                            old_line = position.get("old_line")
+
+                            if new_line and old_line:
+                                # Both present = unchanged/context line
+                                line_number = new_line
+                                line_type = "unchanged"
+                            elif new_line:
+                                line_number = new_line
+                                line_type = "new"
+                            elif old_line:
+                                line_number = old_line
+                                line_type = "old"
+
+                        replies = []
+                        for reply_note in notes[1:]:
+                            if reply_note.get("system", False): continue
+
+                            reply_author_id = reply_note["author"]["id"]
+                            reply_author_username = reply_note["author"]["username"]
+
+                            try:
+                                reply_member = project.members_all.get(reply_author_id)
+
+                                if reply_member.access_level >= 30:
+                                    replies.append(
+                                        CommentReply(
+                                            author=reply_author_username,
+                                            message=reply_note["body"],
+                                            created_at=reply_note["created_at"],
+                                        )
+                                    )
+                            except Exception as e:
+                                # Reply author is not an authorized member
+                                continue
+
+                        authorized_comments.append(
+                            MergeRequestComment(
+                                author=first_author_username,
+                                message=first_note["body"],
+                                created_at=first_note["created_at"],
+                                file_path=file_path,
+                                line_number=line_number,
+                                line_type=line_type,
+                                discussion_id=discussion_id,
+                                replies=replies,
+                            )
+                        )
+                except Exception as e:
+                    # Thread starter is not an authorized member
+                    continue
+
+            return authorized_comments
+
+        comments = await asyncio.to_thread(get_authorized_comments)
+        return comments
+
+    except Exception as e:
+        raise ToolError(f"Failed to get authorized comments from merge request: {e}") from e

@@ -10,3 +10,4 @@ POST_PUSH_TESTING_TIMEOUT_STR = "3 hours"
 # Defines the Jotnar bot's user identity for Errata and Jira
 ERRATA_JOTNAR_BOT_EMAIL = "jotnar-bot@IPA.REDHAT.COM"
 JIRA_JOTNAR_BOT_EMAIL = "jotnar+bot@redhat.com"
+JIRA_JOTNAR_TEAM = "rhel-jotnar"

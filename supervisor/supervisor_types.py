@@ -95,7 +95,7 @@ class Issue(BaseModel):
 
     key: str
     url: str
-    assignee_email: str | None = None
+    assigned_team: str | None = None
     summary: str
     components: list[str]
     status: IssueStatus

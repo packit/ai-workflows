@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from .constants import (
     ERRATA_JOTNAR_BOT_EMAIL,
-    JIRA_JOTNAR_BOT_EMAIL,
+    JIRA_JOTNAR_TEAM,
     POST_PUSH_TESTING_TIMEOUT,
     POST_PUSH_TESTING_TIMEOUT_STR,
 )
@@ -82,7 +82,7 @@ def erratum_get_issues(
 
 
 def jotnar_owns_all_issues(issues: list[Issue]) -> bool:
-    return all(issue.assignee_email == JIRA_JOTNAR_BOT_EMAIL for issue in issues)
+    return all(issue.assigned_team == JIRA_JOTNAR_TEAM for issue in issues)
 
 
 def compare_file_lists(

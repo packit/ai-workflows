@@ -1,8 +1,11 @@
 import logging
 from datetime import datetime, timezone
 
+from common.constants import JiraLabels
+
 from .constants import (
     ERRATA_JOTNAR_BOT_EMAIL,
+    JIRA_JOTNAR_BOT_EMAIL,
     JIRA_JOTNAR_TEAM,
     POST_PUSH_TESTING_TIMEOUT,
     POST_PUSH_TESTING_TIMEOUT_STR,
@@ -57,7 +60,7 @@ def erratum_needs_attention(erratum_id: int) -> bool:
     issue = get_issue_by_jotnar_tag(
         "RHELMISC",
         _needs_attention_tag(erratum_id),
-        with_label="jotnar_needs_attention",
+        with_label=JiraLabels.NEEDS_ATTENTION.value,
     )
     return issue is not None
 
@@ -132,7 +135,7 @@ class ErratumHandler(WorkItemHandler):
         if issue is not None:
             add_issue_label(
                 issue.key,
-                "jotnar_needs_attention",
+                JiraLabels.NEEDS_ATTENTION.value,
                 why,
                 dry_run=self.dry_run,
             )
@@ -144,9 +147,9 @@ class ErratumHandler(WorkItemHandler):
                 summary=summary,
                 description=description,
                 tag=tag,
-                reporter_email="jotnar+bot@redhat.com",
-                assignee_email="jotnar+bot@redhat.com",
-                labels=["jotnar_needs_attention"],
+                reporter_email=JIRA_JOTNAR_BOT_EMAIL,
+                assignee_email=JIRA_JOTNAR_BOT_EMAIL,
+                labels=[JiraLabels.NEEDS_ATTENTION.value],
                 components=["jotnar-package-automation"],
                 dry_run=self.dry_run,
             )

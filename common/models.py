@@ -5,6 +5,7 @@ This module contains common data models used across different agents
 and components to ensure consistency and type safety.
 """
 
+from datetime import datetime
 from typing import Optional, Dict, Any, Union
 from pydantic import BaseModel, Field
 from pathlib import Path
@@ -297,20 +298,20 @@ class FailedPipelineJob(BaseModel):
 class CommentReply(BaseModel):
     """Represents a reply comment in a discussion thread."""
 
-    author: str = Field(description="Username of the reply author")
-    message: str = Field(description="The reply message text")
-    created_at: str = Field(
-        description="ISO 8601 timestamp when reply was created"
+    author: str | None = Field(description="Username of the reply author")
+    message: str | None = Field(description="The reply message text")
+    created_at: datetime | None = Field(
+        description="Timestamp when reply was created"
     )
 
 
 class MergeRequestComment(BaseModel):
     """Represents a comment from a GitLab merge request by an authorized member."""
 
-    author: str = Field(description="Username of the comment author")
-    message: str = Field(description="The comment message text")
-    created_at: str = Field(
-        description="ISO 8601 timestamp when comment was created"
+    author: str | None = Field(description="Username of the comment author")
+    message: str | None = Field(description="The comment message text")
+    created_at: datetime | None = Field(
+        description="Timestamp when comment was created"
     )
     file_path: str = Field(
         default="",

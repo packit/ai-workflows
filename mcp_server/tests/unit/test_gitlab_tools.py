@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 
 import gitlab
 import pytest
@@ -469,9 +470,12 @@ async def test_get_authorized_comments_from_merge_request():
                     namespace="redhat/centos-stream/rpms",
                     repo="bash",
                     gitlab_repo=flexmock(
-                        members_all=flexmock(
-                            get=lambda user_id: flexmock(access_level=30) if user_id == 1 else flexmock(access_level=40) if user_id == 3 else (_ for _ in ()).throw(Exception("Not a member"))
-                        )
+                        members_all=flexmock().should_receive("list").with_args(
+                            get_all=True
+                        ).and_return([
+                            flexmock(id=1, access_level=30),
+                            flexmock(id=3, access_level=40),
+                        ]).mock()
                     )
                 ),
             )
@@ -483,13 +487,13 @@ async def test_get_authorized_comments_from_merge_request():
     assert len(result) == 2
     assert result[0].author == "rhatter"
     assert result[0].message == "This looks good to me!"
-    assert result[0].created_at == "2024-01-15T10:00:00Z"
+    assert result[0].created_at == datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
     assert result[0].file_path == ""
     assert result[0].line_number is None
     assert result[0].line_type == ""
     assert result[1].author == "rh_engineer"
     assert result[1].message == "LGTM, approved"
-    assert result[1].created_at == "2024-01-15T12:00:00Z"
+    assert result[1].created_at == datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
     assert result[1].file_path == ""
     assert result[1].line_number is None
     assert result[1].line_type == ""
@@ -510,7 +514,11 @@ async def test_get_authorized_comments_from_merge_request_no_comments():
                 target_project=flexmock(
                     namespace="redhat/centos-stream/rpms",
                     repo="bash",
-                    gitlab_repo=flexmock(members_all=flexmock())
+                    gitlab_repo=flexmock(
+                        members_all=flexmock().should_receive("list").with_args(
+                            get_all=True
+                        ).and_return([]).mock()
+                    )
                 ),
             )
         ).mock()
@@ -541,9 +549,13 @@ async def test_get_authorized_comments_from_merge_request_filters_low_access():
                     namespace="redhat/centos-stream/rpms",
                     repo="bash",
                     gitlab_repo=flexmock(
-                        members_all=flexmock(
-                            get=lambda user_id: flexmock(access_level=30) if user_id == 1 else flexmock(access_level=20) if user_id == 2 else flexmock(access_level=10)
-                        )
+                        members_all=flexmock().should_receive("list").with_args(
+                            get_all=True
+                        ).and_return([
+                            flexmock(id=1, access_level=30),
+                            flexmock(id=2, access_level=20),
+                            flexmock(id=3, access_level=10),
+                        ]).mock()
                     )
                 ),
             )
@@ -552,7 +564,6 @@ async def test_get_authorized_comments_from_merge_request_filters_low_access():
 
     result = await get_authorized_comments_from_merge_request(merge_request_url=merge_request_url)
 
-    # Only Developer comment should be included
     assert len(result) == 1
     assert result[0].author == "developer_user"
     assert result[0].message == "Developer comment"
@@ -578,9 +589,13 @@ async def test_get_authorized_comments_from_merge_request_with_line_context():
                     namespace="redhat/centos-stream/rpms",
                     repo="bash",
                     gitlab_repo=flexmock(
-                        members_all=flexmock(
-                            get=lambda user_id: flexmock(access_level=30) if user_id in [1, 2] else flexmock(access_level=40)
-                        )
+                        members_all=flexmock().should_receive("list").with_args(
+                            get_all=True
+                        ).and_return([
+                            flexmock(id=1, access_level=30),
+                            flexmock(id=2, access_level=30),
+                            flexmock(id=3, access_level=40),
+                        ]).mock()
                     )
                 ),
             )
@@ -591,26 +606,76 @@ async def test_get_authorized_comments_from_merge_request_with_line_context():
 
     assert len(result) == 3
 
-    # Check general comment
     assert result[0].author == "developer1"
     assert result[0].message == "Overall looks good"
     assert result[0].file_path == ""
     assert result[0].line_number is None
     assert result[0].line_type == ""
 
-    # Check diff note on new line
     assert result[1].author == "developer2"
     assert result[1].message == "This function needs error handling"
     assert result[1].file_path == "src/main.py"
     assert result[1].line_number == 42
     assert result[1].line_type == "new"
 
-    # Check diff note on old line
     assert result[2].author == "developer3"
     assert result[2].message == "Why was this removed?"
     assert result[2].file_path == "src/utils.py"
     assert result[2].line_number == 15
     assert result[2].line_type == "old"
+
+
+@pytest.mark.asyncio
+async def test_get_authorized_comments_from_merge_request_with_replies():
+    merge_request_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/123"
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url="https://gitlab.com/redhat/centos-stream/rpms/bash"
+    ).and_return(
+        flexmock().should_receive("get_pr").with_args(123).and_return(
+            flexmock(
+                _raw_pr=flexmock(
+                    discussions=flexmock().should_receive("list").with_args(get_all=True).and_return([
+                        flexmock(id="disc1", attributes={"notes": [
+                            {"author": {"id": 1, "username": "developer1"}, "body": "I have a question", "created_at": "2024-01-15T10:00:00Z", "system": False},
+                            {"author": {"id": 2, "username": "developer2"}, "body": "Here is the answer", "created_at": "2024-01-15T10:30:00Z", "system": False},
+                            {"author": {"id": 3, "username": "guest_user"}, "body": "I also want to know", "created_at": "2024-01-15T10:45:00Z", "system": False},
+                            {"author": {"id": 1, "username": "developer1"}, "body": "Thanks!", "created_at": "2024-01-15T11:00:00Z", "system": False},
+                        ]}),
+                    ]).mock()
+                ),
+                target_project=flexmock(
+                    namespace="redhat/centos-stream/rpms",
+                    repo="bash",
+                    gitlab_repo=flexmock(
+                        members_all=flexmock().should_receive("list").with_args(
+                            get_all=True
+                        ).and_return([
+                            flexmock(id=1, access_level=30),
+                            flexmock(id=2, access_level=30),
+                            flexmock(id=3, access_level=10),
+                        ]).mock()
+                    )
+                ),
+            )
+        ).mock()
+    )
+
+    result = await get_authorized_comments_from_merge_request(merge_request_url=merge_request_url)
+
+    assert len(result) == 1
+    assert result[0].author == "developer1"
+    assert result[0].message == "I have a question"
+    assert result[0].created_at == datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+
+    assert len(result[0].replies) == 2
+    assert result[0].replies[0].author == "developer2"
+    assert result[0].replies[0].message == "Here is the answer"
+    assert result[0].replies[0].created_at == datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+
+    assert result[0].replies[1].author == "developer1"
+    assert result[0].replies[1].message == "Thanks!"
+    assert result[0].replies[1].created_at == datetime(2024, 1, 15, 11, 0, 0, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio

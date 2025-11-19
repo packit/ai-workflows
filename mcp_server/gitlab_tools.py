@@ -19,6 +19,10 @@ from utils import clean_stale_repositories
 
 logger = logging.getLogger(__name__)
 
+# GitLab access levels: Guest (10), Reporter (20), Developer (30),
+# Maintainer (40), Owner (50)
+DEVELOPER_ACCESS_LEVEL = 30
+
 
 def _get_authenticated_url(repository_url: str) -> str:
     """
@@ -388,105 +392,120 @@ async def get_failed_pipeline_jobs_from_merge_request(
         raise ToolError(f"Failed to get failed jobs from merge request: {e}") from e
 
 
+def _get_authorized_member_ids(project: GitlabProject) -> set[int]:
+    """
+    Fetch all project members and return a set of IDs for members
+    with Developer role or higher. This avoids N+1 API calls.
+    """
+    try:
+        members = project.gitlab_repo.members_all.list(get_all=True)
+        return {
+            member.id for member in members
+            if member.access_level >= DEVELOPER_ACCESS_LEVEL
+        }
+    except Exception as e:
+        logger.warning(f"Failed to fetch project members: {e}")
+        return set()
+
+
+def _extract_position_info(note: dict) -> tuple[str, int | None, str]:
+    """Extract file path, line number, and line type from a note's position."""
+    position = note.get("position")
+    if not position:
+        return "", None, ""
+
+    file_path = position.get("new_path", "") or position.get("old_path", "")
+    new_line = position.get("new_line")
+    old_line = position.get("old_line")
+
+    if new_line and old_line:
+        return file_path, new_line, "unchanged"
+    elif new_line:
+        return file_path, new_line, "new"
+    elif old_line:
+        return file_path, old_line, "old"
+
+    return file_path, None, ""
+
+
+def _process_reply(
+    authorized_member_ids: set[int], note: dict
+) -> CommentReply | None:
+    """Process a reply note and return CommentReply if author is authorized."""
+    if note.get("system", False):
+        return None
+
+    try:
+        author = note.get("author", {})
+        author_id = author.get("id")
+        if not author_id or author_id not in authorized_member_ids:
+            return None
+
+        return CommentReply(
+            author=author.get("username"),
+            message=note.get("body"),
+            created_at=note.get("created_at"),
+        )
+    except Exception as e:
+        logger.warning(f"Failed to process reply note: {e}")
+        return None
+
+
 async def get_authorized_comments_from_merge_request(
     merge_request_url: Annotated[str, Field(description="URL of the merge request")],
 ) -> list[MergeRequestComment]:
     """
     Gets all comments from a merge request, filtered to only include
     comments from authorized members with Developer role or higher.
-    Access levels: Guest (10), Reporter (20), Developer (30),
-    Maintainer (40), Owner (50).
     """
     try:
         mr = await _get_merge_request_from_url(merge_request_url)
 
         def get_authorized_comments():
-            # Get discussions instead of notes to capture thread context
             discussions = mr._raw_pr.discussions.list(get_all=True)
-            project = mr.target_project.gitlab_repo
 
-            logger.info(f"Found {len(discussions)} discussions in MR")
+            authorized_member_ids = _get_authorized_member_ids(mr.target_project)
 
             authorized_comments = []
             for discussion in discussions:
-                discussion_id = discussion.id
-                notes = discussion.attributes.get("notes", [])
-
-                if not notes:
-                    continue
-
-                # Process first note (thread starter)
-                first_note = notes[0]
-
-                # Skip system notes (like "added 1 commit")
-                if first_note.get("system", False): continue
-
-                first_author_id = first_note["author"]["id"]
-                first_author_username = first_note["author"]["username"]
-
                 try:
-                    first_member = project.members_all.get(first_author_id)
+                    if not (notes := discussion.attributes.get("notes")):
+                        continue
 
-                    # Only process thread if starter is Developer+
-                    if first_member.access_level >= 30:
-                        file_path = ""
-                        line_number = None
-                        line_type = ""
+                    first_note = notes[0]
 
-                        position = first_note.get("position")
+                    # Skip system notes (e.g. commit added)
+                    if first_note.get("system"):
+                        continue
 
-                        if position:
-                            file_path = (position.get("new_path", "") or position.get("old_path", ""))
-                            new_line = position.get("new_line")
-                            old_line = position.get("old_line")
+                    author = first_note.get("author", {})
+                    author_id = author.get("id")
+                    if not author_id or author_id not in authorized_member_ids:
+                        continue
 
-                            if new_line and old_line:
-                                # Both present = unchanged/context line
-                                line_number = new_line
-                                line_type = "unchanged"
-                            elif new_line:
-                                line_number = new_line
-                                line_type = "new"
-                            elif old_line:
-                                line_number = old_line
-                                line_type = "old"
+                    file_path, line_number, line_type = (
+                        _extract_position_info(first_note)
+                    )
 
-                        replies = []
-                        for reply_note in notes[1:]:
-                            if reply_note.get("system", False): continue
+                    replies = [
+                        reply for note in notes[1:]
+                        if (reply := _process_reply(authorized_member_ids, note)) is not None
+                    ]
 
-                            reply_author_id = reply_note["author"]["id"]
-                            reply_author_username = reply_note["author"]["username"]
-
-                            try:
-                                reply_member = project.members_all.get(reply_author_id)
-
-                                if reply_member.access_level >= 30:
-                                    replies.append(
-                                        CommentReply(
-                                            author=reply_author_username,
-                                            message=reply_note["body"],
-                                            created_at=reply_note["created_at"],
-                                        )
-                                    )
-                            except Exception as e:
-                                # Reply author is not an authorized member
-                                continue
-
-                        authorized_comments.append(
-                            MergeRequestComment(
-                                author=first_author_username,
-                                message=first_note["body"],
-                                created_at=first_note["created_at"],
-                                file_path=file_path,
-                                line_number=line_number,
-                                line_type=line_type,
-                                discussion_id=discussion_id,
-                                replies=replies,
-                            )
+                    authorized_comments.append(
+                        MergeRequestComment(
+                            author=author.get("username"),
+                            message=first_note.get("body"),
+                            created_at=first_note.get("created_at"),
+                            file_path=file_path,
+                            line_number=line_number,
+                            line_type=line_type,
+                            discussion_id=getattr(discussion, "id", ""),
+                            replies=replies,
                         )
+                    )
                 except Exception as e:
-                    # Thread starter is not an authorized member
+                    logger.warning(f"Failed to process discussion: {e}")
                     continue
 
             return authorized_comments

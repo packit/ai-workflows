@@ -7,7 +7,7 @@ import koji
 from pydantic import BaseModel, Field
 from specfile import Specfile
 from specfile.utils import EVR
-from specfile.value_parser import EnclosedMacroSubstitution, MacroSubstitution, ValueParser
+from specfile.value_parser import EnclosedMacroSubstitution, MacroSubstitution, Node, ValueParser
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
@@ -165,12 +165,48 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         return EVR(epoch=build["epoch"] or 0, version=build["version"], release=build["release"])
 
     @staticmethod
-    async def _bump_or_reset_release(spec_path: Path, rebase: bool) -> None:
+    def _parse_release(release: str) -> list[Node]:
+        return list(ValueParser.flatten(ValueParser.parse(release)))
+
+    @staticmethod
+    def _find_macro(name: str, nodes: list[Node]) -> int | None:
+        for index, node in reversed(list(enumerate(nodes))):
+            if (
+                isinstance(node, (MacroSubstitution, EnclosedMacroSubstitution))
+                and node.name == name
+            ):
+                return index
+        return None
+
+    @classmethod
+    async def _bump_or_reset_release(cls, spec_path: Path, rebase: bool) -> None:
         with Specfile(spec_path) as spec:
-            if rebase and not spec.has_autorelease:
-                spec.release = "1"
+            current_release = spec.raw_release
+        nodes = cls._parse_release(current_release)
+
+        autorelease_index = cls._find_macro("autorelease", nodes)
+        dist_index = cls._find_macro("dist", nodes)
+        if autorelease_index is not None:
+            # revert to plain %autorelease
+            release = "%autorelease"
+        else:
+            if dist_index is None:
+                prefix = current_release
+                suffix = ""
             else:
-                spec.bump_release()
+                prefix = "".join(str(n) for n in nodes[: dist_index])
+                suffix = "".join(str(n) for n in nodes[dist_index + 1 :])
+            if m := re.match(r"^(\d+)(.*)$", prefix):
+                # increase or reset the main numeric part
+                release = str(1 if rebase else int(m.group(1)) + 1) + m.group(2)
+            else:
+                release = prefix + ".1"
+            release += "%{?dist}"
+            if not re.match(r"^\.\d+$", suffix):
+                release += suffix
+
+        with Specfile(spec_path) as spec:
+            spec.raw_release = release
 
     @classmethod
     async def _set_zstream_release(
@@ -184,19 +220,10 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         higher_stream_base_release, _ = latest_higher_stream_build.release.rsplit(".el", maxsplit=1)
         with Specfile(spec_path) as spec:
             current_release = spec.raw_release
-        nodes = list(ValueParser.flatten(ValueParser.parse(current_release)))
+        nodes = cls._parse_release(current_release)
 
-        def find_macro(name):
-            for index, node in reversed(list(enumerate(nodes))):
-                if (
-                    isinstance(node, (MacroSubstitution, EnclosedMacroSubstitution))
-                    and node.name == name
-                ):
-                    return index
-            return None
-
-        autorelease_index = find_macro("autorelease")
-        dist_index = find_macro("dist")
+        autorelease_index = cls._find_macro("autorelease", nodes)
+        dist_index = cls._find_macro("dist", nodes)
         if autorelease_index is not None:
             if rebase:
                 # %autorelease present, rebase, reset the release

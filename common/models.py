@@ -10,6 +10,11 @@ from pydantic import BaseModel, Field
 from pathlib import Path
 from enum import Enum
 
+class WhenEligibility(Enum):
+    """When eligibility for triage."""
+    IMMEDIATELY = "immediately"
+    LATER = "later"
+    NEVER = "never"
 
 class CVEEligibilityResult(BaseModel):
     """
@@ -21,8 +26,8 @@ class CVEEligibilityResult(BaseModel):
     is_cve: bool = Field(
         description="Whether this is a CVE (identified by SecurityTracking label)"
     )
-    is_eligible_for_triage: bool = Field(
-        description="Whether triage agent should process this CVE"
+    when_eligible_for_triage: WhenEligibility = Field(
+        description="Whether triage agent should process this issue immediately, later or never"
     )
     reason: str = Field(
         description="Explanation of the eligibility decision"
@@ -118,6 +123,7 @@ class Resolution(Enum):
     BACKPORT = "backport"
     CLARIFICATION_NEEDED = "clarification-needed"
     NO_ACTION = "no-action"
+    POSTPONED = "postponed"
     ERROR = "error"
 
 
@@ -292,3 +298,26 @@ class FailedPipelineJob(BaseModel):
     artifacts_url: str = Field(
         description="URL to browse job artifacts, empty string if no artifacts"
     )
+
+
+# ============================================================================
+# Clones Analyzer Agent Schemas
+# ============================================================================
+
+class ClonesInputSchema(BaseModel):
+    """Input schema for the clones analyzer agent."""
+    jira_issue: str = Field(description="Jira issue key to identify clones of")
+
+class Clone(BaseModel):
+    """A clone of a Jira issue."""
+    jira_issue: str = Field(description="Jira issue key")
+    branch: str = Field(description="Branch")
+
+class Link(BaseModel):
+    """A link between two Jira issues."""
+    source: str = Field(description="Source Jira issue key")
+    target: str = Field(description="Target Jira issue key")
+class ClonesOutputSchema(BaseModel):
+    """Output schema for the clones analyzer agent."""
+    clones: list[Clone] = Field(description="List of Jira issue keys and branches that are clones of the given Jira issue or the given Jira issue is a clone of the found Jira issues")
+    links: list[Link] = Field(description="List of links between the given Jira issue and the found Jira issues or the found Jira issues and the given Jira issue")

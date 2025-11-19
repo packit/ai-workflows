@@ -1,0 +1,62 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: jira-postponed-issue-fetcher
+  labels:
+    app: jira-postponed-issue-fetcher
+    component: scheduler
+spec:
+  schedule: "0 0 * * *"  # Once a day at midnight
+  concurrencyPolicy: Forbid  # Prevent overlapping runs
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  suspend: false
+  jobTemplate:
+    metadata:
+      labels:
+        app: jira-postponed-issue-fetcher
+        component: job
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800  # 30 minutes max runtime
+      template:
+        metadata:
+          labels:
+            app: jira-postponed-issue-fetcher
+            component: pod
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: jira-issue-fetcher-env
+            image: 'jira-issue-fetcher:prod'
+            imagePullPolicy: Always
+            envFrom:
+            - configMapRef:
+                name: endpoints-env
+            - configMapRef:
+                name: jira-env
+            - secretRef:
+                name: jira-env
+            - configMapRef:
+                name: jira-issue-fetcher-env
+            env:
+            - name: ONLY_POSTPONED_RETRY
+              value: "true"
+            resources:
+              limits:
+                cpu: "200m"
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+              capabilities:
+                drop:
+                - ALL
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          dnsPolicy: ClusterFirst
+          schedulerName: default-scheduler
+          terminationGracePeriodSeconds: 30

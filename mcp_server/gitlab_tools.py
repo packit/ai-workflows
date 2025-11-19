@@ -12,12 +12,16 @@ from ogr.services.gitlab.project import GitlabProject
 from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import Field
 
-from common.models import FailedPipelineJob
+from common.models import FailedPipelineJob, MergeRequestComment, CommentReply
 from common.validators import AbsolutePath
 from utils import clean_stale_repositories
 
 
 logger = logging.getLogger(__name__)
+
+# GitLab access levels: Guest (10), Reporter (20), Developer (30),
+# Maintainer (40), Owner (50)
+DEVELOPER_ACCESS_LEVEL = 30
 
 
 def _get_authenticated_url(repository_url: str) -> str:
@@ -386,3 +390,127 @@ async def get_failed_pipeline_jobs_from_merge_request(
     except Exception as e:
         logger.error(f"Failed to get failed jobs from MR {merge_request_url}: {e}")
         raise ToolError(f"Failed to get failed jobs from merge request: {e}") from e
+
+
+def _get_authorized_member_ids(project: GitlabProject) -> set[int]:
+    """
+    Fetch all project members and return a set of IDs for members
+    with Developer role or higher. This avoids N+1 API calls.
+    """
+    try:
+        members = project.gitlab_repo.members_all.list(get_all=True)
+        return {
+            member.id for member in members
+            if member.access_level >= DEVELOPER_ACCESS_LEVEL
+        }
+    except Exception as e:
+        logger.warning(f"Failed to fetch project members: {e}")
+        return set()
+
+
+def _extract_position_info(note: dict) -> tuple[str, int | None, str]:
+    """Extract file path, line number, and line type from a note's position."""
+    if not (position := note.get("position")):
+        return "", None, ""
+
+    file_path = position.get("new_path", "") or position.get("old_path", "")
+    new_line = position.get("new_line")
+    old_line = position.get("old_line")
+
+    if new_line and old_line:
+        return file_path, new_line, "unchanged"
+    elif new_line:
+        return file_path, new_line, "new"
+    elif old_line:
+        return file_path, old_line, "old"
+
+    return file_path, None, ""
+
+
+def _process_reply(
+    authorized_member_ids: set[int], note: dict
+) -> CommentReply | None:
+    """Process a reply note and return CommentReply if author is authorized."""
+    if note.get("system", False):
+        return None
+
+    try:
+        author = note.get("author", {})
+        author_id = author.get("id")
+        if not author_id or author_id not in authorized_member_ids:
+            return None
+
+        return CommentReply(
+            author=author.get("username"),
+            message=note.get("body"),
+            created_at=note.get("created_at"),
+        )
+    except Exception as e:
+        logger.warning(f"Failed to process reply note: {e}")
+        return None
+
+
+async def get_authorized_comments_from_merge_request(
+    merge_request_url: Annotated[str, Field(description="URL of the merge request")],
+) -> list[MergeRequestComment]:
+    """
+    Gets all comments from a merge request, filtered to only include
+    comments from authorized members with Developer role or higher.
+    """
+    try:
+        mr = await _get_merge_request_from_url(merge_request_url)
+
+        def get_authorized_comments():
+            discussions = mr._raw_pr.discussions.list(get_all=True)
+
+            authorized_member_ids = _get_authorized_member_ids(mr.target_project)
+
+            authorized_comments = []
+            for discussion in discussions:
+                try:
+                    if not (notes := discussion.attributes.get("notes")):
+                        continue
+
+                    first_note = notes[0]
+
+                    # Skip system notes (e.g. commit added)
+                    if first_note.get("system"):
+                        continue
+
+                    author = first_note.get("author", {})
+                    author_id = author.get("id")
+                    if not author_id or author_id not in authorized_member_ids:
+                        continue
+
+                    file_path, line_number, line_type = (
+                        _extract_position_info(first_note)
+                    )
+
+                    replies = [
+                        reply for note in notes[1:]
+                        if (reply := _process_reply(authorized_member_ids, note)) is not None
+                    ]
+
+                    authorized_comments.append(
+                        MergeRequestComment(
+                            author=author.get("username"),
+                            message=first_note.get("body"),
+                            created_at=first_note.get("created_at"),
+                            file_path=file_path,
+                            line_number=line_number,
+                            line_type=line_type,
+                            discussion_id=getattr(discussion, "id", ""),
+                            replies=replies,
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to process discussion: {e}")
+                    continue
+
+            return authorized_comments
+
+        comments = await asyncio.to_thread(get_authorized_comments)
+        return comments
+
+    except Exception as e:
+        raise ToolError(f"Failed to get authorized comments from merge request: {e}") from e

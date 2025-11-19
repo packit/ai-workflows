@@ -5,6 +5,7 @@ This module contains common data models used across different agents
 and components to ensure consistency and type safety.
 """
 
+from datetime import datetime
 from typing import Optional, Dict, Any, Union
 from pydantic import BaseModel, Field
 from pathlib import Path
@@ -278,7 +279,7 @@ class CachedMRMetadata(BaseModel):
 
 
 # ============================================================================
-# GitLab Failed Pipeline Jobs Schemas
+# GitLab Tools Schemas
 # ============================================================================
 
 class FailedPipelineJob(BaseModel):
@@ -291,4 +292,51 @@ class FailedPipelineJob(BaseModel):
     stage: str = Field(description="Pipeline stage the job belongs to")
     artifacts_url: str = Field(
         description="URL to browse job artifacts, empty string if no artifacts"
+    )
+
+
+class CommentReply(BaseModel):
+    """Represents a reply comment in a discussion thread."""
+
+    author: str | None = Field(description="Username of the reply author")
+    message: str | None = Field(description="The reply message text")
+    created_at: datetime | None = Field(
+        description="Timestamp when reply was created"
+    )
+
+
+class MergeRequestComment(BaseModel):
+    """Represents a comment from a GitLab merge request by an authorized member."""
+
+    author: str | None = Field(description="Username of the comment author")
+    message: str | None = Field(description="The comment message text")
+    created_at: datetime | None = Field(
+        description="Timestamp when comment was created"
+    )
+    file_path: str = Field(
+        default="",
+        description="File path if comment targets specific code, "
+        "empty for general comments"
+    )
+    line_number: int | None = Field(
+        default=None,
+        description="Line number in the current state of the file. "
+        "WARNING: If subsequent commits modified the file after this comment "
+        "was made, this line number may differ from where the comment was "
+        "originally placed. None for general comments."
+    )
+    line_type: str = Field(
+        default="",
+        description="Type of line in the diff: 'new' (added line), "
+        "'old' (removed line), 'unchanged' (context line), "
+        "or empty for general comments"
+    )
+    discussion_id: str = Field(
+        default="",
+        description="Discussion/thread ID this comment belongs to"
+    )
+    replies: list[CommentReply] = Field(
+        default_factory=list,
+        description="List of replies to this comment in the thread, "
+        "ordered chronologically"
     )

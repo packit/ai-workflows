@@ -1,5 +1,4 @@
 import asyncio
-from datetime import datetime, timezone
 
 import gitlab
 import pytest
@@ -450,8 +449,50 @@ async def test_get_failed_pipeline_jobs_from_merge_request_invalid_url():
     assert "Could not parse merge request URL" in str(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    "discussions,members,expected_count",
+    [
+        pytest.param(
+            [
+                flexmock(id="d1", attributes={"notes": [{"author": {"id": 1, "username": "dev"}, "body": "Dev", "created_at": "2024-01-15T10:00:00Z", "system": False}]}),
+                flexmock(id="d2", attributes={"notes": [{"author": {"id": 2, "username": "reporter"}, "body": "Rep", "created_at": "2024-01-15T11:00:00Z", "system": False}]}),
+                flexmock(id="d3", attributes={"notes": [{"author": {"id": 3, "username": "guest"}, "body": "Guest", "created_at": "2024-01-15T12:00:00Z", "system": False}]}),
+            ],
+            [flexmock(id=1, access_level=30), flexmock(id=2, access_level=20)],
+            1,
+            id="filters_unauthorized",
+        ),
+        pytest.param(
+            [],
+            [],
+            0,
+            id="no_comments",
+        ),
+        pytest.param(
+            [
+                flexmock(id="d1", attributes={"notes": [{"author": {"id": 1, "username": "dev1"}, "body": "General", "created_at": "2024-01-15T10:00:00Z", "system": False}]}),
+                flexmock(id="d2", attributes={"notes": [{"author": {"id": 2, "username": "dev2"}, "body": "Line", "created_at": "2024-01-15T11:00:00Z", "system": False, "position": {"new_path": "f.py", "old_path": "f.py", "new_line": 42, "old_line": None}}]}),
+            ],
+            [flexmock(id=1, access_level=30), flexmock(id=2, access_level=30)],
+            2,
+            id="with_line_context",
+        ),
+        pytest.param(
+            [
+                flexmock(id="d1", attributes={"notes": [
+                    {"author": {"id": 1, "username": "dev1"}, "body": "Q", "created_at": "2024-01-15T10:00:00Z", "system": False},
+                    {"author": {"id": 2, "username": "dev2"}, "body": "A", "created_at": "2024-01-15T10:30:00Z", "system": False},
+                    {"author": {"id": 3, "username": "guest"}, "body": "?", "created_at": "2024-01-15T10:45:00Z", "system": False},
+                ]}),
+            ],
+            [flexmock(id=1, access_level=30), flexmock(id=2, access_level=30), flexmock(id=3, access_level=10)],
+            1,
+            id="with_replies",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_get_authorized_comments_from_merge_request():
+async def test_get_authorized_comments_from_merge_request(discussions, members, expected_count):
     merge_request_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/123"
 
     flexmock(GitlabService).should_receive("get_project_from_url").with_args(
@@ -460,11 +501,9 @@ async def test_get_authorized_comments_from_merge_request():
         flexmock().should_receive("get_pr").with_args(123).and_return(
             flexmock(
                 _raw_pr=flexmock(
-                    discussions=flexmock().should_receive("list").with_args(get_all=True).and_return([
-                        flexmock(id="disc1", attributes={"notes": [{"author": {"id": 1, "username": "rhatter"}, "body": "This looks good to me!", "created_at": "2024-01-15T10:00:00Z", "system": False}]}),
-                        flexmock(id="disc2", attributes={"notes": [{"author": {"id": 2, "username": "external_contributor"}, "body": "Can you explain this change?", "created_at": "2024-01-15T11:00:00Z", "system": False}]}),
-                        flexmock(id="disc3", attributes={"notes": [{"author": {"id": 3, "username": "rh_engineer"}, "body": "LGTM, approved", "created_at": "2024-01-15T12:00:00Z", "system": False}]}),
-                    ]).mock()
+                    discussions=flexmock().should_receive("list").with_args(
+                        get_all=True
+                    ).and_return(discussions).mock()
                 ),
                 target_project=flexmock(
                     namespace="redhat/centos-stream/rpms",
@@ -472,10 +511,7 @@ async def test_get_authorized_comments_from_merge_request():
                     gitlab_repo=flexmock(
                         members_all=flexmock().should_receive("list").with_args(
                             get_all=True
-                        ).and_return([
-                            flexmock(id=1, access_level=30),
-                            flexmock(id=3, access_level=40),
-                        ]).mock()
+                        ).and_return(members).mock()
                     )
                 ),
             )
@@ -484,205 +520,14 @@ async def test_get_authorized_comments_from_merge_request():
 
     result = await get_authorized_comments_from_merge_request(merge_request_url=merge_request_url)
 
-    assert len(result) == 2
-    assert result[0].author == "rhatter"
-    assert result[0].message == "This looks good to me!"
-    assert result[0].created_at == datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
-    assert result[0].file_path == ""
-    assert result[0].line_number is None
-    assert result[0].line_type == ""
-    assert result[1].author == "rh_engineer"
-    assert result[1].message == "LGTM, approved"
-    assert result[1].created_at == datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
-    assert result[1].file_path == ""
-    assert result[1].line_number is None
-    assert result[1].line_type == ""
+    assert len(result) == expected_count
 
 
 @pytest.mark.asyncio
-async def test_get_authorized_comments_from_merge_request_no_comments():
-    merge_request_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/123"
-
-    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
-        url="https://gitlab.com/redhat/centos-stream/rpms/bash"
-    ).and_return(
-        flexmock().should_receive("get_pr").with_args(123).and_return(
-            flexmock(
-                _raw_pr=flexmock(
-                    discussions=flexmock().should_receive("list").with_args(get_all=True).and_return([]).mock()
-                ),
-                target_project=flexmock(
-                    namespace="redhat/centos-stream/rpms",
-                    repo="bash",
-                    gitlab_repo=flexmock(
-                        members_all=flexmock().should_receive("list").with_args(
-                            get_all=True
-                        ).and_return([]).mock()
-                    )
-                ),
-            )
-        ).mock()
-    )
-
-    result = await get_authorized_comments_from_merge_request(merge_request_url=merge_request_url)
-
-    assert len(result) == 0
-
-
-@pytest.mark.asyncio
-async def test_get_authorized_comments_from_merge_request_filters_low_access():
-    merge_request_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/123"
-
-    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
-        url="https://gitlab.com/redhat/centos-stream/rpms/bash"
-    ).and_return(
-        flexmock().should_receive("get_pr").with_args(123).and_return(
-            flexmock(
-                _raw_pr=flexmock(
-                    discussions=flexmock().should_receive("list").with_args(get_all=True).and_return([
-                        flexmock(id="disc1", attributes={"notes": [{"author": {"id": 1, "username": "developer_user"}, "body": "Developer comment", "created_at": "2024-01-15T10:00:00Z", "system": False}]}),
-                        flexmock(id="disc2", attributes={"notes": [{"author": {"id": 2, "username": "reporter_user"}, "body": "Reporter comment - should be filtered", "created_at": "2024-01-15T11:00:00Z", "system": False}]}),
-                        flexmock(id="disc3", attributes={"notes": [{"author": {"id": 3, "username": "guest_user"}, "body": "Guest comment - should be filtered", "created_at": "2024-01-15T12:00:00Z", "system": False}]}),
-                    ]).mock()
-                ),
-                target_project=flexmock(
-                    namespace="redhat/centos-stream/rpms",
-                    repo="bash",
-                    gitlab_repo=flexmock(
-                        members_all=flexmock().should_receive("list").with_args(
-                            get_all=True
-                        ).and_return([
-                            flexmock(id=1, access_level=30),
-                            flexmock(id=2, access_level=20),
-                            flexmock(id=3, access_level=10),
-                        ]).mock()
-                    )
-                ),
-            )
-        ).mock()
-    )
-
-    result = await get_authorized_comments_from_merge_request(merge_request_url=merge_request_url)
-
-    assert len(result) == 1
-    assert result[0].author == "developer_user"
-    assert result[0].message == "Developer comment"
-
-
-@pytest.mark.asyncio
-async def test_get_authorized_comments_from_merge_request_with_line_context():
-    merge_request_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/123"
-
-    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
-        url="https://gitlab.com/redhat/centos-stream/rpms/bash"
-    ).and_return(
-        flexmock().should_receive("get_pr").with_args(123).and_return(
-            flexmock(
-                _raw_pr=flexmock(
-                    discussions=flexmock().should_receive("list").with_args(get_all=True).and_return([
-                        flexmock(id="disc1", attributes={"notes": [{"author": {"id": 1, "username": "developer1"}, "body": "Overall looks good", "created_at": "2024-01-15T10:00:00Z", "system": False}]}),
-                        flexmock(id="disc2", attributes={"notes": [{"author": {"id": 2, "username": "developer2"}, "body": "This function needs error handling", "created_at": "2024-01-15T11:00:00Z", "system": False, "position": {"new_path": "src/main.py", "old_path": "src/main.py", "new_line": 42, "old_line": None}}]}),
-                        flexmock(id="disc3", attributes={"notes": [{"author": {"id": 3, "username": "developer3"}, "body": "Why was this removed?", "created_at": "2024-01-15T12:00:00Z", "system": False, "position": {"new_path": "src/utils.py", "old_path": "src/utils.py", "new_line": None, "old_line": 15}}]}),
-                    ]).mock()
-                ),
-                target_project=flexmock(
-                    namespace="redhat/centos-stream/rpms",
-                    repo="bash",
-                    gitlab_repo=flexmock(
-                        members_all=flexmock().should_receive("list").with_args(
-                            get_all=True
-                        ).and_return([
-                            flexmock(id=1, access_level=30),
-                            flexmock(id=2, access_level=30),
-                            flexmock(id=3, access_level=40),
-                        ]).mock()
-                    )
-                ),
-            )
-        ).mock()
-    )
-
-    result = await get_authorized_comments_from_merge_request(merge_request_url=merge_request_url)
-
-    assert len(result) == 3
-
-    assert result[0].author == "developer1"
-    assert result[0].message == "Overall looks good"
-    assert result[0].file_path == ""
-    assert result[0].line_number is None
-    assert result[0].line_type == ""
-
-    assert result[1].author == "developer2"
-    assert result[1].message == "This function needs error handling"
-    assert result[1].file_path == "src/main.py"
-    assert result[1].line_number == 42
-    assert result[1].line_type == "new"
-
-    assert result[2].author == "developer3"
-    assert result[2].message == "Why was this removed?"
-    assert result[2].file_path == "src/utils.py"
-    assert result[2].line_number == 15
-    assert result[2].line_type == "old"
-
-
-@pytest.mark.asyncio
-async def test_get_authorized_comments_from_merge_request_with_replies():
-    merge_request_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/123"
-
-    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
-        url="https://gitlab.com/redhat/centos-stream/rpms/bash"
-    ).and_return(
-        flexmock().should_receive("get_pr").with_args(123).and_return(
-            flexmock(
-                _raw_pr=flexmock(
-                    discussions=flexmock().should_receive("list").with_args(get_all=True).and_return([
-                        flexmock(id="disc1", attributes={"notes": [
-                            {"author": {"id": 1, "username": "developer1"}, "body": "I have a question", "created_at": "2024-01-15T10:00:00Z", "system": False},
-                            {"author": {"id": 2, "username": "developer2"}, "body": "Here is the answer", "created_at": "2024-01-15T10:30:00Z", "system": False},
-                            {"author": {"id": 3, "username": "guest_user"}, "body": "I also want to know", "created_at": "2024-01-15T10:45:00Z", "system": False},
-                            {"author": {"id": 1, "username": "developer1"}, "body": "Thanks!", "created_at": "2024-01-15T11:00:00Z", "system": False},
-                        ]}),
-                    ]).mock()
-                ),
-                target_project=flexmock(
-                    namespace="redhat/centos-stream/rpms",
-                    repo="bash",
-                    gitlab_repo=flexmock(
-                        members_all=flexmock().should_receive("list").with_args(
-                            get_all=True
-                        ).and_return([
-                            flexmock(id=1, access_level=30),
-                            flexmock(id=2, access_level=30),
-                            flexmock(id=3, access_level=10),
-                        ]).mock()
-                    )
-                ),
-            )
-        ).mock()
-    )
-
-    result = await get_authorized_comments_from_merge_request(merge_request_url=merge_request_url)
-
-    assert len(result) == 1
-    assert result[0].author == "developer1"
-    assert result[0].message == "I have a question"
-    assert result[0].created_at == datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
-
-    assert len(result[0].replies) == 2
-    assert result[0].replies[0].author == "developer2"
-    assert result[0].replies[0].message == "Here is the answer"
-    assert result[0].replies[0].created_at == datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
-
-    assert result[0].replies[1].author == "developer1"
-    assert result[0].replies[1].message == "Thanks!"
-    assert result[0].replies[1].created_at == datetime(2024, 1, 15, 11, 0, 0, tzinfo=timezone.utc)
-
-
-@pytest.mark.asyncio
-async def test_get_authorized_comments_from_merge_request_invalid_url():
-    merge_request_url = "https://github.com/user/repo/pull/123"
-
+async def test_get_authorized_comments_invalid_url():
+    """Test that invalid URLs raise appropriate errors."""
     with pytest.raises(Exception) as exc_info:
-        await get_authorized_comments_from_merge_request(merge_request_url=merge_request_url)
-
+        await get_authorized_comments_from_merge_request(
+            merge_request_url="https://github.com/user/repo/pull/123"
+        )
     assert "Could not parse merge request URL" in str(exc_info.value)

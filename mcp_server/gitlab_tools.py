@@ -281,7 +281,7 @@ async def add_blocking_merge_request_comment(
             return False
 
         exists = await asyncio.to_thread(check_existing_comment)
-        if exists: 
+        if exists:
             return f"Comment already exists in merge request {merge_request_url}, not adding duplicate"
 
         # Discussions are created unresolved by default, which blocks the MR

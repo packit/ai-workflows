@@ -410,8 +410,7 @@ def _get_authorized_member_ids(project: GitlabProject) -> set[int]:
 
 def _extract_position_info(note: dict) -> tuple[str, int | None, str]:
     """Extract file path, line number, and line type from a note's position."""
-    position = note.get("position")
-    if not position:
+    if not (position := note.get("position")):
         return "", None, ""
 
     file_path = position.get("new_path", "") or position.get("old_path", "")

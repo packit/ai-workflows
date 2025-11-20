@@ -86,15 +86,14 @@ def testing_farm_reproduce_request_with_build(
     """
     original_environments = request.environments_data
 
-    # We manually construct the environment to replace the build
-    # and skip newa_ variables. There are some other keys in the
-    # environment dict that we don't copy over - in particular
-    # "hardware" and "kickstart" - these shouldn't be relevant.
-    environments = [
-        {
+    def create_new_environment(env: dict) -> dict:
+        # We manually construct the environment to replace the build
+        # and skip newa_ variables. There are some other keys in the
+        # environment dict that we don't copy over - in particular
+        # "hardware" and "kickstart" - these shouldn't be relevant.
+        new_env = {
             "arch": env["arch"],
             "os": env["os"],
-            "variables": env["variables"] | {"BUILDS": build_nvr},
             "tmt": {
                 "context": {
                     k: v
@@ -103,13 +102,36 @@ def testing_farm_reproduce_request_with_build(
                 }
             },
         }
-        for env in original_environments
-    ]
+
+        builds_var = env["variables"].get("BUILDS")
+        if builds_var is not None:
+            new_env["variables"] = env["variables"] | {"BUILDS": build_nvr}
+            return new_env
+
+        new_env["variables"] = env["variables"]
+
+        artifacts = env.get("artifacts")
+        if artifacts and len(artifacts) == 1:
+            new_env["artifacts"] = [
+                {
+                    "id": build_nvr,
+                    "type": "redhat-brew-build",
+                    "order": 40,
+                }
+            ]
+            return new_env
+
+        raise ValueError(
+            "Cannot reproduce Testing Farm request: "
+            "cannot determine how to replace build in environment. "
+            "(Looked for BUILDS variable or single artifact.)"
+        )
 
     body = {
         "test": request.test_data,
-        "environments": environments,
+        "environments": [create_new_environment(env) for env in original_environments],
     }
+
     if dry_run:
         logger.info(
             "Dry run: would start Testing Farm request reproducing %s with build %s",

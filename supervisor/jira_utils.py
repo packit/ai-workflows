@@ -250,7 +250,7 @@ def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
 
     _E = TypeVar("_E", bound=Enum)
 
-    def custom(name) -> str | None:
+    def custom(name) -> Any | None:
         return issue_data["fields"].get(custom_fields[name])
 
     def custom_enum(enum_class: Type[_E], name) -> _E | None:
@@ -272,13 +272,13 @@ def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
         str(v["name"]) for v in issue_data["fields"]["components"]
     ]
     errata_link = custom("Errata Link")
-    assignee = issue_data["fields"].get("assignee")
-    assignee_email = assignee.get("emailAddress") if assignee else None
+    assigned_team = custom("AssignedTeam")
+    assigned_team_name = assigned_team.get("value") if assigned_team else None
 
     issue = Issue(
         key=key,
         url=f"https://issues.redhat.com/browse/{urlquote(key)}",
-        assignee_email=assignee_email,
+        assigned_team=assigned_team_name,
         summary=issue_data["fields"]["summary"],
         status=issue_data["fields"]["status"]["name"],
         components=issue_components,
@@ -321,7 +321,7 @@ def _fields(full: bool):
         "summary",
         "status",
         "fixVersions",
-        "assignee",
+        custom_fields["AssignedTeam"],
         custom_fields["Errata Link"],
         custom_fields["Fixed in Build"],
         custom_fields["Test Coverage"],

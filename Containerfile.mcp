@@ -1,5 +1,7 @@
 FROM fedora:42
 
+RUN dnf -y copr enable @testing-farm/stable
+
 # Install system dependencies
 RUN dnf -y install \
       python3 \
@@ -16,6 +18,7 @@ RUN dnf -y install \
       krb5-workstation \
       centpkg \
       git \
+      testing-farm \
     && dnf clean all
 
 # Install FastMCP

@@ -69,6 +69,9 @@ run-backport-agent-c9s-standalone:
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
 		-e CVE_ID=$(CVE_ID) \
+		-e REPRODUCER_INFO_REPO_URL=$(REPRODUCER_INFO_REPO_URL) \
+		-e REPRODUCER_INFO_REPO_REF=$(REPRODUCER_INFO_REPO_REF) \
+		-e REPRODUCER_INFO_TEST=$(REPRODUCER_INFO_TEST) \
 		backport-agent-c9s
 
 .PHONY: run-backport-agent-c10s-standalone
@@ -81,6 +84,9 @@ run-backport-agent-c10s-standalone:
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
 		-e CVE_ID=$(CVE_ID) \
+		-e REPRODUCER_INFO_REPO_URL=$(REPRODUCER_INFO_REPO_URL) \
+		-e REPRODUCER_INFO_REPO_REF=$(REPRODUCER_INFO_REPO_REF) \
+		-e REPRODUCER_INFO_TEST=$(REPRODUCER_INFO_TEST) \
 		backport-agent-c10s
 
 .PHONY: run-backport-agent-standalone

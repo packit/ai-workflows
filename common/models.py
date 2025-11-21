@@ -88,6 +88,12 @@ class RebaseOutputSchema(BaseModel):
 # Backport Agent Schemas
 # ============================================================================
 
+class ReproducerInfo(BaseModel):
+    """Data for TMT resolution."""
+    git_url: str = Field(description="Git URL to the TMT reproducer")
+    git_ref: str = Field(description="Git reference to the TMT reproducer")
+    test: str = Field(description="Test to run the TMT reproducer")
+
 class BackportInputSchema(BaseModel):
     """Input schema for the backport agent."""
     local_clone: Path = Field(description="Path to the local clone of forked dist-git repository")
@@ -99,6 +105,10 @@ class BackportInputSchema(BaseModel):
     upstream_patches: list[str] = Field(
         description="List of URLs to upstream patches that were validated using the PatchValidator tool")
     build_error: str | None = Field(description="Error encountered during package build")
+    build_url: str | None = Field(description="URL to the principal built package", default=None)
+    reproducer_info: ReproducerInfo | None = Field(description="Information about the TMT reproducer", default=None)
+    reproducer_success: bool = Field(default=False, description="Whether the reproducer test case passed")
+    reproducer_result: str | None = Field(description="Result of the reproducer test case", default=None)
 
 
 class BackportOutputSchema(BaseModel):
@@ -106,6 +116,7 @@ class BackportOutputSchema(BaseModel):
     success: bool = Field(description="Whether the backport was successfully completed")
     status: str = Field(description="Backport status with details of how the potential merge conflicts were resolved")
     srpm_path: Path | None = Field(description="Absolute path to generated SRPM")
+    build_url: str | None = Field(description="URL to the principal built package", default=None)
     error: str | None = Field(description="Specific details about an error")
 
 
@@ -129,7 +140,6 @@ class RebaseData(BaseModel):
     jira_issue: str = Field(description="Jira issue identifier")
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
 
-
 class BackportData(BaseModel):
     """Data for backport resolution."""
     package: str = Field(description="Package name")
@@ -139,6 +149,7 @@ class BackportData(BaseModel):
     jira_issue: str = Field(description="Jira issue identifier")
     cve_id: str | None = Field(description="CVE identifier", default=None)
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
+    reproducer_info: ReproducerInfo | None = Field(description="Reproducer test case information", default=None)
 
 
 class ClarificationNeededData(BaseModel):
@@ -246,6 +257,7 @@ class BuildInputSchema(BaseModel):
 class BuildOutputSchema(BaseModel):
     """Output schema for the build agent."""
     success: bool = Field(description="Whether the build was successfully completed")
+    build_url: str | None = Field(description="URL to the principal built package", default=None)
     error: str | None = Field(description="Specific details about an error")
     is_timeout: bool = Field(default=False, description="Whether the build failed due to a timeout")
 

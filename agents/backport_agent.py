@@ -39,6 +39,7 @@ from common.models import (
     Task,
 )
 from common.utils import redis_client, fix_await
+from common.models import ReproducerInfo
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
@@ -292,7 +293,7 @@ def get_prompt() -> str:
 
 
 def get_fix_build_error_prompt() -> str:
-    return """
+    return f"""
       Your working directory is {{local_clone}}, a clone of dist-git repository of package {{package}}.
       {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
       {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
@@ -389,7 +390,8 @@ def get_fix_build_error_prompt() -> str:
       - Test if the SRPM builds successfully using the `build_package` tool:
         * Call build_package with the SRPM path, dist_git_branch, and jira_issue
         * Wait for build results
-        * If build PASSES: Report success=true with the SRPM path
+        * If build PASSES: choose the main package URL (no devel, static, debug packages) from `artifacts_urls`
+          returned by `build_package` tool and report success=true AND the chosen package URL as `build_url`
         * If build FAILS: Use `download_artifacts` to get build logs if available
         * Extract the new error message from the logs:
           - IMPORTANT: Before viewing log files, check their size using `wc -l` command
@@ -402,7 +404,7 @@ def get_fix_build_error_prompt() -> str:
         * Report success=false with the extracted error
 
       Report your results:
-      - If build passes → Report success=true with the SRPM path
+      - If build passes → Report success=true with the SRPM path and the chosen package URL as `build_url`
       - If build fails → Report success=false with the extracted error message
       - If you can't find a fix → Report success=false explaining why
 
@@ -417,6 +419,81 @@ def get_fix_build_error_prompt() -> str:
       - Be creative and pragmatic - the goal is a working build with passing tests, not perfect git history
       - Make ONE solid attempt to fix the issue - if the build fails, report the error clearly
       - Your work will persist in the upstream repo for the next attempt if needed
+
+      Remember: Unpacked upstream sources are in {{unpacked_sources}}.
+      The upstream repository at {{local_clone}}-upstream is your playground - explore it freely!
+    """
+
+def get_fix_reproducer_test_case_error_prompt() -> str:
+    return f"""
+      Your working directory is {{local_clone}}, a clone of dist-git repository of package {{package}}.
+      {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
+      {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
+
+      Upstream patches that were backported:
+      {{#upstream_patches}}
+      - {{.}}
+      {{/upstream_patches}}
+
+      The backport of upstream patches was successful since the build passed,
+      but the reproducer test case failed with the following error:
+
+      {{reproducer_result}}
+
+      Your task is to fix the reproducer test case error by improving the patches - NOT by modifying the spec file.
+      This includes BOTH compilation errors AND test failures during the check section.
+
+      CRITICAL: The upstream repository ({{local_clone}}-upstream) still exists with all your previous work intact.
+      DO NOT clone it again. DO NOT reset to base commit. DO NOT modify anything in {{local_clone}} dist-git repository.
+      Your cherry-picked commits are still there in {{local_clone}}-upstream.
+
+      Follow these steps:
+
+      STEP 1: Analyze the reproducer test case failure {{reproducer_result}}.
+      And also the test code, the test is located in the {{reproducer_info.git_ref}} branch
+      of the {{reproducer_info.git_url}} repository at subpath:{{reproducer_info.test}}.
+      - Identify the specific test failure and the expected behavior
+      - Identify the root cause of the test failure
+      - Identify the specific changes you have done at the original patches that caused the test failure
+
+      STEP 2: Manually adapt the code
+      - Directly edit files in {{local_clone}}-upstream using `str_replace` or `insert` tools
+      - Make minimal changes to fix the specific test failure
+      - Commit your changes: `git -C {{local_clone}}-upstream add <files>` then
+        `git -C {{local_clone}}-upstream commit -m "Manually backport: <description>"`
+
+      STEP 3: Regenerate the patch
+      - After making your fixes (cherry-picked or manual), regenerate the patch file
+      - Use `generate_patch_from_commit` tool with the PATCHED_BASE commit
+      - This creates a single patch with all changes: original commits + prerequisites/fixes
+      - Overwrite {{jira_issue}}.patch in {{local_clone}}
+
+      STEP 4: Test the build
+      - The spec file should already reference {{jira_issue}}.patch
+      - Run `centpkg --name={{package}} --namespace=rpms --release={{dist_git_branch}} prep` to verify patch applies
+      - Run `centpkg --name={{package}} --namespace=rpms --release={{dist_git_branch}} srpm` to generate SRPM
+      - Test if the SRPM builds successfully using the `build_package` tool:
+        * Call build_package with the SRPM path, dist_git_branch, and jira_issue
+        * Wait for build results
+        * If build PASSES: choose the main package URL (no devel, static, debug packages) from `artifacts_urls`
+          returned by `build_package` tool and report success=true AND the chosen package URL as `build_url`
+        * If build FAILS: Report success=false with the extracted error message
+
+      Report your results:
+      - If build PASSED: Report success=true and the chosen package URL as `build_url`
+      - If build FAILED: Report success=false with the extracted error message
+      - If you can't find a fix → Report success=false explaining why
+
+      IMPORTANT RULES:
+      - Work in the EXISTING {{local_clone}}-upstream directory (don't clone again)
+      - NEVER modify the spec file - reproducer test case failures are caused by incomplete patches, not spec issues
+      - The ONLY dist-git file you can modify is {{jira_issue}}.patch (by regenerating it from upstream repo)
+      - Fix reproducer test case failures by adapting the patches to make the reproducer test case pass
+      - For test failures: backport minimal necessary test helpers/functions to make tests pass
+      - You can freely explore, edit, cherry-pick, and commit in the upstream repo - it's your workspace
+      - Use the upstream repo as a rich source of information and examples
+      - Be creative and pragmatic - the goal is a working reproducer test case, not perfect git history
+      - Make ONE solid attempt to fix the issue - if the build fails, report the error clearly and explain why you couldn't fix it.
 
       Remember: Unpacked upstream sources are in {{unpacked_sources}}.
       The upstream repository at {{local_clone}}-upstream is your playground - explore it freely!
@@ -535,9 +612,13 @@ async def main() -> None:
         attempts_remaining: int = Field(default=max_build_attempts)
         used_cherry_pick_workflow: bool = Field(default=False)  # Track if cherry-pick was used
         incremental_fix_attempts: int = Field(default=0)  # Track how many times we tried incremental fix
+        build_url: str | None = Field(default=None)
+        reproducer_success: bool = Field(default=False)
+        reproducer_result: str | None = Field(default=None)
+        reproducer_info: ReproducerInfo | None = Field(default=None)
 
     async def run_workflow(
-        package, dist_git_branch, upstream_patches, jira_issue, cve_id, redis_conn=None
+        package, dist_git_branch, upstream_patches, jira_issue, cve_id, redis_conn=None, reproducer_info=None
     ):
         local_tool_options["working_directory"] = None
 
@@ -603,6 +684,10 @@ async def main() -> None:
                             cve_id=state.cve_id,
                             upstream_patches=state.upstream_patches,
                             build_error=state.build_error,
+                            build_url=state.build_url,
+                            reproducer_success=state.reproducer_success,
+                            reproducer_result=state.reproducer_result,
+                            reproducer_info=state.reproducer_info,
                         ),
                     ),
                     expected_output=BackportOutputSchema,
@@ -663,6 +748,10 @@ async def main() -> None:
                                 cve_id=state.cve_id,
                                 upstream_patches=state.upstream_patches,
                                 build_error=state.build_error,
+                                build_url=state.build_url,
+                                reproducer_success=state.reproducer_success,
+                                reproducer_result=state.reproducer_result,
+                                reproducer_info=state.reproducer_info,
                             ),
                         ),
                         expected_output=BackportOutputSchema,
@@ -670,6 +759,7 @@ async def main() -> None:
                     )
 
                     fix_result = BackportOutputSchema.model_validate_json(response.last_message.text)
+                    state.build_url = fix_result.build_url
 
                     if fix_result.success:
                         # Build passed! Update state and proceed
@@ -677,7 +767,12 @@ async def main() -> None:
                         state.backport_log.append(fix_result.status)
                         logger.info("Incremental fix succeeded with passing build")
                         state.incremental_fix_attempts = 0  # Reset for potential future failures
-                        return "update_release"
+                        if state.reproducer_info:
+                            logger.info(f"Reproducer test case info present for {state.jira_issue}, running reproducer")
+                            return "run_reproducer_test_case"
+                        else:
+                            logger.info(f"No reproducer test case info present for {state.jira_issue}, skipping reproducer test case and updating release")
+                            return "update_release"
 
                     # Build still failing - update the error for next iteration
                     logger.info(f"Build still failing after fix attempt: {fix_result.error}")
@@ -704,6 +799,75 @@ async def main() -> None:
                     logger.error(f"Exception during incremental fix: {e}", exc_info=True)
                     state.backport_result.success = False
                     state.backport_result.error = f"Exception during incremental fix: {str(e)}"
+                    return "comment_in_jira"
+
+            async def fix_reproducer_test_case_error(state):
+                """Try to fix reproducer test case errors by adapting the patches to make the reproducer test case pass.
+                """
+                try:
+                    fix_agent = create_backport_agent(gateway_tools, local_tool_options, include_build_tools=True)
+                    response = await fix_agent.run(
+                        render_prompt(
+                            template=get_fix_reproducer_test_case_error_prompt(),
+                            input=BackportInputSchema(
+                                local_clone=state.local_clone,
+                                unpacked_sources=state.unpacked_sources,
+                                package=state.package,
+                                dist_git_branch=state.dist_git_branch,
+                                jira_issue=state.jira_issue,
+                                cve_id=state.cve_id,
+                                upstream_patches=state.upstream_patches,
+                                build_error=state.build_error,
+                                build_url=state.build_url,
+                                reproducer_success=state.reproducer_success,
+                                reproducer_result=state.reproducer_result,
+                                reproducer_info=state.reproducer_info,
+                            ),
+                        ),
+                        expected_output=BackportOutputSchema,
+                        **get_agent_execution_config(),
+                    )
+                    fix_result = BackportOutputSchema.model_validate_json(response.last_message.text)
+                    state.build_url = fix_result.build_url
+
+                    if fix_result.success:
+                        # Build passed! Update state and proceed
+                        state.backport_result = fix_result
+                        state.backport_log.append(fix_result.status)
+                        logger.info("Incremental fix succeeded with passing build")
+                        state.incremental_fix_attempts = 0  # Reset for potential future failures
+                        if state.reproducer_info:
+                            logger.info(f"Reproducer test case info present for {state.jira_issue}, running reproducer")
+                            return "run_reproducer_test_case"
+                        else:
+                            logger.info(f"No reproducer test case info present for {state.jira_issue}, skipping reproducer test case and updating release")
+                            return "update_release"
+
+                    # Build still failing - update the error for next iteration
+                    logger.info(f"Build still failing after fix attempt: {fix_result.error}")
+                    state.build_error = fix_result.error
+                    state.backport_result = fix_result
+
+                    # Check if we should try again
+                    state.incremental_fix_attempts += 1
+                    if state.incremental_fix_attempts < max_incremental_fix_attempts:
+                        logger.info(f"Will retry incremental fix (attempt {state.incremental_fix_attempts + 1}/{max_incremental_fix_attempts})")
+                        return "fix_reproducer_test_case_error"  # Try again with the new error
+                    else:
+                        # Exhausted all incremental fix attempts - give up
+                        logger.error(f"Exhausted all {max_incremental_fix_attempts} incremental fix attempts, giving up")
+                        state.backport_result.success = False
+                        state.backport_result.error = (
+                            f"Unable to fix reproducer test case errors after {max_incremental_fix_attempts} incremental fix attempts. "
+                            f"Last error: {fix_result.error}"
+                        )
+                        return "comment_in_jira"
+
+                except Exception as e:
+                    # If anything goes wrong in fix_build_error, give up
+                    logger.error(f"Exception during incremental reproducer test case fix: {e}", exc_info=True)
+                    state.backport_result.success = False
+                    state.backport_result.error = f"Exception during incremental reproducer test case fix: {str(e)}"
                     return "comment_in_jira"
 
             async def run_build_agent(state):
@@ -736,7 +900,13 @@ async def main() -> None:
                 if build_result.success:
                     # Build succeeded - reset incremental fix counter for potential future failures
                     state.incremental_fix_attempts = 0
-                    return "update_release"
+                    state.build_url = build_result.build_url
+                    if state.reproducer_info:
+                        logger.info(f"Reproducer test case info present for {state.jira_issue}, running reproducer")
+                        return "run_reproducer_test_case"
+                    else:
+                        logger.info(f"No reproducer test case info present for {state.jira_issue}, skipping reproducer test case and updating release")
+                        return "update_release"
                 if build_result.is_timeout:
                     logger.info(f"Build timed out for {state.jira_issue}, proceeding")
                     return "update_release"
@@ -758,6 +928,13 @@ async def main() -> None:
                     return "fork_and_prepare_dist_git"
 
             async def update_release(state):
+                if state.reproducer_info and state.build_url:
+                    logger.info(f"Reproducer test case info present for {state.jira_issue} and build success, running reproducer test case")
+                    return "run_reproducer_test_case"
+                elif state.reproducer_info and not state.build_url:
+                    logger.info(f"Reproducer test case info present for {state.jira_issue} but build URL is missing, updating release")
+                else:
+                    logger.info(f"No reproducer test case info present for {state.jira_issue}, updating release")
                 try:
                     await tasks.update_release(
                         local_clone=state.local_clone,
@@ -878,6 +1055,26 @@ async def main() -> None:
             async def add_fusa_label(state):
                 return await PackageUpdateStep.add_fusa_label(state, "comment_in_jira", dry_run=dry_run, gateway_tools=gateway_tools)
 
+            async def run_reproducer_test_case(state):
+                if not state.build_url:
+                    logger.error(f"Build URL is not available for {state.jira_issue}, skipping reproducer test case")
+                    return "update_release"
+                state.reproducer_success, state.reproducer_result = await tasks.run_tool(
+                    "run_testing_farm_test",
+                    git_url=state.reproducer_info.git_url,
+                    git_ref=state.reproducer_info.git_ref,
+                    path_to_test=state.reproducer_info.test,
+                    package=state.build_url,
+                    dist_git_branch=state.dist_git_branch,
+                    available_tools=gateway_tools,
+                )
+                if state.reproducer_success:
+                    logger.info(f"Reproducer test case result: {state.reproducer_result}")
+                    return "update_release"
+                else:
+                    logger.error(f"Reproducer test case failed: {state.reproducer_result}")
+                    return "run_backport_agent"
+
             async def comment_in_jira(state):
                 if dry_run:
                     return Workflow.END
@@ -903,6 +1100,8 @@ async def main() -> None:
             workflow.add_step("run_backport_agent", run_backport_agent)
             workflow.add_step("fix_build_error", fix_build_error)
             workflow.add_step("run_build_agent", run_build_agent)
+            workflow.add_step("run_reproducer_test_case", run_reproducer_test_case)
+            workflow.add_step("fix_reproducer_test_case_error", fix_reproducer_test_case_error)
             workflow.add_step("update_release", update_release)
             workflow.add_step("stage_changes", stage_changes)
             workflow.add_step("run_log_agent", run_log_agent)
@@ -919,6 +1118,9 @@ async def main() -> None:
                     upstream_patches=upstream_patches,
                     jira_issue=jira_issue,
                     cve_id=cve_id,
+                    reproducer_info=reproducer_info,
+                    reproducer_success=False,
+                    reproducer_result=None,
                 ),
             )
             return response.state
@@ -931,6 +1133,16 @@ async def main() -> None:
     ):
         upstream_patches = upstream_patches_raw.split(",")
         logger.info("Running in direct mode with environment variables")
+        reproducer_info_repo_url = os.getenv("REPRODUCER_INFO_REPO_URL", None)
+        reproducer_info_repo_ref = os.getenv("REPRODUCER_INFO_REPO_REF", None)
+        reproducer_info_test = os.getenv("REPRODUCER_INFO_TEST", None)
+        reproducer_info = None
+        if reproducer_info_repo_url and reproducer_info_repo_ref and reproducer_info_test:
+            reproducer_info = ReproducerInfo(
+                git_url=reproducer_info_repo_url,
+                git_ref=reproducer_info_repo_ref,
+                test=reproducer_info_test,
+            )
         state = await run_workflow(
             package=package,
             dist_git_branch=branch,
@@ -938,6 +1150,7 @@ async def main() -> None:
             jira_issue=jira_issue,
             cve_id=os.getenv("CVE_ID", None),
             redis_conn=None,
+            reproducer_info=reproducer_info,
         )
         logger.info(f"Direct run completed: {state.backport_result.model_dump_json(indent=4)}")
         return
@@ -967,7 +1180,7 @@ async def main() -> None:
             logger.info(
                 f"Processing backport for package: {backport_data.package}, "
                 f"JIRA: {backport_data.jira_issue}, branch: {dist_git_branch}, "
-                f"attempt: {task.attempts + 1}"
+                f"attempt: {task.attempts + 1}, reproducer test case info: {backport_data.reproducer_info}"
             )
 
             async def retry(task, error):
@@ -1000,6 +1213,7 @@ async def main() -> None:
                     jira_issue=backport_data.jira_issue,
                     cve_id=backport_data.cve_id,
                     redis_conn=redis,
+                    reproducer_info=backport_data.reproducer_info,
                 )
                 logger.info(
                     f"Backport processing completed for {backport_data.jira_issue}, " f"success: {state.backport_result.success}"

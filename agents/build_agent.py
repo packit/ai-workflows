@@ -35,6 +35,9 @@ def get_instructions() -> str:
       just return the error message. Otherwise, start with `builder-live.log` and try to identify
       the build failure. If not found, try the same with `root.log`. Summarize the findings
       and return them as `error`. If the build failed due to a build timeout, set `is_timeout` to `true` in your output.
+      If the build succeed, choose the main package URL (no devel, static, debug packages) from `artifacts_urls` returned by `build_package` tool
+      and return it as `build_url` in your output.
+
 
       General instructions:
 

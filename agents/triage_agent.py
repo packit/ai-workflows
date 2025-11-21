@@ -21,7 +21,8 @@ from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 from beeai_framework.utils.strings import to_json
 
-import tasks
+import agents.tasks as tasks
+from agents.metrics_middleware import MetricsMiddleware
 from common.config import load_rhel_config
 from common.models import (
     Task,
@@ -35,12 +36,12 @@ from common.models import (
 )
 from common.utils import redis_client, fix_await
 from common.constants import JiraLabels, RedisQueues
-from observability import setup_observability
-from tools.commands import RunShellCommandTool
-from tools.patch_validator import PatchValidatorTool
-from tools.version_mapper import VersionMapperTool
-from tools.upstream_search import UpstreamSearchTool
-from utils import get_agent_execution_config, get_chat_model, get_tool_call_checker_config, mcp_tools, run_tool
+from agents.observability import setup_observability
+from agents.tools.commands import RunShellCommandTool
+from agents.tools.patch_validator import PatchValidatorTool
+from agents.tools.version_mapper import VersionMapperTool
+from agents.tools.upstream_search import UpstreamSearchTool
+from agents.utils import get_agent_execution_config, get_chat_model, get_tool_call_checker_config, mcp_tools, run_tool
 
 logger = logging.getLogger(__name__)
 
@@ -291,9 +292,11 @@ class TriageState(BaseModel):
     cve_eligibility_result: CVEEligibilityResult | None = Field(default=None)
     triage_result: OutputSchema | None = Field(default=None)
     target_branch: str | None = Field(default=None)
+    metrics: dict | None = Field(default=None)
 
 
 async def run_workflow(jira_issue, dry_run):
+    current_metrics_middleware = MetricsMiddleware()
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
         triage_agent = RequirementAgent(
             name="TriageAgent",
@@ -317,7 +320,7 @@ async def run_workflow(jira_issue, dry_run):
                 ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),
                 ConditionalRequirement("set_jira_fields", only_after="get_jira_details"),
             ],
-            middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
+            middlewares=[current_metrics_middleware, GlobalTrajectoryMiddleware(pretty=True)],
             role="Red Hat Enterprise Linux developer",
             instructions=[
                 "Use the `think` tool to reason through complex decisions and document your approach.",
@@ -497,6 +500,7 @@ async def run_workflow(jira_issue, dry_run):
         workflow.add_step("comment_in_jira", comment_in_jira)
 
         response = await workflow.run(TriageState(jira_issue=jira_issue))
+        response.state.metrics = current_metrics_middleware.get_metrics()
         return response.state
 
 

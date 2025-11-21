@@ -9,9 +9,9 @@ from beeai_framework.tools import Tool
 
 from common.models import LogOutputSchema, CachedMRMetadata
 from common.utils import is_cs_branch
-from constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
-from utils import check_subprocess, run_subprocess, run_tool, mcp_tools
-from tools.specfile import UpdateReleaseTool
+from agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
+from agents.utils import check_subprocess, run_subprocess, run_tool, mcp_tools
+from agents.tools.specfile import UpdateReleaseTool
 
 logger = logging.getLogger(__name__)
 

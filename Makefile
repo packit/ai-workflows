@@ -27,8 +27,11 @@ run-triage-agent-standalone:
 		-e MOCK_JIRA=$(MOCK_JIRA) \
 		triage-agent
 
-
-
+.PHONY: run-triage-agent-e2e-tests
+run-triage-agent-e2e-tests:
+	$(COMPOSE_AGENTS) run --rm \
+		-e MOCK_JIRA="true" \
+		triage-agent-e2e-tests
 
 .PHONY: run-rebase-agent-c9s-standalone
 run-rebase-agent-c9s-standalone:

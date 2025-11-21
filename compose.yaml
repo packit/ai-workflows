@@ -135,6 +135,15 @@ services:
     command: ["python", "agents/triage_agent.py"]
     profiles: ["agents"]
 
+  triage-agent-e2e-tests:
+    <<: *beeai-agent-c10s
+    environment:
+      <<: *beeai-env
+    # the option about default loop is here because of litellm issue
+    # https://github.com/BerriAI/litellm/issues/14521
+    command: ["pytest", "agents/tests/e2e/test_triage.py", "-o", "asyncio_default_test_loop_scope=session"]
+    profiles: ["agents"]
+
   backport-agent-c9s:
     <<: *beeai-agent-c9s
     command: ["python", "agents/backport_agent.py"]

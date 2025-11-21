@@ -8,7 +8,7 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, Tool, ToolError, ToolRunOptions
 
-from utils import run_subprocess
+from agents.utils import run_subprocess
 
 TIMEOUT = 10 * 60  # seconds
 ELLIPSIZED_LINES = 200

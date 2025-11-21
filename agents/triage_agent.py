@@ -253,7 +253,22 @@ def render_prompt(input: InputSchema) -> str:
            is clarification-needed
          * This is the correct choice when you are sure a problem exists but cannot find the solution yourself
 
-         2.5 Set the Jira fields as per the instructions below.
+         2.5. If the chosen action is backport then search for the issue reproducer in the issue comments.
+         You need to extract the following information to say you have found the issue reproducer:
+            - Git URL to the issue reproducer; a git repo stored in https://gitlab.com/redhat/rhel/tests/
+            - Git reference, it can be omitted and in this case you will use "main" as the reference.
+            - Test to run, usually a path like folder/test_name
+            - You need to say you have found the issue reproducer and provide the information in the JSON format.
+              The JSON format should be like this:
+              ```json
+              {
+                "git_url": "https://gitlab.com/redhat/rhel/tests/test_repo.git",
+                "git_ref": "main",
+                "test": "folder/test_name"
+              }
+              ```
+
+         2.6. Set the Jira fields as per the instructions below.
 
       3. **No Action**
          A No Action decision is appropriate for issues that are NOT bugs or CVEs requiring code fixes:
@@ -410,7 +425,12 @@ async def main() -> None:
                             "justification": "This patch fixes the bug by doing X, Y, and Z.",
                             "jira_issue": "RHEL-12345",
                             "cve_id": "CVE-1234-98765",
-                            "fix_version": "rhel-X.Y.Z"
+                            "fix_version": "rhel-X.Y.Z",
+                            "reproducer_info": {{
+                              "git_url": "https://gitlab.com/redhat/rhel/tests/test_repo.git",
+                              "git_ref": "main",
+                              "test": "folder/test_name"
+                            }}
                           }}
                         }}
                         ```

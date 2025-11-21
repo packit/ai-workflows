@@ -39,6 +39,7 @@ from common.models import (
     Task,
 )
 from common.utils import redis_client, fix_await
+from common.models import ReproducerInfo
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
@@ -288,6 +289,12 @@ def get_prompt() -> str:
       Everything from the previous attempt has been reset. Start over, follow the instructions from the start
       and don't forget to fix the issue.
       {{/build_error}}
+      {{#reproducer_failed}}
+      The reproducer failed after the first backport attempt.
+      Keep it in mind and try to fix the patches you apply to make the reproducer pass.
+      You can inspect the reproducer test at {{tmt_reproducer.git_url}}/blob/{{tmt_reproducer.git_ref}}/{{tmt_reproducer.test}}.
+      The test is located in the {{tmt_reproducer.git_ref}} branch of the {{tmt_reproducer.git_url}} repository.
+      {{/reproducer_failed}}
     """
 
 
@@ -535,9 +542,12 @@ async def main() -> None:
         attempts_remaining: int = Field(default=max_build_attempts)
         used_cherry_pick_workflow: bool = Field(default=False)  # Track if cherry-pick was used
         incremental_fix_attempts: int = Field(default=0)  # Track how many times we tried incremental fix
+        build_url: str | None = Field(default=None)
+        reproducer_failed: bool = Field(default=False)
+        reproducer_info: ReproducerInfo | None = Field(default=None)
 
     async def run_workflow(
-        package, dist_git_branch, upstream_patches, jira_issue, cve_id, redis_conn=None
+        package, dist_git_branch, upstream_patches, jira_issue, cve_id, redis_conn=None, reproducer_info=None
     ):
         local_tool_options["working_directory"] = None
 
@@ -603,6 +613,7 @@ async def main() -> None:
                             cve_id=state.cve_id,
                             upstream_patches=state.upstream_patches,
                             build_error=state.build_error,
+                            reproducer_failed=state.reproducer_failed,
                         ),
                     ),
                     expected_output=BackportOutputSchema,
@@ -663,6 +674,7 @@ async def main() -> None:
                                 cve_id=state.cve_id,
                                 upstream_patches=state.upstream_patches,
                                 build_error=state.build_error,
+                                reproducer_failed=state.reproducer_failed,
                             ),
                         ),
                         expected_output=BackportOutputSchema,
@@ -736,10 +748,14 @@ async def main() -> None:
                 if build_result.success:
                     # Build succeeded - reset incremental fix counter for potential future failures
                     state.incremental_fix_attempts = 0
-                    return "update_release"
+                    state.build_url = build_result.url
+                    if state.reproducer_info:
+                        return "run_reproducer"
+                    else:
+                        return "update_release"
                 if build_result.is_timeout:
                     logger.info(f"Build timed out for {state.jira_issue}, proceeding")
-                    return "update_release"
+                    return "run_testing_farm_test"
                 state.attempts_remaining -= 1
                 if state.attempts_remaining <= 0:
                     state.backport_result.success = False
@@ -878,6 +894,30 @@ async def main() -> None:
             async def add_fusa_label(state):
                 return await PackageUpdateStep.add_fusa_label(state, "comment_in_jira", dry_run=dry_run, gateway_tools=gateway_tools)
 
+            async def run_reproducer(state):
+                reproducer_result = await tasks.run_tool(
+                    "run_testing_farm_test",
+                    git_url=state.reproducer_info.git_url,
+                    git_ref=state.reproducer_info.git_ref,
+                    path_to_test=state.reproducer_info.test,
+                    package=state.build_url,
+                    compose=state.dist_git_branch.upper() + "Nightly",
+                    available_tools=gateway_tools,
+                )
+                if reproducer_result:
+                    return "update_release"
+                else:
+                    state.reproducer_failed = True
+                    state.attempts_remaining -= 1
+                    if state.attempts_remaining <= 0:
+                        state.backport_result.success = False
+                        state.backport_result.error = (
+                            f"Unable to successfully run the reproducer in {max_build_attempts} attempts"
+                        )
+                        return "comment_in_jira"
+                    # Run the backport agent again to try to fix the reproducer error
+                    return "run_backport_agent"
+
             async def comment_in_jira(state):
                 if dry_run:
                     return Workflow.END
@@ -903,6 +943,7 @@ async def main() -> None:
             workflow.add_step("run_backport_agent", run_backport_agent)
             workflow.add_step("fix_build_error", fix_build_error)
             workflow.add_step("run_build_agent", run_build_agent)
+            workflow.add_step("run_reproducer", run_reproducer)
             workflow.add_step("update_release", update_release)
             workflow.add_step("stage_changes", stage_changes)
             workflow.add_step("run_log_agent", run_log_agent)
@@ -919,6 +960,8 @@ async def main() -> None:
                     upstream_patches=upstream_patches,
                     jira_issue=jira_issue,
                     cve_id=cve_id,
+                    reproducer_info=reproducer_info,
+                    reproducer_failed=False,
                 ),
             )
             return response.state
@@ -931,6 +974,16 @@ async def main() -> None:
     ):
         upstream_patches = upstream_patches_raw.split(",")
         logger.info("Running in direct mode with environment variables")
+        reproducer_info_repo_url = os.getenv("REPRODUCER_INFO_REPO_URL", None)
+        reproducer_info_repo_ref = os.getenv("REPRODUCER_INFO_REPO_REF", None)
+        reproducer_info_test = os.getenv("REPRODUCER_INFO_TEST", None)
+        reproducer_info = None
+        if reproducer_info_repo_url and reproducer_info_repo_ref and reproducer_info_test:
+            reproducer_info = ReproducerInfo(
+                git_url=reproducer_info_repo_url,
+                git_ref=reproducer_info_repo_ref,
+                test=reproducer_info_test,
+            )
         state = await run_workflow(
             package=package,
             dist_git_branch=branch,
@@ -938,6 +991,7 @@ async def main() -> None:
             jira_issue=jira_issue,
             cve_id=os.getenv("CVE_ID", None),
             redis_conn=None,
+            reproducer_info=reproducer_info,
         )
         logger.info(f"Direct run completed: {state.backport_result.model_dump_json(indent=4)}")
         return
@@ -967,7 +1021,7 @@ async def main() -> None:
             logger.info(
                 f"Processing backport for package: {backport_data.package}, "
                 f"JIRA: {backport_data.jira_issue}, branch: {dist_git_branch}, "
-                f"attempt: {task.attempts + 1}"
+                f"attempt: {task.attempts + 1}, reproducer info: {backport_data.reproducer_info}"
             )
 
             async def retry(task, error):
@@ -1000,6 +1054,7 @@ async def main() -> None:
                     jira_issue=backport_data.jira_issue,
                     cve_id=backport_data.cve_id,
                     redis_conn=redis,
+                    reproducer_info=backport_data.reproducer_info,
                 )
                 logger.info(
                     f"Backport processing completed for {backport_data.jira_issue}, " f"success: {state.backport_result.success}"

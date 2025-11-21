@@ -16,6 +16,7 @@ RUN dnf -y install \
       krb5-workstation \
       centpkg \
       git \
+      testing-farm \
     && dnf clean all
 
 # Install FastMCP

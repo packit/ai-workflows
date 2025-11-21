@@ -38,6 +38,7 @@ RUN dnf -y install --allowerasing \
       sed \
       gawk \
       rsync \
+      python3-tabulate \
     && dnf clean all
 
 RUN pip3 install --no-cache-dir \
@@ -46,7 +47,9 @@ RUN pip3 install --no-cache-dir \
       openinference-instrumentation-beeai \
       arize-phoenix-otel \
       redis \
-      specfile
+      specfile \
+      pytest \
+      pytest-asyncio
 
 # Create user
 RUN useradd -m -G wheel beeai

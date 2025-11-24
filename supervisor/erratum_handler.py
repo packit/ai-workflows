@@ -88,14 +88,14 @@ def jotnar_owns_all_issues(issues: list[Issue]) -> bool:
 def compare_file_lists(
     current_build: ErratumBuild,
     previous_build: ErratumBuild,
-    previous_erratum: Erratum,
+    previous_erratum_id: str | int,
 ) -> tuple[bool, str]:
     is_matched = current_build.package_file_list == previous_build.package_file_list
 
     comment = (
         f"jotnar-product-listings-checked({current_build.nvr})\n\n"
         f"Compared the file lists for {current_build.nvr} to the file lists for\n"
-        f"{previous_build.nvr} in {previous_erratum.url} -\n"
+        f"{previous_build.nvr} in https://errata.engineering.redhat.com/advisory/{previous_erratum_id} -\n"
     )
 
     if is_matched:
@@ -213,14 +213,18 @@ class ErratumHandler(WorkItemHandler):
                     if not erratum_has_magic_string_in_comments(
                         self.erratum.id, f"jotnar-product-listings-checked({nvr})"
                     ):
-                        prev_erratum = get_previous_erratum(self.erratum.id, package)
+                        prev_erratum_id, _ = get_previous_erratum(
+                            self.erratum.id, package
+                        )
 
-                        if prev_erratum:
-                            other_build_map = get_erratum_build_map(prev_erratum.id)
+                        if prev_erratum_id:
+                            other_build_map = get_erratum_build_map(prev_erratum_id)
                             prev_build = other_build_map.root[package]
 
                             is_matched, comment = compare_file_lists(
-                                cur_build, prev_build, prev_erratum
+                                cur_build,
+                                prev_build,
+                                prev_erratum_id,
                             )
 
                             if not is_matched:
@@ -233,7 +237,7 @@ class ErratumHandler(WorkItemHandler):
                             erratum_add_comment(
                                 self.erratum.id,
                                 f"jotnar-product-listings-checked({nvr})\n\n"
-                                "New package - no need to check package file list change.",
+                                "No previous erratum for this package - no need to check package file list change.",
                                 dry_run=self.dry_run,
                             )
                 if mismatch_packages:

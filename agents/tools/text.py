@@ -51,7 +51,7 @@ class ViewToolInput(BaseModel):
     limit: int | None = Field(
         description=(
             "For text files only: Maximum number of lines to view (default: 1000). "
-            "For large files, use with 'offset' to paginate: offset=0 for lines 0-999, offset=1000 for lines 1000-1999, etc."
+            "For files longer than 1000 lines, use with `offset` to paginate: offset=0 for lines 0-999, offset=1000 for lines 1000-1999, etc."
         ),
         gt=0,
         default=1000,
@@ -63,7 +63,7 @@ class ViewTool(Tool[ViewToolInput, ToolRunOptions, StringToolOutput]):
     name = "view"
     description = """
     Outputs the contents of a file or lists the contents of a directory.
-    For text files, returns up to 1000 lines by default. Use 'offset' and 'limit' to paginate large text files.
+    For text files, returns up to 1000 lines. Use `offset` and `limit` to paginate large text files.
     """
     input_schema = ViewToolInput
 

@@ -321,9 +321,9 @@ async def test_create_merge_request_checklist():
             flexmock(
                 id=123,
                 _raw_pr=flexmock(
-                    notes=flexmock().should_receive("create").and_return(
-                        flexmock(id=1),
-                    ).mock(),
+                    notes=flexmock()
+                        .should_receive("list").with_args(get_all=True).and_return([]).mock()
+                        .should_receive("create").and_return(flexmock(id=1)).mock(),
                 ),
             ),
         ).mock()
@@ -335,6 +335,37 @@ async def test_create_merge_request_checklist():
     )
 
     assert result == f"Successfully created checklist for merge request {merge_request_url}"
+
+
+@pytest.mark.asyncio
+async def test_create_merge_request_checklist_duplicate():
+    """Test that duplicate checklists are not created"""
+    merge_request_url = "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123"
+
+    # Mock an existing note with the checklist identifier
+    existing_note = flexmock(body="# Jötnar MR Review Checklist\n\nSome checklist content")
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url=merge_request_url.rsplit("/-/merge_requests/", 1)[0],
+    ).and_return(
+        flexmock().should_receive("get_pr").and_return(
+            flexmock(
+                id=123,
+                _raw_pr=flexmock(
+                    notes=flexmock()
+                        .should_receive("list").with_args(get_all=True).and_return([existing_note]).mock(),
+                ),
+            ),
+        ).mock()
+    )
+
+    result = await create_merge_request_checklist(
+        merge_request_url=merge_request_url,
+        note_body=GITLAB_MR_CHECKLIST,
+    )
+
+    assert "already exists" in result
+    assert "not adding duplicate" in result
 
 
 @pytest.mark.asyncio

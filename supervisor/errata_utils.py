@@ -20,7 +20,7 @@ from .supervisor_types import Erratum, FullErratum, ErrataStatus, Comment
 logger = logging.getLogger(__name__)
 
 
-ET_URL = "https://errata.engineering.redhat.com/"
+ET_URL = "https://errata.engineering.redhat.com"
 
 # regex pattern for extracting timestamps from push logs
 _TIMESTAMP_PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \+0000")
@@ -117,6 +117,10 @@ def get_utc_timestamp_from_str(timestamp_string: str):
     )
 
 
+def get_erratum_advisory_url(erratum_id: str | int) -> str:
+    return f"{ET_URL}/advisory/{erratum_id}"
+
+
 @overload
 def get_erratum(erratum_id: str | int, full: Literal[False] = False) -> Erratum: ...
 
@@ -155,7 +159,7 @@ def get_erratum(erratum_id: str | int, full: bool = False) -> Erratum | FullErra
     base_erratum = Erratum(
         id=details["id"],
         full_advisory=details["fulladvisory"],
-        url=f"https://errata.engineering.redhat.com/advisory/{erratum_id}",
+        url=get_erratum_advisory_url(erratum_id),
         synopsis=details["synopsis"],
         status=ErrataStatus(details["status"]),
         jira_issues=jira_issues,

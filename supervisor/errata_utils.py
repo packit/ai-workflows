@@ -435,9 +435,8 @@ def _get_rel_prep_lookup(package_name: str) -> DefaultDict[str, list[Erratum]]:
         lists of associated Erratum objects in the REL_PREP state.
     """
     rel_prep_lookup: DefaultDict[str, list[Erratum]] = defaultdict(list)
-    related_errata = ET_api_get(f"packages/{package_name}")["data"]["relationships"][
-        "errata"
-    ]
+    package_data = ET_api_get("packages", params={"name": package_name})
+    related_errata = package_data["data"]["relationships"]["errata"]
     assert isinstance(related_errata, list)
     for erratum_info in related_errata:
         if erratum_info["status"] != ErrataStatus.REL_PREP:

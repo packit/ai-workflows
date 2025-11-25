@@ -19,6 +19,7 @@ from .errata_utils import (
     erratum_has_magic_string_in_comments,
     erratum_push_to_stage,
     erratum_refresh_security_alerts,
+    get_erratum_advisory_url,
     get_erratum_build_map,
     get_erratum_transition_rules,
     get_previous_erratum,
@@ -95,7 +96,7 @@ def compare_file_lists(
     comment = (
         f"jotnar-product-listings-checked({current_build.nvr})\n\n"
         f"Compared the file lists for {current_build.nvr} to the file lists for\n"
-        f"{previous_build.nvr} in https://errata.engineering.redhat.com/advisory/{previous_erratum_id} -\n"
+        f"{previous_build.nvr} in {get_erratum_advisory_url(previous_erratum_id)} -\n"
     )
 
     if is_matched:

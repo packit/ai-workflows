@@ -4,7 +4,7 @@ import tasks
 from pydantic import BaseModel, Field
 from pathlib import Path
 
-from common.constants import JiraLabels
+from common.constants import JiraLabels, GITLAB_MR_CHECKLIST
 from common.config import load_rhel_config
 from common.models import LogOutputSchema
 
@@ -143,6 +143,7 @@ class PackageUpdateStep():
               await tasks.run_tool(
                   "create_merge_request_checklist",
                   merge_request_url=state.merge_request_url,
+                  note_body=GITLAB_MR_CHECKLIST,
                   available_tools=gateway_tools,
               )
               logger.info(f"Created checklist for MR {state.merge_request_url}")

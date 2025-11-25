@@ -305,9 +305,31 @@ async def create_merge_request_checklist(
 ) -> str:
     """
     Creates our pre/post merge checklist for our dist-git merge requests.
+    Checks for existing checklist to avoid duplicates.
     """
     try:
         mr = await _get_merge_request_from_url(merge_request_url)
+
+        def check_existing_checklist():
+            notes = mr._raw_pr.notes.list(get_all=True)
+
+            checklist_body = note_body.strip()
+            if not checklist_body:
+                return False
+            checklist_identifier = checklist_body.splitlines()[0]
+
+            for note in notes:
+                note_body_text = note.body.strip()
+                if (checklist_identifier in note_body_text or
+                        note_body_text == checklist_body):
+                    return True
+
+            return False
+
+        exists = await asyncio.to_thread(check_existing_checklist)
+        if exists:
+            return f"Checklist already exists in merge request {merge_request_url}, not adding duplicate"
+
         # internal note docs: https://docs.gitlab.com/api/notes/#create-new-issue-note
         await asyncio.to_thread(mr._raw_pr.notes.create, {"body": note_body}, internal=True)
         return f"Successfully created checklist for merge request {merge_request_url}"

@@ -26,7 +26,7 @@ def cleanup_stale_directories(git_repos_path: Path, cutoff_time: datetime) -> in
             mod_time = datetime.fromtimestamp(item_path.stat().st_mtime)
             if mod_time < cutoff_time:
                 logger.info(f"Deleting old directory: {item_path}")
-                shutil.rmtree(item_path, ignore_errors=True)
+                shutil.rmtree(item_path, ignore_errors=False)
                 deleted_count += 1
         except Exception as ex:
             logger.warning(f"Failed to delete directory {item_path}: {ex}")

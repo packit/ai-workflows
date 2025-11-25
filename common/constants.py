@@ -104,11 +104,11 @@ GITLAB_MR_CHECKLIST = """ # Jötnar MR Review Checklist
 
 - [ ] **ROG CI Pipeline**: All automated tests pass
    - for any failures, it might be useful to check the previous MRs to see if the test failures are not expected, based on the comments
-- [ ] **CentOS Stream Build**: Successful scratch build
-- [ ] **RHEL Build**: Successful scratch build
+- [ ] **build_rpm**: Successful draft build. Once the gating is complete, it will automatically trigger a RHEL build.
 - [ ] **Gitbz Check**: Commit messages correctly associated with approved Jira ticket (commit messages use "Resolves: RHEL-XXXXX" format)
 - [ ] **Labels**: `target::latest` is set, exception or zstream are set only for exceptions or 0day, please consult Veronika Kabatova for that
-    - you can utilise draft builds if you don’t want to trigger builds after merging manually, by labelling the MR with `feature::draft-builds::enabled` and clicking `Run pipeline` to rerun the pipeline
+    - Draft builds are now enabled by default, you should see the label `feature::draft-builds::enabled` on your MR.
+    - 0day is a regullar zstream build, it just needs to be added to the 0day batch at the Erratum level.
 - [ ] **Branch References**: depending on the existing branch references and the process (RHEL-X Z-stream/0day workflow checklist, CentOS Stream X (RHEL-X Y-stream) workflow checklist, RHEL maintenance phase, RHEL Hotfix Build) you want/need to follow you may need to create new branches.
 - [ ] **Upstream Alignment**: Changes align with upstream practices
 
@@ -130,15 +130,13 @@ GITLAB_MR_CHECKLIST = """ # Jötnar MR Review Checklist
 
 ## ✅ Post-Merge Tasks
 
-- [ ] **Trigger Builds**: manually trigger regular builds (or/and hotfix build if needed)
-   - if using draft builds (feature::draft-builds::enabled label), this step is not needed
 - [ ] **Gating Results**: reviewed and waive/fix failures
 
 ### Verify automated steps
 
 - [ ] **Gating Process**: Build picked up for gating
 - [ ] **Errata Tool**: errata created (requires Preliminary Testing: Pass)
-  - [ ] **Release Date**: check the errata `Release Date` which in case of CVE should be ASAP, if not ask in [#forum-rhel-program](https://redhat.enterprise.slack.com/archives/C04S8PHPXH7)
+  - [ ] **Release Date**: check the errata `Release Date` which in case of important or critical CVE should be ASAP (medium or low severity CVEs should be set to Batch that respects the Due date set in Jira), if not ask in [#forum-rhel-program](https://redhat.enterprise.slack.com/archives/C04S8PHPXH7)
 
 ## 🤖 Jötnar specific tasks
 
@@ -149,22 +147,23 @@ If everything went well:
 
 ## 📋 Process specific workflow checklists
 
-### [RHEL-X Z-stream/0day workflow checklist: Z stream branch has not been forked from the rhel x main branch](https://one.redhat.com/rhel-development-guide/#_z_stream_branch_has_not_been_forked_from_the_rhel_x_main_branch)
+### [RHEL-X Z-stream/0day workflow checklist: Z stream branch has NOT been forked from the rhel x main branch](https://one.redhat.com/rhel-development-guide/#_z_stream_branch_has_not_been_forked_from_the_rhel_x_main_branch)
 
   - [ ] **write**: commit goes to cXs
-  - [ ] **pre-merge**: *verify that the rhel-X-main branch is not also referencing the Z-stream branch.* If the Z-stream branch has not been forked yet, you need to create (fork it from `rhel-X-main`) and push it to the RHEL-X repository: `git push origin rhel-X-main:rhel-X.Y.0` (RHEL 10 and newer do not use the last number e.g. rhel-10.0).
-  - [ ] **build**: **create a CentOS Stream build with the RHEL `rhel-<Y-stream-pre-GA-version>-z-candidate` tag**. Use command `centpkg build --rhel-target=zstream` for it. The RHEL build will be created automatically
+  - [ ] **pre-merge**: *verify that the rhel-X-main branch is not also referencing the Z-stream branch.*
+  - [ ] **build**: Verify that the **build_rpm** pipeline is successful and the label **target::zstream** is set. Once the gating is complete, it will automatically trigger a RHEL build as well.
 
 ### [RHEL-X Z-stream/0day workflow checklist: Z-stream branch HAS been forked from the rhel-X-main branch](https://one.redhat.com/rhel-development-guide/#_z_stream_branch_has_been_forked_from_the_rhel_x_main_branch)
-  - [ ] **write**: one MR against RHEL repository Z-stream branch and one against cXs (to be merged after the rhel one is shipped)
-  - [ ] **rhel builds**: **build the package from the Z-stream** branch using the `rhpkg build` command in the RHEL repository of the package.
+  - [ ] **write**: one MR against RHEL repository Z-stream branch and one against cXs (to be merged after the Z-stream one is shipped)
+  - [ ] **rhel builds**: Verify that the **build_rpm** pipeline is successful.
   - [ ] **verify**: check an advisory has been created
-  - [ ] **centos build**: **once the erratum is shipped**, submit the CentOS Stream build from the `cXs` branch using the `centpkg` command  with the option `--rhel-target=none`
+  - [ ] **centos build**: **once the Z-stream erratum is shipped**, submit the CentOS Stream build from the `cXs` branch using the `centpkg` command  with the option `--rhel-target=none`
+    - Once this [issue](https://issues.redhat.com/browse/OSCI-8940) is resolved, it should be also done via draft build feature.
 
 ### [CentOS Stream X (RHEL-X Y-stream) workflow checklist](https://one.redhat.com/rhel-development-guide/#_centos_stream_x_rhel_x_y_stream_workflow_checklist)
   - [ ] **write**: the commit goes to `cXs`
   - [ ] **pre-merge**: *verify that the rhel-X-main branch is not also referencing the Z-stream branch*. If the Z-stream branch has not been forked yet, you need to create (fork it from rhel-X-main) and push it to the RHEL-X repository. In the example you can achieve it by using a command like `git push origin rhel-8-main:rhel-8.8.0` (RHEL 10 and newer do not use the last number e.g. rhel-10.0).
-  - [ ] **build**: create a build from the `cXs` production branch using `centpkg build` command. (When the CentOS Stream X build is successful, automation will trigger an automated RHEL-X Y-stream brew build).
+  - [ ] **build**: Verify that the **build_rpm** pipeline is successful and the label **target::latest** is set. Once the gating is complete, it will automatically trigger a RHEL build as well.
   - [ ] **verify**: check an advisory has been created
 
 ### [RHEL (8 as of now) maintenance phase](https://one.redhat.com/rhel-development-guide/#_rhel_x_10_z_specific)
@@ -175,6 +174,4 @@ If everything went well:
 ### [RHEL Hotfix Build](https://source.redhat.com/groups/public/release-engineering/release_engineering_rcm_wiki/rhel_hotfix_build_process_description)
 Jötnar shouldn’t create hotfixes. If it happens follow linked document.
 
-You can find even more detailed checklists in [this document](https://docs.google.com/document/d/1GA_JFyO1unlL74LElaFpB6W7iDWudBocPSzMro6xIOA/edit?tab=t.0), it depends on the process you chose to follow.
-Update the MR and pre/post tasks status in [this document](https://docs.google.com/spreadsheets/d/1E4tx1LFdOTEq5lJOiF-JudMLYrc-zKIqgkJx4m7zBnc/edit?gid=1662692521#gid=1662692521).
 """

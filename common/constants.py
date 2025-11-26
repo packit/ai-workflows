@@ -158,7 +158,7 @@ If everything went well:
   - [ ] **rhel builds**: Verify that the **build_rpm** pipeline is successful.
   - [ ] **verify**: check an advisory has been created
   - [ ] **centos build**: **once the Z-stream erratum is shipped**, submit the CentOS Stream build from the `cXs` branch using the `centpkg` command  with the option `--rhel-target=none`
-    - Once this [issue](https://issues.redhat.com/browse/OSCI-8940) is resolved, it should be also done via draft build feature.
+    - Once this [issue](https://issues.redhat.com/browse/OSCI-8940) is resolved, it should be also done automatically via the draft build feature.
 
 ### [CentOS Stream X (RHEL-X Y-stream) workflow checklist](https://one.redhat.com/rhel-development-guide/#_centos_stream_x_rhel_x_y_stream_workflow_checklist)
   - [ ] **write**: the commit goes to `cXs`

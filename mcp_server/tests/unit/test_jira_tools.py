@@ -14,6 +14,7 @@ def mocked_env():
     flexmock(os).should_receive("getenv").with_args("JIRA_URL").and_return("http://jira")
     flexmock(os).should_receive("getenv").with_args("JIRA_TOKEN").and_return("12345")
     flexmock(os).should_receive("getenv").with_args("DRY_RUN", "False").and_return("false")
+    flexmock(os).should_receive("getenv").with_args("SKIP_SETTING_JIRA_FIELDS", "False").and_return("false")
 
 
 @pytest.mark.asyncio

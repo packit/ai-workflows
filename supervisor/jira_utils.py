@@ -16,6 +16,7 @@ from typing import (
 )
 from urllib.parse import quote as urlquote
 
+from adftotxt.adftotxt import startParsing as adf_to_text
 import requests
 
 from .http_utils import requests_session
@@ -57,22 +58,51 @@ def jira_url() -> str:
     return url.rstrip("/")
 
 
+@cache
+def jira_api_version() -> str:
+    if "JIRA_API_VERSION" in os.environ:
+        version = os.environ["JIRA_API_VERSION"]
+        if version not in ("2", "3"):
+            raise ValueError(f"JIRA_API_VERSION must be '2' or '3'")
+        return version
+
+    url = jira_url()
+    if "atlassian.net" in url:
+        return "3"
+
+    return "2"
+
+
 class JiraNotLoggedInError(Exception):
     pass
 
 
 @cache
 def jira_headers() -> dict[str, str]:
+    import base64
+
     jira_token = os.environ["JIRA_TOKEN"]
 
+    if jira_api_version() == "3":
+        # for jira cloud: Basic Auth with email:token
+        jira_email = os.environ.get("JIRA_EMAIL")
+        if not jira_email:
+            raise ValueError("JIRA_EMAIL environment variable is required for Jira Cloud")
+
+        auth_value = base64.b64encode(f"{jira_email}:{jira_token}".encode()).decode()
+        auth_header = f"Basic {auth_value}"
+    else:
+        # Server: Bearer token
+        auth_header = f"Bearer {jira_token}"
+
     headers = {
-        "Authorization": f"Bearer {jira_token}",
+        "Authorization": auth_header,
         "Content-Type": "application/json",
     }
 
     # Test if the token can log in successfully
     response = requests_session().get(
-        f"{jira_url()}/rest/api/2/myself", headers=headers
+        f"{jira_url()}/rest/api/{jira_api_version()}/myself", headers=headers
     )
 
     if response.status_code == 401:
@@ -115,7 +145,7 @@ def retry_on_rate_limit(func):
 
 @retry_on_rate_limit
 def jira_api_get(path: str, *, params: dict | None = None) -> Any:
-    url = f"{jira_url()}/rest/api/2/{path}"
+    url = f"{jira_url()}/rest/api/{jira_api_version()}/{path}"
     response = requests_session().get(url, headers=jira_headers(), params=params)
     if not response.ok:
         logger.error(
@@ -144,7 +174,7 @@ def jira_api_post(
 def jira_api_post(
     path: str, json: dict[str, Any], *, decode_response: bool = False
 ) -> Any | None:
-    url = f"{jira_url()}/rest/api/2/{path}"
+    url = f"{jira_url()}/rest/api/{jira_api_version()}/{path}"
     response = requests_session().post(url, headers=jira_headers(), json=json)
     if not response.ok:
         logger.error(
@@ -183,7 +213,7 @@ def jira_api_upload(
     *,
     decode_response: bool = False,
 ) -> Any | None:
-    url = f"{jira_url()}/rest/api/2/{path}"
+    url = f"{jira_url()}/rest/api/{jira_api_version()}/{path}"
     files = [("file", a) for a in attachments]
     headers = dict(jira_headers())
     del headers["Content-Type"]  # requests will set this correctly for multipart
@@ -217,7 +247,7 @@ def jira_api_put(
 def jira_api_put(
     path: str, json: dict[str, Any], *, decode_response: bool = False
 ) -> Any | None:
-    url = f"{jira_url()}/rest/api/2/{path}"
+    url = f"{jira_url()}/rest/api/{jira_api_version()}/{path}"
     response = requests_session().put(url, headers=jira_headers(), json=json)
     if not response.ok:
         logger.error(
@@ -293,14 +323,16 @@ def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
     if full:
         return FullIssue(
             **issue.__dict__,
-            description=issue_data["fields"]["description"],
+            description=_adf_to_text(issue_data["fields"]["description"]),
             comments=[
                 JiraComment(
                     authorName=c["author"]["displayName"],
                     authorEmail=c["author"].get("emailAddress"),
                     created=datetime.fromisoformat(c["created"]),
-                    body=c["body"],
+                    body=_adf_to_text(c["body"]),
                     id=c["id"],
+                    #storing original ADF if its a dict
+                    adf=c["body"] if isinstance(c["body"], dict) else None,
                 )
                 for c in issue_data["fields"]["comment"]["comments"]
             ],
@@ -367,26 +399,50 @@ def get_current_issues(
     jql: str,
     full: bool = False,
 ) -> Generator[Issue, None, None] | Generator[FullIssue, None, None]:
-    start_at = 0
     max_results = 1000
-    while True:
-        body = {
-            "jql": jql,
-            "startAt": start_at,
-            "maxResults": max_results,
-            "fields": _fields(full),
-        }
 
-        logger.debug("Fetching JIRA issues, start=%d, max=%d", start_at, max_results)
-        response_data = jira_api_post("search", json=body, decode_response=True)
-        logger.debug("Got %d issues", len(response_data["issues"]))
+    if jira_api_version() == "3":
+        #v3 uses nextPageToken for pagination
+        next_page_token = None
+        while True:
+            body = {
+                "jql": jql,
+                "maxResults": max_results,
+                "fields": _fields(full),
+            }
+            if next_page_token:
+                body["nextPageToken"] = next_page_token
 
-        for issue_data in response_data["issues"]:
-            yield decode_issue(issue_data, full)
+            logger.debug("Fetching JIRA issues (v3), token=%s, max=%d", next_page_token, max_results)
+            response_data = jira_api_post("search/jql", json=body, decode_response=True)
+            logger.debug("Got %d issues", len(response_data["issues"]))
 
-        start_at += max_results
-        if response_data["total"] <= start_at:
-            break
+            for issue_data in response_data["issues"]:
+                yield decode_issue(issue_data, full)
+
+            if response_data.get("isLast", True):
+                break
+            next_page_token = response_data.get("nextPageToken")
+    else:
+        #v2 uses startAt for pagination
+        start_at = 0
+        while True:
+            body = {
+                "jql": jql,
+                "startAt": start_at,
+                "maxResults": max_results,
+                "fields": _fields(full),
+            }
+            logger.debug("Fetching JIRA issues (v2), start=%d, max=%d", start_at, max_results)
+            response_data = jira_api_post("search", json=body, decode_response=True)
+            logger.debug("Got %d issues", len(response_data["issues"]))
+
+            for issue_data in response_data["issues"]:
+                yield decode_issue(issue_data, full)
+
+            if response_data["total"] <= start_at + max_results:
+                break
+            start_at += max_results
 
 
 @overload
@@ -410,21 +466,30 @@ def get_issue_by_jotnar_tag(
 def get_issue_by_jotnar_tag(
     project: str, tag: JotnarTag, full: bool = False, with_label: str | None = None
 ) -> Issue | FullIssue | None:
-    start_at = 0
     max_results = 2
     jql = f'project = {project} AND status NOT IN (Done, Closed) AND description ~ "\\"{tag}\\""'
     if with_label is not None:
         jql += f' AND labels = "{with_label}"'
 
-    body = {
-        "jql": jql,
-        "startAt": 0,
-        "maxResults": 2,
-        "fields": _fields(full),
-    }
-
-    logger.debug("Fetching JIRA issues, start=%d, max=%d", start_at, max_results)
-    response_data = jira_api_post("search", json=body, decode_response=True)
+    if jira_api_version() == "3":
+        #v3 doesn't support startAt only uses nextPageToken
+        body = {
+            "jql": jql,
+            "maxResults": max_results,
+            "fields": _fields(full),
+        }
+        logger.debug("Fetching JIRA issues (v3), max=%d", max_results)
+        response_data = jira_api_post("search/jql", json=body, decode_response=True)
+    else:
+        #v2 uses startAt
+        body = {
+            "jql": jql,
+            "startAt": 0,
+            "maxResults": max_results,
+            "fields": _fields(full),
+        }
+        logger.debug("Fetching JIRA issues (v2), start=0, max=%d", max_results)
+        response_data = jira_api_post("search", json=body, decode_response=True)
 
     if len(response_data["issues"]) == 0:
         return None
@@ -438,13 +503,16 @@ def get_issues_statuses(issue_keys: Collection[str]) -> dict[str, IssueStatus]:
     if len(issue_keys) == 0:
         return {}
 
+    jql = f"key in ({','.join(issue_keys)})"
     body = {
-        "jql": f"key in ({','.join(issue_keys)})",
+        "jql": jql,
         "maxResults": len(issue_keys),
         "fields": ["status"],
     }
-
-    response_data = jira_api_post("search", json=body, decode_response=True)
+    if jira_api_version() == "3":
+        response_data = jira_api_post("search/jql", json=body, decode_response=True)
+    else:
+        response_data = jira_api_post("search", json=body, decode_response=True)
 
     result = {
         issue_data["key"]: IssueStatus(issue_data["fields"]["status"]["name"])
@@ -463,24 +531,66 @@ class CommentVisibility(StrEnum):
     RED_HAT_EMPLOYEE = "Red Hat Employee"
 
 
-CommentSpec = None | str | tuple[str, CommentVisibility]
+CommentSpec = None | str | dict[str, Any] | tuple[str | dict[str, Any], CommentVisibility]
+
+
+def _text_to_adf(text: str) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "type": "doc",
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": text
+                    }
+                ]
+            }
+        ]
+    }
+
+
+def _adf_to_text(adf_or_text: dict[str, Any] | str) -> str:
+    if isinstance(adf_or_text, str):
+        return adf_or_text
+
+    #if its ADF, convert to text
+    text = adf_to_text(adf_or_text, runReplacers=False)
+    #removing trailing newline added by adftotxt library
+    return text.rstrip('\n')
 
 
 def _comment_to_dict(comment: CommentSpec) -> dict[str, Any] | None:
     if comment is None:
         return
 
-    if isinstance(comment, str):
+    if isinstance(comment, (str, dict)):
         comment_value = comment
         visibility = CommentVisibility.PUBLIC
     else:
         comment_value, visibility = comment
 
+    # determine the body content based on API version and input type
+    if isinstance(comment_value, dict):
+        #already ADF, use as is for v3 or convert to text for v2
+        if jira_api_version() == "3":
+            body_content = comment_value
+        else:
+            body_content = _adf_to_text(comment_value)
+    else:
+        #plain text convert to ADF for v3, use as is for v2
+        if jira_api_version() == "3":
+            body_content = _text_to_adf(comment_value)
+        else:
+            body_content = comment_value
+
     if visibility == CommentVisibility.PUBLIC:
-        return {"body": comment_value}
+        return {"body": body_content}
     else:
         return {
-            "body": comment_value,
+            "body": body_content,
             "visibility": {"type": "group", "value": str(visibility)},
         }
 
@@ -696,12 +806,23 @@ def get_issue_attachment(issue_key: str, filename: str) -> bytes:
 
 @cache
 def get_user_name(email: str) -> str:
-    users = jira_api_get("user/search", params={"username": email})
+    # v3 uses 'query' v2 uses 'username' param
+    if jira_api_version() == "3":
+        users = jira_api_get("user/search", params={"query": email})
+    else:
+        users = jira_api_get("user/search", params={"username": email})
+
     if len(users) == 0:
         raise ValueError(f"No JIRA user with email {email}")
     elif len(users) > 1:
         raise ValueError(f"Multiple JIRA users with email {email}")
-    return users[0]["name"]
+
+    user = users[0]
+
+    if jira_api_version() == "3":
+        return user.get("displayName") or user["accountId"]
+    else:
+        return user.get("name") or user.get("displayName") or user["accountId"]
 
 
 @overload
@@ -752,10 +873,16 @@ def create_issue(
     if tag is not None:
         description = f"{tag}\n\n{description}"
 
+    #for cloud v3 convert description to ADF format
+    if jira_api_version() == "3":
+        description_content = _text_to_adf(description)
+    else:
+        description_content = description
+
     fields = {
         "project": {"key": project},
         "summary": summary,
-        "description": description,
+        "description": description_content,
         "issuetype": {"name": "Task"},
     }
 

@@ -101,6 +101,8 @@ async def set_jira_fields(
     """
     Updates the specified Jira issue, setting only the fields that are currently empty/unset.
     """
+    if os.getenv("SKIP_SETTING_JIRA_FIELDS", "False").lower() == "true":
+        return "Skipping of setting Jira fields requested, not doing anything (this is expected, not an error)"
     if os.getenv("DRY_RUN", "False").lower() == "true":
         return "Dry run, not updating Jira fields (this is expected, not an error)"
 

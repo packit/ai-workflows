@@ -106,9 +106,9 @@ GITLAB_MR_CHECKLIST = """ # Jötnar MR Review Checklist
    - for any failures, it might be useful to check the previous MRs to see if the test failures are not expected, based on the comments
 - [ ] **build_rpm**: Successful draft build. Once the gating is complete, it will automatically trigger a RHEL build.
 - [ ] **Gitbz Check**: Commit messages correctly associated with approved Jira ticket (commit messages use "Resolves: RHEL-XXXXX" format)
-- [ ] **Labels**: `target::latest` is set, exception or zstream are set only for exceptions or 0day, please consult Veronika Kabatova for that
+- [ ] **Labels**: These are applied automatically (`target::latest` for Y-stream, `target::zstream` for Z-stream/0-day), check if the correct one is applied. The `target::exception` is set for exceptions and should be consulted with Veronika Kabatova.
     - Draft builds are now enabled by default, you should see the label `feature::draft-builds::enabled` on your MR.
-    - 0day is a regullar zstream build, it just needs to be added to the 0day batch at the Erratum level.
+    - 0day is a regular zstream build, it just needs to be added to the 0day batch at the Erratum level.
 - [ ] **Branch References**: depending on the existing branch references and the process (RHEL-X Z-stream/0day workflow checklist, CentOS Stream X (RHEL-X Y-stream) workflow checklist, RHEL maintenance phase, RHEL Hotfix Build) you want/need to follow you may need to create new branches.
 - [ ] **Upstream Alignment**: Changes align with upstream practices
 

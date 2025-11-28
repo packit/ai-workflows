@@ -15,7 +15,7 @@ from beeai_framework.tools import JSONToolOutput, StringToolOutput, Tool, ToolEr
 
 from common.constants import BREWHUB_URL
 from common.validators import NonEmptyString
-from utils import get_absolute_path
+from agents.utils import get_absolute_path
 
 
 class GetPackageInfoToolInput(BaseModel):

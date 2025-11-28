@@ -2,7 +2,8 @@ from tabulate import tabulate
 import pytest
 import os
 
-from agents.triage_agent import run_workflow, TriageState
+from agents.triage_agent import run_workflow, TriageState, create_triage_agent
+from agents.metrics_middleware import MetricsMiddleware
 from agents.observability import setup_observability
 from common.models import TriageOutputSchema, Resolution, BackportData
 
@@ -14,8 +15,14 @@ class TriageAgentTestCase:
         self.metrics: dict = None
 
     async def run(self) -> TriageState:
-        return await run_workflow(self.input, False)
-
+        metrics_middleware = MetricsMiddleware()
+        def testing_factory(gateway_tools):
+            triage_agent = create_triage_agent(gateway_tools)
+            triage_agent.middlewares.append(metrics_middleware)
+            return triage_agent
+        finished_state = await run_workflow(self.input, False, testing_factory)
+        self.metrics = metrics_middleware.get_metrics()
+        return finished_state
 
 test_cases=[
     TriageAgentTestCase(input="RHEL-15216",
@@ -88,5 +95,4 @@ async def test_triage_agent(test_case: TriageAgentTestCase):
         assert real_output.data.fix_version == expected_output.data.fix_version
 
     finished_state = await test_case.run()
-    test_case.metrics = finished_state.metrics
     verify_result(finished_state.triage_result, test_case.expected_output)

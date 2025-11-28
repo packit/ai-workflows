@@ -22,7 +22,6 @@ from beeai_framework.workflows import Workflow
 from beeai_framework.utils.strings import to_json
 
 import agents.tasks as tasks
-from agents.metrics_middleware import MetricsMiddleware
 from common.config import load_rhel_config
 from common.models import (
     Task,
@@ -292,44 +291,46 @@ class TriageState(BaseModel):
     cve_eligibility_result: CVEEligibilityResult | None = Field(default=None)
     triage_result: OutputSchema | None = Field(default=None)
     target_branch: str | None = Field(default=None)
-    metrics: dict | None = Field(default=None)
 
 
-async def run_workflow(jira_issue, dry_run):
-    current_metrics_middleware = MetricsMiddleware()
+def create_triage_agent(gateway_tools):
+    return RequirementAgent(
+        name="TriageAgent",
+        llm=get_chat_model(),
+        tool_call_checker=get_tool_call_checker_config(),
+        tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool(),
+                VersionMapperTool(), UpstreamSearchTool()]
+        + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields"]],
+        memory=UnconstrainedMemory(),
+        requirements=[
+            ConditionalRequirement(
+                ThinkTool,
+                force_at_step=1,
+                force_after=Tool,
+                consecutive_allowed=False,
+                only_success_invocations=False,
+            ),
+            ConditionalRequirement("get_jira_details", min_invocations=1),
+            ConditionalRequirement(UpstreamSearchTool, only_after="get_jira_details"),
+            ConditionalRequirement(RunShellCommandTool, only_after="get_jira_details"),
+            ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),
+            ConditionalRequirement("set_jira_fields", only_after="get_jira_details"),
+        ],
+        middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
+        role="Red Hat Enterprise Linux developer",
+        instructions=[
+            "Use the `think` tool to reason through complex decisions and document your approach.",
+            "Be proactive in your search for fixes and do not give up easily.",
+            "For any patch URL that you are proposing for backport, you need to validate it using PatchValidator tool.",
+            "Do not modify the patch URL in your final answer after it has been validated with the PatchValidator tool.",
+            "After completing your triage analysis, if your decision is backport or rebase, always set appropriate JIRA fields per the instructions using set_jira_fields tool.",
+        ]
+    )
+
+
+async def run_workflow(jira_issue, dry_run, triage_agent_factory):
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
-        triage_agent = RequirementAgent(
-            name="TriageAgent",
-            llm=get_chat_model(),
-            tool_call_checker=get_tool_call_checker_config(),
-            tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool(),
-                    VersionMapperTool(), UpstreamSearchTool()]
-            + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields"]],
-            memory=UnconstrainedMemory(),
-            requirements=[
-                ConditionalRequirement(
-                    ThinkTool,
-                    force_at_step=1,
-                    force_after=Tool,
-                    consecutive_allowed=False,
-                    only_success_invocations=False,
-                ),
-                ConditionalRequirement("get_jira_details", min_invocations=1),
-                ConditionalRequirement(UpstreamSearchTool, only_after="get_jira_details"),
-                ConditionalRequirement(RunShellCommandTool, only_after="get_jira_details"),
-                ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),
-                ConditionalRequirement("set_jira_fields", only_after="get_jira_details"),
-            ],
-            middlewares=[current_metrics_middleware, GlobalTrajectoryMiddleware(pretty=True)],
-            role="Red Hat Enterprise Linux developer",
-            instructions=[
-                "Use the `think` tool to reason through complex decisions and document your approach.",
-                "Be proactive in your search for fixes and do not give up easily.",
-                "For any patch URL that you are proposing for backport, you need to validate it using PatchValidator tool.",
-                "Do not modify the patch URL in your final answer after it has been validated with the PatchValidator tool.",
-                "After completing your triage analysis, if your decision is backport or rebase, always set appropriate JIRA fields per the instructions using set_jira_fields tool.",
-            ]
-        )
+        triage_agent = triage_agent_factory(gateway_tools)
 
         workflow = Workflow(TriageState, name="TriageWorkflow")
 
@@ -500,7 +501,6 @@ async def run_workflow(jira_issue, dry_run):
         workflow.add_step("comment_in_jira", comment_in_jira)
 
         response = await workflow.run(TriageState(jira_issue=jira_issue))
-        response.state.metrics = current_metrics_middleware.get_metrics()
         return response.state
 
 
@@ -513,7 +513,7 @@ async def main() -> None:
 
     if jira_issue := os.getenv("JIRA_ISSUE", None):
         logger.info("Running in direct mode with environment variable")
-        state = await run_workflow(jira_issue, dry_run)
+        state = await run_workflow(jira_issue, dry_run, create_triage_agent)
         logger.info(f"Direct run completed: {state.triage_result.model_dump_json(indent=4)}")
         if state.cve_eligibility_result:
             logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
@@ -568,7 +568,7 @@ async def main() -> None:
                 logger.info(f"Cleaned up existing labels for {input.issue}")
 
                 logger.info(f"Starting triage processing for {input.issue}")
-                state = await run_workflow(input.issue, dry_run)
+                state = await run_workflow(input.issue, dry_run, create_triage_agent)
                 output = state.triage_result
                 logger.info(
                     f"Triage processing completed for {input.issue}, " f"resolution: {output.resolution.value}"

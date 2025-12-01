@@ -86,6 +86,23 @@ run-backport-agent-c10s-standalone:
 .PHONY: run-backport-agent-standalone
 run-backport-agent-standalone: run-backport-agent-c10s-standalone
 
+
+.PHONY: run-mr-agent-c9s-standalone
+run-mr-agent-c9s-standalone:
+	$(COMPOSE_AGENTS)  run --rm \
+		-e MERGE_REQUEST_URL=$(MERGE_REQUEST_URL) \
+		mr-agent-c9s
+
+.PHONY: run-mr-agent-c10s-standalone
+run-mr-agent-c10s-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e MERGE_REQUEST_URL=$(MERGE_REQUEST_URL) \
+		mr-agent-c10s
+
+.PHONY: run-mr-agent-standalone
+run-mr-agent-standalone: run-mr-agent-c10s-standalone
+
+
 .PHONY: run-jira-issue-fetcher
 run-jira-issue-fetcher:
 	@echo "Running Jira Issue Fetcher..."

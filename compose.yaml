@@ -155,6 +155,16 @@ services:
     command: ["python", "agents/rebase_agent.py"]
     profiles: ["agents"]
 
+  mr-agent-c9s:
+    <<: *beeai-agent-c9s
+    command: ["python", "agents/merge_request_agent.py"]
+    profiles: ["agents"]
+
+  mr-agent-c10s:
+    <<: *beeai-agent-c10s
+    command: ["python", "agents/merge_request_agent.py"]
+    profiles: ["agents"]
+
   # This is here so we can use it for '$(COMPOSE) run'
   supervisor:
     <<: *supervisor

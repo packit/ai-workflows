@@ -11,7 +11,7 @@ from beeai_framework.emitter.utils import create_internal_event_matcher
 
 
 class MetricsMiddleware(RunMiddlewareProtocol):
-    def __init__(self):
+    def __init__(self) -> None:
         self.start_time: datetime | None = None
         self.end_time: datetime | None = None
         self.tool_calls: int = 0
@@ -28,10 +28,10 @@ class MetricsMiddleware(RunMiddlewareProtocol):
             EmitterOptions(is_blocking=True, priority=1),
         )
 
-    async def _on_run_context_start(self, event: RunContextStartEvent, meta: EventMeta):
+    async def _on_run_context_start(self, event: RunContextStartEvent, meta: EventMeta) -> None:
         self.start_time = datetime.now()
 
-    async def _on_run_context_finish(self, event: RunContextFinishEvent, meta: EventMeta):
+    async def _on_run_context_finish(self, event: RunContextFinishEvent, meta: EventMeta) -> None:
         self.end_time = datetime.now()
 
     @property
@@ -40,5 +40,5 @@ class MetricsMiddleware(RunMiddlewareProtocol):
             return (self.end_time - self.start_time).total_seconds()
         return 0
 
-    def get_metrics(self) -> dict:
+    def get_metrics(self) -> dict[str, float]:
         return {"duration": self.duration}

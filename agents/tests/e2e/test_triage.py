@@ -9,9 +9,9 @@ from common.models import TriageOutputSchema, Resolution, BackportData
 
 
 class TriageAgentTestCase:
-    def __init__(self, input, expected_output):
-        self.input = input
-        self.expected_output = expected_output
+    def __init__(self, input: str, expected_output: TriageOutputSchema):
+        self.input: str = input
+        self.expected_output: TriageOutputSchema = expected_output
         self.metrics: dict = None
 
     async def run(self) -> TriageState:

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+from datetime import datetime
 from typing import Annotated, Tuple
 from urllib.parse import urlparse
 
@@ -10,9 +11,9 @@ from ogr.factory import get_project
 from ogr.exceptions import OgrException, GitlabAPIException
 from ogr.services.gitlab.project import GitlabProject
 from ogr.services.gitlab.pull_request import GitlabPullRequest
-from pydantic import Field
+from pydantic import BaseModel, Field
 
-from common.models import FailedPipelineJob, MergeRequestComment, CommentReply
+from common.models import CommentReply, FailedPipelineJob, MergeRequestComment, MergeRequestDetails
 from common.validators import AbsolutePath
 from utils import clean_stale_repositories
 
@@ -256,7 +257,22 @@ async def add_merge_request_labels(
             await asyncio.to_thread(mr.add_label, label)
         return f"Successfully added labels {labels} to merge request {merge_request_url}"
     except Exception as e:
-        raise ToolError(f"Failed to add labels to merge request: {e}")
+        raise ToolError(f"Failed to add labels to merge request: {e}") from e
+
+
+async def add_merge_request_comment(
+    merge_request_url: Annotated[str, Field(description="URL of the merge request")],
+    comment: Annotated[str, Field(description="Comment text")],
+) -> str:
+    """
+    Adds a comment to an existing merge request.
+    """
+    try:
+        mr = await _get_merge_request_from_url(merge_request_url)
+        await asyncio.to_thread(mr._raw_pr.notes.create, {"body": comment})
+        return f"Successfully added comment to merge request {merge_request_url}"
+    except Exception as e:
+        raise ToolError(f"Failed to add comment to merge request: {e}") from e
 
 
 async def add_blocking_merge_request_comment(
@@ -296,7 +312,7 @@ async def add_blocking_merge_request_comment(
 
         return f"Successfully added blocking comment to merge request {merge_request_url}"
     except Exception as e:
-        raise ToolError(f"Failed to add blocking comment to merge request: {e}")
+        raise ToolError(f"Failed to add blocking comment to merge request: {e}") from e
 
 
 async def create_merge_request_checklist(
@@ -334,7 +350,7 @@ async def create_merge_request_checklist(
         await asyncio.to_thread(mr._raw_pr.notes.create, {"body": note_body}, internal=True)
         return f"Successfully created checklist for merge request {merge_request_url}"
     except Exception as e:
-        raise ToolError(f"Failed to create checklist for merge request: {e}")
+        raise ToolError(f"Failed to create checklist for merge request: {e}") from e
 
 
 async def retry_pipeline_job(
@@ -536,3 +552,27 @@ async def get_authorized_comments_from_merge_request(
 
     except Exception as e:
         raise ToolError(f"Failed to get authorized comments from merge request: {e}") from e
+
+
+async def get_merge_request_details(
+    merge_request_url: Annotated[str, Field(description="URL of the merge request")],
+) -> MergeRequestDetails:
+    """
+    Retrieves details about the specified merge request.
+    """
+    try:
+        mr = await _get_merge_request_from_url(merge_request_url)
+        comments = await get_authorized_comments_from_merge_request(merge_request_url)
+        username = mr.source_project.service.user.get_username()
+        return MergeRequestDetails(
+            source_repo=mr.source_project.get_git_urls()["git"],
+            source_branch=mr.source_branch,
+            target_repo_name=mr.target_project.gitlab_repo.name,
+            target_branch=mr.target_branch,
+            title=mr.title,
+            description=mr.description,
+            last_updated_at=mr._raw_pr.updated_at,
+            comments=[c for c in comments if f"@{username}" in c.message],
+        )
+    except Exception as e:
+        raise ToolError(f"Failed to get merge request details: {e}") from e

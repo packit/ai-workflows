@@ -6,10 +6,11 @@ and components to ensure consistency and type safety.
 """
 
 from datetime import datetime
-from typing import Optional, Dict, Any, Union
-from pydantic import BaseModel, Field
-from pathlib import Path
 from enum import Enum
+from pathlib import Path
+from typing import Optional, Dict, Any, Union
+
+from pydantic import BaseModel, Field, RootModel
 
 
 class CVEEligibilityResult(BaseModel):
@@ -267,6 +268,37 @@ class LogOutputSchema(BaseModel):
 
 
 # ============================================================================
+# Merge Request Agent Schemas
+# ============================================================================
+
+class MergeRequestInputSchema(BaseModel):
+    """Input schema for the merge request agent."""
+    local_clone: Path = Field(description="Path to the local clone of forked dist-git repository")
+    package: str = Field(description="Package to update")
+    dist_git_branch: str = Field(description="dist-git branch to update")
+    jira_issue: str = Field(description="Jira issue identifier")
+    merge_request_url: str = Field(description="URL of the merge request")
+    merge_request_title: str = Field(description="Title of the MR")
+    merge_request_description: str = Field(description="Description of the MR")
+    comments: str = Field(description="List of MR comments as a JSON string, including schema")
+    fedora_clone: Path | None = Field(
+        description=(
+            "Path to the local clone of corresponding Fedora repository (rawhide branch), "
+            "None if clone failed"
+        ),
+    )
+    build_error: str | None = Field(description="Error encountered during package build")
+
+
+class MergeRequestOutputSchema(BaseModel):
+    success: bool = Field(description="Whether the MR update was successfully completed")
+    status: str = Field(description="MR update status with details of changes performed, in a form of a commit message")
+    srpm_path: Path | None = Field(description="Absolute path to generated SRPM")
+    files_to_git_add: list[str] | None = Field(description="List of files that should be git added and committed")
+    error: str | None = Field(description="Specific details about an error")
+
+
+# ============================================================================
 # Merge Request Metadata Cache Schema
 # ============================================================================
 
@@ -340,3 +372,17 @@ class MergeRequestComment(BaseModel):
         description="List of replies to this comment in the thread, "
         "ordered chronologically"
     )
+
+
+MergeRequestComments = RootModel[list[MergeRequestComment]]
+
+
+class MergeRequestDetails(BaseModel):
+    source_repo: str = Field(description="Clonable git URL of source project of the MR (fork)")
+    source_branch: str = Field(description="Source branch of the MR")
+    target_repo_name: str = Field(description="Name of the target repository (package name)")
+    target_branch: str = Field(description="Target branch of the MR")
+    title: str = Field(description="Title of the MR")
+    description: str = Field(description="Description of the MR")
+    last_updated_at: datetime = Field(description="Timestamp of the last update (push)")
+    comments: MergeRequestComments = Field(description="List of relevant MR comments")

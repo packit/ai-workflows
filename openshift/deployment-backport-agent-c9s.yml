@@ -45,8 +45,9 @@ spec:
         ports:
         - containerPort: 8080
           protocol: TCP
-        # TODO: add limits on cpu and memory.
-        resources: {}
+        resources:
+          limits:
+            memory: 4Gi
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
         volumeMounts:

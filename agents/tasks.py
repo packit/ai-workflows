@@ -9,9 +9,9 @@ from beeai_framework.tools import Tool
 
 from common.models import LogOutputSchema, CachedMRMetadata
 from common.utils import is_cs_branch
-from constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
-from utils import check_subprocess, run_subprocess, run_tool, mcp_tools
-from tools.specfile import UpdateReleaseTool
+from agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
+from agents.utils import check_subprocess, run_subprocess, run_tool, mcp_tools
+from agents.tools.specfile import UpdateReleaseTool
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,8 @@ async def fork_and_prepare_dist_git(
     repository = f"https://gitlab.com/redhat/{namespace}/rpms/{package}"
     fork_url = await run_tool("fork_repository", repository=repository, available_tools=available_tools)
     local_clone = working_dir / package
-    shutil.rmtree(local_clone, ignore_errors=True)
+    if local_clone.is_dir():
+        shutil.rmtree(local_clone, ignore_errors=False)
     if not is_cs_branch(dist_git_branch):
         await run_tool(
             "create_zstream_branch",
@@ -50,7 +51,8 @@ async def fork_and_prepare_dist_git(
     if with_fedora:
         try:
             fedora_clone = working_dir / f"{package}-fedora"
-            shutil.rmtree(fedora_clone, ignore_errors=True)
+            if fedora_clone.is_dir():
+                shutil.rmtree(fedora_clone, ignore_errors=False)
             await check_subprocess(
                 ["git", "clone", "--single-branch", "--branch", "rawhide", f"https://src.fedoraproject.org/rpms/{package}", f"{package}-fedora"],
                 cwd=working_dir,

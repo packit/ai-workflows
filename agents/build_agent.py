@@ -34,7 +34,8 @@ def get_instructions() -> str:
       using the `download_artifacts` tool to the current directory. If there are no log files,
       just return the error message. Otherwise, start with `builder-live.log` and try to identify
       the build failure. If not found, try the same with `root.log`. Summarize the findings
-      and return them as `error`. If the build failed due to a build timeout, set `is_timeout` to `true` in your output.
+      and return them as `error`. If the build failed due to a build timeout, set `is_timeout` to `true`
+      in your output. Remove the downloaded *.log.gz files, if any.
 
       General instructions:
 

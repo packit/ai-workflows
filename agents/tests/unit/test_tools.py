@@ -85,6 +85,28 @@ async def test_run_shell_command(command, exit_code, stdout, stderr):
     assert result.stderr == stderr
 
 
+@pytest.mark.parametrize(
+    "full_output",
+    [False, True],
+)
+@pytest.mark.asyncio
+async def test_run_shell_command_huge_output(full_output):
+    command = "printf 'Line\n%.0s' {1..1000}"
+    tool = RunShellCommandTool()
+    output = await tool.run(input=RunShellCommandToolInput(command=command, full_output=full_output)).middleware(
+        GlobalTrajectoryMiddleware(pretty=True)
+    )
+    result = output.to_json_safe()
+    assert result.exit_code == 0
+    assert result.stderr is None
+    if full_output:
+        assert len(result.stdout.splitlines()) == 1000
+        assert "[...]" not in result.stdout.splitlines()
+    else:
+        assert len(result.stdout.splitlines()) == 200
+        assert "[...]" in result.stdout.splitlines()
+
+
 @pytest.mark.asyncio
 async def test_add_changelog_entry(minimal_spec):
     content = ["- some change", "  second line"]
@@ -235,6 +257,15 @@ async def test_update_release(rebase, dist_git_branch, minimal_spec, autorelease
         await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
         await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "2%{?dist}.2")
         await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
+
+    with specfile.Specfile(minimal_spec) as spec:
+        spec.raw_release = "2%{?dist}.1"
+    with specfile.Specfile(autorelease_spec) as spec:
+        spec.raw_release = "2%{?dist}.%{autorelease -n}"
+
+    if not dist_git_branch.startswith("rhel-"):
+        await run_and_check(minimal_spec, "1%{?dist}" if rebase else "3%{?dist}")
+        await run_and_check(autorelease_spec, "%autorelease")
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,6 @@ from common.constants import JiraLabels
 
 from .constants import DATETIME_MIN_UTC, GITLAB_GROUPS
 from .errata_utils import (
-    get_erratum_build_nvr,
     get_erratum_for_link,
     get_previous_erratum,
 )
@@ -85,17 +84,15 @@ class IssueHandler(WorkItemHandler):
                 details_comment=comment,
             )
 
-        previous_erratum = get_previous_erratum(
+        previous_erratum_id, previous_build_nvr = get_previous_erratum(
             related_erratum.id, self.issue.components[0]
         )
-        if previous_erratum is None:
+
+        if previous_erratum_id is None:
             return resolve_on_error(
                 "Cannot start reproduction with previous build - no previous erratum found to get build from."
             )
 
-        previous_build_nvr = get_erratum_build_nvr(
-            previous_erratum.id, self.issue.components[0]
-        )
         if previous_build_nvr is None:
             return resolve_on_error(
                 "Cannot start reproduction with previous build - error finding previous build NVR."

@@ -258,6 +258,15 @@ async def test_update_release(rebase, dist_git_branch, minimal_spec, autorelease
         await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "2%{?dist}.2")
         await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
 
+    with specfile.Specfile(minimal_spec) as spec:
+        spec.raw_release = "2%{?dist}.1"
+    with specfile.Specfile(autorelease_spec) as spec:
+        spec.raw_release = "2%{?dist}.%{autorelease -n}"
+
+    if not dist_git_branch.startswith("rhel-"):
+        await run_and_check(minimal_spec, "1%{?dist}" if rebase else "3%{?dist}")
+        await run_and_check(autorelease_spec, "%autorelease")
+
 
 @pytest.mark.asyncio
 async def test_get_cwd(tmp_path):

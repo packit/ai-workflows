@@ -101,6 +101,8 @@ async def set_jira_fields(
     """
     Updates the specified Jira issue, setting only the fields that are currently empty/unset.
     """
+    if os.getenv("SKIP_SETTING_JIRA_FIELDS", "False").lower() == "true":
+        return "Skipping of setting Jira fields requested, not doing anything (this is expected, not an error)"
     if os.getenv("DRY_RUN", "False").lower() == "true":
         return "Dry run, not updating Jira fields (this is expected, not an error)"
 
@@ -159,6 +161,9 @@ async def add_jira_comment(
     """
     Adds a comment to the specified Jira issue.
     """
+    if os.getenv("DRY_RUN", "False").lower() == "true":
+        return f"Dry run, not adding comment to {issue_key} (this is expected, not an error)"
+
     async with aiohttpClientSession() as session:
         try:
             async with session.post(

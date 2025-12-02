@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 
 import aiohttp
 from pydantic import BaseModel, Field
@@ -22,10 +22,14 @@ class ExtractUpstreamRepositoryInput(BaseModel):
 class UpstreamRepository(BaseModel):
     """Represents an upstream git repository and commit information."""
     repo_url: str = Field(description="Git clone URL of the upstream repository")
-    commit_hash: str = Field(description="Commit hash to cherry-pick")
+    commit_hash: str = Field(description="Commit hash to cherry-pick (for single commits) or target ref (for compare URLs)")
     original_url: str = Field(description="Original upstream fix URL")
     pr_number: str | None = Field(default=None, description="Pull request or merge request number if this is a PR/MR URL, None otherwise")
     is_pr: bool = Field(default=False, description="True if this is a pull request or merge request URL")
+    is_compare: bool = Field(default=False, description="True if this is a compare/diff URL between two refs")
+    base_ref: str | None = Field(default=None, description="Base reference for compare URLs (e.g., v3.7.0)")
+    target_ref: str | None = Field(default=None, description="Target reference for compare URLs (e.g., v3.7.1)")
+    compare_commits: list[str] | None = Field(default=None, description="List of commit hashes in the compare range (ordered oldest to newest)")
 
 
 class ExtractUpstreamRepositoryOutput(JSONToolOutput[UpstreamRepository]):
@@ -35,15 +39,17 @@ class ExtractUpstreamRepositoryOutput(JSONToolOutput[UpstreamRepository]):
 class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRunOptions, ExtractUpstreamRepositoryOutput]):
     name = "extract_upstream_repository"
     description = """
-    Extract upstream repository URL and commit hash from a commit or pull request URL.
+    Extract upstream repository URL and commit information from a commit, pull request, or compare URL.
 
     Supports common formats:
     - GitHub/GitLab commit: https://domain.com/owner/repo/commit/hash or /-/commit/hash
     - GitHub/GitLab PR: https://domain.com/owner/repo/pull/123 or /merge_requests/123
+    - GitHub/GitLab compare: https://domain.com/owner/repo/compare/ref1...ref2 or /-/compare/ref1...ref2
     - Query param formats: ?id=hash or ?h=hash (for cgit/gitweb)
 
     For pull requests, fetches the head commit SHA from the PR.
-    Returns the git clone URL and commit hash needed for cherry-picking.
+    For compare URLs, fetches all commits in the range and returns them ordered oldest to newest.
+    Returns the git clone URL and commit information needed for cherry-picking.
     """
     input_schema = ExtractUpstreamRepositoryInput
 
@@ -59,7 +65,7 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
         try:
             parsed = urlparse(tool_input.upstream_fix_url)
 
-            # Check if this is a pull request URL and extract owner/repo/PR number in one match
+            # Check if this is a pull request URL and extract owner/repo/PR number in one match.
             pr_match = re.search(r'/([\w\-\.]+)/([\w\-\.]+)/pull/(\d+)(?:\.patch)?', parsed.path)
             mr_match = re.search(r'/([\w\-\.]+)/([\w\-\.]+)/-/merge_requests/(\d+)(?:\.patch)?', parsed.path)
 
@@ -117,50 +123,103 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
                     )
                 )
 
-            else:
+            # Try to match compare URL
+            compare_match = re.search(r'/([\w\-\.]+)/([\w\-\.]+)/(?:-/)?compare/(.+?)(\.{2,3})([^\s\?#]+)', parsed.path)
+            if compare_match:
+                # Handle GitHub/GitLab Compare URLs
+                owner = compare_match.group(1)
+                repo = compare_match.group(2)
+                base_ref = compare_match.group(3)
+                # Group 4 is the separator (.. or ...) - not used, we always use ... for APIs
+                target_ref = compare_match.group(5).rstrip('.patch')  # Remove .patch if present
+                # Construct repository URL
+                repo_url = f"https://{parsed.netloc}/{owner}/{repo}.git"
+                # Fetch compare information to get the list of commits
+                headers = {
+                    'Accept': 'application/json',
+                    'User-Agent': 'RHEL-Backport-Agent'
+                }
+                commits = []
+                commit_hash = target_ref
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        # Determine if this is GitHub or GitLab based on the URL pattern
+                        if '/-/' not in parsed.path:
+                            # GitHub API - URL-encode refs to handle special characters like / in branch names
+                            api_url = f"https://api.github.com/repos/{owner}/{repo}/compare/{quote(base_ref, safe='')}...{quote(target_ref, safe='')}"
+                            async with session.get(api_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                                response.raise_for_status()
+                                data = await response.json()
+                                # GitHub: commits are in 'commits' array (oldest first)
+                                commits = [commit['sha'] for commit in data.get('commits', [])]
+                        else:
+                            # GitLab API - use params dict for automatic URL encoding
+                            api_url = f"https://{parsed.netloc}/api/v4/projects/{owner}%2F{repo}/repository/compare"
+                            params = {'from': base_ref, 'to': target_ref}
+                            async with session.get(api_url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                                response.raise_for_status()
+                                data = await response.json()
+                                # GitLab: commits are in 'commits' array (newest first)
+                                commits = [commit['id'] for commit in data.get('commits', [])]
+                                # Reverse to get oldest first
+                                commits = list(reversed(commits))
+                        # Use the last commit (newest) as the commit_hash
+                        commit_hash = commits[-1] if commits else target_ref
+                except (aiohttp.ClientError, KeyError) as e:
+                    # If API fails, fall back to using target_ref as commit_hash
+                    # This allows the tool to still work even if API is unavailable
+                    commit_hash = target_ref
+                    commits = []
+                # Return with compare information
+                return ExtractUpstreamRepositoryOutput(
+                    result=UpstreamRepository(
+                        repo_url=repo_url,
+                        commit_hash=commit_hash,
+                        original_url=tool_input.upstream_fix_url,
+                        pr_number=None,
+                        is_pr=False,
+                        is_compare=True,
+                        base_ref=base_ref,
+                        target_ref=target_ref,
+                        compare_commits=commits if commits else None
+                    )
+                )
+            # Try to match regular commit URL or query parameter format
+            repo_path = None
+            commit_hash = None
+            commit_match = re.search(r'^(.*?)(?:/(?:-/)?commit(?:s)?/([a-f0-9]{7,40})(?:\.patch)?)', parsed.path)
+            if commit_match:
                 # Handle regular commit URLs
-                commit_hash = None
-                repo_path = None
-
-                # Pattern 1: /commit/hash or /-/commit/hash in the path (capture repo path and commit hash together)
-                commit_match = re.search(r'^(.*?)(?:/(?:-/)?commit(?:s)?/([a-f0-9]{7,40})(?:\.patch)?)', parsed.path)
-                if commit_match:
-                    repo_path = commit_match.group(1).strip('/')
-                    commit_hash = commit_match.group(2)
-
-                # Pattern 2: query parameters (?id=hash or &h=hash for cgit/gitweb, ?p=repo for repo path)
-                if not commit_hash and parsed.query:
-                    query_match = re.search(r'(?:id|h)=([a-f0-9]{7,40})', parsed.query)
-                    if query_match:
-                        commit_hash = query_match.group(1)
-                        # Extract repo from ?p= parameter
-                        repo_query_match = re.search(r'[?&]p=([^;&]+)', parsed.query)
-                        if repo_query_match:
-                            repo_path = repo_query_match.group(1)
-
-                if not commit_hash:
-                    raise ToolError(f"Could not extract commit hash from URL: {tool_input.upstream_fix_url}")
-
+                repo_path = commit_match.group(1).strip('/')
+                commit_hash = commit_match.group(2)
+            elif parsed.query:
+                # Handle query parameter format (cgit/gitweb)
+                query_match = re.search(r'(?:id|h)=([a-f0-9]{7,40})', parsed.query)
+                if query_match:
+                    commit_hash = query_match.group(1)
+                    repo_query_match = re.search(r'[?&]p=([^;&]+)', parsed.query)
+                    if repo_query_match:
+                        repo_path = repo_query_match.group(1)
+            if commit_hash:
                 if not repo_path:
                     raise ToolError(f"Could not extract repository path from URL: {tool_input.upstream_fix_url}")
-
                 # Construct clone URL
                 scheme = parsed.scheme or 'https'
                 repo_url = f"{scheme}://{parsed.netloc}/{repo_path}"
                 if not repo_url.endswith('.git'):
                     repo_url += '.git'
-
-            # Return for non-PR commits
-            return ExtractUpstreamRepositoryOutput(
-                result=UpstreamRepository(
-                    repo_url=repo_url,
-                    commit_hash=commit_hash,
-                    original_url=tool_input.upstream_fix_url,
-                    pr_number=None,
-                    is_pr=False
+                # Return for non-PR/non-compare URLs
+                return ExtractUpstreamRepositoryOutput(
+                    result=UpstreamRepository(
+                        repo_url=repo_url,
+                        commit_hash=commit_hash,
+                        original_url=tool_input.upstream_fix_url,
+                        pr_number=None,
+                        is_pr=False
+                    )
                 )
-            )
-
+            # If we got here, we couldn't match any pattern
+            raise ToolError(f"Could not extract commit hash from URL: {tool_input.upstream_fix_url}")
         except ToolError:
             raise
         except Exception as e:

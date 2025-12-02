@@ -19,6 +19,7 @@ from gitlab_tools import (
     open_merge_request,
     push_to_remote_repository,
     add_merge_request_labels,
+    add_merge_request_comment,
     add_blocking_merge_request_comment,
     retry_pipeline_job,
     get_failed_pipeline_jobs_from_merge_request,
@@ -227,6 +228,36 @@ async def test_add_merge_request_labels_invalid_url():
         )
 
     assert "Could not parse merge request URL" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_add_merge_request_comment():
+    merge_request_url = "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123"
+    comment = "Test comment"
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url=merge_request_url.rsplit("/-/merge_requests/", 1)[0],
+    ).and_return(
+        flexmock().should_receive("get_pr").and_return(
+            flexmock(
+                id=123,
+                _raw_pr=flexmock(
+                    notes=flexmock().should_receive("create").with_args(
+                        {"body": comment},
+                    ).and_return(
+                        flexmock(id=1),
+                    ).mock(),
+                ),
+            ),
+        ).mock()
+    )
+
+    result = await add_merge_request_comment(
+        merge_request_url=merge_request_url,
+        comment=comment,
+    )
+
+    assert result == f"Successfully added comment to merge request {merge_request_url}"
 
 
 @pytest.mark.asyncio

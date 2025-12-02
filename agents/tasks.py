@@ -4,16 +4,38 @@ import os
 import shutil
 from pathlib import Path
 from typing import Tuple
+from urllib.parse import urlparse
 
 from beeai_framework.tools import Tool
 
-from common.models import LogOutputSchema, CachedMRMetadata
+from common.models import LogOutputSchema, CachedMRMetadata, MergeRequestDetails
 from common.utils import is_cs_branch
 from agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
 from agents.utils import check_subprocess, run_subprocess, run_tool, mcp_tools
 from agents.tools.specfile import UpdateReleaseTool
 
 logger = logging.getLogger(__name__)
+
+
+async def _clone_fedora_dist_git(package: str, destination: Path) -> bool:
+    try:
+        if destination.is_dir():
+            shutil.rmtree(destination, ignore_errors=False)
+        await check_subprocess(
+            [
+                "git",
+                "clone",
+                "--single-branch",
+                "--branch",
+                "rawhide",
+                f"https://src.fedoraproject.org/rpms/{package}",
+                str(destination),
+            ],
+        )
+    except Exception as e:
+        logger.warning(f"Failed to clone Fedora repository for {package}: {e}")
+        return False
+    return True
 
 
 async def fork_and_prepare_dist_git(
@@ -49,19 +71,41 @@ async def fork_and_prepare_dist_git(
     await check_subprocess(["git", "checkout", "-B", update_branch], cwd=local_clone)
     fedora_clone = None
     if with_fedora:
-        try:
-            fedora_clone = working_dir / f"{package}-fedora"
-            if fedora_clone.is_dir():
-                shutil.rmtree(fedora_clone, ignore_errors=False)
-            await check_subprocess(
-                ["git", "clone", "--single-branch", "--branch", "rawhide", f"https://src.fedoraproject.org/rpms/{package}", f"{package}-fedora"],
-                cwd=working_dir,
-            )
-        except Exception as e:
-            logger.warning(f"Failed to clone Fedora repository for {package}: {e}")
+        fedora_clone = working_dir / f"{package}-fedora"
+        if not await _clone_fedora_dist_git(package, fedora_clone):
             fedora_clone = None
-
     return local_clone, update_branch, fork_url, fedora_clone
+
+
+async def prepare_dist_git_from_merge_request(
+    merge_request_url: str,
+    available_tools: list[Tool],
+    with_fedora: bool = False,
+) -> Tuple[Path, MergeRequestDetails, Path | None]:
+    working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "merge_requests"
+    working_dir.mkdir(parents=True, exist_ok=True)
+    local_clone = working_dir / urlparse(merge_request_url).path.replace("/", "_")
+    shutil.rmtree(local_clone, ignore_errors=True)
+    details = await run_tool(
+        "get_merge_request_details",
+        merge_request_url=merge_request_url,
+        available_tools=available_tools,
+    )
+    details = MergeRequestDetails.model_validate(details)
+    await run_tool(
+        "clone_repository",
+        repository=details.source_repo,
+        branch=details.source_branch,
+        clone_path=str(local_clone),
+        available_tools=available_tools,
+    )
+    fedora_clone = None
+    if with_fedora:
+        package = details.target_repo_name
+        fedora_clone = working_dir / f"{package}-fedora"
+        if not await _clone_fedora_dist_git(package, fedora_clone):
+            fedora_clone = None
+    return local_clone, details, fedora_clone
 
 
 async def update_release(
@@ -97,6 +141,44 @@ async def stage_changes(
             logger.warning(f"Failed to stage {file}: {stderr}")
 
 
+async def commit_and_push(
+    local_clone: Path,
+    commit_message: str,
+    fork_url: str,
+    update_branch: str,
+    available_tools: list[Tool],
+    commit_only: bool = False,
+) -> bool:
+    """
+    Commits the changes to the local clone.
+
+    Returns:
+        - str: The URL of the merge request if it was created successfully
+        - bool: True if the merge request was created, False otherwise (i.e. MR was reused)
+    """
+    # Check if any files are staged before committing, if none, bail
+    exit_code, _, _ = await run_subprocess(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=local_clone,
+    )
+    # 1 = staged, 0 = none staged
+    if exit_code == 0:
+        logger.info("No files staged for commit, halting.")
+        raise RuntimeError("No files staged for commit, halting.")
+    await check_subprocess(["git", "commit", "-m", commit_message], cwd=local_clone)
+    if commit_only:
+        return False
+    await run_tool(
+        "push_to_remote_repository",
+        repository=fork_url,
+        clone_path=str(local_clone),
+        branch=update_branch,
+        force=True,
+        available_tools=available_tools,
+    )
+    return True
+
+
 async def commit_push_and_open_mr(
     local_clone: Path,
     commit_message: str,
@@ -115,26 +197,15 @@ async def commit_push_and_open_mr(
         - str: The URL of the merge request if it was created successfully
         - bool: True if the merge request was created, False otherwise (i.e. MR was reused)
     """
-    # Check if any files are staged before committing, if none, bail
-    exit_code, _, _ = await run_subprocess(
-        ["git", "diff", "--cached", "--quiet"],
-        cwd=local_clone,
-    )
-    # 1 = staged, 0 = none staged
-    if exit_code == 0:
-        logger.info("No files staged for commit, halting.")
-        raise RuntimeError("No files staged for commit, halting.")
-    await check_subprocess(["git", "commit", "-m", commit_message], cwd=local_clone)
-    if commit_only:
+    if not await commit_and_push(
+        local_clone,
+        commit_message,
+        fork_url,
+        update_branch,
+        available_tools,
+        commit_only,
+    ):
         return None, False
-    await run_tool(
-        "push_to_remote_repository",
-        repository=fork_url,
-        clone_path=str(local_clone),
-        branch=update_branch,
-        force=True,
-        available_tools=available_tools,
-    )
     return await run_tool(
         "open_merge_request",
         fork_url=fork_url,
@@ -157,6 +228,19 @@ async def comment_in_jira(
         issue_key=jira_issue,
         comment=JIRA_COMMENT_TEMPLATE.substitute(AGENT_TYPE=agent_type, JIRA_COMMENT=comment_text),
         private=True,
+        available_tools=available_tools,
+    )
+
+
+async def comment_in_mr(
+    merge_request_url: str,
+    comment_text: str,
+    available_tools: list[Tool],
+) -> None:
+    await run_tool(
+        "add_merge_request_comment",
+        merge_request_url=merge_request_url,
+        comment=comment_text,
         available_tools=available_tools,
     )
 

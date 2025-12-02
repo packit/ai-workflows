@@ -159,6 +159,9 @@ async def add_jira_comment(
     """
     Adds a comment to the specified Jira issue.
     """
+    if os.getenv("DRY_RUN", "False").lower() == "true":
+        return f"Dry run, not adding comment to {issue_key} (this is expected, not an error)"
+
     async with aiohttpClientSession() as session:
         try:
             async with session.post(

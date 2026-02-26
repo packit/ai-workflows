@@ -1,4 +1,5 @@
 import datetime
+import logging
 import os
 import json
 import re
@@ -8,6 +9,8 @@ from typing import Annotated, Any
 from urllib.parse import urljoin
 
 import aiohttp
+
+logger = logging.getLogger(__name__)
 
 if os.getenv("MOCK_JIRA", "False").lower() == "true":
     from aiohttp_client_session_mock import aiohttpClientSessionMock as aiohttpClientSession
@@ -59,12 +62,14 @@ async def get_jira_details(
     Returns a dictionary with issue details and comments.
     """
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
+    jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}")
+    logger.info(f"Connecting to JIRA API to get issue details: {jira_url}")
 
     async with aiohttpClientSession() as session:
         # Get main issue data
         try:
             async with session.get(
-                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+                jira_url,
                 params={"expand": "comments"},
                 headers=headers,
             ) as response:
@@ -108,9 +113,11 @@ async def set_jira_fields(
 
     async with aiohttpClientSession() as session:
         # First, get the current issue to check existing field values
+        jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}")
+        logger.info(f"Connecting to JIRA API to set fields for issue: {jira_url}")
         try:
             async with session.get(
-                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+                jira_url,
                 headers=_get_jira_headers(os.getenv("JIRA_TOKEN")),
             ) as response:
                 response.raise_for_status()
@@ -164,10 +171,12 @@ async def add_jira_comment(
     if os.getenv("DRY_RUN", "False").lower() == "true":
         return f"Dry run, not adding comment to {issue_key} (this is expected, not an error)"
 
+    jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/comment")
+    logger.info(f"Connecting to JIRA API to add comment: {jira_url}")
     async with aiohttpClientSession() as session:
         try:
             async with session.post(
-                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/comment"),
+                jira_url,
                 json={
                     "body": comment,
                     **({"visibility": {"type": "group", "value": RH_EMPLOYEE_GROUP}} if private else {}),
@@ -190,11 +199,13 @@ async def check_cve_triage_eligibility(
     Returns CVEEligibilityResult model with eligibility decision and reasoning.
     """
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
+    jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}")
+    logger.info(f"Connecting to JIRA API to check CVE eligibility: {jira_url}")
 
     async with aiohttpClientSession() as session:
         try:
             async with session.get(
-                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+                jira_url,
                 headers=headers,
             ) as response:
                 response.raise_for_status()
@@ -276,6 +287,7 @@ async def change_jira_status(
 
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
     jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/transitions")
+    logger.info(f"Connecting to JIRA API to change status: {jira_url}")
 
     async with aiohttpClientSession() as session:
         try:
@@ -337,6 +349,7 @@ async def edit_jira_labels(
         return f"Dry run, not editing labels on {issue_key} (this is expected, not an error)"
 
     jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}")
+    logger.info(f"Connecting to JIRA API to edit labels: {jira_url}")
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
 
     update_payload = []
@@ -369,11 +382,13 @@ async def verify_issue_author(
     Supports both Jira Server (using 'key') and Jira Cloud (using 'accountId').
     """
     headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
+    jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}")
+    logger.info(f"Connecting to JIRA API to verify issue author: {jira_url}")
 
     async with aiohttpClientSession() as session:
         try:
             async with session.get(
-                urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}"),
+                jira_url,
                 headers=headers,
             ) as response:
                 response.raise_for_status()
@@ -412,3 +427,98 @@ async def verify_issue_author(
             group.get("name") == RH_EMPLOYEE_GROUP
             for group in user_data.get("groups", {}).get("items", [])
         )
+
+
+async def search_jira_issues(
+    jql: Annotated[str, Field(description="JQL query string (e.g., 'component = \"fence-agents\" AND summary ~ \"fix missing statuses\"')")],
+    fields: Annotated[
+        list[str] | None,
+        Field(description="List of fields to return (e.g., ['summary', 'fixVersions']). Defaults to key, id, summary, fixVersions."),
+    ] = None,
+    max_results: Annotated[int, Field(description="Maximum number of results to return")] = 50,
+) -> list[dict[str, Any]]:
+    """
+    Searches Jira using the provided JQL query and returns matching issues
+    with the specified fields.
+    """
+    if fields is None:
+        fields = ["key", "id", "summary", "fixVersions"]
+
+    headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
+    url = urljoin(os.getenv("JIRA_URL"), "rest/api/2/search")
+    logger.info(f"Searching Jira with JQL: {jql}")
+
+    json_payload = {
+        "jql": jql,
+        "startAt": 0,
+        "maxResults": max_results,
+        "fields": fields,
+    }
+
+    async with aiohttpClientSession() as session:
+        try:
+            async with session.post(
+                url,
+                json=json_payload,
+                headers=headers,
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
+        except aiohttp.ClientError as e:
+            raise ToolError(f"Failed to search Jira issues: {e}") from e
+
+    issues = data.get("issues", [])
+    logger.info(f"Jira search returned {len(issues)} issues")
+
+    return [
+        {
+            "key": issue.get("key"),
+            "id": issue.get("id"),
+            "fields": {f: issue.get("fields", {}).get(f) for f in fields if f not in ("key", "id")},
+        }
+        for issue in issues
+    ]
+
+
+async def get_jira_dev_status(
+    issue_key: Annotated[str, Field(description="Jira issue key (e.g. RHEL-12345)")],
+) -> list[dict[str, Any]]:
+    """
+    Gets development status (linked commits) for a Jira issue using the
+    Bitbucket REST API. Returns a list of commit objects with
+    url, message, and repository_url fields.
+    """
+    headers = _get_jira_headers(os.getenv("JIRA_TOKEN"))
+    jira_base = os.getenv("JIRA_URL")
+
+    dev_status_url = urljoin(
+        jira_base,
+        "rest/bitbucket/1.0/jira-dev/detail",
+    )
+    logger.info(f"Fetching development status for {issue_key}")
+
+    async with aiohttpClientSession() as session:
+        try:
+            async with session.get(
+                dev_status_url,
+                params={"issue": issue_key},
+                headers=headers,
+            ) as response:
+                response.raise_for_status()
+                dev_data = await response.json()
+        except aiohttp.ClientError as e:
+            raise ToolError(f"Failed to get development status for {issue_key}: {e}") from e
+
+    # Parse the response and extract commits
+    commits = []
+    for repo in dev_data.get("repositories", []):
+        repo_url = repo.get("url", "")
+        for commit in repo.get("commits", []):
+            commits.append({
+                "url": commit.get("url", ""),
+                "message": commit.get("message", ""),
+                "repository_url": repo_url,
+            })
+
+    logger.info(f"Found {len(commits)} commits in development status for {issue_key}")
+    return commits

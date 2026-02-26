@@ -98,6 +98,7 @@ async def build_package(
         chroot = (await _branch_to_chroot(dist_git_branch, upcoming_z_streams)) + f"-{build_arch}"
     except ValueError as e:
         raise ToolError(f"Failed to deduce Copr chroot: {e}") from e
+    logger.info(f"Connecting to Copr API at {COPR_CONFIG['copr_url']} for project creation/update")
     project_proxy = ProjectProxy({"username": copr_user, **COPR_CONFIG})
     kwargs = {
         "ownername": copr_user,
@@ -118,6 +119,7 @@ async def build_package(
         raise ToolError(f"Failed to create or update Copr project: {e}") from e
     if not chroot.removesuffix(f"-{build_arch}").endswith(".dev"):
         # make sure the chroot has access to corresponding buildroot repository
+        logger.info(f"Connecting to Copr API to update chroot configuration for {chroot}")
         chroot_proxy = ProjectChrootProxy({"username": copr_user, **COPR_CONFIG})
         if not (internal_repos_host := rhel_config.get("internal_repos_host")):
             raise ToolError("Internal repos host not configured")
@@ -144,6 +146,7 @@ async def build_package(
                 )
         except Exception as e:
             raise ToolError(f"Failed to update Copr chroot: {e}") from e
+    logger.info(f"Connecting to Copr API to submit build for {srpm_path}")
     build_proxy = BuildProxy({"username": copr_user, **COPR_CONFIG})
     try:
         build = await asyncio.to_thread(
@@ -222,6 +225,7 @@ async def download_artifacts(
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         for url in artifacts_urls:
+            logger.info(f"Downloading build artifact from: {url}")
             try:
                 async with session.get(url) as response:
                     if response.status < 400:

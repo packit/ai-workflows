@@ -53,6 +53,7 @@ async def _get_merge_request_from_url(merge_request_url: str) -> GitlabPullReque
     mr_id = int(match.group(2))
 
     project_url = f"https://gitlab.com/{project_path}"
+    logger.info(f"Connecting to GitLab API for merge request: {project_url}")
     project = await asyncio.to_thread(
         get_project, url=project_url, token=os.getenv("GITLAB_TOKEN")
     )
@@ -67,6 +68,7 @@ async def fork_repository(
     Creates a new fork of the specified repository if it doesn't exist yet,
     otherwise gets the existing fork. Returns a clonable git URL of the fork.
     """
+    logger.info(f"Connecting to GitLab API to fork repository: {repository}")
     project = await asyncio.to_thread(get_project, url=repository, token=os.getenv("GITLAB_TOKEN"))
     if not project:
         raise ToolError("Failed to get the specified repository")
@@ -117,6 +119,7 @@ async def open_merge_request(
         - str: The URL of the merge request if it was created successfully
         - bool: True if the merge request was created, False otherwise (i.e. MR was reused)
     """
+    logger.info(f"Connecting to GitLab API to open merge request from fork: {fork_url}")
     project = await asyncio.to_thread(get_project, url=fork_url, token=os.getenv("GITLAB_TOKEN"))
     if not project:
         raise ToolError("Failed to get the specified fork")
@@ -169,6 +172,7 @@ async def get_internal_rhel_branches(
     Returns a list of branch names.
     """
     repository_url = f"https://gitlab.com/redhat/rhel/rpms/{package}"
+    logger.info(f"Connecting to GitLab API to get branches for package: {repository_url}")
 
     try:
         project = await asyncio.to_thread(get_project, url=repository_url, token=os.getenv("GITLAB_TOKEN"))
@@ -360,6 +364,7 @@ async def retry_pipeline_job(
     """
     Retries a specific job in a GitLab pipeline.
     """
+    logger.info(f"Connecting to GitLab API to retry job {job_id} for project: {project_url}")
     try:
         project = await asyncio.to_thread(
             get_project, url=project_url, token=os.getenv("GITLAB_TOKEN")

@@ -45,13 +45,17 @@ The `goose/` directory contains some automation components that were used in the
 
 ## Documentation
 
-Data flow documentation for external service integrations:
+**Data flow documentation for external service integrations:**
 
 - [Jira Data Flow](jira_data_flow.md) - Integration with Jira issue tracking
 - [Jira Label-Based Workflow Routing](jira_label_workflow_routing.md) - Label state machine and queue routing
 - [GitLab Dist-Git Data Flow](gitlab_distgit_data_flow.md) - CentOS Stream and RHEL dist-git repositories
 - [Brew/Konflux Build System Data Flow](brew_konflux_data_flow.md) - Build system integration
 - [AI Providers Data Flow](ai_providers_data_flow.md) - Google Vertex AI integration and model usage
+
+**Data management:**
+
+- [Data Retention Policy](data_retention_policy.md) - Retention periods for logs, queues, and temporary data
 
 ## Development environment
 

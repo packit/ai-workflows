@@ -88,6 +88,8 @@ class JiraLabels(Enum):
 
 GITLAB_MR_CHECKLIST = """ # Jötnar MR Review Checklist
 
+> **⚠️ AI-Generated MR**: Created by Jötnar AI assistant. AI may make mistakes, select incorrect patches, or miss dependencies. **Human review required for accuracy and security before merging.**
+
 ## ✅ Pre-Merge Tasks
 
 ### 📋 Jira Fields Verification
@@ -173,5 +175,11 @@ If everything went well:
 
 ### [RHEL Hotfix Build](https://source.redhat.com/groups/public/release-engineering/release_engineering_rcm_wiki/rhel_hotfix_build_process_description)
 Jötnar shouldn’t create hotfixes. If it happens follow linked document.
+
+---
+
+## 📞 Questions or Issues?
+
+**Contact:** jotnar@redhat.com | **Slack:** #forum-jötnar-package-automation | **Report AI Issues:** [Jira](https://issues.redhat.com/) (project: Packit, component: jotnar) or [GitHub](https://github.com/packit/ai-workflows/issues)
 
 """

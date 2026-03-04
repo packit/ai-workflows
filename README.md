@@ -1,5 +1,32 @@
 # AI workflows
 
+## Overview
+
+**Jötnar** is an AI-powered RHEL package maintenance automation system that triages Jira issues and creates merge requests for package rebases and backports.
+
+### Business Purpose
+The AI Workflows system automates RHEL package maintenance by triaging incoming Jira issues to determine if they can be automatically resolved through rebases or backports, then creating merge requests to the appropriate dist-git repositories. Once merge requests are merged and candidate builds are created, the system manages the testing and release workflow, moving builds through validation and the RHEL release process until they are ready for production deployment.
+
+### Key Features
+- **Automated Triage**: AI analyzes Jira issues to determine appropriate workflow (rebase vs backport)
+- **Patch Selection**: AI selects and applies upstream patches to spec files
+- **Build Testing**: Automated Copr builds with failure diagnosis
+- **MR Creation**: Automatic merge request creation with detailed checklists
+- **Release Management**: Automated progression through RHEL testing and release pipeline
+
+### AI Technology
+- **Powered by**: models via Vertex AI
+- **Framework**: BeeAI agent orchestration framework
+- **Observability**: Phoenix tracing for AI model monitoring
+
+### ⚠️ Limitations & Risks
+- **AI can make mistakes**: The model may select incorrect patches, miss dependencies, or introduce build failures
+- **Hallucinations possible**: AI-generated commit messages or changelog entries may be inaccurate
+- **Incomplete backports**: Multi-commit fixes may be partially backported
+- **Security considerations**: Always verify patches don't introduce vulnerabilities
+- **Human review required**: All AI-generated MRs must be reviewed for accuracy and security before merging
+For reporting issues, please refer to the "Contact & Feedback" section below.
+## Workflows
 This repository contains the code for two different RHEL package maintenance workflows,
 that use the same basic components (BeeAI framework, Redis, etc.),
 but are implemented with different architectures.
@@ -45,3 +72,13 @@ You'll also need to have `python3-rpm` installed on the host system -
 the `rpm` module installed from PyPI is [rpm-shim](https://github.com/packit/rpm-shim)
 and just pulls the files from python3-rpm into the venv.
 In an IDE, select .venv/bin/python as the Python interpreter.
+
+## Contact & Feedback
+
+**Questions or issues with Jötnar?**
+
+- **Email**: jotnar@redhat.com
+- **Slack**: #forum-jötnar-package-automation
+- **Report AI Issues**: [Jira Issues](https://issues.redhat.com/) (project: Packit, component: jotnar) or [GitHub Issues](https://github.com/packit/ai-workflows/issues)
+
+  If you encounter incorrect backports, hallucinations, or other AI-related problems, please file a Jira or GitHub issue.

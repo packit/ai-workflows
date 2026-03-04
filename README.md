@@ -16,6 +16,16 @@ through testing and the remainder of the RHEL process to the point where the bui
 
 The `goose/` directory contains some automation components that were used in the early stages of this project. These components are **mostly unmaintained** and preserved primarily for reference. For active development and production use, focus on the main workflows described above.
 
+## Documentation
+
+Data flow documentation for external service integrations:
+
+- [Jira Data Flow](jira_data_flow.md) - Integration with Jira issue tracking
+- [Jira Label-Based Workflow Routing](jira_label_workflow_routing.md) - Label state machine and queue routing
+- [GitLab Dist-Git Data Flow](gitlab_distgit_data_flow.md) - CentOS Stream and RHEL dist-git repositories
+- [Brew/Konflux Build System Data Flow](brew_konflux_data_flow.md) - Build system integration
+- [AI Providers Data Flow](ai_providers_data_flow.md) - Google Vertex AI integration and model usage
+
 ## Development environment
 
 You need to have the following packages installed on your system:

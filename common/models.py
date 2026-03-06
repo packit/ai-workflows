@@ -176,6 +176,13 @@ class ErrorData(BaseModel):
     jira_issue: str = Field(description="Jira issue identifier")
 
 
+TRIAGE_DISCLAIMER = (
+    "_By following Jötnar suggestions, you agree to comply with the "
+    "[Guidelines on Use of AI Generated Content|https://source.redhat.com/departments/legal/legal_compliance_ethics/compliance_folder/appendix_1_to_policy_on_the_use_of_ai_technologypdf] "
+    "and [Guidelines for Responsible Use of AI Code Assistants|https://source.redhat.com/projects_and_programs/ai/wiki/code_assistants_guidelines_for_responsible_use_of_ai_code_assistants]._\n\n"
+)
+
+
 class TriageOutputSchema(BaseModel):
     """Output schema for the triage agent."""
     resolution: Resolution = Field(
@@ -194,6 +201,7 @@ class TriageOutputSchema(BaseModel):
 
                 patch_urls_text = "\n".join([f"*Patch URL {i+1}*: {url}" for i, url in enumerate(self.data.patch_urls)])
                 return (
+                    f"{TRIAGE_DISCLAIMER}"
                     f"{resolution}"
                     f"{patch_urls_text}\n"
                     f"*Justification*: {self.data.justification}"
@@ -204,6 +212,7 @@ class TriageOutputSchema(BaseModel):
                 fix_version_text = f"\n*Fix Version*: {self.data.fix_version}" if self.data.fix_version else ""
 
                 return (
+                    f"{TRIAGE_DISCLAIMER}"
                     f"{resolution}"
                     f"*Package*: {self.data.package}\n"
                     f"*Version*: {self.data.version}{fix_version_text}"
@@ -211,6 +220,7 @@ class TriageOutputSchema(BaseModel):
 
             case ClarificationNeededData():
                 return (
+                    f"{TRIAGE_DISCLAIMER}"
                     f"{resolution}"
                     f"*Findings*: {self.data.findings}\n"
                     f"*Additional info needed*: {self.data.additional_info_needed}"
@@ -218,12 +228,14 @@ class TriageOutputSchema(BaseModel):
 
             case NoActionData():
                 return (
+                    f"{TRIAGE_DISCLAIMER}"
                     f"{resolution}"
                     f"*Reasoning*: {self.data.reasoning}"
                 )
 
             case ErrorData():
                 return (
+                    f"{TRIAGE_DISCLAIMER}"
                     f"{resolution}"
                     f"*Details*: {self.data.details}"
                 )

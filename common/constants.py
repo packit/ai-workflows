@@ -89,6 +89,8 @@ class JiraLabels(Enum):
 GITLAB_MR_CHECKLIST = """ # Jötnar MR Review Checklist
 
 > **⚠️ AI-Generated MR**: Created by Jötnar AI assistant. AI may make mistakes, select incorrect patches, or miss dependencies. **Human review required for accuracy and security before merging.**
+>
+> <ins>By merging this MR, you agree to follow the [Guidelines on Use of AI Generated Content](https://source.redhat.com/departments/legal/legal_compliance_ethics/compliance_folder/appendix_1_to_policy_on_the_use_of_ai_technologypdf) and [Guidelines for Responsible Use of AI Code Assistants](https://source.redhat.com/projects_and_programs/ai/wiki/code_assistants_guidelines_for_responsible_use_of_ai_code_assistants).</ins>
 
 ## ✅ Pre-Merge Tasks
 

@@ -52,6 +52,7 @@ The `goose/` directory contains some automation components that were used in the
 - [GitLab Dist-Git Data Flow](gitlab_distgit_data_flow.md) - CentOS Stream and RHEL dist-git repositories
 - [Brew/Konflux Build System Data Flow](brew_konflux_data_flow.md) - Build system integration
 - [AI Providers Data Flow](ai_providers_data_flow.md) - Google Vertex AI integration and model usage
+- [Agent Monitoring and Performance Review](monitoring.md) - Monitoring processes, anomaly detection, and continuous improvement
 
 **Data management:**
 

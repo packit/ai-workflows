@@ -4,7 +4,9 @@ import os
 import re
 from datetime import datetime
 from typing import Annotated, Tuple
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
+
+import aiohttp
 
 from fastmcp.exceptions import ToolError
 from ogr.factory import get_project
@@ -23,6 +25,45 @@ logger = logging.getLogger(__name__)
 # GitLab access levels: Guest (10), Reporter (20), Developer (30),
 # Maintainer (40), Owner (50)
 DEVELOPER_ACCESS_LEVEL = 30
+
+GITLAB_HOSTS = {"gitlab.com", "gitlab.cee.redhat.com"}
+
+_GITLAB_COMMIT_RE = re.compile(
+    r"^/(.+?)/-/commit/([0-9a-f]+)\.(?:patch|diff)$", re.IGNORECASE
+)
+
+
+def _get_api_diff_url(url: str) -> str:
+    """Convert a GitLab commit .patch/.diff web URL to an API diff URL.
+
+    Returns the API URL for known GitLab hosts, or the original URL unchanged.
+    """
+    parsed = urlparse(url)
+    hostname = parsed.hostname or ""
+    if hostname not in GITLAB_HOSTS:
+        return url
+
+    match = _GITLAB_COMMIT_RE.match(parsed.path)
+    if not match:
+        return url
+
+    project_path = match.group(1)
+    sha = match.group(2)
+    encoded_path = quote(project_path, safe="")
+    return (
+        f"{parsed.scheme}://{hostname}"
+        f"/api/v4/projects/{encoded_path}/repository/commits/{sha}/diff"
+    )
+
+
+def _get_auth_headers(url: str) -> dict[str, str]:
+    """Return PRIVATE-TOKEN header if *url* points to a known GitLab host."""
+    hostname = urlparse(url).hostname or ""
+    if hostname in GITLAB_HOSTS:
+        token = os.getenv("GITLAB_TOKEN")
+        if token:
+            return {"PRIVATE-TOKEN": token}
+    return {}
 
 
 def _get_authenticated_url(repository_url: str) -> str:
@@ -53,6 +94,7 @@ async def _get_merge_request_from_url(merge_request_url: str) -> GitlabPullReque
     mr_id = int(match.group(2))
 
     project_url = f"https://gitlab.com/{project_path}"
+    logger.info(f"Connecting to GitLab API for merge request: {project_url}")
     project = await asyncio.to_thread(
         get_project, url=project_url, token=os.getenv("GITLAB_TOKEN")
     )
@@ -67,6 +109,7 @@ async def fork_repository(
     Creates a new fork of the specified repository if it doesn't exist yet,
     otherwise gets the existing fork. Returns a clonable git URL of the fork.
     """
+    logger.info(f"Connecting to GitLab API to fork repository: {repository}")
     project = await asyncio.to_thread(get_project, url=repository, token=os.getenv("GITLAB_TOKEN"))
     if not project:
         raise ToolError("Failed to get the specified repository")
@@ -117,6 +160,7 @@ async def open_merge_request(
         - str: The URL of the merge request if it was created successfully
         - bool: True if the merge request was created, False otherwise (i.e. MR was reused)
     """
+    logger.info(f"Connecting to GitLab API to open merge request from fork: {fork_url}")
     project = await asyncio.to_thread(get_project, url=fork_url, token=os.getenv("GITLAB_TOKEN"))
     if not project:
         raise ToolError("Failed to get the specified fork")
@@ -169,6 +213,7 @@ async def get_internal_rhel_branches(
     Returns a list of branch names.
     """
     repository_url = f"https://gitlab.com/redhat/rhel/rpms/{package}"
+    logger.info(f"Connecting to GitLab API to get branches for package: {repository_url}")
 
     try:
         project = await asyncio.to_thread(get_project, url=repository_url, token=os.getenv("GITLAB_TOKEN"))
@@ -360,6 +405,7 @@ async def retry_pipeline_job(
     """
     Retries a specific job in a GitLab pipeline.
     """
+    logger.info(f"Connecting to GitLab API to retry job {job_id} for project: {project_url}")
     try:
         project = await asyncio.to_thread(
             get_project, url=project_url, token=os.getenv("GITLAB_TOKEN")
@@ -576,3 +622,26 @@ async def get_merge_request_details(
         )
     except Exception as e:
         raise ToolError(f"Failed to get merge request details: {e}") from e
+
+
+async def get_patch_from_url(
+    patch_url: Annotated[str, Field(description="URL to a patch or diff file")],
+) -> str:
+    """
+    Fetches a patch/diff from a URL.
+    Returns the patch content as text.
+    """
+    request_url = _get_api_diff_url(patch_url)
+    headers = _get_auth_headers(request_url)
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(request_url, headers=headers) as response:
+                if response.status >= 400:
+                    raise ToolError(
+                        f"Failed to fetch patch from {patch_url}: HTTP {response.status}"
+                    )
+                return await response.text()
+    except aiohttp.ClientError as e:
+        raise ToolError(f"Failed to fetch patch from {patch_url}: {e}") from e

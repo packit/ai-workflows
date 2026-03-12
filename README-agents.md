@@ -1,6 +1,6 @@
-# Package Maintenance Workflows
+# Package Maintenance Workflows as AI agents
 
-A set of AI agents implemented in the BeeAI Framework, interconnected via Redis.
+A set of AI agents implemented in the BeeAI Framework, interconnected via Redis, observed by Phoenix.
 Every agent can run individually or pick up tasks from a Redis queue.
 
 See [README.md](README.md) for general notes about setting up the development environment.
@@ -19,11 +19,13 @@ Three agents process tasks through Redis queues:
 - **Modify JIRA issues** (add comments, update fields, apply labels)
 - **Create GitLab merge requests** and push commits
 
+**Always** use `DRY_RUN=true` if you are developing locally or just wanna give the agents a try.
+
 ## Jira mocking
 
 If you clone testing Jira files from
 `git@gitlab.cee.redhat.com:jotnar-project/testing-jiras.git`
-you can use them to work with instead of real Jira server.
+you can use them to work with pre-downloaded jira content instead of real Jira server.
 
 Example:
 
@@ -74,6 +76,8 @@ This file should be kept secure as it can be used as a replacement for password-
 To be able to access internal RHEL dist-git with your identity, update the `User` field in `files/internal_dist-git_ssh.conf` to match your `<REDHAT_KERBEROS_ID>` used in the keytab.
 
 ## Running the System
+
+Please do not run `podman-compose up` directly; use the provided Makefile instead.
 
 ### Full Pipeline (Production)
 ```bash

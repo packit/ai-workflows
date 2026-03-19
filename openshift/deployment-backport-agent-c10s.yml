@@ -62,7 +62,10 @@ spec:
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
-      securityContext: {}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       # TODO: this should be reset when we have enough data.
       terminationGracePeriodSeconds: 30
       volumes:

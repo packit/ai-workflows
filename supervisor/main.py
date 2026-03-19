@@ -49,6 +49,9 @@ def check_env(
         required_vars.append(
             ("JIRA_TOKEN", "Jira authentication token"),
         )
+        required_vars.append(
+            ("JIRA_EMAIL", "Jira account email for Basic Auth"),
+        )
     if redis:
         required_vars.append(
             ("REDIS_URL", "Redis connection URL (e.g., redis://localhost:6379)")
@@ -198,7 +201,7 @@ def process_issue(
     check_env(chat=True, jira=True, testing_farm=True)
 
     if key_or_url.startswith("http"):
-        m = re.match(r"https://issues.redhat.com/browse/([^/?]+)(?:\?.*)?$", key_or_url)
+        m = re.match(r"https://redhat.atlassian.net/browse/([^/?]+)(?:\?.*)?$", key_or_url)
         if m is None:
             raise typer.BadParameter(f"Invalid issue URL {key_or_url}")
         key = m.group(1)

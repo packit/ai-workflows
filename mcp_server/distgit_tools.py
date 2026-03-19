@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import tempfile
 import time
 from typing import Annotated
@@ -13,6 +14,11 @@ from common.constants import BREWHUB_URL
 from common.utils import init_kerberos_ticket, KerberosError
 
 SYNC_TIMEOUT = 1 * 60 * 60  # seconds
+
+
+def _sanitize_url(text: str) -> str:
+    """Remove oauth2:{token}@ credentials from URLs in error messages."""
+    return re.sub(r"oauth2:[^@\s]+@", "oauth2:***@", text)
 
 
 async def create_zstream_branch(
@@ -29,8 +35,11 @@ async def create_zstream_branch(
     username = principal.split("@", maxsplit=1)[0]
     token = os.environ["GITLAB_TOKEN"]
     gitlab_repo_url = f"https://oauth2:{token}@gitlab.com/redhat/rhel/rpms/{package}"
-    if await asyncio.to_thread(git.cmd.Git().ls_remote, gitlab_repo_url, branch, branches=True):
-        return f"Z-Stream branch {branch} already exists, no need to create it"
+    try:
+        if await asyncio.to_thread(git.cmd.Git().ls_remote, gitlab_repo_url, branch, branches=True):
+            return f"Z-Stream branch {branch} already exists, no need to create it"
+    except Exception as e:
+        raise ToolError(f"Failed to check GitLab remote: {_sanitize_url(str(e))}") from e
     try:
         with tempfile.TemporaryDirectory() as path:
             repo = await asyncio.to_thread(
@@ -70,4 +79,4 @@ async def create_zstream_branch(
                 await asyncio.sleep(30)
             raise RuntimeError(f"The {branch} branch wasn't synced to GitLab after {SYNC_TIMEOUT} seconds")
     except Exception as e:
-        raise ToolError(f"Failed to create Z-Stream branch: {e}") from e
+        raise ToolError(f"Failed to create Z-Stream branch: {_sanitize_url(str(e))}") from e

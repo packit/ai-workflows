@@ -16,7 +16,7 @@ import lookaside_tools
 logger = logging.getLogger(__name__)
 
 # Patterns that match common credential formats in log output
-_REDACT_PATTERNS = [
+FROZEN_REDACT_PATTERNS = frozenset([
     # GitLab PAT
     re.compile(r"glpat-[A-Za-z0-9_-]{20,}"),
     # Anthropic API key
@@ -27,6 +27,7 @@ _REDACT_PATTERNS = [
     re.compile(r"oauth2:[^@\s]+@"),
     # Generic long hex/base64 tokens (e.g. Jira PATs)
     re.compile(r"(?:token|key|password|secret|credential)[\"'=:\s]+[A-Za-z0-9+/=_-]{20,}", re.IGNORECASE),
+])
 ]
 
 

@@ -41,8 +41,8 @@ from common.models import (
     NoActionData,
     ErrorData
 )
-from common.utils import redis_client, fix_await
-from common.constants import JiraLabels, RedisQueues
+from common.utils import redis_client, fix_await, get_jira_auth_headers
+from common.constants import JiraLabels, JIRA_SEARCH_PATH, RedisQueues
 
 # Configure logging
 logging.basicConfig(
@@ -64,7 +64,6 @@ class JiraIssueFetcher:
 
     def __init__(self):
         self.jira_url = os.environ["JIRA_URL"]
-        self.jira_token = os.environ["JIRA_TOKEN"]
         self.redis_url = os.environ["REDIS_URL"]
 
         # Allow query override from environment
@@ -73,11 +72,7 @@ class JiraIssueFetcher:
         # Use constant page size
         self.max_results_per_page = self.MAX_RESULTS_PER_PAGE
 
-        self.headers = {
-            "Authorization": f"Bearer {self.jira_token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        self.headers = get_jira_auth_headers()
 
         # Rate limiting
         self.last_request_time = 0.0
@@ -122,13 +117,13 @@ class JiraIssueFetcher:
 
     async def search_issues(self) -> List[Dict[str, Any]]:
         """
-        Search for issues using the configured query with pagination
+        Search for issues using the configured query with cursor-based pagination.
+        The /rest/api/3/search/jql endpoint uses nextPageToken instead of startAt.
         """
         logger.info(f"Starting issue search with query: {self.query}")
 
         all_issues = []
-        start_at = 0
-        total_issues = None
+        next_page_token = None
 
         fields = [
             "key",        # Issue key (e.g., RHEL-12345)
@@ -138,33 +133,30 @@ class JiraIssueFetcher:
         while True:
             await self._rate_limit()
 
-            # Use POST with JSON payload instead of GET with params to handle long queries
             json_payload = {
                 "jql": self.query,
-                "startAt": start_at,
                 "maxResults": self.max_results_per_page,
                 "fields": fields
             }
 
-            logger.info(f"Fetching issues: startAt={start_at}, maxResults={self.max_results_per_page}")
+            if next_page_token:
+                json_payload["nextPageToken"] = next_page_token
+
+            logger.info(f"Fetching issues: maxResults={self.max_results_per_page}, nextPageToken={next_page_token}")
 
             try:
-                url = urljoin(self.jira_url, "rest/api/2/search")
+                url = urljoin(self.jira_url, JIRA_SEARCH_PATH)
                 response_data = self._make_request_with_retries(url, json_data=json_payload)
 
                 issues = response_data.get("issues", [])
                 all_issues.extend(issues)
 
-                if total_issues is None:
-                    total_issues = response_data.get("total", 0)
-                    logger.info(f"Total issues found: {total_issues}")
-
+                total_issues = response_data.get("total", len(all_issues))
                 logger.info(f"Retrieved {len(issues)} issues (total so far: {len(all_issues)}/{total_issues})")
 
-                if len(all_issues) >= total_issues or len(issues) == 0:
+                next_page_token = response_data.get("nextPageToken")
+                if not next_page_token or len(issues) == 0:
                     break
-
-                start_at += self.max_results_per_page
 
             except Exception as e:
                 logger.error(f"Error fetching issues: {e}")
@@ -357,14 +349,15 @@ async def main():
 
 
 if __name__ == "__main__":
-    required_vars = ["JIRA_URL", "JIRA_TOKEN", "REDIS_URL"]
+    required_vars = ["JIRA_URL", "JIRA_EMAIL", "JIRA_TOKEN", "REDIS_URL"]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
 
     if missing_vars:
         logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
         logger.info("Required environment variables:")
-        logger.info("  JIRA_URL - Jira instance URL (e.g., https://issues.redhat.com)")
-        logger.info("  JIRA_TOKEN - Jira authentication token")
+        logger.info("  JIRA_URL - Jira instance URL (e.g., https://redhat.atlassian.net)")
+        logger.info("  JIRA_EMAIL - Jira account email for authentication")
+        logger.info("  JIRA_TOKEN - Jira API token")
         logger.info("  REDIS_URL - Redis connection URL (e.g., redis://localhost:6379)")
         sys.exit(1)
 

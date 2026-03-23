@@ -19,6 +19,9 @@ from urllib.parse import quote
 
 import aiohttp
 
+from common.constants import JIRA_SEARCH_PATH
+from common.utils import get_jira_auth_headers
+
 
 DEFAULT_DICTIONARY = {
     "mrs_opened": 0,
@@ -27,13 +30,6 @@ DEFAULT_DICTIONARY = {
     "mrs_all_opened": 0
 }
 
-def _get_jira_headers(token: str) -> dict[str, str]:
-    """Get headers for Jira API requests."""
-    return {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
 
 
 async def get_jotnar_issues_basic_count() -> tuple[int, int]:
@@ -41,11 +37,10 @@ async def get_jotnar_issues_basic_count() -> tuple[int, int]:
     Get count of all issues that Jötnar has processed (have any jotnar_* labels).
     Returns a tuple of (total issues, issues with any jotnar_* labels).
     """
-    jira_url = os.getenv("JIRA_URL", "https://issues.redhat.com")
-    jira_token = os.getenv("JIRA_TOKEN")
+    jira_url = os.getenv("JIRA_URL", "https://redhat.atlassian.net")
 
-    if not jira_token:
-        print("Warning: JIRA_URL or JIRA_TOKEN not set, skipping Jira queries", file=sys.stderr)
+    if not os.getenv("JIRA_TOKEN") or not os.getenv("JIRA_EMAIL"):
+        print("Warning: JIRA_EMAIL or JIRA_TOKEN not set, skipping Jira queries", file=sys.stderr)
         return 0, 0
 
     # Query for all jotnar issues
@@ -73,22 +68,29 @@ async def get_jotnar_issues_basic_count() -> tuple[int, int]:
     async with aiohttp.ClientSession() as session:
         try:
             for jql in jqls:
-                json_payload = {
-                    "jql": jql,
-                    "startAt": 0,
-                    "maxResults": 0,  # We only want the count
-                    "fields": ["key"]
-                }
-
-                url = urljoin(jira_url, "rest/api/2/search")
-                async with session.post(
-                    url,
-                    json=json_payload,
-                    headers=_get_jira_headers(jira_token)
-                ) as response:
-                    response.raise_for_status()
-                    data = await response.json()
-                    results.append(data.get("total", 0))
+                count = 0
+                next_page_token = None
+                url = urljoin(jira_url, JIRA_SEARCH_PATH)
+                while True:
+                    json_payload = {
+                        "jql": jql,
+                        "maxResults": 5000,
+                        "fields": ["key"]
+                    }
+                    if next_page_token:
+                        json_payload["nextPageToken"] = next_page_token
+                    async with session.post(
+                        url,
+                        json=json_payload,
+                        headers=get_jira_auth_headers()
+                    ) as response:
+                        response.raise_for_status()
+                        data = await response.json()
+                        count += len(data.get("issues", []))
+                        next_page_token = data.get("nextPageToken")
+                        if not next_page_token:
+                            break
+                results.append(count)
         except Exception as e:
             print(f"Error querying Jira issues: {e}", file=sys.stderr)
             return 0, 0

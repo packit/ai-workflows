@@ -6,15 +6,20 @@ import aiohttp
 import pytest
 from flexmock import flexmock
 
+import jira_tools
 from jira_tools import Severity, PreliminaryTesting, get_jira_details, set_jira_fields, add_jira_comment, change_jira_status, edit_jira_labels, verify_issue_author
 
 
 @pytest.fixture(autouse=True)
 def mocked_env():
     flexmock(os).should_receive("getenv").with_args("JIRA_URL").and_return("http://jira")
-    flexmock(os).should_receive("getenv").with_args("JIRA_TOKEN").and_return("12345")
     flexmock(os).should_receive("getenv").with_args("DRY_RUN", "False").and_return("false")
     flexmock(os).should_receive("getenv").with_args("SKIP_SETTING_JIRA_FIELDS", "False").and_return("false")
+    flexmock(jira_tools).should_receive("get_jira_auth_headers").and_return({
+        "Authorization": "Basic dGVzdEBleGFtcGxlLmNvbToxMjM0NQ==",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    })
 
 
 @pytest.mark.asyncio
@@ -38,12 +43,12 @@ async def test_get_jira_details():
 
     @asynccontextmanager
     async def get(url, params=None, headers=None):
-        if url.endswith(f"rest/api/2/issue/{issue_key}"):
+        if url.endswith(f"rest/api/3/issue/{issue_key}"):
             assert params.get("expand") == "comments"
             async def json():
                 return issue_data
             yield flexmock(json=json, raise_for_status=lambda: None)
-        elif url.endswith(f"rest/api/2/issue/{issue_key}/remotelink"):
+        elif url.endswith(f"rest/api/3/issue/{issue_key}/remotelink"):
             async def json():
                 return remote_links_data
             yield flexmock(json=json, raise_for_status=lambda: None)
@@ -90,7 +95,7 @@ async def test_set_jira_fields(args, current_fields, expected_fields):
 
     @asynccontextmanager
     async def get(url, headers=None):
-        if url.endswith(f"rest/api/2/issue/{issue_key}"):
+        if url.endswith(f"rest/api/3/issue/{issue_key}"):
             async def json():
                 return current_fields
             yield flexmock(json=json, raise_for_status=lambda: None)
@@ -99,7 +104,7 @@ async def test_set_jira_fields(args, current_fields, expected_fields):
 
     @asynccontextmanager
     async def put(url, json, headers):
-        assert url.endswith(f"rest/api/2/issue/{issue_key}")
+        assert url.endswith(f"rest/api/3/issue/{issue_key}")
         assert json.get("fields") == expected_fields
         yield flexmock(raise_for_status=lambda: None)
 
@@ -164,11 +169,11 @@ async def test_change_jira_status(transitions, status, expected_transition_id):
 
     @asynccontextmanager
     async def get(url, params=None, headers=None):
-        if url.endswith(f"rest/api/2/issue/{issue_key}") and params and params.get("fields") == "status":
+        if url.endswith(f"rest/api/3/issue/{issue_key}") and params and params.get("fields") == "status":
             async def json():
                 return current_status_data
             yield flexmock(json=json, raise_for_status=lambda: None)
-        elif url.endswith(f"rest/api/2/issue/{issue_key}/transitions"):
+        elif url.endswith(f"rest/api/3/issue/{issue_key}/transitions"):
             async def json():
                 return {"transitions": transitions}
             yield flexmock(json=json, raise_for_status=lambda: None)
@@ -177,7 +182,7 @@ async def test_change_jira_status(transitions, status, expected_transition_id):
 
     @asynccontextmanager
     async def post(url, json, headers):
-        assert url.endswith(f"rest/api/2/issue/{issue_key}/transitions")
+        assert url.endswith(f"rest/api/3/issue/{issue_key}/transitions")
         assert json.get("transition", {}).get("id") == expected_transition_id
         yield flexmock(raise_for_status=lambda: None)
 
@@ -215,7 +220,7 @@ async def test_edit_jira_labels(labels_to_add, labels_to_remove, expected_update
 
     @asynccontextmanager
     async def put(url, json, headers):
-        assert url.endswith(f"rest/api/2/issue/{issue_key}")
+        assert url.endswith(f"rest/api/3/issue/{issue_key}")
         assert json.get("update", {}).get("labels") == expected_update_payload
         yield flexmock(raise_for_status=lambda: None)
 
@@ -270,11 +275,11 @@ async def test_verify_issue_author(user_groups, expected_result, use_account_id)
 
     @asynccontextmanager
     async def get(url, params=None, headers=None):
-        if url.endswith(f"rest/api/2/issue/{issue_key}"):
+        if url.endswith(f"rest/api/3/issue/{issue_key}"):
             async def json():
                 return issue_data
             yield flexmock(json=json, raise_for_status=lambda: None)
-        elif url.endswith("rest/api/2/user"):
+        elif url.endswith("rest/api/3/user"):
             assert params.get(expected_param_key) == expected_param_value
             assert params.get("expand") == "groups"
             async def json():

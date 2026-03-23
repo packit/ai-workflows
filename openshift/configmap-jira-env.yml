@@ -1,6 +1,7 @@
 apiVersion: v1
 data:
-  JIRA_URL: https://issues.redhat.com/
+  JIRA_URL: https://redhat.atlassian.net/
+  JIRA_EMAIL: jotnar@redhat.com
 immutable: false
 kind: ConfigMap
 metadata:

@@ -2,6 +2,7 @@ from enum import Enum
 
 BREWHUB_URL = "https://brewhub.engineering.redhat.com/brewhub"
 
+JIRA_SEARCH_PATH = "rest/api/3/search/jql"
 
 class RedisQueues(Enum):
     """Constants for Redis queue names used by Jotnar agents"""

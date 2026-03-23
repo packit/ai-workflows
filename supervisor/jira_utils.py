@@ -18,6 +18,8 @@ from urllib.parse import quote as urlquote
 
 import requests
 
+from common.constants import JIRA_SEARCH_PATH
+from common.utils import get_jira_auth_headers
 from .http_utils import requests_session
 from .supervisor_types import (
     FullIssue,
@@ -53,7 +55,7 @@ def quote(component: str):
 
 @cache
 def jira_url() -> str:
-    url = os.environ.get("JIRA_URL", "https://issues.redhat.com")
+    url = os.environ.get("JIRA_URL", "https://redhat.atlassian.net")
     return url.rstrip("/")
 
 
@@ -63,12 +65,7 @@ class JiraNotLoggedInError(Exception):
 
 @cache
 def jira_headers() -> dict[str, str]:
-    jira_token = os.environ["JIRA_TOKEN"]
-
-    headers = {
-        "Authorization": f"Bearer {jira_token}",
-        "Content-Type": "application/json",
-    }
+    headers = get_jira_auth_headers()
 
     # Test if the token can log in successfully
     response = requests_session().get(
@@ -115,7 +112,7 @@ def retry_on_rate_limit(func):
 
 @retry_on_rate_limit
 def jira_api_get(path: str, *, params: dict | None = None) -> Any:
-    url = f"{jira_url()}/rest/api/2/{path}"
+    url = f"{jira_url()}/{path}" if path.startswith("rest/") else f"{jira_url()}/rest/api/2/{path}"
     response = requests_session().get(url, headers=jira_headers(), params=params)
     if not response.ok:
         logger.error(
@@ -144,7 +141,7 @@ def jira_api_post(
 def jira_api_post(
     path: str, json: dict[str, Any], *, decode_response: bool = False
 ) -> Any | None:
-    url = f"{jira_url()}/rest/api/2/{path}"
+    url = f"{jira_url()}/{path}" if path.startswith("rest/") else f"{jira_url()}/rest/api/2/{path}"
     response = requests_session().post(url, headers=jira_headers(), json=json)
     if not response.ok:
         logger.error(
@@ -183,7 +180,7 @@ def jira_api_upload(
     *,
     decode_response: bool = False,
 ) -> Any | None:
-    url = f"{jira_url()}/rest/api/2/{path}"
+    url = f"{jira_url()}/{path}" if path.startswith("rest/") else f"{jira_url()}/rest/api/2/{path}"
     files = [("file", a) for a in attachments]
     headers = dict(jira_headers())
     del headers["Content-Type"]  # requests will set this correctly for multipart
@@ -217,7 +214,7 @@ def jira_api_put(
 def jira_api_put(
     path: str, json: dict[str, Any], *, decode_response: bool = False
 ) -> Any | None:
-    url = f"{jira_url()}/rest/api/2/{path}"
+    url = f"{jira_url()}/{path}" if path.startswith("rest/") else f"{jira_url()}/rest/api/2/{path}"
     response = requests_session().put(url, headers=jira_headers(), json=json)
     if not response.ok:
         logger.error(
@@ -277,7 +274,7 @@ def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
 
     issue = Issue(
         key=key,
-        url=f"https://issues.redhat.com/browse/{urlquote(key)}",
+        url=f"{jira_url()}/browse/{urlquote(key)}",
         assigned_team=assigned_team_name,
         summary=issue_data["fields"]["summary"],
         status=issue_data["fields"]["status"]["name"],
@@ -367,25 +364,27 @@ def get_current_issues(
     jql: str,
     full: bool = False,
 ) -> Generator[Issue, None, None] | Generator[FullIssue, None, None]:
-    start_at = 0
     max_results = 1000
+    next_page_token = None
     while True:
-        body = {
+        body: dict[str, Any] = {
             "jql": jql,
-            "startAt": start_at,
             "maxResults": max_results,
             "fields": _fields(full),
         }
 
-        logger.debug("Fetching JIRA issues, start=%d, max=%d", start_at, max_results)
-        response_data = jira_api_post("search", json=body, decode_response=True)
+        if next_page_token:
+            body["nextPageToken"] = next_page_token
+
+        logger.debug("Fetching JIRA issues, max=%d, nextPageToken=%s", max_results, next_page_token)
+        response_data = jira_api_post(JIRA_SEARCH_PATH, json=body, decode_response=True)
         logger.debug("Got %d issues", len(response_data["issues"]))
 
         for issue_data in response_data["issues"]:
             yield decode_issue(issue_data, full)
 
-        start_at += max_results
-        if response_data["total"] <= start_at:
+        next_page_token = response_data.get("nextPageToken")
+        if not next_page_token or len(response_data["issues"]) == 0:
             break
 
 
@@ -410,21 +409,18 @@ def get_issue_by_jotnar_tag(
 def get_issue_by_jotnar_tag(
     project: str, tag: JotnarTag, full: bool = False, with_label: str | None = None
 ) -> Issue | FullIssue | None:
-    start_at = 0
-    max_results = 2
     jql = f'project = {project} AND status NOT IN (Done, Closed) AND description ~ "\\"{tag}\\""'
     if with_label is not None:
         jql += f' AND labels = "{with_label}"'
 
     body = {
         "jql": jql,
-        "startAt": 0,
         "maxResults": 2,
         "fields": _fields(full),
     }
 
-    logger.debug("Fetching JIRA issues, start=%d, max=%d", start_at, max_results)
-    response_data = jira_api_post("search", json=body, decode_response=True)
+    logger.debug("Fetching JIRA issues by jotnar tag %s", tag)
+    response_data = jira_api_post(JIRA_SEARCH_PATH, json=body, decode_response=True)
 
     if len(response_data["issues"]) == 0:
         return None
@@ -444,7 +440,7 @@ def get_issues_statuses(issue_keys: Collection[str]) -> dict[str, IssueStatus]:
         "fields": ["status"],
     }
 
-    response_data = jira_api_post("search", json=body, decode_response=True)
+    response_data = jira_api_post(JIRA_SEARCH_PATH, json=body, decode_response=True)
 
     result = {
         issue_data["key"]: IssueStatus(issue_data["fields"]["status"]["name"])
@@ -695,13 +691,14 @@ def get_issue_attachment(issue_key: str, filename: str) -> bytes:
 
 
 @cache
-def get_user_name(email: str) -> str:
-    users = jira_api_get("user/search", params={"username": email})
-    if len(users) == 0:
+def get_user_account_id(email: str) -> str:
+    users = jira_api_get("user/search", params={"query": email})
+    matches = [u for u in users if u.get("emailAddress") == email]
+    if len(matches) == 0:
         raise ValueError(f"No JIRA user with email {email}")
-    elif len(users) > 1:
+    elif len(matches) > 1:
         raise ValueError(f"Multiple JIRA users with email {email}")
-    return users[0]["name"]
+    return matches[0]["accountId"]
 
 
 @overload
@@ -760,10 +757,10 @@ def create_issue(
     }
 
     if assignee_email:
-        fields |= {"assignee": {"name": get_user_name(assignee_email)}}
+        fields |= {"assignee": {"accountId": get_user_account_id(assignee_email)}}
 
     if reporter_email:
-        fields |= {"reporter": {"name": get_user_name(reporter_email)}}
+        fields |= {"reporter": {"accountId": get_user_account_id(reporter_email)}}
 
     if components:
         fields |= {"components": [{"name": c} for c in components]}

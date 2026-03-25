@@ -42,6 +42,7 @@ RUN dnf -y install --allowerasing \
     && dnf clean all
 
 RUN pip3 install --no-cache-dir \
+      "litellm!=1.82.7,!=1.82.8" \
       beeai-framework[vertexai,mcp,duckduckgo]==0.1.55 \
       google-cloud-aiplatform \
       openinference-instrumentation-beeai \
@@ -50,6 +51,13 @@ RUN pip3 install --no-cache-dir \
       specfile \
       pytest \
       pytest-asyncio
+
+# Verify no malicious litellm_init.pth was introduced by compromised litellm packages (e.g. 1.82.7, 1.82.8)
+RUN MALICIOUS=$(find /usr /opt -name "litellm_init.pth" 2>/dev/null); \
+    if [ -n "$MALICIOUS" ]; then \
+      echo "SECURITY ALERT: malicious litellm_init.pth detected: $MALICIOUS"; \
+      exit 1; \
+    fi
 
 # Create user
 RUN useradd -m -G wheel beeai

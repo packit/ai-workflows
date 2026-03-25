@@ -13,6 +13,7 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 # we are installing bee 0.1.55 in containers now
 dependencies = [
+    "litellm!=1.82.7,!=1.82.8",
     "aiohttp>=3.12.15",
     "aiofiles>=24.1.0",
     "arize-phoenix-otel>=0.13.0",

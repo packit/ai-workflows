@@ -140,6 +140,9 @@ async def test_add_changelog_entry(minimal_spec):
             "fix-memory-leak.patch",
             "update-documentation.patch"
         ]),
+        ("spec_with_macro_patches", "3.5.3", [
+            "mypackage-3.5.3-Fix-CVE-2026-4111.patch",
+        ]),
         ("minimal_spec", "0.1", []),
     ],
 )
@@ -209,6 +212,39 @@ def spec_with_patches(tmp_path):
 
             %changelog
             * Thu Jan 13 3770 Test User <test@redhat.com> - 1.2.3-1
+            - first version
+            """
+        )
+    )
+    return spec
+
+
+@pytest.fixture
+def spec_with_macro_patches(tmp_path):
+    spec = tmp_path / "macro_patches.spec"
+    source_file = tmp_path / "source.tar.gz"
+    source_file.touch()
+    spec.write_text(
+        dedent(
+            """
+            Name:           mypackage
+            Version:        3.5.3
+            Release:        1%{?dist}
+            Summary:        Test package
+
+            License:        MIT
+
+            Source0:        source.tar.gz
+            Patch0:         %{name}-%{version}-Fix-CVE-2026-4111.patch
+
+            %description
+            Test package with macro-containing patch names
+
+            %prep
+            %autosetup -p1
+
+            %changelog
+            * Thu Jan 13 3770 Test User <test@redhat.com> - 3.5.3-1
             - first version
             """
         )

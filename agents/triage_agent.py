@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import re
 import sys
 import traceback
 from textwrap import dedent
@@ -23,6 +22,7 @@ from beeai_framework.utils.strings import to_json
 
 import agents.tasks as tasks
 from common.config import load_rhel_config
+from common.version_utils import parse_rhel_version, is_older_zstream
 from common.models import (
     Task,
     TriageInputSchema as InputSchema,
@@ -40,6 +40,7 @@ from agents.tools.commands import RunShellCommandTool
 from agents.tools.patch_validator import PatchValidatorTool
 from agents.tools.version_mapper import VersionMapperTool
 from agents.tools.upstream_search import UpstreamSearchTool
+from agents.tools.zstream_search import ZStreamSearchTool
 from agents.utils import get_agent_execution_config, get_chat_model, get_tool_call_checker_config, mcp_tools, run_tool
 
 logger = logging.getLogger(__name__)
@@ -86,21 +87,26 @@ async def _map_version_to_branch(version: str, cve_needs_internal_fix: bool, pac
         - RHEL internal fix: rhel-{major}.{minor}.0 (for RHEL 10, without .0 suffix)
         - CentOS Stream: c{major}s
     """
-    version_match = re.match(r"^rhel-(\d+)\.(\d+)(\.z)?", version.lower())
-    if not version_match:
+    parsed = parse_rhel_version(version)
+    if not parsed:
         logger.warning(f"Failed to parse version: {version}")
         return None
 
-    major_version = version_match.group(1)
-    minor_version = version_match.group(2)
-    is_zstream = version_match.group(3) is not None
+    major_version, minor_version, is_zstream = parsed
 
     # Load rhel-config to check which major versions have Y-stream mappings
     config = await load_rhel_config()
     y_streams = config.get("current_y_streams", {})
+    current_z_streams = config.get("current_z_streams", {})
 
+    # Check if this is an older z-stream than the current one
+    older_zstream = await is_older_zstream(version, current_z_streams)
+    if older_zstream:
+        logger.info(f"Detected older z-stream: {version}")
 
-    if cve_needs_internal_fix:
+    # Only apply special CVE handling if NOT targeting an older z-stream
+    # For older z-streams, we want to check if the branch exists like regular bugs
+    if cve_needs_internal_fix and not older_zstream:
         if major_version in y_streams:
             branch = _construct_internal_branch_name(major_version, minor_version)
             logger.info(f"Mapped {version} -> {branch} (CVE internal fix)")
@@ -110,24 +116,27 @@ async def _map_version_to_branch(version: str, cve_needs_internal_fix: bool, pac
         logger.info(f"Mapped {version} -> {branch} (CentOS Stream)")
         return branch
 
-    # For Z-stream bugs, check if internal RHEL branch exists
-    if is_zstream and package:
+    # For Z-stream bugs, always use internal RHEL branch
+    # Check if branch exists, but use it anyway since it will be created later if needed
+    if is_zstream or older_zstream:
         expected_branch = _construct_internal_branch_name(major_version, minor_version)
 
-        try:
-            async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
-                available_branches = await run_tool(
-                    "get_internal_rhel_branches",
-                    available_tools=gateway_tools,
-                    package=package
-                )
+        if package:
+            try:
+                async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
+                    available_branches = await run_tool(
+                        "get_internal_rhel_branches",
+                        available_tools=gateway_tools,
+                        package=package
+                    )
 
-                if expected_branch in available_branches:
-                    logger.info(f"Mapped {version} -> {expected_branch} (Z-stream with internal branch)")
-                    return expected_branch
-                logger.info(f"Internal branch {expected_branch} not found for package {package}, falling back to Stream")
-        except Exception as e:
-            logger.warning(f"Failed to check internal branches for package {package}: {e}, falling back to Stream")
+                    if expected_branch not in available_branches:
+                        logger.info(f"Branch {expected_branch} does not exist for package {package}")
+            except Exception as e:
+                logger.warning(f"Failed to check internal branches for package {package}: {e}")
+
+        logger.info(f"Mapped {version} -> {expected_branch} (Z-stream RHEL internal branch)")
+        return expected_branch
 
     # Default to CentOS Stream
     branch = f"c{major_version}s"
@@ -138,8 +147,7 @@ async def _map_version_to_branch(version: str, cve_needs_internal_fix: bool, pac
 # All schemas are now imported from common.models
 
 
-def render_prompt(input: InputSchema) -> str:
-    template = """
+TRIAGE_PROMPT = """
       You are an agent tasked to analyze Jira issues for RHEL and identify the most efficient path to resolution,
       whether through a version rebase, a patch backport, or by requesting clarification when blocked.
 
@@ -286,6 +294,168 @@ def render_prompt(input: InputSchema) -> str:
              * Severity: default to 'moderate', for important issues use 'important', for most critical use 'critical' (privilege escalation, RCE, data loss)
              * Fix Version: use the appropriate stream version determined from map_version tool result
     """
+
+TRIAGE_PROMPT_ZSTREAM = """
+      You are an agent tasked to analyze Jira issues for RHEL and identify the most efficient path to resolution,
+      whether through a version rebase, a patch backport, or by requesting clarification when blocked.
+
+      **Important**: Focus on bugs, CVEs, and technical defects that need code fixes.
+      QE tasks, feature requests, refactoring, documentation, and other non-bug issues should be marked as "no-action".
+
+      Goal: Analyze the given issue to determine the correct course of action.
+
+      **Initial Analysis Steps**
+
+      1. Open the {{issue}} Jira issue and thoroughly analyze it:
+         * Extract key details from the title, description, fields, and comments
+         * Identify the Fix Version using the map_version tool and check if it is an older z-stream.
+           An older z-stream is a z-stream version with a minor number lower than the current
+           z-stream for the same major version.
+         * If the Fix Version is an older z-stream use the zstream_search tool to locate the fix.
+           Provide the following from the Jira issue to the tool:
+           - The component name.
+           - The full issue summary text as-is.
+           - The fix_version string.
+           If the tool returns 'found', use the returned commit URLs as your patch candidates.
+         * Pay special attention to comments as they often contain crucial information such as:
+           - Additional context about the problem
+           - Links to upstream fixes or patches
+           - Clarifications from reporters or developers
+         * Look for keywords indicating the root cause of the problem
+         * Identify specific error messages, log snippets, or CVE identifiers
+         * Note any functions, files, or methods mentioned
+         * Pay attention to any direct links to fixes provided in the issue
+         * Do not use upstream patches for older z-streams.
+
+      2. Identify the package name that must be updated:
+         * Determine the name of the package from the issue details (usually component name)
+         * Confirm the package repository exists by running
+           `GIT_TERMINAL_PROMPT=0 git ls-remote https://gitlab.com/redhat/centos-stream/rpms/<package_name>`
+         * A successful command (exit code 0) confirms the package exists
+         * If the package does not exist, re-examine the Jira issue for the correct package name and if it is not found,
+           return error and explicitly state the reason
+
+      3. Proceed to decision making process described below.
+
+      **Decision Guidelines & Investigation Steps**
+
+      You must decide between one of 5 actions. Follow these guidelines to make your decision:
+
+      1. **Rebase**
+         * A Rebase is only to be chosen when the issue explicitly instructs you to "rebase" or "update"
+           to a newer/specific upstream version. Do not infer this.
+         * Identify the <package_version> the package should be updated or rebased to.
+         * Set the Jira fields as per the instructions below.
+
+      2. **Backport a Patch OR Request Clarification**
+         This path is for issues that represent a clear bug or CVE that needs a targeted fix.
+
+         2.1. Deep Analysis of the Issue
+         * Use the details extracted from your initial analysis
+         * Focus on keywords and root cause identification
+         * If the Jira issue already provides a direct link to the fix, use that as your primary lead
+           (e.g. in the commit hash field or comment) unless backporting to an older z-stream.
+
+         2.2. Systematic Source Investigation
+         * Identify the official upstream project from two sources:
+            * Links from the Jira issue (if any direct upstream links are provided)
+            * Package spec file (<package>.spec) in the GitLab repository: check the URL field or Source0 field for upstream project location
+
+         * Even if the Jira issue provides a direct link to a fix, you need to validate it
+         * When no direct link is provided, you must proactively search for fixes - do not give up easily
+         * Try to use upstream_search tool to find out commits related to the issue.
+           - The description you will use should be 1-2 sentences long and include implementation
+             details, keywords, function names or any other helpful information.
+           - The description should be like a command for example `Fix`, `Add` etc.
+           - If the tool gives you list of URLs use them without any change.
+           - Use release date of upstream version used in RHEL if you know it.
+           - If the tool says it can not be used for this project, or it encounters internal error,
+             do not try to use it again and proceed with different approach.
+           - If you run out of commits to check, use different approach, do not give up. Inability
+             of the tool to find proper fix does not mean it does not exist, search bug trackers
+             and version control system.
+         * Using the details from your analysis, search these sources:
+           - Bug Trackers (for fixed bugs matching the issue summary and description)
+           - Git / Version Control (for commit messages, using keywords, CVE IDs, function names, etc.)
+         * Be thorough in your search - try multiple search terms and approaches based on the issue details
+         * Advanced investigation techniques:
+           - If you can identify specific files, functions, or code sections mentioned in the issue,
+             locate them in the source code
+           - Use git history (git log, git blame) to examine changes to those specific code areas
+           - Look for commits that modify the problematic code, especially those with relevant keywords in commit messages
+           - Check git tags and releases around the time when the issue was likely fixed
+           - Search for commits by date ranges when you know approximately when the issue was resolved
+           - Utilize dates strategically in your search if needed, using the version/release date of the package
+             currently used in RHEL
+             - Focus on fixes that came after the RHEL package version date, as earlier fixes would already be included
+             - For CVEs, use the CVE publication date to narrow down the timeframe for fixes
+             - Check upstream release notes and changelogs after the RHEL package version date
+
+         2.3. Validate the Fix and URL
+         * Use the PatchValidator tool to fetch content from any patch/commit URL you intend to use
+         * The tool will verify the URL is accessible and not an issue reference, then return the content
+         * Once you have the content, you must validate two things:
+           1. **Is it a patch/diff?** Look for diff indicators like:
+              - `diff --git` headers
+              - `--- a/file +++ b/file` unified diff headers
+              - `@@...@@` hunk headers
+              - `+` and `-` lines showing changes
+           2. **Does it fix the issue?** Examine the actual code changes to verify:
+              - The fix directly addresses the root cause identified in your analysis
+              - The code changes align with the symptoms described in the Jira issue
+              - The modified functions/files match those mentioned in the issue
+         * Only proceed with URLs that contain valid patch content AND address the specific issue
+         * If the content is not a proper patch or doesn't fix the issue, continue searching for other fixes
+
+         2.4. Decide the Outcome
+         * If your investigation successfully identifies a specific fix that passes both validations in step 2.3, your decision is backport
+         * You must be able to justify why the patch is correct and how it addresses the issue
+         * If your investigation confirms a valid bug/CVE but fails to locate a specific fix, your decision
+           is clarification-needed
+         * This is the correct choice when you are sure a problem exists but cannot find the solution yourself
+
+         2.5 Set the Jira fields as per the instructions below.
+
+      3. **No Action**
+         A No Action decision is appropriate for issues that are NOT bugs or CVEs requiring code fixes:
+         * QE tasks, testing, or validation work
+         * Feature requests or enhancements
+         * Refactoring or code restructuring without fixing bugs
+         * Documentation, build system, or process changes
+         * Vague requests or insufficient information to identify a bug
+         * Note: This is not for valid bugs where you simply can't find the patch
+
+      4. **Error**
+         An Error decision is appropriate when there are processing issues that prevent proper analysis, e.g.:
+         * The package mentioned in the issue cannot be found or identified
+         * The issue cannot be accessed
+
+      **Final Step: Set JIRA Fields (for Rebase and Backport decisions only)**
+
+         If your decision is rebase or backport, use set_jira_fields tool to update JIRA fields (Severity, Fix Version):
+         1. Check all of the mentioned fields in the JIRA issue and don't modify those that are already set
+         2. Extract the affected RHEL major version from the JIRA issue (look in Affects Version/s field or issue description)
+         3. If the Fix Version field is set, do not change it and use its value in the output.
+         4. If the Fix Version field is not set, use the map_version tool with the major version to get available streams
+            and determine appropriate Fix Version:
+             * The tool will return both Y-stream and Z-stream versions (if available) and indicate if it's a maintenance version
+             * For maintenance versions (no Y-stream available):
+               - Critical issues should be fixed (privilege escalation, remote code execution, data loss/corruption, system compromise, regressions, moderate and higher severity CVEs)
+               - Non-critical issues should be marked as no-action with appropriate reasoning
+             * For non-maintenance versions (Y-stream available):
+               - Most critical issues (privilege escalation, RCE, data loss, regressions) should use Z-stream
+               - Other issues should use Y-stream (e.g. performance, usability issues)
+         5. Set non-empty JIRA fields:
+             * Severity: default to 'moderate', for important issues use 'important', for most critical use 'critical' (privilege escalation, RCE, data loss)
+             * Fix Version: use the appropriate stream version determined from map_version tool result
+    """
+
+
+async def render_prompt(input: InputSchema, fix_version: str | None = None) -> str:
+    if fix_version and await is_older_zstream(fix_version):
+        template = TRIAGE_PROMPT_ZSTREAM
+    else:
+        template = TRIAGE_PROMPT
     return PromptTemplate(schema=InputSchema, template=template).render(input)
 
 
@@ -302,7 +472,7 @@ def create_triage_agent(gateway_tools):
         llm=get_chat_model(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool(),
-                VersionMapperTool(), UpstreamSearchTool()]
+                VersionMapperTool(), UpstreamSearchTool(), ZStreamSearchTool()]
         + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields"]],
         memory=UnconstrainedMemory(),
         requirements=[
@@ -315,6 +485,7 @@ def create_triage_agent(gateway_tools):
             ),
             ConditionalRequirement("get_jira_details", min_invocations=1),
             ConditionalRequirement(UpstreamSearchTool, only_after="get_jira_details"),
+            ConditionalRequirement(ZStreamSearchTool, only_after="get_jira_details"),
             ConditionalRequirement(RunShellCommandTool, only_after="get_jira_details"),
             ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),
             ConditionalRequirement("set_jira_fields", only_after="get_jira_details"),
@@ -322,7 +493,6 @@ def create_triage_agent(gateway_tools):
         middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         role="Red Hat Enterprise Linux developer",
         instructions=[
-            "Use the `think` tool to reason through complex decisions and document your approach.",
             "Be proactive in your search for fixes and do not give up easily.",
             "For any patch URL that you are proposing for backport, you need to validate it using PatchValidator tool.",
             "Do not modify the patch URL in your final answer after it has been validated with the PatchValidator tool.",
@@ -377,6 +547,21 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory):
         async def run_triage_analysis(state):
             """Run the main triage analysis"""
             logger.info(f"Running triage analysis for {state.jira_issue}")
+
+            # Pre-fetch JIRA fix version to determine z-stream prompt variant
+            fix_version_name = None
+            try:
+                jira_details = await run_tool(
+                    "get_jira_details",
+                    available_tools=gateway_tools,
+                    issue_key=state.jira_issue
+                )
+                fix_versions = jira_details.get("fields", {}).get("fixVersions", [])
+                if fix_versions:
+                    fix_version_name = fix_versions[0].get("name", "")
+            except Exception as e:
+                logger.warning(f"Failed to pre-fetch fix version for prompt selection: {e}")
+
             input_data = InputSchema(issue=state.jira_issue)
             output_schema_json = to_json(
                 OutputSchema.model_json_schema(mode="validation"),
@@ -384,7 +569,7 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory):
                 sort_keys=False,
             )
             response = await triage_agent.run(
-                render_prompt(input_data),
+                await render_prompt(input_data, fix_version=fix_version_name),
                 # `OutputSchema` alone is not enough here, some models (cough cough, Claude Sonnet 4.5)
                 # really stuggle with the nesting, let's provide some more hints
                 expected_output=dedent(

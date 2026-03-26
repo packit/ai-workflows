@@ -160,7 +160,17 @@ async def mcp_tools(
 
 
 def set_litellm_debug() -> None:
-    """Set litellm to print collosal amount of debug information. This CAN LEAK TOKENS to the logs."""
+    """Set litellm to print debug information.
+
+    WARNING: This CAN LEAK TOKENS to the logs.  It is gated behind the
+    LITELLM_DEBUG environment variable — only enable it in development.
+    """
+    if not os.getenv("LITELLM_DEBUG"):
+        logger.warning(
+            "set_litellm_debug() called but LITELLM_DEBUG env var is not set; "
+            "ignoring to prevent credential leakage in production."
+        )
+        return
     # the following two modules call `litellm_debug(False)` on import
     # import them explicitly now to ensure our call to `litellm_debug()` is not negated later
     import beeai_framework.adapters.litellm.chat

@@ -36,10 +36,10 @@ from common.models import (
 from common.utils import redis_client, fix_await
 from common.constants import JiraLabels, RedisQueues
 from agents.observability import setup_observability
-from agents.tools.commands import RunShellCommandTool
-from agents.tools.patch_validator import PatchValidatorTool
-from agents.tools.version_mapper import VersionMapperTool
-from agents.tools.upstream_search import UpstreamSearchTool
+from ymir_tools.unprivileged.commands import RunShellCommandTool
+from ymir_tools.unprivileged.patch_validator import PatchValidatorTool
+from ymir_tools.unprivileged.version_mapper import VersionMapperTool
+from ymir_tools.unprivileged.upstream_search import UpstreamSearchTool
 from agents.utils import get_agent_execution_config, get_chat_model, get_tool_call_checker_config, mcp_tools, run_tool
 
 logger = logging.getLogger(__name__)

@@ -12,7 +12,7 @@ from common.models import LogOutputSchema, CachedMRMetadata, MergeRequestDetails
 from common.utils import is_cs_branch
 from agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
 from agents.utils import check_subprocess, run_subprocess, run_tool, mcp_tools
-from agents.tools.specfile import UpdateReleaseTool
+from ymir_tools.unprivileged.specfile import UpdateReleaseTool
 
 logger = logging.getLogger(__name__)
 

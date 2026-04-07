@@ -42,9 +42,9 @@ from common.models import (
 from common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
-from tools.commands import RunShellCommandTool
-from tools.filesystem import GetCWDTool, RemoveTool
-from tools.text import (
+from ymir_tools.unprivileged.commands import RunShellCommandTool
+from ymir_tools.unprivileged.filesystem import GetCWDTool, RemoveTool
+from ymir_tools.unprivileged.text import (
     CreateTool,
     InsertAfterSubstringTool,
     InsertTool,

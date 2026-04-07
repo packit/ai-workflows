@@ -22,6 +22,7 @@ x-beeai-agent: &beeai-agent
     - .secrets/beeai-agent.env
   volumes:
     - ./agents:/home/beeai/agents:ro,z
+    - ./ymir_tools:/home/beeai/ymir_tools:ro,z
     - ./common:/home/beeai/common:ro,z
     - git-repos:/git-repos:rw,U
     - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
@@ -67,6 +68,7 @@ x-supervisor: &supervisor
     - .secrets/supervisor.env
   volumes:
     - ./agents:/home/beeai/agents:ro,z
+    - ./ymir_tools:/home/beeai/ymir_tools:ro,z
     - ./common:/home/beeai/common:ro,z
     - ./supervisor:/home/beeai/supervisor:ro,z
     - .secrets/ccache:/home/beeai/ccache:ro,z,U
@@ -87,17 +89,17 @@ services:
       - MOCK_JIRA=${MOCK_JIRA:-false}
       - JIRA_DRY_RUN=${JIRA_DRY_RUN:-false}
       - GIT_REPO_BASEPATH=/git-repos
-      - JIRA_MOCK_FILES=mcp_server/tests/data
+      - JIRA_MOCK_FILES=ymir_tools/privileged/tests/data
     env_file:
       - .secrets/mcp-gateway.env
     volumes:
-      - ./mcp_server:/home/mcp/mcp_server:ro,z
-      - ./mcp_server/tests/data:/home/mcp/mcp_server/tests/data:rw,z
+      - ./ymir_tools/privileged:/home/mcp/ymir_tools/privileged:ro,z
+      - ./ymir_tools/privileged/tests/data:/home/mcp/ymir_tools/privileged/tests/data:rw,z
       - ./common:/home/mcp/common:ro,z
       - .secrets/keytab:/home/mcp/keytab:ro,z,U
       - git-repos:/git-repos
       - .secrets/rhel-config.json:/home/mcp/rhel-config.json:ro,z,U
-    command: ["python", "mcp_server/gateway.py"]
+    command: ["python", "ymir_tools/privileged/gateway.py"]
     restart: unless-stopped
     profiles: ["agents", "supervisor"]
 

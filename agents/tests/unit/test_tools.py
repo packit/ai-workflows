@@ -12,7 +12,7 @@ from specfile.utils import EVR
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import ToolError
 
-from tools.wicked_git import (
+from ymir_tools.unprivileged.wicked_git import (
     GitPatchApplyFinishTool,
     GitPatchApplyFinishToolInput,
     GitPatchApplyTool,
@@ -24,8 +24,8 @@ from tools.wicked_git import (
     discover_patch_p,
     find_rej_files,
 )
-from tools.commands import RunShellCommandTool, RunShellCommandToolInput
-from tools.specfile import (
+from ymir_tools.unprivileged.commands import RunShellCommandTool, RunShellCommandToolInput
+from ymir_tools.unprivileged.specfile import (
     AddChangelogEntryTool,
     AddChangelogEntryToolInput,
     GetPackageInfoTool,
@@ -33,7 +33,7 @@ from tools.specfile import (
     UpdateReleaseTool,
     UpdateReleaseToolInput,
 )
-from tools.text import (
+from ymir_tools.unprivileged.text import (
     CreateTool,
     CreateToolInput,
     InsertAfterSubstringTool,
@@ -47,7 +47,7 @@ from tools.text import (
     SearchTextTool,
     SearchTextToolInput,
 )
-from tools.filesystem import GetCWDTool, GetCWDToolInput, RemoveTool, RemoveToolInput
+from ymir_tools.unprivileged.filesystem import GetCWDTool, GetCWDToolInput, RemoveTool, RemoveToolInput
 
 
 @pytest.mark.parametrize(

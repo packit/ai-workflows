@@ -24,7 +24,7 @@ spec:
         kubernetes.io/hostname: ip-10-30-34-89.us-east-1.compute.internal
       containers:
       - args:
-        - mcp_server/gateway.py
+        - ymir_tools/privileged/gateway.py
         command:
         - /usr/bin/python
         env:

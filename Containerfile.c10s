@@ -65,6 +65,7 @@ RUN useradd -m -G wheel beeai
 # Copy required directories
 # Individual directories are mounted as volumes in development
 COPY agents/ /home/beeai/agents/
+COPY ymir_tools/ /home/beeai/ymir_tools/
 COPY common/ /home/beeai/common/
 RUN chgrp -R root /home/beeai && chmod -R g+rwX /home/beeai
 

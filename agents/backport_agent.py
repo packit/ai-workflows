@@ -42,10 +42,10 @@ from common.models import (
 from common.utils import redis_client, fix_await, is_cs_branch
 from constants import I_AM_YMIR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
-from tools.commands import RunShellCommandTool
-from tools.specfile import GetPackageInfoTool
-from tools.filesystem import GetCWDTool, RemoveTool
-from tools.text import (
+from ymir_tools.unprivileged.commands import RunShellCommandTool
+from ymir_tools.unprivileged.specfile import GetPackageInfoTool
+from ymir_tools.unprivileged.filesystem import GetCWDTool, RemoveTool
+from ymir_tools.unprivileged.text import (
     CreateTool,
     InsertAfterSubstringTool,
     InsertTool,
@@ -53,7 +53,7 @@ from tools.text import (
     ViewTool,
     SearchTextTool,
 )
-from tools.upstream_tools import (
+from ymir_tools.unprivileged.upstream_tools import (
     ApplyDownstreamPatchesTool,
     CherryPickCommitTool,
     CherryPickContinueTool,
@@ -62,8 +62,8 @@ from tools.upstream_tools import (
     FindBaseCommitTool,
     GeneratePatchFromCommitTool,
 )
-from tools.distgit_detector import DistgitDetectorTool
-from tools.wicked_git import (
+from ymir_tools.unprivileged.distgit_detector import DistgitDetectorTool
+from ymir_tools.unprivileged.wicked_git import (
     GitLogSearchTool,
     GitPatchApplyTool,
     GitPatchApplyFinishTool,

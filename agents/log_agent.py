@@ -12,10 +12,10 @@ from beeai_framework.tools import Tool
 from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 
-from tools.commands import RunShellCommandTool
-from tools.specfile import AddChangelogEntryTool
-from tools.filesystem import GetCWDTool
-from tools.text import (
+from ymir_tools.unprivileged.commands import RunShellCommandTool
+from ymir_tools.unprivileged.specfile import AddChangelogEntryTool
+from ymir_tools.unprivileged.filesystem import GetCWDTool
+from ymir_tools.unprivileged.text import (
     CreateTool,
     InsertTool,
     InsertAfterSubstringTool,

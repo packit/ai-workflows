@@ -11,7 +11,7 @@ import requests
 from flexmock import flexmock
 
 from jira_issue_fetcher import JiraIssueFetcher
-from common.models import Task, TriageInputSchema, RebaseInputSchema, BackportInputSchema, RebaseOutputSchema, BackportOutputSchema, ClarificationNeededData, NoActionData, ErrorData, RebaseData, BackportData
+from common.models import Task, TriageInputSchema, RebaseInputSchema, BackportInputSchema, RebaseOutputSchema, BackportOutputSchema, ClarificationNeededData, OpenEndedAnalysisData, ErrorData, RebaseData, BackportData
 from common.constants import JiraLabels, JIRA_SEARCH_PATH, RedisQueues
 from common.utils import redis_client
 
@@ -196,7 +196,7 @@ async def test_get_existing_issue_keys(fetcher, mock_redis_context):
     for queue in [RedisQueues.REBASE_QUEUE_C9S.value, RedisQueues.REBASE_QUEUE_C10S.value,
                  RedisQueues.BACKPORT_QUEUE_C9S.value, RedisQueues.BACKPORT_QUEUE_C10S.value,
                  RedisQueues.CLARIFICATION_NEEDED_QUEUE.value,
-                 RedisQueues.ERROR_LIST.value, RedisQueues.NO_ACTION_LIST.value, RedisQueues.COMPLETED_REBASE_LIST.value, RedisQueues.COMPLETED_BACKPORT_LIST.value]:
+                 RedisQueues.ERROR_LIST.value, RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value, RedisQueues.COMPLETED_REBASE_LIST.value, RedisQueues.COMPLETED_BACKPORT_LIST.value]:
         mock_redis.should_receive('lrange').with_args(queue, 0, -1).and_return(
             create_async_mock_return_value([])
         )
@@ -335,17 +335,17 @@ async def test_run_full_workflow_with_labeled_issues(fetcher, mock_redis_context
 
     # Create schema objects for data queues
     existing_issues = {
-        'ISSUE-1': NoActionData(jira_issue="ISSUE-1", reasoning="Issue requires no action").model_dump_json(),
+        'ISSUE-1': OpenEndedAnalysisData(jira_issue="ISSUE-1", summary="Issue requires no action", recommendation="No action needed.").model_dump_json(),
         'ISSUE-2': task_for_rebase,  # Task object for input queue
         'ISSUE-3': task_for_backport,  # Task object for input queue
-        'ISSUE-4': NoActionData(jira_issue="ISSUE-4", reasoning="Issue requires no action").model_dump_json(),
+        'ISSUE-4': OpenEndedAnalysisData(jira_issue="ISSUE-4", summary="Issue requires no action", recommendation="No action needed.").model_dump_json(),
         'ISSUE-5': Task(metadata={"jira_issue": "ISSUE-5", "triage_result": {"resolution": "clarification-needed", "data": ClarificationNeededData(jira_issue="ISSUE-5", findings="Investigation incomplete", additional_info_needed="More details needed").model_dump()}}).model_dump_json(),
         'ISSUE-6': ErrorData(jira_issue="ISSUE-6", details="Build failed").model_dump_json(),  # Use ErrorData for error_list
     }
 
     # Mock lrange calls for existing issues distributed across different queues
     # Distribute issues across different queues to test the logic
-    mock_redis.should_receive('lrange').with_args(RedisQueues.NO_ACTION_LIST.value, 0, -1).and_return(
+    mock_redis.should_receive('lrange').with_args(RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value, 0, -1).and_return(
         create_async_mock_return_value([existing_issues['ISSUE-1'], existing_issues['ISSUE-4']])
     )
 

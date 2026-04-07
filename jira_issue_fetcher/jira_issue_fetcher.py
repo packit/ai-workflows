@@ -38,7 +38,7 @@ from common.models import (
     RebaseOutputSchema,
     BackportOutputSchema,
     ClarificationNeededData,
-    NoActionData,
+    OpenEndedAnalysisData,
     ErrorData
 )
 from common.utils import redis_client, fix_await, get_jira_auth_headers
@@ -217,8 +217,8 @@ class JiraIssueFetcher:
                                             schema = BackportOutputSchema.model_validate_json(item)
                                             # Schema doesn't have issue keys, skip these
                                             continue
-                                        case RedisQueues.NO_ACTION_LIST.value:
-                                            schema = NoActionData.model_validate_json(item)
+                                        case RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value:
+                                            schema = OpenEndedAnalysisData.model_validate_json(item)
                                             issue_key = schema.jira_issue.upper()
                                         case RedisQueues.ERROR_LIST.value:
                                             schema = ErrorData.model_validate_json(item)

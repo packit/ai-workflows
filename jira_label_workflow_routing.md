@@ -15,9 +15,9 @@ stateDiagram-v2
     Failed --> Retry: jotnar_retry_needed
     Errored --> Attention: jotnar_needs_attention
     Retry --> InProgress: Retry Processing
-    New --> NoAction: jotnar_no_action_needed
+    New --> Triaged: jotnar_triaged
     Merged --> [*]
-    NoAction --> [*]
+    Triaged --> [*]
 ```
 
 ## Redis Queue Routing
@@ -35,7 +35,7 @@ flowchart TD
     TRIAGE_AGENT -->|Resolution.BACKPORT<br/>RHEL 8/9| BACKPORT_C9S[backport_queue_c9s]
     TRIAGE_AGENT -->|Resolution.BACKPORT<br/>RHEL 10+| BACKPORT_C10S[backport_queue_c10s]
     TRIAGE_AGENT -->|Resolution.CLARIFICATION| CLARIFY[clarification_needed_queue]
-    TRIAGE_AGENT -->|Resolution.NO_ACTION| NOACTION[no_action_list]
+    TRIAGE_AGENT -->|Resolution.OPEN_ENDED_ANALYSIS| ANALYSIS[open_ended_analysis_list]
     TRIAGE_AGENT -->|Resolution.ERROR| ERROR[error_list]
 
     REBASE_C9S --> REBASE_AGENT[Rebase Agent]
@@ -86,7 +86,7 @@ flowchart TD
 | Label | Purpose | Effect |
 |-------|---------|--------|
 | `jotnar_retry_needed` | Trigger retry | Forces reprocessing |
-| `jotnar_no_action_needed` | Skip processing | Terminal state |
+| `jotnar_triaged` | Triage completed, no automated follow-up | Terminal state |
 | `jotnar_fusa` | Functional Safety | Requires maintainer review |
 
 ## Queue Types Summary
@@ -102,7 +102,7 @@ flowchart TD
 | `backport_queue` | Input | (Not actively enqueued) | `jotnar_backport_in_progress` | Legacy (checked for deduplication) |
 | `clarification_needed_queue` | Input | Resolution=CLARIFICATION | `jotnar_needs_attention` | Active |
 | `error_list` | Output | Any error | `jotnar_*_errored` | Active |
-| `no_action_list` | Output | Resolution=NO_ACTION | `jotnar_no_action_needed` | Active |
+| `open_ended_analysis_list` | Output | Resolution=OPEN_ENDED_ANALYSIS | `jotnar_triaged` | Active |
 | `completed_rebase_list` | Output | Rebase success | `jotnar_rebased` | Active |
 | `completed_backport_list` | Output | Backport success | `jotnar_backported` | Active |
 

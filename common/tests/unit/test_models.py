@@ -3,10 +3,11 @@ from models import (
     BackportData,
     RebaseData,
     ClarificationNeededData,
-    NoActionData,
+    OpenEndedAnalysisData,
     ErrorData,
     Resolution,
     TRIAGE_DISCLAIMER,
+    AUTOMATED_RESOLUTION_NOT_SUPPORTED,
 )
 
 
@@ -27,6 +28,7 @@ def test_backport_formatting():
         "*Patch URL 1*: https://example.com/patch.patch\n"
         "*Justification*: Fixes the bug in bind.c\n"
         "*Fix Version*: rhel-10.0"
+        "\n\n_Automated follow-up workflow for this resolution type is planned for Q2 2026. Stay tuned._"
     )
 
 
@@ -45,6 +47,7 @@ def test_rebase_formatting():
         "*Package*: httpd\n"
         "*Version*: 2.4.55\n"
         "*Fix Version*: rhel-9.5"
+        "\n\n_Automated follow-up workflow for this resolution type is planned for Q2 2026. Stay tuned._"
     )
 
 
@@ -64,17 +67,20 @@ def test_clarification_needed_formatting():
     )
 
 
-def test_no_action_formatting():
-    data = NoActionData(
-        reasoning="This is a feature request, not a bug",
+def test_open_ended_analysis_formatting():
+    data = OpenEndedAnalysisData(
+        summary="This is a feature request, not a bug",
+        recommendation="No action needed — feature requests are not appropriate for bugfix updates in RHEL.",
         jira_issue="RHEL-22222"
     )
-    result = TriageOutputSchema(resolution=Resolution.NO_ACTION, data=data)
+    result = TriageOutputSchema(resolution=Resolution.OPEN_ENDED_ANALYSIS, data=data)
 
     assert result.format_for_comment() == (
         f"{TRIAGE_DISCLAIMER}"
-        "*Resolution*: no-action\n"
-        "*Reasoning*: This is a feature request, not a bug"
+        "*Resolution*: open-ended-analysis\n"
+        "*Summary*: This is a feature request, not a bug\n"
+        "*Recommendation*: No action needed — feature requests are not appropriate for bugfix updates in RHEL."
+        f"{AUTOMATED_RESOLUTION_NOT_SUPPORTED}"
     )
 
 

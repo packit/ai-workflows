@@ -19,7 +19,7 @@ graph TD
     subgraph Redis["Redis Queues"]
         direction TB
         REDIS_IN["Input Queues:<br/>triage_queue"]
-        REDIS_OUT["Output Queues:<br/>rebase_queue_*<br/>backport_queue_*<br/>clarification_needed_queue<br/>error_list<br/>no_action_list"]
+        REDIS_OUT["Output Queues:<br/>rebase_queue_*<br/>backport_queue_*<br/>clarification_needed_queue<br/>error_list<br/>open_ended_analysis_list"]
     end
 
     REDIS_IN -->|"Consume"| AGENTS
@@ -52,7 +52,7 @@ graph TD
 ### AI Agents (Use MCP Server)
 
 These are AI-powered agents that use the MCP Server tools to interact with Jira:
-- **Triage Agent** - Analyzes issues, determines if rebase/backport/no-action needed
+- **Triage Agent** - Analyzes issues, determines resolution type (rebase/backport/clarification/open-ended-analysis)
 - **Rebase Agent** - Updates packages to new upstream versions
 - **Backport Agent** - Applies specific patches to packages
 
@@ -167,7 +167,7 @@ flowchart TD
     REBASE[Rebase Queue]
     BACKPORT[Backport Queue]
     CLARIFY[Clarification Queue]
-    NOACTION[No Action List]
+    ANALYSIS[Open-Ended Analysis List]
     ERROR[Error List]
 
     PROCESS[Rebase/Backport<br/>Agents]
@@ -184,7 +184,7 @@ flowchart TD
     DECIDE -->|Rebase| REBASE
     DECIDE -->|Backport| BACKPORT
     DECIDE -->|Needs Info| CLARIFY
-    DECIDE -->|No Action| NOACTION
+    DECIDE -->|Open-Ended Analysis| ANALYSIS
     DECIDE -->|Error| ERROR
 
     REBASE --> PROCESS

@@ -29,7 +29,7 @@ from common.models import (
     TriageOutputSchema as OutputSchema,
     Resolution,
     ClarificationNeededData,
-    NoActionData,
+    OpenEndedAnalysisData,
     ErrorData,
     CVEEligibilityResult,
 )
@@ -144,7 +144,7 @@ def render_prompt(input: InputSchema) -> str:
       whether through a version rebase, a patch backport, or by requesting clarification when blocked.
 
       **Important**: Focus on bugs, CVEs, and technical defects that need code fixes.
-      QE tasks, feature requests, refactoring, documentation, and other non-bug issues should be marked as "no-action".
+      Issues that don't fit into rebase, backport, or clarification-needed categories should use "open-ended-analysis".
 
       Goal: Analyze the given issue to determine the correct course of action.
 
@@ -173,7 +173,7 @@ def render_prompt(input: InputSchema) -> str:
 
       **Decision Guidelines & Investigation Steps**
 
-      You must decide between one of 5 actions. Follow these guidelines to make your decision:
+      You must decide between one of the following actions. Follow these guidelines to make your decision:
 
       1. **Rebase**
          * A Rebase is only to be chosen when the issue explicitly instructs you to "rebase" or "update"
@@ -253,14 +253,16 @@ def render_prompt(input: InputSchema) -> str:
 
          2.5 Set the Jira fields as per the instructions below.
 
-      3. **No Action**
-         A No Action decision is appropriate for issues that are NOT bugs or CVEs requiring code fixes:
-         * QE tasks, testing, or validation work
-         * Feature requests or enhancements
-         * Refactoring or code restructuring without fixing bugs
-         * Documentation, build system, or process changes
-         * Vague requests or insufficient information to identify a bug
-         * Note: This is not for valid bugs where you simply can't find the patch
+      3. **Open-Ended Analysis**
+         This is the catch-all for issues that don't fit rebase, backport, or clarification-needed. Use this when:
+         * The issue requires specfile adjustments, dependency updates, or other packaging-level work
+         * The issue requires rebuilding against an updated dependency without source changes
+         * The issue is a QE task, feature request, documentation change, or other non-bug
+         * The issue is a duplicate, misassigned, or otherwise needs no work
+         * The issue is a legitimate problem but doesn't cleanly fit other categories
+         * It is a testing issue and has nothing to do with the selected component
+         * Provide a thorough summary of your findings and a clear recommendation for what action
+           should be taken (or explicitly state that no action is needed and why)
 
       4. **Error**
          An Error decision is appropriate when there are processing issues that prevent proper analysis, e.g.:
@@ -278,7 +280,7 @@ def render_prompt(input: InputSchema) -> str:
              * The tool will return both Y-stream and Z-stream versions (if available) and indicate if it's a maintenance version
              * For maintenance versions (no Y-stream available):
                - Critical issues should be fixed (privilege escalation, remote code execution, data loss/corruption, system compromise, regressions, moderate and higher severity CVEs)
-               - Non-critical issues should be marked as no-action with appropriate reasoning
+               - Non-critical issues should be marked as open-ended-analysis with appropriate reasoning
              * For non-maintenance versions (Y-stream available):
                - Most critical issues (privilege escalation, RCE, data loss, regressions) should use Z-stream
                - Other issues should use Y-stream (e.g. performance, usability issues)
@@ -362,9 +364,10 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory):
                 )
                 else:
                     state.triage_result = OutputSchema(
-                        resolution=Resolution.NO_ACTION,
-                        data=NoActionData(
-                            reasoning=f"CVE eligibility check decided to skip triaging: {state.cve_eligibility_result.reason}",
+                        resolution=Resolution.OPEN_ENDED_ANALYSIS,
+                        data=OpenEndedAnalysisData(
+                            summary=f"CVE eligibility check decided to skip triaging: {state.cve_eligibility_result.reason}",
+                            recommendation="No action needed — this issue is not eligible for triage processing.",
                             jira_issue=state.jira_issue
                         )
                     )
@@ -427,7 +430,7 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory):
                 return "verify_rebase_author"
             elif state.triage_result.resolution == Resolution.BACKPORT:
                 return "determine_target_branch"
-            elif state.triage_result.resolution in [Resolution.CLARIFICATION_NEEDED, Resolution.NO_ACTION]:
+            elif state.triage_result.resolution in [Resolution.CLARIFICATION_NEEDED, Resolution.OPEN_ENDED_ANALYSIS]:
                 return "comment_in_jira"
             else:
                 return Workflow.END
@@ -618,14 +621,14 @@ async def main() -> None:
                     )
                     task = Task(metadata=state.model_dump())
                     await redis.lpush(RedisQueues.CLARIFICATION_NEEDED_QUEUE.value, task.model_dump_json())
-                elif output.resolution == Resolution.NO_ACTION:
-                    logger.info(f"Triage resolved as NO_ACTION for {input.issue}, " f"adding to no action list")
+                elif output.resolution == Resolution.OPEN_ENDED_ANALYSIS:
+                    logger.info(f"Triage resolved as OPEN_ENDED_ANALYSIS for {input.issue}, " f"adding to open-ended analysis list")
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
-                        labels_to_add=[JiraLabels.NO_ACTION_NEEDED.value],
+                        labels_to_add=[JiraLabels.TRIAGED.value],
                         dry_run=dry_run
                     )
-                    await fix_await(redis.lpush(RedisQueues.NO_ACTION_LIST.value, output.data.model_dump_json()))
+                    await fix_await(redis.lpush(RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value, output.data.model_dump_json()))
                 elif output.resolution == Resolution.ERROR:
                     logger.warning(f"Triage resolved as ERROR for {input.issue}, retrying")
                     await tasks.set_jira_labels(

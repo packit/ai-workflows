@@ -119,7 +119,7 @@ class Resolution(Enum):
     REBASE = "rebase"
     BACKPORT = "backport"
     CLARIFICATION_NEEDED = "clarification-needed"
-    NO_ACTION = "no-action"
+    OPEN_ENDED_ANALYSIS = "open-ended-analysis"
     ERROR = "error"
 
 
@@ -156,12 +156,18 @@ class ClarificationNeededData(BaseModel):
     jira_issue: str = Field(description="Jira issue identifier")
 
 
-class NoActionData(BaseModel):
-    """Data for no action resolution."""
-    reasoning: str = Field(
-        description="The reasoning why the issue is intentionally non-actionable, "
-            "e.g., \"The request is for a new feature ('add dark mode') "
-            "which is not appropriate for a bugfix update in RHEL.\""
+class OpenEndedAnalysisData(BaseModel):
+    """Data for open-ended analysis resolution."""
+    summary: str = Field(
+        description="Free-form summary of the issue analysis and findings, "
+            "e.g., \"The issue requests updating BuildRequires for package-x to version >= 2.0 "
+            "due to a new API used in the latest release.\""
+    )
+    recommendation: str = Field(
+        description="Recommended course of action, "
+            "e.g., \"This issue requires a specfile adjustment to update BuildRequires for "
+            "package-x to version >= 2.0. No upstream source changes needed.\" "
+            "or \"No action needed — this is a duplicate of RHEL-12345.\""
     )
     jira_issue: str = Field(description="Jira issue identifier")
 
@@ -182,12 +188,17 @@ TRIAGE_DISCLAIMER = (
     "and [Guidelines for Responsible Use of AI Code Assistants|https://source.redhat.com/projects_and_programs/ai/wiki/code_assistants_guidelines_for_responsible_use_of_ai_code_assistants]._\n\n"
 )
 
+AUTOMATED_RESOLUTION_NOT_SUPPORTED = (
+    "\n\n_Note: Automated resolution for this resolution type "
+    "is not yet supported by Jötnar. Manual action is required._"
+)
+
 
 class TriageOutputSchema(BaseModel):
     """Output schema for the triage agent."""
     resolution: Resolution = Field(
-        description="Triage resolution, one of rebase, backport, clarification-needed, no-action, error")
-    data: Union[RebaseData, BackportData, ClarificationNeededData, NoActionData, ErrorData] = Field(
+        description="Triage resolution, one of rebase, backport, clarification-needed, open-ended-analysis, error")
+    data: Union[RebaseData, BackportData, ClarificationNeededData, OpenEndedAnalysisData, ErrorData] = Field(
         description="Associated data"
     )
 
@@ -206,6 +217,7 @@ class TriageOutputSchema(BaseModel):
                     f"{patch_urls_text}\n"
                     f"*Justification*: {self.data.justification}"
                     f"{fix_version_text}"
+                    f"\n\n_Automated follow-up workflow for this resolution type is planned for Q2 2026. Stay tuned._"
                 )
 
             case RebaseData():
@@ -216,6 +228,7 @@ class TriageOutputSchema(BaseModel):
                     f"{resolution}"
                     f"*Package*: {self.data.package}\n"
                     f"*Version*: {self.data.version}{fix_version_text}"
+                    f"\n\n_Automated follow-up workflow for this resolution type is planned for Q2 2026. Stay tuned._"
                 )
 
             case ClarificationNeededData():
@@ -226,11 +239,13 @@ class TriageOutputSchema(BaseModel):
                     f"*Additional info needed*: {self.data.additional_info_needed}"
                 )
 
-            case NoActionData():
+            case OpenEndedAnalysisData():
                 return (
                     f"{TRIAGE_DISCLAIMER}"
                     f"{resolution}"
-                    f"*Reasoning*: {self.data.reasoning}"
+                    f"*Summary*: {self.data.summary}\n"
+                    f"*Recommendation*: {self.data.recommendation}"
+                    f"{AUTOMATED_RESOLUTION_NOT_SUPPORTED}"
                 )
 
             case ErrorData():

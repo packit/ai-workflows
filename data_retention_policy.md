@@ -56,7 +56,7 @@ env:
 
 **Queues:**
 - Input: `triage_queue`, `rebase_queue_c9s`, `rebase_queue_c10s`, `backport_queue_c9s`, `backport_queue_c10s`, `clarification_needed_queue`
-- Results: `error_list`, `no_action_list`, `completed_rebase_list`, `completed_backport_list`
+- Results: `error_list`, `open_ended_analysis_list`, `completed_rebase_list`, `completed_backport_list`
 - Supervisor: `supervisor_work_queue` (sorted set with time-based scores for retry scheduling)
 
 **Note:** The `supervisor_work_queue` uses time-based scores to schedule retry delays (15 minutes), but items are not automatically removed by TTL or eviction policy. Unprocessed items can persist indefinitely until successfully completed or manually removed.

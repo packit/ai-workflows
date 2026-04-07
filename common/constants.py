@@ -13,7 +13,7 @@ class RedisQueues(Enum):
     BACKPORT_QUEUE_C10S = "backport_queue_c10s"
     CLARIFICATION_NEEDED_QUEUE = "clarification_needed_queue"
     ERROR_LIST = "error_list"
-    NO_ACTION_LIST = "no_action_list"
+    OPEN_ENDED_ANALYSIS_LIST = "open_ended_analysis_list"
     COMPLETED_REBASE_LIST = "completed_rebase_list"
     COMPLETED_BACKPORT_LIST = "completed_backport_list"
     REBASE_QUEUE = "rebase_queue"
@@ -35,7 +35,7 @@ class RedisQueues(Enum):
     def data_queues(cls) -> set[str]:
         """Return data queue names that contain schema objects"""
         return {cls.ERROR_LIST.value,
-                cls.NO_ACTION_LIST.value, cls.COMPLETED_REBASE_LIST.value,
+                cls.OPEN_ENDED_ANALYSIS_LIST.value, cls.COMPLETED_REBASE_LIST.value,
                 cls.COMPLETED_BACKPORT_LIST.value}
 
     @classmethod
@@ -65,7 +65,7 @@ class JiraLabels(Enum):
     REBASE_IN_PROGRESS = "jotnar_rebase_in_progress"
     BACKPORT_IN_PROGRESS = "jotnar_backport_in_progress"
     NEEDS_ATTENTION = "jotnar_needs_attention"
-    NO_ACTION_NEEDED = "jotnar_no_action_needed"
+    TRIAGED = "jotnar_triaged"
 
     REBASED = "jotnar_rebased"
     BACKPORTED = "jotnar_backported"

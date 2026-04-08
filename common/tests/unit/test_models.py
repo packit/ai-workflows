@@ -28,8 +28,24 @@ def test_backport_formatting():
         "*Patch URL 1*: https://example.com/patch.patch\n"
         "*Justification*: Fixes the bug in bind.c\n"
         "*Fix Version*: rhel-10.0"
-        "\n\n_Automated follow-up workflow for this resolution type is planned for Q2 2026. Stay tuned._"
+        "\n\n_Automated individual follow-up workflow for this resolution type is planned for Q2 2026. Stay tuned._"
     )
+
+
+def test_backport_formatting_auto_chain():
+    data = BackportData(
+        package="readline",
+        patch_urls=["https://example.com/patch.patch"],
+        justification="Fixes the bug in bind.c",
+        jira_issue="RHEL-12345",
+        cve_id="CVE-2024-1234",
+        fix_version="rhel-10.0"
+    )
+    result = TriageOutputSchema(resolution=Resolution.BACKPORT, data=data)
+
+    comment = result.format_for_comment(auto_chain=True)
+    assert "planned for Q2 2026" not in comment
+    assert "*Resolution*: backport" in comment
 
 
 def test_rebase_formatting():
@@ -47,8 +63,22 @@ def test_rebase_formatting():
         "*Package*: httpd\n"
         "*Version*: 2.4.55\n"
         "*Fix Version*: rhel-9.5"
-        "\n\n_Automated follow-up workflow for this resolution type is planned for Q2 2026. Stay tuned._"
+        "\n\n_Automated individual follow-up workflow for this resolution type is planned for Q2 2026. Stay tuned._"
     )
+
+
+def test_rebase_formatting_auto_chain():
+    data = RebaseData(
+        package="httpd",
+        version="2.4.55",
+        jira_issue="RHEL-67890",
+        fix_version="rhel-9.5"
+    )
+    result = TriageOutputSchema(resolution=Resolution.REBASE, data=data)
+
+    comment = result.format_for_comment(auto_chain=True)
+    assert "planned for Q2 2026" not in comment
+    assert "*Resolution*: rebase" in comment
 
 
 def test_clarification_needed_formatting():

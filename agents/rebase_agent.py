@@ -506,7 +506,7 @@ async def main() -> None:
                     await tasks.set_jira_labels(
                         jira_issue=rebase_data.jira_issue,
                         labels_to_add=[JiraLabels.REBASE_ERRORED.value],
-                        labels_to_remove=[JiraLabels.REBASE_IN_PROGRESS.value],
+                        labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
                         dry_run=dry_run
                     )
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
@@ -535,7 +535,7 @@ async def main() -> None:
                         jira_issue=rebase_data.jira_issue,
                         labels_to_add=[JiraLabels.REBASED.value],
                         labels_to_remove=[
-                            JiraLabels.REBASE_IN_PROGRESS.value,
+                            JiraLabels.TRIAGED_REBASE.value,
                             JiraLabels.REBASE_ERRORED.value,
                             JiraLabels.REBASE_FAILED.value,
                         ],
@@ -547,7 +547,7 @@ async def main() -> None:
                     await tasks.set_jira_labels(
                         jira_issue=rebase_data.jira_issue,
                         labels_to_add=[JiraLabels.REBASE_FAILED.value],
-                        labels_to_remove=[JiraLabels.REBASE_IN_PROGRESS.value],
+                        labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
                         dry_run=dry_run
                     )
                     await retry(task, state.rebase_result.error)

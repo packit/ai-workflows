@@ -83,11 +83,22 @@ Please do not run `podman-compose up` directly; use the provided Makefile instea
 ```bash
 # Start all agents and services
 make start
-# make start DRY_RUN=true for testing purposes
+
+# With options:
+make start DRY_RUN=true                    # Skip Jira writes and git pushes
+make start AUTO_CHAIN=false                # Disable downstream queue routing (triage only)
+make start DRY_RUN=true AUTO_CHAIN=false   # Combine both
 
 # Process a JIRA issue
 make trigger-pipeline JIRA_ISSUE=RHEL-12345
 ```
+
+**Environment variables:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DRY_RUN` | `false` | Skip Jira writes, git pushes, and MR creation |
+| `AUTO_CHAIN` | `true` | Route triaged issues to downstream backport/rebase queues. Set to `false` to disable routing. |
+| `MOCK_JIRA` | `false` | Use mock Jira API instead of real Jira |
 
 ### Individual Agents Runs
 ```bash

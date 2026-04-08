@@ -62,10 +62,10 @@ class RedisQueues(Enum):
 
 class JiraLabels(Enum):
     """Constants for Jira labels used by Jotnar agents"""
-    REBASE_IN_PROGRESS = "jotnar_rebase_in_progress"
-    BACKPORT_IN_PROGRESS = "jotnar_backport_in_progress"
     NEEDS_ATTENTION = "jotnar_needs_attention"
     TRIAGED = "jotnar_triaged"
+    TRIAGED_BACKPORT = "jotnar_triaged_backport"
+    TRIAGED_REBASE = "jotnar_triaged_rebase"
 
     REBASED = "jotnar_rebased"
     BACKPORTED = "jotnar_backported"

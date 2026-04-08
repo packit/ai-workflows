@@ -202,9 +202,12 @@ class TriageOutputSchema(BaseModel):
         description="Associated data"
     )
 
-    def format_for_comment(self) -> str:
+    def format_for_comment(self, auto_chain: bool = False) -> str:
         """Format the triage result in a human-readable format for Jira comments."""
         resolution = f"*Resolution*: {self.resolution.value}\n"
+        follow_up_note = "" if auto_chain else (
+            "\n\n_Automated individual follow-up workflow for this resolution type is planned for Q2 2026. Stay tuned._"
+        )
 
         match self.data:
             case BackportData():
@@ -217,7 +220,7 @@ class TriageOutputSchema(BaseModel):
                     f"{patch_urls_text}\n"
                     f"*Justification*: {self.data.justification}"
                     f"{fix_version_text}"
-                    f"\n\n_Automated follow-up workflow for this resolution type is planned for Q2 2026. Stay tuned._"
+                    f"{follow_up_note}"
                 )
 
             case RebaseData():
@@ -228,7 +231,7 @@ class TriageOutputSchema(BaseModel):
                     f"{resolution}"
                     f"*Package*: {self.data.package}\n"
                     f"*Version*: {self.data.version}{fix_version_text}"
-                    f"\n\n_Automated follow-up workflow for this resolution type is planned for Q2 2026. Stay tuned._"
+                    f"{follow_up_note}"
                 )
 
             case ClarificationNeededData():

@@ -1012,7 +1012,7 @@ async def main() -> None:
                     await tasks.set_jira_labels(
                         jira_issue=backport_data.jira_issue,
                         labels_to_add=[JiraLabels.BACKPORT_ERRORED.value],
-                        labels_to_remove=[JiraLabels.BACKPORT_IN_PROGRESS.value],
+                        labels_to_remove=[JiraLabels.TRIAGED_BACKPORT.value],
                         dry_run=dry_run
                     )
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
@@ -1042,19 +1042,19 @@ async def main() -> None:
                         jira_issue=backport_data.jira_issue,
                         labels_to_add=[JiraLabels.BACKPORTED.value],
                         labels_to_remove=[
-                            JiraLabels.BACKPORT_IN_PROGRESS.value,
+                            JiraLabels.TRIAGED_BACKPORT.value,
                             JiraLabels.BACKPORT_ERRORED.value,
                             JiraLabels.BACKPORT_FAILED.value,
                         ],
                         dry_run=dry_run
                     )
-                    await redis.lpush(RedisQueues.COMPLETED_BACKPORT_LIST.value, state.backport_result.model_dump_json())
+                    await fix_await(redis.lpush(RedisQueues.COMPLETED_BACKPORT_LIST.value, state.backport_result.model_dump_json()))
                 else:
                     logger.warning(f"Backport failed for {backport_data.jira_issue}: {state.backport_result.error}")
                     await tasks.set_jira_labels(
                         jira_issue=backport_data.jira_issue,
                         labels_to_add=[JiraLabels.BACKPORT_FAILED.value],
-                        labels_to_remove=[JiraLabels.BACKPORT_IN_PROGRESS.value],
+                        labels_to_remove=[JiraLabels.TRIAGED_BACKPORT.value],
                         dry_run=dry_run
                     )
                     await retry(task, state.backport_result.error)

@@ -4,6 +4,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+permissions:
+  contents: read
 jobs:
   beeai-make-build:
     runs-on: ubuntu-latest
@@ -13,7 +15,7 @@ jobs:
           sudo apt-get install -y podman podman-compose
 
       - name: Checkout Git Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
 

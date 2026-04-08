@@ -31,8 +31,10 @@ from common.constants import JiraLabels, RedisQueues
 from common.models import (
     BuildInputSchema,
     BuildOutputSchema,
+    ErrorData,
     LogInputSchema,
     LogOutputSchema,
+    RebaseData,
     RebaseInputSchema,
     RebaseOutputSchema,
     Task,
@@ -50,7 +52,6 @@ from tools.text import (
     ViewTool,
     SearchTextTool,
 )
-from triage_agent import RebaseData, ErrorData
 from utils import get_agent_execution_config, get_chat_model, get_tool_call_checker_config, mcp_tools, render_prompt
 
 logger = logging.getLogger(__name__)

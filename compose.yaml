@@ -143,7 +143,7 @@ services:
     # the option about default loop is here because of litellm issue
     # https://github.com/BerriAI/litellm/issues/14521
     command: ["pytest", "agents/tests/e2e/test_triage.py", "-o", "asyncio_default_test_loop_scope=session"]
-    profiles: ["agents"]
+    profiles: ["e2e-test"]
 
   backport-agent-c9s:
     <<: *beeai-agent-c9s

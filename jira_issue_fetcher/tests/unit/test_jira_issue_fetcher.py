@@ -257,7 +257,7 @@ async def test_push_issues_to_queue_skip_labeled_issues(fetcher, mock_redis_cont
     mock_redis, _ = mock_redis_context
 
     issues = [
-        {'key': 'LABELED-1', 'fields': {'labels': [JiraLabels.REBASE_IN_PROGRESS.value]}},
+        {'key': 'LABELED-1', 'fields': {'labels': [JiraLabels.TRIAGED_REBASE.value]}},
         {'key': 'RETRY-1', 'fields': {'labels': [JiraLabels.RETRY_NEEDED.value]}},
         {'key': 'CLEAN-1', 'fields': {'labels': []}}
     ]

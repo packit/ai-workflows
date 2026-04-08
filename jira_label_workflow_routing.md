@@ -7,15 +7,19 @@ This document describes how Jira labels control workflow routing through the pro
 ```mermaid
 stateDiagram-v2
     [*] --> New: Issue Created
-    New --> InProgress: jotnar_*_in_progress
-    InProgress --> Success: jotnar_rebased/backported
-    InProgress --> Failed: jotnar_*_failed
-    InProgress --> Errored: jotnar_*_errored
+    New --> TriagedBackport: jotnar_triaged_backport
+    New --> TriagedRebase: jotnar_triaged_rebase
+    New --> Triaged: jotnar_triaged
+    TriagedBackport --> Success: jotnar_backported
+    TriagedBackport --> Failed: jotnar_backport_failed
+    TriagedBackport --> Errored: jotnar_backport_errored
+    TriagedRebase --> Success: jotnar_rebased
+    TriagedRebase --> Failed: jotnar_rebase_failed
+    TriagedRebase --> Errored: jotnar_rebase_errored
     Success --> Merged: jotnar_merged
     Failed --> Retry: jotnar_retry_needed
     Errored --> Attention: jotnar_needs_attention
-    Retry --> InProgress: Retry Processing
-    New --> Triaged: jotnar_triaged
+    Retry --> New: Retry Processing
     Merged --> [*]
     Triaged --> [*]
 ```
@@ -64,8 +68,9 @@ flowchart TD
 
 | Label | Added When | Removed When | Next State |
 |-------|------------|--------------|------------|
-| `jotnar_rebase_in_progress` | Rebase starts | Rebase completes/fails | `jotnar_rebased` or `jotnar_rebase_failed` |
-| `jotnar_backport_in_progress` | Backport starts | Backport completes/fails | `jotnar_backported` or `jotnar_backport_failed` |
+| `jotnar_triaged_rebase` | Triage resolves as rebase | On retry (all labels cleared) | `jotnar_rebased` or `jotnar_rebase_failed` |
+| `jotnar_triaged_backport` | Triage resolves as backport | On retry (all labels cleared) | `jotnar_backported` or `jotnar_backport_failed` |
+| `jotnar_triaged` | Triage resolves as open-ended-analysis | On retry (all labels cleared) | Terminal state |
 | `jotnar_rebased` | Rebase success | Never | `jotnar_merged` |
 | `jotnar_backported` | Backport success | Never | `jotnar_merged` |
 | `jotnar_merged` | MR merged | Never | Final state |
@@ -94,15 +99,15 @@ flowchart TD
 | Queue | Type | Triggers | Labels Added | Status |
 |-------|------|----------|--------------|--------|
 | `triage_queue` | Input | No labels OR retry_needed | - | Active |
-| `rebase_queue_c9s` | Input | Resolution=REBASE, RHEL 8/9 | `jotnar_rebase_in_progress` | Active |
-| `rebase_queue_c10s` | Input | Resolution=REBASE, RHEL 10+ | `jotnar_rebase_in_progress` | Active |
-| `backport_queue_c9s` | Input | Resolution=BACKPORT, RHEL 8/9 | `jotnar_backport_in_progress` | Active |
-| `backport_queue_c10s` | Input | Resolution=BACKPORT, RHEL 10+ | `jotnar_backport_in_progress` | Active |
-| `rebase_queue` | Input | (Not actively enqueued) | `jotnar_rebase_in_progress` | Legacy (checked for deduplication) |
-| `backport_queue` | Input | (Not actively enqueued) | `jotnar_backport_in_progress` | Legacy (checked for deduplication) |
-| `clarification_needed_queue` | Input | Resolution=CLARIFICATION | `jotnar_needs_attention` | Active |
+| `rebase_queue_c9s` | Input | Resolution=REBASE, RHEL 8/9 | `jotnar_triaged_rebase` | Active (AUTO_CHAIN only) |
+| `rebase_queue_c10s` | Input | Resolution=REBASE, RHEL 10+ | `jotnar_triaged_rebase` | Active (AUTO_CHAIN only) |
+| `backport_queue_c9s` | Input | Resolution=BACKPORT, RHEL 8/9 | `jotnar_triaged_backport` | Active (AUTO_CHAIN only) |
+| `backport_queue_c10s` | Input | Resolution=BACKPORT, RHEL 10+ | `jotnar_triaged_backport` | Active (AUTO_CHAIN only) |
+| `rebase_queue` | Input | (Not actively enqueued) | `jotnar_triaged_rebase` | Legacy (checked for deduplication) |
+| `backport_queue` | Input | (Not actively enqueued) | `jotnar_triaged_backport` | Legacy (checked for deduplication) |
+| `clarification_needed_queue` | Input | Resolution=CLARIFICATION | `jotnar_needs_attention` | Active (AUTO_CHAIN only) |
 | `error_list` | Output | Any error | `jotnar_*_errored` | Active |
-| `open_ended_analysis_list` | Output | Resolution=OPEN_ENDED_ANALYSIS | `jotnar_triaged` | Active |
+| `open_ended_analysis_list` | Output | Resolution=OPEN_ENDED_ANALYSIS | `jotnar_triaged` | Active (AUTO_CHAIN only) |
 | `completed_rebase_list` | Output | Rebase success | `jotnar_rebased` | Active |
 | `completed_backport_list` | Output | Backport success | `jotnar_backported` | Active |
 

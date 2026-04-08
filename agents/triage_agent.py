@@ -333,7 +333,7 @@ def create_triage_agent(gateway_tools):
     )
 
 
-async def run_workflow(jira_issue, dry_run, triage_agent_factory):
+async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=False):
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
         triage_agent = triage_agent_factory(gateway_tools)
 
@@ -488,7 +488,7 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory):
             return "determine_target_branch"
 
         async def comment_in_jira(state):
-            comment_text = state.triage_result.format_for_comment()
+            comment_text = state.triage_result.format_for_comment(auto_chain=auto_chain)
             logger.info(f"Result to be put in Jira comment: {comment_text}")
             if dry_run:
                 return Workflow.END
@@ -516,10 +516,11 @@ async def main() -> None:
     setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
+    auto_chain = os.getenv("AUTO_CHAIN", "true").lower() == "true"
 
     if jira_issue := os.getenv("JIRA_ISSUE", None):
         logger.info("Running in direct mode with environment variable")
-        state = await run_workflow(jira_issue, dry_run, create_triage_agent)
+        state = await run_workflow(jira_issue, dry_run, create_triage_agent, auto_chain=auto_chain)
         logger.info(f"Direct run completed: {state.triage_result.model_dump_json(indent=4)}")
         if state.cve_eligibility_result:
             logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
@@ -527,7 +528,7 @@ async def main() -> None:
             logger.info(f"Target branch: {state.target_branch}")
         return
 
-    logger.info("Starting triage agent in queue mode")
+    logger.info(f"Starting triage agent in queue mode (AUTO_CHAIN={'enabled' if auto_chain else 'disabled'})")
     async with redis_client(os.environ["REDIS_URL"]) as redis:
         max_retries = int(os.getenv("MAX_RETRIES", 3))
         logger.info(f"Connected to Redis, max retries set to {max_retries}")
@@ -574,7 +575,7 @@ async def main() -> None:
                 logger.info(f"Cleaned up existing labels for {input.issue}")
 
                 logger.info(f"Starting triage processing for {input.issue}")
-                state = await run_workflow(input.issue, dry_run, create_triage_agent)
+                state = await run_workflow(input.issue, dry_run, create_triage_agent, auto_chain=auto_chain)
                 output = state.triage_result
                 logger.info(
                     f"Triage processing completed for {input.issue}, " f"resolution: {output.resolution.value}"
@@ -590,45 +591,58 @@ async def main() -> None:
                 await retry(task, ErrorData(details=error, jira_issue=input.issue).model_dump_json())
             else:
                 if output.resolution == Resolution.REBASE:
-                    logger.info(f"Triage resolved as REBASE for {input.issue}, " f"adding to rebase queue")
+                    logger.info(f"Triage resolved as REBASE for {input.issue}")
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
-                        labels_to_add=[JiraLabels.REBASE_IN_PROGRESS.value],
+                        labels_to_add=[JiraLabels.TRIAGED_REBASE.value],
                         dry_run=dry_run
                     )
-                    task = Task(metadata=state.model_dump())
-                    rebase_queue = RedisQueues.get_rebase_queue_for_branch(state.target_branch)
-                    await redis.lpush(rebase_queue, task.model_dump_json())
+                    if auto_chain:
+                        task = Task(metadata=state.model_dump())
+                        rebase_queue = RedisQueues.get_rebase_queue_for_branch(state.target_branch)
+                        await fix_await(redis.lpush(rebase_queue, task.model_dump_json()))
+                        logger.info(f"Pushed {input.issue} to {rebase_queue}")
+                    else:
+                        logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
                 elif output.resolution == Resolution.BACKPORT:
-                    logger.info(f"Triage resolved as BACKPORT for {input.issue}, " f"adding to backport queue")
+                    logger.info(f"Triage resolved as BACKPORT for {input.issue}")
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
-                        labels_to_add=[JiraLabels.BACKPORT_IN_PROGRESS.value],
+                        labels_to_add=[JiraLabels.TRIAGED_BACKPORT.value],
                         dry_run=dry_run
                     )
-                    task = Task(metadata=state.model_dump())
-                    backport_queue = RedisQueues.get_backport_queue_for_branch(state.target_branch)
-                    await redis.lpush(backport_queue, task.model_dump_json())
+                    if auto_chain:
+                        task = Task(metadata=state.model_dump())
+                        backport_queue = RedisQueues.get_backport_queue_for_branch(state.target_branch)
+                        await fix_await(redis.lpush(backport_queue, task.model_dump_json()))
+                        logger.info(f"Pushed {input.issue} to {backport_queue}")
+                    else:
+                        logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
                 elif output.resolution == Resolution.CLARIFICATION_NEEDED:
-                    logger.info(
-                        f"Triage resolved as CLARIFICATION_NEEDED for {input.issue}, "
-                        f"adding to clarification needed queue"
-                    )
+                    logger.info(f"Triage resolved as CLARIFICATION_NEEDED for {input.issue}")
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.NEEDS_ATTENTION.value],
                         dry_run=dry_run
                     )
-                    task = Task(metadata=state.model_dump())
-                    await redis.lpush(RedisQueues.CLARIFICATION_NEEDED_QUEUE.value, task.model_dump_json())
+                    if auto_chain:
+                        task = Task(metadata=state.model_dump())
+                        await fix_await(redis.lpush(RedisQueues.CLARIFICATION_NEEDED_QUEUE.value, task.model_dump_json()))
+                        logger.info(f"Pushed {input.issue} to {RedisQueues.CLARIFICATION_NEEDED_QUEUE.value}")
+                    else:
+                        logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
                 elif output.resolution == Resolution.OPEN_ENDED_ANALYSIS:
-                    logger.info(f"Triage resolved as OPEN_ENDED_ANALYSIS for {input.issue}, " f"adding to open-ended analysis list")
+                    logger.info(f"Triage resolved as OPEN_ENDED_ANALYSIS for {input.issue}")
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGED.value],
                         dry_run=dry_run
                     )
-                    await fix_await(redis.lpush(RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value, output.data.model_dump_json()))
+                    if auto_chain:
+                        await fix_await(redis.lpush(RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value, output.data.model_dump_json()))
+                        logger.info(f"Pushed {input.issue} to {RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value}")
+                    else:
+                        logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
                 elif output.resolution == Resolution.ERROR:
                     logger.warning(f"Triage resolved as ERROR for {input.issue}, retrying")
                     await tasks.set_jira_labels(

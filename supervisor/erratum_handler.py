@@ -1,9 +1,12 @@
 import logging
 from datetime import datetime, timezone
 
+from common.constants import JiraLabels
+
 from .constants import (
     ERRATA_JOTNAR_BOT_EMAIL,
     JIRA_JOTNAR_BOT_EMAIL,
+    JIRA_JOTNAR_TEAM,
     POST_PUSH_TESTING_TIMEOUT,
     POST_PUSH_TESTING_TIMEOUT_STR,
 )
@@ -19,6 +22,7 @@ from .errata_utils import (
     erratum_has_magic_string_in_comments,
     erratum_push_to_stage,
     erratum_refresh_security_alerts,
+    get_erratum_advisory_url,
     get_erratum_build_map,
     get_erratum_transition_rules,
     get_previous_erratum,
@@ -57,7 +61,7 @@ def erratum_needs_attention(erratum_id: int) -> bool:
     issue = get_issue_by_jotnar_tag(
         "RHELMISC",
         _needs_attention_tag(erratum_id),
-        with_label="jotnar_needs_attention",
+        with_label=JiraLabels.NEEDS_ATTENTION.value,
     )
     return issue is not None
 
@@ -82,20 +86,20 @@ def erratum_get_issues(
 
 
 def jotnar_owns_all_issues(issues: list[Issue]) -> bool:
-    return all(issue.assignee_email == JIRA_JOTNAR_BOT_EMAIL for issue in issues)
+    return all(issue.assigned_team == JIRA_JOTNAR_TEAM for issue in issues)
 
 
 def compare_file_lists(
     current_build: ErratumBuild,
     previous_build: ErratumBuild,
-    previous_erratum: Erratum,
+    previous_erratum_id: str | int,
 ) -> tuple[bool, str]:
     is_matched = current_build.package_file_list == previous_build.package_file_list
 
     comment = (
         f"jotnar-product-listings-checked({current_build.nvr})\n\n"
         f"Compared the file lists for {current_build.nvr} to the file lists for\n"
-        f"{previous_build.nvr} in {previous_erratum.url} -\n"
+        f"{previous_build.nvr} in {get_erratum_advisory_url(previous_erratum_id)} -\n"
     )
 
     if is_matched:
@@ -132,7 +136,7 @@ class ErratumHandler(WorkItemHandler):
         if issue is not None:
             add_issue_label(
                 issue.key,
-                "jotnar_needs_attention",
+                JiraLabels.NEEDS_ATTENTION.value,
                 why,
                 dry_run=self.dry_run,
             )
@@ -144,9 +148,9 @@ class ErratumHandler(WorkItemHandler):
                 summary=summary,
                 description=description,
                 tag=tag,
-                reporter_email="jotnar+bot@redhat.com",
-                assignee_email="jotnar+bot@redhat.com",
-                labels=["jotnar_needs_attention"],
+                reporter_email=JIRA_JOTNAR_BOT_EMAIL,
+                assignee_email=JIRA_JOTNAR_BOT_EMAIL,
+                labels=[JiraLabels.NEEDS_ATTENTION.value],
                 components=["jotnar-package-automation"],
                 dry_run=self.dry_run,
             )
@@ -213,14 +217,18 @@ class ErratumHandler(WorkItemHandler):
                     if not erratum_has_magic_string_in_comments(
                         self.erratum.id, f"jotnar-product-listings-checked({nvr})"
                     ):
-                        prev_erratum = get_previous_erratum(self.erratum.id, package)
+                        prev_erratum_id, _ = get_previous_erratum(
+                            self.erratum.id, package
+                        )
 
-                        if prev_erratum:
-                            other_build_map = get_erratum_build_map(prev_erratum.id)
+                        if prev_erratum_id:
+                            other_build_map = get_erratum_build_map(prev_erratum_id)
                             prev_build = other_build_map.root[package]
 
                             is_matched, comment = compare_file_lists(
-                                cur_build, prev_build, prev_erratum
+                                cur_build,
+                                prev_build,
+                                prev_erratum_id,
                             )
 
                             if not is_matched:
@@ -233,7 +241,7 @@ class ErratumHandler(WorkItemHandler):
                             erratum_add_comment(
                                 self.erratum.id,
                                 f"jotnar-product-listings-checked({nvr})\n\n"
-                                "New package - no need to check package file list change.",
+                                "No previous erratum for this package - no need to check package file list change.",
                                 dry_run=self.dry_run,
                             )
                 if mismatch_packages:

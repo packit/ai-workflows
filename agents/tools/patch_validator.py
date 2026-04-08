@@ -1,14 +1,21 @@
 import asyncio
-import aiohttp
+import logging
+import os
 from typing import Any
 
+import aiohttp
 from pydantic import BaseModel, Field
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, Tool, ToolRunOptions
+from beeai_framework.tools import JSONToolOutput, Tool, ToolRunOptions, ToolError
+
+from agents.utils import mcp_tools, run_tool
 
 MAX_CONTENT_LENGTH = 2000
+
+logger = logging.getLogger(__name__)
+
 
 class PatchValidatorInput(BaseModel):
     url: str = Field(description="URL to validate as a patch/commit")
@@ -63,6 +70,58 @@ class PatchValidatorTool(Tool[PatchValidatorInput, ToolRunOptions, PatchValidato
 
         return content[:max_length] + f"\n\n[Content truncated - showing first {max_length} characters of {len(content)} total]"
 
+    async def _fetch_via_mcp(self, url: str) -> tuple[bool, int | None, str | None, str]:
+        """Fetch patch content via the MCP gateway's get_gitlab_patch tool."""
+        mcp_gateway_url = os.getenv("MCP_GATEWAY_URL")
+        if not mcp_gateway_url:
+            raise ToolError("MCP_GATEWAY_URL environment variable is required")
+
+        try:
+            async with mcp_tools(mcp_gateway_url) as gateway_tools:
+                raw_content = await run_tool(
+                    "get_patch_from_url",
+                    available_tools=gateway_tools,
+                    patch_url=url,
+                )
+            assert isinstance(raw_content, str), f"Expected str from get_patch_from_url, got {type(raw_content)}"
+            content = self._truncate_content(raw_content)
+            return True, 200, content, "URL is accessible and content fetched successfully"
+        except ToolError as e:
+            return False, None, None, f"Not an issue reference but not accessible: {e}"
+        except asyncio.TimeoutError:
+            return False, None, None, "Not an issue reference but request timeout"
+        except Exception as e:
+            return False, None, None, f"Not an issue reference but raised exception: {str(e)}"
+
+    async def _fetch_directly(self, url: str) -> tuple[bool, int | None, str | None, str]:
+        """Fetch non-GitLab patch content directly via HTTP."""
+        try:
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as response:
+                    status_code = response.status
+                    is_accessible = response.status < 400
+
+                    if is_accessible:
+                        max_length = MAX_CONTENT_LENGTH
+                        if response.content_length and response.content_length > max_length:
+                            # Avoid reading a huge response into memory.
+                            partial_bytes = await response.content.read(max_length)
+                            content = partial_bytes.decode(response.get_encoding() or 'utf-8', errors='ignore')
+                            content += f"\n\n[Content truncated - showing first {max_length} bytes of {response.content_length} total]"
+                        else:
+                            # For responses without content-length or smaller ones, read fully and then truncate.
+                            raw_content = await response.text()
+                            content = self._truncate_content(raw_content)
+                        return True, status_code, content, "URL is accessible and content fetched successfully"
+                    else:
+                        return False, status_code, None, f"Not an issue reference but not accessible (HTTP {response.status})"
+
+        except asyncio.TimeoutError:
+            return False, None, None, "Not an issue reference but request timeout"
+        except Exception as e:
+            return False, None, None, f"Not an issue reference but raised exception: {str(e)}"
+
     async def _run(
         self, tool_input: PatchValidatorInput, options: ToolRunOptions | None, context: RunContext
     ) -> PatchValidatorOutput:
@@ -75,32 +134,13 @@ class PatchValidatorTool(Tool[PatchValidatorInput, ToolRunOptions, PatchValidato
         content = None
 
         if not is_issue:
-            try:
-                timeout = aiohttp.ClientTimeout(total=30)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(url) as response:
-                        status_code = response.status
-                        is_accessible = response.status < 400
-
-                        if is_accessible:
-                            max_length = MAX_CONTENT_LENGTH
-                            if response.content_length and response.content_length > max_length:
-                                # Avoid reading a huge response into memory.
-                                partial_bytes = await response.content.read(max_length)
-                                content = partial_bytes.decode(response.get_encoding() or 'utf-8', errors='ignore')
-                                content += f"\n\n[Content truncated - showing first {max_length} bytes of {response.content_length} total]"
-                            else:
-                                # For responses without content-length or smaller ones, read fully and then truncate.
-                                raw_content = await response.text()
-                                content = self._truncate_content(raw_content)
-                            reason = "URL is accessible and content fetched successfully"
-                        else:
-                            reason = f"Not an issue reference but not accessible (HTTP {response.status})"
-
-            except asyncio.TimeoutError:
-                reason = "Not an issue reference but request timeout"
-            except Exception as e:
-                reason = f"Not an issue reference but raised exception: {str(e)}"
+            # Use MCP tool for GitLab URLs (keeps token in the MCP server),
+            # fall back to direct HTTP for other hosts.
+            if os.getenv("MCP_GATEWAY_URL"):
+                is_accessible, status_code, content, reason = await self._fetch_via_mcp(url)
+            else:
+                logger.warning("MCP_GATEWAY_URL not set, fetching patch directly")
+                is_accessible, status_code, content, reason = await self._fetch_directly(url)
 
         result = PatchValidatorResult(
             url=url,

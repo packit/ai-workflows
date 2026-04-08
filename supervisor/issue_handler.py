@@ -7,11 +7,7 @@ from supervisor.baseline_tests import BaselineTests
 from common.constants import JiraLabels
 
 from .constants import DATETIME_MIN_UTC, GITLAB_GROUPS
-from .errata_utils import (
-    get_erratum_build_nvr,
-    get_erratum_for_link,
-    get_previous_erratum,
-)
+from .errata_utils import get_erratum_for_link, get_erratum_build_nvr
 from .gitlab_utils import search_gitlab_project_mrs
 from .work_item_handler import WorkItemHandler
 from .jira_utils import (
@@ -85,17 +81,10 @@ class IssueHandler(WorkItemHandler):
                 details_comment=comment,
             )
 
-        previous_erratum = get_previous_erratum(
+        previous_build_nvr = get_erratum_build_nvr(
             related_erratum.id, self.issue.components[0]
         )
-        if previous_erratum is None:
-            return resolve_on_error(
-                "Cannot start reproduction with previous build - no previous erratum found to get build from."
-            )
 
-        previous_build_nvr = get_erratum_build_nvr(
-            previous_erratum.id, self.issue.components[0]
-        )
         if previous_build_nvr is None:
             return resolve_on_error(
                 "Cannot start reproduction with previous build - error finding previous build NVR."

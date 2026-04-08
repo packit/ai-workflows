@@ -6,6 +6,7 @@ from models import (
     NoActionData,
     ErrorData,
     Resolution,
+    TRIAGE_DISCLAIMER,
 )
 
 
@@ -21,6 +22,7 @@ def test_backport_formatting():
     result = TriageOutputSchema(resolution=Resolution.BACKPORT, data=data)
 
     assert result.format_for_comment() == (
+        f"{TRIAGE_DISCLAIMER}"
         "*Resolution*: backport\n"
         "*Patch URL 1*: https://example.com/patch.patch\n"
         "*Justification*: Fixes the bug in bind.c\n"
@@ -38,6 +40,7 @@ def test_rebase_formatting():
     result = TriageOutputSchema(resolution=Resolution.REBASE, data=data)
 
     assert result.format_for_comment() == (
+        f"{TRIAGE_DISCLAIMER}"
         "*Resolution*: rebase\n"
         "*Package*: httpd\n"
         "*Version*: 2.4.55\n"
@@ -54,6 +57,7 @@ def test_clarification_needed_formatting():
     result = TriageOutputSchema(resolution=Resolution.CLARIFICATION_NEEDED, data=data)
 
     assert result.format_for_comment() == (
+        f"{TRIAGE_DISCLAIMER}"
         "*Resolution*: clarification-needed\n"
         "*Findings*: Found a potential buffer overflow\n"
         "*Additional info needed*: Need upstream patch URL"
@@ -68,6 +72,7 @@ def test_no_action_formatting():
     result = TriageOutputSchema(resolution=Resolution.NO_ACTION, data=data)
 
     assert result.format_for_comment() == (
+        f"{TRIAGE_DISCLAIMER}"
         "*Resolution*: no-action\n"
         "*Reasoning*: This is a feature request, not a bug"
     )
@@ -81,6 +86,7 @@ def test_error_formatting():
     result = TriageOutputSchema(resolution=Resolution.ERROR, data=data)
 
     assert result.format_for_comment() == (
+        f"{TRIAGE_DISCLAIMER}"
         "*Resolution*: error\n"
         "*Details*: Package 'invalid-pkg' not found in repository"
     )

@@ -21,6 +21,8 @@ from beeai_framework.tools import Tool
 from beeai_framework.tools.mcp import MCPTool
 from beeai_framework.tools.types import StringToolOutput, JSONToolOutput
 
+logger = logging.getLogger(__name__)
+
 
 def get_chat_model() -> ChatModel:
     chat_model = os.environ["CHAT_MODEL"]
@@ -113,6 +115,10 @@ async def check_subprocess(
 ) -> Tuple[str | None, str | None]:
     exit_code, stdout, stderr = await run_subprocess(cmd, shell, cwd, env)
     if exit_code:
+        logger.error(
+            "Command %s failed with exit code %d\nstdout: %s\nstderr: %s",
+            cmd, exit_code, stdout, stderr,
+        )
         raise subprocess.CalledProcessError(exit_code, cmd, stdout, stderr)
     return stdout, stderr
 
@@ -154,7 +160,17 @@ async def mcp_tools(
 
 
 def set_litellm_debug() -> None:
-    """Set litellm to print collosal amount of debug information. This CAN LEAK TOKENS to the logs."""
+    """Set litellm to print debug information.
+
+    WARNING: This CAN LEAK TOKENS to the logs.  It is gated behind the
+    LITELLM_DEBUG environment variable — only enable it in development.
+    """
+    if not os.getenv("LITELLM_DEBUG"):
+        logger.warning(
+            "set_litellm_debug() called but LITELLM_DEBUG env var is not set; "
+            "ignoring to prevent credential leakage in production."
+        )
+        return
     # the following two modules call `litellm_debug(False)` on import
     # import them explicitly now to ensure our call to `litellm_debug()` is not negated later
     import beeai_framework.adapters.litellm.chat

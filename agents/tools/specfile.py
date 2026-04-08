@@ -165,10 +165,6 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         return EVR(epoch=build["epoch"] or 0, version=build["version"], release=build["release"])
 
     @staticmethod
-    def _parse_release(release: str) -> list[Node]:
-        return list(ValueParser.flatten(ValueParser.parse(release)))
-
-    @staticmethod
     def _find_macro(name: str, nodes: list[Node]) -> int | None:
         for index, node in reversed(list(enumerate(nodes))):
             if (
@@ -182,7 +178,7 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
     async def _bump_or_reset_release(cls, spec_path: Path, rebase: bool) -> None:
         with Specfile(spec_path) as spec:
             current_release = spec.raw_release
-        nodes = cls._parse_release(current_release)
+        nodes = ValueParser.parse(current_release)
 
         autorelease_index = cls._find_macro("autorelease", nodes)
         dist_index = cls._find_macro("dist", nodes)
@@ -220,7 +216,7 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         higher_stream_base_release, _ = latest_higher_stream_build.release.rsplit(".el", maxsplit=1)
         with Specfile(spec_path) as spec:
             current_release = spec.raw_release
-        nodes = cls._parse_release(current_release)
+        nodes = ValueParser.parse(current_release)
 
         autorelease_index = cls._find_macro("autorelease", nodes)
         dist_index = cls._find_macro("dist", nodes)

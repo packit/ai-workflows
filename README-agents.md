@@ -1,6 +1,6 @@
-# Package Maintenance Workflows
+# Package Maintenance Workflows as AI agents
 
-A set of AI agents implemented in the BeeAI Framework, interconnected via Redis.
+A set of AI agents implemented in the BeeAI Framework, interconnected via Redis, observed by Phoenix.
 Every agent can run individually or pick up tasks from a Redis queue.
 
 See [README.md](README.md) for general notes about setting up the development environment.
@@ -19,11 +19,13 @@ Three agents process tasks through Redis queues:
 - **Modify JIRA issues** (add comments, update fields, apply labels)
 - **Create GitLab merge requests** and push commits
 
+**Always** use `DRY_RUN=true` if you are developing locally or just wanna give the agents a try.
+
 ## Jira mocking
 
 If you clone testing Jira files from
 `git@gitlab.cee.redhat.com:jotnar-project/testing-jiras.git`
-you can use them to work with instead of real Jira server.
+you can use them to work with pre-downloaded jira content instead of real Jira server.
 
 Example:
 
@@ -75,6 +77,8 @@ To be able to access internal RHEL dist-git with your identity, update the `User
 
 ## Running the System
 
+Please do not run `podman-compose up` directly; use the provided Makefile instead.
+
 ### Full Pipeline (Production)
 ```bash
 # Start all agents and services
@@ -104,27 +108,7 @@ Use commas to delimit multiple patch/commit URLs in `UPSTREAM_PATCHES`.
 
 ## How It Works
 
-### Queue Transitions and Label Management
-
-The system uses Redis queues to route issues between agents and applies JIRA labels to track progress:
-
-**From Triage Agent:**
-- **REBASE decision** → `rebase_queue` + applies `jotnar_rebase_in_progress` label
-- **BACKPORT decision** → `backport_queue` + applies `jotnar_backport_in_progress` label
-- **CLARIFICATION_NEEDED decision** → `clarification_needed_queue` + applies `jotnar_needs_attention` label
-- **NO_ACTION decision** → `no_action_list` + applies `jotnar_no_action_needed` label (jötnar team members may apply `jotnar_cant_do` if the system cannot solve the problem)
-- **ERROR/Exception** → `error_list` + applies `jotnar_errored` label
-- **Max retries exceeded** → `error_list` + applies `jotnar_errored` label
-
-**From Rebase Agent:**
-- **Success** → `completed_rebase_list` + applies `jotnar_rebased` label
-- **Failure** → `error_list` + applies `jotnar_errored` label
-- **Retry** → remains in `rebase_queue` (keeps `jotnar_rebase|backport_in_progress` label)
-
-**From Backport Agent:**
-- **Success** → `completed_backport_list` + applies `jotnar_backported` label
-- **Failure** → `error_list` + applies `jotnar_errored` label
-- **Retry** → remains in `backport_queue` (keeps `jotnar_rebase|backport_in_progress` label)
+For detailed information about queue routing, label state transitions, and workflow diagrams, see the [Jira Label-Based Workflow Routing](jira_label_workflow_routing.md) documentation.
 
 ### Service triggering
 
@@ -141,50 +125,6 @@ Issues can be re-triggered through the workflow in two ways:
 Some Jira issues will require a maintainer review by applying the `jotnar_needs_maintainer_review` label to an issue. This is currently agreed on for FuSa (Functional Safety) project packages.
 
 The `jotnar_fusa` label will be automatically added by the triage agent to JIRA issues involving FuSa packages, and related merge requests will need to be reviewed and handled by subject matter experts.
-
-### Workflow Diagram
-
-```mermaid
-flowchart TD
-    Start["JIRA Issue<br/>(New, no jotnar_* labels)"] --> Triage["Triage Agent"]
-
-    Triage --> |"REBASE"| RebaseQ["rebase_queue<br/>+ jotnar_rebase_in_progress<br/>(+ jotnar_fusa if FuSa pkg)"]
-    Triage --> |"BACKPORT"| BackportQ["backport_queue<br/>+ jotnar_backport_in_progress<br/>(+ jotnar_fusa if FuSa pkg)"]
-    Triage --> |"CLARIFICATION_NEEDED"| ClarQ["clarification_needed_queue<br/>+ jotnar_needs_attention<br/>(+ jotnar_fusa if FuSa pkg)"]
-    Triage --> |"NO_ACTION"| NoAction["no_action_list<br/>+ jotnar_no_action_needed<br/>(or jotnar_cant_do manually)"]
-    Triage --> |"ERROR"| ErrorList["error_list<br/>+ jotnar_errored"]
-
-    RebaseQ --> RebaseAgent["Rebase Agent"]
-    RebaseAgent --> |"Success"| RebaseSuccess["completed_rebase_list<br/>+ jotnar_rebased"]
-    RebaseAgent --> |"Failure"| ErrorList
-    RebaseAgent --> |"Retry"| RebaseQ
-
-    BackportQ --> BackportAgent["Backport Agent"]
-    BackportAgent --> |"Success"| BackportSuccess["completed_backport_list<br/>+ jotnar_backported"]
-    BackportAgent --> |"Failure"| ErrorList
-    BackportAgent --> |"Retry"| BackportQ
-
-    %% Re-triggering mechanisms
-    Retrigger1["Remove any jotnar_* label"] -.-> |"Re-enters system"| Start
-    Retrigger2["Add jotnar_retry_needed label"] -.-> |"Re-enters system"| Start
-
-    %% Manual review option
-    ManualReview["Manual Review<br/>+ jotnar_needs_maintainer_review"]
-    RebaseSuccess -.-> ManualReview
-    BackportSuccess -.-> ManualReview
-    ClarQ -.-> ManualReview
-
-    style Start fill:#e1f5fe
-    style Triage fill:#f3e5f5
-    style RebaseAgent fill:#f3e5f5
-    style BackportAgent fill:#f3e5f5
-    style RebaseSuccess fill:#e8f5e8
-    style BackportSuccess fill:#e8f5e8
-    style ErrorList fill:#ffebee
-    style Retrigger1 fill:#e0f2f1
-    style Retrigger2 fill:#e0f2f1
-    style ManualReview fill:#fce4ec
-```
 
 ## Advanced Usage
 

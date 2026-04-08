@@ -3,6 +3,7 @@ Common utility functions shared across the BeeAI system.
 """
 
 import asyncio
+import base64
 import inspect
 import logging
 import os
@@ -60,6 +61,22 @@ async def redis_client(redis_url: str) -> AsyncGenerator[redis.Redis, None]:
     finally:
         await client.aclose()
         logger.debug("Disconnected from Redis")
+
+
+def get_jira_auth_headers() -> dict[str, str]:
+    """Build Jira API authentication headers.
+
+    Uses Basic Auth (email + API token) for Atlassian Cloud.
+    Reads JIRA_EMAIL and JIRA_TOKEN from environment variables.
+    """
+    jira_email = os.environ["JIRA_EMAIL"]
+    jira_token = os.environ["JIRA_TOKEN"]
+    credentials = base64.b64encode(f"{jira_email}:{jira_token}".encode()).decode()
+    return {
+        "Authorization": f"Basic {credentials}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
 
 
 CS_BRANCH_PATTERN = re.compile(r"^c\d+s$")

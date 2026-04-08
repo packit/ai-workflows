@@ -12,7 +12,7 @@ from flexmock import flexmock
 
 from jira_issue_fetcher import JiraIssueFetcher
 from common.models import Task, TriageInputSchema, RebaseInputSchema, BackportInputSchema, RebaseOutputSchema, BackportOutputSchema, ClarificationNeededData, NoActionData, ErrorData, RebaseData, BackportData
-from common.constants import JiraLabels, RedisQueues
+from common.constants import JiraLabels, JIRA_SEARCH_PATH, RedisQueues
 from common.utils import redis_client
 
 
@@ -20,6 +20,7 @@ from common.utils import redis_client
 def mock_env_vars(monkeypatch):
     """Mock environment variables."""
     monkeypatch.setenv('JIRA_URL', 'https://jira.test.com')
+    monkeypatch.setenv('JIRA_EMAIL', 'test@example.com')
     monkeypatch.setenv('JIRA_TOKEN', 'test_token')
     monkeypatch.setenv('REDIS_URL', 'redis://localhost:6379')
     monkeypatch.setenv('QUERY', 'filter = "Jotnar_1000_packages"')
@@ -54,11 +55,10 @@ def test_init(mock_env_vars):
     fetcher = JiraIssueFetcher()
 
     assert fetcher.jira_url == 'https://jira.test.com'
-    assert fetcher.jira_token == 'test_token'
     assert fetcher.redis_url == 'redis://localhost:6379'
     assert fetcher.query == 'filter = "Jotnar_1000_packages"'
     assert fetcher.max_results_per_page == 500
-    assert 'Bearer test_token' in fetcher.headers['Authorization']
+    assert fetcher.headers['Authorization'].startswith('Basic ')
 
 @pytest.mark.asyncio
 async def test_rate_limit(fetcher):
@@ -85,14 +85,14 @@ def test_make_request_with_retries_success(fetcher):
     mock_response.status_code = 200
 
     flexmock(requests).should_receive('post').with_args(
-        'https://jira.test.com/rest/api/2/search',
+        f'https://jira.test.com/{JIRA_SEARCH_PATH}',
         json={'jql': 'test query', 'startAt': 0, 'maxResults': 50},
         headers=fetcher.headers,
         timeout=90
     ).and_return(mock_response).once()
 
     result = fetcher._make_request_with_retries(
-        'https://jira.test.com/rest/api/2/search',
+        f'https://jira.test.com/{JIRA_SEARCH_PATH}',
         {'jql': 'test query', 'startAt': 0, 'maxResults': 50}
     )
 
@@ -113,7 +113,7 @@ def test_make_request_with_retries_rate_limited(fetcher):
 
     with pytest.raises(requests.HTTPError):
         fetcher._make_request_with_retries(
-            'https://jira.test.com/rest/api/2/search',
+            f'https://jira.test.com/{JIRA_SEARCH_PATH}',
             {'jql': 'test query'}
         )
 
@@ -130,18 +130,15 @@ async def test_search_issues_single_page(fetcher):
         pass
     flexmock(fetcher).should_receive('_rate_limit').and_return(mock_rate_limit()).once()
     flexmock(fetcher).should_receive('_make_request_with_retries').with_args(
-        'https://jira.test.com/rest/api/2/search',
+        f'https://jira.test.com/{JIRA_SEARCH_PATH}',
         json_data={
             'jql': 'filter = "Jotnar_1000_packages"',
-            'startAt': 0,
             'maxResults': 500,
             'fields': ['key', 'labels']
         }
     ).and_return({
         'issues': mock_issues,
         'total': 2,
-        'startAt': 0,
-        'maxResults': 500
     }).once()
 
     result = await fetcher.search_issues()
@@ -166,15 +163,12 @@ async def test_search_issues_multiple_pages(fetcher):
         {
             'issues': mock_issues_page1,
             'total': 2,
-            'startAt': 0,
-            'maxResults': 1
+            'nextPageToken': 'page2token',
         }
     ).and_return(
         {
             'issues': mock_issues_page2,
             'total': 2,
-            'startAt': 1,
-            'maxResults': 1
         }
     )
 

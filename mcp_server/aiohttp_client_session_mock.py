@@ -43,19 +43,19 @@ async def _write_jira_mock(issue_key: str, data: dict):
 class aiohttpClientSessionMock:
     # mocking endpoint providing information about issue
     issue_get_regex       = re.compile(
-        re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue"))+"/([A-Z0-9-]+)")
+        re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue"))+"/([A-Z0-9-]+)")
     # mocking endpoint providing available transitions
     transitions_get_regex = re.compile(
-        re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue"))+"/([A-Z0-9-]+)/transitions")
+        re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue"))+"/([A-Z0-9-]+)/transitions")
     # mocking endpoint providing remote links present in issues
     remote_link_get_regex = re.compile(
-        re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue"))+"/([A-Z0-9-]+)/remotelink")
+        re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue"))+"/([A-Z0-9-]+)/remotelink")
     # mocking endpoint for posting comments
     comment_post_regex    = re.compile(
-        re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue"))+"/([A-Z0-9-]+)/comment")
+        re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue"))+"/([A-Z0-9-]+)/comment")
     # mocking endpoint for retrieval of information about users
     user_get_regex        = re.compile(
-        re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/2/user")))
+        re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/3/user")))
 
     async def __aenter__(self):
         return self

@@ -24,6 +24,7 @@ RUN dnf -y install --allowerasing \
 RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
     && /opt/beeai-venv/bin/pip install --upgrade pip \
     && /opt/beeai-venv/bin/pip install --no-cache-dir \
+       "litellm!=1.82.7,!=1.82.8" \
        beeai-framework[vertexai,mcp,duckduckgo]==0.1.55 \
        openinference-instrumentation-beeai \
        arize-phoenix-otel \
@@ -36,6 +37,13 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
        koji \
        GitPython \
        tomli-w
+
+# Verify no malicious litellm_init.pth was introduced by compromised litellm packages (e.g. 1.82.7, 1.82.8)
+RUN MALICIOUS=$(find /usr /opt -name "litellm_init.pth" 2>/dev/null); \
+    if [ -n "$MALICIOUS" ]; then \
+      echo "SECURITY ALERT: malicious litellm_init.pth detected: $MALICIOUS"; \
+      exit 1; \
+    fi
 
 # Make venv Python the default
 ENV PATH=/opt/beeai-venv/bin:$PATH

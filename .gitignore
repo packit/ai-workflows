@@ -1,3 +1,10 @@
+# Security - prevent accidental secret commits
+*.key
+*.pem
+*.p12
+*.keytab
+.env
+
 # Python
 uv.lock
 *.py[cod]
@@ -17,7 +24,6 @@ sdist/
 .coverage*
 
 # Virtual environments
-.env
 .venv
 env/
 venv/

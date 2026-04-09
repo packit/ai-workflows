@@ -45,6 +45,7 @@ To process a single issue or erratum, you can run:
 ```
 make process-issue JIRA_ISSUE=RHEL-12345
 make process-erratum ERRATA_ID=12345
+make preliminary-testing JIRA_ISSUE=RHEL-12345
 ```
 
 This will process the work item in a one-off container,
@@ -57,6 +58,54 @@ Additional variables are supported:
 DRY_RUN=true # Don't actually make any changes to issues/errata, just show what would be done
 DEBUG=true   # Use more detailed logging (shows exactly what would happen for dry run items)
 ```
+
+## Preliminary Testing Workflow
+
+The `preliminary-testing` command evaluates whether the build fixing a Jira issue
+has passed preliminary testing — the gating and CI checks that must pass before
+the build can be added to a compose and erratum.
+
+### How it works
+
+The workflow uses an AI agent to analyze test results from two sources:
+
+1. **GreenWave gating status** — If the issue has a `Fixed in Build` NVR, the agent
+   fetches the HTML page from `https://gating-status.osci.redhat.com/query?nvr=<NVR>`
+   and checks whether all required gating tests have passed.
+
+2. **OSCI results in MR comments** — The workflow looks up merge/pull requests linked
+   in the Jira issue's Development section (via the Jira dev-status API), then fetches
+   comments from those MRs on GitLab. It looks for "Results for pipeline ..." comments
+   containing OSCI test results.
+
+The workflow works with whatever data is available — it can proceed with only one
+source if the other is unavailable (e.g. no build NVR set yet, or no linked MRs).
+
+### Entry conditions
+
+- Issue status must be `In Progress`
+- `Preliminary Testing` field must not already be set to `Pass`
+- At least one of: `Fixed in Build` NVR or linked pull requests in the Development section
+
+### Outcomes
+
+| Condition | Action |
+|-----------|--------|
+| All tests passed and Test Coverage is set | Sets `Preliminary Testing = Pass` with a summary comment |
+| All tests passed but Test Coverage is not set | Flags for human attention (`jotnar_needs_attention` label) with test results in comment |
+| Tests failed | Flags for human attention with failure details |
+| Tests still running or pending | Reschedules the work item for later |
+| No test results found | Flags for human attention |
+| Analysis error | Flags for human attention with error details |
+
+### Usage
+
+```
+make preliminary-testing JIRA_ISSUE=RHEL-12345
+```
+
+Supports `DRY_RUN=true`, `DEBUG=true`, and `IGNORE_NEEDS_ATTENTION=true` variables
+(same as other workflows).
 
 ## Testing the collector
 

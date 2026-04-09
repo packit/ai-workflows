@@ -242,6 +242,11 @@ process-erratum:
 	$(COMPOSE_SUPERVISOR) run --rm \
 		supervisor python -m supervisor.main $(DEBUG_FLAG) $(IGNORE_NEEDS_ATTENTION_FLAG) $(DRY_RUN_FLAG) process-erratum $(ERRATA_ID)
 
+.PHONY: preliminary-testing
+preliminary-testing:
+	$(COMPOSE_SUPERVISOR) run --rm \
+		supervisor python -m supervisor.main $(DEBUG_FLAG) $(IGNORE_NEEDS_ATTENTION_FLAG) $(DRY_RUN_FLAG) preliminary-testing $(JIRA_ISSUE)
+
 
 # Common utility targets
 

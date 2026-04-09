@@ -677,6 +677,73 @@ def add_issue_attachments(
         add_issue_comment(issue_key, comment, dry_run=dry_run)
 
 
+def get_issue_pull_requests(issue_key: str) -> list[dict[str, Any]]:
+    """
+    Get pull/merge requests linked to a JIRA issue via the dev-status API.
+
+    Returns a list of pull request dicts with keys: id, name, status, url,
+    source (branch info), destination (branch info), repositoryName, repositoryUrl.
+    """
+    # dev-status API requires the numeric issue ID
+    issue_data = jira_api_get(f"issue/{urlquote(issue_key)}?fields=")
+    issue_id = issue_data["id"]
+
+    url = f"{jira_url()}/rest/dev-status/latest/issue/detail"
+    params = {
+        "issueId": issue_id,
+        "applicationType": "GitLab",
+        "dataType": "pullrequest",
+    }
+
+    response = requests_session().get(url, headers=jira_headers(), params=params)
+    if not response.ok:
+        logger.error(
+            "GET %s (params=%s) failed.\nerror:\n%s",
+            url,
+            params,
+            response.text,
+        )
+    raise_for_status(response)
+
+    data = response.json()
+    pull_requests: list[dict[str, Any]] = []
+    for detail in data.get("detail", []):
+        pull_requests.extend(detail.get("pullRequests", []))
+
+    return pull_requests
+
+
+def set_preliminary_testing(
+    issue_key: str,
+    value: PreliminaryTesting,
+    comment: CommentSpec = None,
+    *,
+    dry_run: bool = False,
+) -> None:
+    """Update the Preliminary Testing custom field on a JIRA issue."""
+    custom_fields = get_custom_fields()
+    field_id = custom_fields["Preliminary Testing"]
+
+    path = f"issue/{urlquote(issue_key)}"
+    body: dict[str, Any] = {
+        "fields": {field_id: {"value": str(value)}},
+        "update": {},
+    }
+    if comment is not None:
+        _add_comment_update(body["update"], comment)
+
+    if dry_run:
+        logger.info(
+            "Dry run: would set Preliminary Testing to %s on issue %s",
+            value,
+            issue_key,
+        )
+        logger.debug("Dry run: would put %s to %s", body, path)
+        return
+
+    jira_api_put(path, json=body)
+
+
 def get_issue_attachment(issue_key: str, filename: str) -> bytes:
     """
     Retrieve the content of a specific attachment from a JIRA issue.

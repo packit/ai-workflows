@@ -14,6 +14,7 @@ from .erratum_handler import (
     ErratumHandler,
 )
 from .issue_handler import IssueHandler
+from .preliminary_testing_handler import PreliminaryTestingHandler
 from .jira_utils import get_issue
 from .http_utils import with_http_sessions
 from .work_queue import WorkQueue, WorkItemType, work_queue
@@ -249,6 +250,44 @@ def process_erratum(id_or_url: str):
         id = id_or_url
 
     asyncio.run(do_process_erratum(id))
+
+
+@with_http_sessions()
+async def do_preliminary_testing(key: str):
+    await init_kerberos_ticket()
+
+    issue = get_issue(key, full=True)
+    result = await PreliminaryTestingHandler(
+        issue,
+        dry_run=app_state.dry_run,
+        ignore_needs_attention=app_state.ignore_needs_attention,
+    ).run()
+    logger.info(
+        "Issue %s preliminary testing processed, status=%s, reschedule_in=%s",
+        key,
+        result.status,
+        result.reschedule_in if result.reschedule_in >= 0 else "never",
+    )
+
+
+@app.command()
+def preliminary_testing(
+    key_or_url: str,
+):
+    check_env(chat=True, jira=True, gitlab=True)
+
+    if key_or_url.startswith("http"):
+        m = re.match(r"https://redhat.atlassian.net/browse/([^/?]+)(?:\?.*)?$", key_or_url)
+        if m is None:
+            raise typer.BadParameter(f"Invalid issue URL {key_or_url}")
+        key = m.group(1)
+    else:
+        key = key_or_url
+
+    if not key.startswith("RHEL-"):
+        raise typer.BadParameter("Issue must be in the RHEL project")
+
+    asyncio.run(do_preliminary_testing(key))
 
 
 @app.callback()

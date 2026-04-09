@@ -16,6 +16,9 @@ class RedisQueues(Enum):
     OPEN_ENDED_ANALYSIS_LIST = "open_ended_analysis_list"
     COMPLETED_REBASE_LIST = "completed_rebase_list"
     COMPLETED_BACKPORT_LIST = "completed_backport_list"
+    REBUILD_QUEUE_C9S = "rebuild_queue_c9s"
+    REBUILD_QUEUE_C10S = "rebuild_queue_c10s"
+    COMPLETED_REBUILD_LIST = "completed_rebuild_list"
     REBASE_QUEUE = "rebase_queue"
     BACKPORT_QUEUE = "backport_queue"
 
@@ -28,7 +31,9 @@ class RedisQueues(Enum):
     def input_queues(cls) -> set[str]:
         """Return input queue names that contain Task objects with metadata"""
         return {cls.TRIAGE_QUEUE.value, cls.REBASE_QUEUE_C9S.value, cls.REBASE_QUEUE_C10S.value,
-                cls.BACKPORT_QUEUE_C9S.value, cls.BACKPORT_QUEUE_C10S.value, cls.CLARIFICATION_NEEDED_QUEUE.value,
+                cls.BACKPORT_QUEUE_C9S.value, cls.BACKPORT_QUEUE_C10S.value,
+                cls.REBUILD_QUEUE_C9S.value, cls.REBUILD_QUEUE_C10S.value,
+                cls.CLARIFICATION_NEEDED_QUEUE.value,
                 cls.REBASE_QUEUE.value, cls.BACKPORT_QUEUE.value}
 
     @classmethod
@@ -36,7 +41,7 @@ class RedisQueues(Enum):
         """Return data queue names that contain schema objects"""
         return {cls.ERROR_LIST.value,
                 cls.OPEN_ENDED_ANALYSIS_LIST.value, cls.COMPLETED_REBASE_LIST.value,
-                cls.COMPLETED_BACKPORT_LIST.value}
+                cls.COMPLETED_BACKPORT_LIST.value, cls.COMPLETED_REBUILD_LIST.value}
 
     @classmethod
     def get_rebase_queue_for_branch(cls, target_branch: str | None) -> str:
@@ -53,6 +58,13 @@ class RedisQueues(Enum):
         return cls.BACKPORT_QUEUE_C10S.value
 
     @classmethod
+    def get_rebuild_queue_for_branch(cls, target_branch: str | None) -> str:
+        """Return appropriate rebuild queue based on target branch"""
+        if target_branch and cls._use_c9s_branch(target_branch):
+            return cls.REBUILD_QUEUE_C9S.value
+        return cls.REBUILD_QUEUE_C10S.value
+
+    @classmethod
     def _use_c9s_branch(cls, branch: str) -> bool:
         """Check if branch should use c9s container"""
         branch_lower = branch.lower()
@@ -67,16 +79,21 @@ class JiraLabels(Enum):
     TRIAGED_BACKPORT = "jotnar_triaged_backport"
     TRIAGED_REBASE = "jotnar_triaged_rebase"
 
+    TRIAGED_REBUILD = "jotnar_triaged_rebuild"
+
     REBASED = "jotnar_rebased"
     BACKPORTED = "jotnar_backported"
+    REBUILT = "jotnar_rebuilt"
     MERGED = "jotnar_merged"
 
     REBASE_ERRORED = "jotnar_rebase_errored"
     BACKPORT_ERRORED = "jotnar_backport_errored"
+    REBUILD_ERRORED = "jotnar_rebuild_errored"
     TRIAGE_ERRORED = "jotnar_triage_errored"
 
     REBASE_FAILED = "jotnar_rebase_failed"
     BACKPORT_FAILED = "jotnar_backport_failed"
+    REBUILD_FAILED = "jotnar_rebuild_failed"
 
     RETRY_NEEDED = "jotnar_retry_needed"
     FUSA = "jotnar_fusa"

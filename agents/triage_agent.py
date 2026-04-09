@@ -245,18 +245,49 @@ def render_prompt(input: InputSchema) -> str:
          * If the content is not a proper patch or doesn't fix the issue, continue searching for other fixes
 
          2.4. Decide the Outcome
-         * If your investigation successfully identifies a specific fix that passes both validations in step 2.3, your decision is backport
-         * You must be able to justify why the patch is correct and how it addresses the issue
+         * **CRITICAL — Check if the fix belongs to the package or a dependency:**
+           Before deciding on backport, verify that the patch you found modifies the package's OWN source
+           code, not the source code of a dependency. Watch for these signs that the fix is in a DEPENDENCY:
+           - The patch comes from a different upstream repository than the package (e.g., a Go standard
+             library or Go module patch for a Go application, a C library patch for an application that
+             links to it, etc.)
+           - The package bundles or vendors dependencies. Check the spec file for indicators like:
+             * `Provides: bundled(golang(...))` or `Provides: bundled(...)` entries
+             * Vendor tarballs like `Source1: *-vendor.tar.gz` or `Source1: *-vendor-*.tar.*`
+           - The CVE describes a vulnerability in a library, runtime, or language (e.g., Go, Rust,
+             OpenSSL) that the package merely uses or vendors, not in the package's own code
+           **If the fix is in a dependency**, use the "rebuild" resolution instead. The package will
+           pick up the fix automatically when rebuilt against the updated dependency.
+         * If the patch IS for the package's own code and passes both validations in step 2.3, your
+           decision is backport. You must justify why the patch is correct and how it addresses the issue.
          * If your investigation confirms a valid bug/CVE but fails to locate a specific fix, your decision
            is clarification-needed
          * This is the correct choice when you are sure a problem exists but cannot find the solution yourself
 
          2.5 Set the Jira fields as per the instructions below.
 
-      3. **Open-Ended Analysis**
-         This is the catch-all for issues that don't fit rebase, backport, or clarification-needed. Use this when:
+      3. **Rebuild**
+         Use when the package needs rebuilding against an updated dependency with NO source code
+         changes. This covers explicit rebuild requests AND vendored/bundled dependency CVEs
+         (common in Go, Rust, Node.js packages — see step 2.4 which redirects here).
+
+         3.1. Confirm no source code changes are needed for the package itself.
+         3.2. Check dependency readiness — search thoroughly:
+         * Look for linked Jira issues in fields.issuelinks representing the dependency update
+         * If no linked issue found, use search_jira_issues to find it. Try JQL queries like:
+           - project = RHEL AND summary ~ "<CVE-ID>" AND component != "<this-package>"
+           Include fields ["key", "summary", "fixVersions", "status"] in the search
+         * Once found, call get_jira_details on the dependency issue to check its status
+         * If the dependency issue has a `Fixed in Build` field set → resolution is "rebuild"
+           Set dependency_issue to the issue key AND dependency_component to the component name
+           (e.g., "golang", "openssl") from the dependency issue's component field
+         * Otherwise → resolution is "open-ended-analysis"
+           with a recommendation to rebuild once the dependency is ready
+         3.3. If rebuild: set Jira fields as per the instructions below.
+
+      4. **Open-Ended Analysis**
+         This is the catch-all for issues that don't fit rebase, backport, rebuild, or clarification-needed. Use this when:
          * The issue requires specfile adjustments, dependency updates, or other packaging-level work
-         * The issue requires rebuilding against an updated dependency without source changes
          * The issue is a QE task, feature request, documentation change, or other non-bug
          * The issue is a duplicate, misassigned, or otherwise needs no work
          * The issue is a legitimate problem but doesn't cleanly fit other categories
@@ -264,14 +295,14 @@ def render_prompt(input: InputSchema) -> str:
          * Provide a thorough summary of your findings and a clear recommendation for what action
            should be taken (or explicitly state that no action is needed and why)
 
-      4. **Error**
+      5. **Error**
          An Error decision is appropriate when there are processing issues that prevent proper analysis, e.g.:
          * The package mentioned in the issue cannot be found or identified
          * The issue cannot be accessed
 
-      **Final Step: Set JIRA Fields (for Rebase and Backport decisions only)**
+      **Final Step: Set JIRA Fields (for Rebase, Backport, and Rebuild decisions only)**
 
-         If your decision is rebase or backport, use set_jira_fields tool to update JIRA fields (Severity, Fix Version):
+         If your decision is rebase, backport, or rebuild, use set_jira_fields tool to update JIRA fields (Severity, Fix Version):
          1. Check all of the mentioned fields in the JIRA issue and don't modify those that are already set
          2. Extract the affected RHEL major version from the JIRA issue (look in Affects Version/s field or issue description)
          3. If the Fix Version field is set, do not change it and use its value in the output.
@@ -305,7 +336,7 @@ def create_triage_agent(gateway_tools):
         tool_call_checker=get_tool_call_checker_config(),
         tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool(),
                 VersionMapperTool(), UpstreamSearchTool()]
-        + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields"]],
+        + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields", "search_jira_issues"]],
         memory=UnconstrainedMemory(),
         requirements=[
             ConditionalRequirement(
@@ -320,6 +351,7 @@ def create_triage_agent(gateway_tools):
             ConditionalRequirement(RunShellCommandTool, only_after="get_jira_details"),
             ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),
             ConditionalRequirement("set_jira_fields", only_after="get_jira_details"),
+            ConditionalRequirement("search_jira_issues", only_after="get_jira_details"),
         ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         role="Red Hat Enterprise Linux developer",
@@ -333,7 +365,7 @@ def create_triage_agent(gateway_tools):
     )
 
 
-async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=False):
+async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=False, force_cve_triage=False):
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
         triage_agent = triage_agent_factory(gateway_tools)
 
@@ -351,8 +383,15 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
 
             logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
 
-            # If not eligible for triage, end workflow
+            # If not eligible for triage, end workflow (unless forced)
             if not state.cve_eligibility_result.is_eligible_for_triage:
+                if force_cve_triage and not state.cve_eligibility_result.error:
+                    logger.info(
+                        f"Issue {state.jira_issue} not eligible for triage "
+                        f"({state.cve_eligibility_result.reason}), but force_cve_triage is set — proceeding"
+                    )
+                    return "run_triage_analysis"
+
                 logger.info(f"Issue {state.jira_issue} not eligible for triage: {state.cve_eligibility_result.reason}")
                 if state.cve_eligibility_result.error:
                     state.triage_result = OutputSchema(
@@ -428,7 +467,7 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
 
             if state.triage_result.resolution == Resolution.REBASE:
                 return "verify_rebase_author"
-            elif state.triage_result.resolution == Resolution.BACKPORT:
+            elif state.triage_result.resolution in [Resolution.BACKPORT, Resolution.REBUILD]:
                 return "determine_target_branch"
             elif state.triage_result.resolution in [Resolution.CLARIFICATION_NEEDED, Resolution.OPEN_ENDED_ANALYSIS]:
                 return "comment_in_jira"
@@ -517,10 +556,11 @@ async def main() -> None:
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     auto_chain = os.getenv("AUTO_CHAIN", "true").lower() == "true"
+    force_cve_triage = os.getenv("FORCE_CVE_TRIAGE", "false").lower() == "true"
 
     if jira_issue := os.getenv("JIRA_ISSUE", None):
         logger.info("Running in direct mode with environment variable")
-        state = await run_workflow(jira_issue, dry_run, create_triage_agent, auto_chain=auto_chain)
+        state = await run_workflow(jira_issue, dry_run, create_triage_agent, auto_chain=auto_chain, force_cve_triage=force_cve_triage)
         logger.info(f"Direct run completed: {state.triage_result.model_dump_json(indent=4)}")
         if state.cve_eligibility_result:
             logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
@@ -575,7 +615,7 @@ async def main() -> None:
                 logger.info(f"Cleaned up existing labels for {input.issue}")
 
                 logger.info(f"Starting triage processing for {input.issue}")
-                state = await run_workflow(input.issue, dry_run, create_triage_agent, auto_chain=auto_chain)
+                state = await run_workflow(input.issue, dry_run, create_triage_agent, auto_chain=auto_chain, force_cve_triage=input.force_cve_triage)
                 output = state.triage_result
                 logger.info(
                     f"Triage processing completed for {input.issue}, " f"resolution: {output.resolution.value}"
@@ -616,6 +656,20 @@ async def main() -> None:
                         backport_queue = RedisQueues.get_backport_queue_for_branch(state.target_branch)
                         await fix_await(redis.lpush(backport_queue, task.model_dump_json()))
                         logger.info(f"Pushed {input.issue} to {backport_queue}")
+                    else:
+                        logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
+                elif output.resolution == Resolution.REBUILD:
+                    logger.info(f"Triage resolved as REBUILD for {input.issue}")
+                    await tasks.set_jira_labels(
+                        jira_issue=input.issue,
+                        labels_to_add=[JiraLabels.TRIAGED_REBUILD.value],
+                        dry_run=dry_run
+                    )
+                    if auto_chain:
+                        task = Task(metadata=state.model_dump())
+                        rebuild_queue = RedisQueues.get_rebuild_queue_for_branch(state.target_branch)
+                        await fix_await(redis.lpush(rebuild_queue, task.model_dump_json()))
+                        logger.info(f"Pushed {input.issue} to {rebuild_queue}")
                     else:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
                 elif output.resolution == Resolution.CLARIFICATION_NEEDED:

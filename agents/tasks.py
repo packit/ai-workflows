@@ -148,6 +148,7 @@ async def commit_and_push(
     update_branch: str,
     available_tools: list[Tool],
     commit_only: bool = False,
+    allow_empty: bool = False,
 ) -> bool:
     """
     Commits the changes to the local clone.
@@ -156,16 +157,21 @@ async def commit_and_push(
         - str: The URL of the merge request if it was created successfully
         - bool: True if the merge request was created, False otherwise (i.e. MR was reused)
     """
-    # Check if any files are staged before committing, if none, bail
-    exit_code, _, _ = await run_subprocess(
-        ["git", "diff", "--cached", "--quiet"],
-        cwd=local_clone,
-    )
-    # 1 = staged, 0 = none staged
-    if exit_code == 0:
-        logger.info("No files staged for commit, halting.")
-        raise RuntimeError("No files staged for commit, halting.")
-    await check_subprocess(["git", "commit", "-m", commit_message], cwd=local_clone)
+    if not allow_empty:
+        # Check if any files are staged before committing, if none, bail
+        exit_code, _, _ = await run_subprocess(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=local_clone,
+        )
+        # 1 = staged, 0 = none staged
+        if exit_code == 0:
+            logger.info("No files staged for commit, halting.")
+            raise RuntimeError("No files staged for commit, halting.")
+    commit_cmd = ["git", "commit"]
+    if allow_empty:
+        commit_cmd.append("--allow-empty")
+    commit_cmd.extend(["-m", commit_message])
+    await check_subprocess(commit_cmd, cwd=local_clone)
     if commit_only:
         return False
     await run_tool(
@@ -189,6 +195,7 @@ async def commit_push_and_open_mr(
     mr_description: str,
     available_tools: list[Tool],
     commit_only: bool = False,
+    allow_empty: bool = False,
 ) -> Tuple[str | None, bool]:
     """
     Commits the changes to the local clone and opens a merge request.
@@ -204,6 +211,7 @@ async def commit_push_and_open_mr(
         update_branch,
         available_tools,
         commit_only,
+        allow_empty,
     ):
         return None, False
     return await run_tool(

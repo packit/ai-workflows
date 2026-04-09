@@ -91,6 +91,9 @@ make start DRY_RUN=true AUTO_CHAIN=false   # Combine both
 
 # Process a JIRA issue
 make trigger-pipeline JIRA_ISSUE=RHEL-12345
+
+# Force triage of Y-stream CVEs (normally skipped)
+make trigger-pipeline JIRA_ISSUE=RHEL-12345 FORCE_CVE_TRIAGE=true
 ```
 
 **Environment variables:**
@@ -99,6 +102,8 @@ make trigger-pipeline JIRA_ISSUE=RHEL-12345
 | `DRY_RUN` | `false` | Skip Jira writes, git pushes, and MR creation |
 | `AUTO_CHAIN` | `true` | Route triaged issues to downstream backport/rebase queues. Set to `false` to disable routing. |
 | `MOCK_JIRA` | `false` | Use mock Jira API instead of real Jira |
+| `SKIP_JIRA` | `false` | Skip all Jira write operations (status, comments, labels, fields) while keeping reads working |
+| `FORCE_CVE_TRIAGE` | `false` | Force triage of CVE issues that would normally be skipped (e.g. Y-stream CVEs) |
 
 ### Individual Agents Runs
 ```bash
@@ -106,9 +111,13 @@ make trigger-pipeline JIRA_ISSUE=RHEL-12345
 make JIRA_ISSUE=RHEL-12345 run-triage-agent-standalone
 make PACKAGE=httpd VERSION=2.4.62 JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-rebase-agent-standalone
 make PACKAGE=httpd UPSTREAM_PATCHES=https://github.com/... JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-backport-agent-standalone
+make PACKAGE=httpd JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-rebuild-agent-standalone
 
 # Or with dry-run
 DRY_RUN=true make JIRA_ISSUE=RHEL-12345 run-triage-agent-standalone
+
+# Force triage of a Y-stream CVE
+make JIRA_ISSUE=RHEL-12345 FORCE_CVE_TRIAGE=true run-triage-agent-standalone
 ```
 
 Use commas to delimit multiple patch/commit URLs in `UPSTREAM_PATCHES`.

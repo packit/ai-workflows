@@ -2,7 +2,9 @@ IMAGE_NAME ?= beeai-agent
 COMPOSE_FILE ?= compose.yaml
 DRY_RUN ?= false
 MOCK_JIRA ?= false
+SKIP_JIRA ?= false
 AUTO_CHAIN ?= true
+FORCE_CVE_TRIAGE ?= false
 LOKI_URL ?= http://loki.tft.osci.redhat.com/
 LOKI_SINCE ?= 24h
 LOKI_LIMIT ?= 3000
@@ -26,6 +28,7 @@ run-triage-agent-standalone:
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e FORCE_CVE_TRIAGE=$(FORCE_CVE_TRIAGE) \
 		triage-agent
 
 .PHONY: run-triage-agent-e2e-tests
@@ -92,6 +95,58 @@ run-backport-agent-c10s-standalone:
 run-backport-agent-standalone: run-backport-agent-c10s-standalone
 
 
+.PHONY: run-rebuild-agent-c9s-standalone
+run-rebuild-agent-c9s-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e DEPENDENCY_ISSUE=$(DEPENDENCY_ISSUE) \
+		-e DEPENDENCY_COMPONENT=$(DEPENDENCY_COMPONENT) \
+		rebuild-agent-c9s
+
+.PHONY: run-rebuild-agent-c10s-standalone
+run-rebuild-agent-c10s-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e DEPENDENCY_ISSUE=$(DEPENDENCY_ISSUE) \
+		-e DEPENDENCY_COMPONENT=$(DEPENDENCY_COMPONENT) \
+		rebuild-agent-c10s
+
+.PHONY: run-rebuild-agent-standalone
+run-rebuild-agent-standalone: run-rebuild-agent-c10s-standalone
+
+.PHONY: run-rebuild-agent-c9s-debug
+run-rebuild-agent-c9s-debug:
+	$(COMPOSE_AGENTS) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e DEPENDENCY_ISSUE=$(DEPENDENCY_ISSUE) \
+		-e DEPENDENCY_COMPONENT=$(DEPENDENCY_COMPONENT) \
+		rebuild-agent-c9s sh -c "python agents/rebuild_agent.py || true; exec /bin/bash"
+
+.PHONY: run-rebuild-agent-c10s-debug
+run-rebuild-agent-c10s-debug:
+	$(COMPOSE_AGENTS) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e DEPENDENCY_ISSUE=$(DEPENDENCY_ISSUE) \
+		-e DEPENDENCY_COMPONENT=$(DEPENDENCY_COMPONENT) \
+		rebuild-agent-c10s sh -c "python agents/rebuild_agent.py || true; exec /bin/bash"
+
+
 .PHONY: run-mr-agent-c9s-standalone
 run-mr-agent-c9s-standalone:
 	$(COMPOSE_AGENTS)  run --rm \
@@ -133,11 +188,11 @@ build-jira-issue-fetcher:
 
 .PHONY: start
 start:
-	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) AUTO_CHAIN=$(AUTO_CHAIN) $(COMPOSE_AGENTS) up
+	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) SKIP_JIRA=$(SKIP_JIRA) AUTO_CHAIN=$(AUTO_CHAIN) $(COMPOSE_AGENTS) up
 
 .PHONY: start-detached
 start-detached:
-	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) AUTO_CHAIN=$(AUTO_CHAIN) $(COMPOSE_AGENTS) up -d
+	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) SKIP_JIRA=$(SKIP_JIRA) AUTO_CHAIN=$(AUTO_CHAIN) $(COMPOSE_AGENTS) up -d
 
 .PHONY: stop
 stop:
@@ -160,6 +215,10 @@ logs-backport:
 logs-rebase:
 	$(COMPOSE_AGENTS) logs -f rebase-agent
 
+.PHONY: logs-rebuild
+logs-rebuild:
+	$(COMPOSE_AGENTS) logs -f rebuild-agent
+
 .PHONY: logs-jira-issue-fetcher
 logs-jira-issue-fetcher:
 	$(COMPOSE) -f $(COMPOSE_FILE) --profile manual logs -f jira-issue-fetcher
@@ -179,6 +238,8 @@ logs-loki-help:
 	@echo "  - backport-agent-c10s"
 	@echo "  - rebase-agent-c9s"
 	@echo "  - rebase-agent-c10s"
+	@echo "  - rebuild-agent-c9s"
+	@echo "  - rebuild-agent-c10s"
 	@echo "  - supervisor-collector"
 	@echo "  - supervisor-processor"
 	@echo "  - mcp-gateway"
@@ -192,11 +253,11 @@ logs-loki:
 .PHONY: trigger-pipeline
 trigger-pipeline:
 	@if [ -z "$(JIRA_ISSUE)" ]; then \
-		echo "Usage: make trigger-pipeline JIRA_ISSUE=RHEL-12345"; \
+		echo "Usage: make trigger-pipeline JIRA_ISSUE=RHEL-12345 [FORCE_CVE_TRIAGE=true]"; \
 		exit 1; \
 	fi
-	@echo "Triggering pipeline for issue: $(JIRA_ISSUE)"
-	$(COMPOSE_AGENTS) exec valkey redis-cli LPUSH triage_queue '{"metadata": {"issue": "$(JIRA_ISSUE)"}}'
+	@echo "Triggering pipeline for issue: $(JIRA_ISSUE) (force_cve_triage=$(FORCE_CVE_TRIAGE))"
+	$(COMPOSE_AGENTS) exec valkey redis-cli LPUSH triage_queue '{"metadata": {"issue": "$(JIRA_ISSUE)", "force_cve_triage": $(FORCE_CVE_TRIAGE)}}'
 
 
 # Testing and Release Supervisor

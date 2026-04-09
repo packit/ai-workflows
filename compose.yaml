@@ -85,6 +85,7 @@ services:
       - KRB5CCNAME=FILE:/tmp/krb5cc
       - DRY_RUN=${DRY_RUN:-false}
       - MOCK_JIRA=${MOCK_JIRA:-false}
+      - SKIP_JIRA=${SKIP_JIRA:-false}
       - GIT_REPO_BASEPATH=/git-repos
       - JIRA_MOCK_FILES=mcp_server/tests/data
     env_file:
@@ -163,6 +164,16 @@ services:
   rebase-agent-c10s:
     <<: *beeai-agent-c10s
     command: ["python", "agents/rebase_agent.py"]
+    profiles: ["agents"]
+
+  rebuild-agent-c9s:
+    <<: *beeai-agent-c9s
+    command: ["python", "agents/rebuild_agent.py"]
+    profiles: ["agents"]
+
+  rebuild-agent-c10s:
+    <<: *beeai-agent-c10s
+    command: ["python", "agents/rebuild_agent.py"]
     profiles: ["agents"]
 
   mr-agent-c9s:

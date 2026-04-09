@@ -39,7 +39,7 @@ from common.models import (
     RebaseOutputSchema,
     Task,
 )
-from common.utils import redis_client, fix_await
+from common.utils import redis_client, fix_await, is_cs_branch
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
@@ -80,13 +80,14 @@ def get_instructions() -> str:
       4. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
       5. Download upstream sources using `spectool -g -S <PACKAGE>.spec`.
-         Run `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
+         Run `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
          to see if everything is in order. It is possible that some *.patch files will fail to apply now
          that the spec file has been updated. Don't jump to conclusions - if one patch fails to apply, it doesn't mean
          all other patches fail to apply as well. Go through the errors one by one, fix them and verify the changes
-         by running `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` again.
+         by running `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` again.
          Repeat as necessary. Do not remove any patches unless all their hunks have been already applied
          to the upstream sources.
+         Note: <PKG_TOOL> is `centpkg` for CentOS Stream branches (c9s, c10s) and `rhpkg` for RHEL branches.
 
       6. Upload new upstream sources (files that the `spectool` command downloaded in the previous step)
          to lookaside cache using the `upload_sources` tool.
@@ -94,7 +95,7 @@ def get_instructions() -> str:
       7. If you removed any patch file references from the spec file (e.g. because they were already applied upstream),
          you must remove all the corresponding patch files from the repository as well.
 
-      8. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+      8. Generate a SRPM using `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
 
       9. In your output, provide a "files_to_git_add" list containing all files that should be git added for this rebase.
          This typically includes the updated spec file and any new/modified/deleted patch files or other files you've changed
@@ -242,6 +243,7 @@ async def main() -> None:
 
             async def run_rebase_agent(state):
                 package_instructions = await get_package_instructions(state.package, "rebase")
+                pkg_tool = "centpkg" if is_cs_branch(state.dist_git_branch) else "rhpkg"
                 response = await rebase_agent.run(
                     render_prompt(
                         template=get_prompt(),
@@ -254,6 +256,7 @@ async def main() -> None:
                             jira_issue=state.jira_issue,
                             build_error=state.build_error,
                             package_instructions=package_instructions,
+                            pkg_tool=pkg_tool,
                         ),
                     ),
                     expected_output=RebaseOutputSchema,

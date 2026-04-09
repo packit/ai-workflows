@@ -33,6 +33,7 @@ from common.models import (
     MergeRequestInputSchema,
     MergeRequestOutputSchema,
 )
+from common.utils import is_cs_branch
 from constants import I_AM_JOTNAR
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
@@ -62,14 +63,15 @@ def get_instructions() -> str:
 
       2. If you updated the spec file, use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
-      3. Verify any changes to patches by running `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`.
+      3. Verify any changes to patches by running `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`.
          Repeat as necessary. Do not remove any patches unless all their hunks have been already applied
          to the upstream sources.
+         Note: <PKG_TOOL> is `centpkg` for CentOS Stream branches (c9s, c10s) and `rhpkg` for RHEL branches.
 
       4. If you removed any patch file references from the spec file (e.g. because they were already applied upstream),
          you must remove all the corresponding patch files from the repository as well.
 
-      5. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+      5. Generate a SRPM using `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
 
       6. In your output, provide a "files_to_git_add" list containing all files that have been modified, added or removed.
          This typically includes the updated spec file and any new/modified/deleted patch files or other files you've changed
@@ -245,6 +247,7 @@ async def main() -> None:
                 return "run_merge_request_agent"
 
             async def run_merge_request_agent(state):
+                pkg_tool = "centpkg" if is_cs_branch(state.dist_git_branch) else "rhpkg"
                 response = await merge_request_agent.run(
                     render_prompt(
                         template=get_prompt(),
@@ -259,6 +262,7 @@ async def main() -> None:
                             comments=state.merge_request_comments,
                             fedora_clone=state.fedora_clone,
                             build_error=state.build_error,
+                            pkg_tool=pkg_tool,
                         ),
                     ),
                     expected_output=MergeRequestOutputSchema,

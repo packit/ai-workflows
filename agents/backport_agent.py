@@ -3,7 +3,6 @@ import copy
 import logging
 import os
 import sys
-import re
 import traceback
 from pathlib import Path
 from typing import Any
@@ -40,7 +39,7 @@ from common.models import (
     BackportData,
     ErrorData,
 )
-from common.utils import redis_client, fix_await
+from common.utils import redis_client, fix_await, is_cs_branch
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
@@ -79,13 +78,13 @@ from utils import (
     mcp_tools,
     render_prompt,
 )
+from common.version_utils import is_older_zstream
 from specfile import Specfile
 
 logger = logging.getLogger(__name__)
 
 
-def get_instructions() -> str:
-    return """
+BACKPORT_INSTRUCTIONS = """
       You are an expert on backporting upstream patches to packages in RHEL ecosystem.
 
       To backport upstream patches <UPSTREAM_PATCHES> to package <PACKAGE> in dist-git branch <DIST_GIT_BRANCH>, do the following:
@@ -292,6 +291,198 @@ def get_instructions() -> str:
       - Never abort the existing git am session.
     """
 
+BACKPORT_INSTRUCTIONS_ZSTREAM = """
+      You are an expert on backporting upstream patches to packages in RHEL ecosystem.
+
+      To backport upstream patches <UPSTREAM_PATCHES> to package <PACKAGE> in dist-git branch <DIST_GIT_BRANCH>, do the following:
+
+      CRITICAL: Do NOT modify, delete, or touch any existing patches in the dist-git repository.
+      Only add new patches for the current backport. Existing patches are there for a reason
+      and must remain unchanged.
+
+      1. Knowing Jira issue <JIRA_ISSUE>, CVE ID <CVE_ID> or both, use the `git_log_search` tool to check
+         in the dist-git repository whether the issue/CVE has already been resolved. If it has,
+         end the process with `success=True` and `status="Backport already applied"`.
+
+      2. Use the `git_prepare_package_sources` tool to prepare package sources in directory <UNPACKED_SOURCES>
+         for application of the upstream patch.
+
+      3. Determine which backport approach to use:
+
+         A. CHERRY-PICK WORKFLOW (Preferred - try this first):
+
+            IMPORTANT: This workflow uses TWO separate git repositories:
+            - <UNPACKED_SOURCES>: Git repository (from Step 2) containing unpacked and committed upstream sources
+            - <UPSTREAM_REPO>: A temporary upstream repository clone (created in step 3c with -upstream suffix)
+
+            When to use this workflow:
+            - <UPSTREAM_PATCHES> is a list of commit or pull request URLs
+            - This includes URLs with .patch suffix (e.g., https://github.com/.../commit/abc123.patch)
+            - If URL extraction fails, fall back to approach B
+
+            3a. Extract upstream repository information:
+                - Use `extract_upstream_repository` tool with the upstream fix URL
+                - This extracts the repository URL and commit hash
+                - If extraction fails, fall back to approach B
+
+            3b. Get package information from dist-git:
+                - Use `get_package_info` tool with the spec file path from <UNPACKED_SOURCES>
+                - This provides the package version and list of existing patch filenames
+
+            3c. Clone the upstream repository to a SEPARATE directory:
+                - Use `clone_upstream_repository` tool with:
+                  * repository_url: from step 3a
+                  * clone_directory: current working directory (the dist-git repository root)
+                  * The tool automatically creates a directory with -upstream suffix as <UPSTREAM_REPO>
+                - Steps 3d-3g work in <UPSTREAM_REPO>, NOT in <UNPACKED_SOURCES>
+
+            3d. Find and checkout the base version in upstream:
+                - Use `find_base_commit` tool with <UPSTREAM_REPO> path and package version from 3b
+                - IMPORTANT: Save this base version commit hash using `run_shell_command`:
+                  `git -C <UPSTREAM_REPO> rev-parse HEAD` - store this as UPSTREAM_BASE
+                - If no matching tag found, try to find the base commit manually using `view` and `run_shell_command` tools
+                - Look for any tags or commits that might correspond to the package version
+                - Only fall back to approach B if you cannot find any reasonable base commit
+
+            3e. Apply existing patches from dist-git to upstream:
+                - Use `apply_downstream_patches` tool with:
+                  * repo_path: <UPSTREAM_REPO> (where to apply)
+                  * patches_directory: current working directory (dist-git root where patch files are located)
+                  * patch_files: list from step 3b
+                - This recreates the current package state in <UPSTREAM_REPO>
+                - IMPORTANT: Save the current commit hash after applying patches using `run_shell_command`:
+                  `git -C <UPSTREAM_REPO> rev-parse HEAD` - store this as PATCHED_BASE for patch generation
+                - If any patch fails to apply, immediately fall back to approach B
+
+            3f. Cherry-pick the fix in upstream:
+                FOR PULL REQUESTS (if is_pr is True from step 3a):
+                  * Download the PR patch to see all commits: `curl -L <original_url> -o /tmp/pr.patch`
+                  * Parse the patch file to extract commit hashes (lines starting with "From ")
+                    Each commit appears as "From <hash> Mon Sep DD ..." and has "[PATCH XX/YY]" in subject
+                  * You now have the exact list of commits that are part of the PR
+                  * Fetch PR branch: `git -C <UPSTREAM_REPO> fetch origin pull/<pr_number>/head:pr-branch`
+                  * Cherry-pick each commit from the list, starting from the first (oldest)
+                  * When conflicts occur (EXPECTED when backporting to older version):
+                    - Understand what the commit is trying to do and why it conflicts
+                    - Examine what's different between old and current version
+                    - Identify if the commit depends on changes that aren't in the dist-git version:
+                      * Missing helper functions, types, or macros
+                      * API changes that happened between versions
+                      * Structural changes to the codebase
+                      * Test file reorganization (tests split/merged into different files)
+                    - If prerequisites are missing, you have options:
+                      * Cherry-pick the prerequisite commits first (from upstream history between dist-git version and PR)
+                      * Or adapt the code to work without them (rewrite to use older APIs)
+                      * Or manually backport just the needed helper functions
+                    - For test file conflicts due to reorganization:
+                      * NEVER SKIP TEST COMMITS - tests validate that your fix actually works!
+                      * Check if test files exist in different locations in the old version
+                      * Use git log in upstream repo to trace test file movements: `git -C <UPSTREAM_REPO> log --follow --all -- path/to/test_file`
+                      * Merge test changes into existing test files that match the old structure
+                      * Adapt test code to work with older test frameworks or patterns
+                      * Don't skip tests just because file paths don't match - adapt them!
+                      * For CVE fixes: tests often demonstrate the vulnerability - they're CRITICAL
+                    - If adding NEW test files, ensure they're integrated into the build system:
+                        check Makefile/CMakeLists.txt/meson.build and add to test lists if needed,
+                        or verify they follow auto-discovery naming conventions (test_*.py, *_test.c)
+                    - Intelligently adapt the changes to make them work with the older codebase
+                  * Continue until all PR commits are successfully cherry-picked and adapted
+
+                FOR SINGLE COMMITS (if is_pr is False):
+                  * Use commit_hash from step 3a
+                  * Cherry-pick this single commit
+
+                CHERRY-PICKING PROCESS (ONE commit at a time - NEVER multiple at once):
+                  1. Cherry-pick ONE commit: `cherry_pick_commit` tool with ONE commit hash
+                  2. If conflicts occur (NORMAL for backporting):
+                     a. View conflicting files to understand what's needed
+                     b. Intelligently resolve by editing files with `str_replace`:
+                        - Understand what the commit does
+                        - Adapt to older codebase
+                        - Add missing helpers if needed
+                        - Rewrite to use older APIs if needed
+                        - Prioritize preserving the patch's original logic. The final backport must still fix the original bug.
+                     c. Stage ALL resolved files: `git -C <UPSTREAM_REPO> add <file>` for each file
+                     d. Complete cherry-pick: `cherry_pick_continue` tool
+                  3. CRITICAL: Only move to next commit after current one is FULLY COMPLETE
+                  4. NEVER try to cherry-pick multiple commits at once
+                  5. Do NOT fall back to approach B - keep cherry-picking through all PR commits
+                  6. NEVER skip any commits - all commits must be adapted and cherry-picked
+
+            3g. Generate the final patch file from upstream:
+                - Use `generate_patch_from_commit` tool on <UPSTREAM_REPO>
+                - Specify output_directory as current working directory (the dist-git repository root)
+                - Use a descriptive name like <JIRA_ISSUE>.patch (e.g., if JIRA is RHEL-114639, use RHEL-114639.patch)
+                - CRITICAL: Provide base_commit parameter with the PATCHED_BASE from step 3e
+                  This ensures the patch includes ALL cherry-picked commits, not just the last one
+                - IMPORTANT: Only create NEW patch files. Do NOT modify existing patches in the dist-git repository
+                - This patch file is now ready to be added to the spec file
+
+            3h. The cherry-pick workflow is complete! The generated patch file contains the cleanly
+                cherry-picked fix. Continue with steps 4-6 below to add this patch to the spec file,
+                verify it with `<PKG_TOOL> prep`, and build the SRPM.
+
+                Note: You do NOT need to apply this patch to <UNPACKED_SOURCES>. The patch file
+                will be automatically applied during the RPM build process when you run `<PKG_TOOL> prep`.
+
+         B. GIT AM WORKFLOW (Fallback approach):
+
+            Note: For this workflow, use the pre-downloaded patch files in the current working directory.
+            They are called `<JIRA_ISSUE>-<N>.patch` where <N> is a 0-based index. For example,
+            for a `RHEL-12345` Jira issue the first patch would be called `RHEL-12345-0.patch`.
+
+            Backport all patches individually using the steps 3a and 3b below.
+
+            3a. Backport one patch at a time using the following steps:
+                - Use the `git_patch_apply` tool with the patch file: <JIRA_ISSUE>-<N>.patch
+                - Resolve all conflicts and leave the repository in a dirty state. Delete all *.rej files.
+                - Use the `git_apply_finish` tool to finish the patch application.
+
+            3b. Once there are no more conflicts, use the `git_patch_create` tool with the patch file path
+                <JIRA_ISSUE>-<N>.patch to update the patch file.
+
+      4. Update the spec file. Add a new `Patch` tag for every patch in <UPSTREAM_PATCHES>.
+         Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
+         make sure it has the highest number. Make sure the patch is applied in the "%prep" section
+         and the `-p` argument is correct.
+         Include every patch defined in <UPSTREAM_PATCHES> list.
+         IMPORTANT: Only ADD new patches. Do NOT modify existing Patch tags or their order. Do NOT
+         add or change any changelog entries. Do NOT change the Release field.
+
+      5. Run `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` to see if the new patch
+         applies cleanly. When `prep` command finishes with "exit 0", it's a success. Ignore errors from
+         libtoolize that warn about newer files: "use '--force' to overwrite".
+         Note: <PKG_TOOL> is the package tool command provided in the prompt.
+
+      6. Generate a SRPM using `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+
+
+      General instructions:
+
+      - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
+      - Never change anything in the spec file changelog.
+      - Never change the Release field in the spec file.
+      - Preserve existing formatting and style conventions in spec files and patch headers.
+      - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
+      - Ignore all changes that cause conflicts in the following kinds of files: .github/ workflows, .gitignore, news, changes, and internal documentation.
+      - Apply all changes that modify the core library of the package, and all binaries, manpages, and user-facing documentation.
+      - For more information how the package is being built, inspect the RPM spec file and read sections `%prep` and `%build`.
+      - If there is a complex conflict, you are required to properly resolve it by applying the core functionality of the proposed patch.
+      - When a tool explicitly says "Abort cherry-pick approach, use git am workflow", immediately switch to approach B.
+      - When using the cherry-pick workflow, you have access to <UPSTREAM_REPO> (the cloned upstream repository).
+        You can explore it to find clues for resolving conflicts: examine commit history, related changes,
+        documentation, test files, or similar fixes that might help understand the proper resolution.
+      - Never apply the patches yourself, always use the `git_patch_apply` tool.
+      - Never run `git am --skip`, always use the `git_apply_finish` tool instead.
+      - Never abort the existing git am session.
+    """
+
+
+async def get_instructions(fix_version: str | None = None) -> str:
+    if fix_version and await is_older_zstream(fix_version):
+        return BACKPORT_INSTRUCTIONS_ZSTREAM
+    return BACKPORT_INSTRUCTIONS
+
 
 def get_prompt() -> str:
     return """
@@ -304,6 +495,7 @@ def get_prompt() -> str:
       - {{.}}
       {{/upstream_patches}}
       Unpacked upstream sources are in {{unpacked_sources}}.
+      Use `{{pkg_tool}}` as the package tool command.
       {{/build_error}}
       {{#build_error}}
       This is a repeated backport, after the previous attempt the generated SRPM failed to build:
@@ -316,8 +508,7 @@ def get_prompt() -> str:
     """
 
 
-def get_fix_build_error_prompt() -> str:
-    return """
+BACKPORT_FIX_BUILD_ERROR_PROMPT = """
       Your working directory is {{local_clone}}, a clone of dist-git repository of package {{package}}.
       {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
       {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
@@ -447,9 +638,147 @@ def get_fix_build_error_prompt() -> str:
       The upstream repository at {{local_clone}}-upstream is your playground - explore it freely!
     """
 
+BACKPORT_FIX_BUILD_ERROR_PROMPT_ZSTREAM = """
+      Your working directory is {{local_clone}}, a clone of dist-git repository of package {{package}}.
+      {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
+      {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
 
-def create_backport_agent(
-    mcp_tools: list[Tool], local_tool_options: dict[str, Any], include_build_tools: bool = False
+      Upstream patches that were backported:
+      {{#upstream_patches}}
+      - {{.}}
+      {{/upstream_patches}}
+
+      The backport of upstream patches was initially successful using the cherry-pick workflow,
+      but the build failed with the following error:
+
+      {{build_error}}
+
+      CRITICAL: The upstream repository ({{local_clone}}-upstream) still exists with all your previous work intact.
+      DO NOT clone it again. DO NOT reset to base commit. DO NOT modify anything in {{local_clone}} dist-git repository.
+      Your cherry-picked commits are still there in {{local_clone}}-upstream.
+
+      The package built successfully before your patches were added - the spec file and build configuration are correct.
+      Your task is to fix this build error by improving the patches - NOT by modifying the spec file.
+      This includes BOTH compilation errors AND test failures during the check section.
+      Make ONE attempt to fix the issue - you will be called again if the build still fails.
+
+      Follow these steps:
+
+      STEP 1: Analyze the build error
+      - Identify if it's a compilation error (undefined symbols, headers) or test failure (in check section)
+      - Identify what's missing: undefined functions, types, macros, symbols, headers, or API changes
+      - Look for patterns like "undefined reference", "implicit declaration", "undeclared identifier", etc.
+      - Note the specific names of missing symbols
+
+      STEP 2: Explore the upstream repository for solutions
+      You have FULL ACCESS to the upstream repository ({{local_clone}}-upstream) as a reference:
+
+      - Examine the history between versions:
+        * `git -C {{local_clone}}-upstream log --oneline <base_version>..<target_commit>`
+
+      - Search for how missing symbols are implemented:
+        * Search in commit messages: `git -C {{local_clone}}-upstream log --all --grep="function_name" --oneline`
+        * Search in code changes: `git -C {{local_clone}}-upstream log --all -S"function_name" --oneline`
+        * Show commit details: `git -C {{local_clone}}-upstream show <commit_hash>`
+
+      - Look at current implementation in newer versions:
+        * View files to see how things work: `view` tool on files in {{local_clone}}-upstream
+        * Understand the context and dependencies
+        * See how the code evolved over time
+
+      - Explore related changes:
+        * Check header files, documentation, tests
+        * Look for API changes, refactorings, helper functions
+        * Understand the bigger picture
+
+      STEP 3: Choose the best fix approach
+      You have TWO options for fixing the issue:
+
+      OPTION A: Cherry-pick prerequisite commits
+      - If you find clean, self-contained commits that add what's missing
+      - Use `cherry_pick_commit` tool ONE commit at a time (chronological order, oldest first)
+      - Resolve conflicts using `str_replace` tool
+      - Stage resolved files: `git -C {{local_clone}}-upstream add <file>`
+      - Complete cherry-pick: use `cherry_pick_continue` tool
+
+      OPTION B: Manually adapt the code
+      - If cherry-picking would pull in too many dependencies
+      - If the commit doesn't apply cleanly and needs significant adaptation
+      - If you need to backport just a small piece of functionality
+      - Directly edit files in {{local_clone}}-upstream using `str_replace` or `insert` tools
+      - Make minimal changes to fix the specific build error
+      - Commit your changes: `git -C {{local_clone}}-upstream add <files>` then
+        `git -C {{local_clone}}-upstream commit -m "Manually backport: <description>"`
+
+      You can MIX both approaches:
+      - Cherry-pick some commits, then manually adapt code where needed
+      - Use the upstream repo as a reference while writing your own backport
+
+      SPECIAL CONSIDERATIONS FOR TEST FAILURES:
+      - Tests validate the fix - they MUST pass
+      - If tests use missing functions/helpers: backport ONLY the minimal necessary test helpers
+        (search upstream history for test utility commits and cherry-pick or manually add them)
+      - If tests fail due to API changes: adapt test code to work with older APIs
+      - NEVER skip or disable tests - fix them instead
+
+      STEP 4: Regenerate the patch
+      - After making your fixes (cherry-picked or manual), regenerate the patch file
+      - First, delete the old patch file: `rm {{local_clone}}/{{jira_issue}}.patch`
+      - Use `generate_patch_from_commit` tool with the PATCHED_BASE commit
+      - This creates a single patch with all changes: original commits + prerequisites/fixes
+      - Save it as {{jira_issue}}.patch in {{local_clone}}
+      - This improved patch now includes all missing dependencies needed for a successful build
+
+      STEP 5: Test the build
+      - The spec file should already reference {{jira_issue}}.patch
+      - Run `{{pkg_tool}} --name={{package}} --namespace=rpms --release={{dist_git_branch}} prep` to verify patch applies
+      - Run `{{pkg_tool}} --name={{package}} --namespace=rpms --release={{dist_git_branch}} srpm` to generate SRPM
+      - Test if the SRPM builds successfully using the `build_package` tool:
+        * Call build_package with the SRPM path, dist_git_branch, and jira_issue
+        * Wait for build results
+        * If build PASSES: Report success=true with the SRPM path
+        * If build FAILS: Use `download_artifacts` to get build logs if available
+        * Extract the new error message from the logs:
+          - IMPORTANT: Before viewing log files, check their size using `wc -l` command
+          - If a log file has more than 2000 lines, use the view tool with offset and limit
+            parameters to read only the LAST 1000 lines (calculate offset as total_lines - 1000, limit as 1000)
+          - Build failures are almost always at the end of logs, avoiding context overflow
+          - Alternatively, use the `search_text` tool to search for error patterns (e.g., "ERROR", "FAILED", "error:", "fatal:")
+            and then use the view tool to read targeted sections around the matching line numbers
+          - Combine strategies as needed to understand the failure without reading the entire file
+        * Report success=false with the extracted error
+
+      Report your results:
+      - If build passes → Report success=true with the SRPM path
+      - If build fails → Report success=false with the extracted error message
+      - If you can't find a fix → Report success=false explaining why
+
+      IMPORTANT RULES:
+      - Work in the EXISTING {{local_clone}}-upstream directory (don't clone again)
+      - NEVER modify the spec file - build failures are caused by incomplete patches, not spec issues
+      - The ONLY dist-git file you can modify is {{jira_issue}}.patch (by regenerating it from upstream repo)
+      - Fix build errors (compilation AND test failures) by adding missing prerequisites/dependencies to your patches in upstream repo
+      - For test failures: backport minimal necessary test helpers/functions to make tests pass
+      - You can freely explore, edit, cherry-pick, and commit in the upstream repo - it's your workspace
+      - Use the upstream repo as a rich source of information and examples
+      - Be creative and pragmatic - the goal is a working build with passing tests, not perfect git history
+      - Make ONE solid attempt to fix the issue - if the build fails, report the error clearly
+      - Your work will persist in the upstream repo for the next attempt if needed
+
+      Remember: Unpacked upstream sources are in {{unpacked_sources}}.
+      The upstream repository at {{local_clone}}-upstream is your playground - explore it freely!
+    """
+
+
+async def get_fix_build_error_prompt(fix_version: str | None = None) -> str:
+    if fix_version and await is_older_zstream(fix_version):
+        return BACKPORT_FIX_BUILD_ERROR_PROMPT_ZSTREAM
+    return BACKPORT_FIX_BUILD_ERROR_PROMPT
+
+
+async def create_backport_agent(
+    mcp_tools: list[Tool], local_tool_options: dict[str, Any],
+    include_build_tools: bool = False, fix_version: str | None = None,
 ) -> RequirementAgent:
     """
     Create a backport agent.
@@ -459,6 +788,7 @@ def create_backport_agent(
         local_tool_options: Options for local tools
         include_build_tools: If True, include build_package and download_artifacts tools
                            for iterative build testing during error fixing
+        fix_version: Fix version string for z-stream instruction selection
     """
     base_tools = [
         ThinkTool(),
@@ -510,7 +840,7 @@ def create_backport_agent(
         ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         role="Red Hat Enterprise Linux developer",
-        instructions=get_instructions(),
+        instructions=await get_instructions(fix_version),
         # role and instructions above set defaults for the system prompt input
         # but the `RequirementAgentSystemPrompt` instance is shared so the defaults
         # affect all requirement agents - use our own copy to prevent that
@@ -526,17 +856,27 @@ def get_unpacked_sources(local_clone: Path, package: str) -> Path:
     That's the place where we'll initiate the backporting process.
     """
     with Specfile(local_clone / f"{package}.spec") as spec:
+        name = spec.expand("%{name}")
+        version = spec.expand("%{version}")
         buildsubdir = spec.expand("%{buildsubdir}")
     if "/" in buildsubdir:
-        # Sooner or later we'll run into a package where this will break. Sorry.
-        # More details: https://github.com/packit/jotnar/issues/217
+        # When %setup -n uses a nested path (e.g. libexpat-R_2_6_4/expat),
+        # use the archive root because some specs apply patches at that level
+        # via pushd/popd.  More details: https://github.com/packit/jotnar/issues/217
         buildsubdir = buildsubdir.split("/")[0]
+
+    # RPM 4.20+ uses a per-build directory named %{NAME}-%{VERSION}-build
+    per_build_dir = local_clone / f"{name}-{version}-build"
+    sources_dir = per_build_dir / buildsubdir
+    if sources_dir.is_dir():
+        return sources_dir
+
+    # Older RPM versions unpack directly under _builddir
     sources_dir = local_clone / buildsubdir
+    if sources_dir.is_dir():
+        return sources_dir
 
-    if not sources_dir.exists():
-        raise ValueError(f"Unpacked source directory does not exist: {sources_dir}")
-
-    return sources_dir
+    raise ValueError(f"Unpacked source directory does not exist: {sources_dir}")
 
 
 async def main() -> None:
@@ -561,14 +901,17 @@ async def main() -> None:
         attempts_remaining: int = Field(default=max_build_attempts)
         used_cherry_pick_workflow: bool = Field(default=False)  # Track if cherry-pick was used
         incremental_fix_attempts: int = Field(default=0)  # Track how many times we tried incremental fix
+        fix_version: str | None = Field(default=None)
 
     async def run_workflow(
-        package, dist_git_branch, upstream_patches, jira_issue, cve_id, redis_conn=None
+        package, dist_git_branch, upstream_patches, jira_issue, cve_id,
+        fix_version=None, redis_conn=None,
     ):
         local_tool_options["working_directory"] = None
 
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-            backport_agent = create_backport_agent(gateway_tools, local_tool_options)
+            backport_agent = await create_backport_agent(
+                gateway_tools, local_tool_options, fix_version=fix_version)
             build_agent = create_build_agent(gateway_tools, local_tool_options)
             log_agent = create_log_agent(gateway_tools, local_tool_options)
 
@@ -600,9 +943,12 @@ async def main() -> None:
                     available_tools=gateway_tools,
                 )
                 local_tool_options["working_directory"] = state.local_clone
-                centpkg_cmd = ["centpkg", f"--name={state.package}", "--namespace=rpms", f"--release={state.dist_git_branch}"]
-                await check_subprocess(centpkg_cmd + ["sources"], cwd=state.local_clone)
-                await check_subprocess(centpkg_cmd + ["prep"], cwd=state.local_clone)
+                if is_cs_branch(state.dist_git_branch):
+                    pkg_cmd = ["centpkg", f"--name={state.package}", "--namespace=rpms", f"--release={state.dist_git_branch}"]
+                else:
+                    pkg_cmd = ["rhpkg", f"--name={state.package}", "--namespace=rpms", f"--release={state.dist_git_branch}", "--offline", "--released"]
+                await check_subprocess(pkg_cmd + ["sources"], cwd=state.local_clone)
+                await check_subprocess(pkg_cmd + ["prep"], cwd=state.local_clone)
                 state.unpacked_sources = get_unpacked_sources(state.local_clone, state.package)
                 timeout = aiohttp.ClientTimeout(total=30)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -617,6 +963,7 @@ async def main() -> None:
                 return "run_backport_agent"
 
             async def run_backport_agent(state):
+                pkg_tool = "centpkg" if is_cs_branch(state.dist_git_branch) else "rhpkg --offline --released"
                 response = await backport_agent.run(
                     render_prompt(
                         template=get_prompt(),
@@ -629,6 +976,7 @@ async def main() -> None:
                             cve_id=state.cve_id,
                             upstream_patches=state.upstream_patches,
                             build_error=state.build_error,
+                            pkg_tool=pkg_tool,
                         ),
                     ),
                     expected_output=BackportOutputSchema,
@@ -674,12 +1022,15 @@ async def main() -> None:
 
                 try:
                     # Create a fresh backport agent with build tools enabled for iterative testing
-                    fix_agent = create_backport_agent(gateway_tools, local_tool_options, include_build_tools=True)
+                    fix_agent = await create_backport_agent(
+                        gateway_tools, local_tool_options,
+                        include_build_tools=True, fix_version=state.fix_version)
 
                     # Give the agent the current build error and let it try to fix it
+                    pkg_tool = "centpkg" if is_cs_branch(state.dist_git_branch) else "rhpkg --offline --released"
                     response = await fix_agent.run(
                         render_prompt(
-                            template=get_fix_build_error_prompt(),
+                            template=await get_fix_build_error_prompt(fix_version=state.fix_version),
                             input=BackportInputSchema(
                                 local_clone=state.local_clone,
                                 unpacked_sources=state.unpacked_sources,
@@ -689,6 +1040,7 @@ async def main() -> None:
                                 cve_id=state.cve_id,
                                 upstream_patches=state.upstream_patches,
                                 build_error=state.build_error,
+                                pkg_tool=pkg_tool,
                             ),
                         ),
                         expected_output=BackportOutputSchema,
@@ -800,18 +1152,24 @@ async def main() -> None:
 
             async def stage_changes(state):
                 try:
-                    # Find patch files to stage based on workflow type
-                    if state.used_cherry_pick_workflow:
-                        # Cherry-pick workflow: only stage the single consolidated patch
-                        # This avoids staging the pre-downloaded input patches (JIRA-12345-0.patch, etc.)
-                        patch_file = state.local_clone / f"{state.jira_issue}.patch"
-                        patch_files = [patch_file] if patch_file.exists() else []
-                    else:
-                        # Git am workflow: stage all numbered patches (JIRA-12345-0.patch, JIRA-12345-1.patch, etc.)
-                        patch_files = list(state.local_clone.glob(f"{state.jira_issue}-*.patch"))
+                    # Use the spec file as the source of truth for which patches
+                    # to commit.  The agent may create temporary or pre-downloaded
+                    # .patch files in the working directory that should NOT be
+                    # committed; only patches referenced by Patch tags in the spec
+                    # belong in the final commit.
+                    spec_path = state.local_clone / f"{state.package}.spec"
+                    with Specfile(spec_path) as spec:
+                        with spec.patches() as patches:
+                            patch_files = [p.expanded_location for p in patches if p.expanded_location]
 
-                    files_to_git_add = [f"{state.package}.spec"] + [p.name for p in patch_files]
-                    logger.info(f"Staging files (cherry_pick={state.used_cherry_pick_workflow}): {files_to_git_add}")
+                    if not patch_files:
+                        raise RuntimeError(
+                            f"Backport completed but no Patch tags found "
+                            f"in {spec_path}"
+                        )
+
+                    files_to_git_add = [f"{state.package}.spec"] + patch_files
+                    logger.info(f"Staging files: {files_to_git_add}")
 
                     await tasks.stage_changes(
                         local_clone=state.local_clone,
@@ -945,6 +1303,7 @@ async def main() -> None:
                     upstream_patches=upstream_patches,
                     jira_issue=jira_issue,
                     cve_id=cve_id,
+                    fix_version=fix_version,
                 ),
             )
             return response.state
@@ -963,6 +1322,7 @@ async def main() -> None:
             upstream_patches=upstream_patches,
             jira_issue=jira_issue,
             cve_id=os.getenv("CVE_ID", None),
+            fix_version=branch,
             redis_conn=None,
         )
         logger.info(f"Direct run completed: {state.backport_result.model_dump_json(indent=4)}")
@@ -1025,6 +1385,7 @@ async def main() -> None:
                     upstream_patches=backport_data.patch_urls,
                     jira_issue=backport_data.jira_issue,
                     cve_id=backport_data.cve_id,
+                    fix_version=backport_data.fix_version,
                     redis_conn=redis,
                 )
                 logger.info(

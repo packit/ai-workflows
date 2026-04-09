@@ -100,6 +100,7 @@ class BackportInputSchema(BaseModel):
     upstream_patches: list[str] = Field(
         description="List of URLs to upstream patches that were validated using the PatchValidator tool")
     build_error: str | None = Field(description="Error encountered during package build")
+    pkg_tool: str = Field(default="centpkg", description="Package tool command with arguments")
 
 
 class BackportOutputSchema(BaseModel):

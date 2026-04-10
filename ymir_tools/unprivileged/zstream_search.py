@@ -11,8 +11,8 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, Tool, ToolRunOptions, ToolError
 
-from agents.utils import mcp_tools, run_tool
-from common.version_utils import parse_rhel_version, is_older_zstream
+from ymir_common.utils import mcp_tools, run_tool
+from ymir_common.version_utils import parse_rhel_version, is_older_zstream
 
 logger = logging.getLogger(__name__)
 

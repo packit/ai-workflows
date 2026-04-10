@@ -7,7 +7,7 @@ from attr import dataclass
 import typer
 
 from agents.observability import setup_observability
-from common.utils import init_kerberos_ticket
+from ymir_common.utils import init_kerberos_ticket
 from .collect import collect_and_schedule_work_items
 from .errata_utils import get_erratum
 from .erratum_handler import (

@@ -10,7 +10,7 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, Tool, ToolRunOptions, ToolError
 
-from agents.utils import mcp_tools, run_tool
+from ymir_common.utils import mcp_tools, run_tool
 
 MAX_CONTENT_LENGTH = 2000
 

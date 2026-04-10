@@ -22,9 +22,9 @@ from beeai_framework.workflows import Workflow
 from beeai_framework.utils.strings import to_json
 
 import agents.tasks as tasks
-from common.config import load_rhel_config
-from common.version_utils import parse_rhel_version, is_older_zstream
-from common.models import (
+from ymir_common.config import load_rhel_config
+from ymir_common.version_utils import parse_rhel_version, is_older_zstream
+from ymir_common.models import (
     Task,
     TriageInputSchema as InputSchema,
     TriageOutputSchema as OutputSchema,
@@ -34,8 +34,8 @@ from common.models import (
     ErrorData,
     CVEEligibilityResult,
 )
-from common.utils import redis_client, fix_await
-from common.constants import JiraLabels, RedisQueues
+from ymir_common.utils import redis_client, fix_await
+from ymir_common.constants import JiraLabels, RedisQueues
 from agents.observability import setup_observability
 from ymir_tools.unprivileged.commands import RunShellCommandTool
 from ymir_tools.unprivileged.patch_validator import PatchValidatorTool
@@ -144,7 +144,7 @@ async def _map_version_to_branch(version: str, cve_needs_internal_fix: bool, pac
     return branch
 
 
-# All schemas are now imported from common.models
+# All schemas are now imported from ymir_common.models
 
 
 TRIAGE_PROMPT = """

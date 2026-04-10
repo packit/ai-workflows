@@ -30,7 +30,7 @@ import redis.asyncio as redis
 import requests
 import backoff
 
-from common.models import (
+from ymir_common.models import (
     Task,
     TriageInputSchema,
     RebaseInputSchema,
@@ -41,8 +41,8 @@ from common.models import (
     OpenEndedAnalysisData,
     ErrorData
 )
-from common.utils import redis_client, fix_await, get_jira_auth_headers
-from common.constants import JiraLabels, JIRA_SEARCH_PATH, RedisQueues
+from ymir_common.utils import redis_client, fix_await, get_jira_auth_headers
+from ymir_common.constants import JiraLabels, JIRA_SEARCH_PATH, RedisQueues
 
 # Configure logging
 logging.basicConfig(

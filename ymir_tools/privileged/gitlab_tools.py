@@ -15,8 +15,8 @@ from ogr.services.gitlab.project import GitlabProject
 from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import BaseModel, Field
 
-from common.models import CommentReply, FailedPipelineJob, MergeRequestComment, MergeRequestDetails
-from common.validators import AbsolutePath
+from ymir_common.models import CommentReply, FailedPipelineJob, MergeRequestComment, MergeRequestDetails
+from ymir_common.validators import AbsolutePath
 from utils import clean_stale_repositories
 
 

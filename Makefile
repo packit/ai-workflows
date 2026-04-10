@@ -92,6 +92,33 @@ run-backport-agent-c10s-standalone:
 run-backport-agent-standalone: run-backport-agent-c10s-standalone
 
 
+.PHONY: run-rebuild-agent-c9s-standalone
+run-rebuild-agent-c9s-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e DEPENDENCY_ISSUE=$(DEPENDENCY_ISSUE) \
+		-e DEPENDENCY_COMPONENT=$(DEPENDENCY_COMPONENT) \
+		rebuild-agent-c9s
+
+.PHONY: run-rebuild-agent-c10s-standalone
+run-rebuild-agent-c10s-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e BRANCH=$(BRANCH) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e DEPENDENCY_ISSUE=$(DEPENDENCY_ISSUE) \
+		-e DEPENDENCY_COMPONENT=$(DEPENDENCY_COMPONENT) \
+		rebuild-agent-c10s
+
+.PHONY: run-rebuild-agent-standalone
+run-rebuild-agent-standalone: run-rebuild-agent-c10s-standalone
+
 .PHONY: run-mr-agent-c9s-standalone
 run-mr-agent-c9s-standalone:
 	$(COMPOSE_AGENTS)  run --rm \
@@ -160,6 +187,10 @@ logs-backport:
 logs-rebase:
 	$(COMPOSE_AGENTS) logs -f rebase-agent
 
+.PHONY: logs-rebuild
+logs-rebuild:
+	$(COMPOSE_AGENTS) logs -f rebuild-agent
+
 .PHONY: logs-jira-issue-fetcher
 logs-jira-issue-fetcher:
 	$(COMPOSE) -f $(COMPOSE_FILE) --profile manual logs -f jira-issue-fetcher
@@ -179,6 +210,8 @@ logs-loki-help:
 	@echo "  - backport-agent-c10s"
 	@echo "  - rebase-agent-c9s"
 	@echo "  - rebase-agent-c10s"
+	@echo "  - rebuild-agent-c9s"
+	@echo "  - rebuild-agent-c10s"
 	@echo "  - supervisor-collector"
 	@echo "  - supervisor-processor"
 	@echo "  - mcp-gateway"

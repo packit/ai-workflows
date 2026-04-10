@@ -38,7 +38,6 @@ from ymir_common.utils import redis_client, fix_await
 from ymir_common.constants import JiraLabels, RedisQueues
 from agents.observability import setup_observability
 from ymir_tools.unprivileged.commands import RunShellCommandTool
-from ymir_tools.unprivileged.patch_validator import PatchValidatorTool
 from ymir_tools.unprivileged.version_mapper import VersionMapperTool
 from ymir_tools.unprivileged.upstream_search import UpstreamSearchTool
 from agents.utils import get_agent_execution_config, get_chat_model, get_tool_call_checker_config, mcp_tools, run_tool
@@ -230,8 +229,9 @@ def render_prompt(input: InputSchema) -> str:
              - Check upstream release notes and changelogs after the RHEL package version date
 
          2.3. Validate the Fix and URL
-         * Use the PatchValidator tool to fetch content from any patch/commit URL you intend to use
-         * The tool will verify the URL is accessible and not an issue reference, then return the content
+         * First, make sure the URL is an actual patch/commit link, not an issue or bug tracker reference
+           (e.g. reject URLs containing /issues/, /bug/, bugzilla, jira, /tickets/)
+         * Use the get_patch_from_url tool to fetch content from any patch/commit URL you intend to use
          * Once you have the content, you must validate two things:
            1. **Is it a patch/diff?** Look for diff indicators like:
               - `diff --git` headers
@@ -304,9 +304,9 @@ def create_triage_agent(gateway_tools):
         name="TriageAgent",
         llm=get_chat_model(),
         tool_call_checker=get_tool_call_checker_config(),
-        tools=[ThinkTool(), RunShellCommandTool(), PatchValidatorTool(),
+        tools=[ThinkTool(), RunShellCommandTool(),
                 VersionMapperTool(), UpstreamSearchTool()]
-        + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields"]],
+        + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields", "get_patch_from_url"]],
         memory=UnconstrainedMemory(),
         requirements=[
             ConditionalRequirement(
@@ -319,7 +319,7 @@ def create_triage_agent(gateway_tools):
             ConditionalRequirement("get_jira_details", min_invocations=1),
             ConditionalRequirement(UpstreamSearchTool, only_after="get_jira_details"),
             ConditionalRequirement(RunShellCommandTool, only_after="get_jira_details"),
-            ConditionalRequirement(PatchValidatorTool, only_after="get_jira_details"),
+            ConditionalRequirement("get_patch_from_url", only_after="get_jira_details"),
             ConditionalRequirement("set_jira_fields", only_after="get_jira_details"),
         ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
@@ -327,8 +327,8 @@ def create_triage_agent(gateway_tools):
         instructions=[
             "Use the `think` tool to reason through complex decisions and document your approach.",
             "Be proactive in your search for fixes and do not give up easily.",
-            "For any patch URL that you are proposing for backport, you need to validate it using PatchValidator tool.",
-            "Do not modify the patch URL in your final answer after it has been validated with the PatchValidator tool.",
+            "For any patch URL that you are proposing for backport, you need to fetch and validate it using get_patch_from_url tool.",
+            "Do not modify the patch URL in your final answer after it has been validated with get_patch_from_url.",
             "After completing your triage analysis, if your decision is backport or rebase, always set appropriate JIRA fields per the instructions using set_jira_fields tool.",
         ]
     )

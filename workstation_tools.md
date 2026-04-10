@@ -160,16 +160,15 @@ tools from both `ymir-privileged` and `ymir-unprivileged` servers.
 
 ## Note on cross-gateway calls
 
-Two unprivileged tools -- `PatchValidatorTool` and `ZStreamSearchTool` --
-contain internal logic that calls privileged tools (`get_patch_from_url`,
-`search_jira_issues`) via the `MCP_GATEWAY_URL` SSE endpoint. In the stdio
-setup described above, the privileged gateway is not exposed as an HTTP server,
-so these internal cross-calls are not available.
+`ZStreamSearchTool` (unprivileged) contains internal logic that calls the
+privileged tool `search_jira_issues` via the `MCP_GATEWAY_URL` SSE endpoint.
+In the stdio setup described above, the privileged gateway is not exposed as
+an HTTP server, so this internal cross-call is not available.
 
 This has **no practical impact** when using Claude Code: because the model has
-direct access to all tools from both servers simultaneously, it can call the
-underlying privileged tools (`get_patch_from_url`, `search_jira_issues`)
-directly instead of relying on the embedded cross-gateway delegation.
+direct access to all tools from both servers simultaneously, it can call
+`search_jira_issues` directly instead of relying on the embedded cross-gateway
+delegation.
 
 If you need the fully self-contained tool behavior (e.g. for automated
 pipelines), run the privileged gateway separately as an SSE server and point
@@ -219,6 +218,5 @@ Claude Code
   |-- stdio --> ymir-unprivileged (child process)
                   |-- Local filesystem, shell, specfile, git
                   |-- UpstreamSearchTool    --> UPSTREAM_SEARCH_API_URL
-                  |-- PatchValidatorTool    --> MCP_GATEWAY_URL (optional, see above)
                   |-- ZStreamSearchTool     --> MCP_GATEWAY_URL (optional, see above)
 ```

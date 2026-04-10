@@ -8,7 +8,6 @@ from beeai_framework.emitter.emitter import Emitter
 from ymir_tools.unprivileged.commands import RunShellCommandTool
 from ymir_tools.unprivileged.distgit_detector import DistgitDetectorTool
 from ymir_tools.unprivileged.filesystem import GetCWDTool, RemoveTool
-from ymir_tools.unprivileged.patch_validator import PatchValidatorTool
 from ymir_tools.unprivileged.specfile import AddChangelogEntryTool, GetPackageInfoTool, UpdateReleaseTool
 from ymir_tools.unprivileged.text import (
     CreateTool,
@@ -76,7 +75,6 @@ def main():
         DistgitDetectorTool(),
         GetCWDTool(),
         RemoveTool(),
-        PatchValidatorTool(),
         GetPackageInfoTool(),
         AddChangelogEntryTool(),
         UpdateReleaseTool(),

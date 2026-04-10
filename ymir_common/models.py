@@ -98,7 +98,7 @@ class BackportInputSchema(BaseModel):
     jira_issue: str = Field(description="Jira issue to reference as resolved")
     cve_id: str | None = Field(default=None, description="CVE ID if the jira issue is a CVE")
     upstream_patches: list[str] = Field(
-        description="List of URLs to upstream patches that were validated using the PatchValidator tool")
+        description="List of URLs to upstream patches that were validated using the get_patch_from_url tool")
     build_error: str | None = Field(description="Error encountered during package build")
 
 
@@ -135,7 +135,7 @@ class BackportData(BaseModel):
     """Data for backport resolution."""
     package: str = Field(description="Package name")
     patch_urls: list[str] = Field(
-        description="A list of URLs to the sources of the fixes that were validated using the PatchValidator tool")
+        description="A list of URLs to the sources of the fixes that were validated using the get_patch_from_url tool")
     justification: str = Field(description="Clear explanation of why this patch fixes the issue, linking it to the root cause")
     jira_issue: str = Field(description="Jira issue identifier")
     cve_id: str | None = Field(description="CVE identifier", default=None)

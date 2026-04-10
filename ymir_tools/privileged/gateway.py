@@ -1,7 +1,7 @@
 import logging
-import functools
 import re
 from typing import Any
+import os
 
 from beeai_framework.adapters.mcp.serve.server import MCPServer, MCPServerConfig, MCPSettings
 from beeai_framework.emitter.emitter import Emitter
@@ -36,9 +36,9 @@ def _redact(text: str) -> str:
         text = pattern.sub("[REDACTED]", text)
     return text
 
-from copr_tools import BuildPackageTool, DownloadArtifactsTool
-from distgit_tools import CreateZstreamBranchTool
-from gitlab_tools import (
+from ymir_tools.privileged.copr_tools import BuildPackageTool, DownloadArtifactsTool
+from ymir_tools.privileged.distgit_tools import CreateZstreamBranchTool
+from ymir_tools.privileged.gitlab_tools import (
     AddBlockingMergeRequestCommentTool,
     AddMergeRequestCommentTool,
     AddMergeRequestLabelsTool,
@@ -54,7 +54,7 @@ from gitlab_tools import (
     PushToRemoteRepositoryTool,
     RetryPipelineJobTool,
 )
-from jira_tools import (
+from ymir_tools.privileged.jira_tools import (
     AddJiraCommentTool,
     ChangeJiraStatusTool,
     CheckCveTriageEligibilityTool,
@@ -65,7 +65,7 @@ from jira_tools import (
     SetJiraFieldsTool,
     VerifyIssueAuthorTool,
 )
-from lookaside_tools import DownloadSourcesTool, PrepSourcesTool, UploadSourcesTool
+from ymir_tools.privileged.lookaside_tools import DownloadSourcesTool, PrepSourcesTool, UploadSourcesTool
 
 
 def _setup_logging():
@@ -88,17 +88,17 @@ def _setup_logging():
     Emitter.root().on("tool.*.error", on_tool_error)
 
 
-if __name__ == "__main__":
+def main():
     logger = logging.getLogger(__name__)
 
-    config = MCPServerConfig(
-        name="MCP Gateway",
-        transport="sse",
-        settings=MCPSettings(
+    transport = os.getenv("MCP_TRANSPORT", "sse")
+    config_kwargs = {"name": "Ymir Privileged MCP Gateway", "transport": transport}
+    if transport == "sse":
+        config_kwargs["settings"] = MCPSettings(
             host="0.0.0.0",
             port=int(os.getenv("SSE_PORT", "8000")),
         )
-    )
+    config = MCPServerConfig(**config_kwargs)
 
     _setup_logging()
     mcp = MCPServer(config=config)
@@ -135,3 +135,7 @@ if __name__ == "__main__":
     ])
 
     mcp.serve()
+
+
+if __name__ == "__main__":
+    main()

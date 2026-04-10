@@ -42,6 +42,10 @@ class CVEEligibilityResult(BaseModel):
 class TriageInputSchema(BaseModel):
     """Input schema for the triage agent - metadata for a JIRA issue task."""
     issue: str = Field(description="JIRA issue key (e.g., RHEL-12345)")
+    force_cve_triage: bool = Field(
+        default=False,
+        description="Force triage of CVE issues that would normally be skipped (e.g. Y-stream CVEs)",
+    )
 
 
 class Task(BaseModel):

@@ -7,7 +7,7 @@ import json
 import re
 import os
 
-from fastmcp.exceptions import ToolError
+from beeai_framework.tools import ToolError
 from flexmock import flexmock
 
 async def _get_transitions():
@@ -52,7 +52,7 @@ class aiohttpClientSessionMock:
         re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue"))+"/([A-Z0-9-]+)/remotelink")
     # mocking endpoint for posting comments
     comment_post_regex    = re.compile(
-        re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue"))+"/([A-Z0-9-]+)/comment")
+        re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/"))+"[2-3]/issue/([A-Z0-9-]+)/comment")
     # mocking endpoint for retrieval of information about users
     user_get_regex        = re.compile(
         re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/3/user")))
@@ -140,8 +140,8 @@ class aiohttpClientSessionMock:
                     "resolution for context regarding why" \
                     "(for example Done, Abandoned, Duplicate, etc)"
             else:
-                raise NotImplementedError()
+                raise ToolError("Not implemented Transition!")
             await _write_jira_mock(match_data.group(1), jira_data)
             yield flexmock(raise_for_status=lambda: None)
         else:
-            raise NotImplementedError()
+            raise ToolError("Not implemented Post!")

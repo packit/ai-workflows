@@ -1,10 +1,11 @@
 import asyncio
+import os
 
 import pytest
 from flexmock import flexmock
 
 import lookaside_tools
-from lookaside_tools import download_sources, prep_sources, upload_sources
+from lookaside_tools import DownloadSourcesTool, PrepSourcesTool, UploadSourcesTool
 
 
 async def _noop():
@@ -31,7 +32,11 @@ async def test_download_sources(branch):
 
     _mock_kerberos()
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
-    result = await download_sources(dist_git_path=".", package=package, dist_git_branch=branch)
+    result = (
+        await DownloadSourcesTool().run(
+            input={"dist_git_path": os.getcwd(), "package": package, "dist_git_branch": branch}
+        )
+    ).result
     assert result.startswith("Successfully")
 
 
@@ -51,7 +56,11 @@ async def test_prep_sources(branch):
 
     _mock_kerberos()
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
-    result = await prep_sources(dist_git_path=".", package=package, dist_git_branch=branch)
+    result = (
+        await PrepSourcesTool().run(
+            input={"dist_git_path": os.getcwd(), "package": package, "dist_git_branch": branch}
+        )
+    ).result
     assert result.startswith("Successfully")
 
 
@@ -75,5 +84,14 @@ async def test_upload_sources(branch):
 
     flexmock(lookaside_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
-    result = await upload_sources(dist_git_path=".", package=package, dist_git_branch=branch, new_sources=new_sources)
+    result = (
+        await UploadSourcesTool().run(
+            input={
+                "dist_git_path": os.getcwd(),
+                "package": package,
+                "dist_git_branch": branch,
+                "new_sources": new_sources,
+            }
+        )
+    ).result
     assert result.startswith("Successfully")

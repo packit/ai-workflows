@@ -13,17 +13,17 @@ from ogr.services.gitlab import GitlabService
 
 from common.constants import GITLAB_MR_CHECKLIST
 from gitlab_tools import (
-    clone_repository,
-    create_merge_request_checklist,
-    fork_repository,
-    open_merge_request,
-    push_to_remote_repository,
-    add_merge_request_labels,
-    add_merge_request_comment,
-    add_blocking_merge_request_comment,
-    retry_pipeline_job,
-    get_failed_pipeline_jobs_from_merge_request,
-    get_authorized_comments_from_merge_request,
+    AddBlockingMergeRequestCommentTool,
+    AddMergeRequestCommentTool,
+    AddMergeRequestLabelsTool,
+    CloneRepositoryTool,
+    CreateMergeRequestChecklistTool,
+    ForkRepositoryTool,
+    GetAuthorizedCommentsFromMergeRequestTool,
+    GetFailedPipelineJobsFromMergeRequestTool,
+    OpenMergeRequestTool,
+    PushToRemoteRepositoryTool,
+    RetryPipelineJobTool,
 )
 from test_utils import mock_git_repo_basepath
 
@@ -69,7 +69,7 @@ async def test_fork_repository(repository, fork_exists):
             service=flexmock(instance_url="https://gitlab.com", user=flexmock(get_username=lambda: fork_namespace)),
         )
     )
-    assert await fork_repository(repository=repository) == clone_url
+    assert (await ForkRepositoryTool().run(input={"repository": repository})).result == clone_url
 
 
 @pytest.mark.asyncio
@@ -85,16 +85,16 @@ async def test_open_merge_request():
         url=fork_url
     ).and_return(flexmock(create_pr=lambda title, body, target, source: pr_mock, parent=flexmock(get_pr=lambda id: pr_mock)))
     pr_mock.should_receive("add_label").with_args("jotnar_needs_attention").once()
-    assert (
-        await open_merge_request(
-            fork_url=fork_url,
-            title=title,
-            description=description,
-            target=target,
-            source=source,
-        )
-        == mr_url, True
+    out = await OpenMergeRequestTool().run(
+        input={
+            "fork_url": fork_url,
+            "title": title,
+            "description": description,
+            "target": target,
+            "source": source,
+        }
     )
+    assert out.result == (mr_url, True)
 
 
 @pytest.mark.asyncio
@@ -122,16 +122,16 @@ async def test_open_merge_request_with_existing_mr():
         )
     )
     pr_mock.should_receive("add_label").with_args("jotnar_needs_attention").once()
-    assert (
-        await open_merge_request(
-            fork_url=fork_url,
-            title=title,
-            description=description,
-            target=target,
-            source=source,
-        )
-        == mr_url, False
+    out = await OpenMergeRequestTool().run(
+        input={
+            "fork_url": fork_url,
+            "title": title,
+            "description": description,
+            "target": target,
+            "source": source,
+        }
     )
+    assert out.result == (mr_url, False)
 
 
 @pytest.mark.asyncio
@@ -158,7 +158,11 @@ async def test_clone_repository(mock_git_repo_basepath):
 
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
 
-    result = await clone_repository(repository=repository, branch=branch, clone_path=clone_path)
+    result = (
+        await CloneRepositoryTool().run(
+            input={"repository": repository, "branch": branch, "clone_path": clone_path}
+        )
+    ).result
     assert result.startswith("Successfully")
 
 
@@ -179,7 +183,11 @@ async def test_push_to_remote_repository():
         return flexmock(wait=wait)
 
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
-    result = await push_to_remote_repository(repository=repository, clone_path=clone_path, branch=branch)
+    result = (
+        await PushToRemoteRepositoryTool().run(
+            input={"repository": repository, "clone_path": clone_path, "branch": branch}
+        )
+    ).result
     assert result.startswith("Successfully")
 
 
@@ -208,10 +216,11 @@ async def test_add_merge_request_labels(merge_request_url, expected_project_path
         url=f"https://gitlab.com/{expected_project_path}"
     ).and_return(project_mock)
 
-    result = await add_merge_request_labels(
-        merge_request_url=merge_request_url,
-        labels=labels
-    )
+    result = (
+        await AddMergeRequestLabelsTool().run(
+            input={"merge_request_url": merge_request_url, "labels": labels}
+        )
+    ).result
 
     assert result == f"Successfully added labels {labels} to merge request {merge_request_url}"
 
@@ -222,9 +231,8 @@ async def test_add_merge_request_labels_invalid_url():
     labels = ["test-label"]
 
     with pytest.raises(Exception) as exc_info:
-        await add_merge_request_labels(
-            merge_request_url=merge_request_url,
-            labels=labels
+        await AddMergeRequestLabelsTool().run(
+            input={"merge_request_url": merge_request_url, "labels": labels}
         )
 
     assert "Could not parse merge request URL" in str(exc_info.value)
@@ -252,10 +260,11 @@ async def test_add_merge_request_comment():
         ).mock()
     )
 
-    result = await add_merge_request_comment(
-        merge_request_url=merge_request_url,
-        comment=comment,
-    )
+    result = (
+        await AddMergeRequestCommentTool().run(
+            input={"merge_request_url": merge_request_url, "comment": comment}
+        )
+    ).result
 
     assert result == f"Successfully added comment to merge request {merge_request_url}"
 
@@ -281,10 +290,11 @@ async def test_add_blocking_merge_request_comment():
         ).mock()
     )
 
-    result = await add_blocking_merge_request_comment(
-        merge_request_url=merge_request_url,
-        comment=comment
-    )
+    result = (
+        await AddBlockingMergeRequestCommentTool().run(
+            input={"merge_request_url": merge_request_url, "comment": comment}
+        )
+    ).result
 
     assert result == f"Successfully added blocking comment to merge request {merge_request_url}"
 
@@ -317,10 +327,11 @@ async def test_add_blocking_merge_request_comment_already_exists(resolved_status
         ).mock()
     )
 
-    result = await add_blocking_merge_request_comment(
-        merge_request_url=merge_request_url,
-        comment=comment
-    )
+    result = (
+        await AddBlockingMergeRequestCommentTool().run(
+            input={"merge_request_url": merge_request_url, "comment": comment}
+        )
+    ).result
 
     assert "already exists" in result
     assert merge_request_url in result
@@ -332,9 +343,8 @@ async def test_add_blocking_merge_request_comment_invalid_url():
     comment = "Test comment"
 
     with pytest.raises(Exception) as exc_info:
-        await add_blocking_merge_request_comment(
-            merge_request_url=merge_request_url,
-            comment=comment
+        await AddBlockingMergeRequestCommentTool().run(
+            input={"merge_request_url": merge_request_url, "comment": comment}
         )
 
     assert "Could not parse merge request URL" in str(exc_info.value)
@@ -360,10 +370,11 @@ async def test_create_merge_request_checklist():
         ).mock()
     )
 
-    result = await create_merge_request_checklist(
-        merge_request_url=merge_request_url,
-        note_body=GITLAB_MR_CHECKLIST,
-    )
+    result = (
+        await CreateMergeRequestChecklistTool().run(
+            input={"merge_request_url": merge_request_url, "note_body": GITLAB_MR_CHECKLIST}
+        )
+    ).result
 
     assert result == f"Successfully created checklist for merge request {merge_request_url}"
 
@@ -390,10 +401,11 @@ async def test_create_merge_request_checklist_duplicate():
         ).mock()
     )
 
-    result = await create_merge_request_checklist(
-        merge_request_url=merge_request_url,
-        note_body=GITLAB_MR_CHECKLIST,
-    )
+    result = (
+        await CreateMergeRequestChecklistTool().run(
+            input={"merge_request_url": merge_request_url, "note_body": GITLAB_MR_CHECKLIST}
+        )
+    ).result
 
     assert "already exists" in result
     assert "not adding duplicate" in result
@@ -416,7 +428,9 @@ async def test_retry_pipeline_job():
         )
     )
 
-    result = await retry_pipeline_job(project_url=project_url, job_id=job_id)
+    result = (
+        await RetryPipelineJobTool().run(input={"project_url": project_url, "job_id": job_id})
+    ).result
 
     assert result == f"Successfully retried job {job_id}. Status: pending"
 
@@ -431,7 +445,7 @@ async def test_retry_pipeline_job_invalid_project():
     ).and_raise(Exception("Project not found"))
 
     with pytest.raises(Exception) as exc_info:
-        await retry_pipeline_job(project_url=project_url, job_id=job_id)
+        await RetryPipelineJobTool().run(input={"project_url": project_url, "job_id": job_id})
 
     assert "Failed to retry job" in str(exc_info.value)
 
@@ -466,7 +480,11 @@ async def test_get_failed_pipeline_jobs_from_merge_request():
         ).mock()
     )
 
-    result = await get_failed_pipeline_jobs_from_merge_request(merge_request_url=merge_request_url)
+    result = (
+        await GetFailedPipelineJobsFromMergeRequestTool().run(
+            input={"merge_request_url": merge_request_url}
+        )
+    ).result
 
     assert len(result) == 2
     assert result[0].id == "11111"
@@ -496,7 +514,11 @@ async def test_get_failed_pipeline_jobs_from_merge_request_no_pipelines():
         ).mock()
     )
 
-    result = await get_failed_pipeline_jobs_from_merge_request(merge_request_url=merge_request_url)
+    result = (
+        await GetFailedPipelineJobsFromMergeRequestTool().run(
+            input={"merge_request_url": merge_request_url}
+        )
+    ).result
 
     assert len(result) == 0
 
@@ -506,7 +528,9 @@ async def test_get_failed_pipeline_jobs_from_merge_request_invalid_url():
     merge_request_url = "https://github.com/user/repo/pull/123"
 
     with pytest.raises(Exception) as exc_info:
-        await get_failed_pipeline_jobs_from_merge_request(merge_request_url=merge_request_url)
+        await GetFailedPipelineJobsFromMergeRequestTool().run(
+            input={"merge_request_url": merge_request_url}
+        )
 
     assert "Could not parse merge request URL" in str(exc_info.value)
 
@@ -580,7 +604,11 @@ async def test_get_authorized_comments_from_merge_request(discussions, members, 
         ).mock()
     )
 
-    result = await get_authorized_comments_from_merge_request(merge_request_url=merge_request_url)
+    result = (
+        await GetAuthorizedCommentsFromMergeRequestTool().run(
+            input={"merge_request_url": merge_request_url}
+        )
+    ).result
 
     assert len(result) == expected_count
 
@@ -589,7 +617,7 @@ async def test_get_authorized_comments_from_merge_request(discussions, members, 
 async def test_get_authorized_comments_invalid_url():
     """Test that invalid URLs raise appropriate errors."""
     with pytest.raises(Exception) as exc_info:
-        await get_authorized_comments_from_merge_request(
-            merge_request_url="https://github.com/user/repo/pull/123"
+        await GetAuthorizedCommentsFromMergeRequestTool().run(
+            input={"merge_request_url": "https://github.com/user/repo/pull/123"}
         )
     assert "Could not parse merge request URL" in str(exc_info.value)

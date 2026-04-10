@@ -12,14 +12,15 @@ RUN dnf -y install \
       python3-requests \
       python3-GitPython \
       python3-flexmock \
+      python3-koji \
       krb5-libs \
       krb5-workstation \
       centpkg \
       git \
     && dnf clean all
 
-# Install FastMCP
-RUN pip3 install --no-cache-dir fastmcp
+# Install beeai mcp server
+RUN pip3 install --no-cache-dir "litellm!=1.82.7,!=1.82.8" beeai-framework[mcp]==0.1.55
 
 # Create user
 RUN useradd -m -G wheel mcp

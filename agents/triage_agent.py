@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sys
+import json
 import traceback
 from textwrap import dedent
 
@@ -347,6 +348,10 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
                 available_tools=gateway_tools,
                 issue_key=state.jira_issue
             )
+            # loads twice here is neccessary, because beeai mcp server unfortunately wraps the
+            # JSON object twice
+            result=json.loads(result)
+            result=json.loads(result)
             state.cve_eligibility_result = CVEEligibilityResult.model_validate(result)
 
             logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")

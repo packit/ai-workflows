@@ -1,16 +1,10 @@
 import logging
-import os
-import inspect
 import functools
 import re
+from typing import Any
 
-from fastmcp import FastMCP
-
-import copr_tools
-import distgit_tools
-import gitlab_tools
-import jira_tools
-import lookaside_tools
+from beeai_framework.adapters.mcp.serve.server import MCPServer, MCPServerConfig, MCPSettings
+from beeai_framework.emitter.emitter import Emitter
 
 
 logger = logging.getLogger(__name__)
@@ -42,45 +36,102 @@ def _redact(text: str) -> str:
         text = pattern.sub("[REDACTED]", text)
     return text
 
-
-def log_tool_call(func):
-    """Decorator to log tool calls with their arguments.
-
-    Sensitive values (tokens, keys, credentials) are redacted from log output.
-    """
-    @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
-        tool_name = func.__name__
-        logger.info(f"Tool called: {tool_name}")
-        logger.info("Tool arguments: args=%s, kwargs=%s",
-                     _redact(str(args)), _redact(str(kwargs)))
-        try:
-            result = await func(*args, **kwargs)
-            logger.info(f"Tool {tool_name} completed successfully")
-            return result
-        except Exception as e:
-            logger.error("Tool %s failed with error: %s",
-                         tool_name, _redact(str(e)))
-            raise
-    return wrapper
-
-
-# Collect all tools and wrap them with logging
-tools = [
-    log_tool_call(coroutine)
-    for module in [copr_tools, distgit_tools, gitlab_tools, jira_tools, lookaside_tools]
-    for name, coroutine in inspect.getmembers(module, inspect.iscoroutinefunction)
-    if coroutine.__module__ == module.__name__
-    and not name.startswith("_")
-]
-
-mcp = FastMCP(
-    name="MCP Gateway",
-    tools=tools
+from copr_tools import BuildPackageTool, DownloadArtifactsTool
+from distgit_tools import CreateZstreamBranchTool
+from gitlab_tools import (
+    AddBlockingMergeRequestCommentTool,
+    AddMergeRequestCommentTool,
+    AddMergeRequestLabelsTool,
+    CloneRepositoryTool,
+    CreateMergeRequestChecklistTool,
+    ForkRepositoryTool,
+    GetAuthorizedCommentsFromMergeRequestTool,
+    GetFailedPipelineJobsFromMergeRequestTool,
+    GetInternalRhelBranchesTool,
+    GetMergeRequestDetailsTool,
+    GetPatchFromUrlTool,
+    OpenMergeRequestTool,
+    PushToRemoteRepositoryTool,
+    RetryPipelineJobTool,
 )
+from jira_tools import (
+    AddJiraCommentTool,
+    ChangeJiraStatusTool,
+    CheckCveTriageEligibilityTool,
+    EditJiraLabelsTool,
+    GetJiraDetailsTool,
+    GetJiraDevStatusTool,
+    SearchJiraIssuesTool,
+    SetJiraFieldsTool,
+    VerifyIssueAuthorTool,
+)
+from lookaside_tools import DownloadSourcesTool, PrepSourcesTool, UploadSourcesTool
+
+
+def _setup_logging():
+    logging.basicConfig(level=logging.INFO)
+    logging.getLogger("FastMCP").handlers = [logging.StreamHandler()]
+
+    # Log tool calls via Emitter
+    def on_tool_start(data: Any, meta: Any):
+        logger.info(f"Tool called: {meta.name}")
+        logger.info(f"Tool arguments: {_redact(str(data))}")
+
+    def on_tool_success(data: Any, meta: Any):
+        logger.info(f"Tool {meta.name} completed successfully")
+
+    def on_tool_error(data: Any, meta: Any):
+        logger.error(f"Tool {meta.name} failed with error: {_redact(str(data))}")
+
+    Emitter.root().on("tool.*.start", on_tool_start)
+    Emitter.root().on("tool.*.success", on_tool_success)
+    Emitter.root().on("tool.*.error", on_tool_error)
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    logging.getLogger("FastMCP").handlers = [logging.StreamHandler()]
-    mcp.run(transport="sse", host="0.0.0.0", port=int(os.getenv("SSE_PORT", "8000")))
+    logger = logging.getLogger(__name__)
+
+    config = MCPServerConfig(
+        name="MCP Gateway",
+        transport="sse",
+        settings=MCPSettings(
+            host="0.0.0.0",
+            port=int(os.getenv("SSE_PORT", "8000")),
+        )
+    )
+
+    _setup_logging()
+    mcp = MCPServer(config=config)
+    mcp.register_many([
+        BuildPackageTool(),
+        DownloadArtifactsTool(),
+        CreateZstreamBranchTool(),
+        AddBlockingMergeRequestCommentTool(),
+        AddMergeRequestCommentTool(),
+        AddMergeRequestLabelsTool(),
+        CloneRepositoryTool(),
+        CreateMergeRequestChecklistTool(),
+        ForkRepositoryTool(),
+        GetAuthorizedCommentsFromMergeRequestTool(),
+        GetFailedPipelineJobsFromMergeRequestTool(),
+        GetInternalRhelBranchesTool(),
+        GetMergeRequestDetailsTool(),
+        GetPatchFromUrlTool(),
+        OpenMergeRequestTool(),
+        PushToRemoteRepositoryTool(),
+        RetryPipelineJobTool(),
+        AddJiraCommentTool(),
+        ChangeJiraStatusTool(),
+        CheckCveTriageEligibilityTool(),
+        EditJiraLabelsTool(),
+        GetJiraDetailsTool(),
+        GetJiraDevStatusTool(),
+        SearchJiraIssuesTool(),
+        SetJiraFieldsTool(),
+        VerifyIssueAuthorTool(),
+        DownloadSourcesTool(),
+        PrepSourcesTool(),
+        UploadSourcesTool(),
+    ])
+
+    mcp.serve()

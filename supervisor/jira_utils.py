@@ -18,7 +18,7 @@ from urllib.parse import quote as urlquote
 
 import requests
 
-from common.utils import get_jira_auth_headers
+from ymir_common.utils import get_jira_auth_headers
 from .http_utils import requests_session
 from .supervisor_types import (
     FullIssue,

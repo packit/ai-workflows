@@ -11,8 +11,8 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
-from common.constants import BREWHUB_URL
-from common.utils import init_kerberos_ticket, KerberosError
+from ymir_common.constants import BREWHUB_URL
+from ymir_common.utils import init_kerberos_ticket, KerberosError
 
 SYNC_TIMEOUT = 1 * 60 * 60  # seconds
 

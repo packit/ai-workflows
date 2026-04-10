@@ -17,9 +17,9 @@ RUN useradd -m -G wheel issuebot
 # Create working directory
 WORKDIR /home/issuebot
 
-# Copy issue fetcher script and shared common module
+# Copy issue fetcher script and shared ymir_common module
 COPY jira_issue_fetcher/jira_issue_fetcher.py /home/issuebot/
-COPY common/ /home/issuebot/common/
+COPY ymir_common/ /home/issuebot/ymir_common/
 
 # Set proper permissions
 RUN chgrp -R root /home/issuebot && chmod -R g+rwX /home/issuebot

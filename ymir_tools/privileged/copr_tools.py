@@ -14,9 +14,9 @@ from beeai_framework.emitter import Emitter
 from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
 from pydantic import BaseModel, Field
 
-from common import load_rhel_config
-from common.utils import init_kerberos_ticket, KerberosError
-from common.validators import AbsolutePath
+from ymir_common import load_rhel_config
+from ymir_common.utils import init_kerberos_ticket, KerberosError
+from ymir_common.validators import AbsolutePath
 
 COPR_CONFIG = {
     "copr_url": "https://copr.devel.redhat.com",

@@ -7,8 +7,8 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
-from common.utils import KerberosError, init_kerberos_ticket, is_cs_branch
-from common.validators import AbsolutePath
+from ymir_common.utils import KerberosError, init_kerberos_ticket, is_cs_branch
+from ymir_common.validators import AbsolutePath
 
 logger = logging.getLogger(__name__)
 

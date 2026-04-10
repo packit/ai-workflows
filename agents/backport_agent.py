@@ -28,8 +28,8 @@ import tasks
 from agents.build_agent import create_build_agent, get_prompt as get_build_prompt
 from agents.log_agent import create_log_agent, get_prompt as get_log_prompt
 from agents.package_update_steps import PackageUpdateStep, PackageUpdateState
-from common.constants import JiraLabels, RedisQueues
-from common.models import (
+from ymir_common.constants import JiraLabels, RedisQueues
+from ymir_common.models import (
     BackportInputSchema,
     BackportOutputSchema,
     BuildInputSchema,
@@ -40,7 +40,7 @@ from common.models import (
     BackportData,
     ErrorData,
 )
-from common.utils import redis_client, fix_await
+from ymir_common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from ymir_tools.unprivileged.commands import RunShellCommandTool

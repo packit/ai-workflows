@@ -26,8 +26,8 @@ from beeai_framework.workflows import Workflow
 
 import tasks
 from agents.build_agent import create_build_agent, get_prompt as get_build_prompt
-from common.config import get_package_instructions
-from common.models import (
+from ymir_common.config import get_package_instructions
+from ymir_common.models import (
     BuildInputSchema,
     BuildOutputSchema,
     MergeRequestInputSchema,

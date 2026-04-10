@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
-from common.constants import JiraLabels
+from ymir_common.constants import JiraLabels
 
 from .constants import (
     ERRATA_JOTNAR_BOT_EMAIL,

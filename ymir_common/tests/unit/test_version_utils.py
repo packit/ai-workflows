@@ -1,6 +1,6 @@
 import pytest
 
-from common.version_utils import parse_rhel_version, parse_branch_name, is_older_zstream
+from ymir_common.version_utils import parse_rhel_version, parse_branch_name, is_older_zstream
 
 
 @pytest.mark.parametrize(

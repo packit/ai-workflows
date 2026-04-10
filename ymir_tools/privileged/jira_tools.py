@@ -20,9 +20,9 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, StringToolOutput, Tool, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
-from common import CVEEligibilityResult, load_rhel_config
-from common.constants import JIRA_SEARCH_PATH
-from common.utils import get_jira_auth_headers
+from ymir_common import CVEEligibilityResult, load_rhel_config
+from ymir_common.constants import JIRA_SEARCH_PATH
+from ymir_common.utils import get_jira_auth_headers
 
 # Jira custom field IDs
 SEVERITY_CUSTOM_FIELD = "customfield_12316142"

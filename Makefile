@@ -258,7 +258,7 @@ redis-cli:
 build-test-image:
 	$(MAKE) -f Makefile.tests build-test-image
 
-.PHONY: check-in-container check-agents-in-container check-mcp-server-in-container check-common-in-container
+.PHONY: check-in-container check-agents-in-container check-mcp-server-in-container check-ymir-common-in-container
 check-in-container:
 	$(MAKE) -f Makefile.tests check-in-container
 check-agents-in-container:
@@ -267,7 +267,7 @@ check-mcp-server-in-container:
 	$(MAKE) -f Makefile.tests check-mcp-server-in-container
 check-jira-issue-fetcher-in-container:
 	$(MAKE) -f Makefile.tests check-jira-issue-fetcher-in-container
-check-common-in-container:
-	$(MAKE) -f Makefile.tests check-common-in-container
+check-ymir-common-in-container:
+	$(MAKE) -f Makefile.tests check-ymir-common-in-container
 check-supervisor-in-container:
 	$(MAKE) -f Makefile.tests check-supervisor-in-container

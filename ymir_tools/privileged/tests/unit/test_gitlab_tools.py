@@ -11,7 +11,7 @@ from ogr.services.gitlab.project import GitlabProject
 from flexmock import flexmock
 from ogr.services.gitlab import GitlabService
 
-from common.constants import GITLAB_MR_CHECKLIST
+from ymir_common.constants import GITLAB_MR_CHECKLIST
 from gitlab_tools import (
     AddBlockingMergeRequestCommentTool,
     AddMergeRequestCommentTool,

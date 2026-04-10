@@ -13,8 +13,8 @@ build-test-image-fedora:
 build-test-image-c9s:
 	$(CONTAINER_ENGINE) build --rm --tag $(TEST_IMAGE_C9S) -f Containerfile.c9s-tests
 
-.PHONY: check check-agents check-mcp-server check-common check-in-container \
-	check-agents-in-container check-mcp-server-in-container check-jira-issue-fetcher-in-container check-common-in-container
+.PHONY: check check-agents check-mcp-server check-ymir-common check-in-container \
+	check-agents-in-container check-mcp-server-in-container check-jira-issue-fetcher-in-container check-ymir-common-in-container
 
 check-agents:
 	cd ./agents && \
@@ -25,14 +25,14 @@ check-mcp-server:
 check-jira-issue-fetcher:
 	cd ./jira_issue_fetcher && \
 	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
-check-common:
-	cd ./common && \
+check-ymir-common:
+	cd ./ymir_common && \
 	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
 check-supervisor:
 	cd ./supervisor && \
 	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
 
-check: check-agents check-mcp-server check-jira-issue-fetcher check-common check-supervisor
+check: check-agents check-mcp-server check-jira-issue-fetcher check-ymir-common check-supervisor
 
 check-agents-in-container:
 	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE_C9S) make -f Makefile.tests check-agents
@@ -40,10 +40,10 @@ check-mcp-server-in-container:
 	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE) make -f Makefile.tests check-mcp-server
 check-jira-issue-fetcher-in-container:
 	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE) make -f Makefile.tests check-jira-issue-fetcher
-check-common-in-container:
-	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE_C9S) make -f Makefile.tests check-common
+check-ymir-common-in-container:
+	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE_C9S) make -f Makefile.tests check-ymir-common
 check-supervisor-in-container:
 	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE_C9S) make -f Makefile.tests check-supervisor
 
 check-in-container: check-agents-in-container check-mcp-server-in-container \
-	check-jira-issue-fetcher-in-container check-common-in-container check-supervisor-in-container
+	check-jira-issue-fetcher-in-container check-ymir-common-in-container check-supervisor-in-container

@@ -6,7 +6,7 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, Tool, ToolRunOptions
 
-from common.config import load_rhel_config
+from ymir_common.config import load_rhel_config
 
 
 class VersionMapperInput(BaseModel):

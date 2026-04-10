@@ -75,7 +75,7 @@ async def is_older_zstream(
         True if the version targets an older z-stream, False otherwise.
     """
     if current_z_streams is None:
-        from common.config import load_rhel_config
+        from ymir_common.config import load_rhel_config
         config = await load_rhel_config()
         current_z_streams = config.get("current_z_streams", {})
 

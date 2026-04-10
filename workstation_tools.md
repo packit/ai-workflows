@@ -158,52 +158,6 @@ Launch Claude Code and confirm both servers are running:
 This lists all connected MCP servers and their available tools. You should see
 tools from both `ymir-privileged` and `ymir-unprivileged` servers.
 
-## Note on cross-gateway calls
-
-`ZStreamSearchTool` (unprivileged) contains internal logic that calls the
-privileged tool `search_jira_issues` via the `MCP_GATEWAY_URL` SSE endpoint.
-In the stdio setup described above, the privileged gateway is not exposed as
-an HTTP server, so this internal cross-call is not available.
-
-This has **no practical impact** when using Claude Code: because the model has
-direct access to all tools from both servers simultaneously, it can call
-`search_jira_issues` directly instead of relying on the embedded cross-gateway
-delegation.
-
-If you need the fully self-contained tool behavior (e.g. for automated
-pipelines), run the privileged gateway separately as an SSE server and point
-`MCP_GATEWAY_URL` at it:
-
-```bash
-# Terminal: start privileged gateway as SSE server
-SSE_PORT=8001 ymir-privileged-gateway
-```
-
-Then in Claude Code, configure the privileged server as an SSE endpoint and
-add `MCP_GATEWAY_URL` to the unprivileged server:
-
-```json
-{
-  "mcpServers": {
-    "ymir-privileged": {
-      "type": "sse",
-      "url": "http://localhost:8001/sse"
-    },
-    "ymir-unprivileged": {
-      "command": "ymir-unprivileged-gateway",
-      "env": {
-        "MCP_TRANSPORT": "stdio",
-        "UPSTREAM_SEARCH_API_URL": "http://your-upstream-search-service:port",
-        "MCP_GATEWAY_URL": "http://localhost:8001/sse"
-      }
-    }
-  }
-}
-```
-
-In this variant the privileged gateway must be started manually before
-launching Claude Code.
-
 ## Network topology
 
 ```
@@ -214,9 +168,9 @@ Claude Code
   |               |-- Jira API          (JIRA_EMAIL + JIRA_TOKEN)
   |               |-- Copr / Koji       (Kerberos)
   |               |-- Lookaside cache
+  |               |-- ZStreamSearchTool  (uses Jira API internally)
   |
   |-- stdio --> ymir-unprivileged (child process)
                   |-- Local filesystem, shell, specfile, git
                   |-- UpstreamSearchTool    --> UPSTREAM_SEARCH_API_URL
-                  |-- ZStreamSearchTool     --> MCP_GATEWAY_URL (optional, see above)
 ```

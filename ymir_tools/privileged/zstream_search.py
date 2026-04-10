@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import re
 from enum import Enum
 from urllib.parse import urlparse
@@ -11,8 +10,12 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, Tool, ToolRunOptions, ToolError
 
-from ymir_common.utils import mcp_tools, run_tool
+from ymir_common.utils import run_tool
 from ymir_common.version_utils import parse_rhel_version, is_older_zstream
+from ymir_tools.privileged.jira_tools import (
+    GetJiraDevStatusTool,
+    SearchJiraIssuesTool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -179,12 +182,7 @@ class ZStreamSearchTool(Tool[ZStreamSearchToolInput, ToolRunOptions, ZStreamSear
         cleaned_summary = _clean_summary(tool_input.summary)
         logger.info(f"Cleaned summary: '{cleaned_summary}'")
 
-        # 3. Search Jira for related issues via MCP gateway
-        mcp_gateway_url = os.getenv("MCP_GATEWAY_URL")
-        if not mcp_gateway_url:
-            raise ToolError("MCP_GATEWAY_URL environment variable is required")
-
-        # Escape special JQL characters in component and summary
+        # 3. Search Jira for related issues
         escaped_component = tool_input.component.replace('"', '\\"')
         escaped_summary = cleaned_summary.replace('"', '\\"')
 
@@ -195,87 +193,82 @@ class ZStreamSearchTool(Tool[ZStreamSearchToolInput, ToolRunOptions, ZStreamSear
         logger.info(f"Searching Jira with JQL: {jql}")
 
         try:
-            async with mcp_tools(mcp_gateway_url) as gateway_tools:
-                search_result = await run_tool(
-                    "search_jira_issues",
-                    available_tools=gateway_tools,
-                    jql=jql,
-                    fields=["fixVersions"],
-                    max_results=50,
-                )
-                issues = json.loads(search_result) if isinstance(search_result, str) else search_result
+            search_result = await run_tool(
+                SearchJiraIssuesTool(),
+                jql=jql,
+                fields=["fixVersions"],
+                max_results=50,
+            )
+            issues = json.loads(search_result) if isinstance(search_result, str) else search_result
 
-                if not issues:
-                    logger.info("No related issues found in Jira search")
-                    return _not_found()
+            if not issues:
+                logger.info("No related issues found in Jira search")
+                return _not_found()
 
-                logger.info(f"Found {len(issues)} related issues")
+            logger.info(f"Found {len(issues)} related issues")
 
-                # 4. Sort by version proximity - only include versions higher than target
-                candidates = []
-                for issue in issues:
-                    fix_versions = issue.get("fields", {}).get("fixVersions", [])
-                    for fv in fix_versions:
-                        fv_name = fv.get("name", "")
-                        fv_parsed = parse_rhel_version(fv_name)
-                        if not fv_parsed:
-                            continue
-                        fv_major, fv_minor_str, _ = fv_parsed
-                        # Only include issues from the same major version
-                        # and with a higher minor version (we backport from newer to older)
-                        if fv_major == target_major and int(fv_minor_str) > target_minor:
-                            sort_key = _version_sort_key(fv_parsed, target_major, target_minor)
-                            candidates.append((sort_key, fv_name, issue))
+            # 4. Sort by version proximity - only include versions higher than target
+            candidates = []
+            for issue in issues:
+                fix_versions = issue.get("fields", {}).get("fixVersions", [])
+                for fv in fix_versions:
+                    fv_name = fv.get("name", "")
+                    fv_parsed = parse_rhel_version(fv_name)
+                    if not fv_parsed:
+                        continue
+                    fv_major, fv_minor_str, _ = fv_parsed
+                    if fv_major == target_major and int(fv_minor_str) > target_minor:
+                        sort_key = _version_sort_key(fv_parsed, target_major, target_minor)
+                        candidates.append((sort_key, fv_name, issue))
 
-                # Sort by proximity (closest first)
-                candidates.sort(key=lambda x: x[0])
+            # Sort by proximity (closest first)
+            candidates.sort(key=lambda x: x[0])
 
-                if not candidates:
-                    logger.info("No candidate issues with newer versions found")
-                    return _not_found()
+            if not candidates:
+                logger.info("No candidate issues with newer versions found")
+                return _not_found()
+
+            logger.info(
+                f"Cascading through {len(candidates)} candidates: "
+                f"{[c[1] for c in candidates]}"
+            )
+
+            # 5. Cascade through candidates - check Development section for commits
+            for sort_key, version_name, issue in candidates:
+                issue_key = issue.get("key", "")
+                if not issue_key:
+                    continue
+
+                try:
+                    dev_status = await run_tool(
+                        GetJiraDevStatusTool(),
+                        issue_key=issue_key,
+                    )
+                    commits = json.loads(dev_status) if isinstance(dev_status, str) else dev_status
+                except Exception as e:
+                    logger.debug(f"Dev status request error for {issue_key}: {e}")
+                    continue
+
+                commit_urls = [
+                    _get_patch_url(c["url"]) for c in commits if c.get("url")
+                ]
+
+                if commit_urls:
+                    logger.info(
+                        f"Found {len(commit_urls)} commits in {issue_key} "
+                        f"(version {version_name})"
+                    )
+                    return ZStreamSearchToolOutput(ZStreamSearchToolResult(
+                        result=ZStreamSearchResult.FOUND,
+                        source_issue=issue_key,
+                        source_version=version_name,
+                        related_commits=commit_urls,
+                    ))
 
                 logger.info(
-                    f"Cascading through {len(candidates)} candidates: "
-                    f"{[c[1] for c in candidates]}"
+                    f"No commits in Development section for {issue_key} "
+                    f"(version {version_name}), cascading..."
                 )
-
-                # 5. Cascade through candidates - check Development section for commits
-                for sort_key, version_name, issue in candidates:
-                    issue_key = issue.get("key", "")
-                    if not issue_key:
-                        continue
-
-                    try:
-                        dev_status = await run_tool(
-                            "get_jira_dev_status",
-                            available_tools=gateway_tools,
-                            issue_key=issue_key,
-                        )
-                        commits = json.loads(dev_status) if isinstance(dev_status, str) else dev_status
-                    except Exception as e:
-                        logger.debug(f"Dev status request error for {issue_key}: {e}")
-                        continue
-
-                    commit_urls = [
-                        _get_patch_url(c["url"]) for c in commits if c.get("url")
-                    ]
-
-                    if commit_urls:
-                        logger.info(
-                            f"Found {len(commit_urls)} commits in {issue_key} "
-                            f"(version {version_name})"
-                        )
-                        return ZStreamSearchToolOutput(ZStreamSearchToolResult(
-                            result=ZStreamSearchResult.FOUND,
-                            source_issue=issue_key,
-                            source_version=version_name,
-                            related_commits=commit_urls,
-                        ))
-
-                    logger.info(
-                        f"No commits in Development section for {issue_key} "
-                        f"(version {version_name}), cascading..."
-                    )
 
         except ToolError:
             raise

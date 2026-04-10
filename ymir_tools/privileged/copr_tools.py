@@ -294,5 +294,3 @@ class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, Str
                 except asyncio.TimeoutError as e:
                     raise ToolError(f"Failed to download {url}: timed out") from e
         return StringToolOutput(result="Successfully downloaded the specified build artifacts")
-
-

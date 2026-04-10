@@ -1,4 +1,4 @@
-from models import (
+from ymir_common.models import (
     TriageOutputSchema,
     BackportData,
     RebaseData,

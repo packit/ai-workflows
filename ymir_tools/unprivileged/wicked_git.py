@@ -4,8 +4,8 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 
-from common.validators import AbsolutePath
-from utils import run_subprocess
+from ymir_common.validators import AbsolutePath
+from ymir_common.utils import run_subprocess
 
 
 class GitPreparePackageSourcesInput(BaseModel):

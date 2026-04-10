@@ -5,7 +5,7 @@ import pytest
 from flexmock import flexmock
 from unittest.mock import AsyncMock
 
-from common.utils import init_kerberos_ticket, KerberosError, extract_principal
+from ymir_common.utils import init_kerberos_ticket, KerberosError, extract_principal
 
 
 class TestInitKerberosTicket:
@@ -142,7 +142,7 @@ jotnar-bot@IPA.REDHAT.COM    KCM:1000
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
         ).and_return(AsyncMock(return_value=mock_proc)())
 
-        from common import utils
+        from ymir_common import utils
 
         flexmock(utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
             AsyncMock(return_value="jotnar-bot@IPA.REDHAT.COM")()
@@ -181,7 +181,7 @@ jotnar-bot@IPA.REDHAT.COM    KCM:1000
             mock_create_subprocess
         )
 
-        from common import utils
+        from ymir_common import utils
 
         flexmock(utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
             AsyncMock(return_value="jotnar-bot@IPA.REDHAT.COM")()
@@ -220,7 +220,7 @@ jotnar-bot@IPA.REDHAT.COM    KCM:1000
             mock_create_subprocess
         )
 
-        from common import utils
+        from ymir_common import utils
 
         flexmock(utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
             AsyncMock(return_value="jotnar-bot@IPA.REDHAT.COM")()
@@ -235,7 +235,7 @@ jotnar-bot@IPA.REDHAT.COM    KCM:1000
         monkeypatch.setenv("KEYTAB_FILE", "/path/to/keytab")
         monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
 
-        from common import utils
+        from ymir_common import utils
 
         flexmock(utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
             AsyncMock(return_value=None)()

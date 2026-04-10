@@ -11,9 +11,9 @@ import requests
 from flexmock import flexmock
 
 from jira_issue_fetcher import JiraIssueFetcher
-from common.models import Task, TriageInputSchema, RebaseInputSchema, BackportInputSchema, RebaseOutputSchema, BackportOutputSchema, ClarificationNeededData, OpenEndedAnalysisData, ErrorData, RebaseData, BackportData
-from common.constants import JiraLabels, JIRA_SEARCH_PATH, RedisQueues
-from common.utils import redis_client
+from ymir_common.models import Task, TriageInputSchema, RebaseInputSchema, BackportInputSchema, RebaseOutputSchema, BackportOutputSchema, ClarificationNeededData, OpenEndedAnalysisData, ErrorData, RebaseData, BackportData
+from ymir_common.constants import JiraLabels, JIRA_SEARCH_PATH, RedisQueues
+from ymir_common.utils import redis_client
 
 
 @pytest.fixture

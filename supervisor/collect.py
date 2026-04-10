@@ -1,6 +1,6 @@
 import logging
 
-from common.utils import init_kerberos_ticket
+from ymir_common.utils import init_kerberos_ticket
 
 from .errata_utils import get_erratum_for_link
 from .erratum_handler import (

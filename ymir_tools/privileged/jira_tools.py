@@ -11,7 +11,7 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 if os.getenv("MOCK_JIRA", "False").lower() == "true":
-    from aiohttp_client_session_mock import aiohttpClientSessionMock as aiohttpClientSession
+    from ymir_tools.privileged.aiohttp_client_session_mock import aiohttpClientSessionMock as aiohttpClientSession
 else:
     from aiohttp import ClientSession as aiohttpClientSession
 

@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from ymir_common.models import CommentReply, FailedPipelineJob, MergeRequestComment, MergeRequestDetails
 from ymir_common.validators import AbsolutePath
-from utils import clean_stale_repositories
+from ymir_tools.privileged.utils import clean_stale_repositories
 
 
 logger = logging.getLogger(__name__)
@@ -882,6 +882,9 @@ class GetMergeRequestDetailsTool(
             raise ToolError(f"Failed to get merge request details: {e}") from e
 
 
+MAX_PATCH_CONTENT_LENGTH = 2000
+
+
 class GetPatchFromUrlToolInput(BaseModel):
     patch_url: str = Field(description="URL to a patch or diff file")
 
@@ -890,7 +893,7 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
     name = "get_patch_from_url"
     description = """
     Fetches a patch/diff from a URL.
-    Returns the patch content as text.
+    Returns the patch content as text (truncated to the first 2000 characters for large patches).
     """
     input_schema = GetPatchFromUrlToolInput
 
@@ -898,6 +901,15 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
         return Emitter.root().child(
             namespace=["tool", "gitlab", self.name],
             creator=self,
+        )
+
+    @staticmethod
+    def _truncate(text: str, max_length: int = MAX_PATCH_CONTENT_LENGTH) -> str:
+        if len(text) <= max_length:
+            return text
+        return (
+            text[:max_length]
+            + f"\n\n[Content truncated - showing first {max_length} characters of {len(text)} total]"
         )
 
     async def _run(
@@ -921,4 +933,4 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
                     text = await response.text()
         except aiohttp.ClientError as e:
             raise ToolError(f"Failed to fetch patch from {patch_url}: {e}") from e
-        return StringToolOutput(result=text)
+        return StringToolOutput(result=self._truncate(text))

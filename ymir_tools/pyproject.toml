@@ -22,6 +22,10 @@ dependencies = [
     "specfile>=0.36.0",
 ]
 
+[project.scripts]
+ymir-privileged-gateway = "ymir_tools.privileged.gateway:main"
+ymir-unprivileged-gateway = "ymir_tools.unprivileged.gateway:main"
+
 [project.optional-dependencies]
 test = [
     "pytest>=8.4.1",

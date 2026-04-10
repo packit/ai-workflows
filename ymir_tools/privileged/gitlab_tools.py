@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from ymir_common.models import CommentReply, FailedPipelineJob, MergeRequestComment, MergeRequestDetails
 from ymir_common.validators import AbsolutePath
-from utils import clean_stale_repositories
+from ymir_tools.privileged.utils import clean_stale_repositories
 
 
 logger = logging.getLogger(__name__)

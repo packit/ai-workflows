@@ -1,13 +1,11 @@
-import asyncio
 import pytest
-from pathlib import Path
 
 import git
 import koji
 from flexmock import flexmock
 
 import distgit_tools
-from distgit_tools import create_zstream_branch
+from distgit_tools import CreateZstreamBranchTool
 
 
 @pytest.mark.parametrize(
@@ -51,7 +49,7 @@ async def test_create_zstream_branch(branch_exists, monkeypatch):
 
     monkeypatch.setenv("GITLAB_TOKEN", "<TOKEN>")
 
-    result = await create_zstream_branch(package=package, branch=branch)
+    result = (await CreateZstreamBranchTool().run(input={"package": package, "branch": branch})).result
     if branch_exists:
         assert "already exists" in result
     else:

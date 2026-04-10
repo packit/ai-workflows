@@ -106,6 +106,7 @@ make trigger-pipeline JIRA_ISSUE=RHEL-12345
 make JIRA_ISSUE=RHEL-12345 run-triage-agent-standalone
 make PACKAGE=httpd VERSION=2.4.62 JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-rebase-agent-standalone
 make PACKAGE=httpd UPSTREAM_PATCHES=https://github.com/... JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-backport-agent-standalone
+make PACKAGE=httpd JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-rebuild-agent-standalone
 
 # Or with dry-run
 DRY_RUN=true make JIRA_ISSUE=RHEL-12345 run-triage-agent-standalone

@@ -111,6 +111,13 @@ class BackportOutputSchema(BaseModel):
     error: str | None = Field(description="Specific details about an error")
 
 
+class RebuildOutputSchema(BaseModel):
+    """Output schema for the rebuild agent."""
+    success: bool = Field(description="Whether the rebuild was successfully completed")
+    merge_request_url: str | None = Field(default=None, description="URL of the opened merge request")
+    error: str | None = Field(default=None, description="Specific details about an error")
+
+
 # ============================================================================
 # Triage Agent Schemas
 # ============================================================================
@@ -119,6 +126,7 @@ class Resolution(Enum):
     """Triage resolution types."""
     REBASE = "rebase"
     BACKPORT = "backport"
+    REBUILD = "rebuild"
     CLARIFICATION_NEEDED = "clarification-needed"
     OPEN_ENDED_ANALYSIS = "open-ended-analysis"
     ERROR = "error"
@@ -140,6 +148,21 @@ class BackportData(BaseModel):
     justification: str = Field(description="Clear explanation of why this patch fixes the issue, linking it to the root cause")
     jira_issue: str = Field(description="Jira issue identifier")
     cve_id: str | None = Field(description="CVE identifier", default=None)
+    fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
+
+
+class RebuildData(BaseModel):
+    """Data for rebuild resolution."""
+    package: str = Field(description="Package name")
+    jira_issue: str = Field(description="Jira issue identifier")
+    dependency_issue: str | None = Field(
+        description="Key of the dependency Jira issue that triggered the rebuild",
+        default=None,
+    )
+    dependency_component: str | None = Field(
+        description="Name of the dependency component that triggered the rebuild (e.g., 'golang', 'openssl')",
+        default=None,
+    )
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
 
 
@@ -198,8 +221,8 @@ AUTOMATED_RESOLUTION_NOT_SUPPORTED = (
 class TriageOutputSchema(BaseModel):
     """Output schema for the triage agent."""
     resolution: Resolution = Field(
-        description="Triage resolution, one of rebase, backport, clarification-needed, open-ended-analysis, error")
-    data: Union[RebaseData, BackportData, ClarificationNeededData, OpenEndedAnalysisData, ErrorData] = Field(
+        description="Triage resolution, one of rebase, backport, rebuild, clarification-needed, open-ended-analysis, error")
+    data: Union[RebaseData, BackportData, RebuildData, ClarificationNeededData, OpenEndedAnalysisData, ErrorData] = Field(
         description="Associated data"
     )
 
@@ -232,6 +255,21 @@ class TriageOutputSchema(BaseModel):
                     f"{resolution}"
                     f"*Package*: {self.data.package}\n"
                     f"*Version*: {self.data.version}{fix_version_text}"
+                    f"{follow_up_note}"
+                )
+
+            case RebuildData():
+                fix_version_text = f"\n*Fix Version*: {self.data.fix_version}" if self.data.fix_version else ""
+                dep_text = f"\n*Dependency Issue*: {self.data.dependency_issue}" if self.data.dependency_issue else ""
+                dep_comp_text = f"\n*Dependency Component*: {self.data.dependency_component}" if self.data.dependency_component else ""
+
+                return (
+                    f"{TRIAGE_DISCLAIMER}"
+                    f"{resolution}"
+                    f"*Package*: {self.data.package}"
+                    f"{dep_comp_text}"
+                    f"{dep_text}"
+                    f"{fix_version_text}"
                     f"{follow_up_note}"
                 )
 

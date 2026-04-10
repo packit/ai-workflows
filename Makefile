@@ -2,6 +2,7 @@ IMAGE_NAME ?= beeai-agent
 COMPOSE_FILE ?= compose.yaml
 DRY_RUN ?= false
 MOCK_JIRA ?= false
+JIRA_DRY_RUN ?= false
 AUTO_CHAIN ?= true
 FORCE_CVE_TRIAGE ?= false
 LOKI_URL ?= http://loki.tft.osci.redhat.com/
@@ -162,11 +163,11 @@ build-jira-issue-fetcher:
 
 .PHONY: start
 start:
-	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) AUTO_CHAIN=$(AUTO_CHAIN) $(COMPOSE_AGENTS) up
+	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) AUTO_CHAIN=$(AUTO_CHAIN) $(COMPOSE_AGENTS) up
 
 .PHONY: start-detached
 start-detached:
-	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) AUTO_CHAIN=$(AUTO_CHAIN) $(COMPOSE_AGENTS) up -d
+	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) AUTO_CHAIN=$(AUTO_CHAIN) $(COMPOSE_AGENTS) up -d
 
 .PHONY: stop
 stop:

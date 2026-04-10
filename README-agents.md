@@ -102,6 +102,7 @@ make trigger-pipeline JIRA_ISSUE=RHEL-12345 FORCE_CVE_TRIAGE=true
 | `DRY_RUN` | `false` | Skip Jira writes, git pushes, and MR creation |
 | `AUTO_CHAIN` | `true` | Route triaged issues to downstream backport/rebase queues. Set to `false` to disable routing. |
 | `MOCK_JIRA` | `false` | Use mock Jira API instead of real Jira |
+| `JIRA_DRY_RUN` | `false` | Skip all Jira write operations (status, comments, labels, fields) while keeping reads working |
 | `FORCE_CVE_TRIAGE` | `false` | Force triage of CVE issues that would normally be skipped (e.g. Y-stream CVEs) |
 
 ### Individual Agents Runs

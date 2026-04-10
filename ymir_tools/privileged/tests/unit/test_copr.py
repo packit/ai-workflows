@@ -6,15 +6,15 @@ from pathlib import Path
 import aiohttp
 import pytest
 from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
-from fastmcp.exceptions import ToolError
+from beeai_framework.tools import ToolError
 from flexmock import flexmock
 
 import copr_tools
 from copr_tools import (
     COPR_PROJECT_LIFETIME,
     COPR_BUILD_TIMEOUT,
-    build_package,
-    download_artifacts,
+    BuildPackageTool,
+    DownloadArtifactsTool,
 )
 
 
@@ -33,7 +33,7 @@ from copr_tools import (
 @pytest.mark.asyncio
 async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
     ownername = "jotnar-bot"
-    srpm_path = Path("test.src.rpm")
+    srpm_path = Path("/tmp/test.src.rpm")
     jira_issue = "RHEL-12345"
     suffix = "" if dist_git_branch == "rhel-10.0" else ".dev"
     build_arch = exclusive_arch or "x86_64"
@@ -60,7 +60,7 @@ async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
 
     flexmock(copr_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
     flexmock(copr_tools).should_receive("load_rhel_config").replace_with(load_rhel_config).once()
-    flexmock(copr_tools).should_receive("_get_exclusive_arches").replace_with(_get_exclusive_arches).once()
+    flexmock(copr_tools.BuildPackageTool).should_receive("_get_exclusive_arches").replace_with(_get_exclusive_arches).once()
     flexmock(asyncio).should_receive("sleep").replace_with(sleep)
 
     kwargs = {
@@ -120,7 +120,14 @@ async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
             }
         }
     ).once()
-    result = await build_package(srpm_path=srpm_path, dist_git_branch=dist_git_branch, jira_issue=jira_issue)
+    out = await BuildPackageTool().run(
+        input={
+            "srpm_path": srpm_path,
+            "dist_git_branch": dist_git_branch,
+            "jira_issue": jira_issue,
+        }
+    )
+    result = out.result
     assert result.success == (not build_failure)
     assert any(url.endswith("builder-live.log.gz") for url in result.artifacts_urls)
     assert any(url.endswith("root.log.gz") for url in result.artifacts_urls)
@@ -158,9 +165,14 @@ async def test_download_artifacts(url, tmp_path):
     )
     if "broken" in url:
         with pytest.raises(ToolError):
-            await download_artifacts(artifacts_urls=artifacts_urls, target_path=target_path)
+            await DownloadArtifactsTool().run(
+                input={"artifacts_urls": artifacts_urls, "target_path": target_path}
+            )
     else:
-        result = await download_artifacts(artifacts_urls=artifacts_urls, target_path=target_path)
+        out = await DownloadArtifactsTool().run(
+            input={"artifacts_urls": artifacts_urls, "target_path": target_path}
+        )
+        result = out.result
         assert result.startswith("Successfully")
     path = target_path / url.rsplit("/", 1)[-1].removesuffix(".gz")
     if "broken" in url:

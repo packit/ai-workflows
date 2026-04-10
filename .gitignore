@@ -46,4 +46,4 @@ noarch/
 .secrets
 
 # Testing Jira files
-mcp_server/tests/data/*
+ymir_tools/privileged/tests/data/*

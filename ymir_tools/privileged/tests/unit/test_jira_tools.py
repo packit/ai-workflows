@@ -7,7 +7,16 @@ import pytest
 from flexmock import flexmock
 
 import jira_tools
-from jira_tools import Severity, PreliminaryTesting, get_jira_details, set_jira_fields, add_jira_comment, change_jira_status, edit_jira_labels, verify_issue_author
+from jira_tools import (
+    AddJiraCommentTool,
+    ChangeJiraStatusTool,
+    EditJiraLabelsTool,
+    GetJiraDetailsTool,
+    PreliminaryTesting,
+    SetJiraFieldsTool,
+    Severity,
+    VerifyIssueAuthorTool,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -58,7 +67,7 @@ async def test_get_jira_details():
 
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)
 
-    result = await get_jira_details(issue_key)
+    result = (await GetJiraDetailsTool().run(input={"issue_key": issue_key})).result
     expected_result = issue_data.copy()
     expected_result["remote_links"] = remote_links_data
 
@@ -111,7 +120,7 @@ async def test_set_jira_fields(args, current_fields, expected_fields):
 
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)
     flexmock(aiohttp.ClientSession).should_receive("put").replace_with(put)
-    result = await set_jira_fields(issue_key, **args)
+    result = (await SetJiraFieldsTool().run(input={"issue_key": issue_key, **args})).result
     assert result.startswith("Successfully")
 
 
@@ -132,7 +141,11 @@ async def test_add_jira_comment(private):
         yield flexmock(raise_for_status=lambda: None)
 
     flexmock(aiohttp.ClientSession).should_receive("post").replace_with(post)
-    result = await add_jira_comment(issue_key, comment, private)
+    result = (
+        await AddJiraCommentTool().run(
+            input={"issue_key": issue_key, "comment": comment, "private": private}
+        )
+    ).result
     assert result.startswith("Successfully")
 
 
@@ -190,7 +203,7 @@ async def test_change_jira_status(transitions, status, expected_transition_id):
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)
     flexmock(aiohttp.ClientSession).should_receive("post").replace_with(post)
 
-    result = await change_jira_status(issue_key, status)
+    result = (await ChangeJiraStatusTool().run(input={"issue_key": issue_key, "status": status})).result
     assert result.startswith("Successfully")
 
 
@@ -227,7 +240,15 @@ async def test_edit_jira_labels(labels_to_add, labels_to_remove, expected_update
 
     flexmock(aiohttp.ClientSession).should_receive("put").replace_with(put)
 
-    result = await edit_jira_labels(issue_key, labels_to_add, labels_to_remove)
+    result = (
+        await EditJiraLabelsTool().run(
+            input={
+                "issue_key": issue_key,
+                "labels_to_add": labels_to_add,
+                "labels_to_remove": labels_to_remove,
+            }
+        )
+    ).result
     assert result.startswith("Successfully")
 
 
@@ -291,5 +312,5 @@ async def test_verify_issue_author(user_groups, expected_result, use_account_id)
 
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)
 
-    result = await verify_issue_author(issue_key)
+    result = (await VerifyIssueAuthorTool().run(input={"issue_key": issue_key})).result
     assert result == expected_result

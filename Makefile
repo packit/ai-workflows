@@ -3,6 +3,7 @@ COMPOSE_FILE ?= compose.yaml
 DRY_RUN ?= false
 MOCK_JIRA ?= false
 AUTO_CHAIN ?= true
+FORCE_CVE_TRIAGE ?= false
 LOKI_URL ?= http://loki.tft.osci.redhat.com/
 LOKI_SINCE ?= 24h
 LOKI_LIMIT ?= 3000
@@ -26,6 +27,7 @@ run-triage-agent-standalone:
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e FORCE_CVE_TRIAGE=$(FORCE_CVE_TRIAGE) \
 		triage-agent
 
 .PHONY: run-triage-agent-e2e-tests
@@ -225,11 +227,11 @@ logs-loki:
 .PHONY: trigger-pipeline
 trigger-pipeline:
 	@if [ -z "$(JIRA_ISSUE)" ]; then \
-		echo "Usage: make trigger-pipeline JIRA_ISSUE=RHEL-12345"; \
+		echo "Usage: make trigger-pipeline JIRA_ISSUE=RHEL-12345 [FORCE_CVE_TRIAGE=true]"; \
 		exit 1; \
 	fi
-	@echo "Triggering pipeline for issue: $(JIRA_ISSUE)"
-	$(COMPOSE_AGENTS) exec valkey redis-cli LPUSH triage_queue '{"metadata": {"issue": "$(JIRA_ISSUE)"}}'
+	@echo "Triggering pipeline for issue: $(JIRA_ISSUE) (force_cve_triage=$(FORCE_CVE_TRIAGE))"
+	$(COMPOSE_AGENTS) exec valkey redis-cli LPUSH triage_queue '{"metadata": {"issue": "$(JIRA_ISSUE)", "force_cve_triage": $(FORCE_CVE_TRIAGE)}}'
 
 
 # Testing and Release Supervisor

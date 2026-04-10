@@ -535,7 +535,7 @@ def create_triage_agent(gateway_tools):
     )
 
 
-async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=False):
+async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=False, force_cve_triage=False):
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
         triage_agent = triage_agent_factory(gateway_tools)
 
@@ -553,8 +553,15 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
 
             logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
 
-            # If not eligible for triage, end workflow
+            # If not eligible for triage, end workflow (unless forced)
             if not state.cve_eligibility_result.is_eligible_for_triage:
+                if force_cve_triage and not state.cve_eligibility_result.error:
+                    logger.info(
+                        f"Issue {state.jira_issue} not eligible for triage "
+                        f"({state.cve_eligibility_result.reason}), but force_cve_triage is set — proceeding"
+                    )
+                    return "run_triage_analysis"
+
                 logger.info(f"Issue {state.jira_issue} not eligible for triage: {state.cve_eligibility_result.reason}")
                 if state.cve_eligibility_result.error:
                     state.triage_result = OutputSchema(
@@ -734,10 +741,11 @@ async def main() -> None:
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     auto_chain = os.getenv("AUTO_CHAIN", "true").lower() == "true"
+    force_cve_triage = os.getenv("FORCE_CVE_TRIAGE", "false").lower() == "true"
 
     if jira_issue := os.getenv("JIRA_ISSUE", None):
         logger.info("Running in direct mode with environment variable")
-        state = await run_workflow(jira_issue, dry_run, create_triage_agent, auto_chain=auto_chain)
+        state = await run_workflow(jira_issue, dry_run, create_triage_agent, auto_chain=auto_chain, force_cve_triage=force_cve_triage)
         logger.info(f"Direct run completed: {state.triage_result.model_dump_json(indent=4)}")
         if state.cve_eligibility_result:
             logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
@@ -794,7 +802,7 @@ async def main() -> None:
                 logger.info(f"Cleaned up existing labels for {input.issue}")
 
                 logger.info(f"Starting triage processing for {input.issue}")
-                state = await run_workflow(input.issue, dry_run, create_triage_agent, auto_chain=auto_chain)
+                state = await run_workflow(input.issue, dry_run, create_triage_agent, auto_chain=auto_chain, force_cve_triage=input.force_cve_triage)
                 output = state.triage_result
                 logger.info(
                     f"Triage processing completed for {input.issue}, " f"resolution: {output.resolution.value}"

@@ -34,7 +34,6 @@ from ymir_tools.unprivileged.wicked_git import (
     GitPatchApplyTool,
     GitPatchCreationTool,
 )
-from ymir_tools.unprivileged.zstream_search import ZStreamSearchTool
 
 
 def _setup_logging():
@@ -97,7 +96,6 @@ def main():
         GitPatchApplyFinishTool(),
         GitPatchCreationTool(),
         GitLogSearchTool(),
-        ZStreamSearchTool(),
     ])
 
     mcp.serve()

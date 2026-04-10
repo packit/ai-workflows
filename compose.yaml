@@ -85,6 +85,7 @@ services:
       - KRB5CCNAME=FILE:/tmp/krb5cc
       - DRY_RUN=${DRY_RUN:-false}
       - MOCK_JIRA=${MOCK_JIRA:-false}
+      - JIRA_DRY_RUN=${JIRA_DRY_RUN:-false}
       - GIT_REPO_BASEPATH=/git-repos
       - JIRA_MOCK_FILES=mcp_server/tests/data
     env_file:

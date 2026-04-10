@@ -15,6 +15,7 @@ def mocked_env():
     flexmock(os).should_receive("getenv").with_args("JIRA_URL").and_return("http://jira")
     flexmock(os).should_receive("getenv").with_args("DRY_RUN", "False").and_return("false")
     flexmock(os).should_receive("getenv").with_args("SKIP_SETTING_JIRA_FIELDS", "False").and_return("false")
+    flexmock(os).should_receive("getenv").with_args("JIRA_DRY_RUN", "False").and_return("false")
     flexmock(jira_tools).should_receive("get_jira_auth_headers").and_return({
         "Authorization": "Basic dGVzdEBleGFtcGxlLmNvbToxMjM0NQ==",
         "Content-Type": "application/json",

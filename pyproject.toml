@@ -3,7 +3,7 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["agents*", "common*", "mcp_server*", "jira_issue_fetcher*"]
+include = ["agents*", "ymir_common*", "ymir_tools*", "jira_issue_fetcher*"]
 
 [project]
 name = "ai-workflows-beeai"

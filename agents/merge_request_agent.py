@@ -26,8 +26,8 @@ from beeai_framework.workflows import Workflow
 
 import tasks
 from agents.build_agent import create_build_agent, get_prompt as get_build_prompt
-from common.config import get_package_instructions
-from common.models import (
+from ymir_common.config import get_package_instructions
+from ymir_common.models import (
     BuildInputSchema,
     BuildOutputSchema,
     MergeRequestInputSchema,
@@ -35,9 +35,9 @@ from common.models import (
 )
 from constants import I_AM_JOTNAR
 from observability import setup_observability
-from tools.commands import RunShellCommandTool
-from tools.filesystem import GetCWDTool, RemoveTool
-from tools.text import (
+from ymir_tools.unprivileged.commands import RunShellCommandTool
+from ymir_tools.unprivileged.filesystem import GetCWDTool, RemoveTool
+from ymir_tools.unprivileged.text import (
     CreateTool,
     InsertAfterSubstringTool,
     InsertTool,

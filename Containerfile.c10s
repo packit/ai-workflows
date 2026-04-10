@@ -65,7 +65,8 @@ RUN useradd -m -G wheel beeai
 # Copy required directories
 # Individual directories are mounted as volumes in development
 COPY agents/ /home/beeai/agents/
-COPY common/ /home/beeai/common/
+COPY ymir_tools/ /home/beeai/ymir_tools/
+COPY ymir_common/ /home/beeai/ymir_common/
 RUN chgrp -R root /home/beeai && chmod -R g+rwX /home/beeai
 
 # Set up GitLab SSH host keys

@@ -26,9 +26,9 @@ import tasks
 from agents.build_agent import create_build_agent, get_prompt as get_build_prompt
 from agents.log_agent import create_log_agent, get_prompt as get_log_prompt
 from agents.package_update_steps import PackageUpdateStep, PackageUpdateState
-from common.config import get_package_instructions
-from common.constants import JiraLabels, RedisQueues
-from common.models import (
+from ymir_common.config import get_package_instructions
+from ymir_common.constants import JiraLabels, RedisQueues
+from ymir_common.models import (
     BuildInputSchema,
     BuildOutputSchema,
     ErrorData,
@@ -39,12 +39,12 @@ from common.models import (
     RebaseOutputSchema,
     Task,
 )
-from common.utils import redis_client, fix_await
+from ymir_common.utils import redis_client, fix_await
 from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
-from tools.commands import RunShellCommandTool
-from tools.filesystem import GetCWDTool, RemoveTool
-from tools.text import (
+from ymir_tools.unprivileged.commands import RunShellCommandTool
+from ymir_tools.unprivileged.filesystem import GetCWDTool, RemoveTool
+from ymir_tools.unprivileged.text import (
     CreateTool,
     InsertAfterSubstringTool,
     InsertTool,

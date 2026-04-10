@@ -5,7 +5,7 @@ import os
 from agents.triage_agent import run_workflow, TriageState, create_triage_agent
 from agents.metrics_middleware import MetricsMiddleware
 from agents.observability import setup_observability
-from common.models import TriageOutputSchema, Resolution, BackportData
+from ymir_common.models import TriageOutputSchema, Resolution, BackportData
 
 
 class TriageAgentTestCase:

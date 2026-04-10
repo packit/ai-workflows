@@ -4,7 +4,7 @@ from urllib.error import HTTPError
 
 from supervisor.baseline_tests import BaselineTests
 
-from common.constants import JiraLabels
+from ymir_common.constants import JiraLabels
 
 from .constants import DATETIME_MIN_UTC, GITLAB_GROUPS
 from .errata_utils import get_erratum_for_link, get_erratum_build_nvr

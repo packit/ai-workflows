@@ -1,11 +1,10 @@
-from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 
-from tools.zstream_search import (
+from ymir_tools.privileged.zstream_search import (
     ZStreamSearchTool,
     ZStreamSearchToolInput,
     ZStreamSearchResult,
@@ -27,11 +26,6 @@ RHEL_CONFIG = {
     },
     "upcoming_z_streams": {},
 }
-
-
-@asynccontextmanager
-async def mock_mcp_tools(url):
-    yield MagicMock()
 
 
 # ============================================================================
@@ -138,7 +132,7 @@ async def test_not_applicable_y_stream():
 async def test_not_applicable_current_zstream():
     """Current z-stream fixVersion should return NOT_APPLICABLE."""
     tool = ZStreamSearchTool()
-    with patch("tools.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=False):
+    with patch("ymir_tools.privileged.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=False):
         output = await tool.run(
             input=ZStreamSearchToolInput(
                 component="fence-agents",
@@ -189,10 +183,8 @@ async def test_found_in_closest_stream():
 
     tool = ZStreamSearchTool()
     with (
-        patch("tools.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
-        patch("tools.zstream_search.mcp_tools", mock_mcp_tools),
-        patch("tools.zstream_search.run_tool", mock_run_tool),
-        patch.dict("os.environ", {"MCP_GATEWAY_URL": "http://mcp-gateway:8000"}),
+        patch("ymir_tools.privileged.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
+        patch("ymir_tools.privileged.zstream_search.run_tool", mock_run_tool),
     ):
         output = await tool.run(
             input=ZStreamSearchToolInput(
@@ -241,10 +233,8 @@ async def test_cascade_to_further_version():
 
     tool = ZStreamSearchTool()
     with (
-        patch("tools.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
-        patch("tools.zstream_search.mcp_tools", mock_mcp_tools),
-        patch("tools.zstream_search.run_tool", mock_run_tool),
-        patch.dict("os.environ", {"MCP_GATEWAY_URL": "http://mcp-gateway:8000"}),
+        patch("ymir_tools.privileged.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
+        patch("ymir_tools.privileged.zstream_search.run_tool", mock_run_tool),
     ):
         output = await tool.run(
             input=ZStreamSearchToolInput(
@@ -277,10 +267,8 @@ async def test_not_found_anywhere():
 
     tool = ZStreamSearchTool()
     with (
-        patch("tools.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
-        patch("tools.zstream_search.mcp_tools", mock_mcp_tools),
-        patch("tools.zstream_search.run_tool", mock_run_tool),
-        patch.dict("os.environ", {"MCP_GATEWAY_URL": "http://mcp-gateway:8000"}),
+        patch("ymir_tools.privileged.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
+        patch("ymir_tools.privileged.zstream_search.run_tool", mock_run_tool),
     ):
         output = await tool.run(
             input=ZStreamSearchToolInput(
@@ -302,10 +290,8 @@ async def test_no_related_issues_found():
 
     tool = ZStreamSearchTool()
     with (
-        patch("tools.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
-        patch("tools.zstream_search.mcp_tools", mock_mcp_tools),
-        patch("tools.zstream_search.run_tool", mock_run_tool),
-        patch.dict("os.environ", {"MCP_GATEWAY_URL": "http://mcp-gateway:8000"}),
+        patch("ymir_tools.privileged.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
+        patch("ymir_tools.privileged.zstream_search.run_tool", mock_run_tool),
     ):
         output = await tool.run(
             input=ZStreamSearchToolInput(
@@ -350,10 +336,8 @@ async def test_version_proximity_sorting():
 
     tool = ZStreamSearchTool()
     with (
-        patch("tools.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
-        patch("tools.zstream_search.mcp_tools", mock_mcp_tools),
-        patch("tools.zstream_search.run_tool", mock_run_tool),
-        patch.dict("os.environ", {"MCP_GATEWAY_URL": "http://mcp-gateway:8000"}),
+        patch("ymir_tools.privileged.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
+        patch("ymir_tools.privileged.zstream_search.run_tool", mock_run_tool),
     ):
         output = await tool.run(
             input=ZStreamSearchToolInput(
@@ -393,10 +377,8 @@ async def test_older_issues_excluded():
 
     tool = ZStreamSearchTool()
     with (
-        patch("tools.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
-        patch("tools.zstream_search.mcp_tools", mock_mcp_tools),
-        patch("tools.zstream_search.run_tool", mock_run_tool),
-        patch.dict("os.environ", {"MCP_GATEWAY_URL": "http://mcp-gateway:8000"}),
+        patch("ymir_tools.privileged.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
+        patch("ymir_tools.privileged.zstream_search.run_tool", mock_run_tool),
     ):
         output = await tool.run(
             input=ZStreamSearchToolInput(

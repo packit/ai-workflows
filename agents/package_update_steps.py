@@ -4,9 +4,9 @@ import tasks
 from pydantic import BaseModel, Field
 from pathlib import Path
 
-from common.constants import JiraLabels, GITLAB_MR_CHECKLIST
-from common.config import load_rhel_config
-from common.models import LogOutputSchema
+from ymir_common.constants import JiraLabels, GITLAB_MR_CHECKLIST
+from ymir_common.config import load_rhel_config
+from ymir_common.models import LogOutputSchema
 
 logger = logging.getLogger(__name__)
 

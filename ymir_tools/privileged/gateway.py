@@ -66,6 +66,7 @@ from ymir_tools.privileged.jira_tools import (
     VerifyIssueAuthorTool,
 )
 from ymir_tools.privileged.lookaside_tools import DownloadSourcesTool, PrepSourcesTool, UploadSourcesTool
+from ymir_tools.privileged.zstream_search import ZStreamSearchTool
 
 
 def _setup_logging():
@@ -132,6 +133,7 @@ def main():
         DownloadSourcesTool(),
         PrepSourcesTool(),
         UploadSourcesTool(),
+        ZStreamSearchTool(),
     ])
 
     mcp.serve()

@@ -64,6 +64,7 @@ class JiraLabels(Enum):
     """Constants for Jira labels used by Jotnar agents"""
     NEEDS_ATTENTION = "jotnar_needs_attention"
     TRIAGED = "jotnar_triaged"
+    TRIAGE_IN_PROGRESS = "jotnar_triage_in_progress"
     TRIAGED_BACKPORT = "jotnar_triaged_backport"
     TRIAGED_REBASE = "jotnar_triaged_rebase"
 

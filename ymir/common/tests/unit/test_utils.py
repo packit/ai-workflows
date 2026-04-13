@@ -1,12 +1,27 @@
 import asyncio
 import os
 import subprocess
-from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from flexmock import flexmock
 
-from ymir.common.utils import KerberosError, extract_principal, init_kerberos_ticket
+import ymir.common.utils as _ymir_utils
+from ymir.common.utils import (
+    KerberosError,
+    _is_connection_error,
+    extract_principal,
+    init_kerberos_ticket,
+    mcp_tools,
+)
+
+
+async def _coro(val):
+    return val
+
+
+async def _noop(*args, **kwargs):
+    pass
 
 
 class TestInitKerberosTicket:
@@ -40,16 +55,14 @@ class TestInitKerberosTicket:
     async def test_klist_command_failure_raises_error(self, monkeypatch):
         """Test that klist command failure raises KerberosError."""
         mock_proc = flexmock(returncode=1)
-        mock_proc.should_receive("communicate").and_return(
-            AsyncMock(return_value=(b"error output", b"stderr output"))()
-        )
+        mock_proc.should_receive("communicate").and_return(_coro((b"error output", b"stderr output")))
 
         monkeypatch.delenv("KEYTAB_FILE", raising=False)
         monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
         flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        ).and_return(AsyncMock(return_value=mock_proc)())
+        ).and_return(_coro(mock_proc))
 
         with pytest.raises(KerberosError, match="Failed to list Kerberos tickets"):
             await init_kerberos_ticket()
@@ -63,14 +76,14 @@ class TestInitKerberosTicket:
             b"user@EXAMPLE.COM         KCM:1000\n"
         )
         mock_proc = flexmock(returncode=0)
-        mock_proc.should_receive("communicate").and_return(AsyncMock(return_value=(klist_output, b""))())
+        mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         monkeypatch.delenv("KEYTAB_FILE", raising=False)
         monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
         flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        ).and_return(AsyncMock(return_value=mock_proc)())
+        ).and_return(_coro(mock_proc))
 
         result = await init_kerberos_ticket()
         assert result == "user@EXAMPLE.COM"
@@ -84,14 +97,14 @@ class TestInitKerberosTicket:
             b"user@EXAMPLE.COM         FILE:.secrets/ccache/krb5cc (Expired)\n"
         )
         mock_proc = flexmock(returncode=0)
-        mock_proc.should_receive("communicate").and_return(AsyncMock(return_value=(klist_output, b""))())
+        mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         monkeypatch.delenv("KEYTAB_FILE", raising=False)
         monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
         flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        ).and_return(AsyncMock(return_value=mock_proc)())
+        ).and_return(_coro(mock_proc))
 
         with pytest.raises(
             KerberosError,
@@ -106,14 +119,14 @@ class TestInitKerberosTicket:
             b"Principal name                 Cache name\n--------------                 ----------\n"
         )
         mock_proc = flexmock(returncode=0)
-        mock_proc.should_receive("communicate").and_return(AsyncMock(return_value=(klist_output, b""))())
+        mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         monkeypatch.delenv("KEYTAB_FILE", raising=False)
         monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
         flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        ).and_return(AsyncMock(return_value=mock_proc)())
+        ).and_return(_coro(mock_proc))
 
         with pytest.raises(
             KerberosError,
@@ -130,19 +143,19 @@ class TestInitKerberosTicket:
             b"jotnar-bot@IPA.REDHAT.COM    KCM:1000\n"
         )
         mock_proc = flexmock(returncode=0)
-        mock_proc.should_receive("communicate").and_return(AsyncMock(return_value=(klist_output, b""))())
+        mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         monkeypatch.setenv("KEYTAB_FILE", "/path/to/keytab")
         monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
         flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        ).and_return(AsyncMock(return_value=mock_proc)())
+        ).and_return(_coro(mock_proc))
 
         from ymir.common import utils
 
         flexmock(utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
-            AsyncMock(return_value="jotnar-bot@IPA.REDHAT.COM")()
+            _coro("jotnar-bot@IPA.REDHAT.COM")
         )
 
         result = await init_kerberos_ticket()
@@ -155,14 +168,10 @@ class TestInitKerberosTicket:
             b"Principal name                 Cache name\n--------------                 ----------\n"
         )
         mock_klist_proc = flexmock(returncode=0)
-        mock_klist_proc.should_receive("communicate").and_return(
-            AsyncMock(return_value=(klist_output, b""))()
-        )
+        mock_klist_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         mock_kinit_proc = flexmock(returncode=0)
-        mock_kinit_proc.should_receive("communicate").and_return(
-            AsyncMock(return_value=(b"error output", b"stderr output"))()
-        )
+        mock_kinit_proc.should_receive("communicate").and_return(_coro((b"error output", b"stderr output")))
 
         monkeypatch.setenv("KEYTAB_FILE", "/path/to/keytab")
         monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
@@ -170,9 +179,9 @@ class TestInitKerberosTicket:
 
         def mock_create_subprocess(*args, **kwargs):
             if args[0] == "klist":
-                return AsyncMock(return_value=mock_klist_proc)()
+                return _coro(mock_klist_proc)
             if args[0] == "kinit":
-                return AsyncMock(return_value=mock_kinit_proc)()
+                return _coro(mock_kinit_proc)
             return None
 
         flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(mock_create_subprocess)
@@ -180,7 +189,7 @@ class TestInitKerberosTicket:
         from ymir.common import utils
 
         flexmock(utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
-            AsyncMock(return_value="jotnar-bot@IPA.REDHAT.COM")()
+            _coro("jotnar-bot@IPA.REDHAT.COM")
         )
 
         result = await init_kerberos_ticket()
@@ -193,14 +202,10 @@ class TestInitKerberosTicket:
             b"Principal name                 Cache name\n--------------                 ----------\n"
         )
         mock_klist_proc = flexmock(returncode=0)
-        mock_klist_proc.should_receive("communicate").and_return(
-            AsyncMock(return_value=(klist_output, b""))()
-        )
+        mock_klist_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         mock_kinit_proc = flexmock(returncode=1)
-        mock_kinit_proc.should_receive("communicate").and_return(
-            AsyncMock(return_value=(b"error output", b"stderr output"))()
-        )
+        mock_kinit_proc.should_receive("communicate").and_return(_coro((b"error output", b"stderr output")))
 
         monkeypatch.setenv("KEYTAB_FILE", "/path/to/keytab")
         monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
@@ -208,9 +213,9 @@ class TestInitKerberosTicket:
 
         def mock_create_subprocess(*args, **kwargs):
             if args[0] == "klist":
-                return AsyncMock(return_value=mock_klist_proc)()
+                return _coro(mock_klist_proc)
             if args[0] == "kinit":
-                return AsyncMock(return_value=mock_kinit_proc)()
+                return _coro(mock_kinit_proc)
             return None
 
         flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(mock_create_subprocess)
@@ -218,7 +223,7 @@ class TestInitKerberosTicket:
         from ymir.common import utils
 
         flexmock(utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
-            AsyncMock(return_value="jotnar-bot@IPA.REDHAT.COM")()
+            _coro("jotnar-bot@IPA.REDHAT.COM")
         )
 
         with pytest.raises(KerberosError, match="kinit command failed"):
@@ -233,7 +238,7 @@ class TestInitKerberosTicket:
         from ymir.common import utils
 
         flexmock(utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
-            AsyncMock(return_value=None)()
+            _coro(None)
         )
 
         with pytest.raises(KerberosError, match="Failed to extract principal from keytab file"):
@@ -259,7 +264,7 @@ class TestInitKerberosTicket:
             b"user@EXAMPLE.COM         KCM:1000\n"
         )
         mock_proc = flexmock(returncode=0)
-        mock_proc.should_receive("communicate").and_return(AsyncMock(return_value=(klist_output, b""))())
+        mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         monkeypatch.delenv("KEYTAB_FILE", raising=False)
         monkeypatch.setenv("KRB5CCNAME", ccache_name)
@@ -271,7 +276,7 @@ class TestInitKerberosTicket:
 
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        ).and_return(AsyncMock(return_value=mock_proc)())
+        ).and_return(_coro(mock_proc))
 
         result = await init_kerberos_ticket()
         assert result == "user@EXAMPLE.COM"
@@ -286,14 +291,14 @@ class TestInitKerberosTicket:
             b"user2@EXAMPLE.COM         KCM:1001\n"
         )
         mock_proc = flexmock(returncode=0)
-        mock_proc.should_receive("communicate").and_return(AsyncMock(return_value=(klist_output, b""))())
+        mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         monkeypatch.delenv("KEYTAB_FILE", raising=False)
         monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
         flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        ).and_return(AsyncMock(return_value=mock_proc)())
+        ).and_return(_coro(mock_proc))
 
         result = await init_kerberos_ticket()
         assert result == "user1@EXAMPLE.COM"
@@ -308,14 +313,14 @@ class TestInitKerberosTicket:
             b"valid@EXAMPLE.COM        KCM:1000\n"
         )
         mock_proc = flexmock(returncode=0)
-        mock_proc.should_receive("communicate").and_return(AsyncMock(return_value=(klist_output, b""))())
+        mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         monkeypatch.delenv("KEYTAB_FILE", raising=False)
         monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
         flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        ).and_return(AsyncMock(return_value=mock_proc)())
+        ).and_return(_coro(mock_proc))
 
         result = await init_kerberos_ticket()
         assert result == "valid@EXAMPLE.COM"
@@ -337,7 +342,7 @@ class TestExtractPrincipal:
             b"(0xabcdef000000000000000000000000000)\n"
         )
         mock_proc = flexmock(returncode=0)
-        mock_proc.should_receive("communicate").and_return(AsyncMock(return_value=(klist_output, b""))())
+        mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist",
@@ -347,7 +352,7 @@ class TestExtractPrincipal:
             "/path/to/keytab",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-        ).and_return(AsyncMock(return_value=mock_proc)())
+        ).and_return(_coro(mock_proc))
 
         result = await extract_principal("/path/to/keytab")
         assert result == "jotnar-bot@IPA.REDHAT.COM"
@@ -356,7 +361,7 @@ class TestExtractPrincipal:
     async def test_extract_principal_klist_failure(self):
         """Test extract_principal when klist command fails."""
         mock_proc = flexmock(returncode=1)
-        mock_proc.should_receive("communicate").and_return(AsyncMock(return_value=(b"error", b"stderr"))())
+        mock_proc.should_receive("communicate").and_return(_coro((b"error", b"stderr")))
 
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist",
@@ -366,7 +371,7 @@ class TestExtractPrincipal:
             "/path/to/keytab",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-        ).and_return(AsyncMock(return_value=mock_proc)())
+        ).and_return(_coro(mock_proc))
 
         with pytest.raises(KerberosError, match="klist command failed"):
             await extract_principal("/path/to/keytab")
@@ -380,7 +385,7 @@ class TestExtractPrincipal:
             b"---- --------------------------------------------------------------------------\n"
         )
         mock_proc = flexmock(returncode=0)
-        mock_proc.should_receive("communicate").and_return(AsyncMock(return_value=(klist_output, b""))())
+        mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist",
@@ -390,7 +395,122 @@ class TestExtractPrincipal:
             "/path/to/keytab",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-        ).and_return(AsyncMock(return_value=mock_proc)())
+        ).and_return(_coro(mock_proc))
 
         with pytest.raises(KerberosError, match="No valid key found in the keytab file"):
             await extract_principal("/path/to/keytab")
+
+
+# ============================================================================
+# _is_connection_error
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "exc, expected",
+    [
+        (httpx.ConnectError("refused"), True),
+        (ConnectionError("reset"), True),
+        (OSError("network unreachable"), True),
+        (ValueError("bad value"), False),
+        (RuntimeError("oops"), False),
+        (ExceptionGroup("task group", [httpx.ConnectError("refused")]), True),
+        (ExceptionGroup("task group", [ValueError("bad value")]), False),
+        (ExceptionGroup("outer", [ExceptionGroup("inner", [httpx.ConnectError("refused")])]), True),
+    ],
+)
+def test_is_connection_error(exc, expected):
+    assert _is_connection_error(exc) == expected
+
+
+# ============================================================================
+# mcp_tools retry logic
+# ============================================================================
+
+FAKE_URL = "http://mcp-gateway:8000/sse"
+FAKE_TOOLS = [flexmock()]
+
+
+class _SSEContextManager:
+    def __init__(self, exc=None):
+        self._exc = exc
+
+    async def __aenter__(self):
+        if self._exc:
+            raise self._exc
+        return flexmock(), flexmock()
+
+    async def __aexit__(self, *args):
+        return False
+
+
+def make_sse_cm(exc=None):
+    """Async context manager mock for sse_client. Raises exc on entry if given."""
+    return _SSEContextManager(exc)
+
+
+class _SessionContextManager:
+    async def __aenter__(self):
+        session = flexmock()
+        session.should_receive("initialize").and_return(_coro(None))
+        return session
+
+    async def __aexit__(self, *args):
+        return False
+
+
+def make_session_cm():
+    """Async context manager mock for ClientSession, yielding an async session."""
+    return _SessionContextManager()
+
+
+@pytest.mark.asyncio
+async def test_mcp_tools_success_on_first_attempt():
+    """Connected immediately; sleep is never called."""
+    flexmock(_ymir_utils).should_receive("sse_client").once().and_return(make_sse_cm())
+    flexmock(_ymir_utils).should_receive("ClientSession").and_return(make_session_cm())
+    flexmock(_ymir_utils.MCPTool).should_receive("from_client").and_return(_coro(FAKE_TOOLS))
+    flexmock(asyncio).should_receive("sleep").never()
+
+    async with mcp_tools(FAKE_URL) as tools:
+        assert tools == FAKE_TOOLS
+
+
+@pytest.mark.asyncio
+async def test_mcp_tools_retries_once_then_succeeds():
+    """First attempt raises ConnectError; second attempt succeeds."""
+    conn_err = httpx.ConnectError("refused")
+    flexmock(_ymir_utils).should_receive("sse_client").twice().and_return(
+        make_sse_cm(exc=conn_err)
+    ).and_return(make_sse_cm())
+    flexmock(_ymir_utils).should_receive("ClientSession").and_return(make_session_cm())
+    flexmock(_ymir_utils.MCPTool).should_receive("from_client").and_return(_coro(FAKE_TOOLS))
+    flexmock(asyncio).should_receive("sleep").once().with_args(3.0).replace_with(_noop)
+
+    async with mcp_tools(FAKE_URL, retry_delay=3.0) as tools:
+        assert tools == FAKE_TOOLS
+
+
+@pytest.mark.asyncio
+async def test_mcp_tools_exhausts_retries_and_raises():
+    """All attempts fail; ConnectError propagates after max_retries exhausted."""
+    conn_err = httpx.ConnectError("refused")
+    flexmock(_ymir_utils).should_receive("sse_client").times(3).and_return(make_sse_cm(exc=conn_err))
+    flexmock(asyncio).should_receive("sleep").times(2).with_args(2.0).replace_with(_noop)
+
+    with pytest.raises(httpx.ConnectError):
+        async with mcp_tools(FAKE_URL, max_retries=3, retry_delay=2.0):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_mcp_tools_non_connection_error_raises_immediately():
+    """A non-connection error on first attempt is not retried."""
+    flexmock(_ymir_utils).should_receive("sse_client").once().and_return(
+        make_sse_cm(exc=ValueError("unexpected"))
+    )
+    flexmock(asyncio).should_receive("sleep").never()
+
+    with pytest.raises(ValueError):
+        async with mcp_tools(FAKE_URL, max_retries=5):
+            pass

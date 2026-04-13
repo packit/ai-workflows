@@ -747,6 +747,7 @@ async def main() -> None:
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
+                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
                         dry_run=dry_run
                     )
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
@@ -754,7 +755,8 @@ async def main() -> None:
             try:
                 await tasks.set_jira_labels(
                     jira_issue=input.issue,
-                    labels_to_remove=list(JiraLabels.all_labels()),
+                    labels_to_add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                    labels_to_remove=[l for l in JiraLabels.all_labels() if l != JiraLabels.TRIAGE_IN_PROGRESS.value],
                     dry_run=dry_run
                 )
                 logger.info(f"Cleaned up existing labels for {input.issue}")
@@ -780,6 +782,7 @@ async def main() -> None:
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGED_REBASE.value],
+                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
                         dry_run=dry_run
                     )
                     if auto_chain:
@@ -794,6 +797,7 @@ async def main() -> None:
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGED_BACKPORT.value],
+                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
                         dry_run=dry_run
                     )
                     if auto_chain:
@@ -808,6 +812,7 @@ async def main() -> None:
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.NEEDS_ATTENTION.value],
+                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
                         dry_run=dry_run
                     )
                     if auto_chain:
@@ -821,6 +826,7 @@ async def main() -> None:
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGED.value],
+                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
                         dry_run=dry_run
                     )
                     if auto_chain:
@@ -833,6 +839,7 @@ async def main() -> None:
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
+                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
                         dry_run=dry_run
                     )
                     await retry(task, output.data.model_dump_json())

@@ -71,7 +71,6 @@ from ymir_tools.privileged.zstream_search import ZStreamSearchTool
 
 def _setup_logging():
     logging.basicConfig(level=logging.INFO)
-    logging.getLogger("FastMCP").handlers = [logging.StreamHandler()]
 
     # Log tool calls via Emitter
     def on_tool_start(data: Any, meta: Any):
@@ -90,8 +89,6 @@ def _setup_logging():
 
 
 def main():
-    logger = logging.getLogger(__name__)
-
     transport = os.getenv("MCP_TRANSPORT", "sse")
     config_kwargs = {"name": "Ymir Privileged MCP Gateway", "transport": transport}
     if transport == "sse":

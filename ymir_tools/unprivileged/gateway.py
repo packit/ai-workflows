@@ -35,10 +35,10 @@ from ymir_tools.unprivileged.wicked_git import (
     GitPatchCreationTool,
 )
 
+logger = logging.getLogger(__name__)
 
 def _setup_logging():
     logging.basicConfig(level=logging.INFO)
-    logging.getLogger("FastMCP").handlers = [logging.StreamHandler()]
 
     def on_tool_start(data: Any, meta: Any):
         logger.info(f"Tool called: {meta.name}")
@@ -56,8 +56,6 @@ def _setup_logging():
 
 
 def main():
-    logger = logging.getLogger(__name__)
-
     transport = os.getenv("MCP_TRANSPORT", "sse")
     config_kwargs = {"name": "Ymir Unprivileged MCP Gateway", "transport": transport}
     if transport == "sse":

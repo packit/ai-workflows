@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 # If there is an existing issue for the tag and it's not closed, we'll reuse
 # it, but if the existing issue is closed, we'll create a new one.
 #
-# The string form of the tag is "::: JOTNAR needs_attention E: 123456 :::"
+# The string form of the tag is "::: YMIR needs_attention E: 123456 :::"
 
 
 def _needs_attention_tag(erratum_id: int) -> JotnarTag:
@@ -97,7 +97,7 @@ def compare_file_lists(
     is_matched = current_build.package_file_list == previous_build.package_file_list
 
     comment = (
-        f"jotnar-product-listings-checked({current_build.nvr})\n\n"
+        f"ymir-product-listings-checked({current_build.nvr})\n\n"
         f"Compared the file lists for {current_build.nvr} to the file lists for\n"
         f"{previous_build.nvr} in {get_erratum_advisory_url(previous_erratum_id)} -\n"
     )
@@ -215,7 +215,7 @@ class ErratumHandler(WorkItemHandler):
                 for package, cur_build in cur_build_map.root.items():
                     nvr = cur_build.nvr
                     if not erratum_has_magic_string_in_comments(
-                        self.erratum.id, f"jotnar-product-listings-checked({nvr})"
+                        self.erratum.id, f"ymir-product-listings-checked({nvr})"
                     ):
                         prev_erratum_id, _ = get_previous_erratum(
                             self.erratum.id, package
@@ -240,7 +240,7 @@ class ErratumHandler(WorkItemHandler):
                         else:
                             erratum_add_comment(
                                 self.erratum.id,
-                                f"jotnar-product-listings-checked({nvr})\n\n"
+                                f"ymir-product-listings-checked({nvr})\n\n"
                                 "No previous erratum for this package - no need to check package file list change.",
                                 dry_run=self.dry_run,
                             )
@@ -319,7 +319,7 @@ class ErratumHandler(WorkItemHandler):
             )
 
         related_issues = erratum_get_issues(erratum)
-        # Try to change the ownership to Jotnar if the erratum was not owned by Jotnar
+        # Try to change the ownership to Ymir if the erratum was not owned by Ymir
         if (
             erratum.assigned_to_email != ERRATA_JOTNAR_BOT_EMAIL
             or erratum.package_owner_email != ERRATA_JOTNAR_BOT_EMAIL
@@ -327,14 +327,14 @@ class ErratumHandler(WorkItemHandler):
             if jotnar_owns_all_issues(related_issues):
                 erratum_change_ownership(erratum.id, ERRATA_JOTNAR_BOT_EMAIL)
                 return WorkflowResult(
-                    status=f"Changed ownership of erratum {erratum.id} to Jotnar bot, re-processing",
+                    status=f"Changed ownership of erratum {erratum.id} to Ymir bot, re-processing",
                     reschedule_in=0,
                 )
             else:
                 return self.resolve_flag_attention(
-                    "Erratum has issues not owned by Project Jötnar. Please coordinate with QA Contact for these "
+                    "Erratum has issues not owned by Project Ymir. Please coordinate with QA Contact for these "
                     "issues to move those issues to Release Pending or change the Assigned Team for the issue to "
-                    "rhel-jotnar. No further action will be taken on the erratum until jotnar_needs_attention is "
+                    "rhel-jotnar. No further action will be taken on the erratum until ymir_needs_attention is "
                     "cleared on this issue."
                 )
 

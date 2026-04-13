@@ -256,7 +256,7 @@ def main(
     debug: bool = typer.Option(False, help="Enable debug mode."),
     dry_run: bool = typer.Option(False, help="Don't actually change anything."),
     ignore_needs_attention: bool = typer.Option(
-        False, help="Process issues or errata flagged with jotnar_needs_attention."
+        False, help="Process issues or errata flagged with ymir_needs_attention."
     ),
 ):
     if debug:

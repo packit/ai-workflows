@@ -189,7 +189,7 @@ class JotnarTag(BaseModel):
     id: str
 
     def __str__(self) -> str:
-        return f"::: JOTNAR {self.type} E: {self.id.strip()} :::"
+        return f"::: YMIR {self.type} E: {self.id.strip()} :::"
 
 
 class TestingState(StrEnum):

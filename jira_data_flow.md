@@ -85,7 +85,7 @@ sequenceDiagram
 
     Fetcher->>Jira: POST /rest/api/2/search<br/>JQL: "project=RHEL and assignee=jotnar-project"
     Jira-->>Fetcher: Issues [{key, labels}]
-    Fetcher->>Fetcher: Deduplicate & Filter<br/>(skip if jötnar labels exist)
+    Fetcher->>Fetcher: Deduplicate & Filter<br/>(skip if Ymir labels exist)
     Fetcher->>Redis: Push Task to triage_queue<br/>{metadata: {issue: "RHEL-12345"}}
 ```
 
@@ -159,7 +159,7 @@ sequenceDiagram
 flowchart TD
     START([Jira Issue Created])
     FETCH[Jira Issue Fetcher<br/>Queries Jira]
-    FILTER{Has jötnar<br/>labels?}
+    FILTER{Has Ymir<br/>labels?}
     REDIS[(Redis<br/>triage_queue)]
     TRIAGE[Triage Agent]
     DECIDE{Resolution<br/>Type?}

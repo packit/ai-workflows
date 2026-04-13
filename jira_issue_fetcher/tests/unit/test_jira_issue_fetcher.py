@@ -253,7 +253,7 @@ async def test_push_issues_to_queue_skip_existing(fetcher, mock_redis_context):
 
 @pytest.mark.asyncio
 async def test_push_issues_to_queue_skip_labeled_issues(fetcher, mock_redis_context):
-    """Test that issues with jotnar labels (except retry_needed) are skipped."""
+    """Test that issues with ymir labels (except retry_needed) are skipped."""
     mock_redis, _ = mock_redis_context
 
     issues = [
@@ -301,11 +301,11 @@ async def test_run_full_workflow_with_labeled_issues(fetcher, mock_redis_context
     # Create test issues with different label states
     mock_issues = [
         {'key': 'ISSUE-1', 'fields': {'labels': []}},  # No labels - should be pushed
-        {'key': 'ISSUE-2', 'fields': {'labels': ['jotnar_rebase_in_progress']}},  # Has jotnar label - should be skipped
-        {'key': 'ISSUE-3', 'fields': {'labels': ['jotnar_backport_in_progress']}},  # Has jotnar label - should be skipped
-        {'key': 'ISSUE-4', 'fields': {'labels': ['jotnar_retry_needed']}},  # Has retry label - should be pushed
+        {'key': 'ISSUE-2', 'fields': {'labels': ['ymir_rebase_in_progress']}},  # Has ymir label - should be skipped
+        {'key': 'ISSUE-3', 'fields': {'labels': ['ymir_backport_in_progress']}},  # Has ymir label - should be skipped
+        {'key': 'ISSUE-4', 'fields': {'labels': ['ymir_retry_needed']}},  # Has retry label - should be pushed
         {'key': 'ISSUE-5', 'fields': {'labels': []}},  # No labels - should be pushed
-        {'key': 'ISSUE-6', 'fields': {'labels': ['jotnar_completed']}},  # Has jotnar label - should be skipped
+        {'key': 'ISSUE-6', 'fields': {'labels': ['ymir_completed']}},  # Has ymir label - should be skipped
     ]
 
     # Create existing issues that are already in Redis queues using the correct data structures
@@ -386,7 +386,7 @@ async def test_run_full_workflow_with_labeled_issues(fetcher, mock_redis_context
 
     # Mock lpush calls for issues that should be pushed despite already existing
     # ISSUE-1, ISSUE-4, and ISSUE-5 should be pushed (no labels or retry_needed)
-    # ISSUE-2, ISSUE-3, and ISSUE-6 should be skipped (have jotnar labels)
+    # ISSUE-2, ISSUE-3, and ISSUE-6 should be skipped (have ymir labels)
     # The actual code pushes JSON strings, not just issue keys
     task1 = Task.from_issue("ISSUE-1")
     task4 = Task.from_issue("ISSUE-4")

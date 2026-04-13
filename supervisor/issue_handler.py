@@ -109,7 +109,7 @@ class IssueHandler(WorkItemHandler):
 
         add_issue_label(
             self.issue.key,
-            "jotnar_reproducing_tests",
+            "ymir_reproducing_tests",
             issue_comment,
             dry_run=self.dry_run,
         )
@@ -120,7 +120,7 @@ class IssueHandler(WorkItemHandler):
         baseline_tests = BaselineTests.load_from_issue(self.issue)
         if baseline_tests is None:
             return self.resolve_flag_attention(
-                "Issue has jotnar_reproducing_tests label but cannot parse baseline tests from comments"
+                "Issue has ymir_reproducing_tests label but cannot parse baseline tests from comments"
             )
 
         if not baseline_tests.settled():
@@ -133,7 +133,7 @@ class IssueHandler(WorkItemHandler):
         issue_comment = baseline_tests.format_issue_comment(include_attachments=True)
         remove_issue_label(
             self.issue.key,
-            "jotnar_reproducing_tests",
+            "ymir_reproducing_tests",
             dry_run=self.dry_run,
         )
 
@@ -153,12 +153,12 @@ class IssueHandler(WorkItemHandler):
         )
 
     def label_merge_if_needed(self):
-        """Add the jotnar_merged label to the issue
+        """Add the ymir_merged label to the issue
 
-        This function will only add jotnar_merged label to the issue if it matches
+        This function will only add ymir_merged label to the issue if it matches
         all the following requirements:
-            1. Issue has either jotnar_backported or jotnar_rebased label.
-            2. Issue doesn't have jotnar_merged label.
+            1. Issue has either ymir_backported or ymir_rebased label.
+            2. Issue doesn't have ymir_merged label.
             3. A merged MR is found on Gitlab.
 
         Returns:
@@ -272,7 +272,7 @@ class IssueHandler(WorkItemHandler):
                 "happened before the gitlab pull request was merged"
             )
 
-        # We still want the jotnar_merged label for JIRA dashboards even if we never saw
+        # We still want the ymir_merged label for JIRA dashboards even if we never saw
         # the merged merge request in the pre-errata-creation state.
         self.label_merge_if_needed()
 
@@ -283,7 +283,7 @@ class IssueHandler(WorkItemHandler):
                     "Preliminary testing has passed, moving to Integration",
                 )
             case IssueStatus.INTEGRATION:
-                if "jotnar_reproducing_tests" in issue.labels:
+                if "ymir_reproducing_tests" in issue.labels:
                     return await self.resolve_check_reproduction()
 
                 related_erratum = get_erratum_for_link(issue.errata_link, full=True)
@@ -362,13 +362,13 @@ class IssueHandler(WorkItemHandler):
             and not self.ignore_needs_attention
         ):
             return self.resolve_remove_work_item(
-                "Issue has the jotnar_needs_attention label"
+                "Issue has the ymir_needs_attention label"
             )
 
         if len(issue.components) != 1:
             return self.resolve_flag_attention(
                 "This issue has multiple components. "
-                "Jotnar only handles issues with single component currently."
+                "Ymir only handles issues with single component currently."
             )
 
         if issue.errata_link is None:

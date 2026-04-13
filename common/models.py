@@ -184,14 +184,14 @@ class ErrorData(BaseModel):
 
 
 TRIAGE_DISCLAIMER = (
-    "_By following Jötnar suggestions, you agree to comply with the "
+    "_By following Ymir suggestions, you agree to comply with the "
     "[Guidelines on Use of AI Generated Content|https://source.redhat.com/departments/legal/legal_compliance_ethics/compliance_folder/appendix_1_to_policy_on_the_use_of_ai_technologypdf] "
     "and [Guidelines for Responsible Use of AI Code Assistants|https://source.redhat.com/projects_and_programs/ai/wiki/code_assistants_guidelines_for_responsible_use_of_ai_code_assistants]._\n\n"
 )
 
 AUTOMATED_RESOLUTION_NOT_SUPPORTED = (
     "\n\n_Note: Automated resolution for this resolution type "
-    "is not yet supported by Jötnar. Manual action is required._"
+    "is not yet supported by Ymir. Manual action is required._"
 )
 
 

@@ -135,7 +135,7 @@ sequenceDiagram
 
     Agent->>MCP_Git: open_merge_request(fork_url, title, desc, target, source)
     MCP_Git->>Upstream: Create MR or update existing
-    MCP_Git->>Upstream: Add label: jotnar_needs_attention
+    MCP_Git->>Upstream: Add label: ymir_needs_attention
     Upstream-->>MCP_Git: MR URL
     MCP_Git-->>Agent: MR URL, is_brand_new
 
@@ -268,8 +268,8 @@ ssh://{username}@pkgs.devel.redhat.com/rpms/{package}
 
 | Label | Applied By | Meaning |
 |-------|------------|---------|
-| `jotnar_needs_attention` | open_merge_request (auto) | MR needs human review |
-| `jotnar_needs_inspection` | Agents | Specific attention required |
+| `ymir_needs_attention` | open_merge_request (auto) | MR needs human review |
+| `ymir_needs_inspection` | Agents | Specific attention required |
 | `target::latest` | GitLab CI (auto) | Y-stream build |
 | `target::zstream` | GitLab CI (auto) | Z-stream build |
 | `feature::draft-builds::enabled` | Manual (when ready) | Enables Konflux draft builds when added |

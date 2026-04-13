@@ -34,7 +34,7 @@ from common.models import (
     MergeRequestOutputSchema,
 )
 from common.utils import is_cs_branch
-from constants import I_AM_JOTNAR
+from constants import I_AM_YMIR
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.filesystem import GetCWDTool, RemoveTool
@@ -329,8 +329,8 @@ async def main() -> None:
                         commit_message=(
                             f"{state.mr_update_log[-1]}\n\n"
                             f"Related: {state.jira_issue}\n\n"
-                            f"This commit was created {I_AM_JOTNAR}\n\n"
-                            f"Assisted-by: Jotnar\n"
+                            f"This commit was created {I_AM_YMIR}\n\n"
+                            f"Assisted-by: Ymir\n"
                         ),
                         fork_url=state.fork_url,
                         update_branch=state.update_branch,

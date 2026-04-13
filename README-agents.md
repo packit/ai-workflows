@@ -123,19 +123,19 @@ For detailed information about queue routing, label state transitions, and workf
 
 ### Service triggering
 
-Jotnar bot processes issues assigned to `jotnar-project`.
+Ymir bot processes issues assigned to `jotnar-project`.
 
 Issues can be re-triggered through the workflow in two ways:
-1. **Remove any existing `jotnar_*` label** - allows the issue to re-enter the system on the next fetcher run
-2. **Add the `jotnar_retry_needed` label** - triggers workflow retry. Use cases include:
+1. **Remove any existing `ymir_*` label** - allows the issue to re-enter the system on the next fetcher run
+2. **Add the `ymir_retry_needed` label** - triggers workflow retry. Use cases include:
    - Package maintainers who have made changes (e.g., updated some fields, added links, commented)
-   - Jötnar team members after production code updates to resolve issues
+   - Ymir team members after production code updates to resolve issues
 
 ### Maintainer Review Process
 
-Some Jira issues will require a maintainer review by applying the `jotnar_needs_maintainer_review` label to an issue. This is currently agreed on for FuSa (Functional Safety) project packages.
+Some Jira issues will require a maintainer review by applying the `ymir_needs_maintainer_review` label to an issue. This is currently agreed on for FuSa (Functional Safety) project packages.
 
-The `jotnar_fusa` label will be automatically added by the triage agent to JIRA issues involving FuSa packages, and related merge requests will need to be reviewed and handled by subject matter experts.
+The `ymir_fusa` label will be automatically added by the triage agent to JIRA issues involving FuSa packages, and related merge requests will need to be reviewed and handled by subject matter experts.
 
 ## Advanced Usage
 

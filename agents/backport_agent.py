@@ -40,7 +40,7 @@ from common.models import (
     ErrorData,
 )
 from common.utils import redis_client, fix_await, is_cs_branch
-from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
+from constants import I_AM_YMIR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.specfile import GetPackageInfoTool
@@ -1225,15 +1225,15 @@ async def main() -> None:
                             + (f"CVE: {state.cve_id}\n" if state.cve_id else "")
                             + "Upstream patches:\n" + formatted_patches + "\n"
                             + f"Resolves: {state.jira_issue}\n\n"
-                            f"This commit was backported {I_AM_JOTNAR}\n\n"
-                            "Assisted-by: Jotnar\n"
+                            f"This commit was backported {I_AM_YMIR}\n\n"
+                            "Assisted-by: Ymir\n"
                         ),
                         fork_url=state.fork_url,
                         dist_git_branch=state.dist_git_branch,
                         update_branch=state.update_branch,
                         mr_title=state.log_result.title,
                         mr_description=(
-                            f"This merge request was created {I_AM_JOTNAR}\n"
+                            f"This merge request was created {I_AM_YMIR}\n"
                             f"{CAREFULLY_REVIEW_CHANGES}\n\n"
                             f"{state.log_result.description}\n\n"
                             + "Upstream patches:\n" + formatted_patches + "\n"

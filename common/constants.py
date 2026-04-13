@@ -5,7 +5,7 @@ BREWHUB_URL = "https://brewhub.engineering.redhat.com/brewhub"
 JIRA_SEARCH_PATH = "rest/api/3/search/jql"
 
 class RedisQueues(Enum):
-    """Constants for Redis queue names used by Jotnar agents"""
+    """Constants for Redis queue names used by Ymir agents"""
     TRIAGE_QUEUE = "triage_queue"
     REBASE_QUEUE_C9S = "rebase_queue_c9s"
     REBASE_QUEUE_C10S = "rebase_queue_c10s"
@@ -61,36 +61,36 @@ class RedisQueues(Enum):
 
 
 class JiraLabels(Enum):
-    """Constants for Jira labels used by Jotnar agents"""
-    NEEDS_ATTENTION = "jotnar_needs_attention"
-    TRIAGED = "jotnar_triaged"
-    TRIAGE_IN_PROGRESS = "jotnar_triage_in_progress"
-    TRIAGED_BACKPORT = "jotnar_triaged_backport"
-    TRIAGED_REBASE = "jotnar_triaged_rebase"
+    """Constants for Jira labels used by Ymir agents"""
+    NEEDS_ATTENTION = "ymir_needs_attention"
+    TRIAGED = "ymir_triaged"
+    TRIAGE_IN_PROGRESS = "ymir_triage_in_progress"
+    TRIAGED_BACKPORT = "ymir_triaged_backport"
+    TRIAGED_REBASE = "ymir_triaged_rebase"
 
-    REBASED = "jotnar_rebased"
-    BACKPORTED = "jotnar_backported"
-    MERGED = "jotnar_merged"
+    REBASED = "ymir_rebased"
+    BACKPORTED = "ymir_backported"
+    MERGED = "ymir_merged"
 
-    REBASE_ERRORED = "jotnar_rebase_errored"
-    BACKPORT_ERRORED = "jotnar_backport_errored"
-    TRIAGE_ERRORED = "jotnar_triage_errored"
+    REBASE_ERRORED = "ymir_rebase_errored"
+    BACKPORT_ERRORED = "ymir_backport_errored"
+    TRIAGE_ERRORED = "ymir_triage_errored"
 
-    REBASE_FAILED = "jotnar_rebase_failed"
-    BACKPORT_FAILED = "jotnar_backport_failed"
+    REBASE_FAILED = "ymir_rebase_failed"
+    BACKPORT_FAILED = "ymir_backport_failed"
 
-    RETRY_NEEDED = "jotnar_retry_needed"
-    FUSA = "jotnar_fusa"
+    RETRY_NEEDED = "ymir_retry_needed"
+    FUSA = "ymir_fusa"
 
     @classmethod
     def all_labels(cls) -> set[str]:
-        """Return all Jotnar labels for cleanup operations"""
+        """Return all Ymir labels for cleanup operations"""
         return {label.value for label in cls}
 
 
-GITLAB_MR_CHECKLIST = """ # Jötnar MR Review Checklist
+GITLAB_MR_CHECKLIST = """ # Ymir MR Review Checklist
 
-> **⚠️ AI-Generated MR**: Created by Jötnar AI assistant. AI may make mistakes, select incorrect patches, or miss dependencies. **RHEL human maintainer needs to approve this contribution before merging.**
+> **⚠️ AI-Generated MR**: Created by Ymir AI assistant. AI may make mistakes, select incorrect patches, or miss dependencies. **RHEL human maintainer needs to approve this contribution before merging.**
 >
 > <ins>By merging this MR, you agree to follow the [Guidelines on Use of AI Generated Content](https://source.redhat.com/departments/legal/legal_compliance_ethics/compliance_folder/appendix_1_to_policy_on_the_use_of_ai_technologypdf) and [Guidelines for Responsible Use of AI Code Assistants](https://source.redhat.com/projects_and_programs/ai/wiki/code_assistants_guidelines_for_responsible_use_of_ai_code_assistants).</ins>
 
@@ -98,12 +98,12 @@ GITLAB_MR_CHECKLIST = """ # Jötnar MR Review Checklist
 
 ### 📋 Jira Fields Verification
 
-- [ ] **Fix Version/s**: Verify that the fix version chosen by Jötnar is correct
+- [ ] **Fix Version/s**: Verify that the fix version chosen by Ymir is correct
 - [ ] **Testing**
   - [ ] **Test Coverage**: Required for Release Pending status (Manual, Automated, or RegressionOnly)
   - [ ] **Preliminary Testing**: Set to "Pass" after pre-merge testing has been done by a team member according to the test coverage choice.
   - [ ] If **Preliminary Testing** was *Manual*, add a note to the issue that describes the justification for this value and any manual test done.
-- [ ] **Product Documentation Required**: Set to "Yes" or "No" (No if no user facing change  - use this value almost always for Project Jötnar)
+- [ ] **Product Documentation Required**: Set to "Yes" or "No" (No if no user facing change  - use this value almost always for Project Ymir)
 - [ ] **Release Note Fields**: If documentation is required, ensure Release Note Type, Text, and Status are set.
 
 ### Automated Checks
@@ -120,7 +120,7 @@ GITLAB_MR_CHECKLIST = """ # Jötnar MR Review Checklist
 
 ### 🔍 MR Code Review
 
-- [ ] **Upstream Patch Verification** (Jötnar-specific):
+- [ ] **Upstream Patch Verification** (Ymir-specific):
   - [ ] Source of upstream patch is trustworthy and patch is correct
   - [ ] Patch is applied correctly (does it capture the important parts of the change, and not add anything)
   - [ ] Patch picked by triaging is complete (e.g. not just one commit from pull request addressing the issue)
@@ -132,7 +132,7 @@ GITLAB_MR_CHECKLIST = """ # Jötnar MR Review Checklist
   - [ ] are added/removed patches from specfile also added/removed as files in dist-git
   - [ ] new %changelog entry is valid
 - [ ] If any patch is removed it has to be removed both from the specfile and the dist-git
-- [ ] For FuSa packages (related Jira issues have `jotnar_fusa` label) request review and wait for approval from a package maintainer.
+- [ ] For FuSa packages (related Jira issues have `ymir_fusa` label) request review and wait for approval from a package maintainer.
 
 ## ✅ Post-Merge Tasks
 
@@ -144,10 +144,10 @@ GITLAB_MR_CHECKLIST = """ # Jötnar MR Review Checklist
 - [ ] **Errata Tool**: errata created (requires Preliminary Testing: Pass)
   - [ ] **Release Date**: check the errata `Release Date` which in case of important or critical CVE should be ASAP (medium or low severity CVEs should be set to Batch that respects the Due date set in Jira), if not ask in [#forum-rhel-program](https://redhat.enterprise.slack.com/archives/C04S8PHPXH7)
 
-## 🤖 Jötnar specific tasks
+## 🤖 Ymir specific tasks
 
 If everything went well:
-- [ ] Remove `jotnar_needs_inspection` label from issue and merge request if any
+- [ ] Remove `ymir_needs_inspection` label from issue and merge request if any
 - [ ] Remove the issue from the [jotnar todo list](https://issues.redhat.com/issues/?filter=12480549)
 - [ ] Add the issue to the [jotnar handpicked list](https://issues.redhat.com/browse/RHEL-118425?filter=12481077 )
 
@@ -178,7 +178,7 @@ If everything went well:
   - [ ] **verify**: after the build is complete, you need to **manually create an Errata Advisory**
 
 ### [RHEL Hotfix Build](https://source.redhat.com/groups/public/release-engineering/release_engineering_rcm_wiki/rhel_hotfix_build_process_description)
-Jötnar shouldn’t create hotfixes. If it happens follow linked document.
+Ymir shouldn’t create hotfixes. If it happens follow linked document.
 
 ---
 
@@ -188,6 +188,6 @@ Jötnar shouldn’t create hotfixes. If it happens follow linked document.
 
 ### 💡 Feedback Welcome
 
-If the quality of this MR does not meet your expectations or you have suggestions for improvement, please reach out to us. Your feedback helps us continuously improve Jötnar's capabilities and deliver better results.
+If the quality of this MR does not meet your expectations or you have suggestions for improvement, please reach out to us. Your feedback helps us continuously improve Ymir's capabilities and deliver better results.
 
 """

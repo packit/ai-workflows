@@ -159,29 +159,29 @@ Reproduced failed tests with previous build libtiff-4.4.0-13.el9:
             print(f"Comment update verified")
 
     # Test 15: Test get_issue_by_jotnar_tag
-    print("\n[15/15] Testing Jotnar tag search")
-    # create an issue with a Jotnar tag from the start
+    print("\n[15/15] Testing Ymir tag search")
+    # create an issue with a Ymir tag from the start
     tag = JotnarTag(type="needs_attention", resource="erratum", id="TEST-456")
     tag_str = str(tag)
 
     tagged_issue_key = create_issue(
         project=project,
-        summary="[TEST] UAT - Issue with Jotnar Tag",
-        description=f"Test issue for Jotnar tag search\n\n{tag_str}",
+        summary="[TEST] UAT - Issue with Ymir Tag",
+        description=f"Test issue for Ymir tag search\n\n{tag_str}",
         labels=["uat_test", "jotnar_tag_test"],
         components=["jotnar-package-automation"]
     )
-    print(f"Created issue with Jotnar tag: {tagged_issue_key}")
+    print(f"Created issue with Ymir tag: {tagged_issue_key}")
 
     # wait for Jira to index
     time.sleep(3)
 
-    # try to find jotnar issue by tag
+    # try to find Ymir issue by tag
     found_issue = get_issue_by_jotnar_tag(project, tag, with_label="jotnar_tag_test")
     if found_issue:
-        print(f" Found issue with jotnar tag: {found_issue.key}")
+        print(f" Found issue with Ymir tag: {found_issue.key}")
     else:
-        print(f"issue not found by jotnar tag")
+        print(f"issue not found by Ymir tag")
 
 
 if __name__ == "__main__":

@@ -22,8 +22,8 @@ RUN dnf -y install \
       python3-GitPython \
     && dnf clean all
 
-RUN git config --global user.email "jotnar-tests@example.com" \
-      && git config --global user.name "Jotnar Tests"
+RUN git config --global user.email "ymir-tests@example.com" \
+      && git config --global user.name "Ymir Tests"
 
 # Set PYTHONPATH so agents module can be imported
 ENV PYTHONPATH=/src:$PYTHONPATH

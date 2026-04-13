@@ -83,7 +83,7 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
             raise ToolError(f"Failed to initialize Kerberos ticket: {e}") from e
         copr_user = principal.split("@", maxsplit=1)[0]
         try:
-            exclusive_arches = await self._get_exclusive_arches(srpm_path)
+            exclusive_arches = await self.get_exclusive_arches(srpm_path)
         except Exception as e:
             raise ToolError(f"Failed to read SRPM header: {e}") from e
         # build for x86_64 unless the package is exclusive to other arch(es),
@@ -92,7 +92,7 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
         rhel_config = await load_rhel_config()
         upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
         try:
-            chroot = (await self._branch_to_chroot(dist_git_branch, upcoming_z_streams)) + f"-{build_arch}"
+            chroot = (await self.branch_to_chroot(dist_git_branch, upcoming_z_streams)) + f"-{build_arch}"
         except ValueError as e:
             raise ToolError(f"Failed to deduce Copr chroot: {e}") from e
         logger.info(f"Connecting to Copr API at {COPR_CONFIG['copr_url']} for project creation/update")
@@ -217,7 +217,8 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
             )
         )
 
-    async def _get_exclusive_arches(self, srpm_path: Path) -> set[str]:
+    @staticmethod
+    async def get_exclusive_arches(srpm_path: Path) -> set[str]:
         def read_header():
             ts = rpm.TransactionSet()
             ts.setVSFlags(rpm._RPMVSF_NOSIGNATURES | rpm._RPMVSF_NODIGESTS)
@@ -229,7 +230,8 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
         exclusive_arches = set(header[rpm.RPMTAG_EXCLUSIVEARCH])
         return (COPR_ARCHES - exclude_arches) & exclusive_arches
 
-    async def _branch_to_chroot(self, dist_git_branch: str, upcoming_z_streams: dict[str, str]) -> str:
+    @staticmethod
+    async def branch_to_chroot(dist_git_branch: str, upcoming_z_streams: dict[str, str]) -> str:
         if not (m := re.match(r"^(?:c(\d+)s|rhel-(\d+)-main|rhel-(\d+)\.(\d+).*)$", dist_git_branch)):
             raise ValueError(f"Unsupported branch name: {dist_git_branch}")
         majorver, minorver = m.group(1) or m.group(2) or m.group(3), m.group(4)

@@ -60,7 +60,7 @@ async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
 
     flexmock(copr_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
     flexmock(copr_tools).should_receive("load_rhel_config").replace_with(load_rhel_config).once()
-    flexmock(copr_tools.BuildPackageTool).should_receive("_get_exclusive_arches").replace_with(_get_exclusive_arches).once()
+    flexmock(copr_tools.BuildPackageTool).should_receive("get_exclusive_arches").replace_with(_get_exclusive_arches).once()
     flexmock(asyncio).should_receive("sleep").replace_with(sleep)
 
     kwargs = {

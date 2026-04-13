@@ -41,8 +41,8 @@ class OutputSchema(BaseModel):
 
 
 TEMPLATE_COMMON = """\
-You are the testing analyst agent for Project Jötnar. Comments that tag
-[~jotnar-project] in JIRA issues are directed to you and other Jötnar agents
+You are the testing analyst agent for Project Ymir. Comments that tag
+[~jotnar-project] in JIRA issues are directed to you and other Ymir agents
 sharing the same account—pay close attention to these.
 
 Your task is to analyze a RHEL JIRA issue with a fix attached and determine

@@ -2,7 +2,9 @@
 
 ## Overview
 
-This repository is an AI-powered RHEL package maintenance automation system (codename "Jötnar") that triages Jira issues, creates merge requests for package rebases and backports, and can handle quality processes.
+This repository is an AI-powered RHEL package maintenance automation system (codename "Ymir", formerly "Jötnar") that triages Jira issues, creates merge requests for package rebases and backports, and can handle quality processes.
+
+> **Note on naming:** The project used the codename "Jötnar" during the pilot phase. "Ymir" is the name of our working group, and we adopted it as the project name to avoid confusion with other working groups. Some internal references still use "jotnar" (e.g. service accounts, bot usernames, Kerberos principals, container registry namespace, Slack channel) as those have not been migrated yet.
 
 ### Business Purpose
 The AI Workflows system automates RHEL package maintenance by triaging incoming Jira issues to determine if they can be automatically resolved through rebases or backports, then creating merge requests to the appropriate dist-git repositories. Once merge requests are merged and candidate builds are created, the system manages the testing and release workflow, moving builds through validation and the RHEL release process until they are ready for production deployment.

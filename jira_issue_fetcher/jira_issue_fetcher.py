@@ -266,23 +266,23 @@ class JiraIssueFetcher:
             existing_keys = await self._get_existing_issue_keys(redis_conn)
 
             remove_issues_for_retry = set()
-            # Extend existing_keys with issues that have jötnar labels (except jotnar_retry_needed)
+            # Extend existing_keys with issues that have Ymir labels (except ymir_retry_needed)
             for issue in issues:
                 issue_key = issue.get("key")
                 if issue_key:
                     fields = issue.get("fields", {})
                     labels = fields.get("labels", [])
-                    jotnar_labels = [label for label in labels if label.startswith('jotnar_')]
+                    ymir_labels = [label for label in labels if label.startswith('ymir_')]
 
-                    # If issue has jötnar labels and there is no jotnar_retry_needed label, mark as existing
-                    if jotnar_labels and JiraLabels.RETRY_NEEDED.value not in jotnar_labels:
+                    # If issue has Ymir labels and there is no ymir_retry_needed label, mark as existing
+                    if ymir_labels and JiraLabels.RETRY_NEEDED.value not in ymir_labels:
                         existing_keys.add(issue_key)
-                        logger.info(f"Issue {issue_key} has jötnar labels {jotnar_labels} - marking as existing")
-                    elif JiraLabels.RETRY_NEEDED.value in jotnar_labels:
-                        logger.info(f"Issue {issue_key} has jotnar_retry_needed label - marking for retry")
+                        logger.info(f"Issue {issue_key} has Ymir labels {ymir_labels} - marking as existing")
+                    elif JiraLabels.RETRY_NEEDED.value in ymir_labels:
+                        logger.info(f"Issue {issue_key} has ymir_retry_needed label - marking for retry")
                         remove_issues_for_retry.add(issue_key)
-                    elif not jotnar_labels:
-                        logger.info(f"Issue {issue_key} has no jötnar labels - marking for retry")
+                    elif not ymir_labels:
+                        logger.info(f"Issue {issue_key} has no Ymir labels - marking for retry")
                         remove_issues_for_retry.add(issue_key)
 
             pushed_count = 0

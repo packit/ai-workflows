@@ -86,7 +86,7 @@ class PackageUpdateStep():
 
   @staticmethod
   async def add_blocking_comment(state, next_step, dry_run, gateway_tools):
-      """Add a blocking comment to the MR to prevent merge until Jotnar members approve.
+      """Add a blocking comment to the MR to prevent merge until Ymir team members approve.
 
       Args:
           state: The state of the workflow.
@@ -103,7 +103,7 @@ class PackageUpdateStep():
       if state.merge_request_url:
           blocking_comment = """
               **⚠️ Do not merge this merge request ⚠️**\n\n
-              Anyone is welcome to review and approve the changes, but please leave the merging on Jötnar team members.\n
+              Anyone is welcome to review and approve the changes, but please leave the merging on Ymir team members.\n
               There are automated processes that run after merge, and this MR may need to wait
               before being merged to avoid conflicts with ongoing automation.
           """

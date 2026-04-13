@@ -84,7 +84,7 @@ async def test_open_merge_request():
     flexmock(GitlabService).should_receive("get_project_from_url").with_args(
         url=fork_url
     ).and_return(flexmock(create_pr=lambda title, body, target, source: pr_mock, parent=flexmock(get_pr=lambda id: pr_mock)))
-    pr_mock.should_receive("add_label").with_args("jotnar_needs_attention").once()
+    pr_mock.should_receive("add_label").with_args("ymir_needs_attention").once()
     assert (
         await open_merge_request(
             fork_url=fork_url,
@@ -121,7 +121,7 @@ async def test_open_merge_request_with_existing_mr():
             parent=flexmock(get_pr_list=lambda: [pr_mock], get_pr=lambda id: pr_mock),
         )
     )
-    pr_mock.should_receive("add_label").with_args("jotnar_needs_attention").once()
+    pr_mock.should_receive("add_label").with_args("ymir_needs_attention").once()
     assert (
         await open_merge_request(
             fork_url=fork_url,
@@ -192,11 +192,11 @@ async def test_push_to_remote_repository():
 )
 @pytest.mark.asyncio
 async def test_add_merge_request_labels(merge_request_url, expected_project_path):
-    labels = ["jotnar_fusa", "test-label"]
+    labels = ["ymir_fusa", "test-label"]
 
     # Mock the merge request object
     mr_mock = flexmock()
-    mr_mock.should_receive("add_label").with_args("jotnar_fusa").once()
+    mr_mock.should_receive("add_label").with_args("ymir_fusa").once()
     mr_mock.should_receive("add_label").with_args("test-label").once()
 
     # Mock the project object
@@ -374,7 +374,7 @@ async def test_create_merge_request_checklist_duplicate():
     merge_request_url = "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123"
 
     # Mock an existing note with the checklist identifier
-    existing_note = flexmock(body="# Jötnar MR Review Checklist\n\nSome checklist content")
+    existing_note = flexmock(body="# Ymir MR Review Checklist\n\nSome checklist content")
 
     flexmock(GitlabService).should_receive("get_project_from_url").with_args(
         url=merge_request_url.rsplit("/-/merge_requests/", 1)[0],

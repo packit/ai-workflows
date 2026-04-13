@@ -40,7 +40,7 @@ from common.models import (
     Task,
 )
 from common.utils import redis_client, fix_await, is_cs_branch
-from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
+from constants import I_AM_YMIR, CAREFULLY_REVIEW_CHANGES
 from observability import setup_observability
 from tools.commands import RunShellCommandTool
 from tools.filesystem import GetCWDTool, RemoveTool
@@ -371,15 +371,15 @@ async def main() -> None:
                             f"{state.log_result.title}\n\n"
                             f"{state.log_result.description}\n\n"
                             f"Resolves: {state.jira_issue}\n\n"
-                            f"This commit was created {I_AM_JOTNAR}\n\n"
-                            f"Assisted-by: Jotnar\n"
+                            f"This commit was created {I_AM_YMIR}\n\n"
+                            f"Assisted-by: Ymir\n"
                         ),
                         fork_url=state.fork_url,
                         dist_git_branch=state.dist_git_branch,
                         update_branch=state.update_branch,
                         mr_title=state.log_result.title,
                         mr_description=(
-                            f"This merge request was created {I_AM_JOTNAR}\n"
+                            f"This merge request was created {I_AM_YMIR}\n"
                             f"{CAREFULLY_REVIEW_CHANGES}\n\n"
                             f"{state.log_result.description}\n\n"
                             f"Resolves: {state.jira_issue}\n\n"

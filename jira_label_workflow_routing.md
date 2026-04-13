@@ -7,18 +7,18 @@ This document describes how Jira labels control workflow routing through the pro
 ```mermaid
 stateDiagram-v2
     [*] --> New: Issue Created
-    New --> TriagedBackport: jotnar_triaged_backport
-    New --> TriagedRebase: jotnar_triaged_rebase
-    New --> Triaged: jotnar_triaged
-    TriagedBackport --> Success: jotnar_backported
-    TriagedBackport --> Failed: jotnar_backport_failed
-    TriagedBackport --> Errored: jotnar_backport_errored
-    TriagedRebase --> Success: jotnar_rebased
-    TriagedRebase --> Failed: jotnar_rebase_failed
-    TriagedRebase --> Errored: jotnar_rebase_errored
-    Success --> Merged: jotnar_merged
-    Failed --> Retry: jotnar_retry_needed
-    Errored --> Attention: jotnar_needs_attention
+    New --> TriagedBackport: ymir_triaged_backport
+    New --> TriagedRebase: ymir_triaged_rebase
+    New --> Triaged: ymir_triaged
+    TriagedBackport --> Success: ymir_backported
+    TriagedBackport --> Failed: ymir_backport_failed
+    TriagedBackport --> Errored: ymir_backport_errored
+    TriagedRebase --> Success: ymir_rebased
+    TriagedRebase --> Failed: ymir_rebase_failed
+    TriagedRebase --> Errored: ymir_rebase_errored
+    Success --> Merged: ymir_merged
+    Failed --> Retry: ymir_retry_needed
+    Errored --> Attention: ymir_needs_attention
     Retry --> New: Retry Processing
     Merged --> [*]
     Triaged --> [*]
@@ -30,7 +30,7 @@ stateDiagram-v2
 flowchart TD
     FETCH[Jira Issue Fetcher]
 
-    FETCH -->|No jötnar labels<br/>OR jotnar_retry_needed| TRIAGE[triage_queue]
+    FETCH -->|No Ymir labels<br/>OR ymir_retry_needed| TRIAGE[triage_queue]
 
     TRIAGE --> TRIAGE_AGENT[Triage Agent]
 
@@ -68,58 +68,58 @@ flowchart TD
 
 | Label | Added When | Removed When | Next State |
 |-------|------------|--------------|------------|
-| `jotnar_triaged_rebase` | Triage resolves as rebase | On retry (all labels cleared) | `jotnar_rebased` or `jotnar_rebase_failed` |
-| `jotnar_triaged_backport` | Triage resolves as backport | On retry (all labels cleared) | `jotnar_backported` or `jotnar_backport_failed` |
-| `jotnar_triaged` | Triage resolves as open-ended-analysis | On retry (all labels cleared) | Terminal state |
-| `jotnar_rebased` | Rebase success | Never | `jotnar_merged` |
-| `jotnar_backported` | Backport success | Never | `jotnar_merged` |
-| `jotnar_merged` | MR merged | Never | Final state |
+| `ymir_triaged_rebase` | Triage resolves as rebase | On retry (all labels cleared) | `ymir_rebased` or `ymir_rebase_failed` |
+| `ymir_triaged_backport` | Triage resolves as backport | On retry (all labels cleared) | `ymir_backported` or `ymir_backport_failed` |
+| `ymir_triaged` | Triage resolves as open-ended-analysis | On retry (all labels cleared) | Terminal state |
+| `ymir_rebased` | Rebase success | Never | `ymir_merged` |
+| `ymir_backported` | Backport success | Never | `ymir_merged` |
+| `ymir_merged` | MR merged | Never | Final state |
 
 ### Error Labels
 
 | Label | Meaning | Blocks Retry? | Action |
 |-------|---------|---------------|--------|
-| `jotnar_needs_attention` | Human intervention needed | ✅ Yes | Fix issue, remove label, add `jotnar_retry_needed` |
-| `jotnar_triage_errored` | Triage failed | ✅ Yes | Check error_list |
-| `jotnar_rebase_errored` | Rebase error | ✅ Yes | Check Jira comment |
-| `jotnar_backport_errored` | Backport error | ✅ Yes | Check Jira comment |
-| `jotnar_rebase_failed` | Rebase unsuccessful | ❌ No | May auto-retry |
-| `jotnar_backport_failed` | Backport unsuccessful | ❌ No | May auto-retry |
+| `ymir_needs_attention` | Human intervention needed | ✅ Yes | Fix issue, remove label, add `ymir_retry_needed` |
+| `ymir_triage_errored` | Triage failed | ✅ Yes | Check error_list |
+| `ymir_rebase_errored` | Rebase error | ✅ Yes | Check Jira comment |
+| `ymir_backport_errored` | Backport error | ✅ Yes | Check Jira comment |
+| `ymir_rebase_failed` | Rebase unsuccessful | ❌ No | May auto-retry |
+| `ymir_backport_failed` | Backport unsuccessful | ❌ No | May auto-retry |
 
 ### Control Labels
 
 | Label | Purpose | Effect |
 |-------|---------|--------|
-| `jotnar_retry_needed` | Trigger retry | Forces reprocessing |
-| `jotnar_triaged` | Triage completed, no automated follow-up | Terminal state |
-| `jotnar_fusa` | Functional Safety | Requires maintainer review |
+| `ymir_retry_needed` | Trigger retry | Forces reprocessing |
+| `ymir_triaged` | Triage completed, no automated follow-up | Terminal state |
+| `ymir_fusa` | Functional Safety | Requires maintainer review |
 
 ## Queue Types Summary
 
 | Queue | Type | Triggers | Labels Added | Status |
 |-------|------|----------|--------------|--------|
 | `triage_queue` | Input | No labels OR retry_needed | - | Active |
-| `rebase_queue_c9s` | Input | Resolution=REBASE, RHEL 8/9 | `jotnar_triaged_rebase` | Active (AUTO_CHAIN only) |
-| `rebase_queue_c10s` | Input | Resolution=REBASE, RHEL 10+ | `jotnar_triaged_rebase` | Active (AUTO_CHAIN only) |
-| `backport_queue_c9s` | Input | Resolution=BACKPORT, RHEL 8/9 | `jotnar_triaged_backport` | Active (AUTO_CHAIN only) |
-| `backport_queue_c10s` | Input | Resolution=BACKPORT, RHEL 10+ | `jotnar_triaged_backport` | Active (AUTO_CHAIN only) |
-| `rebase_queue` | Input | (Not actively enqueued) | `jotnar_triaged_rebase` | Legacy (checked for deduplication) |
-| `backport_queue` | Input | (Not actively enqueued) | `jotnar_triaged_backport` | Legacy (checked for deduplication) |
-| `clarification_needed_queue` | Input | Resolution=CLARIFICATION | `jotnar_needs_attention` | Active (AUTO_CHAIN only) |
-| `error_list` | Output | Any error | `jotnar_*_errored` | Active |
-| `open_ended_analysis_list` | Output | Resolution=OPEN_ENDED_ANALYSIS | `jotnar_triaged` | Active (AUTO_CHAIN only) |
-| `completed_rebase_list` | Output | Rebase success | `jotnar_rebased` | Active |
-| `completed_backport_list` | Output | Backport success | `jotnar_backported` | Active |
+| `rebase_queue_c9s` | Input | Resolution=REBASE, RHEL 8/9 | `ymir_triaged_rebase` | Active (AUTO_CHAIN only) |
+| `rebase_queue_c10s` | Input | Resolution=REBASE, RHEL 10+ | `ymir_triaged_rebase` | Active (AUTO_CHAIN only) |
+| `backport_queue_c9s` | Input | Resolution=BACKPORT, RHEL 8/9 | `ymir_triaged_backport` | Active (AUTO_CHAIN only) |
+| `backport_queue_c10s` | Input | Resolution=BACKPORT, RHEL 10+ | `ymir_triaged_backport` | Active (AUTO_CHAIN only) |
+| `rebase_queue` | Input | (Not actively enqueued) | `ymir_triaged_rebase` | Legacy (checked for deduplication) |
+| `backport_queue` | Input | (Not actively enqueued) | `ymir_triaged_backport` | Legacy (checked for deduplication) |
+| `clarification_needed_queue` | Input | Resolution=CLARIFICATION | `ymir_needs_attention` | Active (AUTO_CHAIN only) |
+| `error_list` | Output | Any error | `ymir_*_errored` | Active |
+| `open_ended_analysis_list` | Output | Resolution=OPEN_ENDED_ANALYSIS | `ymir_triaged` | Active (AUTO_CHAIN only) |
+| `completed_rebase_list` | Output | Rebase success | `ymir_rebased` | Active |
+| `completed_backport_list` | Output | Backport success | `ymir_backported` | Active |
 
 ## Deduplication Logic
 
-**Note:** The Jira Issue Fetcher only decides whether to queue an issue for processing based on labels. The actual label cleanup (including removal of `jotnar_retry_needed`) happens in the Triage Agent after it consumes the task from the queue.
+**Note:** The Jira Issue Fetcher only decides whether to queue an issue for processing based on labels. The actual label cleanup (including removal of `ymir_retry_needed`) happens in the Triage Agent after it consumes the task from the queue.
 
 ```mermaid
 flowchart TD
     START[Jira Issue Fetcher<br/>Found issue]
-    CHECK{Has any<br/>jötnar_* label?}
-    RETRY{Has<br/>jotnar_retry_needed?}
+    CHECK{Has any<br/>ymir_* label?}
+    RETRY{Has<br/>ymir_retry_needed?}
 
     START --> CHECK
     CHECK -->|No| ADD[Add to triage_queue]
@@ -128,7 +128,7 @@ flowchart TD
     RETRY -->|No| SKIP[Skip - already processed]
 
     ADD --> TRIAGE_PROCESS[Triage Agent processes issue]
-    TRIAGE_PROCESS --> CLEANUP[Triage Agent removes<br/>all jötnar_* labels]
+    TRIAGE_PROCESS --> CLEANUP[Triage Agent removes<br/>all ymir_* labels]
 
     style ADD fill:#c8e6c9
     style SKIP fill:#ffcdd2

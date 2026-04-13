@@ -1,4 +1,4 @@
-# Jötnar Agent Monitoring and Performance Review
+# Ymir Agent Monitoring and Performance Review
 
 ## Overview
 
@@ -28,7 +28,7 @@ Weekly rotating role ([definition](https://github.com/packit/agile/issues/972)) 
 ### Weekly Review Artifacts
 The team primarily tracks these items using Jira dashboards:
 - Newly triaged issues and CVEs
-- Issues with `jotnar_needs_attention` or `jotnar_*_errored` labels
+- Issues with `ymir_needs_attention` or `ymir_*_errored` labels
 - Z-stream issues in current batches
 - MR quality, correctness, and completeness
 - Agent decision accuracy (triage, patch selection, severity)
@@ -40,7 +40,7 @@ The team primarily tracks these items using Jira dashboards:
 ## Anomaly Detection
 
 ### Automated Signals
-- **Labels**: `jotnar_needs_attention`, `jotnar_*_errored`, `jotnar_cant_do`
+- **Labels**: `ymir_needs_attention`, `ymir_*_errored`, `ymir_cant_do`
 - **Build/Test**: CI failures, ROG gating failures, test regressions
 
 ### Manual Review Focus
@@ -86,10 +86,10 @@ The team reviews agent results during weekly sessions, identifies failing use ca
 ### Common Labels
 | Label | Meaning | Action |
 |-------|---------|--------|
-| `jotnar_needs_attention` | Requires team review | Weekly priority |
-| `jotnar_*_errored` | Workflow failed | Review if >3 attempts |
-| `jotnar_cant_do` | Agent cannot handle | Human takeover |
-| `jotnar_fusa` | RHIVOS FuSa package | Maintainer approval |
+| `ymir_needs_attention` | Requires team review | Weekly priority |
+| `ymir_*_errored` | Workflow failed | Review if >3 attempts |
+| `ymir_cant_do` | Agent cannot handle | Human takeover |
+| `ymir_fusa` | RHIVOS FuSa package | Maintainer approval |
 
 ### Links
 - [Skald Role](https://github.com/packit/agile/issues/972)

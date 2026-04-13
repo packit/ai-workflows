@@ -61,7 +61,7 @@ sequenceDiagram
 
     Agent->>MCP: open_merge_request()
     MCP->>MR: Create MR
-    MCP->>MR: Add label: jotnar_needs_attention
+    MCP->>MR: Add label: ymir_needs_attention
     Note over MR: MR created without build label
 
     Note over MR: Later, when ready for build...
@@ -173,7 +173,7 @@ flowchart TD
 
     AGENT --> CREATE["Create MR<br/>via open_merge_request()"]
 
-    CREATE --> ADD_LABEL_NOTE["Note: MR created with only<br/>jotnar_needs_attention label"]
+    CREATE --> ADD_LABEL_NOTE["Note: MR created with only<br/>ymir_needs_attention label"]
 
     ADD_LABEL_NOTE --> MANUAL_LABEL["When ready: Manually add<br/>feature::draft-builds::enabled<br/>via add_merge_request_labels()"]
 

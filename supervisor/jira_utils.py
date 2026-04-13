@@ -591,10 +591,10 @@ def change_issue_status(
 
 def format_attention_message(why: str) -> str:
     return (
-        "{panel:title=Project Jötnar: ATTENTION NEEDED|"
+        "{panel:title=Project Ymir: ATTENTION NEEDED|"
         "borderStyle=solid|borderColor=#CC0000|titleBGColor=#FFF5F5|bgColor=#FFFEF0}\n"
         f"{why}\n\n"
-        "Please resolve this and remove the {{jotnar_needs_attention}} flag.\n"
+        "Please resolve this and remove the {{ymir_needs_attention}} flag.\n"
         "{panel}"
     )
 

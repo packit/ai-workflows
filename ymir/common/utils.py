@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, TypeVar
 
+import httpx
 import redis.asyncio as redis
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
@@ -315,16 +316,38 @@ async def run_tool(
     return result
 
 
+def _is_connection_error(exc: Exception) -> bool:
+    if isinstance(exc, ExceptionGroup):
+        return any(_is_connection_error(e) for e in exc.exceptions)
+    return isinstance(exc, (httpx.ConnectError, ConnectionError, OSError))
+
+
 @asynccontextmanager
 async def mcp_tools(
-    sse_url: str, filter: Callable[[str], bool] | None = None
+    sse_url: str,
+    filter: Callable[[str], bool] | None = None,
+    max_retries: int = 10,
+    retry_delay: float = 3.0,
 ) -> AsyncGenerator[list[MCPTool]]:
-    async with (
-        sse_client(sse_url) as (read, write),
-        ClientSession(read, write) as session,
-    ):
-        await session.initialize()
-        tools = await MCPTool.from_client(session)
-        if filter:
-            tools = [t for t in tools if filter(t.name)]
-        yield tools
+    connected = False
+    for attempt in range(max_retries):
+        try:
+            async with sse_client(sse_url) as (read, write), ClientSession(read, write) as session:
+                await session.initialize()
+                tools = await MCPTool.from_client(session)
+                if filter:
+                    tools = [t for t in tools if filter(t.name)]
+                connected = True
+                yield tools
+                return
+        except Exception as e:
+            if not connected and _is_connection_error(e) and attempt < max_retries - 1:
+                logger.warning(
+                    "MCP gateway not ready, retrying in %.0fs (attempt %d/%d)...",
+                    retry_delay,
+                    attempt + 1,
+                    max_retries,
+                )
+                await asyncio.sleep(retry_delay)
+                continue
+            raise

@@ -10,7 +10,7 @@ LOKI_SINCE ?= 24h
 LOKI_LIMIT ?= 3000
 LOKI_POD ?= mcp-gateway
 
-COMPOSE ?= $(shell command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker-compose")
+COMPOSE ?= $(shell if podman compose ls >/dev/null 2>&1; then echo "podman compose"; elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose"; else echo "docker-compose"; fi)
 COMPOSE_AGENTS=$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents
 COMPOSE_SUPERVISOR=$(COMPOSE) -f $(COMPOSE_FILE) --profile=supervisor
 

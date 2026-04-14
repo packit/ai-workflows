@@ -12,4 +12,18 @@ AGENT_WARNING = (
 JIRA_COMMENT_TEMPLATE = Template(f"""Output from Ymir $AGENT_TYPE Agent: \n\n$JIRA_COMMENT\n\n{AGENT_WARNING}""")
 
 I_AM_YMIR = "by Ymir, a Red Hat Enterprise Linux software maintenance AI agent."
-CAREFULLY_REVIEW_CHANGES = "Carefully review the changes and make sure they are correct."
+
+MR_DESCRIPTION_FOOTER = """---
+
+> **⚠️ AI-Generated MR**: Created by Ymir AI assistant. AI may make mistakes, select incorrect patches, or miss dependencies. **Carefully review the changes. Human RHEL maintainer needs to approve this contribution before merging.**
+>
+> <ins>By merging this MR, you agree to follow the [Guidelines on Use of AI Generated Content](https://source.redhat.com/departments/legal/legal_compliance_ethics/compliance_folder/appendix_1_to_policy_on_the_use_of_ai_technologypdf) and [Guidelines for Responsible Use of AI Code Assistants](https://source.redhat.com/projects_and_programs/ai/wiki/code_assistants_guidelines_for_responsible_use_of_ai_code_assistants).</ins>
+
+## 📞 Questions or Issues?
+
+**Contact:** jotnar@redhat.com | **Slack:** #forum-jötnar-package-automation | **Report AI Issues:** [Jira](https://issues.redhat.com/) (project: Packit, component: jotnar) or [GitHub](https://github.com/packit/ai-workflows/issues)
+
+### 💡 Feedback Welcome
+
+If the quality of this MR does not meet your expectations or you have suggestions for improvement, please reach out to us. Your feedback helps us continuously improve Ymir's capabilities and deliver better results.
+"""

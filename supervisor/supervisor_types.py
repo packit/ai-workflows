@@ -188,8 +188,17 @@ class JotnarTag(BaseModel):
     resource: Literal["erratum"]
     id: str
 
+    _LEGACY_PREFIXES = ("JOTNAR",)
+
     def __str__(self) -> str:
         return f"::: YMIR {self.type} E: {self.id.strip()} :::"
+
+    def all_formats(self) -> list[str]:
+        """Current and legacy tag strings for backwards-compatible search."""
+        return [str(self)] + [
+            f"::: {p} {self.type} E: {self.id.strip()} :::"
+            for p in self._LEGACY_PREFIXES
+        ]
 
 
 class TestingState(StrEnum):

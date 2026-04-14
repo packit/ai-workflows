@@ -419,7 +419,11 @@ def get_issue_by_jotnar_tag(
     project: str, tag: JotnarTag, full: bool = False, with_label: str | None = None
 ) -> Issue | FullIssue | None:
     max_results = 2
-    jql = f'project = {project} AND status NOT IN (Done, Closed) AND description ~ "\\"{tag}\\""'
+    # Match both current (YMIR) and legacy (JOTNAR) tag formats
+    description_filter = " OR ".join(
+        f'description ~ "\\"{t}\\""' for t in tag.all_formats()
+    )
+    jql = f"project = {project} AND status NOT IN (Done, Closed) AND ({description_filter})"
     if with_label is not None:
         jql += f' AND labels = "{with_label}"'
 

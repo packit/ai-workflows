@@ -214,8 +214,15 @@ class ErratumHandler(WorkItemHandler):
                 mismatch_packages = []
                 for package, cur_build in cur_build_map.root.items():
                     nvr = cur_build.nvr
-                    if not erratum_has_magic_string_in_comments(
-                        self.erratum.id, f"ymir-product-listings-checked({nvr})"
+                    if not (
+                        erratum_has_magic_string_in_comments(
+                            self.erratum.id,
+                            f"ymir-product-listings-checked({nvr})",
+                        )
+                        or erratum_has_magic_string_in_comments(
+                            self.erratum.id,
+                            f"jotnar-product-listings-checked({nvr})",
+                        )
                     ):
                         prev_erratum_id, _ = get_previous_erratum(
                             self.erratum.id, package

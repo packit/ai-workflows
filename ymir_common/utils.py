@@ -13,6 +13,7 @@ import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncGenerator, Awaitable, Callable, Tuple, TypeVar
+import json
 
 import redis.asyncio as redis
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
@@ -298,6 +299,17 @@ async def run_tool(
         result = result.text
     if isinstance(result, dict) and len(result) == 1 and "result" in result:
         result = result["result"]
+
+    # loads twice here is neccessary, because beeai mcp server unfortunately wraps the
+    # JSON object twice
+    # this has been fixed in BeeAI 0.1.58
+    # FIXME: Once BeeAI is updated remove this workaround
+    try:
+        result=json.loads(result)
+        result=json.loads(result)
+    except json.JSONDecodeError:
+        pass
+
     return result
 
 

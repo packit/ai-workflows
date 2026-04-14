@@ -43,6 +43,28 @@
   ```
   You can obtain the file from our bitwarden.
 
+- Verify the storage class works on the cluster before deploying. The default storage class shown by
+  `oc get storageclass` may be blocked by an admission webhook that isn't visible in its description.
+  Test with a throwaway PVC first:
+
+  ```bash
+  oc apply -f - <<EOF
+  apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: test-pvc
+  spec:
+    storageClassName: netapp-nfs
+    accessModes: [ReadWriteOnce]
+    resources:
+      requests:
+        storage: 1Mi
+  EOF
+  oc delete pvc test-pvc
+  ```
+
+  If the webhook rejects it, try a different storage class.
+
 - Run `make deploy`. This would apply all the existing configurations to the project.
 
 - Run `oc get route phoenix` and verify url listed in `HOST/PORT` column is accessible.

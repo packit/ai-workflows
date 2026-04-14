@@ -143,17 +143,20 @@ async def set_jira_fields(
             return f"No fields needed updating in {issue_key}"
 
     async with aiohttpClientSession() as session:
-        async with session.put(
-            urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}"),
-            json={"fields": fields},
-            headers=get_jira_auth_headers(),
-        ) as response:
-            if not response.ok:
-                body = await response.text()
-                raise ToolError(
-                    f"Failed to set the specified fields on {issue_key} "
-                    f"(HTTP {response.status}): {body}"
-                )
+        try:
+            async with session.put(
+                urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}"),
+                json={"fields": fields},
+                headers=get_jira_auth_headers(),
+            ) as response:
+                if not response.ok:
+                    body = await response.text()
+                    raise ToolError(
+                        f"Failed to set the specified fields on {issue_key} "
+                        f"(HTTP {response.status}): {body}"
+                    )
+        except aiohttp.ClientError as e:
+            raise ToolError(f"Failed to set the specified fields: {e}") from e
 
     return f"Successfully updated {issue_key}"
 

@@ -179,7 +179,8 @@ start-detached:
 
 .PHONY: stop
 stop:
-	$(COMPOSE) -f $(COMPOSE_FILE) down
+	$(COMPOSE_AGENTS) stop
+	$(COMPOSE_AGENTS) down
 
 .PHONY: clean
 clean:

@@ -1,0 +1,4 @@
+[libdefaults]
+    default_realm = IPA.REDHAT.COM
+    dns_lookup_realm = true
+    dns_lookup_kdc = true

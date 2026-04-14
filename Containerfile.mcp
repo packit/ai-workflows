@@ -29,6 +29,7 @@ RUN useradd -m -G wheel mcp
 # Individual directories are mounted as volumes in development
 COPY ymir/tools/ /home/mcp/ymir/tools/
 COPY ymir/common/ /home/mcp/ymir/common/
+COPY files/ipa_redhat_com /etc/krb5.conf.d/ipa_redhat_com
 RUN chgrp -R root /home/mcp && chmod -R g+rwX /home/mcp
 RUN mkdir /git-repos && chmod -R o+rwX /git-repos
 

@@ -15,7 +15,7 @@ spec:
     - name: c10s
       from:
         kind: DockerImage
-        name: quay.io/jotnar/beeai:c10s
+        name: quay.io/tomastomecek/beeai-agent:c10s
       importPolicy:
         # Periodically query registry to synchronize tag and image metadata.
         scheduled: true

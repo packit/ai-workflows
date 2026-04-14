@@ -9,11 +9,11 @@ from pydantic import Field
 from beeai_framework.errors import FrameworkError
 from beeai_framework.workflows import Workflow
 
-import tasks
-from agents.log_agent import create_log_agent, get_prompt as get_log_prompt
-from agents.package_update_steps import PackageUpdateState
-from common.constants import JiraLabels, RedisQueues
-from common.models import (
+import ymir.agents.tasks as tasks
+from ymir.agents.log_agent import create_log_agent, get_prompt as get_log_prompt
+from ymir.agents.package_update_steps import PackageUpdateState
+from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.models import (
     LogInputSchema,
     LogOutputSchema,
     Task,
@@ -21,10 +21,10 @@ from common.models import (
     RebuildOutputSchema,
     ErrorData,
 )
-from common.utils import redis_client, fix_await
-from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
-from observability import setup_observability
-from utils import get_agent_execution_config, mcp_tools, render_prompt, run_subprocess
+from ymir.common.utils import redis_client, fix_await
+from ymir.agents.constants import I_AM_YMIR, CAREFULLY_REVIEW_CHANGES
+from ymir.agents.observability import setup_observability
+from ymir.agents.utils import get_agent_execution_config, mcp_tools, render_prompt, run_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -154,15 +154,15 @@ async def main() -> None:
                             f"{state.log_result.description}\n\n"
                             f"{dep_text}"
                             f"Resolves: {state.jira_issue}\n\n"
-                            f"This commit was created {I_AM_JOTNAR}\n\n"
-                            "Assisted-by: Jotnar\n"
+                            f"This commit was created {I_AM_YMIR}\n\n"
+                            "Assisted-by: Ymir\n"
                         ),
                         fork_url=state.fork_url,
                         dist_git_branch=state.dist_git_branch,
                         update_branch=state.update_branch,
                         mr_title=state.log_result.title,
                         mr_description=(
-                            f"This merge request was created {I_AM_JOTNAR}\n"
+                            f"This merge request was created {I_AM_YMIR}\n"
                             f"{CAREFULLY_REVIEW_CHANGES}\n\n"
                             f"{state.log_result.description}\n\n"
                             f"{dep_text}"

@@ -506,7 +506,7 @@ def create_triage_agent(gateway_tools):
         tool_call_checker=get_tool_call_checker_config(),
         tools=[ThinkTool(), RunShellCommandTool(),
                 VersionMapperTool(), UpstreamSearchTool()]
-        + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields", "get_patch_from_url"]],
+        + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields", "get_patch_from_url", "search_jira_issues"]],
         memory=UnconstrainedMemory(),
         requirements=[
             ConditionalRequirement(

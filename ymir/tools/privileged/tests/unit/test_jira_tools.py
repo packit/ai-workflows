@@ -116,7 +116,7 @@ async def test_set_jira_fields(args, current_fields, expected_fields):
     async def put(url, json, headers):
         assert url.endswith(f"rest/api/3/issue/{issue_key}")
         assert json.get("fields") == expected_fields
-        yield flexmock(ok=True)
+        yield flexmock(ok=True, raise_for_status=lambda: None)
 
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)
     flexmock(aiohttp.ClientSession).should_receive("put").replace_with(put)

@@ -48,10 +48,10 @@ RUN useradd -m -G wheel beeai
 
 # Copy required directories
 # Individual directories are mounted as volumes in development
-COPY agents/ /home/beeai/agents/
-COPY ymir_tools/ /home/beeai/ymir_tools/
-COPY ymir_common/ /home/beeai/ymir_common/
-COPY supervisor/ /home/beeai/supervisor/
+COPY ymir/agents/ /home/beeai/ymir/agents/
+COPY ymir/tools/ /home/beeai/ymir/tools/
+COPY ymir/common/ /home/beeai/ymir/common/
+COPY ymir/supervisor/ /home/beeai/ymir/supervisor/
 RUN chgrp -R root /home/beeai && chmod -R g+rX /home/beeai
 
 COPY <<EOF /etc/nitrate.conf
@@ -65,7 +65,7 @@ USER beeai
 ENV HOME=/home/beeai
 WORKDIR $HOME
 
-# Set PYTHONPATH so agents module can be imported
+# Set PYTHONPATH so ymir namespace package can be imported
 ENV PYTHONPATH=$HOME:$PYTHONPATH
 
 CMD ["/bin/bash"]

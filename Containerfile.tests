@@ -25,7 +25,7 @@ RUN dnf -y install \
 RUN git config --global user.email "ymir-tests@example.com" \
       && git config --global user.name "Ymir Tests"
 
-# Set PYTHONPATH so agents module can be imported
+# Set PYTHONPATH so ymir namespace package can be imported
 ENV PYTHONPATH=/src:$PYTHONPATH
 
 # Install BeeAI Framework and FastMCP

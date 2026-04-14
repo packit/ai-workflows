@@ -1,18 +1,16 @@
 [build-system]
-requires = ["setuptools>=45", "wheel"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-include = ["agents*", "ymir_common*", "ymir_tools*", "jira_issue_fetcher*"]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
-name = "ai-workflows-beeai"
+name = "ymir"
 version = "0.1.0"
-description = "ai-workflows development environment"
+description = "AI-powered RHEL package maintenance automation"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
-# we are installing bee 0.1.55 in containers now
 dependencies = [
+    "ymir-common",
+    "ymir-tools",
     "litellm!=1.82.7,!=1.82.8",
     "aiohttp>=3.12.15",
     "aiofiles>=24.1.0",
@@ -48,3 +46,14 @@ test = [
     "koji",
     "pyforgejo==2.0.4",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["ymir"]
+exclude = ["ymir/common", "ymir/tools"]
+
+[tool.uv.workspace]
+members = ["ymir/common", "ymir/tools"]
+
+[tool.uv.sources]
+ymir-common = { workspace = true }
+ymir-tools = { workspace = true }

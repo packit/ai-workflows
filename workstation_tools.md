@@ -8,8 +8,8 @@ and **unprivileged** MCP gateways automatically.
 
 | Gateway | Module | Tools |
 |---------|--------|-------|
-| **Privileged** | `ymir_tools.privileged.gateway` | GitLab, Jira, Copr, Koji/Kerberos, lookaside cache, dist-git branching |
-| **Unprivileged** | `ymir_tools.unprivileged.gateway` | Filesystem, shell, specfile, git operations, patches, upstream search, z-stream search |
+| **Privileged** | `ymir.tools.privileged.gateway` | GitLab, Jira, Copr, Koji/Kerberos, lookaside cache, dist-git branching |
+| **Unprivileged** | `ymir.tools.unprivileged.gateway` | Filesystem, shell, specfile, git operations, patches, upstream search, z-stream search |
 
 Claude Code starts both servers in `stdio` mode and communicates with them
 directly. Both run as child processes managed by Claude Code and are available
@@ -28,8 +28,8 @@ Install `ymir-common` first because `ymir-tools` depends on it and the package
 is not published on PyPI.
 
 ```bash
-pip install "git+https://github.com/username/repository.git#subdirectory=ymir_common"
-pip install "git+https://github.com/username/repository.git#subdirectory=ymir_tools"
+pip install "git+https://github.com/username/repository.git#subdirectory=ymir/common"
+pip install "git+https://github.com/username/repository.git#subdirectory=ymir/tools"
 ```
 
 After installation, two console scripts are available:

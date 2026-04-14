@@ -21,9 +21,9 @@ x-beeai-agent: &beeai-agent
   env_file:
     - .secrets/beeai-agent.env
   volumes:
-    - ./agents:/home/beeai/agents:ro,z
-    - ./ymir_tools:/home/beeai/ymir_tools:ro,z
-    - ./ymir_common:/home/beeai/ymir_common:ro,z
+    - ./ymir/agents:/home/beeai/ymir/agents:ro,z
+    - ./ymir/tools:/home/beeai/ymir/tools:ro,z
+    - ./ymir/common:/home/beeai/ymir/common:ro,z
     - git-repos:/git-repos:rw,U
     - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
     - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z,U
@@ -67,10 +67,10 @@ x-supervisor: &supervisor
   env_file:
     - .secrets/supervisor.env
   volumes:
-    - ./agents:/home/beeai/agents:ro,z
-    - ./ymir_tools:/home/beeai/ymir_tools:ro,z
-    - ./ymir_common:/home/beeai/ymir_common:ro,z
-    - ./supervisor:/home/beeai/supervisor:ro,z
+    - ./ymir/agents:/home/beeai/ymir/agents:ro,z
+    - ./ymir/tools:/home/beeai/ymir/tools:ro,z
+    - ./ymir/common:/home/beeai/ymir/common:ro,z
+    - ./ymir/supervisor:/home/beeai/ymir/supervisor:ro,z
     - .secrets/ccache:/home/beeai/ccache:ro,z,U
   restart: unless-stopped
 
@@ -89,17 +89,17 @@ services:
       - MOCK_JIRA=${MOCK_JIRA:-false}
       - JIRA_DRY_RUN=${JIRA_DRY_RUN:-false}
       - GIT_REPO_BASEPATH=/git-repos
-      - JIRA_MOCK_FILES=ymir_tools/privileged/tests/data
+      - JIRA_MOCK_FILES=ymir/tools/privileged/tests/data
     env_file:
       - .secrets/mcp-gateway.env
     volumes:
-      - ./ymir_tools/privileged:/home/mcp/ymir_tools/privileged:ro,z
-      - ./ymir_tools/privileged/tests/data:/home/mcp/ymir_tools/privileged/tests/data:rw,z
-      - ./ymir_common:/home/mcp/ymir_common:ro,z
+      - ./ymir/tools/privileged:/home/mcp/ymir/tools/privileged:ro,z
+      - ./ymir/tools/privileged/tests/data:/home/mcp/ymir/tools/privileged/tests/data:rw,z
+      - ./ymir/common:/home/mcp/ymir/common:ro,z
       - .secrets/keytab:/home/mcp/keytab:ro,z,U
       - git-repos:/git-repos
       - .secrets/rhel-config.json:/home/mcp/rhel-config.json:ro,z,U
-    command: ["python", "ymir_tools/privileged/gateway.py"]
+    command: ["python", "-m", "ymir.tools.privileged.gateway"]
     restart: unless-stopped
     profiles: ["agents", "supervisor", "e2e-test"]
 
@@ -136,7 +136,7 @@ services:
     <<: *beeai-agent-c10s
     environment:
       <<: *beeai-env
-    command: ["python", "agents/triage_agent.py"]
+    command: ["python", "-m", "ymir.agents.triage_agent"]
     profiles: ["agents"]
 
   triage-agent-e2e-tests:
@@ -145,27 +145,27 @@ services:
       <<: *beeai-env
     # the option about default loop is here because of litellm issue
     # https://github.com/BerriAI/litellm/issues/14521
-    command: ["pytest", "agents/tests/e2e/test_triage.py", "-o", "asyncio_default_test_loop_scope=session"]
+    command: ["pytest", "ymir/agents/tests/e2e/test_triage.py", "-o", "asyncio_default_test_loop_scope=session"]
     profiles: ["e2e-test"]
 
   backport-agent-c9s:
     <<: *beeai-agent-c9s
-    command: ["python", "agents/backport_agent.py"]
+    command: ["python", "-m", "ymir.agents.backport_agent"]
     profiles: ["agents"]
 
   backport-agent-c10s:
     <<: *beeai-agent-c10s
-    command: ["python", "agents/backport_agent.py"]
+    command: ["python", "-m", "ymir.agents.backport_agent"]
     profiles: ["agents"]
 
   rebase-agent-c9s:
     <<: *beeai-agent-c9s
-    command: ["python", "agents/rebase_agent.py"]
+    command: ["python", "-m", "ymir.agents.rebase_agent"]
     profiles: ["agents"]
 
   rebase-agent-c10s:
     <<: *beeai-agent-c10s
-    command: ["python", "agents/rebase_agent.py"]
+    command: ["python", "-m", "ymir.agents.rebase_agent"]
     profiles: ["agents"]
 
   rebuild-agent-c9s:
@@ -180,12 +180,12 @@ services:
 
   mr-agent-c9s:
     <<: *beeai-agent-c9s
-    command: ["python", "agents/merge_request_agent.py"]
+    command: ["python", "-m", "ymir.agents.merge_request_agent"]
     profiles: ["agents"]
 
   mr-agent-c10s:
     <<: *beeai-agent-c10s
-    command: ["python", "agents/merge_request_agent.py"]
+    command: ["python", "-m", "ymir.agents.merge_request_agent"]
     profiles: ["agents"]
 
   # This is here so we can use it for '$(COMPOSE) run'

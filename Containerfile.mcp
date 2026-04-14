@@ -27,8 +27,8 @@ RUN useradd -m -G wheel mcp
 
 # Copy required directories
 # Individual directories are mounted as volumes in development
-COPY ymir_tools/privileged/ /home/mcp/ymir_tools/privileged/
-COPY ymir_common/ /home/mcp/ymir_common/
+COPY ymir/tools/privileged/ /home/mcp/ymir/tools/privileged/
+COPY ymir/common/ /home/mcp/ymir/common/
 RUN chgrp -R root /home/mcp && chmod -R g+rwX /home/mcp
 RUN mkdir /git-repos && chmod -R o+rwX /git-repos
 

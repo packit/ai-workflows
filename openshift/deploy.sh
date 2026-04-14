@@ -3,7 +3,7 @@
 set -e
 
 # TODO: This should be removed when we have more than one OpenShift deployment.
-oc project jotnar-prod
+oc project jotnar-ymir--jotnar-ymir
 
 for filename in *.yml; do
     # This check prevents an error if no .yml files are found.

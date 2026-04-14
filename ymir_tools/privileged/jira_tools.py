@@ -249,7 +249,7 @@ class CheckCveTriageEligibilityToolInput(BaseModel):
     issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
 
 class CheckCveTriageEligibilityTool(
-    Tool[CheckCveTriageEligibilityToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
+    Tool[CheckCveTriageEligibilityToolInput, ToolRunOptions, JSONToolOutput[CVEEligibilityResult]]
 ):
     name = "check_cve_triage_eligibility"
     description = """

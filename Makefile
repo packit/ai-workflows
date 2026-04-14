@@ -5,10 +5,6 @@ MOCK_JIRA ?= false
 JIRA_DRY_RUN ?= false
 AUTO_CHAIN ?= true
 FORCE_CVE_TRIAGE ?= false
-LOKI_URL ?= http://loki.tft.osci.redhat.com/
-LOKI_SINCE ?= 24h
-LOKI_LIMIT ?= 3000
-LOKI_POD ?= mcp-gateway
 
 COMPOSE ?= $(shell if podman compose ls >/dev/null 2>&1; then echo "podman compose"; elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose"; else echo "docker-compose"; fi)
 COMPOSE_AGENTS=$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents
@@ -207,32 +203,6 @@ logs-rebuild:
 logs-jira-issue-fetcher:
 	$(COMPOSE) -f $(COMPOSE_FILE) --profile manual logs -f jira-issue-fetcher
 
-
-# Loki logcli targets
-# https://grafana.com/docs/loki/latest/setup/install/local/
-# add their RPM repos and `dnf install logcli`
-LOKI_CMD = logcli --output-timestamp-format=unixdate --addr=$(LOKI_URL) query --since=$(LOKI_SINCE) --limit=$(LOKI_LIMIT) -o raw
-LOKI_FILTER = '{kubernetes_container_name="$(1)",kubernetes_namespace_name="jotnar-prod"} | json | line_format "{{._timestamp}} {{.kubernetes_pod_name}} {{.message}}"'
-
-.PHONY: logs-loki-help
-logs-loki-help:
-	@echo "Available pod names:"
-	@echo "  - triage-agent"
-	@echo "  - backport-agent-c9s"
-	@echo "  - backport-agent-c10s"
-	@echo "  - rebase-agent-c9s"
-	@echo "  - rebase-agent-c10s"
-	@echo "  - rebuild-agent-c9s"
-	@echo "  - rebuild-agent-c10s"
-	@echo "  - supervisor-collector"
-	@echo "  - supervisor-processor"
-	@echo "  - mcp-gateway"
-	@echo "  - valkey"
-	@echo "Usage example: LOKI_SINCE=24h LOKI_POD=<pod-name> make logs-loki"
-
-.PHONY: logs-loki
-logs-loki:
-	$(LOKI_CMD) $(call LOKI_FILTER,$(LOKI_POD))
 
 .PHONY: trigger-pipeline
 trigger-pipeline:

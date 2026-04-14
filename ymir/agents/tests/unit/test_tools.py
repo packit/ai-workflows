@@ -1,0 +1,760 @@
+import contextlib
+import datetime
+import subprocess
+from pathlib import Path
+from textwrap import dedent
+
+import pytest
+from flexmock import flexmock
+from specfile import specfile
+from specfile.utils import EVR
+
+from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
+from beeai_framework.tools import ToolError
+
+from ymir.tools.unprivileged.wicked_git import (
+    GitPatchApplyFinishTool,
+    GitPatchApplyFinishToolInput,
+    GitPatchApplyTool,
+    GitPatchApplyToolInput,
+    GitPatchCreationTool,
+    GitPatchCreationToolInput,
+    GitLogSearchTool,
+    GitLogSearchToolInput,
+    discover_patch_p,
+    find_rej_files,
+)
+from ymir.tools.unprivileged.commands import RunShellCommandTool, RunShellCommandToolInput
+from ymir.tools.unprivileged.specfile import (
+    AddChangelogEntryTool,
+    AddChangelogEntryToolInput,
+    GetPackageInfoTool,
+    GetPackageInfoToolInput,
+    UpdateReleaseTool,
+    UpdateReleaseToolInput,
+)
+from ymir.tools.unprivileged.text import (
+    CreateTool,
+    CreateToolInput,
+    InsertAfterSubstringTool,
+    InsertAfterSubstringToolInput,
+    ViewTool,
+    ViewToolInput,
+    InsertTool,
+    InsertToolInput,
+    StrReplaceTool,
+    StrReplaceToolInput,
+    SearchTextTool,
+    SearchTextToolInput,
+)
+from ymir.tools.unprivileged.filesystem import GetCWDTool, GetCWDToolInput, RemoveTool, RemoveToolInput
+
+
+@pytest.mark.parametrize(
+    "command, exit_code, stdout, stderr",
+    [
+        (
+            "exit 28",
+            28,
+            None,
+            None,
+        ),
+        (
+            "echo -n test",
+            0,
+            "test",
+            None,
+        ),
+        (
+            "echo -n error >&2 && false",
+            1,
+            None,
+            "error",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_shell_command(command, exit_code, stdout, stderr):
+    tool = RunShellCommandTool()
+    output = await tool.run(input=RunShellCommandToolInput(command=command)).middleware(
+        GlobalTrajectoryMiddleware(pretty=True)
+    )
+    result = output.to_json_safe()
+    assert result.exit_code == exit_code
+    assert result.stdout == stdout
+    assert result.stderr == stderr
+
+
+@pytest.mark.parametrize(
+    "full_output",
+    [False, True],
+)
+@pytest.mark.asyncio
+async def test_run_shell_command_huge_output(full_output):
+    command = "printf 'Line\n%.0s' {1..1000}"
+    tool = RunShellCommandTool()
+    output = await tool.run(input=RunShellCommandToolInput(command=command, full_output=full_output)).middleware(
+        GlobalTrajectoryMiddleware(pretty=True)
+    )
+    result = output.to_json_safe()
+    assert result.exit_code == 0
+    assert result.stderr is None
+    if full_output:
+        assert len(result.stdout.splitlines()) == 1000
+        assert "[...]" not in result.stdout.splitlines()
+    else:
+        assert len(result.stdout.splitlines()) == 200
+        assert "[...]" in result.stdout.splitlines()
+
+
+@pytest.mark.asyncio
+async def test_add_changelog_entry(minimal_spec):
+    content = ["- some change", "  second line"]
+    flexmock(specfile).should_receive("guess_packager").and_return(f"RHEL Packaging Agent <jotnar@redhat.com>")
+    flexmock(specfile).should_receive("datetime").and_return(
+        flexmock(
+            datetime=flexmock(now=lambda _: flexmock(date=lambda: datetime.date(2025, 8, 5))),
+            timezone=flexmock(utc=None),
+        )
+    )
+    tool = AddChangelogEntryTool()
+    output = await tool.run(
+        input=AddChangelogEntryToolInput(spec=minimal_spec, content=content)
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    assert minimal_spec.read_text().splitlines()[-7:-2] == [
+        "%changelog",
+        "* Tue Aug 05 2025 RHEL Packaging Agent <jotnar@redhat.com> - 0.1-2",
+        "- some change",
+        "  second line",
+        "",
+    ]
+
+
+@pytest.mark.parametrize(
+    "spec_fixture, expected_version, expected_patches",
+    [
+        ("spec_with_patches", "1.2.3", [
+            "fix-cve-2024-1234.patch",
+            "fix-memory-leak.patch",
+            "update-documentation.patch"
+        ]),
+        ("spec_with_macro_patches", "3.5.3", [
+            "mypackage-3.5.3-Fix-CVE-2026-4111.patch",
+        ]),
+        ("minimal_spec", "0.1", []),
+    ],
+)
+@pytest.mark.asyncio
+async def test_get_package_info(spec_fixture, expected_version, expected_patches, request):
+    spec = request.getfixturevalue(spec_fixture)
+    tool = GetPackageInfoTool()
+
+    output = await tool.run(
+        input=GetPackageInfoToolInput(spec=spec)
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.to_json_safe()
+
+    assert result.version == expected_version
+    assert result.patch_files == expected_patches
+
+
+@pytest.fixture
+def autorelease_spec(tmp_path):
+    spec = tmp_path / "autorelease.spec"
+    spec.write_text(
+        dedent(
+            """
+            Name:           test
+            Version:        0.1
+            Release:        %autorelease
+            Summary:        Test package
+
+            License:        MIT
+
+            %description
+            Test package
+
+            %changelog
+            %autochangelog
+            """
+        )
+    )
+    return spec
+
+
+@pytest.fixture
+def spec_with_patches(tmp_path):
+    spec = tmp_path / "with_patches.spec"
+    source_file = tmp_path / "source.tar.gz"
+    source_file.touch()
+    spec.write_text(
+        dedent(
+            """
+            Name:           test
+            Version:        1.2.3
+            Release:        1%{?dist}
+            Summary:        Test package
+
+            License:        MIT
+
+            Source0:        source.tar.gz
+            Patch0:         fix-cve-2024-1234.patch
+            Patch1:         fix-memory-leak.patch
+            Patch2:         update-documentation.patch
+
+            %description
+            Test package with patches
+
+            %prep
+            %autosetup -p1
+
+            %changelog
+            * Thu Jan 13 3770 Test User <test@redhat.com> - 1.2.3-1
+            - first version
+            """
+        )
+    )
+    return spec
+
+
+@pytest.fixture
+def spec_with_macro_patches(tmp_path):
+    spec = tmp_path / "macro_patches.spec"
+    source_file = tmp_path / "source.tar.gz"
+    source_file.touch()
+    spec.write_text(
+        dedent(
+            """
+            Name:           mypackage
+            Version:        3.5.3
+            Release:        1%{?dist}
+            Summary:        Test package
+
+            License:        MIT
+
+            Source0:        source.tar.gz
+            Patch0:         %{name}-%{version}-Fix-CVE-2026-4111.patch
+
+            %description
+            Test package with macro-containing patch names
+
+            %prep
+            %autosetup -p1
+
+            %changelog
+            * Thu Jan 13 3770 Test User <test@redhat.com> - 3.5.3-1
+            - first version
+            """
+        )
+    )
+    return spec
+
+
+@pytest.mark.parametrize(
+    "rebase",
+    [False, True],
+)
+@pytest.mark.parametrize(
+    "dist_git_branch",
+    ["c9s", "c10s", "rhel-9.6.0", "rhel-10.0"],
+)
+@pytest.mark.asyncio
+async def test_update_release(rebase, dist_git_branch, minimal_spec, autorelease_spec):
+    package = "test"
+
+    async def _get_latest_higher_stream_build(*_, **__):
+        return EVR(version="0.1", release="2.elX")
+
+    flexmock(UpdateReleaseTool).should_receive("_get_latest_higher_stream_build").replace_with(_get_latest_higher_stream_build)
+
+    tool = UpdateReleaseTool()
+
+    async def run_and_check(spec, expected_release, error=False):
+        with (pytest.raises(ToolError) if error else contextlib.nullcontext()) as e:
+            output = await tool.run(
+                input=UpdateReleaseToolInput(
+                    spec=spec, package=package, dist_git_branch=dist_git_branch, rebase=rebase
+                )
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+        if error:
+            return e.value.message
+        result = output.result
+        assert result.startswith("Successfully")
+        assert spec.read_text().splitlines()[3] == f"Release:        {expected_release}"
+        return result
+
+    if not dist_git_branch.startswith("rhel-"):
+        await run_and_check(minimal_spec, "1%{?dist}" if rebase else "3%{?dist}")
+        await run_and_check(autorelease_spec, "%autorelease")
+    else:
+        await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "2%{?dist}.1")
+        await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
+        await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "2%{?dist}.2")
+        await run_and_check(autorelease_spec, "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}")
+
+    with specfile.Specfile(minimal_spec) as spec:
+        spec.raw_release = "2%{?dist}.1"
+    with specfile.Specfile(autorelease_spec) as spec:
+        spec.raw_release = "2%{?dist}.%{autorelease -n}"
+
+    if not dist_git_branch.startswith("rhel-"):
+        await run_and_check(minimal_spec, "1%{?dist}" if rebase else "3%{?dist}")
+        await run_and_check(autorelease_spec, "%autorelease")
+
+    with specfile.Specfile(minimal_spec) as spec:
+        spec.raw_release = "5%{?alphatag:.%{alphatag}}%{?dist}.8"
+
+    if not dist_git_branch.startswith("rhel-"):
+        await run_and_check(
+            minimal_spec,
+            (
+                "1%{?alphatag:.%{alphatag}}%{?dist}"
+                if rebase
+                else "6%{?alphatag:.%{alphatag}}%{?dist}"
+            ),
+        )
+    else:
+        await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "5%{?alphatag:.%{alphatag}}%{?dist}.9")
+        await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "5%{?alphatag:.%{alphatag}}%{?dist}.10")
+
+
+@pytest.mark.asyncio
+async def test_get_cwd(tmp_path):
+    tool = GetCWDTool(options={"working_directory": tmp_path})
+    output = await tool.run(input=GetCWDToolInput()).middleware(
+        GlobalTrajectoryMiddleware(pretty=True)
+    )
+    result = output.result
+    assert Path(result) == tmp_path
+
+
+@pytest.mark.asyncio
+async def test_remove(tmp_path):
+    test_file = tmp_path / "test.txt"
+    test_file.touch()
+    tool = RemoveTool()
+    output = await tool.run(input=RemoveToolInput(file=test_file)).middleware(
+        GlobalTrajectoryMiddleware(pretty=True)
+    )
+    result = output.result
+    assert result.startswith("Successfully")
+    assert not test_file.is_file()
+    with pytest.raises(ToolError) as e:
+        output = await tool.run(input=RemoveToolInput(file=test_file)).middleware(
+            GlobalTrajectoryMiddleware(pretty=True)
+        )
+    assert e.value.message.startswith("Failed to remove file")
+
+
+@pytest.mark.asyncio
+async def test_create(tmp_path):
+    test_file = tmp_path / "test.txt"
+    content = "Line 1\nLine 2\n"
+    tool = CreateTool()
+    output = await tool.run(input=CreateToolInput(file=test_file, content=content)).middleware(
+        GlobalTrajectoryMiddleware(pretty=True)
+    )
+    result = output.result
+    assert result.startswith("Successfully")
+    assert test_file.read_text() == content
+
+
+@pytest.mark.asyncio
+async def test_view(tmp_path):
+    test_dir = tmp_path
+    test_file = test_dir / "test.txt"
+    content = "Line 1\nLine 2\nLine 3\n"
+    test_file.write_text(content)
+    tool = ViewTool()
+    output = await tool.run(input=ViewToolInput(path=test_dir)).middleware(
+        GlobalTrajectoryMiddleware(pretty=True)
+    )
+    result = output.result
+    assert result == "test.txt\n"
+    output = await tool.run(input=ViewToolInput(path=test_file)).middleware(
+        GlobalTrajectoryMiddleware(pretty=True)
+    )
+    result = output.result
+    assert result == content
+    output = await tool.run(input=ViewToolInput(path=test_file, offset=1)).middleware(
+        GlobalTrajectoryMiddleware(pretty=True)
+    )
+    result = output.result
+    assert (
+        result
+        == dedent(
+            """
+            Line 2
+            Line 3
+            """
+        )[1:]
+    )
+    output = await tool.run(input=ViewToolInput(path=test_file, offset=1, limit=1)).middleware(
+        GlobalTrajectoryMiddleware(pretty=True)
+    )
+    result = output.result
+    assert (
+        result
+        == dedent(
+            """
+            Line 2
+            """
+        )[1:]
+    )
+
+
+@pytest.mark.parametrize(
+    "line, content",
+    [
+        (
+            0,
+            dedent(
+                """
+                Inserted line
+                Line 1
+                Line 2
+                Line 3
+                """
+            )[1:],
+        ),
+        (
+            1,
+            dedent(
+                """
+                Line 1
+                Inserted line
+                Line 2
+                Line 3
+                """
+            )[1:],
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_insert(line, content, tmp_path):
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("Line 1\nLine 2\nLine 3\n")
+    tool = InsertTool()
+    output = await tool.run(
+        input=InsertToolInput(file=test_file, line=line, new_string="Inserted line")
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    assert test_file.read_text() == content
+
+
+@pytest.mark.parametrize(
+    "insert_after_substring, final_content",
+    [
+        (
+            "Line 1",
+            "Line 1\nInserted line\nLine 2\nLine 3\n",
+        ),
+        (
+            "Line 2",
+            "Line 1\nLine 2\nInserted line\nLine 3\n",
+        ),
+        (
+            "Line 3",
+            "Line 1\nLine 2\nLine 3\nInserted line\n",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_insert_after_substring(insert_after_substring, final_content, tmp_path):
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("Line 1\nLine 2\nLine 3\n")
+    tool = InsertAfterSubstringTool()
+    output = await tool.run(
+        input=InsertAfterSubstringToolInput(file=test_file, insert_after_substring=insert_after_substring, new_string="Inserted line")
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    assert test_file.read_text() == final_content
+
+
+@pytest.mark.asyncio
+async def test_insert_after_substring_missing(tmp_path):
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("Line 1\nLine 2\nLine 3\n")
+    tool = InsertAfterSubstringTool()
+    with pytest.raises(ToolError) as e:
+        await tool.run(
+            input=InsertAfterSubstringToolInput(file=test_file, insert_after_substring="Line 4", new_string="Inserted line")
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = e.value.message
+    assert "No insertion was done because the specified substring wasn't present" in result
+
+
+@pytest.mark.asyncio
+async def test_str_replace(tmp_path):
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("Line 1\nLine 2\nLine 3\n")
+    tool = StrReplaceTool()
+    output = await tool.run(
+        input=StrReplaceToolInput(file=test_file, old_string="Line 2", new_string="LINE_2")
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    assert (
+        test_file.read_text()
+        == dedent(
+            """
+            Line 1
+            LINE_2
+            Line 3
+            """
+        )[1:]
+    )
+
+
+@pytest.mark.parametrize(
+    "pattern, expected_output",
+    [
+        (
+            "^Line",
+            "1:Line 1\n2:Line 2\n3:Line 3\n",
+        ),
+        (
+            "2$",
+            "2:Line 2\n",
+        ),
+        (
+            "Line 3",
+            "3:Line 3\n",
+        ),
+        (
+            "somethingelse",
+            None,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_search_text(tmp_path, pattern, expected_output):
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("Line 1\nLine 2\nLine 3\n")
+    tool = SearchTextTool()
+    with (pytest.raises(ToolError) if expected_output is None else contextlib.nullcontext()) as e:
+        output = await tool.run(
+            input=SearchTextToolInput(file=test_file, pattern=pattern)
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    if expected_output is not None:
+        result = output.result
+        assert result == expected_output
+    else:
+        assert e.value.message.endswith("No matches found")
+
+
+@pytest.mark.asyncio
+async def test_git_patch_creation_tool_nonexistent_repo(tmp_path):
+    # This test checks the error message for a non-existent repo path
+    repo_path = tmp_path / "not_a_repo"
+    patch_file_path = tmp_path / "patch.patch"
+    tool = GitPatchCreationTool()
+    with pytest.raises(ToolError) as e:
+        await tool.run(
+            input=GitPatchCreationToolInput(
+                repository_path=str(repo_path),
+                patch_file_path=str(patch_file_path),
+            )
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = e.value.message
+    assert "Repository path does not exist" in result
+
+@pytest.fixture
+def git_repo(tmp_path):
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    subprocess.run(["git", "init"], cwd=repo_path, check=True)
+    # Create a file and commit it
+    file_path = repo_path / "file.txt"
+    file_path.write_text("Line 1\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=repo_path, check=True)
+    subprocess.run(["git", "commit", "-m", "Initial commit\n\nCVE-2025-12345"],
+        cwd=repo_path, check=True)
+    file_path.write_text("Line 1\nLine 2\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=repo_path, check=True)
+    subprocess.run(["git", "commit", "-m", "Initial commit2\n\nResolves: RHEL-123456"],
+        cwd=repo_path, check=True)
+    subprocess.run(["git", "branch", "line-2"], cwd=repo_path, check=True)
+    return repo_path
+
+@pytest.mark.asyncio
+async def test_git_patch_creation_tool_success(git_repo, tmp_path):
+    # Simulate a git-am session with a conflict by creating a new commit and then using format-patch
+    # Create a new file and stage it
+    subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=git_repo, check=True)
+    new_file = git_repo / "file.txt"
+    new_file.write_text("Line 1\nLine 3\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-m", "Add line 3"], cwd=git_repo, check=True)
+
+    patch_file = tmp_path / "patch.patch"
+    subprocess.run(["git", "format-patch", "-1", "HEAD", "--stdout"], cwd=git_repo, check=True, stdout=patch_file.open("w"))
+
+    subprocess.run(["git", "switch", "line-2"], cwd=git_repo, check=True)
+    base_head_commit = subprocess.run(["git", "rev-parse", "HEAD"],
+        cwd=git_repo, check=True, capture_output=True, text=True).stdout.strip()
+
+    # Now apply the patch with git am
+    # This will fail with a merge conflict, but we don't care about that
+    apply_tool = GitPatchApplyTool()
+    output = await apply_tool.run(
+        input=GitPatchApplyToolInput(
+            repository_path=str(git_repo),
+            patch_file_path=str(patch_file),
+        ),
+    )
+    assert "Patch application failed" in str(output.result)
+
+    # resolve the conflict:
+    new_file.write_text("Line 1\nLine 2\nLine 3\n")
+    # remove rej file
+    (git_repo / "file.txt.rej").unlink()
+
+    # finish the patch application
+    finish_tool = GitPatchApplyFinishTool()
+    output = await finish_tool.run(
+        input=GitPatchApplyFinishToolInput(
+            repository_path=str(git_repo),
+            patch_file_path=str(patch_file),
+        ),
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    # Now use the tool to create a patch file from the repo
+    tool = GitPatchCreationTool(options={"this_cannot_be_empty": "sure-why-not"})
+    tool.options["base_head_commit"] = base_head_commit
+    output_patch = tmp_path / "output.patch"
+    output = await tool.run(
+        input=GitPatchCreationToolInput(
+            repository_path=str(git_repo),
+            patch_file_path=str(output_patch),
+        ),
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert "Successfully created a patch file" in result
+    assert output_patch.exists()
+    # The patch file should contain the commit message "Add line 3"
+    assert "Add line 3" in output_patch.read_text()
+
+
+@pytest.mark.asyncio
+async def test_git_patch_creation_tool_with_hideous_patch_file(git_repo, tmp_path):
+    """ Verifies that GitPatchCreationTool can recover from a `git am` failure
+    caused by a patch file without a proper header (i.e., missing author identity).
+    """
+    base_head_commit = subprocess.run(["git", "rev-parse", "HEAD"],
+        cwd=git_repo, check=True, capture_output=True, text=True).stdout.strip()
+    patch_file = tmp_path / "hideous-patch.patch"
+    patch_file.write_text(
+        "\nRotten plums and apples\n\n"
+        "--- a/file.txt\n"
+        "+++ b/file.txt\n"
+        "@@ -1,2 +1,3 @@\n"
+        " Line 1\n"
+        " Line 2\n"
+        "+Line 3\n"
+        "--\n"
+        "2.51.0\n"
+    )
+    # Now apply the patch
+    apply_tool = GitPatchApplyTool()
+    output = await apply_tool.run(
+        input=GitPatchApplyToolInput(
+            repository_path=str(git_repo),
+            patch_file_path=str(patch_file),
+        ),
+    )
+    # verify the git-am fails with the expected error message
+    assert "fatal: empty ident name (for <>) not allowed" in str(output.result)
+
+    # finish the patch application
+    finish_tool = GitPatchApplyFinishTool()
+    output = await finish_tool.run(
+        input=GitPatchApplyFinishToolInput(
+            repository_path=str(git_repo),
+            patch_file_path=str(patch_file),
+        ),
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    # Now use the tool to create a patch file from the repo
+    tool = GitPatchCreationTool(options={"this_cannot_be_empty": "sure-why-not"})
+    tool.options["base_head_commit"] = base_head_commit
+    output_patch = tmp_path / "output.patch"
+    output = await tool.run(
+        input=GitPatchCreationToolInput(
+            repository_path=str(git_repo),
+            patch_file_path=str(output_patch),
+        ),
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert "Successfully created a patch file" in result
+    assert output_patch.exists()
+    # The patch file should contain the addition of 'Line 3'
+    assert "+Line 3\n" in output_patch.read_text()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cve_id, jira_issue, expected",
+    [
+        ("CVE-2025-12345", "", "Found 1 matching commit(s) for 'CVE-2025-12345'"),
+        ("CVE-2025-12346", "", "No matches found for 'CVE-2025-12346'"),
+        ("", "RHEL-123456", "Found 1 matching commit(s) for 'RHEL-123456'"),
+        ("", "RHEL-123457", "No matches found for 'RHEL-123457'"),
+    ]
+)
+async def test_git_log_search_tool_found(git_repo, cve_id, jira_issue, expected):
+    tool = GitLogSearchTool()
+    output = await tool.run(
+        input=GitLogSearchToolInput(
+            repository_path=str(git_repo),
+            cve_id=cve_id,
+            jira_issue=jira_issue,
+        )
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert expected in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "patch_content, expected_n",
+    [
+        (
+            "diff --git a/file.txt b/file.txt\n"
+            "index cb752151e..ceb5c5dca 100644\n"
+            "--- a/file.txt\n"
+            "+++ b/file.txt\n"
+            "@@ -1,2 +1,3 @@\n"
+            " Line 1\n"
+            " Line 2\n"
+            "+Line 3\n",
+            1),
+        (
+            "diff --git a/z/file.txt b/z/file.txt\n"
+            "index cb752151e..ceb5c5dca 100644\n"
+            "--- a/z/file.txt\n"
+            "+++ b/z/file.txt\n"
+            "@@ -1,2 +1,3 @@\n"
+            " Line 1\n"
+            " Line 2\n"
+            "+Line 3\n",
+            2),
+    ]
+)
+async def test_discover_patch_p(git_repo, tmp_path, patch_content, expected_n):
+    patch_file = tmp_path / f"{expected_n}.patch"
+    patch_file.write_text(patch_content)
+    n = await discover_patch_p(patch_file, git_repo)
+    assert n == expected_n
+
+
+@pytest.mark.asyncio
+async def test_find_rej_files(git_repo):
+    (git_repo / ".gitignore").write_text("*.rej\n")
+    (git_repo / "file.txt.rej").write_text("rej content")
+    (git_repo / "foo-bar.rej").write_text("rej content 2")
+    result = await find_rej_files(git_repo)
+    assert sorted(result) == sorted(["file.txt.rej", "foo-bar.rej"])

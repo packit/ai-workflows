@@ -11,8 +11,8 @@ from datetime import datetime
 # Add current directory to path
 sys.path.insert(0, '.')
 
-from supervisor.http_utils import with_requests_session
-from supervisor.jira_utils import (
+from ymir.supervisor.http_utils import with_requests_session
+from ymir.supervisor.jira_utils import (
     change_issue_status,
     get_custom_fields,
     create_issue,
@@ -26,7 +26,7 @@ from supervisor.jira_utils import (
     get_current_issues,
     get_issue_by_jotnar_tag,
 )
-from supervisor.supervisor_types import IssueStatus, JotnarTag
+from ymir.supervisor.supervisor_types import IssueStatus, JotnarTag
 
 
 @with_requests_session()

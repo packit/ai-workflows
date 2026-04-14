@@ -19,8 +19,8 @@ from urllib.parse import quote
 
 import aiohttp
 
-from ymir_common.constants import JIRA_SEARCH_PATH
-from ymir_common.utils import get_jira_auth_headers
+from ymir.common.constants import JIRA_SEARCH_PATH
+from ymir.common.utils import get_jira_auth_headers
 
 
 DEFAULT_DICTIONARY = {

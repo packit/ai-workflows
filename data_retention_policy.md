@@ -20,7 +20,7 @@
 
 ### Git Repository Clones (14 Days) ✅
 
-**Configured in:** `ymir_tools/privileged/utils.py`
+**Configured in:** `ymir/tools/privileged/utils.py`
 ```python
 REPO_CLEANUP_DAYS = 14
 ```

@@ -38,6 +38,7 @@ run-triage-agent-e2e-tests:
 		-e DRY_RUN=$(DRY_RUN) \
 		triage-agent-e2e-tests
 
+
 .PHONY: run-rebase-agent-c9s-standalone
 run-rebase-agent-c9s-standalone:
 	$(COMPOSE_AGENTS) run --rm \
@@ -261,22 +262,22 @@ endif
 .PHONY: supervisor-clear-queue
 supervisor-clear-queue:
 	$(COMPOSE_SUPERVISOR) run --rm \
-		supervisor python -m supervisor.main $(DEBUG_FLAG) clear-queue
+		supervisor python -m ymir.supervisor.main $(DEBUG_FLAG) clear-queue
 
 .PHONY: supervisor-collect
 supervisor-collect:
 	$(COMPOSE_SUPERVISOR) run --rm \
-		supervisor python -m supervisor.main $(DEBUG_FLAG) collect --no-repeat
+		supervisor python -m ymir.supervisor.main $(DEBUG_FLAG) collect --no-repeat
 
 .PHONY: process-issue
 process-issue:
 	$(COMPOSE_SUPERVISOR) run --rm \
-		supervisor python -m supervisor.main $(DEBUG_FLAG) $(IGNORE_NEEDS_ATTENTION_FLAG) $(DRY_RUN_FLAG) process-issue $(JIRA_ISSUE)
+		supervisor python -m ymir.supervisor.main $(DEBUG_FLAG) $(IGNORE_NEEDS_ATTENTION_FLAG) $(DRY_RUN_FLAG) process-issue $(JIRA_ISSUE)
 
 .PHONY: process-erratum
 process-erratum:
 	$(COMPOSE_SUPERVISOR) run --rm \
-		supervisor python -m supervisor.main $(DEBUG_FLAG) $(IGNORE_NEEDS_ATTENTION_FLAG) $(DRY_RUN_FLAG) process-erratum $(ERRATA_ID)
+		supervisor python -m ymir.supervisor.main $(DEBUG_FLAG) $(IGNORE_NEEDS_ATTENTION_FLAG) $(DRY_RUN_FLAG) process-erratum $(ERRATA_ID)
 
 
 # Common utility targets

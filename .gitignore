@@ -46,4 +46,4 @@ noarch/
 .secrets
 
 # Testing Jira files
-ymir_tools/privileged/tests/data/*
+ymir/tools/privileged/tests/data/*

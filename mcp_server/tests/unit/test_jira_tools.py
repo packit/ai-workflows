@@ -74,18 +74,18 @@ async def test_get_jira_details():
         ),
         (
             dict(severity=Severity.LOW),
-            {"fields": {"customfield_12316142": {"value": None}}},
-            {"customfield_12316142": {"value": Severity.LOW.value}},
+            {"fields": {"customfield_10840": {"value": None}}},
+            {"customfield_10840": {"value": Severity.LOW.value}},
         ),
         (
             dict(target_end=datetime.date(2024, 12, 31)),
-            {"fields": {"customfield_12313942": {"value": None}}},
-            {"customfield_12313942": "2024-12-31"},
+            {"fields": {"customfield_10023": {"value": None}}},
+            {"customfield_10023": "2024-12-31"},
         ),
         (
             dict(fix_versions=["rhel-1.2.3"], severity=Severity.CRITICAL),
-            {"fields": {"fixVersions": [], "customfield_12316142": {"value": None}}},
-            {"fixVersions": [{"name": "rhel-1.2.3"}], "customfield_12316142": {"value": Severity.CRITICAL.value}},
+            {"fields": {"fixVersions": [], "customfield_10840": {"value": None}}},
+            {"fixVersions": [{"name": "rhel-1.2.3"}], "customfield_10840": {"value": Severity.CRITICAL.value}},
         ),
     ],
 )
@@ -106,7 +106,7 @@ async def test_set_jira_fields(args, current_fields, expected_fields):
     async def put(url, json, headers):
         assert url.endswith(f"rest/api/3/issue/{issue_key}")
         assert json.get("fields") == expected_fields
-        yield flexmock(raise_for_status=lambda: None)
+        yield flexmock(ok=True)
 
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)
     flexmock(aiohttp.ClientSession).should_receive("put").replace_with(put)

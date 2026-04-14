@@ -32,6 +32,8 @@ spec:
             configMapKeyRef:
               key: GIT_REPO_BASEPATH
               name: agents-env
+        - name: DRY_RUN
+          value: "true"
         - name: SSE_PORT
           value: "8000"
         - name: REQUESTS_CA_BUNDLE

@@ -187,12 +187,13 @@ class ClarificationNeededData(BaseModel):
 class OpenEndedAnalysisData(BaseModel):
     """Data for open-ended analysis resolution."""
     summary: str = Field(
-        description="Free-form summary of the issue analysis and findings, "
+        description="Concise summary (2-3 sentences) of the issue analysis and findings. "
+            "Focus on what the issue is and why it can't be resolved as a simple rebase, backport, or rebuild. "
             "e.g., \"The issue requests updating BuildRequires for package-x to version >= 2.0 "
             "due to a new API used in the latest release.\""
     )
     recommendation: str = Field(
-        description="Recommended course of action, "
+        description="Concise recommended course of action (1-2 sentences). "
             "e.g., \"This issue requires a specfile adjustment to update BuildRequires for "
             "package-x to version >= 2.0. No upstream source changes needed.\" "
             "or \"No action needed — this is a duplicate of RHEL-12345.\""
@@ -211,9 +212,9 @@ class ErrorData(BaseModel):
 
 
 TRIAGE_DISCLAIMER = (
-    "_By following Ymir suggestions, you agree to comply with the "
+    "\n\n_By following Ymir suggestions, you agree to comply with the "
     "[Guidelines on Use of AI Generated Content|https://source.redhat.com/departments/legal/legal_compliance_ethics/compliance_folder/appendix_1_to_policy_on_the_use_of_ai_technologypdf] "
-    "and [Guidelines for Responsible Use of AI Code Assistants|https://source.redhat.com/projects_and_programs/ai/wiki/code_assistants_guidelines_for_responsible_use_of_ai_code_assistants]._\n\n"
+    "and [Guidelines for Responsible Use of AI Code Assistants|https://source.redhat.com/projects_and_programs/ai/wiki/code_assistants_guidelines_for_responsible_use_of_ai_code_assistants]._"
 )
 
 AUTOMATED_RESOLUTION_NOT_SUPPORTED = (
@@ -243,23 +244,23 @@ class TriageOutputSchema(BaseModel):
 
                 patch_urls_text = "\n".join([f"*Patch URL {i+1}*: {url}" for i, url in enumerate(self.data.patch_urls)])
                 return (
-                    f"{TRIAGE_DISCLAIMER}"
                     f"{resolution}"
                     f"{patch_urls_text}\n"
                     f"*Justification*: {self.data.justification}"
                     f"{fix_version_text}"
                     f"{follow_up_note}"
+                    f"{TRIAGE_DISCLAIMER}"
                 )
 
             case RebaseData():
                 fix_version_text = f"\n*Fix Version*: {self.data.fix_version}" if self.data.fix_version else ""
 
                 return (
-                    f"{TRIAGE_DISCLAIMER}"
                     f"{resolution}"
                     f"*Package*: {self.data.package}\n"
                     f"*Version*: {self.data.version}{fix_version_text}"
                     f"{follow_up_note}"
+                    f"{TRIAGE_DISCLAIMER}"
                 )
 
             case RebuildData():
@@ -268,37 +269,36 @@ class TriageOutputSchema(BaseModel):
                 dep_comp_text = f"\n*Dependency Component*: {self.data.dependency_component}" if self.data.dependency_component else ""
 
                 return (
-                    f"{TRIAGE_DISCLAIMER}"
                     f"{resolution}"
                     f"*Package*: {self.data.package}"
                     f"{dep_comp_text}"
                     f"{dep_text}"
                     f"{fix_version_text}"
                     f"{follow_up_note}"
+                    f"{TRIAGE_DISCLAIMER}"
                 )
 
             case ClarificationNeededData():
                 return (
-                    f"{TRIAGE_DISCLAIMER}"
                     f"{resolution}"
                     f"*Findings*: {self.data.findings}\n"
                     f"*Additional info needed*: {self.data.additional_info_needed}"
+                    f"{TRIAGE_DISCLAIMER}"
                 )
 
             case OpenEndedAnalysisData():
                 return (
-                    f"{TRIAGE_DISCLAIMER}"
-                    f"{resolution}"
                     f"*Summary*: {self.data.summary}\n"
                     f"*Recommendation*: {self.data.recommendation}"
                     f"{AUTOMATED_RESOLUTION_NOT_SUPPORTED}"
+                    f"{TRIAGE_DISCLAIMER}"
                 )
 
             case ErrorData():
                 return (
-                    f"{TRIAGE_DISCLAIMER}"
                     f"{resolution}"
                     f"*Details*: {self.data.details}"
+                    f"{TRIAGE_DISCLAIMER}"
                 )
 
             case _:

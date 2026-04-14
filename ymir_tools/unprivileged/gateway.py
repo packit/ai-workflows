@@ -40,22 +40,25 @@ logger = logging.getLogger(__name__)
 def _setup_logging():
     logging.basicConfig(level=logging.INFO)
 
+    # Log tool calls via Emitter.
+    # Dotted strings in Emitter.on() are matched exactly (not as globs),
+    # so we use regex patterns to match any tool's events.
     def on_tool_start(data: Any, meta: Any):
-        logger.info(f"Tool called: {meta.name}")
-        logger.info(f"Tool arguments: {data}")
+        logger.info(f"Tool called: {meta.creator}")
+        logger.info(f"Tool arguments: {_redact(str(data))}")
 
     def on_tool_success(data: Any, meta: Any):
-        logger.info(f"Tool {meta.name} completed successfully")
+        logger.info(f"Tool {meta.creator} completed successfully")
 
     def on_tool_error(data: Any, meta: Any):
-        logger.error(f"Tool {meta.name} failed with error: {data}")
+        logger.error(f"Tool {meta.creator} failed with error: {_redact(str(data))}")
         error = getattr(data, "error", None)
         if error is not None:
-            logger.error(f"Tool {meta.name} traceback:", exc_info=error)
+            logger.error(f"Tool {meta.creator} traceback:", exc_info=error)
 
-    Emitter.root().on("tool.*.start", on_tool_start)
-    Emitter.root().on("tool.*.success", on_tool_success)
-    Emitter.root().on("tool.*.error", on_tool_error)
+    Emitter.root().on(re.compile(r"^tool\..+\.start$"), on_tool_start)
+    Emitter.root().on(re.compile(r"^tool\..+\.success$"), on_tool_success)
+    Emitter.root().on(re.compile(r"^tool\..+\.error$"), on_tool_error)
 
 
 def main():

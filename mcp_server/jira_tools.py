@@ -25,9 +25,9 @@ from common.constants import JIRA_SEARCH_PATH
 from common.utils import get_jira_auth_headers
 
 # Jira custom field IDs
-SEVERITY_CUSTOM_FIELD = "customfield_12316142"
-TARGET_END_CUSTOM_FIELD = "customfield_12313942"
-EMBARGO_CUSTOM_FIELD = "customfield_12324750"
+SEVERITY_CUSTOM_FIELD = "customfield_10840"
+TARGET_END_CUSTOM_FIELD = "customfield_10023"
+EMBARGO_CUSTOM_FIELD = "customfield_10860"
 
 
 RH_EMPLOYEE_GROUP = "Red Hat Employee"
@@ -143,15 +143,17 @@ async def set_jira_fields(
             return f"No fields needed updating in {issue_key}"
 
     async with aiohttpClientSession() as session:
-        try:
-            async with session.put(
-                urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}"),
-                json={"fields": fields},
-                headers=get_jira_auth_headers(),
-            ) as response:
-                response.raise_for_status()
-        except aiohttp.ClientError as e:
-            raise ToolError(f"Failed to set the specified fields: {e}") from e
+        async with session.put(
+            urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}"),
+            json={"fields": fields},
+            headers=get_jira_auth_headers(),
+        ) as response:
+            if not response.ok:
+                body = await response.text()
+                raise ToolError(
+                    f"Failed to set the specified fields on {issue_key} "
+                    f"(HTTP {response.status}): {body}"
+                )
 
     return f"Successfully updated {issue_key}"
 

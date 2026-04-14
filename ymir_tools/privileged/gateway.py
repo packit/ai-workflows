@@ -82,6 +82,9 @@ def _setup_logging():
 
     def on_tool_error(data: Any, meta: Any):
         logger.error(f"Tool {meta.name} failed with error: {_redact(str(data))}")
+        error = getattr(data, "error", None)
+        if error is not None:
+            logger.error(f"Tool {meta.name} traceback:", exc_info=error)
 
     Emitter.root().on("tool.*.start", on_tool_start)
     Emitter.root().on("tool.*.success", on_tool_success)

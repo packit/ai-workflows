@@ -7,7 +7,6 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-import aiohttp
 from pydantic import BaseModel, Field
 
 from beeai_framework.agents.requirement import RequirementAgent
@@ -77,6 +76,7 @@ from ymir.agents.utils import (
     get_tool_call_checker_config,
     mcp_tools,
     render_prompt,
+    run_tool,
 )
 from ymir.common.version_utils import is_older_zstream
 from specfile import Specfile
@@ -950,16 +950,14 @@ async def main() -> None:
                 await check_subprocess(pkg_cmd + ["sources"], cwd=state.local_clone)
                 await check_subprocess(pkg_cmd + ["prep"], cwd=state.local_clone)
                 state.unpacked_sources = get_unpacked_sources(state.local_clone, state.package)
-                timeout = aiohttp.ClientTimeout(total=30)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    for idx, upstream_patch in enumerate(state.upstream_patches):
-                        # should we guess the patch name with log agent?
-                        patch_name = f"{state.jira_issue}-{idx}.patch"
-                        async with session.get(upstream_patch) as response:
-                            if response.status < 400:
-                                (state.local_clone / patch_name).write_text(await response.text())
-                            else:
-                                raise ValueError(f"Failed to fetch upstream patch: {response.status}")
+                for idx, upstream_patch in enumerate(state.upstream_patches):
+                    patch_name = f"{state.jira_issue}-{idx}.patch"
+                    content = await run_tool(
+                        "get_patch_from_url",
+                        available_tools=gateway_tools,
+                        patch_url=upstream_patch,
+                    )
+                    (state.local_clone / patch_name).write_text(content)
                 return "run_backport_agent"
 
             async def run_backport_agent(state):

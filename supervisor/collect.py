@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 CURRENT_ISSUES_JQL = """
 project = RHEL AND AssignedTeam = rhel-jotnar
 AND status in ('New', 'In Progress', 'Integration', 'Release Pending')
-AND ('Errata Link' is not EMPTY OR labels in ('ymir_backported', 'ymir_rebased', 'ymir_merged'))
-AND labels != ymir_needs_attention
+AND ('Errata Link' is not EMPTY OR labels in ('ymir_backported', 'ymir_rebased', 'ymir_merged', 'jotnar_backported', 'jotnar_rebased', 'jotnar_merged'))
+AND labels != ymir_needs_attention AND labels != jotnar_needs_attention
 """
 
 

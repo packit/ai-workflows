@@ -558,65 +558,6 @@ class AddBlockingMergeRequestCommentTool(Tool[AddBlockingMergeRequestCommentTool
             raise ToolError(f"Failed to add blocking comment to merge request: {e}") from e
 
 
-class CreateMergeRequestChecklistToolInput(BaseModel):
-    merge_request_url: str = Field(description="URL of the merge request")
-    note_body: str = Field(description="Body of the note to create")
-
-
-class CreateMergeRequestChecklistTool(Tool[CreateMergeRequestChecklistToolInput, ToolRunOptions, StringToolOutput]):
-    name = "create_merge_request_checklist"
-    description = """
-    Creates our pre/post merge checklist for our dist-git merge requests.
-    Checks for existing checklist to avoid duplicates.
-    """
-    input_schema = CreateMergeRequestChecklistToolInput
-
-    def _create_emitter(self) -> Emitter:
-        return Emitter.root().child(
-            namespace=["tool", "gitlab", self.name],
-            creator=self,
-        )
-
-    async def _run(
-        self,
-        tool_input: CreateMergeRequestChecklistToolInput,
-        options: ToolRunOptions | None,
-        context: RunContext,
-    ) -> StringToolOutput:
-        merge_request_url = tool_input.merge_request_url
-        note_body = tool_input.note_body
-        try:
-            mr = await _get_merge_request_from_url(merge_request_url)
-
-            def check_existing_checklist():
-                notes = mr._raw_pr.notes.list(get_all=True)
-
-                checklist_body = note_body.strip()
-                if not checklist_body:
-                    return False
-                checklist_identifier = checklist_body.splitlines()[0]
-
-                for note in notes:
-                    note_body_text = note.body.strip()
-                    if checklist_identifier in note_body_text or note_body_text == checklist_body:
-                        return True
-
-                return False
-
-            exists = await asyncio.to_thread(check_existing_checklist)
-            if exists:
-                return StringToolOutput(
-                    result=f"Checklist already exists in merge request {merge_request_url}, not adding duplicate"
-                )
-
-            await asyncio.to_thread(mr._raw_pr.notes.create, {"body": note_body}, internal=True)
-            return StringToolOutput(
-                result=f"Successfully created checklist for merge request {merge_request_url}"
-            )
-        except Exception as e:
-            raise ToolError(f"Failed to create checklist for merge request: {e}") from e
-
-
 class RetryPipelineJobToolInput(BaseModel):
     project_url: str = Field(description="GitLab project URL")
     job_id: int = Field(description="Job ID to retry")

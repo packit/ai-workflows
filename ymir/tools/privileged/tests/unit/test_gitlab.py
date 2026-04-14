@@ -11,14 +11,12 @@ from ogr.services.gitlab.project import GitlabProject
 from flexmock import flexmock
 from ogr.services.gitlab import GitlabService
 
-from ymir.common.constants import GITLAB_MR_CHECKLIST
 from ymir.common.models import OpenMergeRequestResult
 from ymir.tools.privileged.gitlab import (
     AddBlockingMergeRequestCommentTool,
     AddMergeRequestCommentTool,
     AddMergeRequestLabelsTool,
     CloneRepositoryTool,
-    CreateMergeRequestChecklistTool,
     ForkRepositoryTool,
     GetAuthorizedCommentsFromMergeRequestTool,
     GetFailedPipelineJobsFromMergeRequestTool,
@@ -348,67 +346,6 @@ async def test_add_blocking_merge_request_comment_invalid_url():
         )
 
     assert "Could not parse merge request URL" in str(exc_info.value)
-
-
-@pytest.mark.asyncio
-async def test_create_merge_request_checklist():
-    merge_request_url = "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123"
-
-    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
-        # Extract project URL from merge request URL
-        url=merge_request_url.rsplit("/-/merge_requests/", 1)[0],
-    ).and_return(
-        flexmock().should_receive("get_pr").and_return(
-            flexmock(
-                id=123,
-                _raw_pr=flexmock(
-                    notes=flexmock()
-                        .should_receive("list").with_args(get_all=True).and_return([]).mock()
-                        .should_receive("create").and_return(flexmock(id=1)).mock(),
-                ),
-            ),
-        ).mock()
-    )
-
-    result = (
-        await CreateMergeRequestChecklistTool().run(
-            input={"merge_request_url": merge_request_url, "note_body": GITLAB_MR_CHECKLIST}
-        )
-    ).result
-
-    assert result == f"Successfully created checklist for merge request {merge_request_url}"
-
-
-@pytest.mark.asyncio
-async def test_create_merge_request_checklist_duplicate():
-    """Test that duplicate checklists are not created"""
-    merge_request_url = "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123"
-
-    # Mock an existing note with the checklist identifier
-    existing_note = flexmock(body="# Ymir MR Review Checklist\n\nSome checklist content")
-
-    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
-        url=merge_request_url.rsplit("/-/merge_requests/", 1)[0],
-    ).and_return(
-        flexmock().should_receive("get_pr").and_return(
-            flexmock(
-                id=123,
-                _raw_pr=flexmock(
-                    notes=flexmock()
-                        .should_receive("list").with_args(get_all=True).and_return([existing_note]).mock(),
-                ),
-            ),
-        ).mock()
-    )
-
-    result = (
-        await CreateMergeRequestChecklistTool().run(
-            input={"merge_request_url": merge_request_url, "note_body": GITLAB_MR_CHECKLIST}
-        )
-    ).result
-
-    assert "already exists" in result
-    assert "not adding duplicate" in result
 
 
 @pytest.mark.asyncio

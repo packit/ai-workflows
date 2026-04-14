@@ -22,7 +22,7 @@ from ymir.common.models import (
     ErrorData,
 )
 from ymir.common.utils import redis_client, fix_await
-from ymir.agents.constants import I_AM_YMIR, CAREFULLY_REVIEW_CHANGES
+from ymir.agents.constants import I_AM_YMIR, MR_DESCRIPTION_FOOTER
 from ymir.agents.observability import setup_observability
 from ymir.agents.utils import get_agent_execution_config, mcp_tools, render_prompt, run_subprocess
 
@@ -162,11 +162,10 @@ async def main() -> None:
                         update_branch=state.update_branch,
                         mr_title=state.log_result.title,
                         mr_description=(
-                            f"This merge request was created {I_AM_YMIR}\n"
-                            f"{CAREFULLY_REVIEW_CHANGES}\n\n"
                             f"{state.log_result.description}\n\n"
                             f"{dep_text}"
                             f"Resolves: {state.jira_issue}\n"
+                            f"\n\n{MR_DESCRIPTION_FOOTER}"
                         ),
                         available_tools=gateway_tools,
                         commit_only=dry_run,

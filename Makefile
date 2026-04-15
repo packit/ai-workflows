@@ -28,6 +28,7 @@ run-triage-agent-standalone:
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		-e FORCE_CVE_TRIAGE=$(FORCE_CVE_TRIAGE) \
 		triage-agent
 
@@ -48,6 +49,7 @@ run-rebase-agent-c9s-standalone:
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		rebase-agent-c9s
 
 .PHONY: run-rebase-agent-c10s-standalone
@@ -59,6 +61,7 @@ run-rebase-agent-c10s-standalone:
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		rebase-agent-c10s
 
 .PHONY: run-rebase-agent-standalone
@@ -77,6 +80,7 @@ run-backport-agent-c9s-standalone:
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		-e CVE_ID=$(CVE_ID) \
 		backport-agent-c9s
 
@@ -89,6 +93,7 @@ run-backport-agent-c10s-standalone:
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		-e CVE_ID=$(CVE_ID) \
 		backport-agent-c10s
 
@@ -106,6 +111,7 @@ run-rebuild-agent-c9s-standalone:
 		-e MOCK_JIRA=$(MOCK_JIRA) \
 		-e DEPENDENCY_ISSUE=$(DEPENDENCY_ISSUE) \
 		-e DEPENDENCY_COMPONENT=$(DEPENDENCY_COMPONENT) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		rebuild-agent-c9s
 
 .PHONY: run-rebuild-agent-c10s-standalone
@@ -118,6 +124,7 @@ run-rebuild-agent-c10s-standalone:
 		-e MOCK_JIRA=$(MOCK_JIRA) \
 		-e DEPENDENCY_ISSUE=$(DEPENDENCY_ISSUE) \
 		-e DEPENDENCY_COMPONENT=$(DEPENDENCY_COMPONENT) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		rebuild-agent-c10s
 
 .PHONY: run-rebuild-agent-standalone

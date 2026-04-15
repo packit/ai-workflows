@@ -41,6 +41,9 @@ async def _write_jira_mock(issue_key: str, data: dict):
 
 
 class aiohttpClientSessionMock:
+    def __init__(self, **kwargs):
+        pass
+
     # mocking endpoint providing information about issue
     issue_get_regex       = re.compile(
         re.escape(urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue"))+"/([A-Z0-9-]+)")

@@ -16,6 +16,7 @@ from ogr.services.gitlab.project import GitlabProject
 from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import BaseModel, Field
 
+from ymir.common.constants import AIOHTTP_TIMEOUT
 from ymir.common.models import CommentReply, FailedPipelineJob, MergeRequestComment, MergeRequestDetails
 from ymir.common.validators import AbsolutePath
 from ymir.tools.privileged.utils import clean_stale_repositories
@@ -924,8 +925,7 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
         headers = _get_auth_headers(request_url)
 
         try:
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
                 async with session.get(request_url, headers=headers) as response:
                     if response.status >= 400:
                         raise ToolError(
@@ -982,7 +982,7 @@ class FetchGitlabMrNotesTool(
         logger.info("Fetching MR notes from %s", url)
 
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+            async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
                 async with session.get(
                     url, headers=headers, params={"per_page": "100", "sort": "desc", "order_by": "created_at"}
                 ) as response:

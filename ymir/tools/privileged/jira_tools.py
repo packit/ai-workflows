@@ -21,7 +21,7 @@ from beeai_framework.tools import JSONToolOutput, StringToolOutput, Tool, ToolEr
 from pydantic import BaseModel, Field
 
 from ymir.common import CVEEligibilityResult, load_rhel_config
-from ymir.common.constants import JIRA_SEARCH_PATH
+from ymir.common.constants import AIOHTTP_TIMEOUT, JIRA_SEARCH_PATH
 from ymir.common.utils import get_jira_auth_headers
 
 def _skip_jira_writes() -> bool:
@@ -80,7 +80,7 @@ class GetJiraDetailsTool(Tool[GetJiraDetailsToolInput, ToolRunOptions, JSONToolO
         jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}")
         logger.info(f"Connecting to JIRA API to get issue details: {jira_url}")
 
-        async with aiohttpClientSession() as session:
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             try:
                 async with session.get(
                     jira_url,
@@ -146,7 +146,7 @@ class SetJiraFieldsTool(Tool[SetJiraFieldsToolInput, ToolRunOptions, StringToolO
         if os.getenv("DRY_RUN", "False").lower() == "true":
             return StringToolOutput(result="Dry run, not updating Jira fields (this is expected, not an error)")
 
-        async with aiohttpClientSession() as session:
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}")
             logger.info(f"Connecting to JIRA API to set fields for issue: {jira_url}")
             try:
@@ -180,7 +180,7 @@ class SetJiraFieldsTool(Tool[SetJiraFieldsToolInput, ToolRunOptions, StringToolO
             if not fields:
                 return StringToolOutput(result=f"No fields needed updating in {issue_key}")
 
-        async with aiohttpClientSession() as session:
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             try:
                 async with session.put(
                     urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}"),
@@ -229,7 +229,7 @@ class AddJiraCommentTool(Tool[AddJiraCommentToolInput, ToolRunOptions, StringToo
 
         jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/comment")
         logger.info(f"Connecting to JIRA API to add comment: {jira_url}")
-        async with aiohttpClientSession() as session:
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             try:
                 async with session.post(
                     jira_url,
@@ -277,7 +277,7 @@ class CheckCveTriageEligibilityTool(
         jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}")
         logger.info(f"Connecting to JIRA API to check CVE eligibility: {jira_url}")
 
-        async with aiohttpClientSession() as session:
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             try:
                 async with session.get(
                     jira_url,
@@ -396,7 +396,7 @@ class ChangeJiraStatusTool(Tool[ChangeJiraStatusToolInput, ToolRunOptions, Strin
         jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}/transitions")
         logger.info(f"Connecting to JIRA API to change status: {jira_url}")
 
-        async with aiohttpClientSession() as session:
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             try:
                 async with session.get(
                     urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}"),
@@ -491,7 +491,7 @@ class EditJiraLabelsTool(Tool[EditJiraLabelsToolInput, ToolRunOptions, StringToo
 
         payload = {"update": {"labels": update_payload}}
 
-        async with aiohttpClientSession() as session:
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             try:
                 async with session.put(
                     jira_url,
@@ -534,7 +534,7 @@ class VerifyIssueAuthorTool(Tool[VerifyIssueAuthorToolInput, ToolRunOptions, JSO
         jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}")
         logger.info(f"Connecting to JIRA API to verify issue author: {jira_url}")
 
-        async with aiohttpClientSession() as session:
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             try:
                 async with session.get(
                     jira_url,
@@ -625,7 +625,7 @@ class SearchJiraIssuesTool(Tool[SearchJiraIssuesToolInput, ToolRunOptions, JSONT
             "fields": fields,
         }
 
-        async with aiohttpClientSession() as session:
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             try:
                 async with session.post(
                     url,
@@ -852,7 +852,7 @@ class SetPreliminaryTestingTool(Tool[SetPreliminaryTestingToolInput, ToolRunOpti
         headers = get_jira_auth_headers()
         jira_base = os.getenv("JIRA_URL")
 
-        async with aiohttpClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             field_id = await self._resolve_field_id(session, headers)
 
             body: dict[str, Any] = {

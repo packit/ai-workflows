@@ -1,6 +1,10 @@
 from enum import Enum
 
+import aiohttp
+
 BREWHUB_URL = "https://brewhub.engineering.redhat.com/brewhub"
+
+AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
 
 JIRA_SEARCH_PATH = "rest/api/3/search/jql"
 

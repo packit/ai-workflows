@@ -84,7 +84,7 @@ async def test_open_merge_request():
     flexmock(GitlabService).should_receive("get_project_from_url").with_args(
         url=fork_url
     ).and_return(flexmock(create_pr=lambda title, body, target, source: pr_mock, parent=flexmock(get_pr=lambda id: pr_mock)))
-    pr_mock.should_receive("add_label").with_args("jotnar_needs_attention").once()
+    pr_mock.should_receive("add_label").never()
     out = await OpenMergeRequestTool().run(
         input={
             "fork_url": fork_url,
@@ -121,7 +121,7 @@ async def test_open_merge_request_with_existing_mr():
             parent=flexmock(get_pr_list=lambda: [pr_mock], get_pr=lambda id: pr_mock),
         )
     )
-    pr_mock.should_receive("add_label").with_args("jotnar_needs_attention").once()
+    pr_mock.should_receive("add_label").never()
     out = await OpenMergeRequestTool().run(
         input={
             "fork_url": fork_url,

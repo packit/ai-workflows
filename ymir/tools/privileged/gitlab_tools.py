@@ -276,17 +276,6 @@ class OpenMergeRequestTool(Tool[OpenMergeRequestToolInput, ToolRunOptions, JSONT
         if not pr:
             raise ToolError("Failed to open the merge request")
 
-        for attempt in range(5):
-            try:
-                pr = await asyncio.to_thread(project.parent.get_pr, pr.id)
-                await asyncio.to_thread(pr.add_label, "jotnar_needs_attention")
-                break
-            except OgrException as ex:
-                logger.info("Failed to add label on attempt %d/5, retrying. Error: %s", attempt + 1, ex)
-                await asyncio.sleep(0.5 * (2**attempt))
-        else:
-            logger.error("MR %s does not appear to exist after creation", pr)
-            logger.error("Unable to set label 'jotnar_needs_attention' on the MR")
         return JSONToolOutput(result=(pr.url, is_brand_new_mr))
 
 

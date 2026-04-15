@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from beeai_framework.tools import Tool
 
-from ymir.common.models import LogOutputSchema, CachedMRMetadata, MergeRequestDetails
+from ymir.common.models import LogOutputSchema, CachedMRMetadata, MergeRequestDetails, OpenMergeRequestResult
 from ymir.common.utils import is_cs_branch
 from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
 from ymir.agents.utils import check_subprocess, run_subprocess, run_tool, mcp_tools
@@ -214,7 +214,7 @@ async def commit_push_and_open_mr(
         allow_empty,
     ):
         return None, False
-    return await run_tool(
+    result = await run_tool(
         "open_merge_request",
         fork_url=fork_url,
         title=mr_title,
@@ -223,6 +223,8 @@ async def commit_push_and_open_mr(
         source=update_branch,
         available_tools=available_tools,
     )
+    mr = OpenMergeRequestResult.model_validate(result)
+    return mr.url, mr.is_new_mr
 
 
 async def comment_in_jira(

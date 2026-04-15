@@ -3,7 +3,8 @@ import json
 import logging
 import os
 import re
-from typing import Tuple
+
+
 from urllib.parse import quote, urlparse
 
 import aiohttp
@@ -17,7 +18,7 @@ from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import BaseModel, Field
 
 from ymir.common.constants import AIOHTTP_TIMEOUT
-from ymir.common.models import CommentReply, FailedPipelineJob, MergeRequestComment, MergeRequestDetails
+from ymir.common.models import CommentReply, FailedPipelineJob, MergeRequestComment, MergeRequestDetails, OpenMergeRequestResult
 from ymir.common.validators import AbsolutePath
 from ymir.tools.privileged.utils import clean_stale_repositories
 
@@ -225,7 +226,7 @@ class OpenMergeRequestToolInput(BaseModel):
     source: str = Field(description="Source branch (in the fork)")
 
 
-class OpenMergeRequestTool(Tool[OpenMergeRequestToolInput, ToolRunOptions, JSONToolOutput[Tuple[str, bool]]]):
+class OpenMergeRequestTool(Tool[OpenMergeRequestToolInput, ToolRunOptions, JSONToolOutput[OpenMergeRequestResult]]):
     name = "open_merge_request"
     description = """
     Opens a new merge request from the specified fork against its original repository.
@@ -245,7 +246,7 @@ class OpenMergeRequestTool(Tool[OpenMergeRequestToolInput, ToolRunOptions, JSONT
         tool_input: OpenMergeRequestToolInput,
         options: ToolRunOptions | None,
         context: RunContext,
-    ) -> JSONToolOutput[Tuple[str, bool]]:
+    ) -> JSONToolOutput[OpenMergeRequestResult]:
         fork_url = tool_input.fork_url
         title = tool_input.title
         description = tool_input.description
@@ -255,7 +256,7 @@ class OpenMergeRequestTool(Tool[OpenMergeRequestToolInput, ToolRunOptions, JSONT
         project = await asyncio.to_thread(get_project, url=fork_url, token=os.getenv("GITLAB_TOKEN"))
         if not project:
             raise ToolError("Failed to get the specified fork")
-        is_brand_new_mr = True
+        is_new_mr = True
         try:
             pr = await asyncio.to_thread(project.create_pr, title, description, target, source)
         except GitlabAPIException as ex:
@@ -267,7 +268,7 @@ class OpenMergeRequestTool(Tool[OpenMergeRequestToolInput, ToolRunOptions, JSONT
                         logger.info("Reusing existing MR %s", pr)
                         pr.description = description
                         pr.title = title
-                        is_brand_new_mr = False
+                        is_new_mr = False
                         break
                 else:
                     raise
@@ -276,7 +277,7 @@ class OpenMergeRequestTool(Tool[OpenMergeRequestToolInput, ToolRunOptions, JSONT
         if not pr:
             raise ToolError("Failed to open the merge request")
 
-        return JSONToolOutput(result=(pr.url, is_brand_new_mr))
+        return JSONToolOutput(result=OpenMergeRequestResult(url=pr.url, is_new_mr=is_new_mr))
 
 
 class GetInternalRhelBranchesToolInput(BaseModel):

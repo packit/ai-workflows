@@ -293,9 +293,12 @@ class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions,
 class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, StringToolOutput]):
     name = "git_patch_create"
     description = """
-    Creates a patch file from commits made on top of the base HEAD commit.
-    This tool should be called after 'git_apply_finish' has successfully completed.
-    It generates a patch file that can be applied later in the RPM build process.
+    Creates a combined patch file from all commits made on top of the base HEAD commit.
+    The base commit is determined automatically from a previous tool invocation
+    (git_prepare_package_sources or apply_downstream_patches).
+
+    The patch preserves individual commit messages (mbox format).
+    If the output file already exists, it will be overwritten.
     """
     input_schema = GitPatchCreationToolInput
 
@@ -313,18 +316,23 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
             base_commit_sha = self.options.get("base_head_commit")
             if not base_commit_sha:
                 raise ToolError("`base_head_commit` not found in options. "
-                                "Ensure 'git_prepare_package_sources' is run before this tool. "
+                                "Ensure 'git_prepare_package_sources' or "
+                                "'apply_downstream_patches' is run before this tool. "
                                 f"Options: {self.options}")
             cmd = [
                 "git", "format-patch",
-                "--output",
-                str(tool_input.patch_file_path),
+                "--stdout",
                 f"{base_commit_sha}..HEAD"
             ]
-            exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
             if exit_code != 0:
                 raise ToolError(f"Command git-format-patch failed: {stderr}")
-            return StringToolOutput(result=f"Successfully created a patch file: {tool_input.patch_file_path}")
+            if not stdout:
+                raise ToolError("Generated patch is empty")
+            tool_input.patch_file_path.write_text(stdout, encoding="utf-8")
+            return StringToolOutput(
+                result=f"Successfully created a patch file: {tool_input.patch_file_path} "
+                       f"(base commit: {base_commit_sha})")
         except ToolError:
             raise
         except Exception as e:

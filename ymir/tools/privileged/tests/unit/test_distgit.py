@@ -4,8 +4,8 @@ import git
 import koji
 from flexmock import flexmock
 
-import distgit_tools
-from distgit_tools import CreateZstreamBranchTool
+from ymir.tools.privileged import distgit as distgit_tools
+from ymir.tools.privileged.distgit import CreateZstreamBranchTool
 
 
 @pytest.mark.parametrize(
@@ -17,7 +17,7 @@ async def test_create_zstream_branch(branch_exists, monkeypatch):
     package = "bash"
     branch = "rhel-10.0"
     user = "bot"
-    ref = "123456abcdef"
+    ref = "123456abcdef"  # pragma: allowlist secret
 
     async def init_kerberos_ticket():
         return f"{user}@EXAMPLE.COM"

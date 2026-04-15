@@ -1,7 +1,7 @@
 """ Unit tests for mcp_server/gateway.py """
 import pytest
 
-from gateway import _redact
+from ymir.tools.privileged.gateway import _redact
 
 
 class TestRedactFunction:

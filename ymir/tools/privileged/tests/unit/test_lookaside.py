@@ -4,8 +4,8 @@ import os
 import pytest
 from flexmock import flexmock
 
-import lookaside_tools
-from lookaside_tools import DownloadSourcesTool, PrepSourcesTool, UploadSourcesTool
+from ymir.tools.privileged import lookaside as lookaside_tools
+from ymir.tools.privileged.lookaside import DownloadSourcesTool, PrepSourcesTool, UploadSourcesTool
 
 
 async def _noop():

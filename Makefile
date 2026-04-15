@@ -279,10 +279,13 @@ process-erratum:
 	$(COMPOSE_SUPERVISOR) run --rm \
 		supervisor python -m ymir.supervisor.main $(DEBUG_FLAG) $(IGNORE_NEEDS_ATTENTION_FLAG) $(DRY_RUN_FLAG) process-erratum $(ERRATA_ID)
 
-.PHONY: preliminary-testing
-preliminary-testing:
-	$(COMPOSE_SUPERVISOR) run --rm \
-		supervisor python -m supervisor.main $(DEBUG_FLAG) $(IGNORE_NEEDS_ATTENTION_FLAG) $(DRY_RUN_FLAG) preliminary-testing $(JIRA_ISSUE)
+.PHONY: run-preliminary-testing-agent-standalone
+run-preliminary-testing-agent-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e IGNORE_NEEDS_ATTENTION=$(IGNORE_NEEDS_ATTENTION) \
+		preliminary-testing-agent
 
 
 # Common utility targets

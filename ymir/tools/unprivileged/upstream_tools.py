@@ -432,8 +432,14 @@ class ApplyDownstreamPatchesTool(Tool[ApplyDownstreamPatchesToolInput, ToolRunOp
                 raise ToolError(f"Patches directory does not exist: {tool_input.patches_directory}")
 
             if not tool_input.patch_files:
+                cmd = ["git", "rev-parse", "HEAD"]
+                exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
+                if exit_code != 0:
+                    raise ToolError(f"Failed to get HEAD commit: {stderr}")
+                self.options["base_head_commit"] = stdout.strip()
                 return StringToolOutput(
-                    result="No patches to apply (patch list is empty)"
+                    result=f"No patches to apply (patch list is empty). "
+                           f"Base commit for patch generation: {self.options['base_head_commit']}"
                 )
 
             applied_patches = []
@@ -479,8 +485,15 @@ class ApplyDownstreamPatchesTool(Tool[ApplyDownstreamPatchesToolInput, ToolRunOp
 
                 applied_patches.append(patch_file)
 
+            cmd = ["git", "rev-parse", "HEAD"]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
+            if exit_code != 0:
+                raise ToolError(f"Failed to get HEAD commit after applying patches: {stderr}")
+            self.options["base_head_commit"] = stdout.strip()
+
             return StringToolOutput(
-                result=f"Successfully applied {len(applied_patches)} patches: {', '.join(applied_patches)}"
+                result=f"Successfully applied {len(applied_patches)} patches: {', '.join(applied_patches)}. "
+                       f"Base commit for patch generation: {self.options['base_head_commit']}"
             )
 
         except ToolError:
@@ -670,5 +683,3 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
             raise
         except Exception as e:
             raise ToolError(f"ERROR: {e}") from e
-
-

@@ -153,8 +153,6 @@ BACKPORT_INSTRUCTIONS = """
 
             4d. Find and checkout the base version in upstream:
                 - Use `find_base_commit` tool with <UPSTREAM_REPO> path and package version from 4b
-                - IMPORTANT: Save this base version commit hash using `run_shell_command`:
-                  `git -C <UPSTREAM_REPO> rev-parse HEAD` - store this as UPSTREAM_BASE
                 - If no matching tag found, try to find the base commit manually using `view` and `run_shell_command` tools
                 - Look for any tags or commits that might correspond to the package version
                 - Only fall back to approach B if you cannot find any reasonable base commit
@@ -165,8 +163,7 @@ BACKPORT_INSTRUCTIONS = """
                   * patches_directory: current working directory (dist-git root where patch files are located)
                   * patch_files: list from step 4b
                 - This recreates the current package state in <UPSTREAM_REPO>
-                - IMPORTANT: Save the current commit hash after applying patches using `run_shell_command`:
-                  `git -C <UPSTREAM_REPO> rev-parse HEAD` - store this as PATCHED_BASE for patch generation
+                - The tool automatically records the base commit for patch generation
                 - If any patch fails to apply, immediately fall back to approach B
 
             4f. Cherry-pick the fix in upstream:
@@ -225,11 +222,12 @@ BACKPORT_INSTRUCTIONS = """
                   6. NEVER skip any commits - all commits must be adapted and cherry-picked
 
             4g. Generate the final patch file from upstream:
-                - Use `generate_patch_from_commit` tool on <UPSTREAM_REPO>
-                - Specify output_directory as current working directory (the dist-git repository root)
-                - Use a descriptive name like <JIRA_ISSUE>.patch (e.g., if JIRA is RHEL-114639, use RHEL-114639.patch)
-                - CRITICAL: Provide base_commit parameter with the PATCHED_BASE from step 4e
-                  This ensures the patch includes ALL cherry-picked commits, not just the last one
+                - Use `git_patch_create` tool with:
+                  * repository_path: <UPSTREAM_REPO>
+                  * patch_file_path: <JIRA_ISSUE>.patch in the current working directory (the dist-git repository root)
+                    (e.g., if JIRA is RHEL-114639, use /path/to/distgit/RHEL-114639.patch)
+                - The tool automatically uses the base commit recorded in step 4e to include
+                  ALL cherry-picked commits, not just the last one
                 - IMPORTANT: Only create NEW patch files. Do NOT modify existing patches in the dist-git repository
                 - This patch file is now ready to be added to the spec file
 
@@ -337,8 +335,6 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
 
             3d. Find and checkout the base version in upstream:
                 - Use `find_base_commit` tool with <UPSTREAM_REPO> path and package version from 3b
-                - IMPORTANT: Save this base version commit hash using `run_shell_command`:
-                  `git -C <UPSTREAM_REPO> rev-parse HEAD` - store this as UPSTREAM_BASE
                 - If no matching tag found, try to find the base commit manually using `view` and `run_shell_command` tools
                 - Look for any tags or commits that might correspond to the package version
                 - Only fall back to approach B if you cannot find any reasonable base commit
@@ -349,8 +345,7 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
                   * patches_directory: current working directory (dist-git root where patch files are located)
                   * patch_files: list from step 3b
                 - This recreates the current package state in <UPSTREAM_REPO>
-                - IMPORTANT: Save the current commit hash after applying patches using `run_shell_command`:
-                  `git -C <UPSTREAM_REPO> rev-parse HEAD` - store this as PATCHED_BASE for patch generation
+                - The tool automatically records the base commit for patch generation
                 - If any patch fails to apply, immediately fall back to approach B
 
             3f. Cherry-pick the fix in upstream:
@@ -409,11 +404,12 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
                   6. NEVER skip any commits - all commits must be adapted and cherry-picked
 
             3g. Generate the final patch file from upstream:
-                - Use `generate_patch_from_commit` tool on <UPSTREAM_REPO>
-                - Specify output_directory as current working directory (the dist-git repository root)
-                - Use a descriptive name like <JIRA_ISSUE>.patch (e.g., if JIRA is RHEL-114639, use RHEL-114639.patch)
-                - CRITICAL: Provide base_commit parameter with the PATCHED_BASE from step 3e
-                  This ensures the patch includes ALL cherry-picked commits, not just the last one
+                - Use `git_patch_create` tool with:
+                  * repository_path: <UPSTREAM_REPO>
+                  * patch_file_path: <JIRA_ISSUE>.patch in the current working directory (the dist-git repository root)
+                    (e.g., if JIRA is RHEL-114639, use /path/to/distgit/RHEL-114639.patch)
+                - The tool automatically uses the base commit recorded in step 3e to include
+                  ALL cherry-picked commits, not just the last one
                 - IMPORTANT: Only create NEW patch files. Do NOT modify existing patches in the dist-git repository
                 - This patch file is now ready to be added to the spec file
 
@@ -592,9 +588,11 @@ BACKPORT_FIX_BUILD_ERROR_PROMPT = """
 
       STEP 4: Regenerate the patch
       - After making your fixes (cherry-picked or manual), regenerate the patch file
-      - Use `generate_patch_from_commit` tool with the PATCHED_BASE commit
+      - Use `git_patch_create` tool with:
+        * repository_path: {{local_clone}}-upstream
+        * patch_file_path: {{local_clone}}/{{jira_issue}}.patch
+      - The tool automatically uses the base commit to include all changes
       - This creates a single patch with all changes: original commits + prerequisites/fixes
-      - Overwrite {{jira_issue}}.patch in {{local_clone}}
       - This improved patch now includes all missing dependencies needed for a successful build
 
       STEP 5: Test the build
@@ -722,10 +720,11 @@ BACKPORT_FIX_BUILD_ERROR_PROMPT_ZSTREAM = """
 
       STEP 4: Regenerate the patch
       - After making your fixes (cherry-picked or manual), regenerate the patch file
-      - First, delete the old patch file: `rm {{local_clone}}/{{jira_issue}}.patch`
-      - Use `generate_patch_from_commit` tool with the PATCHED_BASE commit
+      - Use `git_patch_create` tool with:
+        * repository_path: {{local_clone}}-upstream
+        * patch_file_path: {{local_clone}}/{{jira_issue}}.patch
+      - The tool automatically uses the base commit to include all changes
       - This creates a single patch with all changes: original commits + prerequisites/fixes
-      - Save it as {{jira_issue}}.patch in {{local_clone}}
       - This improved patch now includes all missing dependencies needed for a successful build
 
       STEP 5: Test the build

@@ -250,16 +250,19 @@ BACKPORT_INSTRUCTIONS = """
                 - Use the `git_patch_apply` tool with the patch file: <JIRA_ISSUE>-<N>.patch
                 - Resolve all conflicts and leave the repository in a dirty state. Delete all *.rej files.
                 - Use the `git_apply_finish` tool to finish the patch application.
+                - Repeat for each pre-downloaded patch file.
 
-            4b. Once there are no more conflicts, use the `git_patch_create` tool with the patch file path
-                <JIRA_ISSUE>-<N>.patch to update the patch file.
+            4b. After ALL patches have been applied, generate a single combined patch:
+                - Use `git_patch_create` tool with:
+                  * repository_path: <UNPACKED_SOURCES>
+                  * patch_file_path: <JIRA_ISSUE>.patch in the current working directory (the dist-git repository root)
+                - The tool automatically captures all applied changes into one patch file.
 
-      5. Update the spec file. Add a new `Patch` tag for every patch in <UPSTREAM_PATCHES>.
+      5. Update the spec file. Add ONE new `Patch` tag for <JIRA_ISSUE>.patch.
          Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
          make sure it has the highest number. Make sure the patch is applied in the "%prep" section
-         and the `-p` argument is correct. Add an upstream URL as a comment above
-         the `Patch:` tag - this URL references the related upstream commit or a pull/merge request.
-         Include every patch defined in <UPSTREAM_PATCHES> list.
+         and the `-p` argument is correct. Add upstream URLs as comments above
+         the `Patch:` tag - these URLs reference the related upstream commits or pull/merge requests.
          IMPORTANT: Only ADD new patches. Do NOT modify existing Patch tags or their order.
 
       6. Run `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` to see if the new patch
@@ -432,15 +435,19 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
                 - Use the `git_patch_apply` tool with the patch file: <JIRA_ISSUE>-<N>.patch
                 - Resolve all conflicts and leave the repository in a dirty state. Delete all *.rej files.
                 - Use the `git_apply_finish` tool to finish the patch application.
+                - Repeat for each pre-downloaded patch file.
 
-            3b. Once there are no more conflicts, use the `git_patch_create` tool with the patch file path
-                <JIRA_ISSUE>-<N>.patch to update the patch file.
+            3b. After ALL patches have been applied, generate a single combined patch:
+                - Use `git_patch_create` tool with:
+                  * repository_path: <UNPACKED_SOURCES>
+                  * patch_file_path: <JIRA_ISSUE>.patch in the current working directory (the dist-git repository root)
+                - The tool automatically captures all applied changes into one patch file.
 
-      4. Update the spec file. Add a new `Patch` tag for every patch in <UPSTREAM_PATCHES>.
+      4. Update the spec file. Add ONE new `Patch` tag for <JIRA_ISSUE>.patch.
          Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
          make sure it has the highest number. Make sure the patch is applied in the "%prep" section
-         and the `-p` argument is correct.
-         Include every patch defined in <UPSTREAM_PATCHES> list.
+         and the `-p` argument is correct. Add upstream URLs as comments above
+         the `Patch:` tag - these URLs reference the related upstream commits or pull/merge requests.
          IMPORTANT: Only ADD new patches. Do NOT modify existing Patch tags or their order. Do NOT
          add or change any changelog entries. Do NOT change the Release field.
 

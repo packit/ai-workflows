@@ -1,0 +1,46 @@
+# Rebuild Redis Commander 0.9.0 with SQLite >= 3.50.2 to fix CVE-2025-6965.
+#
+# The upstream image (ghcr.io/joeferner/redis-commander:0.9.0) is based on
+# Alpine 3.21 which ships SQLite 3.48.0.
+# We compile SQLite from source and overlay the shared library.
+
+ARG REDIS_COMMANDER_VERSION=0.9.0
+
+# --- Stage 1: build SQLite from source ---
+FROM docker.io/library/alpine:3.21 AS sqlite-builder
+
+ARG SQLITE_VERSION=3500200
+ARG SQLITE_YEAR=2025
+
+RUN apk add --no-cache gcc make musl-dev wget
+
+RUN wget -q "https://www.sqlite.org/${SQLITE_YEAR}/sqlite-autoconf-${SQLITE_VERSION}.tar.gz" && \
+    tar xzf "sqlite-autoconf-${SQLITE_VERSION}.tar.gz" && \
+    cd "sqlite-autoconf-${SQLITE_VERSION}" && \
+    CFLAGS="-O2 \
+      -DSQLITE_ENABLE_FTS3_PARENTHESIS \
+      -DSQLITE_ENABLE_COLUMN_METADATA \
+      -DSQLITE_SECURE_DELETE \
+      -DSQLITE_ENABLE_UNLOCK_NOTIFY \
+      -DSQLITE_ENABLE_RTREE \
+      -DSQLITE_ENABLE_GEOPOLY \
+      -DSQLITE_USE_URI \
+      -DSQLITE_ENABLE_DBSTAT_VTAB \
+      -DSQLITE_MAX_VARIABLE_NUMBER=250000" \
+    ./configure --prefix=/usr/local \
+      --enable-threadsafe \
+      --enable-session \
+      --enable-fts3 \
+      --enable-fts4 \
+      --enable-fts5 && \
+    make -j"$(nproc)" && \
+    make install
+
+# --- Stage 2: patch the upstream Redis Commander image ---
+FROM ghcr.io/joeferner/redis-commander:${REDIS_COMMANDER_VERSION}
+
+# Copy the updated SQLite shared library over the system one.
+# Alpine keeps libsqlite3 at /usr/lib/.
+COPY --from=sqlite-builder /usr/local/lib/libsqlite3.so.0* /usr/lib/
+
+CMD ["/redis-commander/docker/entrypoint.sh"]

@@ -145,6 +145,10 @@ class SetJiraFieldsTool(Tool[SetJiraFieldsToolInput, ToolRunOptions, StringToolO
             )
         if os.getenv("DRY_RUN", "False").lower() == "true":
             return StringToolOutput(result="Dry run, not updating Jira fields (this is expected, not an error)")
+        if _skip_jira_writes():
+            return StringToolOutput(
+                result=f"JIRA_DRY_RUN is set, not updating fields on {issue_key} (this is expected, not an error)"
+            )
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}")
@@ -225,6 +229,10 @@ class AddJiraCommentTool(Tool[AddJiraCommentToolInput, ToolRunOptions, StringToo
         if os.getenv("DRY_RUN", "False").lower() == "true":
             return StringToolOutput(
                 result=f"Dry run, not adding comment to {issue_key} (this is expected, not an error)"
+            )
+        if _skip_jira_writes():
+            return StringToolOutput(
+                result=f"JIRA_DRY_RUN is set, not adding comment to {issue_key} (this is expected, not an error)"
             )
 
         jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/comment")
@@ -391,6 +399,10 @@ class ChangeJiraStatusTool(Tool[ChangeJiraStatusToolInput, ToolRunOptions, Strin
             return StringToolOutput(
                 result=f"Dry run, not changing status of {issue_key} to {status}  (this is expected, not an error)"
             )
+        if _skip_jira_writes():
+            return StringToolOutput(
+                result=f"JIRA_DRY_RUN is set, not changing status of {issue_key} (this is expected, not an error)"
+            )
 
         headers = get_jira_auth_headers()
         jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}/transitions")
@@ -477,6 +489,10 @@ class EditJiraLabelsTool(Tool[EditJiraLabelsToolInput, ToolRunOptions, StringToo
         if os.getenv("DRY_RUN", "False").lower() == "true":
             return StringToolOutput(
                 result=f"Dry run, not editing labels on {issue_key} (this is expected, not an error)"
+            )
+        if _skip_jira_writes():
+            return StringToolOutput(
+                result=f"JIRA_DRY_RUN is set, not editing labels on {issue_key} (this is expected, not an error)"
             )
 
         jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}")

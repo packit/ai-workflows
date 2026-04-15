@@ -5,6 +5,8 @@ import logging
 from enum import Enum
 from urllib.parse import urlparse
 
+from ymir.common.constants import AIOHTTP_TIMEOUT
+
 from pydantic import BaseModel, Field
 
 from beeai_framework.context import RunContext
@@ -69,10 +71,9 @@ class UpstreamSearchTool(Tool[UpstreamSearchToolInput, ToolRunOptions, UpstreamS
         self, tool_input: UpstreamSearchToolInput,
         options: ToolRunOptions | None, context: RunContext) -> UpstreamSearchToolOutput:
         try:
-            timeout = aiohttp.ClientTimeout(total=30)
             repos = []
             commits = []
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
                 async with session.get(f"{os.environ['UPSTREAM_SEARCH_API_URL']}/find_repository",
                                        params={"name": tool_input.project}) as response:
                     if response.status != 200:

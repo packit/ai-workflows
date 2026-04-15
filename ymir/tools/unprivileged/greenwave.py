@@ -4,6 +4,8 @@ from urllib.parse import quote as urlquote
 import aiohttp
 from pydantic import BaseModel, Field
 
+from ymir.common.constants import AIOHTTP_TIMEOUT
+
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
@@ -48,7 +50,7 @@ class FetchGreenWaveTool(Tool[FetchGreenWaveInput, ToolRunOptions, StringToolOut
         logger.info("Fetching GreenWave gating status from %s", url)
 
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+            async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
                 async with session.get(url) as response:
                     if response.status == 200:
                         html = await response.text()

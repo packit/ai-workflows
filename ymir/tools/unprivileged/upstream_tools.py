@@ -7,6 +7,8 @@ from urllib.parse import urlparse, quote
 import aiohttp
 from pydantic import BaseModel, Field
 
+from ymir.common.constants import AIOHTTP_TIMEOUT
+
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, StringToolOutput, Tool, ToolError, ToolRunOptions
@@ -90,8 +92,8 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
                 }
 
                 try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(api_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+                        async with session.get(api_url, headers=headers) as response:
                             response.raise_for_status()
                             data = await response.json()
 
@@ -142,12 +144,12 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
                 commits = []
                 commit_hash = target_ref
                 try:
-                    async with aiohttp.ClientSession() as session:
+                    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
                         # Determine if this is GitHub or GitLab based on the URL pattern
                         if '/-/' not in parsed.path:
                             # GitHub API - URL-encode refs to handle special characters like / in branch names
                             api_url = f"https://api.github.com/repos/{owner}/{repo}/compare/{quote(base_ref, safe='')}...{quote(target_ref, safe='')}"
-                            async with session.get(api_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                            async with session.get(api_url, headers=headers) as response:
                                 response.raise_for_status()
                                 data = await response.json()
                                 # GitHub: commits are in 'commits' array (oldest first)
@@ -156,7 +158,7 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
                             # GitLab API - use params dict for automatic URL encoding
                             api_url = f"https://{parsed.netloc}/api/v4/projects/{owner}%2F{repo}/repository/compare"
                             params = {'from': base_ref, 'to': target_ref}
-                            async with session.get(api_url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                            async with session.get(api_url, params=params, headers=headers) as response:
                                 response.raise_for_status()
                                 data = await response.json()
                                 # GitLab: commits are in 'commits' array (newest first)

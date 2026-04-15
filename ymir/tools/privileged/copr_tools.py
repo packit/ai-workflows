@@ -15,6 +15,7 @@ from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
 from pydantic import BaseModel, Field
 
 from ymir.common import load_rhel_config
+from ymir.common.constants import AIOHTTP_TIMEOUT
 from ymir.common.utils import init_kerberos_ticket, KerberosError
 from ymir.common.validators import AbsolutePath
 
@@ -275,8 +276,7 @@ class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, Str
     ) -> StringToolOutput:
         artifacts_urls = tool_input.artifacts_urls
         target_path = tool_input.target_path
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             for url in artifacts_urls:
                 logger.info(f"Downloading build artifact from: {url}")
                 try:

@@ -36,9 +36,9 @@ def _redact(text: str) -> str:
         text = pattern.sub("[REDACTED]", text)
     return text
 
-from ymir.tools.privileged.copr_tools import BuildPackageTool, DownloadArtifactsTool
-from ymir.tools.privileged.distgit_tools import CreateZstreamBranchTool
-from ymir.tools.privileged.gitlab_tools import (
+from ymir.tools.privileged.copr import BuildPackageTool, DownloadArtifactsTool
+from ymir.tools.privileged.distgit import CreateZstreamBranchTool
+from ymir.tools.privileged.gitlab import (
     AddBlockingMergeRequestCommentTool,
     AddMergeRequestCommentTool,
     AddMergeRequestLabelsTool,
@@ -55,7 +55,7 @@ from ymir.tools.privileged.gitlab_tools import (
     PushToRemoteRepositoryTool,
     RetryPipelineJobTool,
 )
-from ymir.tools.privileged.jira_tools import (
+from ymir.tools.privileged.jira import (
     AddJiraCommentTool,
     ChangeJiraStatusTool,
     CheckCveTriageEligibilityTool,
@@ -68,7 +68,7 @@ from ymir.tools.privileged.jira_tools import (
     SetPreliminaryTestingTool,
     VerifyIssueAuthorTool,
 )
-from ymir.tools.privileged.lookaside_tools import DownloadSourcesTool, PrepSourcesTool, UploadSourcesTool
+from ymir.tools.privileged.lookaside import DownloadSourcesTool, PrepSourcesTool, UploadSourcesTool
 from ymir.tools.privileged.zstream_search import ZStreamSearchTool
 
 

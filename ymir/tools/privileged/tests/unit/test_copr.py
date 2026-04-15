@@ -9,8 +9,8 @@ from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
 from beeai_framework.tools import ToolError
 from flexmock import flexmock
 
-import copr_tools
-from copr_tools import (
+from ymir.tools.privileged import copr as copr_tools
+from ymir.tools.privileged.copr import (
     COPR_PROJECT_LIFETIME,
     COPR_BUILD_TIMEOUT,
     BuildPackageTool,

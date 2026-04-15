@@ -13,7 +13,7 @@ from ogr.services.gitlab import GitlabService
 
 from ymir.common.constants import GITLAB_MR_CHECKLIST
 from ymir.common.models import OpenMergeRequestResult
-from gitlab_tools import (
+from ymir.tools.privileged.gitlab import (
     AddBlockingMergeRequestCommentTool,
     AddMergeRequestCommentTool,
     AddMergeRequestLabelsTool,
@@ -26,7 +26,6 @@ from gitlab_tools import (
     PushToRemoteRepositoryTool,
     RetryPipelineJobTool,
 )
-from test_utils import mock_git_repo_basepath
 
 
 

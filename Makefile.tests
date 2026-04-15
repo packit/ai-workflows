@@ -17,20 +17,15 @@ build-test-image-c9s:
 	check-agents-in-container check-mcp-server-in-container check-jira-issue-fetcher-in-container check-ymir-common-in-container
 
 check-agents:
-	cd ./ymir/agents && \
-	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(addprefix ymir/agents/,$(TEST_TARGET))
 check-mcp-server:
-	cd ./ymir/tools/privileged && \
-	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(addprefix ymir/tools/privileged/,$(TEST_TARGET))
 check-jira-issue-fetcher:
-	cd ./ymir/jira_issue_fetcher && \
-	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(addprefix ymir/jira_issue_fetcher/,$(TEST_TARGET))
 check-ymir-common:
-	cd ./ymir/common && \
-	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(addprefix ymir/common/,$(TEST_TARGET))
 check-supervisor:
-	cd ./ymir/supervisor && \
-	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(addprefix ymir/supervisor/,$(TEST_TARGET))
 
 check: check-agents check-mcp-server check-jira-issue-fetcher check-ymir-common check-supervisor
 

@@ -12,7 +12,7 @@ from beeai_framework.tools import JSONToolOutput, Tool, ToolRunOptions, ToolErro
 
 from ymir.common.utils import run_tool
 from ymir.common.version_utils import parse_rhel_version, is_older_zstream
-from ymir.tools.privileged.jira_tools import (
+from ymir.tools.privileged.jira import (
     GetJiraDevStatusTool,
     SearchJiraIssuesTool,
 )

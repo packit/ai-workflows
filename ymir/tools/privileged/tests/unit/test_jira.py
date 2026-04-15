@@ -6,8 +6,8 @@ import aiohttp
 import pytest
 from flexmock import flexmock
 
-import jira_tools
-from jira_tools import (
+from ymir.tools.privileged import jira as jira_tools
+from ymir.tools.privileged.jira import (
     AddJiraCommentTool,
     ChangeJiraStatusTool,
     EditJiraLabelsTool,

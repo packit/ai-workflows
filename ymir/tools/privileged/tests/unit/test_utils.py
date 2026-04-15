@@ -6,14 +6,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from flexmock import flexmock
 
-from utils import clean_stale_repositories
-
-
-@pytest.fixture
-def mock_git_repo_basepath(tmp_path, monkeypatch):
-    """Fixture to mock GIT_REPO_BASEPATH environment variable."""
-    monkeypatch.setenv('GIT_REPO_BASEPATH', str(tmp_path))
-    return tmp_path
+from ymir.tools.privileged.utils import clean_stale_repositories
 
 
 @pytest.fixture

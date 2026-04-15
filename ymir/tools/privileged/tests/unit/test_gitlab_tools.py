@@ -12,6 +12,7 @@ from flexmock import flexmock
 from ogr.services.gitlab import GitlabService
 
 from ymir.common.constants import GITLAB_MR_CHECKLIST
+from ymir.common.models import OpenMergeRequestResult
 from gitlab_tools import (
     AddBlockingMergeRequestCommentTool,
     AddMergeRequestCommentTool,
@@ -94,7 +95,7 @@ async def test_open_merge_request():
             "source": source,
         }
     )
-    assert out.result == (mr_url, True)
+    assert out.result == OpenMergeRequestResult(url=mr_url, is_new_mr=True)
 
 
 @pytest.mark.asyncio
@@ -131,7 +132,7 @@ async def test_open_merge_request_with_existing_mr():
             "source": source,
         }
     )
-    assert out.result == (mr_url, False)
+    assert out.result == OpenMergeRequestResult(url=mr_url, is_new_mr=False)
 
 
 @pytest.mark.asyncio

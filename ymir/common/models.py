@@ -387,6 +387,12 @@ class CachedMRMetadata(BaseModel):
 # GitLab Tools Schemas
 # ============================================================================
 
+class OpenMergeRequestResult(BaseModel):
+    """Result of opening a merge request."""
+    url: str = Field(description="URL of the merge request")
+    is_new_mr: bool = Field(description="True if newly created, False if an existing MR was reused")
+
+
 class FailedPipelineJob(BaseModel):
     """Represents a failed job in a GitLab pipeline."""
 

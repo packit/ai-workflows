@@ -25,7 +25,6 @@ from ymir.tools.unprivileged.upstream_tools import (
     CloneUpstreamRepositoryTool,
     ExtractUpstreamRepositoryTool,
     FindBaseCommitTool,
-    GeneratePatchFromCommitTool,
 )
 from ymir.tools.unprivileged.version_mapper import VersionMapperTool
 from ymir.tools.unprivileged.wicked_git import (
@@ -94,7 +93,6 @@ def main():
         ApplyDownstreamPatchesTool(),
         CherryPickCommitTool(),
         CherryPickContinueTool(),
-        GeneratePatchFromCommitTool(),
         VersionMapperTool(),
         GitPatchApplyTool(),
         GitPatchApplyFinishTool(),

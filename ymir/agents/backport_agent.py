@@ -59,7 +59,6 @@ from ymir.tools.unprivileged.upstream_tools import (
     CloneUpstreamRepositoryTool,
     ExtractUpstreamRepositoryTool,
     FindBaseCommitTool,
-    GeneratePatchFromCommitTool,
 )
 from ymir.tools.unprivileged.distgit_detector import DistgitDetectorTool
 from ymir.tools.unprivileged.wicked_git import (
@@ -816,7 +815,6 @@ async def create_backport_agent(
         ApplyDownstreamPatchesTool(options=local_tool_options),
         CherryPickCommitTool(options=local_tool_options),
         CherryPickContinueTool(options=local_tool_options),
-        GeneratePatchFromCommitTool(options=local_tool_options),
     ]
 
     # Add build tools if requested (for iterative build error fixing)

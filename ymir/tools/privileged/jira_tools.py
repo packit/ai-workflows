@@ -651,6 +651,63 @@ class SearchJiraIssuesTool(Tool[SearchJiraIssuesToolInput, ToolRunOptions, JSONT
         return JSONToolOutput(result=out)
 
 
+async def _fetch_dev_status_details(
+    session: Any,
+    issue_key: str,
+    headers: dict,
+    jira_base: str,
+    summary_category: str,
+    data_type: str,
+) -> list[dict[str, Any]]:
+    """Resolve a Jira issue ID, fetch the dev-status summary, and return
+    aggregated detail records for every application type found under
+    *summary_category* (e.g. ``"repository"`` or ``"pullrequest"``)."""
+    issue_url = urljoin(jira_base, f"rest/api/3/issue/{issue_key}")
+    try:
+        async with session.get(issue_url, params={"fields": ""}, headers=headers) as response:
+            response.raise_for_status()
+            issue_data = await response.json()
+            issue_id = issue_data["id"]
+    except aiohttp.ClientError as e:
+        raise ToolError(f"Failed to resolve issue ID for {issue_key}: {e}") from e
+
+    summary_url = urljoin(jira_base, f"rest/dev-status/1.0/issue/summary?issueId={issue_id}")
+    try:
+        async with session.get(summary_url, headers=headers) as response:
+            response.raise_for_status()
+            summary_data = await response.json()
+    except aiohttp.ClientError as e:
+        raise ToolError(f"Failed to get dev status summary for {issue_key}: {e}") from e
+
+    app_types = list(
+        summary_data.get("summary", {})
+        .get(summary_category, {})
+        .get("byInstanceType", {})
+        .keys()
+    )
+
+    details: list[dict[str, Any]] = []
+    for app_type in app_types:
+        detail_url = urljoin(
+            jira_base,
+            f"rest/dev-status/1.0/issue/detail?issueId={issue_id}"
+            f"&applicationType={app_type}&dataType={data_type}",
+        )
+        try:
+            async with session.get(detail_url, headers=headers) as response:
+                response.raise_for_status()
+                dev_data = await response.json()
+        except aiohttp.ClientError as e:
+            logger.warning(
+                f"Failed to get dev-status detail for {issue_key} (applicationType={app_type}): {e}"
+            )
+            continue
+
+        details.extend(dev_data.get("detail", []))
+
+    return details
+
+
 class GetJiraDevStatusToolInput(BaseModel):
     issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
 
@@ -679,69 +736,138 @@ class GetJiraDevStatusTool(Tool[GetJiraDevStatusToolInput, ToolRunOptions, JSONT
         issue_key = tool_input.issue_key
         headers = get_jira_auth_headers()
         jira_base = os.getenv("JIRA_URL")
-
         logger.info(f"Fetching development status for {issue_key}")
 
-        async with aiohttpClientSession() as session:
-            issue_url = urljoin(jira_base, f"rest/api/3/issue/{issue_key}")
-            try:
-                async with session.get(
-                    issue_url,
-                    params={"fields": ""},
-                    headers=headers,
-                ) as response:
-                    response.raise_for_status()
-                    issue_data = await response.json()
-                    issue_id = issue_data["id"]
-            except aiohttp.ClientError as e:
-                raise ToolError(f"Failed to resolve issue ID for {issue_key}: {e}") from e
-
-            summary_url = urljoin(
-                jira_base,
-                f"rest/dev-status/1.0/issue/summary?issueId={issue_id}",
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            details = await _fetch_dev_status_details(
+                session, issue_key, headers, jira_base,
+                summary_category="repository", data_type="repository",
             )
-            try:
-                async with session.get(
-                    summary_url,
-                    headers=headers,
-                ) as response:
-                    response.raise_for_status()
-                    summary_data = await response.json()
-            except aiohttp.ClientError as e:
-                raise ToolError(f"Failed to get dev status summary for {issue_key}: {e}") from e
 
-            commits = []
-            for provider in summary_data.get("summary", {}).get("repository", {}).get("byInstanceType", {}).values():
-                app_type = provider.get("applicationType")
-                if not app_type:
-                    continue
-
-                dev_status_url = urljoin(
-                    jira_base,
-                    f"rest/dev-status/1.0/issue/detail?issueId={issue_id}&applicationType={app_type}&dataType=repository",
-                )
-                try:
-                    async with session.get(
-                        dev_status_url,
-                        headers=headers,
-                    ) as response:
-                        response.raise_for_status()
-                        dev_data = await response.json()
-                except aiohttp.ClientError as e:
-                    logger.warning(
-                        f"Failed to get dev status detail for {issue_key} (applicationType={app_type}): {e}"
-                    )
-                    continue
-
-                for detail in dev_data.get("detail", []):
-                    for repo in detail.get("repositories", []):
-                        repo_url = repo.get("url", "")
-                        for commit in repo.get("commits", []):
-                            commits.append({
-                                "url": commit.get("url", ""),
-                                "message": commit.get("message", ""),
-                                "repository_url": repo_url,
-                            })
+        commits = []
+        for detail in details:
+            for repo in detail.get("repositories", []):
+                repo_url = repo.get("url", "")
+                for commit in repo.get("commits", []):
+                    commits.append({
+                        "url": commit.get("url", ""),
+                        "message": commit.get("message", ""),
+                        "repository_url": repo_url,
+                    })
 
         logger.info(f"Found {len(commits)} commits in development status for {issue_key}")
         return JSONToolOutput(result=commits)
+
+
+class GetJiraPullRequestsToolInput(BaseModel):
+    issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
+
+
+class GetJiraPullRequestsTool(Tool[GetJiraPullRequestsToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]):
+    name = "get_jira_pull_requests"
+    description = """
+    Gets pull/merge requests linked to a Jira issue via the dev-status API.
+    Returns a list of pull request dicts with keys: id, name, status, url,
+    source, destination, repositoryName, repositoryUrl.
+    """
+    input_schema = GetJiraPullRequestsToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "jira", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: GetJiraPullRequestsToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[list[dict[str, Any]]]:
+        issue_key = tool_input.issue_key
+        headers = get_jira_auth_headers()
+        jira_base = os.getenv("JIRA_URL")
+        logger.info(f"Fetching pull requests for {issue_key}")
+
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            details = await _fetch_dev_status_details(
+                session, issue_key, headers, jira_base,
+                summary_category="pullrequest", data_type="pullrequest",
+            )
+
+        pull_requests: list[dict[str, Any]] = []
+        for detail in details:
+            pull_requests.extend(detail.get("pullRequests", []))
+
+        logger.info(f"Found {len(pull_requests)} pull requests for {issue_key}")
+        return JSONToolOutput(result=pull_requests)
+
+
+class SetPreliminaryTestingToolInput(BaseModel):
+    issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
+    value: PreliminaryTesting = Field(description="Value to set for Preliminary Testing field")
+    comment: str | None = Field(default=None, description="Optional comment to add to the issue")
+
+
+class SetPreliminaryTestingTool(Tool[SetPreliminaryTestingToolInput, ToolRunOptions, StringToolOutput]):
+    name = "set_preliminary_testing"
+    description = """
+    Updates the Preliminary Testing custom field on a Jira issue.
+    Optionally adds a comment at the same time.
+    """
+    input_schema = SetPreliminaryTestingToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "jira", self.name],
+            creator=self,
+        )
+
+    async def _resolve_field_id(self, session: Any, headers: dict) -> str:
+        jira_base = os.getenv("JIRA_URL")
+        url = urljoin(jira_base, "rest/api/3/field")
+        async with session.get(url, headers=headers) as response:
+            response.raise_for_status()
+            fields = await response.json()
+        for field in fields:
+            if field["name"] == "Preliminary Testing":
+                return field["id"]
+        raise ToolError("Could not find 'Preliminary Testing' custom field in Jira")
+
+    async def _run(
+        self,
+        tool_input: SetPreliminaryTestingToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        issue_key = tool_input.issue_key
+        value = tool_input.value
+        comment = tool_input.comment
+
+        if os.getenv("DRY_RUN", "False").lower() == "true":
+            return StringToolOutput(
+                result=f"Dry run, not setting Preliminary Testing on {issue_key} (this is expected, not an error)"
+            )
+
+        headers = get_jira_auth_headers()
+        jira_base = os.getenv("JIRA_URL")
+
+        async with aiohttpClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+            field_id = await self._resolve_field_id(session, headers)
+
+            body: dict[str, Any] = {
+                "fields": {field_id: {"value": str(value.value)}},
+            }
+            if comment is not None:
+                body["update"] = {
+                    "comment": [{"add": {"body": comment}}],
+                }
+
+            url = urljoin(jira_base, f"rest/api/2/issue/{issue_key}")
+            try:
+                async with session.put(url, json=body, headers=headers) as response:
+                    response.raise_for_status()
+            except aiohttp.ClientError as e:
+                raise ToolError(f"Failed to set Preliminary Testing on {issue_key}: {e}") from e
+
+        return StringToolOutput(result=f"Successfully set Preliminary Testing to {value.value} on {issue_key}")

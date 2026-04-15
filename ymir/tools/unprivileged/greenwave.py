@@ -1,13 +1,12 @@
 import logging
 from urllib.parse import quote as urlquote
 
+import aiohttp
 from pydantic import BaseModel, Field
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
-
-from ..http_utils import aiohttp_session
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,7 @@ class FetchGreenWaveTool(Tool[FetchGreenWaveInput, ToolRunOptions, StringToolOut
 
     def _create_emitter(self) -> Emitter:
         return Emitter.root().child(
-            namespace=["tool", "fetch_greenwave"],
+            namespace=["tool", "greenwave", self.name],
             creator=self,
         )
 
@@ -45,26 +44,25 @@ class FetchGreenWaveTool(Tool[FetchGreenWaveInput, ToolRunOptions, StringToolOut
         options: ToolRunOptions | None,
         context: RunContext,
     ) -> StringToolOutput:
-        session = aiohttp_session()
-
         url = f"{GREENWAVE_URL}/query?nvr={urlquote(input.nvr)}"
         logger.info("Fetching GreenWave gating status from %s", url)
 
         try:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    html = await response.text()
-                    return StringToolOutput(result=html)
-                else:
-                    text = await response.text()
-                    logger.error(
-                        "GreenWave request failed with status %d: %s",
-                        response.status,
-                        text,
-                    )
-                    return StringToolOutput(
-                        result=f"Failed to fetch GreenWave gating status (HTTP {response.status}): {text}"
-                    )
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        html = await response.text()
+                        return StringToolOutput(result=html)
+                    else:
+                        text = await response.text()
+                        logger.error(
+                            "GreenWave request failed with status %d: %s",
+                            response.status,
+                            text,
+                        )
+                        return StringToolOutput(
+                            result=f"Failed to fetch GreenWave gating status (HTTP {response.status}): {text}"
+                        )
         except Exception as e:
             logger.error("Error fetching GreenWave gating status: %s", e)
             return StringToolOutput(

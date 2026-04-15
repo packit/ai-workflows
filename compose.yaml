@@ -139,6 +139,13 @@ services:
     command: ["python", "-m", "ymir.agents.triage_agent"]
     profiles: ["agents"]
 
+  preliminary-testing-agent:
+    <<: *beeai-agent-c10s
+    environment:
+      <<: *beeai-env
+    command: ["python", "-m", "ymir.agents.preliminary_testing_agent"]
+    profiles: ["agents"]
+
   triage-agent-e2e-tests:
     <<: *beeai-agent-c10s
     environment:

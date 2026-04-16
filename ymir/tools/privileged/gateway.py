@@ -73,7 +73,10 @@ from ymir.tools.privileged.zstream_search import ZStreamSearchTool
 
 
 def _setup_logging():
-    logging.basicConfig(level=logging.INFO)
+    handlers = [logging.StreamHandler()]
+    if os.environ.get("DEBUG_FILE"):
+        handlers.append(logging.FileHandler(os.environ.get("DEBUG_FILE")))
+    logging.basicConfig(level=logging.INFO, handlers=handlers)
 
     # Log tool calls via Emitter.
     # Dotted strings in Emitter.on() are matched exactly (not as globs),

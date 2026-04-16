@@ -71,6 +71,7 @@ to the directory that contains this file.
 | `MOCK_JIRA` | No | Set to `true` to use a mock Jira client (for testing). |
 | `JIRA_MOCK_FILES` | No | Directory with mock Jira JSON fixtures (only when `MOCK_JIRA=true`). |
 | `SKIP_SETTING_JIRA_FIELDS` | No | Set to `true` to skip setting Jira custom fields. |
+| `DEBUG_FILE` | No | Path to a log file. When set, gateway logs are written to this file in addition to stderr. Useful for debugging local installations. |
 
 ### Unprivileged gateway
 
@@ -79,6 +80,7 @@ to the directory that contains this file.
 | `MCP_TRANSPORT` | **Yes** | Set to `stdio` so Claude Code can communicate with the process. |
 | `UPSTREAM_SEARCH_API_URL` | **Yes** | Base URL of the upstream search service (provides `/find_repository` and `/find_commit` endpoints). |
 | `MCP_GATEWAY_URL` | No | SSE URL of a running privileged gateway. See the note on cross-gateway calls below. |
+| `DEBUG_FILE` | No | Path to a log file. When set, gateway logs are written to this file in addition to stderr. Useful for debugging local installations. |
 
 ## 4. Configure Claude Code
 

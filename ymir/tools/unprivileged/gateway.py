@@ -2,6 +2,7 @@ import logging
 import os
 import re
 from typing import Any
+import re
 
 from beeai_framework.adapters.mcp.serve.server import (
     MCPServer,
@@ -87,13 +88,13 @@ def _setup_logging():
     # so we use regex patterns to match any tool's events.
     def on_tool_start(data: Any, meta: Any):
         logger.info(f"Tool called: {meta.creator}")
-        logger.info(f"Tool arguments: {_redact(str(data))}")
+        logger.info(f"Tool arguments: {str(data)}")
 
     def on_tool_success(data: Any, meta: Any):
         logger.info(f"Tool {meta.creator} completed successfully")
 
     def on_tool_error(data: Any, meta: Any):
-        logger.error(f"Tool {meta.creator} failed with error: {_redact(str(data))}")
+        logger.error(f"Tool {meta.creator} failed with error: {str(data)}")
         error = getattr(data, "error", None)
         if error is not None:
             logger.error(f"Tool {meta.creator} traceback:", exc_info=error)

@@ -93,7 +93,7 @@ services:
     env_file:
       - .secrets/mcp-gateway.env
     volumes:
-      - ./ymir/tools/privileged:/home/mcp/ymir/tools/privileged:ro,z
+      - ./ymir/tools:/home/mcp/ymir/tools:ro,z
       - ./ymir/tools/privileged/tests/data:/home/mcp/ymir/tools/privileged/tests/data:rw,z
       - ./ymir/common:/home/mcp/ymir/common:ro,z
       - .secrets/keytab:/home/mcp/keytab:ro,z,U

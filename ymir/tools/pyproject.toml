@@ -42,5 +42,6 @@ packages = []
 
 [tool.hatch.build.targets.wheel.force-include]
 "__init__.py" = "ymir/tools/__init__.py"
+"gateway_utils.py" = "ymir/tools/gateway_utils.py"
 "privileged" = "ymir/tools/privileged"
 "unprivileged" = "ymir/tools/unprivileged"

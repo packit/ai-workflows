@@ -1,0 +1,33 @@
+# Rebuild Arize Phoenix 11.6.2 with SQLite >= 3.50.2 to fix CVE-2025-6965.
+#
+# The upstream image (arizephoenix/phoenix:version-11.6.2) is based on
+# gcr.io/distroless/python3-debian12 which ships SQLite 3.40.1.
+# We compile SQLite from source and overlay the shared library.
+
+ARG PHOENIX_VERSION=version-11.6.2
+
+# --- Stage 1: build SQLite from source ---
+FROM docker.io/library/debian:bookworm-slim AS sqlite-builder
+
+ARG SQLITE_VERSION=3500200
+ARG SQLITE_YEAR=2025
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc make wget ca-certificates libc6-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN wget -q "https://www.sqlite.org/${SQLITE_YEAR}/sqlite-autoconf-${SQLITE_VERSION}.tar.gz" && \
+    tar xzf "sqlite-autoconf-${SQLITE_VERSION}.tar.gz" && \
+    cd "sqlite-autoconf-${SQLITE_VERSION}" && \
+    ./configure --prefix=/usr/local && \
+    make -j"$(nproc)" && \
+    make install
+
+# --- Stage 2: patch the upstream Phoenix image ---
+FROM docker.io/arizephoenix/phoenix:${PHOENIX_VERSION}
+
+# Copy the updated SQLite shared library over the system one.
+# The distroless base has libsqlite3.so.0 at /usr/lib/x86_64-linux-gnu/.
+COPY --from=sqlite-builder /usr/local/lib/libsqlite3.so.0* /usr/lib/x86_64-linux-gnu/
+
+CMD ["-m", "phoenix.server.main", "serve"]

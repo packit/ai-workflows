@@ -1,7 +1,6 @@
-import pytest
-
 import git
 import koji
+import pytest
 from flexmock import flexmock
 
 from ymir.tools.privileged import distgit as distgit_tools

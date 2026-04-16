@@ -11,16 +11,17 @@ from .erratum_handler import (
 from .http_utils import with_http_sessions
 from .jira_utils import get_current_issues
 from .supervisor_types import ErrataStatus, IssueStatus
-from .work_queue import WorkItem, WorkQueue, WorkItemType
+from .work_queue import WorkItem, WorkItemType, WorkQueue
 
 logger = logging.getLogger(__name__)
 
-CURRENT_ISSUES_JQL = """
-project = RHEL AND AssignedTeam = rhel-jotnar
-AND status in ('New', 'In Progress', 'Integration', 'Release Pending')
-AND ('Errata Link' is not EMPTY OR labels in ('ymir_backported', 'ymir_rebased', 'ymir_merged', 'jotnar_backported', 'jotnar_rebased', 'jotnar_merged'))
-AND labels != ymir_needs_attention AND labels != jotnar_needs_attention
-"""
+CURRENT_ISSUES_JQL = (
+    "project = RHEL AND AssignedTeam = rhel-jotnar "
+    "AND status in ('New', 'In Progress', 'Integration', 'Release Pending') "
+    "AND ('Errata Link' is not EMPTY OR labels in ('ymir_backported', 'ymir_rebased', "
+    "'ymir_merged', 'jotnar_backported', 'jotnar_rebased', 'jotnar_merged')) "
+    "AND labels != ymir_needs_attention AND labels != jotnar_needs_attention"
+)
 
 
 @with_http_sessions()
@@ -30,16 +31,14 @@ async def collect_and_schedule_work_items(queue: WorkQueue):
     logger.info("Getting all relevant issues from JIRA")
     issues = {i.key: i for i in get_current_issues(CURRENT_ISSUES_JQL)}
 
-    erratum_links = set(
-        i.errata_link for i in issues.values() if i.errata_link is not None
-    )
+    erratum_links = {i.errata_link for i in issues.values() if i.errata_link is not None}
     errata = [get_erratum_for_link(link) for link in erratum_links]
 
-    work_items = set(
+    work_items = {
         WorkItem(item_type=WorkItemType.PROCESS_ISSUE, item_data=i.key)
         for i in issues.values()
         if i.status != IssueStatus.RELEASE_PENDING
-    ) | set(
+    } | {
         WorkItem(item_type=WorkItemType.PROCESS_ERRATUM, item_data=str(e.id))
         for e in errata
         if (
@@ -47,14 +46,12 @@ async def collect_and_schedule_work_items(queue: WorkQueue):
                 e.status == ErrataStatus.NEW_FILES
                 or (
                     e.status == ErrataStatus.QE
-                    and all_issues_are_release_pending(
-                        erratum_get_issues(e, issue_cache=issues)
-                    )
+                    and all_issues_are_release_pending(erratum_get_issues(e, issue_cache=issues))
                 )
             )
             and not erratum_needs_attention(e.id)
         )
-    )
+    }
 
     new_work_items = work_items - set(await queue.get_all_work_items())
     await queue.schedule_work_items(new_work_items)

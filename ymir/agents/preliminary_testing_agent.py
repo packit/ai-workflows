@@ -4,11 +4,9 @@ import logging
 import os
 import sys
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
-
-from pydantic import BaseModel, Field
 
 from beeai_framework.agents.requirement import RequirementAgent
 from beeai_framework.agents.requirement.requirements.conditional import (
@@ -21,15 +19,22 @@ from beeai_framework.template import PromptTemplate, PromptTemplateInput
 from beeai_framework.tools import Tool
 from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
+from pydantic import BaseModel, Field
 
 from ymir.agents.observability import setup_observability
-from ymir.agents.utils import get_agent_execution_config, get_chat_model, get_tool_call_checker_config, mcp_tools, run_tool
+from ymir.agents.utils import (
+    get_agent_execution_config,
+    get_chat_model,
+    get_tool_call_checker_config,
+    mcp_tools,
+    run_tool,
+)
 from ymir.tools.unprivileged.greenwave import FetchGreenWaveTool
 
 logger = logging.getLogger(__name__)
 
 FIXED_IN_BUILD_CUSTOM_FIELD = "customfield_10578"
-TEST_COVERAGE_CUSTOM_FIELD  = "customfield_10638"
+TEST_COVERAGE_CUSTOM_FIELD = "customfield_10638"
 PRELIMINARY_TESTING_CUSTOM_FIELD = "customfield_10879"
 
 
@@ -55,9 +60,7 @@ class InputSchema(BaseModel):
 
 class PreliminaryTestingResult(BaseModel):
     state: TestingState = Field(description="State of preliminary testing")
-    comment: str | None = Field(
-        description="Comment to add to the JIRA issue explaining the result"
-    )
+    comment: str | None = Field(description="Comment to add to the JIRA issue explaining the result")
 
 
 TEMPLATE = """\
@@ -131,24 +134,31 @@ If all sources returned errors and no results could be obtained:
 
 
 def render_prompt(input: InputSchema) -> str:
-    return PromptTemplate(
-        PromptTemplateInput(schema=InputSchema, template=TEMPLATE)
-    ).render(input)
+    return PromptTemplate(PromptTemplateInput(schema=InputSchema, template=TEMPLATE)).render(input)
 
 
 def create_preliminary_testing_agent(gateway_tools: list) -> RequirementAgent:
     return RequirementAgent(
         name="PreliminaryTestingAnalyst",
-        description="Agent that analyzes GreenWave gating and MR comment results to determine preliminary testing status",
+        description=(
+            "Agent that analyzes GreenWave gating and MR comment results"
+            " to determine preliminary testing status"
+        ),
         llm=get_chat_model(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
             ThinkTool(),
             FetchGreenWaveTool(),
-        ] + [t for t in gateway_tools if t.name in [
-            "fetch_gitlab_mr_notes",
-            "get_jira_details",
-        ]],
+        ]
+        + [
+            t
+            for t in gateway_tools
+            if t.name
+            in [
+                "fetch_gitlab_mr_notes",
+                "get_jira_details",
+            ]
+        ],
         memory=UnconstrainedMemory(),
         requirements=[
             ConditionalRequirement(
@@ -191,7 +201,6 @@ async def run_preliminary_testing(
     ignore_needs_attention: bool = False,
 ) -> PreliminaryTestingResult:
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
-
         workflow = Workflow(PreliminaryTestingWorkflowState, name="PreliminaryTestingWorkflow")
 
         async def fetch_and_validate_issue(state: PreliminaryTestingWorkflowState):
@@ -209,7 +218,11 @@ async def run_preliminary_testing(
 
             needs_attention_label = "ymir_needs_attention"
             if needs_attention_label in labels and not state.ignore_needs_attention:
-                logger.info("Issue %s has %s label, skipping", state.jira_issue, needs_attention_label)
+                logger.info(
+                    "Issue %s has %s label, skipping",
+                    state.jira_issue,
+                    needs_attention_label,
+                )
                 state.result = PreliminaryTestingResult(
                     state=TestingState.ERROR,
                     comment=f"Issue has the {needs_attention_label} label",
@@ -218,12 +231,15 @@ async def run_preliminary_testing(
 
             components = [c["name"] for c in fields.get("components", [])]
             if len(components) != 1:
-                logger.warning("Issue %s has %d components, expected 1", state.jira_issue, len(components))
+                logger.warning(
+                    "Issue %s has %d components, expected 1",
+                    state.jira_issue,
+                    len(components),
+                )
                 await _flag_attention(
                     state.jira_issue,
-                    "This issue has multiple components. "
-                    "This workflow expects exactly one component.",
-                    gateway_tools=gateway_tools
+                    "This issue has multiple components. This workflow expects exactly one component.",
+                    gateway_tools=gateway_tools,
                 )
                 state.result = PreliminaryTestingResult(
                     state=TestingState.ERROR,
@@ -232,7 +248,11 @@ async def run_preliminary_testing(
                 return Workflow.END
 
             if status != "In Progress":
-                logger.info("Issue %s status is %s, expected In Progress", state.jira_issue, status)
+                logger.info(
+                    "Issue %s status is %s, expected In Progress",
+                    state.jira_issue,
+                    status,
+                )
                 state.result = PreliminaryTestingResult(
                     state=TestingState.ERROR,
                     comment=f"Issue status is {status}, expected In Progress",
@@ -242,9 +262,7 @@ async def run_preliminary_testing(
             # Check Preliminary Testing field
             preliminary_testing = fields.get(PRELIMINARY_TESTING_CUSTOM_FIELD)
             preliminary_testing_value = (
-                preliminary_testing.get("value")
-                if isinstance(preliminary_testing, dict)
-                else None
+                preliminary_testing.get("value") if isinstance(preliminary_testing, dict) else None
             )
 
             if preliminary_testing_value == "Pass":
@@ -265,8 +283,7 @@ async def run_preliminary_testing(
             test_coverage = fields.get(TEST_COVERAGE_CUSTOM_FIELD)
             try:
                 if any(
-                    v.get("value")
-                    in ("Manual", "Automated", "RegressionOnly", "New Test Coverage")
+                    v.get("value") in ("Manual", "Automated", "RegressionOnly", "New Test Coverage")
                     for v in test_coverage
                 ):
                     state.test_coverage_missing = False
@@ -285,7 +302,11 @@ async def run_preliminary_testing(
                 logger.warning("Failed to get pull requests for %s: %s", state.jira_issue, e)
 
             if state.pull_requests:
-                logger.info("Found %d pull request(s) for %s", len(state.pull_requests), state.jira_issue)
+                logger.info(
+                    "Found %d pull request(s) for %s",
+                    len(state.pull_requests),
+                    state.jira_issue,
+                )
             else:
                 logger.warning("No pull requests found for %s", state.jira_issue)
 
@@ -298,7 +319,10 @@ async def run_preliminary_testing(
                 return Workflow.END
 
             if state.build_nvr is None:
-                logger.info("Fixed in Build not set for %s, will analyze using MR results only", state.jira_issue)
+                logger.info(
+                    "Fixed in Build not set for %s, will analyze using MR results only",
+                    state.jira_issue,
+                )
 
             return "run_analysis"
 
@@ -311,7 +335,7 @@ async def run_preliminary_testing(
                 issue_data=json.dumps(state.issue_data, indent=2, default=str),
                 build_nvr=state.build_nvr,
                 jira_pull_requests=json.dumps(state.pull_requests, indent=2),
-                current_time=datetime.now(timezone.utc),
+                current_time=datetime.now(UTC),
             )
 
             response = await agent.run(
@@ -321,7 +345,10 @@ async def run_preliminary_testing(
             )
 
             state.result = PreliminaryTestingResult.model_validate_json(response.last_message.text)
-            logger.info("Preliminary testing analysis completed: %s", state.result.model_dump_json(indent=4))
+            logger.info(
+                "Preliminary testing analysis completed: %s",
+                state.result.model_dump_json(indent=4),
+            )
 
             return "act_on_result"
 
@@ -334,7 +361,7 @@ async def run_preliminary_testing(
                             state.jira_issue,
                             "Preliminary tests passed but Test Coverage field is not set",
                             details_comment=state.result.comment,
-                            gateway_tools=gateway_tools
+                            gateway_tools=gateway_tools,
                         )
                     else:
                         comment = state.result.comment or "Preliminary testing has passed."
@@ -350,23 +377,27 @@ async def run_preliminary_testing(
                         state.jira_issue,
                         "Preliminary testing failed - see details below",
                         details_comment=state.result.comment,
-                        gateway_tools=gateway_tools
+                        gateway_tools=gateway_tools,
                     )
                 case TestingState.PENDING | TestingState.RUNNING:
-                    logger.info("Tests are %s for %s, no action taken", state.result.state, state.jira_issue)
+                    logger.info(
+                        "Tests are %s for %s, no action taken",
+                        state.result.state,
+                        state.jira_issue,
+                    )
                 case TestingState.NOT_RUNNING:
                     await _flag_attention(
                         state.jira_issue,
                         "Preliminary tests are not running - see details below",
                         details_comment=state.result.comment,
-                        gateway_tools=gateway_tools
+                        gateway_tools=gateway_tools,
                     )
                 case TestingState.ERROR:
                     await _flag_attention(
                         state.jira_issue,
                         "An error occurred during preliminary testing analysis - see details below",
                         details_comment=state.result.comment,
-                        gateway_tools=gateway_tools
+                        gateway_tools=gateway_tools,
                     )
 
             return Workflow.END

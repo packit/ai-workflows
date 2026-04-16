@@ -8,8 +8,10 @@ AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
 
 JIRA_SEARCH_PATH = "rest/api/3/search/jql"
 
+
 class RedisQueues(Enum):
     """Constants for Redis queue names used by Ymir agents"""
+
     TRIAGE_QUEUE = "triage_queue"
     REBASE_QUEUE_C9S = "rebase_queue_c9s"
     REBASE_QUEUE_C10S = "rebase_queue_c10s"
@@ -34,18 +36,29 @@ class RedisQueues(Enum):
     @classmethod
     def input_queues(cls) -> set[str]:
         """Return input queue names that contain Task objects with metadata"""
-        return {cls.TRIAGE_QUEUE.value, cls.REBASE_QUEUE_C9S.value, cls.REBASE_QUEUE_C10S.value,
-                cls.BACKPORT_QUEUE_C9S.value, cls.BACKPORT_QUEUE_C10S.value,
-                cls.REBUILD_QUEUE_C9S.value, cls.REBUILD_QUEUE_C10S.value,
-                cls.CLARIFICATION_NEEDED_QUEUE.value,
-                cls.REBASE_QUEUE.value, cls.BACKPORT_QUEUE.value}
+        return {
+            cls.TRIAGE_QUEUE.value,
+            cls.REBASE_QUEUE_C9S.value,
+            cls.REBASE_QUEUE_C10S.value,
+            cls.BACKPORT_QUEUE_C9S.value,
+            cls.BACKPORT_QUEUE_C10S.value,
+            cls.REBUILD_QUEUE_C9S.value,
+            cls.REBUILD_QUEUE_C10S.value,
+            cls.CLARIFICATION_NEEDED_QUEUE.value,
+            cls.REBASE_QUEUE.value,
+            cls.BACKPORT_QUEUE.value,
+        }
 
     @classmethod
     def data_queues(cls) -> set[str]:
         """Return data queue names that contain schema objects"""
-        return {cls.ERROR_LIST.value,
-                cls.OPEN_ENDED_ANALYSIS_LIST.value, cls.COMPLETED_REBASE_LIST.value,
-                cls.COMPLETED_BACKPORT_LIST.value, cls.COMPLETED_REBUILD_LIST.value}
+        return {
+            cls.ERROR_LIST.value,
+            cls.OPEN_ENDED_ANALYSIS_LIST.value,
+            cls.COMPLETED_REBASE_LIST.value,
+            cls.COMPLETED_BACKPORT_LIST.value,
+            cls.COMPLETED_REBUILD_LIST.value,
+        }
 
     @classmethod
     def get_rebase_queue_for_branch(cls, target_branch: str | None) -> str:
@@ -73,11 +86,12 @@ class RedisQueues(Enum):
         """Check if branch should use c9s container"""
         branch_lower = branch.lower()
         # use c9s for both RHEL 8 and 9
-        return any(pattern in branch_lower for pattern in ['rhel-9', 'c9s', 'rhel-8', 'c8s'])
+        return any(pattern in branch_lower for pattern in ["rhel-9", "c9s", "rhel-8", "c8s"])
 
 
 class JiraLabels(Enum):
     """Constants for Jira labels used by Ymir agents"""
+
     NEEDS_ATTENTION = "ymir_needs_attention"
     TRIAGED = "ymir_triaged"
     TRIAGE_IN_PROGRESS = "ymir_triage_in_progress"

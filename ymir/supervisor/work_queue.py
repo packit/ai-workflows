@@ -1,12 +1,14 @@
 import asyncio
+import time
+from collections.abc import AsyncGenerator, Iterable
 from contextlib import asynccontextmanager
 from enum import StrEnum
-import time
-from typing import AsyncGenerator, Iterable, cast
-from pydantic import BaseModel
-import redis.asyncio as redis
+from typing import cast
 
-from ymir.common.utils import redis_client, fix_await
+import redis.asyncio as redis
+from pydantic import BaseModel
+
+from ymir.common.utils import fix_await, redis_client
 
 
 class WorkItemType(StrEnum):
@@ -81,9 +83,7 @@ class WorkQueue:
                 return work_item
             await asyncio.sleep(POLLING_INTERVAL)
 
-    async def schedule_work_items(
-        self, work_items: Iterable[WorkItem], delay: float = 0.0
-    ) -> None:
+    async def schedule_work_items(self, work_items: Iterable[WorkItem], delay: float = 0.0) -> None:
         new_time = time.time() + delay
         to_add = {str(item): new_time for item in work_items}
         if len(to_add) == 0:
@@ -103,12 +103,10 @@ class WorkQueue:
 
     async def get_all_work_items(self) -> list[WorkItem]:
         work_items = await self.client.zrange("supervisor_work_queue", 0, -1)
-        return [
-            WorkItem.from_str(str(item_bytes.decode())) for item_bytes in work_items
-        ]
+        return [WorkItem.from_str(str(item_bytes.decode())) for item_bytes in work_items]
 
 
 @asynccontextmanager
-async def work_queue(redis_url: str) -> AsyncGenerator[WorkQueue, None]:
+async def work_queue(redis_url: str) -> AsyncGenerator[WorkQueue]:
     async with redis_client(redis_url) as client:
         yield WorkQueue(client)

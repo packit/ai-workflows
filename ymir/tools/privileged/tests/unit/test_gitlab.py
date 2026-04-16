@@ -1,15 +1,13 @@
 import asyncio
+from pathlib import Path
 
 import gitlab
 import pytest
-
-from pathlib import Path
-
+from flexmock import flexmock
 from ogr.abstract import PRStatus
 from ogr.exceptions import GitlabAPIException
-from ogr.services.gitlab.project import GitlabProject
-from flexmock import flexmock
 from ogr.services.gitlab import GitlabService
+from ogr.services.gitlab.project import GitlabProject
 
 from ymir.common.models import OpenMergeRequestResult
 from ymir.tools.privileged.gitlab import (
@@ -24,7 +22,6 @@ from ymir.tools.privileged.gitlab import (
     PushToRemoteRepositoryTool,
     RetryPipelineJobTool,
 )
-
 
 
 @pytest.mark.parametrize(
@@ -64,7 +61,10 @@ async def test_fork_repository(repository, fork_exists):
                 },
                 path=package,
             ),
-            service=flexmock(instance_url="https://gitlab.com", user=flexmock(get_username=lambda: fork_namespace)),
+            service=flexmock(
+                instance_url="https://gitlab.com",
+                user=flexmock(get_username=lambda: fork_namespace),
+            ),
         )
     )
     assert (await ForkRepositoryTool().run(input={"repository": repository})).result == clone_url
@@ -79,9 +79,12 @@ async def test_open_merge_request():
     source = "automated-package-update-RHEL-12345"
     mr_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/1"
     pr_mock = flexmock(url=mr_url, status=PRStatus.open, id=1)
-    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
-        url=fork_url
-    ).and_return(flexmock(create_pr=lambda title, body, target, source: pr_mock, parent=flexmock(get_pr=lambda id: pr_mock)))
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(url=fork_url).and_return(
+        flexmock(
+            create_pr=lambda title, body, target, source: pr_mock,
+            parent=flexmock(get_pr=lambda id: pr_mock),
+        )
+    )
     pr_mock.should_receive("add_label").never()
     out = await OpenMergeRequestTool().run(
         input={
@@ -103,7 +106,13 @@ async def test_open_merge_request_with_existing_mr():
     target = "c10s"
     source = "automated-package-update-RHEL-12345"
     mr_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/1"
-    pr_mock = flexmock(url=mr_url, source_branch=source, status=PRStatus.open, target_branch=target, id=1)
+    pr_mock = flexmock(
+        url=mr_url,
+        source_branch=source,
+        status=PRStatus.open,
+        target_branch=target,
+        id=1,
+    )
 
     # create_pr raises an exception with code 409 indicating the MR already exists
     def create_pr_raises(*args, **kwargs):
@@ -111,9 +120,7 @@ async def test_open_merge_request_with_existing_mr():
         exc.__cause__ = gitlab.GitlabError(response_code=409)
         raise exc
 
-    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
-        url=fork_url
-    ).and_return(
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(url=fork_url).and_return(
         flexmock(
             create_pr=create_pr_raises,
             parent=flexmock(get_pr_list=lambda: [pr_mock], get_pr=lambda id: pr_mock),
@@ -150,8 +157,10 @@ async def test_clone_repository(mock_git_repo_basepath):
             assert args[1] == branch
         else:
             pytest.fail(f"Unexpected git command: {args}")
+
         async def wait():
             return 0
+
         return flexmock(wait=wait)
 
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
@@ -176,8 +185,10 @@ async def test_push_to_remote_repository():
         assert args[1].endswith(repository.removeprefix("https://"))
         assert args[2] == branch
         assert kwargs.get("cwd") == clone_path
+
         async def wait():
             return 0
+
         return flexmock(wait=wait)
 
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
@@ -192,8 +203,14 @@ async def test_push_to_remote_repository():
 @pytest.mark.parametrize(
     "merge_request_url,expected_project_path",
     [
-        ("https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123", "redhat/rhel/rpms/bash"),
-        ("https://gitlab.com/packit-service/hello-world/-/merge_requests/123", "packit-service/hello-world"),
+        (
+            "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123",
+            "redhat/rhel/rpms/bash",
+        ),
+        (
+            "https://gitlab.com/packit-service/hello-world/-/merge_requests/123",
+            "packit-service/hello-world",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -244,18 +261,25 @@ async def test_add_merge_request_comment():
     flexmock(GitlabService).should_receive("get_project_from_url").with_args(
         url=merge_request_url.rsplit("/-/merge_requests/", 1)[0],
     ).and_return(
-        flexmock().should_receive("get_pr").and_return(
+        flexmock()
+        .should_receive("get_pr")
+        .and_return(
             flexmock(
                 id=123,
                 _raw_pr=flexmock(
-                    notes=flexmock().should_receive("create").with_args(
+                    notes=flexmock()
+                    .should_receive("create")
+                    .with_args(
                         {"body": comment},
-                    ).and_return(
+                    )
+                    .and_return(
                         flexmock(id=1),
-                    ).mock(),
+                    )
+                    .mock(),
                 ),
             ),
-        ).mock()
+        )
+        .mock()
     )
 
     result = (
@@ -276,16 +300,25 @@ async def test_add_blocking_merge_request_comment():
         # Extract project URL from merge request URL
         url=merge_request_url.rsplit("/-/merge_requests/", 1)[0],
     ).and_return(
-        flexmock().should_receive("get_pr").and_return(
+        flexmock()
+        .should_receive("get_pr")
+        .and_return(
             flexmock(
                 id=123,
                 _raw_pr=flexmock(
                     discussions=flexmock()
-                        .should_receive("list").with_args(get_all=True).and_return([]).mock()
-                        .should_receive("create").with_args({"body": comment}).and_return(flexmock(id=1)).mock(),
+                    .should_receive("list")
+                    .with_args(get_all=True)
+                    .and_return([])
+                    .mock()
+                    .should_receive("create")
+                    .with_args({"body": comment})
+                    .and_return(flexmock(id=1))
+                    .mock(),
                 ),
             ),
-        ).mock()
+        )
+        .mock()
     )
 
     result = (
@@ -308,21 +341,27 @@ async def test_add_blocking_merge_request_comment_already_exists(resolved_status
         attributes={
             "notes": [{"body": "**Blocking Merge Request**\n\nTest comment"}],
             "resolved": resolved_status,
-        }
+        },
     )
 
     flexmock(GitlabService).should_receive("get_project_from_url").with_args(
         url=merge_request_url.rsplit("/-/merge_requests/", 1)[0],
     ).and_return(
-        flexmock().should_receive("get_pr").and_return(
+        flexmock()
+        .should_receive("get_pr")
+        .and_return(
             flexmock(
                 id=123,
                 _raw_pr=flexmock(
                     discussions=flexmock()
-                        .should_receive("list").with_args(get_all=True).and_return([existing_discussion]).mock()
+                    .should_receive("list")
+                    .with_args(get_all=True)
+                    .and_return([existing_discussion])
+                    .mock()
                 ),
             ),
-        ).mock()
+        )
+        .mock()
     )
 
     result = (
@@ -353,21 +392,19 @@ async def test_retry_pipeline_job():
     project_url = "https://gitlab.com/redhat/rhel/rpms/bash"
     job_id = 12345678
 
-    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
-        url=project_url
-    ).and_return(
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(url=project_url).and_return(
         flexmock(
             gitlab_repo=flexmock(
-                jobs=flexmock().should_receive("get").with_args(job_id).and_return(
-                    flexmock(id=job_id, status="pending").should_receive("retry").once().mock()
-                ).mock()
+                jobs=flexmock()
+                .should_receive("get")
+                .with_args(job_id)
+                .and_return(flexmock(id=job_id, status="pending").should_receive("retry").once().mock())
+                .mock()
             )
         )
     )
 
-    result = (
-        await RetryPipelineJobTool().run(input={"project_url": project_url, "job_id": job_id})
-    ).result
+    result = (await RetryPipelineJobTool().run(input={"project_url": project_url, "job_id": job_id})).result
 
     assert result == f"Successfully retried job {job_id}. Status: pending"
 
@@ -377,9 +414,9 @@ async def test_retry_pipeline_job_invalid_project():
     project_url = "https://gitlab.com/nonexistent/project"
     job_id = 12345678
 
-    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
-        url=project_url
-    ).and_raise(Exception("Project not found"))
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(url=project_url).and_raise(
+        Exception("Project not found")
+    )
 
     with pytest.raises(Exception) as exc_info:
         await RetryPipelineJobTool().run(input={"project_url": project_url, "job_id": job_id})
@@ -395,32 +432,62 @@ async def test_get_failed_pipeline_jobs_from_merge_request():
     flexmock(GitlabService).should_receive("get_project_from_url").with_args(
         url="https://gitlab.com/redhat/centos-stream/rpms/bash"
     ).and_return(
-        flexmock().should_receive("get_pr").with_args(123).and_return(
+        flexmock()
+        .should_receive("get_pr")
+        .with_args(123)
+        .and_return(
             flexmock(
                 _raw_pr=flexmock(head_pipeline={"id": pipeline_id}),
                 target_project=flexmock(
                     namespace="redhat/centos-stream/rpms",
                     repo="bash",
                     gitlab_repo=flexmock(
-                        pipelines=flexmock().should_receive("get").with_args(pipeline_id).and_return(
+                        pipelines=flexmock()
+                        .should_receive("get")
+                        .with_args(pipeline_id)
+                        .and_return(
                             flexmock(
-                                jobs=flexmock().should_receive("list").with_args(get_all=True).and_return([
-                                    flexmock(id=11111, name="check-tickets", status="failed", stage="build", artifacts_file={"filename": "debug.log"}),
-                                    flexmock(id=22222, name="build_rpm", status="failed", stage="test", artifacts_file=None),
-                                    flexmock(id=33333, name="trigger_tests", status="success", stage="test", artifacts_file=None),
-                                ]).mock()
+                                jobs=flexmock()
+                                .should_receive("list")
+                                .with_args(get_all=True)
+                                .and_return(
+                                    [
+                                        flexmock(
+                                            id=11111,
+                                            name="check-tickets",
+                                            status="failed",
+                                            stage="build",
+                                            artifacts_file={"filename": "debug.log"},
+                                        ),
+                                        flexmock(
+                                            id=22222,
+                                            name="build_rpm",
+                                            status="failed",
+                                            stage="test",
+                                            artifacts_file=None,
+                                        ),
+                                        flexmock(
+                                            id=33333,
+                                            name="trigger_tests",
+                                            status="success",
+                                            stage="test",
+                                            artifacts_file=None,
+                                        ),
+                                    ]
+                                )
+                                .mock()
                             )
-                        ).mock()
-                    )
+                        )
+                        .mock()
+                    ),
                 ),
             )
-        ).mock()
+        )
+        .mock()
     )
 
     result = (
-        await GetFailedPipelineJobsFromMergeRequestTool().run(
-            input={"merge_request_url": merge_request_url}
-        )
+        await GetFailedPipelineJobsFromMergeRequestTool().run(input={"merge_request_url": merge_request_url})
     ).result
 
     assert len(result) == 2
@@ -429,7 +496,10 @@ async def test_get_failed_pipeline_jobs_from_merge_request():
     assert result[0].status == "failed"
     assert result[0].stage == "build"
     assert "/-/jobs/11111" in result[0].url
-    assert result[0].artifacts_url == "https://gitlab.com/redhat/centos-stream/rpms/bash/-/jobs/11111/artifacts/browse"
+    assert (
+        result[0].artifacts_url
+        == "https://gitlab.com/redhat/centos-stream/rpms/bash/-/jobs/11111/artifacts/browse"
+    )
 
     assert result[1].id == "22222"
     assert result[1].name == "build_rpm"
@@ -446,15 +516,15 @@ async def test_get_failed_pipeline_jobs_from_merge_request_no_pipelines():
     flexmock(GitlabService).should_receive("get_project_from_url").with_args(
         url="https://gitlab.com/redhat/centos-stream/rpms/bash"
     ).and_return(
-        flexmock().should_receive("get_pr").with_args(123).and_return(
-            flexmock(_raw_pr=flexmock(head_pipeline=None))
-        ).mock()
+        flexmock()
+        .should_receive("get_pr")
+        .with_args(123)
+        .and_return(flexmock(_raw_pr=flexmock(head_pipeline=None)))
+        .mock()
     )
 
     result = (
-        await GetFailedPipelineJobsFromMergeRequestTool().run(
-            input={"merge_request_url": merge_request_url}
-        )
+        await GetFailedPipelineJobsFromMergeRequestTool().run(input={"merge_request_url": merge_request_url})
     ).result
 
     assert len(result) == 0
@@ -465,9 +535,7 @@ async def test_get_failed_pipeline_jobs_from_merge_request_invalid_url():
     merge_request_url = "https://github.com/user/repo/pull/123"
 
     with pytest.raises(Exception) as exc_info:
-        await GetFailedPipelineJobsFromMergeRequestTool().run(
-            input={"merge_request_url": merge_request_url}
-        )
+        await GetFailedPipelineJobsFromMergeRequestTool().run(input={"merge_request_url": merge_request_url})
 
     assert "Could not parse merge request URL" in str(exc_info.value)
 
@@ -477,9 +545,45 @@ async def test_get_failed_pipeline_jobs_from_merge_request_invalid_url():
     [
         pytest.param(
             [
-                flexmock(id="d1", attributes={"notes": [{"author": {"id": 1, "username": "dev"}, "body": "Dev", "created_at": "2024-01-15T10:00:00Z", "system": False}]}),
-                flexmock(id="d2", attributes={"notes": [{"author": {"id": 2, "username": "reporter"}, "body": "Rep", "created_at": "2024-01-15T11:00:00Z", "system": False}]}),
-                flexmock(id="d3", attributes={"notes": [{"author": {"id": 3, "username": "guest"}, "body": "Guest", "created_at": "2024-01-15T12:00:00Z", "system": False}]}),
+                flexmock(
+                    id="d1",
+                    attributes={
+                        "notes": [
+                            {
+                                "author": {"id": 1, "username": "dev"},
+                                "body": "Dev",
+                                "created_at": "2024-01-15T10:00:00Z",
+                                "system": False,
+                            }
+                        ]
+                    },
+                ),
+                flexmock(
+                    id="d2",
+                    attributes={
+                        "notes": [
+                            {
+                                "author": {"id": 2, "username": "reporter"},
+                                "body": "Rep",
+                                "created_at": "2024-01-15T11:00:00Z",
+                                "system": False,
+                            }
+                        ]
+                    },
+                ),
+                flexmock(
+                    id="d3",
+                    attributes={
+                        "notes": [
+                            {
+                                "author": {"id": 3, "username": "guest"},
+                                "body": "Guest",
+                                "created_at": "2024-01-15T12:00:00Z",
+                                "system": False,
+                            }
+                        ]
+                    },
+                ),
             ],
             [flexmock(id=1, access_level=30), flexmock(id=2, access_level=20)],
             1,
@@ -493,8 +597,38 @@ async def test_get_failed_pipeline_jobs_from_merge_request_invalid_url():
         ),
         pytest.param(
             [
-                flexmock(id="d1", attributes={"notes": [{"author": {"id": 1, "username": "dev1"}, "body": "General", "created_at": "2024-01-15T10:00:00Z", "system": False}]}),
-                flexmock(id="d2", attributes={"notes": [{"author": {"id": 2, "username": "dev2"}, "body": "Line", "created_at": "2024-01-15T11:00:00Z", "system": False, "position": {"new_path": "f.py", "old_path": "f.py", "new_line": 42, "old_line": None}}]}),
+                flexmock(
+                    id="d1",
+                    attributes={
+                        "notes": [
+                            {
+                                "author": {"id": 1, "username": "dev1"},
+                                "body": "General",
+                                "created_at": "2024-01-15T10:00:00Z",
+                                "system": False,
+                            }
+                        ]
+                    },
+                ),
+                flexmock(
+                    id="d2",
+                    attributes={
+                        "notes": [
+                            {
+                                "author": {"id": 2, "username": "dev2"},
+                                "body": "Line",
+                                "created_at": "2024-01-15T11:00:00Z",
+                                "system": False,
+                                "position": {
+                                    "new_path": "f.py",
+                                    "old_path": "f.py",
+                                    "new_line": 42,
+                                    "old_line": None,
+                                },
+                            }
+                        ]
+                    },
+                ),
             ],
             [flexmock(id=1, access_level=30), flexmock(id=2, access_level=30)],
             2,
@@ -502,13 +636,37 @@ async def test_get_failed_pipeline_jobs_from_merge_request_invalid_url():
         ),
         pytest.param(
             [
-                flexmock(id="d1", attributes={"notes": [
-                    {"author": {"id": 1, "username": "dev1"}, "body": "Q", "created_at": "2024-01-15T10:00:00Z", "system": False},
-                    {"author": {"id": 2, "username": "dev2"}, "body": "A", "created_at": "2024-01-15T10:30:00Z", "system": False},
-                    {"author": {"id": 3, "username": "guest"}, "body": "?", "created_at": "2024-01-15T10:45:00Z", "system": False},
-                ]}),
+                flexmock(
+                    id="d1",
+                    attributes={
+                        "notes": [
+                            {
+                                "author": {"id": 1, "username": "dev1"},
+                                "body": "Q",
+                                "created_at": "2024-01-15T10:00:00Z",
+                                "system": False,
+                            },
+                            {
+                                "author": {"id": 2, "username": "dev2"},
+                                "body": "A",
+                                "created_at": "2024-01-15T10:30:00Z",
+                                "system": False,
+                            },
+                            {
+                                "author": {"id": 3, "username": "guest"},
+                                "body": "?",
+                                "created_at": "2024-01-15T10:45:00Z",
+                                "system": False,
+                            },
+                        ]
+                    },
+                ),
             ],
-            [flexmock(id=1, access_level=30), flexmock(id=2, access_level=30), flexmock(id=3, access_level=10)],
+            [
+                flexmock(id=1, access_level=30),
+                flexmock(id=2, access_level=30),
+                flexmock(id=3, access_level=10),
+            ],
             1,
             id="with_replies",
         ),
@@ -521,30 +679,36 @@ async def test_get_authorized_comments_from_merge_request(discussions, members, 
     flexmock(GitlabService).should_receive("get_project_from_url").with_args(
         url="https://gitlab.com/redhat/centos-stream/rpms/bash"
     ).and_return(
-        flexmock().should_receive("get_pr").with_args(123).and_return(
+        flexmock()
+        .should_receive("get_pr")
+        .with_args(123)
+        .and_return(
             flexmock(
                 _raw_pr=flexmock(
-                    discussions=flexmock().should_receive("list").with_args(
-                        get_all=True
-                    ).and_return(discussions).mock()
+                    discussions=flexmock()
+                    .should_receive("list")
+                    .with_args(get_all=True)
+                    .and_return(discussions)
+                    .mock()
                 ),
                 target_project=flexmock(
                     namespace="redhat/centos-stream/rpms",
                     repo="bash",
                     gitlab_repo=flexmock(
-                        members_all=flexmock().should_receive("list").with_args(
-                            get_all=True
-                        ).and_return(members).mock()
-                    )
+                        members_all=flexmock()
+                        .should_receive("list")
+                        .with_args(get_all=True)
+                        .and_return(members)
+                        .mock()
+                    ),
                 ),
             )
-        ).mock()
+        )
+        .mock()
     )
 
     result = (
-        await GetAuthorizedCommentsFromMergeRequestTool().run(
-            input={"merge_request_url": merge_request_url}
-        )
+        await GetAuthorizedCommentsFromMergeRequestTool().run(input={"merge_request_url": merge_request_url})
     ).result
 
     assert len(result) == expected_count

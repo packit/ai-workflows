@@ -1,11 +1,10 @@
-from pydantic import BaseModel, Field
-
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
+from pydantic import BaseModel, Field
 
-from ymir.common.validators import AbsolutePath
 from ymir.common.utils import run_subprocess
+from ymir.common.validators import AbsolutePath
 
 
 class GitPreparePackageSourcesInput(BaseModel):
@@ -28,7 +27,10 @@ class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOption
         )
 
     async def _run(
-        self, tool_input: GitPreparePackageSourcesInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: GitPreparePackageSourcesInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         try:
             tool_input_path = tool_input.unpacked_sources_path
@@ -71,8 +73,9 @@ class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOption
             self.options["base_head_commit"] = stdout.strip()
             return StringToolOutput(
                 result=f"Successfully prepared the package sources at {tool_input_path}"
-                        " for application of the upstream fix. "
-                        f"HEAD commit is: {self.options['base_head_commit']}")
+                " for application of the upstream fix. "
+                f"HEAD commit is: {self.options['base_head_commit']}"
+            )
         except ToolError:
             raise
         except Exception as e:
@@ -153,7 +156,10 @@ class GitPatchApplyTool(Tool[GitPatchApplyToolInput, ToolRunOptions, StringToolO
         )
 
     async def _run(
-        self, tool_input: GitPatchApplyToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: GitPatchApplyToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         ensure_git_repository(tool_input.repository_path)
         p = await discover_patch_p(tool_input.patch_file_path, tool_input.repository_path)
@@ -197,7 +203,10 @@ class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions,
         )
 
     async def _run(
-        self, tool_input: GitPatchApplyFinishToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: GitPatchApplyFinishToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         ensure_git_repository(tool_input.repository_path)
         try:
@@ -205,8 +214,7 @@ class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions,
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
             if "am session" not in stdout:
                 # am session is not active, we can reuse the patch file
-                return StringToolOutput(
-                    result=f"The patch applied cleanly, you can use the patch file as is.")
+                return StringToolOutput(result="The patch applied cleanly, you can use the patch file as is.")
 
             # list all untracked files in the repository
             rej_candidates = []
@@ -227,8 +235,10 @@ class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions,
                 # make sure there are no *.rej files in the repository
                 rej_files = [file for file in rej_candidates if file.endswith(".rej")]
                 if rej_files:
-                    raise ToolError("Merge conflicts detected in the repository: "
-                                    f"{tool_input.repository_path}, {rej_files}")
+                    raise ToolError(
+                        "Merge conflicts detected in the repository: "
+                        f"{tool_input.repository_path}, {rej_files}"
+                    )
 
             # git-am leaves the repository in a dirty state, so we need to stage everything
             # I considered to inspect the patch and only stage the files that are changed by the patch,
@@ -246,11 +256,20 @@ class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions,
                 # let's verify in the error message
                 if "fatal: empty ident name " in stderr:
                     exit_code, stdout, stderr = await run_subprocess(
-                        ["git", "commit", "-m", f"Patch {tool_input.patch_file_path.name}"], cwd=tool_input.repository_path)
+                        [
+                            "git",
+                            "commit",
+                            "-m",
+                            f"Patch {tool_input.patch_file_path.name}",
+                        ],
+                        cwd=tool_input.repository_path,
+                    )
                     if exit_code != 0:
                         raise ToolError(f"Command git-commit failed: {stderr}")
                     exit_code, stdout, stderr = await run_subprocess(
-                        ["git", "am", "--reject", "--skip"], cwd=tool_input.repository_path)
+                        ["git", "am", "--reject", "--skip"],
+                        cwd=tool_input.repository_path,
+                    )
                     if exit_code != 0:
                         raise ToolError(f"Command git-am failed: {stderr}")
                 # FIXME: we need to find a more reliable way to detect this
@@ -267,7 +286,9 @@ class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions,
                     )
                 elif "No changes - did you forget" in stdout:
                     exit_code, stdout, stderr = await run_subprocess(
-                        ["git", "am", "--reject", "--skip"], cwd=tool_input.repository_path)
+                        ["git", "am", "--reject", "--skip"],
+                        cwd=tool_input.repository_path,
+                    )
                     if exit_code != 0:
                         reject_files = await find_rej_files(tool_input.repository_path)
                         return StringToolOutput(
@@ -283,7 +304,8 @@ class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions,
             # good, now we should have the patch committed, so let's get the file
             return StringToolOutput(
                 result="Successfully finished the patch application. "
-                "You can use the tool `git_patch_create` to create the final patch file.")
+                "You can use the tool `git_patch_create` to create the final patch file."
+            )
         except ToolError:
             raise
         except Exception as e:
@@ -309,21 +331,22 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
         )
 
     async def _run(
-        self, tool_input: GitPatchCreationToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: GitPatchCreationToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         ensure_git_repository(tool_input.repository_path)
         try:
             base_commit_sha = self.options.get("base_head_commit")
             if not base_commit_sha:
-                raise ToolError("`base_head_commit` not found in options. "
-                                "Ensure 'git_prepare_package_sources' or "
-                                "'apply_downstream_patches' is run before this tool. "
-                                f"Options: {self.options}")
-            cmd = [
-                "git", "format-patch",
-                "--stdout",
-                f"{base_commit_sha}..HEAD"
-            ]
+                raise ToolError(
+                    "`base_head_commit` not found in options. "
+                    "Ensure 'git_prepare_package_sources' "
+                    "or 'apply_downstream_patches' is run before this tool. "
+                    f"Options: {self.options}"
+                )
+            cmd = ["git", "format-patch", "--stdout", f"{base_commit_sha}..HEAD"]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
             if exit_code != 0:
                 raise ToolError(f"Command git-format-patch failed: {stderr}")
@@ -332,7 +355,8 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
             tool_input.patch_file_path.write_text(stdout, encoding="utf-8")
             return StringToolOutput(
                 result=f"Successfully created a patch file: {tool_input.patch_file_path} "
-                       f"(base commit: {base_commit_sha})")
+                f"(base commit: {base_commit_sha})"
+            )
         except ToolError:
             raise
         except Exception as e:
@@ -360,7 +384,10 @@ class GitLogSearchTool(Tool[GitLogSearchToolInput, ToolRunOptions, StringToolOut
         )
 
     async def _run(
-        self, tool_input: GitLogSearchToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: GitLogSearchToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         repo_path = tool_input.repository_path
         if not repo_path.exists():
@@ -377,8 +404,9 @@ class GitLogSearchTool(Tool[GitLogSearchToolInput, ToolRunOptions, StringToolOut
             "log",
             "--no-merges",
             f"--grep={search}",
-            "-n", "1",
-            f"--pretty=%s %H",
+            "-n",
+            "1",
+            "--pretty=%s %H",
         ]
 
         exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)

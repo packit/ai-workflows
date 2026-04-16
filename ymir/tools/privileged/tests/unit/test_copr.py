@@ -5,14 +5,14 @@ from pathlib import Path
 
 import aiohttp
 import pytest
-from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
 from beeai_framework.tools import ToolError
+from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
 from flexmock import flexmock
 
 from ymir.tools.privileged import copr as copr_tools
 from ymir.tools.privileged.copr import (
-    COPR_PROJECT_LIFETIME,
     COPR_BUILD_TIMEOUT,
+    COPR_PROJECT_LIFETIME,
     BuildPackageTool,
     DownloadArtifactsTool,
 )
@@ -60,7 +60,9 @@ async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
 
     flexmock(copr_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
     flexmock(copr_tools).should_receive("load_rhel_config").replace_with(load_rhel_config).once()
-    flexmock(copr_tools.BuildPackageTool).should_receive("get_exclusive_arches").replace_with(_get_exclusive_arches).once()
+    flexmock(copr_tools.BuildPackageTool).should_receive("get_exclusive_arches").replace_with(
+        _get_exclusive_arches
+    ).once()
     flexmock(asyncio).should_receive("sleep").replace_with(sleep)
 
     kwargs = {
@@ -157,6 +159,7 @@ async def test_download_artifacts(url, tmp_path):
     async def get(url):
         async def read():
             return content_gz if url.endswith(".log.gz") and not url.endswith("build.log.gz") else content
+
         yield flexmock(status=404 if "broken" in url else 200, reason="Because", read=read)
 
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)

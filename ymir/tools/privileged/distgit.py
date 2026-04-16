@@ -12,7 +12,7 @@ from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOpti
 from pydantic import BaseModel, Field
 
 from ymir.common.constants import BREWHUB_URL
-from ymir.common.utils import init_kerberos_ticket, KerberosError
+from ymir.common.utils import KerberosError, init_kerberos_ticket
 
 SYNC_TIMEOUT = 1 * 60 * 60  # seconds
 
@@ -57,7 +57,9 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
         gitlab_repo_url = f"https://oauth2:{token}@gitlab.com/redhat/rhel/rpms/{package}"
         try:
             if await asyncio.to_thread(git.cmd.Git().ls_remote, gitlab_repo_url, branch, branches=True):
-                return StringToolOutput(result=f"Z-Stream branch {branch} already exists, no need to create it")
+                return StringToolOutput(
+                    result=f"Z-Stream branch {branch} already exists, no need to create it"
+                )
         except Exception as e:
             raise ToolError(f"Failed to check GitLab remote: {_sanitize_url(str(e))}") from e
         try:
@@ -90,6 +92,8 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                     if await asyncio.to_thread(repo.git.ls_remote, gitlab_repo_url, branch, branches=True):
                         return StringToolOutput(result=f"Successfully created Z-Stream branch {branch}")
                     await asyncio.sleep(30)
-                raise RuntimeError(f"The {branch} branch wasn't synced to GitLab after {SYNC_TIMEOUT} seconds")
+                raise RuntimeError(
+                    f"The {branch} branch wasn't synced to GitLab after {SYNC_TIMEOUT} seconds"
+                )
         except Exception as e:
             raise ToolError(f"Failed to create Z-Stream branch: {_sanitize_url(str(e))}") from e

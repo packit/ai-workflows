@@ -3,20 +3,21 @@ import logging
 import os
 import re
 
-from attr import dataclass
 import typer
+from attr import dataclass
 
 from ymir.agents.observability import setup_observability
 from ymir.common.utils import init_kerberos_ticket
+
 from .collect import collect_and_schedule_work_items
 from .errata_utils import get_erratum
 from .erratum_handler import (
     ErratumHandler,
 )
+from .http_utils import with_http_sessions
 from .issue_handler import IssueHandler
 from .jira_utils import get_issue
-from .http_utils import with_http_sessions
-from .work_queue import WorkQueue, WorkItemType, work_queue
+from .work_queue import WorkItemType, WorkQueue, work_queue
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +43,7 @@ def check_env(
 ):
     required_vars = []
     if chat:
-        required_vars.append(
-            ("CHAT_MODEL", "name of model to use (e.g., gemini:gemini-2.5-pro)")
-        )
+        required_vars.append(("CHAT_MODEL", "name of model to use (e.g., gemini:gemini-2.5-pro)"))
     if jira:
         required_vars.append(
             ("JIRA_TOKEN", "Jira authentication token"),
@@ -53,9 +52,7 @@ def check_env(
             ("JIRA_EMAIL", "Jira account email for Basic Auth"),
         )
     if redis:
-        required_vars.append(
-            ("REDIS_URL", "Redis connection URL (e.g., redis://localhost:6379)")
-        )
+        required_vars.append(("REDIS_URL", "Redis connection URL (e.g., redis://localhost:6379)"))
     if gitlab:
         required_vars.append(("GITLAB_TOKEN", "Gitlab authentication token"))
     if testing_farm:
@@ -64,9 +61,7 @@ def check_env(
     missing_vars = [var for var in required_vars if not os.getenv(var[0])]
 
     if missing_vars:
-        logger.error(
-            f"Missing required environment variables: {', '.join(var[0] for var in missing_vars)}"
-        )
+        logger.error(f"Missing required environment variables: {', '.join(var[0] for var in missing_vars)}")
         logger.info("Required environment variables:")
         for var in missing_vars:
             logger.info(f"  {var[0]} - {var[1]}")
@@ -239,9 +234,7 @@ def process_erratum(id_or_url: str):
     check_env(chat=True, jira=True)
 
     if id_or_url.startswith("http"):
-        m = re.match(
-            r"https://errata.engineering.redhat.com/advisory/(\d+)$", id_or_url
-        )
+        m = re.match(r"https://errata.engineering.redhat.com/advisory/(\d+)$", id_or_url)
         if m is None:
             raise typer.BadParameter(f"Invalid advisory URL {id_or_url}")
         id = m.group(1)

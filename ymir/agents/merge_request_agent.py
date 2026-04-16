@@ -9,8 +9,6 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
-from pydantic import BaseModel, Field
-
 from beeai_framework.agents.requirement import RequirementAgent
 from beeai_framework.agents.requirement.prompts import RequirementAgentSystemPrompt
 from beeai_framework.agents.requirement.requirements.conditional import (
@@ -23,10 +21,20 @@ from beeai_framework.tools import Tool
 from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
+from pydantic import BaseModel, Field
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import create_build_agent, get_prompt as get_build_prompt
-from ymir.common.config import get_package_instructions
+from ymir.agents.build_agent import create_build_agent
+from ymir.agents.build_agent import get_prompt as get_build_prompt
+from ymir.agents.constants import I_AM_YMIR
+from ymir.agents.observability import setup_observability
+from ymir.agents.utils import (
+    get_agent_execution_config,
+    get_chat_model,
+    get_tool_call_checker_config,
+    mcp_tools,
+    render_prompt,
+)
 from ymir.common.models import (
     BuildInputSchema,
     BuildOutputSchema,
@@ -34,48 +42,51 @@ from ymir.common.models import (
     MergeRequestOutputSchema,
 )
 from ymir.common.utils import is_cs_branch
-from ymir.agents.constants import I_AM_YMIR
-from ymir.agents.observability import setup_observability
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
 from ymir.tools.unprivileged.text import (
     CreateTool,
     InsertAfterSubstringTool,
     InsertTool,
+    SearchTextTool,
     StrReplaceTool,
     ViewTool,
-    SearchTextTool,
 )
-from ymir.agents.utils import get_agent_execution_config, get_chat_model, get_tool_call_checker_config, mcp_tools, render_prompt
 
 logger = logging.getLogger(__name__)
 
 
 def get_instructions() -> str:
     return """
-      You are an expert on maintaining packages in RHEL ecosystem. Your job is to tweak existing merge requests
-      and accomodate user feedback.
+      You are an expert on maintaining packages in RHEL ecosystem.
+      Your job is to tweak existing merge requests and accomodate user feedback.
 
       To process and accomodate feedback given on a merge request, knowing the target package <PACKAGE>
       and dist-git branch <DIST_GIT_BRANCH>, do the following:
 
       1. Go through the comments, including replies if relevant, and follow the provided feedback.
 
-      2. If you updated the spec file, use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
+      2. If you updated the spec file, use `rpmlint <PACKAGE>.spec` to validate
+         your changes and fix any new issues.
 
-      3. Verify any changes to patches by running `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`.
+      3. Verify any changes to patches by running
+         `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`.
          Repeat as necessary. Do not remove any patches unless all their hunks have been already applied
          to the upstream sources.
          Note: <PKG_TOOL> is `centpkg` for CentOS Stream branches (c9s, c10s) and `rhpkg` for RHEL branches.
 
-      4. If you removed any patch file references from the spec file (e.g. because they were already applied upstream),
+      4. If you removed any patch file references from the spec file
+         (e.g. because they were already applied upstream),
          you must remove all the corresponding patch files from the repository as well.
 
-      5. Generate a SRPM using `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+      5. Generate a SRPM using
+         `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
 
-      6. In your output, provide a "files_to_git_add" list containing all files that have been modified, added or removed.
-         This typically includes the updated spec file and any new/modified/deleted patch files or other files you've changed
-         or added/removed during processing the feedback. Make sure to include patch files that were also removed
+      6. In your output, provide a "files_to_git_add" list containing all files
+         that have been modified, added or removed.
+         This typically includes the updated spec file and any new/modified/deleted
+         patch files or other files you've changed or added/removed during
+         processing the feedback. Make sure to include patch files that were also removed
          from the spec file.
 
 
@@ -91,8 +102,9 @@ def get_instructions() -> str:
 
 def get_prompt() -> str:
     return """
-      Your working directory is {{local_clone}}, a clone of source repository of merge request {{merge_request_url}}
-      opened against {{dist_git_branch}} dist-git branch of package {{package}}. The merge request is titled
+      Your working directory is {{local_clone}}, a clone of source repository
+      of merge request {{merge_request_url}} opened against {{dist_git_branch}}
+      dist-git branch of package {{package}}. The merge request is titled
       "{{merge_request_title}}" and its description is:
 
       {{merge_request_description}}
@@ -105,14 +117,16 @@ def get_prompt() -> str:
 
       {{#fedora_clone}}
       Additionally, you have access to the corresponding Fedora repository (rawhide branch) at {{.}}.
-      This can be used as a reference for comparing package versions, spec files, patches, and other packaging details when explicitly instructed to do so.
+      This can be used as a reference for comparing package versions, spec files,
+      patches, and other packaging details when explicitly instructed to do so.
       {{/fedora_clone}}
 
       {{^build_error}}
       Make changes necessary to accomodate user feedback provided in the comments.
       {{#package_instructions}}
 
-      **Package-specific instructions (these are important to follow, incorporate them into your workflow reasonably):**
+      **Package-specific instructions (these are important to follow,
+      incorporate them into your workflow reasonably):**
       {{.}}
       {{/package_instructions}}
       {{/build_error}}
@@ -144,7 +158,8 @@ def create_merge_request_agent(mcp_tools: list[Tool], local_tool_options: dict[s
             SearchTextTool(options=local_tool_options),
             GetCWDTool(options=local_tool_options),
             RemoveTool(options=local_tool_options),
-        ] + [t for t in mcp_tools if t.name == "upload_sources"],
+        ]
+        + [t for t in mcp_tools if t.name == "upload_sources"],
         memory=UnconstrainedMemory(),
         requirements=[
             ConditionalRequirement(
@@ -209,7 +224,11 @@ async def main() -> None:
             workflow = Workflow(State, name="MergeRequestWorkflow")
 
             async def prepare_dist_git_from_mr(state):
-                state.local_clone, mr_details, state.fedora_clone = await tasks.prepare_dist_git_from_merge_request(
+                (
+                    state.local_clone,
+                    mr_details,
+                    state.fedora_clone,
+                ) = await tasks.prepare_dist_git_from_merge_request(
                     merge_request_url=state.merge_request_url,
                     available_tools=gateway_tools,
                     with_fedora=True,
@@ -268,7 +287,9 @@ async def main() -> None:
                     expected_output=MergeRequestOutputSchema,
                     **get_agent_execution_config(),
                 )
-                state.mr_update_result = MergeRequestOutputSchema.model_validate_json(response.last_message.text)
+                state.mr_update_result = MergeRequestOutputSchema.model_validate_json(
+                    response.last_message.text
+                )
                 if state.mr_update_result.success:
                     state.mr_update_log.append(state.mr_update_result.status)
                     # Accumulate files from this iteration

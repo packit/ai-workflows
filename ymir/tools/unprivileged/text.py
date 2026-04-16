@@ -2,14 +2,13 @@ import asyncio
 import re
 from pathlib import Path
 
-from pydantic import BaseModel, Field
-
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
+from pydantic import BaseModel, Field
 
-from ymir.common.validators import NonEmptyString
 from ymir.common.utils import get_absolute_path
+from ymir.common.validators import NonEmptyString
 
 
 class CreateToolInput(BaseModel):
@@ -31,7 +30,10 @@ class CreateTool(Tool[CreateToolInput, ToolRunOptions, StringToolOutput]):
         )
 
     async def _run(
-        self, tool_input: CreateToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: CreateToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         file_path = get_absolute_path(tool_input.file, self)
         try:
@@ -51,7 +53,8 @@ class ViewToolInput(BaseModel):
     limit: int | None = Field(
         description=(
             "For text files only: Maximum number of lines to view (default: 1000). "
-            "For files longer than 1000 lines, use with `offset` to paginate: offset=0 for lines 0-999, offset=1000 for lines 1000-1999, etc."
+            "For files longer than 1000 lines, use with `offset` to paginate: "
+            "offset=0 for lines 0-999, offset=1000 for lines 1000-1999, etc."
         ),
         gt=0,
         default=1000,
@@ -74,7 +77,10 @@ class ViewTool(Tool[ViewToolInput, ToolRunOptions, StringToolOutput]):
         )
 
     async def _run(
-        self, tool_input: ViewToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: ViewToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         path = get_absolute_path(tool_input.path, self)
         try:
@@ -109,7 +115,10 @@ class InsertTool(Tool[InsertToolInput, ToolRunOptions, StringToolOutput]):
         )
 
     async def _run(
-        self, tool_input: InsertToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: InsertToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         file_path = get_absolute_path(tool_input.file, self)
         try:
@@ -143,7 +152,10 @@ class InsertAfterSubstringTool(Tool[InsertAfterSubstringToolInput, ToolRunOption
         )
 
     async def _run(
-        self, tool_input: InsertAfterSubstringToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: InsertAfterSubstringToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         file_path = get_absolute_path(tool_input.file, self)
         try:
@@ -155,8 +167,8 @@ class InsertAfterSubstringTool(Tool[InsertAfterSubstringToolInput, ToolRunOption
                 content.replace(
                     tool_input.insert_after_substring,
                     tool_input.insert_after_substring + "\n" + tool_input.new_string,
-                    1  # Replace only the first occurrence, 'count' kw introduced in Python 3.13
-                )
+                    1,  # Replace only the first occurrence, 'count' kw introduced in Python 3.13
+                ),
             )
         except ToolError:
             raise
@@ -189,20 +201,26 @@ class StrReplaceTool(Tool[StrReplaceToolInput, ToolRunOptions, StringToolOutput]
         )
 
     async def _run(
-        self, tool_input: StrReplaceToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: StrReplaceToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         file_path = get_absolute_path(tool_input.file, self)
         try:
             content = await asyncio.to_thread(file_path.read_text)
             if (count := content.count(tool_input.old_string)) == 0:
-                raise ToolError("No replacement was done because the specified text to replace wasn't present")
-            elif count > 1:
+                raise ToolError(
+                    "No replacement was done because the specified text to replace wasn't present"
+                )
+            if count > 1:
                 raise ToolError(
                     "No replacement was done because the specified text is not unique."
                     "Please provide more context!"
                 )
             await asyncio.to_thread(
-                file_path.write_text, content.replace(tool_input.old_string, tool_input.new_string)
+                file_path.write_text,
+                content.replace(tool_input.old_string, tool_input.new_string),
             )
         except ToolError:
             raise
@@ -231,7 +249,10 @@ class SearchTextTool(Tool[SearchTextToolInput, ToolRunOptions, StringToolOutput]
         )
 
     async def _run(
-        self, tool_input: SearchTextToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: SearchTextToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         file_path = get_absolute_path(tool_input.file, self)
         try:

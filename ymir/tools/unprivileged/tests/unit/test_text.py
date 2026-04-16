@@ -2,7 +2,6 @@ import contextlib
 from textwrap import dedent
 
 import pytest
-
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import ToolError
 
@@ -11,14 +10,14 @@ from ymir.tools.unprivileged.text import (
     CreateToolInput,
     InsertAfterSubstringTool,
     InsertAfterSubstringToolInput,
-    ViewTool,
-    ViewToolInput,
     InsertTool,
     InsertToolInput,
-    StrReplaceTool,
-    StrReplaceToolInput,
     SearchTextTool,
     SearchTextToolInput,
+    StrReplaceTool,
+    StrReplaceToolInput,
+    ViewTool,
+    ViewToolInput,
 )
 
 
@@ -142,7 +141,11 @@ async def test_insert_after_substring(insert_after_substring, final_content, tmp
     test_file.write_text("Line 1\nLine 2\nLine 3\n")
     tool = InsertAfterSubstringTool()
     output = await tool.run(
-        input=InsertAfterSubstringToolInput(file=test_file, insert_after_substring=insert_after_substring, new_string="Inserted line")
+        input=InsertAfterSubstringToolInput(
+            file=test_file,
+            insert_after_substring=insert_after_substring,
+            new_string="Inserted line",
+        )
     ).middleware(GlobalTrajectoryMiddleware(pretty=True))
     result = output.result
     assert result.startswith("Successfully")
@@ -156,7 +159,11 @@ async def test_insert_after_substring_missing(tmp_path):
     tool = InsertAfterSubstringTool()
     with pytest.raises(ToolError) as e:
         await tool.run(
-            input=InsertAfterSubstringToolInput(file=test_file, insert_after_substring="Line 4", new_string="Inserted line")
+            input=InsertAfterSubstringToolInput(
+                file=test_file,
+                insert_after_substring="Line 4",
+                new_string="Inserted line",
+            )
         ).middleware(GlobalTrajectoryMiddleware(pretty=True))
     result = e.value.message
     assert "No insertion was done because the specified substring wasn't present" in result
@@ -210,10 +217,10 @@ async def test_search_text(tmp_path, pattern, expected_output):
     test_file = tmp_path / "test.txt"
     test_file.write_text("Line 1\nLine 2\nLine 3\n")
     tool = SearchTextTool()
-    with (pytest.raises(ToolError) if expected_output is None else contextlib.nullcontext()) as e:
-        output = await tool.run(
-            input=SearchTextToolInput(file=test_file, pattern=pattern)
-        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    with pytest.raises(ToolError) if expected_output is None else contextlib.nullcontext() as e:
+        output = await tool.run(input=SearchTextToolInput(file=test_file, pattern=pattern)).middleware(
+            GlobalTrajectoryMiddleware(pretty=True)
+        )
     if expected_output is not None:
         result = output.result
         assert result == expected_output

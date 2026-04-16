@@ -71,6 +71,7 @@ or other options to refer to anything else.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -78,17 +79,18 @@ import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass, asdict
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set, Tuple
-
 
 # --------------------------- Utility: git and filesystem ---------------------------
 
-def run_git_command(arguments: List[str],
-                    check: bool = True,
-                    text_output: bool = True) -> subprocess.CompletedProcess:
+
+def run_git_command(
+    arguments: list[str], check: bool = True, text_output: bool = True
+) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *arguments], check=check, text=text_output, capture_output=True)
+
 
 def require_git_repository() -> None:
     try:
@@ -96,20 +98,25 @@ def require_git_repository() -> None:
     except subprocess.CalledProcessError:
         exit_with_error("Not inside a git repository.")
 
+
 def get_git_repository_root_path() -> Path:
     output = run_git_command(["rev-parse", "--show-toplevel"]).stdout.strip()
     return Path(output)
+
 
 def exit_with_error(message: str, exit_code: int = 1) -> None:
     print(message, file=sys.stderr)
     sys.exit(exit_code)
 
+
 def read_text_file_contents(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="surrogateescape") if path.exists() else ""
+
 
 def write_text_file_contents(path: Path, data: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(data, encoding="utf-8", errors="surrogateescape")
+
 
 def append_lines_to_file(path: Path, lines: Iterable[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,37 +127,47 @@ def append_lines_to_file(path: Path, lines: Iterable[str]) -> None:
 
 # --------------------------- State paths ---------------------------
 
+
 def get_state_directory_path() -> Path:
     return get_git_repository_root_path() / ".git" / "git-add-patch-non-interactive"
+
 
 def get_block_list_file_path() -> Path:
     return get_state_directory_path() / "blocklist"
 
+
 def get_current_hunk_patch_file_path() -> Path:
     return get_state_directory_path() / "current-hunk.patch"
+
 
 def get_current_hunk_hash_file_path() -> Path:
     return get_state_directory_path() / "current.hash"
 
+
 def get_current_lines_json_file_path() -> Path:
     return get_state_directory_path() / "current-lines.json"
+
 
 def get_processed_include_ids_file_path() -> Path:
     return get_state_directory_path() / "processed.include"
 
+
 def get_processed_exclude_ids_file_path() -> Path:
     return get_state_directory_path() / "processed.exclude"
+
 
 def get_index_snapshot_file_path() -> Path:
     return get_state_directory_path() / "snapshot-base"  # index side
 
+
 def get_working_tree_snapshot_file_path() -> Path:
-    return get_state_directory_path() / "snapshot-new"   # working tree side
+    return get_state_directory_path() / "snapshot-new"  # working tree side
 
 
 def ensure_state_directory_exists() -> None:
     get_state_directory_path().mkdir(parents=True, exist_ok=True)
     get_block_list_file_path().touch(exist_ok=True)
+
 
 def clear_current_hunk_state_files() -> None:
     for path in (
@@ -162,14 +179,12 @@ def clear_current_hunk_state_files() -> None:
         get_index_snapshot_file_path(),
         get_working_tree_snapshot_file_path(),
     ):
-        try:
+        with contextlib.suppress(OSError):
             path.unlink(missing_ok=True)
-        except OSError:
-            # Ignore OS-level errors during cleanup (e.g. permission denied)
-            pass
 
 
 # --------------------------- Diff model ---------------------------
+
 
 @dataclass
 class HunkHeader:
@@ -178,21 +193,23 @@ class HunkHeader:
     new_start: int
     new_len: int
 
+
 @dataclass
 class LineEntry:
-    id: Optional[int]            # assigned only to changed lines; context lines have id=None
-    kind: str                    # " " | "+" | "-"
-    old_line_number: Optional[int]
-    new_line_number: Optional[int]
-    text: str                    # content without leading sign
+    id: int | None  # assigned only to changed lines; context lines have id=None
+    kind: str  # " " | "+" | "-"
+    old_line_number: int | None
+    new_line_number: int | None
+    text: str  # content without leading sign
+
 
 @dataclass
 class CurrentLines:
     path: str
     header: HunkHeader
-    lines: List[LineEntry]
+    lines: list[LineEntry]
 
-    def changed_line_ids(self) -> List[int]:
+    def changed_line_ids(self) -> list[int]:
         return [line_entry.id for line_entry in self.lines if line_entry.id is not None]  # type: ignore
 
     def maximum_line_id_digit_count(self) -> int:
@@ -202,13 +219,14 @@ class CurrentLines:
 
 # --------------------------- Hashing (stable identity) ---------------------------
 
+
 def compute_stable_hunk_hash(patch_text: str) -> str:
     """
     Stable identity for a one-hunk patch: path + @@ header + body (post-header).
     """
     selected_path = ""
     header_text = ""
-    body_lines: List[str] = []
+    body_lines: list[str] = []
     saw_header = False
     for line in patch_text.splitlines():
         if line.startswith("+++ "):
@@ -227,7 +245,8 @@ def compute_stable_hunk_hash(patch_text: str) -> str:
             continue
         if saw_header:
             body_lines.append(line)
-    key = f"{selected_path}\0{header_text}\0{'\n'.join(body_lines)}"
+    joined_body = "\n".join(body_lines)
+    key = f"{selected_path}\0{header_text}\0{joined_body}"
     return hashlib.sha1(key.encode("utf-8", errors="surrogateescape")).hexdigest()
 
 
@@ -236,30 +255,33 @@ def compute_stable_hunk_hash(patch_text: str) -> str:
 DIFF_FILE_HEADER_PATTERN = re.compile(r"^diff --git a/(.+?) b/(.+?)$")
 HUNK_HEADER_PATTERN = re.compile(r"^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@")
 
+
 @dataclass
 class SingleHunkPatch:
     old_path: str
     new_path: str
-    lines: List[str]  # includes ---/+++ and a single @@ hunk body
+    lines: list[str]  # includes ---/+++ and a single @@ hunk body
 
     def to_patch_text(self) -> str:
         return "\n".join(self.lines).rstrip("\n") + "\n"
 
 
-def parse_unified_diff_into_single_hunk_patches(diff_text: str) -> List[SingleHunkPatch]:
+def parse_unified_diff_into_single_hunk_patches(
+    diff_text: str,
+) -> list[SingleHunkPatch]:
     """
     Convert a full diff into a list of SingleHunkPatch (each with exactly one @@ hunk).
     """
-    single_hunk_patches: List[SingleHunkPatch] = []
+    single_hunk_patches: list[SingleHunkPatch] = []
     current_old_path = ""
     current_new_path = ""
-    current_file_buffer: List[str] = []
+    current_file_buffer: list[str] = []
     saw_file_header = False
 
-    def flush_file_hunks(buffer: List[str], old_path_value: str, new_path_value: str) -> None:
+    def flush_file_hunks(buffer: list[str], old_path_value: str, new_path_value: str) -> None:
         nonlocal single_hunk_patches
-        hunk_lists: List[List[str]] = []
-        current_hunk_buffer: List[str] = []
+        hunk_lists: list[list[str]] = []
+        current_hunk_buffer: list[str] = []
         for line in buffer:
             if line.startswith("@@ "):
                 if current_hunk_buffer:
@@ -286,13 +308,21 @@ def parse_unified_diff_into_single_hunk_patches(diff_text: str) -> List[SingleHu
             continue
         if raw_line.startswith("--- "):
             normalized = raw_line.split(" ", 1)[1].strip()
-            current_old_path = "/dev/null" if normalized == "/dev/null" else (normalized[2:] if normalized.startswith("a/") else normalized)
+            current_old_path = (
+                "/dev/null"
+                if normalized == "/dev/null"
+                else (normalized[2:] if normalized.startswith("a/") else normalized)
+            )
             continue
         if raw_line.startswith("+++ "):
             normalized = raw_line.split(" ", 1)[1].strip()
-            current_new_path = "/dev/null" if normalized == "/dev/null" else (normalized[2:] if normalized.startswith("b/") else normalized)
+            current_new_path = (
+                "/dev/null"
+                if normalized == "/dev/null"
+                else (normalized[2:] if normalized.startswith("b/") else normalized)
+            )
             continue
-        if raw_line.startswith("@@ ") or raw_line.startswith(" ") or raw_line.startswith("+") or raw_line.startswith("-") or raw_line.startswith("\\ "):
+        if raw_line.startswith(("@@ ", " ", "+", "-", "\\ ")):
             current_file_buffer.append(raw_line)
 
     if saw_file_header and current_file_buffer and (current_old_path or current_new_path):
@@ -303,12 +333,13 @@ def parse_unified_diff_into_single_hunk_patches(diff_text: str) -> List[SingleHu
 
 # --------------------------- Build CurrentLines + snapshots ---------------------------
 
+
 def build_current_lines_from_patch_text(patch_text: str) -> CurrentLines:
     path_value = ""
     old_path_value = ""
     new_path_value = ""
     captured_header_line = ""
-    body_lines: List[str] = []
+    body_lines: list[str] = []
 
     for line in patch_text.splitlines():
         if line.startswith("--- "):
@@ -346,7 +377,7 @@ def build_current_lines_from_patch_text(patch_text: str) -> CurrentLines:
     new_length = int(header_match.group(4) or "1")
     hunk_header = HunkHeader(old_start, old_length, new_start, new_length)
 
-    line_entries: List[LineEntry] = []
+    line_entries: list[LineEntry] = []
     old_line_number = old_start
     new_line_number = new_start
     next_display_id = 0
@@ -362,35 +393,51 @@ def build_current_lines_from_patch_text(patch_text: str) -> CurrentLines:
             text = raw[1:]
 
         if sign == " ":
-            line_entries.append(LineEntry(id=None,
-                                          kind=" ",
-                                          old_line_number=old_line_number,
-                                          new_line_number=new_line_number,
-                                          text=text))
+            line_entries.append(
+                LineEntry(
+                    id=None,
+                    kind=" ",
+                    old_line_number=old_line_number,
+                    new_line_number=new_line_number,
+                    text=text,
+                )
+            )
             old_line_number += 1
             new_line_number += 1
         elif sign == "-":
             next_display_id += 1
-            line_entries.append(LineEntry(id=next_display_id,
-                                          kind="-",
-                                          old_line_number=old_line_number,
-                                          new_line_number=None,
-                                          text=text))
+            line_entries.append(
+                LineEntry(
+                    id=next_display_id,
+                    kind="-",
+                    old_line_number=old_line_number,
+                    new_line_number=None,
+                    text=text,
+                )
+            )
             old_line_number += 1
         elif sign == "+":
             next_display_id += 1
-            line_entries.append(LineEntry(id=next_display_id,
-                                          kind="+",
-                                          old_line_number=None,
-                                          new_line_number=new_line_number,
-                                          text=text))
+            line_entries.append(
+                LineEntry(
+                    id=next_display_id,
+                    kind="+",
+                    old_line_number=None,
+                    new_line_number=new_line_number,
+                    text=text,
+                )
+            )
             new_line_number += 1
         else:
-            line_entries.append(LineEntry(id=None,
-                                          kind=" ",
-                                          old_line_number=old_line_number,
-                                          new_line_number=new_line_number,
-                                          text=text))
+            line_entries.append(
+                LineEntry(
+                    id=None,
+                    kind=" ",
+                    old_line_number=old_line_number,
+                    new_line_number=new_line_number,
+                    text=text,
+                )
+            )
             old_line_number += 1
             new_line_number += 1
 
@@ -418,15 +465,17 @@ def write_snapshots_for_current_file_path(file_path: str) -> None:
 
 # --------------------------- Printing with aligned gutter ---------------------------
 
+
 def print_annotated_hunk_with_aligned_gutter(current_lines: CurrentLines) -> None:
     header = current_lines.header
-    print(f"{current_lines.path} :: @@ -{header.old_start},{header.old_len} +{header.new_start},{header.new_len} @@")
+    print(
+        f"{current_lines.path} :: "
+        f"@@ -{header.old_start},{header.old_len} "
+        f"+{header.new_start},{header.new_len} @@"
+    )
 
     maximum_digits = current_lines.maximum_line_id_digit_count()
     label_width = maximum_digits + 3  # "[#N]" plus one space
-
-    processed_include_ids = set(read_line_ids_file(get_processed_include_ids_file_path()))
-    processed_exclude_ids = set(read_line_ids_file(get_processed_exclude_ids_file_path()))
 
     for line_entry in current_lines.lines:
         if line_entry.id is not None:
@@ -441,11 +490,12 @@ def print_annotated_hunk_with_aligned_gutter(current_lines: CurrentLines) -> Non
 
 # --------------------------- Line selection parsing ---------------------------
 
-def parse_line_id_specification(specification: str) -> List[int]:
+
+def parse_line_id_specification(specification: str) -> list[int]:
     if not specification:
         exit_with_error("Provide line IDs (e.g. 1,3,5-7).")
     specification = re.sub(r"\s+", "", specification)
-    result: Set[int] = set()
+    result: set[int] = set()
     for part in specification.split(","):
         if re.fullmatch(r"\d+-\d+", part):
             start_value, end_value = map(int, part.split("-"))
@@ -460,10 +510,10 @@ def parse_line_id_specification(specification: str) -> List[int]:
     return sorted(result)
 
 
-def read_line_ids_file(path: Path) -> List[int]:
+def read_line_ids_file(path: Path) -> list[int]:
     if not path.exists():
         return []
-    ids: List[int] = []
+    ids: list[int] = []
     for line in read_text_file_contents(path).splitlines():
         value = line.strip()
         if value.isdigit():
@@ -473,16 +523,20 @@ def read_line_ids_file(path: Path) -> List[int]:
 
 def write_line_ids_file(path: Path, ids: Iterable[int]) -> None:
     unique_sorted_ids = sorted(set(ids))
-    write_text_file_contents(path, "\n".join(str(i) for i in unique_sorted_ids) + ("\n" if unique_sorted_ids else ""))
+    write_text_file_contents(
+        path,
+        "\n".join(str(i) for i in unique_sorted_ids) + ("\n" if unique_sorted_ids else ""),
+    )
 
 
 # --------------------------- Apply-only-selected to INDEX ---------------------------
 
-def build_target_index_content_with_selected_lines(current_lines: CurrentLines,
-                                                   include_ids: Set[int],
-                                                   base_text: str) -> str:
+
+def build_target_index_content_with_selected_lines(
+    current_lines: CurrentLines, include_ids: set[int], base_text: str
+) -> str:
     base_lines = base_text.splitlines()
-    output_lines: List[str] = []
+    output_lines: list[str] = []
 
     base_pointer = current_lines.header.old_start - 1  # 0-based
     base_line_count = len(base_lines)
@@ -490,7 +544,7 @@ def build_target_index_content_with_selected_lines(current_lines: CurrentLines,
     def push_output(line: str) -> None:
         output_lines.append(line)
 
-    for index in range(0, min(base_pointer, base_line_count)):
+    for index in range(min(base_pointer, base_line_count)):
         push_output(base_lines[index])
 
     for line_entry in current_lines.lines:
@@ -501,13 +555,12 @@ def build_target_index_content_with_selected_lines(current_lines: CurrentLines,
         elif line_entry.kind == "-":
             if base_pointer < base_line_count:
                 if line_entry.id in include_ids:
-                    base_pointer += 1      # drop deletion target
+                    base_pointer += 1  # drop deletion target
                 else:
                     push_output(base_lines[base_pointer])
                     base_pointer += 1
-        elif line_entry.kind == "+":
-            if line_entry.id in include_ids:
-                push_output(line_entry.text)
+        elif line_entry.kind == "+" and line_entry.id in include_ids:
+            push_output(line_entry.text)
 
     while base_pointer < base_line_count:
         push_output(base_lines[base_pointer])
@@ -530,25 +583,23 @@ def update_index_with_blob_content(path: str, content: str) -> None:
     if not file_mode:
         file_mode = "100644"
     run_git_command(["update-index", "--add", "--cacheinfo", f"{file_mode},{blob_hash},{path}"])
-    try:
+    with contextlib.suppress(OSError):
         temporary_blob_path.unlink(missing_ok=True)
-    except OSError:
-        # Ignore OS-level errors when cleaning up temporary file
-        pass
 
 
 # --------------------------- Discard-only-selected from WORKING TREE ---------------------------
 
-def build_target_working_tree_content_with_discarded_lines(current_lines: CurrentLines,
-                                                           discard_ids: Set[int],
-                                                           working_text: str) -> str:
+
+def build_target_working_tree_content_with_discarded_lines(
+    current_lines: CurrentLines, discard_ids: set[int], working_text: str
+) -> str:
     """
     Apply the inverse of selected changes to the working tree:
       - For '+' lines with ids in discard_ids: remove that line from the working content.
       - For '-' lines with ids in discard_ids: reinsert that old line at the correct spot.
     """
     working_lines = working_text.splitlines()
-    output_lines: List[str] = []
+    output_lines: list[str] = []
 
     working_pointer = current_lines.header.new_start - 1  # 0-based
     working_line_count = len(working_lines)
@@ -556,7 +607,7 @@ def build_target_working_tree_content_with_discarded_lines(current_lines: Curren
     def push_output(line: str) -> None:
         output_lines.append(line)
 
-    for index in range(0, min(working_pointer, working_line_count)):
+    for index in range(min(working_pointer, working_line_count)):
         push_output(working_lines[index])
 
     for line_entry in current_lines.lines:
@@ -566,14 +617,14 @@ def build_target_working_tree_content_with_discarded_lines(current_lines: Curren
                 working_pointer += 1
         elif line_entry.kind == "-":
             if line_entry.id in discard_ids:
-                push_output(line_entry.text)   # reinsert deleted line
+                push_output(line_entry.text)  # reinsert deleted line
             else:
                 # keep deletion as-is (no output, no pointer advance)
                 pass
         elif line_entry.kind == "+":
             if working_pointer < working_line_count:
                 if line_entry.id in discard_ids:
-                    working_pointer += 1       # drop inserted line
+                    working_pointer += 1  # drop inserted line
                 else:
                     push_output(working_lines[working_pointer])
                     working_pointer += 1
@@ -596,20 +647,30 @@ def build_target_working_tree_content_with_discarded_lines(current_lines: Curren
 
 # --------------------------- Command helpers ---------------------------
 
+
 def is_hunk_hash_in_block_list(hunk_hash: str) -> bool:
     return hunk_hash in set(read_text_file_contents(get_block_list_file_path()).splitlines())
+
 
 def append_current_hunk_hash_to_block_list() -> None:
     hunk_hash = read_text_file_contents(get_current_hunk_hash_file_path()).strip()
     if hunk_hash:
         append_lines_to_file(get_block_list_file_path(), [hunk_hash])
-        unique = "\n".join(sorted(set(read_text_file_contents(get_block_list_file_path()).splitlines()))) + "\n"
+        unique = (
+            "\n".join(sorted(set(read_text_file_contents(get_block_list_file_path()).splitlines()))) + "\n"
+        )
         write_text_file_contents(get_block_list_file_path(), unique)
+
 
 def summarize_current_hunk_header_line(current_patch_text: str) -> str:
     current_lines = build_current_lines_from_patch_text(current_patch_text)
     header = current_lines.header
-    return f"{current_lines.path} :: @@ -{header.old_start},{header.old_len} +{header.new_start},{header.new_len} @@"
+    return (
+        f"{current_lines.path} :: "
+        f"@@ -{header.old_start},{header.old_len} "
+        f"+{header.new_start},{header.new_len} @@"
+    )
+
 
 def find_and_cache_next_unblocked_hunk() -> bool:
     diff_text = run_git_command(["diff", "-U1", "--no-color"], check=False).stdout
@@ -632,9 +693,14 @@ def find_and_cache_next_unblocked_hunk() -> bool:
         write_text_file_contents(get_current_hunk_hash_file_path(), hunk_hash)
 
         current_lines = build_current_lines_from_patch_text(patch_text)
-        write_text_file_contents(get_current_lines_json_file_path(),
-                                 json.dumps(convert_current_lines_to_serializable_dict(current_lines),
-                                            ensure_ascii=False, indent=0))
+        write_text_file_contents(
+            get_current_lines_json_file_path(),
+            json.dumps(
+                convert_current_lines_to_serializable_dict(current_lines),
+                ensure_ascii=False,
+                indent=0,
+            ),
+        )
         write_snapshots_for_current_file_path(current_lines.path)
 
         print_annotated_hunk_with_aligned_gutter(current_lines)
@@ -644,7 +710,7 @@ def find_and_cache_next_unblocked_hunk() -> bool:
     return False
 
 
-def convert_current_lines_to_serializable_dict(current_lines: CurrentLines) -> Dict:
+def convert_current_lines_to_serializable_dict(current_lines: CurrentLines) -> dict:
     return {
         "path": current_lines.path,
         "header": asdict(current_lines.header),
@@ -660,27 +726,31 @@ def convert_current_lines_to_serializable_dict(current_lines: CurrentLines) -> D
         ],
     }
 
+
 def load_current_lines_from_state() -> CurrentLines:
     if not get_current_hunk_patch_file_path().exists() or not get_current_lines_json_file_path().exists():
         exit_with_error("No current hunk. Run 'start' first.")
     data = json.loads(read_text_file_contents(get_current_lines_json_file_path()))
     header = HunkHeader(**data["header"])
-    lines = [LineEntry(id=le["id"],
-                       kind=le["kind"],
-                       old_line_number=le["old_lineno"],
-                       new_line_number=le["new_lineno"],
-                       text=le["text"])
-             for le in data["lines"]]
+    lines = [
+        LineEntry(
+            id=le["id"],
+            kind=le["kind"],
+            old_line_number=le["old_lineno"],
+            new_line_number=le["new_lineno"],
+            text=le["text"],
+        )
+        for le in data["lines"]
+    ]
     return CurrentLines(path=data["path"], header=header, lines=lines)
 
 
-def compute_remaining_changed_line_ids() -> List[int]:
+def compute_remaining_changed_line_ids() -> list[int]:
     current_lines = load_current_lines_from_state()
     all_changed_ids = set(current_lines.changed_line_ids())
     included_ids = set(read_line_ids_file(get_processed_include_ids_file_path()))
     excluded_ids = set(read_line_ids_file(get_processed_exclude_ids_file_path()))
-    remaining = sorted(all_changed_ids - included_ids - excluded_ids)
-    return remaining
+    return sorted(all_changed_ids - included_ids - excluded_ids)
 
 
 def advance_if_hunk_complete_else_show() -> None:
@@ -695,6 +765,7 @@ def advance_if_hunk_complete_else_show() -> None:
 
 # --------------------------- Command handlers ---------------------------
 
+
 def command_start() -> None:
     require_git_repository()
     ensure_state_directory_exists()
@@ -702,12 +773,14 @@ def command_start() -> None:
     if not find_and_cache_next_unblocked_hunk():
         sys.exit(2)
 
+
 def command_show() -> None:
     require_git_repository()
     ensure_state_directory_exists()
     if not get_current_hunk_patch_file_path().exists() or not get_current_lines_json_file_path().exists():
         exit_with_error("No current hunk. Run 'start' first.")
     print_annotated_hunk_with_aligned_gutter(load_current_lines_from_state())
+
 
 def command_include() -> None:
     require_git_repository()
@@ -717,10 +790,13 @@ def command_include() -> None:
     try:
         run_git_command(["apply", "--cached", "--index", str(get_current_hunk_patch_file_path())])
     except subprocess.CalledProcessError as error:
-        exit_with_error(f"Failed to apply hunk: {error.stderr.strip() or error.stdout.strip() or 'git apply failed.'}")
+        exit_with_error(
+            f"Failed to apply hunk: {error.stderr.strip() or error.stdout.strip() or 'git apply failed.'}"
+        )
     append_current_hunk_hash_to_block_list()
     clear_current_hunk_state_files()
     find_and_cache_next_unblocked_hunk()
+
 
 def command_exclude() -> None:
     require_git_repository()
@@ -731,6 +807,7 @@ def command_exclude() -> None:
     clear_current_hunk_state_files()
     find_and_cache_next_unblocked_hunk()
 
+
 def command_discard() -> None:
     require_git_repository()
     ensure_state_directory_exists()
@@ -739,10 +816,14 @@ def command_discard() -> None:
     try:
         run_git_command(["apply", "-R", str(get_current_hunk_patch_file_path())])
     except subprocess.CalledProcessError as error:
-        exit_with_error(f"Failed to discard hunk: {error.stderr.strip() or error.stdout.strip() or 'git apply -R failed.'}")
+        exit_with_error(
+            "Failed to discard hunk: "
+            f"{error.stderr.strip() or error.stdout.strip() or 'git apply -R failed.'}"
+        )
     append_current_hunk_hash_to_block_list()
     clear_current_hunk_state_files()
     find_and_cache_next_unblocked_hunk()
+
 
 def command_include_line(line_id_specification: str) -> None:
     require_git_repository()
@@ -756,11 +837,14 @@ def command_include_line(line_id_specification: str) -> None:
 
     current_lines = load_current_lines_from_state()
     base_text = read_text_file_contents(get_index_snapshot_file_path())
-    target_index_content = build_target_index_content_with_selected_lines(current_lines, combined_include_ids, base_text)
+    target_index_content = build_target_index_content_with_selected_lines(
+        current_lines, combined_include_ids, base_text
+    )
     update_index_with_blob_content(current_lines.path, target_index_content)
 
     write_line_ids_file(get_processed_include_ids_file_path(), combined_include_ids)
     advance_if_hunk_complete_else_show()
+
 
 def command_exclude_line(line_id_specification: str) -> None:
     require_git_repository()
@@ -772,6 +856,7 @@ def command_exclude_line(line_id_specification: str) -> None:
     existing_excluded_ids |= set(requested_ids)
     write_line_ids_file(get_processed_exclude_ids_file_path(), existing_excluded_ids)
     advance_if_hunk_complete_else_show()
+
 
 def command_discard_line(line_id_specification: str) -> None:
     """
@@ -791,7 +876,9 @@ def command_discard_line(line_id_specification: str) -> None:
     absolute_path = get_git_repository_root_path() / current_lines.path
     working_text = read_text_file_contents(absolute_path) if absolute_path.exists() else ""
 
-    new_working_text = build_target_working_tree_content_with_discarded_lines(current_lines, discard_ids, working_text)
+    new_working_text = build_target_working_tree_content_with_discarded_lines(
+        current_lines, discard_ids, working_text
+    )
     write_text_file_contents(absolute_path, new_working_text)
 
     existing_excluded_ids = set(read_line_ids_file(get_processed_exclude_ids_file_path()))
@@ -799,30 +886,29 @@ def command_discard_line(line_id_specification: str) -> None:
     write_line_ids_file(get_processed_exclude_ids_file_path(), existing_excluded_ids)
     advance_if_hunk_complete_else_show()
 
+
 def command_again() -> None:
     require_git_repository()
-    try:
+    with contextlib.suppress(OSError):
         shutil.rmtree(get_state_directory_path(), ignore_errors=False)
-    except OSError:
-        # Ignore OS-level errors during cleanup (e.g. permission denied)
-        pass
     ensure_state_directory_exists()
     find_and_cache_next_unblocked_hunk()
 
+
 def command_stop() -> None:
     require_git_repository()
-    try:
+    with contextlib.suppress(OSError):
         shutil.rmtree(get_state_directory_path(), ignore_errors=False)
-    except OSError:
-        # Ignore OS-level errors during cleanup (e.g. permission denied)
-        pass
     print("✓ State cleared.")
+
 
 def command_status() -> None:
     require_git_repository()
     if get_current_hunk_patch_file_path().exists():
-        print("current:",
-              summarize_current_hunk_header_line(read_text_file_contents(get_current_hunk_patch_file_path())))
+        print(
+            "current:",
+            summarize_current_hunk_header_line(read_text_file_contents(get_current_hunk_patch_file_path())),
+        )
         remaining = compute_remaining_changed_line_ids()
         if remaining:
             print("remaining lines:", ",".join(map(str, remaining)))
@@ -830,12 +916,17 @@ def command_status() -> None:
             print("remaining lines: 0")
     else:
         print("current: none")
-    block_list_lines = read_text_file_contents(get_block_list_file_path()).splitlines() if get_block_list_file_path().exists() else []
+    block_list_lines = (
+        read_text_file_contents(get_block_list_file_path()).splitlines()
+        if get_block_list_file_path().exists()
+        else []
+    )
     print(f"blocked: {len([x for x in block_list_lines if x.strip()])}")
     print(f"state:   {get_state_directory_path()}")
 
 
 # --------------------------- CLI ---------------------------
+
 
 def main() -> None:
     argument_parser = argparse.ArgumentParser(prog="git-add-patch-non-interactive", add_help=False)
@@ -848,7 +939,7 @@ def main() -> None:
 
     if command in ("", "-h", "--help", "help"):
         print(
-"""
+            """
 Usage: git-add-patch-non-interactive {start|show|include|exclude|discard|
 include-line IDS|exclude-line IDS|discard-line IDS|again|stop|status}
 
@@ -869,17 +960,17 @@ Commands:
         sys.exit(0)
 
     dispatch_table = {
-        "start":         lambda: command_start(),
-        "show":          lambda: command_show(),
-        "include":       lambda: command_include(),
-        "exclude":       lambda: command_exclude(),
-        "discard":       lambda: command_discard(),
-        "include-line":  lambda: command_include_line(argument),
-        "exclude-line":  lambda: command_exclude_line(argument),
-        "discard-line":  lambda: command_discard_line(argument),
-        "again":         lambda: command_again(),
-        "stop":          lambda: command_stop(),
-        "status":        lambda: command_status(),
+        "start": lambda: command_start(),
+        "show": lambda: command_show(),
+        "include": lambda: command_include(),
+        "exclude": lambda: command_exclude(),
+        "discard": lambda: command_discard(),
+        "include-line": lambda: command_include_line(argument),
+        "exclude-line": lambda: command_exclude_line(argument),
+        "discard-line": lambda: command_discard_line(argument),
+        "again": lambda: command_again(),
+        "stop": lambda: command_stop(),
+        "status": lambda: command_status(),
     }
 
     if command not in dispatch_table:

@@ -5,15 +5,16 @@ Common utility functions shared across the BeeAI system.
 import asyncio
 import base64
 import inspect
+import json
 import logging
 import os
 import re
 import shlex
 import subprocess
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncGenerator, Awaitable, Callable, Tuple, TypeVar
-import json
+from typing import Any, TypeVar
 
 import redis.asyncio as redis
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
@@ -25,7 +26,6 @@ from mcp.client.sse import sse_client
 from mcp.types import TextContent
 
 logger = logging.getLogger(__name__)
-
 
 T = TypeVar("T")
 
@@ -49,7 +49,7 @@ async def fix_await(v: T | Awaitable[T]) -> T:
 
 
 @asynccontextmanager
-async def redis_client(redis_url: str) -> AsyncGenerator[redis.Redis, None]:
+async def redis_client(redis_url: str) -> AsyncGenerator[redis.Redis]:
     """
     Create a Redis client with proper connection management.
 
@@ -219,8 +219,7 @@ async def init_kerberos_ticket() -> str:
     if principals:
         logger.info("Using existing ticket for %s", principals[0])
         return principals[0]
-    else:
-        raise KerberosError("No valid Kerberos ticket found and KEYTAB_FILE is not set")
+    raise KerberosError("No valid Kerberos ticket found and KEYTAB_FILE is not set")
 
 
 def get_absolute_path(path: Path, tool: Tool) -> Path:
@@ -235,7 +234,7 @@ async def run_subprocess(
     shell: bool = False,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
-) -> Tuple[int, str | None, str | None]:
+) -> tuple[int, str | None, str | None]:
     """Run a subprocess and return the exit code, stdout, and stderr."""
     kwargs = {
         "stdout": asyncio.subprocess.PIPE,
@@ -267,12 +266,15 @@ async def check_subprocess(
     shell: bool = False,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
-) -> Tuple[str | None, str | None]:
+) -> tuple[str | None, str | None]:
     exit_code, stdout, stderr = await run_subprocess(cmd, shell, cwd, env)
     if exit_code:
         logger.error(
             "Command %s failed with exit code %d\nstdout: %s\nstderr: %s",
-            cmd, exit_code, stdout, stderr,
+            cmd,
+            exit_code,
+            stdout,
+            stderr,
         )
         raise subprocess.CalledProcessError(exit_code, cmd, stdout, stderr)
     return stdout, stderr
@@ -305,8 +307,8 @@ async def run_tool(
     # this has been fixed in BeeAI 0.1.58
     # FIXME: Once BeeAI is updated remove this workaround
     try:
-        result=json.loads(result)
-        result=json.loads(result)
+        result = json.loads(result)
+        result = json.loads(result)
     except json.JSONDecodeError:
         pass
 
@@ -316,8 +318,11 @@ async def run_tool(
 @asynccontextmanager
 async def mcp_tools(
     sse_url: str, filter: Callable[[str], bool] | None = None
-) -> AsyncGenerator[list[MCPTool], None]:
-    async with sse_client(sse_url) as (read, write), ClientSession(read, write) as session:
+) -> AsyncGenerator[list[MCPTool]]:
+    async with (
+        sse_client(sse_url) as (read, write),
+        ClientSession(read, write) as session,
+    ):
         await session.initialize()
         tools = await MCPTool.from_client(session)
         if filter:

@@ -6,9 +6,10 @@ RHEL configuration across agents and MCP gateway.
 """
 
 import json
-import aiofiles
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
+
+import aiofiles
 
 
 async def load_rhel_config() -> dict[str, Any]:
@@ -23,7 +24,7 @@ async def load_rhel_config() -> dict[str, Any]:
     if not Path(config_file).exists():
         raise FileNotFoundError(f"RHEL config file {config_file} not found")
     try:
-        async with aiofiles.open(config_file, 'r') as f:
+        async with aiofiles.open(config_file) as f:
             content = await f.read()
             return json.loads(content)
     except json.JSONDecodeError as e:

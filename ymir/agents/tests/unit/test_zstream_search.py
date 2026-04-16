@@ -1,18 +1,16 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 
 from ymir.tools.privileged.zstream_search import (
+    ZStreamSearchResult,
     ZStreamSearchTool,
     ZStreamSearchToolInput,
-    ZStreamSearchResult,
     _clean_summary,
     _get_patch_url,
     _version_sort_key,
 )
-
 
 RHEL_CONFIG = {
     "current_y_streams": {
@@ -132,7 +130,11 @@ async def test_not_applicable_y_stream():
 async def test_not_applicable_current_zstream():
     """Current z-stream fixVersion should return NOT_APPLICABLE."""
     tool = ZStreamSearchTool()
-    with patch("ymir.tools.privileged.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=False):
+    with patch(
+        "ymir.tools.privileged.zstream_search.is_older_zstream",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
         output = await tool.run(
             input=ZStreamSearchToolInput(
                 component="fence-agents",
@@ -183,7 +185,11 @@ async def test_found_in_closest_stream():
 
     tool = ZStreamSearchTool()
     with (
-        patch("ymir.tools.privileged.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
+        patch(
+            "ymir.tools.privileged.zstream_search.is_older_zstream",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
         patch("ymir.tools.privileged.zstream_search.run_tool", mock_run_tool),
     ):
         output = await tool.run(
@@ -233,7 +239,11 @@ async def test_cascade_to_further_version():
 
     tool = ZStreamSearchTool()
     with (
-        patch("ymir.tools.privileged.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
+        patch(
+            "ymir.tools.privileged.zstream_search.is_older_zstream",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
         patch("ymir.tools.privileged.zstream_search.run_tool", mock_run_tool),
     ):
         output = await tool.run(
@@ -267,7 +277,11 @@ async def test_not_found_anywhere():
 
     tool = ZStreamSearchTool()
     with (
-        patch("ymir.tools.privileged.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
+        patch(
+            "ymir.tools.privileged.zstream_search.is_older_zstream",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
         patch("ymir.tools.privileged.zstream_search.run_tool", mock_run_tool),
     ):
         output = await tool.run(
@@ -290,7 +304,11 @@ async def test_no_related_issues_found():
 
     tool = ZStreamSearchTool()
     with (
-        patch("ymir.tools.privileged.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
+        patch(
+            "ymir.tools.privileged.zstream_search.is_older_zstream",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
         patch("ymir.tools.privileged.zstream_search.run_tool", mock_run_tool),
     ):
         output = await tool.run(
@@ -336,7 +354,11 @@ async def test_version_proximity_sorting():
 
     tool = ZStreamSearchTool()
     with (
-        patch("ymir.tools.privileged.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
+        patch(
+            "ymir.tools.privileged.zstream_search.is_older_zstream",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
         patch("ymir.tools.privileged.zstream_search.run_tool", mock_run_tool),
     ):
         output = await tool.run(
@@ -377,7 +399,11 @@ async def test_older_issues_excluded():
 
     tool = ZStreamSearchTool()
     with (
-        patch("ymir.tools.privileged.zstream_search.is_older_zstream", new_callable=AsyncMock, return_value=True),
+        patch(
+            "ymir.tools.privileged.zstream_search.is_older_zstream",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
         patch("ymir.tools.privileged.zstream_search.run_tool", mock_run_tool),
     ):
         output = await tool.run(

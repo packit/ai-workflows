@@ -1,11 +1,12 @@
-from tabulate import tabulate
-import pytest
 import os
 
-from ymir.agents.triage_agent import run_workflow, TriageState, create_triage_agent
+import pytest
+from tabulate import tabulate
+
 from ymir.agents.metrics_middleware import MetricsMiddleware
 from ymir.agents.observability import setup_observability
-from ymir.common.models import TriageOutputSchema, Resolution, BackportData
+from ymir.agents.triage_agent import TriageState, create_triage_agent, run_workflow
+from ymir.common.models import BackportData, Resolution, TriageOutputSchema
 
 
 class TriageAgentTestCase:
@@ -107,7 +108,7 @@ def mydata(request):
     for test_case in test_cases:
         if test_case.metrics is None:
             continue
-        collected_metrics.append([test_case.input] + list(test_case.metrics.values()))
+        collected_metrics.append([test_case.input, *test_case.metrics.values()])
     request.config.stash["metrics"] = tabulate(collected_metrics, ["Issue", "Time"])
 
 
@@ -117,9 +118,7 @@ def mydata(request):
     test_cases,
 )
 async def test_triage_agent(test_case: TriageAgentTestCase):
-    def verify_result(
-        real_output: TriageOutputSchema, expected_output: TriageOutputSchema
-    ):
+    def verify_result(real_output: TriageOutputSchema, expected_output: TriageOutputSchema):
         assert real_output.resolution == expected_output.resolution
         assert real_output.data.package == expected_output.data.package
         assert real_output.data.patch_urls == expected_output.data.patch_urls

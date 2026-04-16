@@ -14,22 +14,19 @@ import argparse
 import asyncio
 import os
 import sys
-from urllib.parse import urljoin
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 
 import aiohttp
 
 from ymir.common.constants import JIRA_SEARCH_PATH
 from ymir.common.utils import get_jira_auth_headers
 
-
 DEFAULT_DICTIONARY = {
     "mrs_opened": 0,
     "mrs_closed": 0,
     "mrs_merged": 0,
-    "mrs_all_opened": 0
+    "mrs_all_opened": 0,
 }
-
 
 
 async def get_jotnar_issues_basic_count() -> tuple[int, int]:
@@ -40,11 +37,16 @@ async def get_jotnar_issues_basic_count() -> tuple[int, int]:
     jira_url = os.getenv("JIRA_URL", "https://redhat.atlassian.net")
 
     if not os.getenv("JIRA_TOKEN") or not os.getenv("JIRA_EMAIL"):
-        print("Warning: JIRA_EMAIL or JIRA_TOKEN not set, skipping Jira queries", file=sys.stderr)
+        print(
+            "Warning: JIRA_EMAIL or JIRA_TOKEN not set, skipping Jira queries",
+            file=sys.stderr,
+        )
         return 0, 0
 
     # Query for all jotnar issues
-    jqls = ["project=RHEL AND AssignedTeam = rhel-jotnar", ]
+    jqls = [
+        "project=RHEL AND AssignedTeam = rhel-jotnar",
+    ]
     # Jotnar labels for finished runs
     jotnar_labels = [
         "jotnar_no_action_needed",
@@ -58,7 +60,7 @@ async def get_jotnar_issues_basic_count() -> tuple[int, int]:
         "jotnar_needs_attention",
         "jotnar_upstream_patch_missing",
         "jotnar_retry_blocked",
-        "jotnar_cant_do"
+        "jotnar_cant_do",
     ]
     # Build a JQL clause for all jotnar_* labels
     jql_labels = ", ".join(jotnar_labels)
@@ -72,17 +74,11 @@ async def get_jotnar_issues_basic_count() -> tuple[int, int]:
                 next_page_token = None
                 url = urljoin(jira_url, JIRA_SEARCH_PATH)
                 while True:
-                    json_payload = {
-                        "jql": jql,
-                        "maxResults": 5000,
-                        "fields": ["key"]
-                    }
+                    json_payload = {"jql": jql, "maxResults": 5000, "fields": ["key"]}
                     if next_page_token:
                         json_payload["nextPageToken"] = next_page_token
                     async with session.post(
-                        url,
-                        json=json_payload,
-                        headers=get_jira_auth_headers()
+                        url, json=json_payload, headers=get_jira_auth_headers()
                     ) as response:
                         response.raise_for_status()
                         data = await response.json()
@@ -126,7 +122,10 @@ async def get_gitlab_stats_single(namespace: str, gitlab_token: str) -> dict[str
                     # The total number is in the X-Total header
                     return int(resp.headers.get("X-Total", "0"))
             except Exception as e:
-                print(f"Warning: Error querying GitLab namespace {namespace} for {state} MRs: {e}", file=sys.stderr)
+                print(
+                    f"Warning: Error querying GitLab namespace {namespace} for {state} MRs: {e}",
+                    file=sys.stderr,
+                )
                 return 0
 
     opened = await count_mrs("opened")
@@ -150,7 +149,7 @@ async def get_gitlab_stats(namespaces: list[str]) -> dict[str, dict[str, int]]:
 
     if not gitlab_token:
         print("Warning: GITLAB_TOKEN not set, skipping GitLab queries", file=sys.stderr)
-        return {ns: DEFAULT_DICTIONARY for ns in namespaces}
+        return dict.fromkeys(namespaces, DEFAULT_DICTIONARY)
 
     # Get stats for all namespaces concurrently
     tasks = [get_gitlab_stats_single(namespace, gitlab_token) for namespace in namespaces]
@@ -158,7 +157,7 @@ async def get_gitlab_stats(namespaces: list[str]) -> dict[str, dict[str, int]]:
 
     # Combine results with namespace keys
     combined_results = {}
-    for namespace, result in zip(namespaces, results):
+    for namespace, result in zip(namespaces, results, strict=False):
         if isinstance(result, Exception):
             print(f"Error processing namespace {namespace}: {result}", file=sys.stderr)
             combined_results[namespace] = DEFAULT_DICTIONARY
@@ -171,14 +170,23 @@ async def get_gitlab_stats(namespaces: list[str]) -> dict[str, dict[str, int]]:
 async def main():
     """Main function to gather and display Jötnar statistics."""
     parser = argparse.ArgumentParser(description="Get Jötnar pilot statistics")
-    parser.add_argument("--namespace", action="append",
-                       help="GitLab namespace to query for merge requests. "
-                       "Can be used multiple times to query multiple namespaces. "
-                       "If not specified, defaults to redhat/centos-stream/rpms and redhat/rhel/rpms.")
-    parser.add_argument("--jira-only", action="store_true",
-                       help="Only query Jira statistics, skip GitLab")
-    parser.add_argument("--gitlab-only", action="store_true",
-                       help="Only query GitLab statistics, skip Jira")
+    parser.add_argument(
+        "--namespace",
+        action="append",
+        help="GitLab namespace to query for merge requests. "
+        "Can be used multiple times to query multiple namespaces. "
+        "If not specified, defaults to redhat/centos-stream/rpms and redhat/rhel/rpms.",
+    )
+    parser.add_argument(
+        "--jira-only",
+        action="store_true",
+        help="Only query Jira statistics, skip GitLab",
+    )
+    parser.add_argument(
+        "--gitlab-only",
+        action="store_true",
+        help="Only query GitLab statistics, skip Jira",
+    )
 
     args = parser.parse_args()
 
@@ -210,7 +218,7 @@ async def main():
         gitlab_stats = await get_gitlab_stats(args.namespace)
 
         # Display GitLab results for each namespace
-        print(f"\nGitLab Statistics:")
+        print("\nGitLab Statistics:")
         total_opened = 0
         total_closed = 0
         total_merged = 0
@@ -223,13 +231,13 @@ async def main():
             print(f"  Merge requests merged: {stats['mrs_merged']}")
             print(f"  Merge requests ever opened: {stats['mrs_all_opened']}")
 
-            total_opened += stats['mrs_opened']
-            total_closed += stats['mrs_closed']
-            total_merged += stats['mrs_merged']
-            total_all_opened += stats['mrs_all_opened']
+            total_opened += stats["mrs_opened"]
+            total_closed += stats["mrs_closed"]
+            total_merged += stats["mrs_merged"]
+            total_all_opened += stats["mrs_all_opened"]
 
         if len(args.namespace) > 1:
-            print(f"\nTotal across all namespaces:")
+            print("\nTotal across all namespaces:")
             print(f"  Merge requests currently opened: {total_opened}")
             print(f"  Merge requests closed: {total_closed}")
             print(f"  Merge requests merged: {total_merged}")

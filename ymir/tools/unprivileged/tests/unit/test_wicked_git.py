@@ -1,19 +1,18 @@
 import subprocess
 
 import pytest
-
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import ToolError
 
 from ymir.tools.unprivileged.wicked_git import (
+    GitLogSearchTool,
+    GitLogSearchToolInput,
     GitPatchApplyFinishTool,
     GitPatchApplyFinishToolInput,
     GitPatchApplyTool,
     GitPatchApplyToolInput,
     GitPatchCreationTool,
     GitPatchCreationToolInput,
-    GitLogSearchTool,
-    GitLogSearchToolInput,
     discover_patch_p,
     find_rej_files,
 )
@@ -28,12 +27,18 @@ def git_repo(tmp_path):
     file_path = repo_path / "file.txt"
     file_path.write_text("Line 1\n")
     subprocess.run(["git", "add", "file.txt"], cwd=repo_path, check=True)
-    subprocess.run(["git", "commit", "-m", "Initial commit\n\nCVE-2025-12345"],
-        cwd=repo_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Initial commit\n\nCVE-2025-12345"],
+        cwd=repo_path,
+        check=True,
+    )
     file_path.write_text("Line 1\nLine 2\n")
     subprocess.run(["git", "add", "file.txt"], cwd=repo_path, check=True)
-    subprocess.run(["git", "commit", "-m", "Initial commit2\n\nResolves: RHEL-123456"],
-        cwd=repo_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Initial commit2\n\nResolves: RHEL-123456"],
+        cwd=repo_path,
+        check=True,
+    )
     subprocess.run(["git", "branch", "line-2"], cwd=repo_path, check=True)
     return repo_path
 
@@ -54,6 +59,7 @@ async def test_git_patch_creation_tool_nonexistent_repo(tmp_path):
     result = e.value.message
     assert "Repository path does not exist" in result
 
+
 @pytest.mark.asyncio
 async def test_git_patch_creation_tool_success(git_repo, tmp_path):
     # Simulate a git-am session with a conflict by creating a new commit and then using format-patch
@@ -65,11 +71,21 @@ async def test_git_patch_creation_tool_success(git_repo, tmp_path):
     subprocess.run(["git", "commit", "-m", "Add line 3"], cwd=git_repo, check=True)
 
     patch_file = tmp_path / "patch.patch"
-    subprocess.run(["git", "format-patch", "-1", "HEAD", "--stdout"], cwd=git_repo, check=True, stdout=patch_file.open("w"))
+    subprocess.run(
+        ["git", "format-patch", "-1", "HEAD", "--stdout"],
+        cwd=git_repo,
+        check=True,
+        stdout=patch_file.open("w"),
+    )
 
     subprocess.run(["git", "switch", "line-2"], cwd=git_repo, check=True)
-    base_head_commit = subprocess.run(["git", "rev-parse", "HEAD"],
-        cwd=git_repo, check=True, capture_output=True, text=True).stdout.strip()
+    base_head_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=git_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
     # Now apply the patch with git am
     # This will fail with a merge conflict, but we don't care about that
@@ -115,11 +131,16 @@ async def test_git_patch_creation_tool_success(git_repo, tmp_path):
 
 @pytest.mark.asyncio
 async def test_git_patch_creation_tool_with_hideous_patch_file(git_repo, tmp_path):
-    """ Verifies that GitPatchCreationTool can recover from a `git am` failure
+    """Verifies that GitPatchCreationTool can recover from a `git am` failure
     caused by a patch file without a proper header (i.e., missing author identity).
     """
-    base_head_commit = subprocess.run(["git", "rev-parse", "HEAD"],
-        cwd=git_repo, check=True, capture_output=True, text=True).stdout.strip()
+    base_head_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=git_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     patch_file = tmp_path / "hideous-patch.patch"
     patch_file.write_text(
         "\nRotten plums and apples\n\n"
@@ -176,7 +197,7 @@ async def test_git_patch_creation_tool_with_hideous_patch_file(git_repo, tmp_pat
         ("CVE-2025-12346", "", "No matches found for 'CVE-2025-12346'"),
         ("", "RHEL-123456", "Found 1 matching commit(s) for 'RHEL-123456'"),
         ("", "RHEL-123457", "No matches found for 'RHEL-123457'"),
-    ]
+    ],
 )
 async def test_git_log_search_tool_found(git_repo, cve_id, jira_issue, expected):
     tool = GitLogSearchTool()
@@ -204,7 +225,8 @@ async def test_git_log_search_tool_found(git_repo, cve_id, jira_issue, expected)
             " Line 1\n"
             " Line 2\n"
             "+Line 3\n",
-            1),
+            1,
+        ),
         (
             "diff --git a/z/file.txt b/z/file.txt\n"
             "index cb752151e..ceb5c5dca 100644\n"
@@ -214,8 +236,9 @@ async def test_git_log_search_tool_found(git_repo, cve_id, jira_issue, expected)
             " Line 1\n"
             " Line 2\n"
             "+Line 3\n",
-            2),
-    ]
+            2,
+        ),
+    ],
 )
 async def test_discover_patch_p(git_repo, tmp_path, patch_content, expected_n):
     patch_file = tmp_path / f"{expected_n}.patch"

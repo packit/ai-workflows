@@ -3,15 +3,19 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Tuple
 from urllib.parse import urlparse
 
 from beeai_framework.tools import Tool
 
-from ymir.common.models import LogOutputSchema, CachedMRMetadata, MergeRequestDetails, OpenMergeRequestResult
-from ymir.common.utils import is_cs_branch
 from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
-from ymir.agents.utils import check_subprocess, run_subprocess, run_tool, mcp_tools
+from ymir.agents.utils import check_subprocess, mcp_tools, run_subprocess, run_tool
+from ymir.common.models import (
+    CachedMRMetadata,
+    LogOutputSchema,
+    MergeRequestDetails,
+    OpenMergeRequestResult,
+)
+from ymir.common.utils import is_cs_branch
 from ymir.tools.unprivileged.specfile import UpdateReleaseTool
 
 logger = logging.getLogger(__name__)
@@ -44,7 +48,7 @@ async def fork_and_prepare_dist_git(
     dist_git_branch: str,
     available_tools: list[Tool],
     with_fedora: bool = False,
-) -> Tuple[Path, str, str, Path | None]:
+) -> tuple[Path, str, str, Path | None]:
     working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / jira_issue
     working_dir.mkdir(parents=True, exist_ok=True)
     namespace = "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
@@ -81,7 +85,7 @@ async def prepare_dist_git_from_merge_request(
     merge_request_url: str,
     available_tools: list[Tool],
     with_fedora: bool = False,
-) -> Tuple[Path, MergeRequestDetails, Path | None]:
+) -> tuple[Path, MergeRequestDetails, Path | None]:
     working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "merge_requests"
     working_dir.mkdir(parents=True, exist_ok=True)
     local_clone = working_dir / urlparse(merge_request_url).path.replace("/", "_")
@@ -132,10 +136,7 @@ async def stage_changes(
 
     for file in files_to_commit:
         logger.info(f"Staging: {file}")
-        exit_code, _, stderr = await run_subprocess(
-            ["git", "add", "--all", file],
-            cwd=local_clone
-        )
+        exit_code, _, stderr = await run_subprocess(["git", "add", "--all", file], cwd=local_clone)
         # for the case agent already staged deleted file which leads to error
         if exit_code != 0:
             logger.warning(f"Failed to stage {file}: {stderr}")
@@ -196,7 +197,7 @@ async def commit_push_and_open_mr(
     available_tools: list[Tool],
     commit_only: bool = False,
     allow_empty: bool = False,
-) -> Tuple[str | None, bool]:
+) -> tuple[str | None, bool]:
     """
     Commits the changes to the local clone and opens a merge request.
 
@@ -272,7 +273,7 @@ async def set_jira_labels(
     jira_issue: str,
     labels_to_add: list[str] | None = None,
     labels_to_remove: list[str] | None = None,
-    dry_run: bool = False
+    dry_run: bool = False,
 ) -> None:
     if dry_run:
         logger.info(f"Dry run, not updating labels for {jira_issue}")
@@ -325,10 +326,7 @@ async def cache_mr_metadata(
         try:
             metadata = CachedMRMetadata.model_validate_json(cached)
             # Override the title by value stored in the cache
-            return LogOutputSchema(
-                title=metadata.title,
-                description=log_output.description
-            )
+            return LogOutputSchema(title=metadata.title, description=log_output.description)
         except ValueError as e:
             logger.warning(f"Error validating cached MR metadata for key {cache_key}: {e}")
 
@@ -337,7 +335,7 @@ async def cache_mr_metadata(
         operation_type=operation_type,
         title=log_output.title,
         package=package,
-        details=details
+        details=details,
     )
     await redis_conn.set(cache_key, metadata.model_dump_json())
     logger.info(f"MR metadata cache stored for {operation_type}/{package}/{details} (key: {cache_key})")

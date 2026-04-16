@@ -1,20 +1,28 @@
 import asyncio
 import re
 from pathlib import Path
-from typing import Any
 
 import koji
+from beeai_framework.context import RunContext
+from beeai_framework.emitter import Emitter
+from beeai_framework.tools import (
+    JSONToolOutput,
+    StringToolOutput,
+    Tool,
+    ToolError,
+    ToolRunOptions,
+)
 from pydantic import BaseModel, Field
 from specfile import Specfile
 from specfile.utils import EVR
-from specfile.value_parser import EnclosedMacroSubstitution, MacroSubstitution, Node, ValueParser
-
-from beeai_framework.context import RunContext
-from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, StringToolOutput, Tool, ToolError, ToolRunOptions
+from specfile.value_parser import (
+    EnclosedMacroSubstitution,
+    MacroSubstitution,
+    Node,
+    ValueParser,
+)
 
 from ymir.common.constants import BREWHUB_URL
-from ymir.common.validators import NonEmptyString
 from ymir.common.utils import get_absolute_path
 
 
@@ -24,6 +32,7 @@ class GetPackageInfoToolInput(BaseModel):
 
 class PackageInfo(BaseModel):
     """Package information extracted from spec file."""
+
     version: str = Field(description="Package version from Version field")
     patch_files: list[str] = Field(description="List of patch filenames in order (Patch0, Patch1, etc.)")
 
@@ -66,12 +75,7 @@ class GetPackageInfoTool(Tool[GetPackageInfoToolInput, ToolRunOptions, GetPackag
                 with spec.patches() as patches:
                     patch_files = [p.expanded_location for p in patches if p.expanded_location]
 
-                return GetPackageInfoToolOutput(
-                    result=PackageInfo(
-                        version=version,
-                        patch_files=patch_files
-                    )
-                )
+                return GetPackageInfoToolOutput(result=PackageInfo(version=version, patch_files=patch_files))
 
         except Exception as e:
             raise ToolError(f"Failed to extract package info from {spec_path}: {e}") from e
@@ -137,17 +141,21 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
 
     @staticmethod
     def _process_zstream_branch(dist_git_branch: str) -> tuple[str, str] | None:
-        if not (m := re.match(r"^(?P<prefix>rhel-(?P<x>\d+)\.)(?P<y>\d+)(?P<suffix>\.\d+)?$", dist_git_branch)):
+        if not (
+            m := re.match(
+                r"^(?P<prefix>rhel-(?P<x>\d+)\.)(?P<y>\d+)(?P<suffix>\.\d+)?$",
+                dist_git_branch,
+            )
+        ):
             # not a Z-Stream branch
             return None
-        higher_stream_candidate_tag = (
+        return (
             m.group("prefix")
             # y++, up to 10 (highest RHEL minor version)
             + str(min(int(m.group("y")) + 1, 10))
             + (m.group("suffix") or "")
             + "-candidate"
         )
-        return higher_stream_candidate_tag
 
     @staticmethod
     async def _get_latest_higher_stream_build(package: str, candidate_tag: str) -> EVR:
@@ -162,15 +170,16 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         if not builds:
             raise RuntimeError(f"There are no builds of {package} in {candidate_tag}")
         [build] = builds
-        return EVR(epoch=build["epoch"] or 0, version=build["version"], release=build["release"])
+        return EVR(
+            epoch=build["epoch"] or 0,
+            version=build["version"],
+            release=build["release"],
+        )
 
     @staticmethod
     def _find_macro(name: str, nodes: list[Node]) -> int | None:
         for index, node in reversed(list(enumerate(nodes))):
-            if (
-                isinstance(node, (MacroSubstitution, EnclosedMacroSubstitution))
-                and node.name == name
-            ):
+            if isinstance(node, (MacroSubstitution, EnclosedMacroSubstitution)) and node.name == name:
                 return index
         return None
 
@@ -190,7 +199,7 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                 prefix = current_release
                 suffix = ""
             else:
-                prefix = "".join(str(n) for n in nodes[: dist_index])
+                prefix = "".join(str(n) for n in nodes[:dist_index])
                 suffix = "".join(str(n) for n in nodes[dist_index + 1 :])
             if m := re.match(r"^(\d+)(.*)$", prefix):
                 # increase or reset the main numeric part
@@ -212,7 +221,9 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         rebase: bool,
         higher_stream_candidate_tag: str,
     ) -> None:
-        latest_higher_stream_build = await cls._get_latest_higher_stream_build(package, higher_stream_candidate_tag)
+        latest_higher_stream_build = await cls._get_latest_higher_stream_build(
+            package, higher_stream_candidate_tag
+        )
         higher_stream_base_release, _ = latest_higher_stream_build.release.rsplit(".el", maxsplit=1)
         with Specfile(spec_path) as spec:
             current_release = spec.raw_release

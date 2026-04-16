@@ -31,8 +31,10 @@ paths:
       summary: Stream Testing Farm requests via SSE
       description: |
         Streams server-sent events (SSE) with an initial snapshot followed by deltas and periodic pings.
-        Any query parameters other than 'until' and 'id' are forwarded upstream to Testing Farm's /v0.1/requests.
-        If 'until=complete' is used, an 'all_complete' event is emitted just before the server closes the stream.
+        Any query parameters other than 'until' and 'id' are forwarded upstream
+        to Testing Farm's /v0.1/requests.
+        If 'until=complete' is used, an 'all_complete' event is emitted just before
+        the server closes the stream.
         Error events include a 'ts' field for correlation.
       parameters:
         - in: query
@@ -110,9 +112,10 @@ import os
 import random
 import sys
 import time
-import uuid
 import traceback
-from typing import Any, AsyncGenerator, Dict, Optional, Union, cast
+import uuid
+from collections.abc import AsyncGenerator
+from typing import Any, cast
 
 import httpx
 from fastapi import FastAPI, Request, Response
@@ -130,16 +133,16 @@ ERROR_EVENT = "error"
 ALL_COMPLETE_EVENT = "all_complete"
 
 # Request states
-REQUEST_STATE_NEW = 'new'
-REQUEST_STATE_QUEUED = 'queued'
-REQUEST_STATE_RUNNING = 'running'
-REQUEST_STATE_ERROR = 'error'
-REQUEST_STATE_COMPLETE = 'complete'
-REQUEST_STATE_CANCEL_REQUESTED = 'cancel-requested'
-REQUEST_STATE_CANCELED = 'canceled'
+REQUEST_STATE_NEW = "new"
+REQUEST_STATE_QUEUED = "queued"
+REQUEST_STATE_RUNNING = "running"
+REQUEST_STATE_ERROR = "error"
+REQUEST_STATE_COMPLETE = "complete"
+REQUEST_STATE_CANCEL_REQUESTED = "cancel-requested"
+REQUEST_STATE_CANCELED = "canceled"
 
 TESTING_FARM_API_URL: str = os.environ.get("TESTING_FARM_API_URL", "https://api.testing-farm.io")
-API_TOKEN: Optional[str] = os.environ.get("TESTING_FARM_API_TOKEN")
+API_TOKEN: str | None = os.environ.get("TESTING_FARM_API_TOKEN")
 POLL_INTERVAL_SECONDS: float = float(os.environ.get("TESTING_FARM_POLL_INTERVAL", "5.0"))
 PING_INTERVAL_SECONDS: float = 30.0
 REQUEST_TIMEOUT_SECONDS: float = float(os.environ.get("TESTING_FARM_TIMEOUT", "30.0"))
@@ -158,7 +161,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(nam
 logger = logging.getLogger("testing-farm-sse-bridge")
 
 
-def _mask_token(value: Optional[str]) -> Optional[str]:
+def _mask_token(value: str | None) -> str | None:
     if not value or not API_TOKEN:
         return value
     return value.replace(API_TOKEN, "<redacted>")
@@ -179,7 +182,9 @@ class SecretMaskingFilter(logging.Filter):
                     if isinstance(record.args, tuple):
                         record.args = tuple(_mask_token(a) if isinstance(a, str) else a for a in record.args)
                     elif isinstance(record.args, dict):
-                        record.args = {k: _mask_token(v) if isinstance(v, str) else v for k, v in record.args.items()}
+                        record.args = {
+                            k: _mask_token(v) if isinstance(v, str) else v for k, v in record.args.items()
+                        }
         except (ValueError, AttributeError, TypeError):
             # Do not break logging on masking errors
             pass
@@ -194,7 +199,7 @@ logger.addFilter(SecretMaskingFilter())
 # Globals
 # -------------------------------------------------------------------
 app = FastAPI()
-bearer_token: Optional[str] = None
+bearer_token: str | None = None
 bearer_token_lock: asyncio.Lock = asyncio.Lock()
 shutdown_event: asyncio.Event = asyncio.Event()
 
@@ -202,7 +207,8 @@ shutdown_event: asyncio.Event = asyncio.Event()
 # Helper Functions
 # -------------------------------------------------------------------
 
-def format_sse_event(event_type: str, data: Any, event_id: Optional[str] = None) -> str:
+
+def format_sse_event(event_type: str, data: Any, event_id: str | None = None) -> str:
     """Format a proper SSE event line."""
     sse = ""
     if event_id:
@@ -215,10 +221,16 @@ def format_sse_event(event_type: str, data: Any, event_id: Optional[str] = None)
 def log_deltas(connection_id: str, created: int, updated: int, deleted: int) -> None:
     """Log request state changes."""
     if created or updated or deleted:
-        logger.info("[%s] Deltas: created=%d updated=%d deleted=%d", connection_id, created, updated, deleted)
+        logger.info(
+            "[%s] Deltas: created=%d updated=%d deleted=%d",
+            connection_id,
+            created,
+            updated,
+            deleted,
+        )
 
 
-def is_terminal_state(state: Optional[str]) -> bool:
+def is_terminal_state(state: str | None) -> bool:
     """Check if a request state is terminal."""
     if state is None:
         return False
@@ -228,6 +240,7 @@ def is_terminal_state(state: Optional[str]) -> bool:
 # -------------------------------------------------------------------
 # Token Management
 # -------------------------------------------------------------------
+
 
 async def fetch_bearer_token() -> str:
     """Validate API token with /whoami."""
@@ -259,7 +272,7 @@ async def get_bearer_token() -> str:
         return bearer_token
 
 
-async def fetch_token_id_for_auth_header(auth_header_value: str) -> Optional[str]:
+async def fetch_token_id_for_auth_header(auth_header_value: str) -> str | None:
     """Fetch token_id via /whoami using the provided Authorization header."""
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
@@ -280,11 +293,15 @@ async def fetch_token_id_for_auth_header(auth_header_value: str) -> Optional[str
         return None
     return None
 
+
 # -------------------------------------------------------------------
 # Polling Helpers
 # -------------------------------------------------------------------
 
-async def fetch_requests(client: httpx.AsyncClient, params: Dict[str, Any], headers: Dict[str, str]) -> list[Dict[str, Any]]:
+
+async def fetch_requests(
+    client: httpx.AsyncClient, params: dict[str, Any], headers: dict[str, str]
+) -> list[dict[str, Any]]:
     """Fetch and normalize Testing Farm requests."""
     # Build request to capture the final encoded URL for logging/debugging
     req = client.build_request("GET", f"{TESTING_FARM_API_URL}/v0.1/requests", params=params, headers=headers)
@@ -307,12 +324,12 @@ async def fetch_requests(client: httpx.AsyncClient, params: Dict[str, Any], head
     return []
 
 
-def emit_snapshot(requests: list[Dict[str, Any]]) -> str:
+def emit_snapshot(requests: list[dict[str, Any]]) -> str:
     """Emit a snapshot event with all current requests."""
     return format_sse_event(SNAPSHOT_EVENT, requests)
 
 
-def emit_deltas(prev: Dict[str, str], curr: list[Dict[str, Any]], conn_id: str) -> list[str]:
+def emit_deltas(prev: dict[str, str], curr: list[dict[str, Any]], conn_id: str) -> list[str]:
     """Calculate and emit delta events between previous and current state."""
     out, created, updated, deleted = [], 0, 0, 0
     curr_ids = {r["id"] for r in curr}
@@ -339,9 +356,13 @@ def emit_ping() -> str:
     return format_sse_event(PING_EVENT, {"ts": int(time.time())})
 
 
-def emit_error(err_type: str, detail: str, trace: Optional[str] = None) -> str:
+def emit_error(err_type: str, detail: str, trace: str | None = None) -> str:
     """Emit an error event with optional traceback."""
-    payload: Dict[str, Any] = {"ts": int(time.time()), "type": err_type, "detail": _mask_token(detail) or detail}
+    payload: dict[str, Any] = {
+        "ts": int(time.time()),
+        "type": err_type,
+        "detail": _mask_token(detail) or detail,
+    }
     if trace:
         # Limit trace size to avoid overwhelming clients
         masked_trace = _mask_token(trace) or trace
@@ -353,9 +374,16 @@ def emit_error(err_type: str, detail: str, trace: Optional[str] = None) -> str:
 # Poll Loop
 # -------------------------------------------------------------------
 
-async def poll_requests(params: Dict[str, Any], conn_id: str, until_mode: str, request_ids: Optional[list[str]] = None, headers: Optional[Dict[str, str]] = None) -> AsyncGenerator[str, None]:
+
+async def poll_requests(
+    params: dict[str, Any],
+    conn_id: str,
+    until_mode: str,
+    request_ids: list[str] | None = None,
+    headers: dict[str, str] | None = None,
+) -> AsyncGenerator[str]:
     """Poll Testing Farm requests and emit SSE events for changes."""
-    seen: Dict[str, str] = {}
+    seen: dict[str, str] = {}
     snapshot_sent = False
     last_ping = time.monotonic()
     backoff = POLL_INTERVAL_SECONDS
@@ -405,7 +433,10 @@ async def poll_requests(params: Dict[str, Any], conn_id: str, until_mode: str, r
                     # Inform clients explicitly before closing the stream
                     yield format_sse_event(
                         ALL_COMPLETE_EVENT,
-                        {"ts": int(time.time()), "requests": [r["id"] for r in requests_list]},
+                        {
+                            "ts": int(time.time()),
+                            "requests": [r["id"] for r in requests_list],
+                        },
                     )
                     logger.info("[%s] until=complete satisfied: closing stream", conn_id)
                     break
@@ -415,9 +446,11 @@ async def poll_requests(params: Dict[str, Any], conn_id: str, until_mode: str, r
                 last_ping = time.monotonic()
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
+
 # -------------------------------------------------------------------
 # FastAPI Routes
 # -------------------------------------------------------------------
+
 
 @app.on_event("startup")
 async def startup_event() -> None:
@@ -428,7 +461,13 @@ async def startup_event() -> None:
             _ = await fetch_bearer_token()
     except SystemExit:
         raise
-    except (httpx.HTTPError, ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
+    except (
+        httpx.HTTPError,
+        ValueError,
+        TypeError,
+        KeyError,
+        json.JSONDecodeError,
+    ) as e:
         logger.error("Unexpected error in startup: %s", e.__class__.__name__)
         sys.exit(3)
 
@@ -464,11 +503,19 @@ async def stream_requests(request: Request) -> StreamingResponse:
             params["token_id"] = token_id
 
     conn_id = str(uuid.uuid4())[:8]
-    logger.info("[%s] Client connected params=%s until=%s request_ids=%s", conn_id, params, until_mode, request_ids)
+    logger.info(
+        "[%s] Client connected params=%s until=%s request_ids=%s",
+        conn_id,
+        params,
+        until_mode,
+        request_ids,
+    )
 
-    async def event_gen() -> AsyncGenerator[str, None]:
+    async def event_gen() -> AsyncGenerator[str]:
         try:
-            async for evt in poll_requests(params, conn_id, until_mode, request_ids, headers=upstream_headers):
+            async for evt in poll_requests(
+                params, conn_id, until_mode, request_ids, headers=upstream_headers
+            ):
                 if await request.is_disconnected() or shutdown_event.is_set():
                     break
                 yield evt
@@ -487,8 +534,10 @@ async def healthz(request: Request) -> JSONResponse:
     """Health check endpoint."""
     return JSONResponse({"status": "ok"})
 
+
 @app.head("/healthz")
 async def healthz_head(request: Request):
     return Response(status_code=200)
+
 
 __all__ = ["app"]

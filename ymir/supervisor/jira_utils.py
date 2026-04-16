@@ -1,24 +1,23 @@
-import backoff
+import logging
+import os
+from collections.abc import Collection, Generator
 from datetime import datetime
 from enum import Enum, StrEnum
 from functools import cache
 from json import dumps as json_dumps
-import logging
-import os
 from typing import (
     Any,
-    Collection,
-    Generator,
     Literal,
-    Type,
     TypeVar,
     overload,
 )
 from urllib.parse import quote as urlquote
 
+import backoff
 import requests
 
 from ymir.common.utils import get_jira_auth_headers
+
 from .http_utils import requests_session
 from .supervisor_types import (
     FullIssue,
@@ -26,10 +25,9 @@ from .supervisor_types import (
     IssueStatus,
     JiraComment,
     JotnarTag,
-    TestCoverage,
     PreliminaryTesting,
+    TestCoverage,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +38,7 @@ logger = logging.getLogger(__name__)
 # v3 is used only for:
 # - cloud's /search/jql endpoint
 # - cloud's /user/search endpoint (requires 'query' param instead of 'username')
+
 
 @cache
 def components():
@@ -74,9 +73,7 @@ def jira_headers() -> dict[str, str]:
     headers = get_jira_auth_headers()
 
     # Test if the token can log in successfully
-    response = requests_session().get(
-        f"{jira_url()}/rest/api/2/myself", headers=headers
-    )
+    response = requests_session().get(f"{jira_url()}/rest/api/2/myself", headers=headers)
 
     if response.status_code == 401:
         raise JiraNotLoggedInError(
@@ -132,20 +129,20 @@ def jira_api_get(path: str, *, params: dict | None = None, api_version: Literal[
 
 
 @overload
-def jira_api_post(
-    path: str, json: dict[str, Any], *, decode_response: Literal[False] = False
-) -> None: ...
+def jira_api_post(path: str, json: dict[str, Any], *, decode_response: Literal[False] = False) -> None: ...
 
 
 @overload
-def jira_api_post(
-    path: str, json: dict[str, Any], *, decode_response: Literal[True]
-) -> Any: ...
+def jira_api_post(path: str, json: dict[str, Any], *, decode_response: Literal[True]) -> Any: ...
 
 
 @retry_on_rate_limit
 def jira_api_post(
-    path: str, json: dict[str, Any], *, decode_response: bool = False, api_version: Literal["2", "3"] = "2"
+    path: str,
+    json: dict[str, Any],
+    *,
+    decode_response: bool = False,
+    api_version: Literal["2", "3"] = "2",
 ) -> Any | None:
     url = f"{jira_url()}/rest/api/{api_version}/{path}"
     response = requests_session().post(url, headers=jira_headers(), json=json)
@@ -159,6 +156,7 @@ def jira_api_post(
     raise_for_status(response)
     if decode_response:
         return response.json()
+    return None
 
 
 @overload
@@ -186,7 +184,7 @@ def jira_api_upload(
     *,
     decode_response: bool = False,
 ) -> Any | None:
-    url = f"{jira_url()}/rest/api/2/{path}"  #use v2 for uploads
+    url = f"{jira_url()}/rest/api/2/{path}"  # use v2 for uploads
     files = [("file", a) for a in attachments]
     headers = dict(jira_headers())
     del headers["Content-Type"]  # requests will set this correctly for multipart
@@ -202,23 +200,24 @@ def jira_api_upload(
     raise_for_status(response)
     if decode_response:
         return response.json()
+    return None
 
 
 @overload
-def jira_api_put(
-    path: str, json: dict[str, Any], *, decode_response: Literal[False] = False
-) -> None: ...
+def jira_api_put(path: str, json: dict[str, Any], *, decode_response: Literal[False] = False) -> None: ...
 
 
 @overload
-def jira_api_put(
-    path: str, json: dict[str, Any], *, decode_response: Literal[True]
-) -> Any: ...
+def jira_api_put(path: str, json: dict[str, Any], *, decode_response: Literal[True]) -> Any: ...
 
 
 @retry_on_rate_limit
 def jira_api_put(
-    path: str, json: dict[str, Any], *, decode_response: bool = False, api_version: Literal["2", "3"] = "2"
+    path: str,
+    json: dict[str, Any],
+    *,
+    decode_response: bool = False,
+    api_version: Literal["2", "3"] = "2",
 ) -> Any | None:
     url = f"{jira_url()}/rest/api/{api_version}/{path}"
     response = requests_session().put(url, headers=jira_headers(), json=json)
@@ -232,6 +231,7 @@ def jira_api_put(
     raise_for_status(response)
     if decode_response:
         return response.json()
+    return None
 
 
 @cache
@@ -256,24 +256,20 @@ def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
     def custom(name) -> Any | None:
         return issue_data["fields"].get(custom_fields[name])
 
-    def custom_enum(enum_class: Type[_E], name) -> _E | None:
+    def custom_enum(enum_class: type[_E], name) -> _E | None:
         data = issue_data["fields"].get(custom_fields[name])
         if data is None:
             return None
-        else:
-            return enum_class(data["value"])
+        return enum_class(data["value"])
 
-    def custom_enum_list(enum_class: Type[_E], name) -> list[_E] | None:
+    def custom_enum_list(enum_class: type[_E], name) -> list[_E] | None:
         data = issue_data["fields"].get(custom_fields[name])
         if data is None:
             return None
-        else:
-            return [enum_class(d["value"]) for d in data]
+        return [enum_class(d["value"]) for d in data]
 
     key = issue_data["key"]
-    issue_components: list[str] = [
-        str(v["name"]) for v in issue_data["fields"]["components"]
-    ]
+    issue_components: list[str] = [str(v["name"]) for v in issue_data["fields"]["components"]]
     errata_link = custom("Errata Link")
     assigned_team = custom("AssignedTeam")
     assigned_team_name = assigned_team.get("value") if assigned_team else None
@@ -308,8 +304,7 @@ def decode_issue(issue_data: Any, full: bool = False) -> Issue | FullIssue:
                 for c in issue_data["fields"]["comment"]["comments"]
             ],
         )
-    else:
-        return issue
+    return issue
 
 
 def _fields(full: bool):
@@ -331,9 +326,8 @@ def _fields(full: bool):
         custom_fields["Preliminary Testing"],
     ]
     if full:
-        return base_fields + ["comment", "description"]
-    else:
-        return base_fields
+        return [*base_fields, "comment", "description"]
+    return base_fields
 
 
 @overload
@@ -357,19 +351,17 @@ def get_issue(issue_key: str, full: bool = False) -> Issue | FullIssue:
 def get_current_issues(
     jql: str,
     full: Literal[False] = False,
-) -> Generator[Issue, None, None]: ...
+) -> Generator[Issue]: ...
 
 
 @overload
-def get_current_issues(
-    jql: str, full: Literal[True]
-) -> Generator[FullIssue, None, None]: ...
+def get_current_issues(jql: str, full: Literal[True]) -> Generator[FullIssue]: ...
 
 
 def get_current_issues(
     jql: str,
     full: bool = False,
-) -> Generator[Issue, None, None] | Generator[FullIssue, None, None]:
+) -> Generator[Issue] | Generator[FullIssue]:
     max_results = 1000
     next_page_token = None
     while True:
@@ -420,9 +412,7 @@ def get_issue_by_jotnar_tag(
 ) -> Issue | FullIssue | None:
     max_results = 2
     # Match both current (YMIR) and legacy (JOTNAR) tag formats
-    description_filter = " OR ".join(
-        f'description ~ "\\"{t}\\""' for t in tag.all_formats()
-    )
+    description_filter = " OR ".join(f'description ~ "\\"{t}\\""' for t in tag.all_formats())
     jql = f"project = {project} AND status NOT IN (Done, Closed) AND ({description_filter})"
     if with_label is not None:
         jql += f' AND labels = "{with_label}"'
@@ -439,14 +429,12 @@ def get_issue_by_jotnar_tag(
 
     if len(response_data["issues"]) == 0:
         return None
-    elif len(response_data["issues"]) > 1:
+    if len(response_data["issues"]) > 1:
         raise ValueError(f"Multiple open issues found with JOTNAR tag {tag}")
-    else:
-        if full:
-            # Re-fetch full issue with v2 to get plain text descriptions/comments
-            return get_issue(response_data["issues"][0]["key"], full=True)
-        else:
-            return decode_issue(response_data["issues"][0], full)
+    if full:
+        # Re-fetch full issue with v2 to get plain text descriptions/comments
+        return get_issue(response_data["issues"][0]["key"], full=True)
+    return decode_issue(response_data["issues"][0], full)
 
 
 def get_issues_statuses(issue_keys: Collection[str]) -> dict[str, IssueStatus]:
@@ -484,7 +472,7 @@ CommentSpec = None | str | tuple[str, CommentVisibility]
 
 def _comment_to_dict(comment: CommentSpec) -> dict[str, Any] | None:
     if comment is None:
-        return
+        return None
 
     if isinstance(comment, str):
         comment_value = comment
@@ -495,11 +483,10 @@ def _comment_to_dict(comment: CommentSpec) -> dict[str, Any] | None:
     # v2 API uses plain text for comments
     if visibility == CommentVisibility.PUBLIC:
         return {"body": comment_value}
-    else:
-        return {
-            "body": comment_value,
-            "visibility": {"type": "group", "value": str(visibility)},
-        }
+    return {
+        "body": comment_value,
+        "visibility": {"type": "group", "value": str(visibility)},
+    }
 
 
 def _add_comment_update(update: dict[str, Any], comment: CommentSpec) -> None:
@@ -510,9 +497,7 @@ def _add_comment_update(update: dict[str, Any], comment: CommentSpec) -> None:
     update["comment"] = [{"add": comment_dict}]
 
 
-def add_issue_comment(
-    issue_key: str, comment: CommentSpec, *, dry_run: bool = False
-) -> None:
+def add_issue_comment(issue_key: str, comment: CommentSpec, *, dry_run: bool = False) -> None:
     body = _comment_to_dict(comment)
     if body is None:
         return
@@ -581,9 +566,7 @@ def change_issue_status(
         _add_comment_update(body["update"], comment)
 
     if dry_run:
-        logger.info(
-            "Dry run: would change issue %s status to %s", issue_key, new_status
-        )
+        logger.info("Dry run: would change issue %s status to %s", issue_key, new_status)
         logger.debug("Dry run: would post %s to %s", body, path)
 
     if not dry_run:
@@ -717,7 +700,7 @@ def get_user_account_id(email: str) -> str:
     matches = [u for u in users if u.get("emailAddress") == email]
     if len(matches) == 0:
         raise ValueError(f"No JIRA user with email {email}")
-    elif len(matches) > 1:
+    if len(matches) > 1:
         raise ValueError(f"Multiple JIRA users with email {email}")
 
     user = matches[0]
@@ -806,7 +789,7 @@ def create_issue(
             tag,
         )
         logger.debug("Dry run: would post %s to %s", body, path)
-        return
+        return None
 
     response_data = jira_api_post(path, json=body, decode_response=True, api_version="2")
     key = response_data["key"]
@@ -817,6 +800,7 @@ def create_issue(
 
 if __name__ == "__main__":
     import asyncio
+
     from .http_utils import with_requests_session
 
     @with_requests_session()

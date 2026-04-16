@@ -1,10 +1,10 @@
 import logging
 import re
-from pydantic import BaseModel, Field
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
+from pydantic import BaseModel, Field
 
 from ..http_utils import aiohttp_session
 
@@ -29,8 +29,8 @@ LOGFILE_PATTERNS = [
 
 # Normalize an URL so it doesn't have any .. components in the path
 def normalize_url(url: str) -> str:
-    from urllib.parse import urlparse, urlunparse
     import os
+    from urllib.parse import urlparse, urlunparse
 
     parsed = urlparse(url)
     normalized_path = os.path.normpath(parsed.path)
@@ -67,9 +67,7 @@ class ReadLogfileTool(Tool[ReadLogfileInput, ToolRunOptions, StringToolOutput]):
                 break
 
         if not matched:
-            return StringToolOutput(
-                result=f"URL does not match allowed patterns: {input.logfile_url}"
-            )
+            return StringToolOutput(result=f"URL does not match allowed patterns: {input.logfile_url}")
 
         logger.info("Reading logfile from URL: %s", url)
         async with session.get(url) as response:
@@ -78,6 +76,4 @@ class ReadLogfileTool(Tool[ReadLogfileInput, ToolRunOptions, StringToolOutput]):
                     result=await response.text(),
                 )
 
-        return StringToolOutput(
-            result=f"Failed to read logfile from {input.logfile_url}"
-        )
+        return StringToolOutput(result=f"Failed to read logfile from {input.logfile_url}")

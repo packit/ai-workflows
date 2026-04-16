@@ -2,7 +2,7 @@
 
 import pytest
 
-from ymir.tools.privileged.gateway import _redact
+from ymir.tools.gateway_utils import redact_credentials as _redact
 
 
 class TestRedactFunction:

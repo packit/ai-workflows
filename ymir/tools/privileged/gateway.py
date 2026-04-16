@@ -1,15 +1,14 @@
 import logging
 import os
 import re
-from typing import Any
 
 from beeai_framework.adapters.mcp.serve.server import (
     MCPServer,
     MCPServerConfig,
     MCPSettings,
 )
-from beeai_framework.emitter.emitter import Emitter
 
+from ymir.tools.gateway_utils import setup_logging
 from ymir.tools.privileged.copr import BuildPackageTool, DownloadArtifactsTool
 from ymir.tools.privileged.distgit import CreateZstreamBranchTool
 from ymir.tools.privileged.gitlab import (
@@ -81,33 +80,6 @@ def _redact(text: str) -> str:
     return text
 
 
-def _setup_logging():
-    handlers = [logging.StreamHandler()]
-    if os.environ.get("DEBUG_FILE"):
-        handlers.append(logging.FileHandler(os.environ.get("DEBUG_FILE")))
-    logging.basicConfig(level=logging.INFO, handlers=handlers)
-
-    # Log tool calls via Emitter.
-    # Dotted strings in Emitter.on() are matched exactly (not as globs),
-    # so we use regex patterns to match any tool's events.
-    def on_tool_start(data: Any, meta: Any):
-        logger.info(f"Tool called: {meta.creator}")
-        logger.info(f"Tool arguments: {_redact(str(data))}")
-
-    def on_tool_success(data: Any, meta: Any):
-        logger.info(f"Tool {meta.creator} completed successfully")
-
-    def on_tool_error(data: Any, meta: Any):
-        logger.error(f"Tool {meta.creator} failed with error: {_redact(str(data))}")
-        error = getattr(data, "error", None)
-        if error is not None:
-            logger.error(f"Tool {meta.creator} traceback:", exc_info=error)
-
-    Emitter.root().on(re.compile(r"^tool\..+\.start$"), on_tool_start)
-    Emitter.root().on(re.compile(r"^tool\..+\.success$"), on_tool_success)
-    Emitter.root().on(re.compile(r"^tool\..+\.error$"), on_tool_error)
-
-
 def main():
     transport = os.getenv("MCP_TRANSPORT", "sse")
     config_kwargs = {"name": "Ymir Privileged MCP Gateway", "transport": transport}
@@ -118,7 +90,7 @@ def main():
         )
     config = MCPServerConfig(**config_kwargs)
 
-    _setup_logging()
+    setup_logging()
     mcp = MCPServer(config=config)
     mcp.register_many(
         [

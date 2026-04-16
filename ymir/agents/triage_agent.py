@@ -2,11 +2,8 @@ import asyncio
 import logging
 import os
 import sys
-import json
 import traceback
 from textwrap import dedent
-
-from pydantic import BaseModel, Field
 
 from beeai_framework.agents.requirement import RequirementAgent
 from beeai_framework.agents.requirement.requirements.conditional import (
@@ -18,49 +15,60 @@ from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.template import PromptTemplate
 from beeai_framework.tools import Tool
 from beeai_framework.tools.think import ThinkTool
-from beeai_framework.workflows import Workflow
 from beeai_framework.utils.strings import to_json
+from beeai_framework.workflows import Workflow
+from pydantic import BaseModel, Field
 
 import ymir.agents.tasks as tasks
-from ymir.common.config import load_rhel_config
-from ymir.common.version_utils import parse_rhel_version, is_older_zstream
-from ymir.common.models import (
-    Task,
-    TriageInputSchema as InputSchema,
-    TriageOutputSchema as OutputSchema,
-    Resolution,
-    ClarificationNeededData,
-    OpenEndedAnalysisData,
-    ErrorData,
-    CVEEligibilityResult,
-)
-from ymir.common.utils import redis_client, fix_await
-from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.agents.observability import setup_observability
+from ymir.agents.utils import (
+    get_agent_execution_config,
+    get_chat_model,
+    get_tool_call_checker_config,
+    mcp_tools,
+    run_tool,
+)
+from ymir.common.config import load_rhel_config
+from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.models import (
+    ClarificationNeededData,
+    CVEEligibilityResult,
+    ErrorData,
+    OpenEndedAnalysisData,
+    Resolution,
+    Task,
+)
+from ymir.common.models import (
+    TriageInputSchema as InputSchema,
+)
+from ymir.common.models import (
+    TriageOutputSchema as OutputSchema,
+)
+from ymir.common.utils import fix_await, redis_client
+from ymir.common.version_utils import is_older_zstream, parse_rhel_version
 from ymir.tools.unprivileged.commands import RunShellCommandTool
-from ymir.tools.unprivileged.version_mapper import VersionMapperTool
 from ymir.tools.unprivileged.upstream_search import UpstreamSearchTool
-from ymir.agents.utils import get_agent_execution_config, get_chat_model, get_tool_call_checker_config, mcp_tools, run_tool
+from ymir.tools.unprivileged.version_mapper import VersionMapperTool
 
 logger = logging.getLogger(__name__)
 
 
-async def determine_target_branch(cve_eligibility_result: CVEEligibilityResult | None, triage_data: BaseModel) -> str | None:
+async def determine_target_branch(
+    cve_eligibility_result: CVEEligibilityResult | None, triage_data: BaseModel
+) -> str | None:
     """
     Determine target branch from fix_version and CVE eligibility.
     """
-    if not (hasattr(triage_data, 'fix_version') and triage_data.fix_version):
+    if not (hasattr(triage_data, "fix_version") and triage_data.fix_version):
         logger.warning("No fix_version available for branch mapping")
         return None
 
     # Check if CVE needs internal fix first
     cve_needs_internal_fix = (
-        cve_eligibility_result
-        and cve_eligibility_result.is_cve
-        and cve_eligibility_result.needs_internal_fix
+        cve_eligibility_result and cve_eligibility_result.is_cve and cve_eligibility_result.needs_internal_fix
     )
 
-    package = triage_data.package if hasattr(triage_data, 'package') else None
+    package = triage_data.package if hasattr(triage_data, "package") else None
 
     return await _map_version_to_branch(triage_data.fix_version, cve_needs_internal_fix, package)
 
@@ -73,7 +81,9 @@ def _construct_internal_branch_name(major_version: str, minor_version: str) -> s
     return branch
 
 
-async def _map_version_to_branch(version: str, cve_needs_internal_fix: bool, package: str | None = None) -> str | None:
+async def _map_version_to_branch(
+    version: str, cve_needs_internal_fix: bool, package: str | None = None
+) -> str | None:
     """
     Map version string to target branch.
 
@@ -126,7 +136,7 @@ async def _map_version_to_branch(version: str, cve_needs_internal_fix: bool, pac
                     available_branches = await run_tool(
                         "get_internal_rhel_branches",
                         available_tools=gateway_tools,
-                        package=package
+                        package=package,
                     )
 
                     if expected_branch not in available_branches:
@@ -147,11 +157,13 @@ async def _map_version_to_branch(version: str, cve_needs_internal_fix: bool, pac
 
 
 TRIAGE_PROMPT = """
-      You are an agent tasked to analyze Jira issues for RHEL and identify the most efficient path to resolution,
-      whether through a version rebase, a patch backport, or by requesting clarification when blocked.
+      You are an agent tasked to analyze Jira issues for RHEL and identify
+      the most efficient path to resolution, whether through a version rebase,
+      a patch backport, or by requesting clarification when blocked.
 
       **Important**: Focus on bugs, CVEs, and technical defects that need code fixes.
-      Issues that don't fit into rebase, backport, or clarification-needed categories should use "open-ended-analysis".
+      Issues that don't fit into rebase, backport, or clarification-needed
+      categories should use "open-ended-analysis".
 
       Goal: Analyze the given issue to determine the correct course of action.
 
@@ -173,7 +185,8 @@ TRIAGE_PROMPT = """
          * Confirm the package repository exists by running
            `GIT_TERMINAL_PROMPT=0 git ls-remote https://gitlab.com/redhat/centos-stream/rpms/<package_name>`
          * A successful command (exit code 0) confirms the package exists
-         * If the package does not exist, re-examine the Jira issue for the correct package name and if it is not found,
+         * If the package does not exist, re-examine the Jira issue
+           for the correct package name and if it is not found,
            return error and explicitly state the reason
 
       3. Proceed to decision making process described below.
@@ -202,10 +215,13 @@ TRIAGE_PROMPT = """
          * When no direct link is provided, you must proactively search for fixes - do not give up easily
          * There are 2 locations where you can search for the fixes: Fedora and upstream project.
          * First, check if the fix is in Fedora repository in https://src.fedoraproject.org/rpms/<package_name>.
-           * In Fedora, search for .patch files and check git commit history for fixes using relevant keywords (CVE IDs, function names, error messages)
+           * In Fedora, search for .patch files and check git commit history
+             for fixes using relevant keywords (CVE IDs, function names,
+             error messages)
          * If it's not, identify the official upstream project from the following 2 sources and search there:
             * Links from the Jira issue (if any direct upstream links are provided)
-            * Package spec file (<package>.spec) in the GitLab repository: check the URL field or Source0 field for upstream project location
+            * Package spec file (<package>.spec) in the GitLab repository:
+              check the URL field or Source0 field for upstream project location
 
          * Try to use upstream_search tool to find out commits related to the issue.
            - The description you will use should be 1-2 sentences long and include implementation
@@ -226,12 +242,15 @@ TRIAGE_PROMPT = """
            - If you can identify specific files, functions, or code sections mentioned in the issue,
              locate them in the source code
            - Use git history (git log, git blame) to examine changes to those specific code areas
-           - Look for commits that modify the problematic code, especially those with relevant keywords in commit messages
+           - Look for commits that modify the problematic code, especially those
+             with relevant keywords in commit messages
            - Check git tags and releases around the time when the issue was likely fixed
            - Search for commits by date ranges when you know approximately when the issue was resolved
-           - Utilize dates strategically in your search if needed, using the version/release date of the package
+           - Utilize dates strategically in your search if needed, using
+             the version/release date of the package
              currently used in RHEL
-             - Focus on fixes that came after the RHEL package version date, as earlier fixes would already be included
+             - Focus on fixes that came after the RHEL package version date,
+               as earlier fixes would already be included
              - For CVEs, use the CVE publication date to narrow down the timeframe for fixes
              - Check upstream release notes and changelogs after the RHEL package version date
 
@@ -294,7 +313,8 @@ TRIAGE_PROMPT = """
          3.3. If rebuild: set Jira fields as per the instructions below.
 
       4. **Open-Ended Analysis**
-         This is the catch-all for issues that don't fit rebase, backport, rebuild, or clarification-needed. Use this when:
+         This is the catch-all for issues that don't fit rebase, backport,
+         rebuild, or clarification-needed. Use this when:
          * The issue requires specfile adjustments, dependency updates, or other packaging-level work
          * The issue is a QE task, feature request, documentation change, or other non-bug
          * The issue is a duplicate, misassigned, or otherwise needs no work
@@ -310,30 +330,40 @@ TRIAGE_PROMPT = """
 
       **Final Step: Set JIRA Fields (for Rebase, Backport, and Rebuild decisions only)**
 
-         If your decision is rebase, backport, or rebuild, use set_jira_fields tool to update JIRA fields (Severity, Fix Version):
+         If your decision is rebase, backport, or rebuild, use set_jira_fields
+         tool to update JIRA fields (Severity, Fix Version):
          1. Check all of the mentioned fields in the JIRA issue and don't modify those that are already set
-         2. Extract the affected RHEL major version from the JIRA issue (look in Affects Version/s field or issue description)
+         2. Extract the affected RHEL major version from the JIRA issue
+            (look in Affects Version/s field or issue description)
          3. If the Fix Version field is set, do not change it and use its value in the output.
-         4. If the Fix Version field is not set, use the map_version tool with the major version to get available streams
+         4. If the Fix Version field is not set, use the map_version tool
+            with the major version to get available streams
             and determine appropriate Fix Version:
-             * The tool will return both Y-stream and Z-stream versions (if available) and indicate if it's a maintenance version
+             * The tool will return both Y-stream and Z-stream versions
+               (if available) and indicate if it's a maintenance version
              * For maintenance versions (no Y-stream available):
-               - Critical issues should be fixed (privilege escalation, remote code execution, data loss/corruption, system compromise, regressions, moderate and higher severity CVEs)
+               - Critical issues should be fixed (privilege escalation,
+                 remote code execution, data loss/corruption, system compromise,
+                 regressions, moderate and higher severity CVEs)
                - Non-critical issues should be marked as open-ended-analysis with appropriate reasoning
              * For non-maintenance versions (Y-stream available):
                - Most critical issues (privilege escalation, RCE, data loss, regressions) should use Z-stream
                - Other issues should use Y-stream (e.g. performance, usability issues)
          5. Set non-empty JIRA fields:
-             * Severity: default to 'moderate', for important issues use 'important', for most critical use 'critical' (privilege escalation, RCE, data loss)
+             * Severity: default to 'moderate', for important issues use
+               'important', for most critical use 'critical'
+               (privilege escalation, RCE, data loss)
              * Fix Version: use the appropriate stream version determined from map_version tool result
     """
 
 TRIAGE_PROMPT_ZSTREAM = """
-      You are an agent tasked to analyze Jira issues for RHEL and identify the most efficient path to resolution,
-      whether through a version rebase, a patch backport, or by requesting clarification when blocked.
+      You are an agent tasked to analyze Jira issues for RHEL and identify
+      the most efficient path to resolution, whether through a version rebase,
+      a patch backport, or by requesting clarification when blocked.
 
       **Important**: Focus on bugs, CVEs, and technical defects that need code fixes.
-      QE tasks, feature requests, refactoring, documentation, and other non-bug issues should be marked as "no-action".
+      QE tasks, feature requests, refactoring, documentation,
+      and other non-bug issues should be marked as "no-action".
 
       Goal: Analyze the given issue to determine the correct course of action.
 
@@ -365,7 +395,8 @@ TRIAGE_PROMPT_ZSTREAM = """
          * Confirm the package repository exists by running
            `GIT_TERMINAL_PROMPT=0 git ls-remote https://gitlab.com/redhat/centos-stream/rpms/<package_name>`
          * A successful command (exit code 0) confirms the package exists
-         * If the package does not exist, re-examine the Jira issue for the correct package name and if it is not found,
+         * If the package does not exist, re-examine the Jira issue
+           for the correct package name and if it is not found,
            return error and explicitly state the reason
 
       3. Proceed to decision making process described below.
@@ -392,7 +423,8 @@ TRIAGE_PROMPT_ZSTREAM = """
          2.2. Systematic Source Investigation
          * Identify the official upstream project from two sources:
             * Links from the Jira issue (if any direct upstream links are provided)
-            * Package spec file (<package>.spec) in the GitLab repository: check the URL field or Source0 field for upstream project location
+            * Package spec file (<package>.spec) in the GitLab repository:
+              check the URL field or Source0 field for upstream project location
 
          * Even if the Jira issue provides a direct link to a fix, you need to validate it
          * When no direct link is provided, you must proactively search for fixes - do not give up easily
@@ -415,12 +447,15 @@ TRIAGE_PROMPT_ZSTREAM = """
            - If you can identify specific files, functions, or code sections mentioned in the issue,
              locate them in the source code
            - Use git history (git log, git blame) to examine changes to those specific code areas
-           - Look for commits that modify the problematic code, especially those with relevant keywords in commit messages
+           - Look for commits that modify the problematic code, especially those
+             with relevant keywords in commit messages
            - Check git tags and releases around the time when the issue was likely fixed
            - Search for commits by date ranges when you know approximately when the issue was resolved
-           - Utilize dates strategically in your search if needed, using the version/release date of the package
+           - Utilize dates strategically in your search if needed, using
+             the version/release date of the package
              currently used in RHEL
-             - Focus on fixes that came after the RHEL package version date, as earlier fixes would already be included
+             - Focus on fixes that came after the RHEL package version date,
+               as earlier fixes would already be included
              - For CVEs, use the CVE publication date to narrow down the timeframe for fixes
              - Check upstream release notes and changelogs after the RHEL package version date
 
@@ -441,7 +476,8 @@ TRIAGE_PROMPT_ZSTREAM = """
          * If the content is not a proper patch or doesn't fix the issue, continue searching for other fixes
 
          2.4. Decide the Outcome
-         * If your investigation successfully identifies a specific fix that passes both validations in step 2.3, your decision is backport
+         * If your investigation successfully identifies a specific fix that
+           passes both validations in step 2.3, your decision is backport
          * You must be able to justify why the patch is correct and how it addresses the issue
          * If your investigation confirms a valid bug/CVE but fails to locate a specific fix, your decision
            is clarification-needed
@@ -465,30 +501,35 @@ TRIAGE_PROMPT_ZSTREAM = """
 
       **Final Step: Set JIRA Fields (for Rebase and Backport decisions only)**
 
-         If your decision is rebase or backport, use set_jira_fields tool to update JIRA fields (Severity, Fix Version):
+         If your decision is rebase or backport, use set_jira_fields tool
+         to update JIRA fields (Severity, Fix Version):
          1. Check all of the mentioned fields in the JIRA issue and don't modify those that are already set
-         2. Extract the affected RHEL major version from the JIRA issue (look in Affects Version/s field or issue description)
+         2. Extract the affected RHEL major version from the JIRA issue
+            (look in Affects Version/s field or issue description)
          3. If the Fix Version field is set, do not change it and use its value in the output.
-         4. If the Fix Version field is not set, use the map_version tool with the major version to get available streams
+         4. If the Fix Version field is not set, use the map_version tool
+            with the major version to get available streams
             and determine appropriate Fix Version:
-             * The tool will return both Y-stream and Z-stream versions (if available) and indicate if it's a maintenance version
+             * The tool will return both Y-stream and Z-stream versions
+               (if available) and indicate if it's a maintenance version
              * For maintenance versions (no Y-stream available):
-               - Critical issues should be fixed (privilege escalation, remote code execution, data loss/corruption, system compromise, regressions, moderate and higher severity CVEs)
+               - Critical issues should be fixed (privilege escalation,
+                 remote code execution, data loss/corruption, system compromise,
+                 regressions, moderate and higher severity CVEs)
                - Non-critical issues should be marked as no-action with appropriate reasoning
              * For non-maintenance versions (Y-stream available):
                - Most critical issues (privilege escalation, RCE, data loss, regressions) should use Z-stream
                - Other issues should use Y-stream (e.g. performance, usability issues)
          5. Set non-empty JIRA fields:
-             * Severity: default to 'moderate', for important issues use 'important', for most critical use 'critical' (privilege escalation, RCE, data loss)
+             * Severity: default to 'moderate', for important issues use
+               'important', for most critical use 'critical'
+               (privilege escalation, RCE, data loss)
              * Fix Version: use the appropriate stream version determined from map_version tool result
     """
 
 
 async def render_prompt(input: InputSchema, fix_version: str | None = None) -> str:
-    if fix_version and await is_older_zstream(fix_version):
-        template = TRIAGE_PROMPT_ZSTREAM
-    else:
-        template = TRIAGE_PROMPT
+    template = TRIAGE_PROMPT_ZSTREAM if fix_version and await is_older_zstream(fix_version) else TRIAGE_PROMPT
     return PromptTemplate(schema=InputSchema, template=template).render(input)
 
 
@@ -504,9 +545,23 @@ def create_triage_agent(gateway_tools):
         name="TriageAgent",
         llm=get_chat_model(),
         tool_call_checker=get_tool_call_checker_config(),
-        tools=[ThinkTool(), RunShellCommandTool(),
-                VersionMapperTool(), UpstreamSearchTool()]
-        + [t for t in gateway_tools if t.name in ["get_jira_details", "set_jira_fields", "get_patch_from_url", "search_jira_issues"]],
+        tools=[
+            ThinkTool(),
+            RunShellCommandTool(),
+            VersionMapperTool(),
+            UpstreamSearchTool(),
+        ]
+        + [
+            t
+            for t in gateway_tools
+            if t.name
+            in [
+                "get_jira_details",
+                "set_jira_fields",
+                "get_patch_from_url",
+                "search_jira_issues",
+            ]
+        ],
         memory=UnconstrainedMemory(),
         requirements=[
             ConditionalRequirement(
@@ -527,10 +582,14 @@ def create_triage_agent(gateway_tools):
         role="Red Hat Enterprise Linux developer",
         instructions=[
             "Be proactive in your search for fixes and do not give up easily.",
-            "For any patch URL that you are proposing for backport, you need to fetch and validate it using get_patch_from_url tool.",
-            "Do not modify the patch URL in your final answer after it has been validated with get_patch_from_url.",
-            "After completing your triage analysis, if your decision is backport or rebase, always set appropriate JIRA fields per the instructions using set_jira_fields tool.",
-        ]
+            "For any patch URL that you are proposing for backport, you need "
+            "to fetch and validate it using get_patch_from_url tool.",
+            "Do not modify the patch URL in your final answer after it has been "
+            "validated with get_patch_from_url.",
+            "After completing your triage analysis, if your decision is backport "
+            "or rebase, always set appropriate JIRA fields per the instructions "
+            "using set_jira_fields tool.",
+        ],
     )
 
 
@@ -546,7 +605,7 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
             result = await run_tool(
                 "check_cve_triage_eligibility",
                 available_tools=gateway_tools,
-                issue_key=state.jira_issue
+                issue_key=state.jira_issue,
             )
             state.cve_eligibility_result = CVEEligibilityResult.model_validate(result)
 
@@ -561,23 +620,27 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
                     )
                     return "run_triage_analysis"
 
-                logger.info(f"Issue {state.jira_issue} not eligible for triage: {state.cve_eligibility_result.reason}")
+                logger.info(
+                    f"Issue {state.jira_issue} not eligible for triage: {state.cve_eligibility_result.reason}"
+                )
                 if state.cve_eligibility_result.error:
                     state.triage_result = OutputSchema(
-                    resolution=Resolution.ERROR,
-                    data=ErrorData(
-                        details=f"CVE eligibility check error: {state.cve_eligibility_result.error}",
-                        jira_issue=state.jira_issue
+                        resolution=Resolution.ERROR,
+                        data=ErrorData(
+                            details=f"CVE eligibility check error: {state.cve_eligibility_result.error}",
+                            jira_issue=state.jira_issue,
+                        ),
                     )
-                )
                 else:
                     state.triage_result = OutputSchema(
                         resolution=Resolution.OPEN_ENDED_ANALYSIS,
                         data=OpenEndedAnalysisData(
-                            summary=f"CVE eligibility check decided to skip triaging: {state.cve_eligibility_result.reason}",
-                            recommendation="No action needed — this issue is not eligible for triage processing.",
-                            jira_issue=state.jira_issue
-                        )
+                            summary="CVE eligibility check decided to skip "
+                            f"triaging: {state.cve_eligibility_result.reason}",
+                            recommendation="No action needed — this issue "
+                            "is not eligible for triage processing.",
+                            jira_issue=state.jira_issue,
+                        ),
                     )
                 return "comment_in_jira"
 
@@ -595,7 +658,7 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
                 jira_details = await run_tool(
                     "get_jira_details",
                     available_tools=gateway_tools,
-                    issue_key=state.jira_issue
+                    issue_key=state.jira_issue,
                 )
                 fix_versions = jira_details.get("fields", {}).get("fixVersions", [])
                 if fix_versions:
@@ -618,9 +681,12 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
                     The final answer must fulfill the following.
 
                     **Important Formatting Rules:**
-                    - The top-level output must be a JSON object with two keys: `resolution` (a string) and `data` (an object).
-                    - The `data` field MUST be a nested JSON object. **It must not be a stringified JSON object.**
-                    - The structure of the `data` object must match the schema corresponding to the chosen `resolution`.
+                    - The top-level output must be a JSON object with two keys:
+                      `resolution` (a string) and `data` (an object).
+                    - The `data` field MUST be a nested JSON object.
+                      **It must not be a stringified JSON object.**
+                    - The structure of the `data` object must match the schema
+                      corresponding to the chosen `resolution`.
 
                     **Correct example for a 'backport' resolution:**
                     ```json
@@ -651,12 +717,17 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
 
             if state.triage_result.resolution == Resolution.REBASE:
                 return "verify_rebase_author"
-            elif state.triage_result.resolution in [Resolution.BACKPORT, Resolution.REBUILD]:
+            if state.triage_result.resolution in [
+                Resolution.BACKPORT,
+                Resolution.REBUILD,
+            ]:
                 return "determine_target_branch"
-            elif state.triage_result.resolution in [Resolution.CLARIFICATION_NEEDED, Resolution.OPEN_ENDED_ANALYSIS]:
+            if state.triage_result.resolution in [
+                Resolution.CLARIFICATION_NEEDED,
+                Resolution.OPEN_ENDED_ANALYSIS,
+            ]:
                 return "comment_in_jira"
-            else:
-                return Workflow.END
+            return Workflow.END
 
         async def determine_target_branch_step(state):
             """Determine target branch for rebase/backport decisions"""
@@ -664,7 +735,7 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
 
             state.target_branch = await determine_target_branch(
                 cve_eligibility_result=state.cve_eligibility_result,
-                triage_data=state.triage_result.data
+                triage_data=state.triage_result.data,
             )
 
             if state.target_branch:
@@ -681,32 +752,39 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
             is_rh_employee = await run_tool(
                 "verify_issue_author",
                 available_tools=gateway_tools,
-                issue_key=state.jira_issue
+                issue_key=state.jira_issue,
             )
 
             issue_status = await run_tool(
                 "get_jira_details",
                 available_tools=gateway_tools,
-                issue_key=state.jira_issue
+                issue_key=state.jira_issue,
             )
             issue_status = issue_status.get("fields", {}).get("status", {}).get("name")
 
             if not is_rh_employee and issue_status == "New":
-                logger.warning(f"Issue author for {state.jira_issue} is not verified as RH employee - ending triage with clarification needed")
+                logger.warning(
+                    f"Issue author for {state.jira_issue} is not verified as "
+                    "RH employee - ending triage with clarification needed"
+                )
 
                 # override triage result with clarification needed so that it gets reviewed by us
                 state.triage_result = OutputSchema(
                     resolution=Resolution.CLARIFICATION_NEEDED,
                     data=ClarificationNeededData(
                         findings="The rebase resolution was determined, but author verification failed.",
-                        additional_info_needed="Needs human review, as the issue author is not verified as a Red Hat employee.",
-                        jira_issue=state.jira_issue
-                    )
+                        additional_info_needed="Needs human review, as the issue "
+                        "author is not verified as a Red Hat employee.",
+                        jira_issue=state.jira_issue,
+                    ),
                 )
 
                 return "comment_in_jira"
 
-            logger.info(f"Issue author for {state.jira_issue} verified as RH employee or issue is not in new status - proceeding with rebase")
+            logger.info(
+                f"Issue author for {state.jira_issue} verified as RH employee "
+                "or issue is not in new status - proceeding with rebase"
+            )
 
             return "determine_target_branch"
 
@@ -744,7 +822,13 @@ async def main() -> None:
 
     if jira_issue := os.getenv("JIRA_ISSUE", None):
         logger.info("Running in direct mode with environment variable")
-        state = await run_workflow(jira_issue, dry_run, create_triage_agent, auto_chain=auto_chain, force_cve_triage=force_cve_triage)
+        state = await run_workflow(
+            jira_issue,
+            dry_run,
+            create_triage_agent,
+            auto_chain=auto_chain,
+            force_cve_triage=force_cve_triage,
+        )
         logger.info(f"Direct run completed: {state.triage_result.model_dump_json(indent=4)}")
         if state.cve_eligibility_result:
             logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
@@ -769,9 +853,9 @@ async def main() -> None:
 
             task = Task.model_validate_json(payload)
             input = InputSchema.model_validate(task.metadata)
-            logger.info(f"Processing triage for JIRA issue: {input.issue}, " f"attempt: {task.attempts + 1}")
+            logger.info(f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}")
 
-            async def retry(task, error):
+            async def retry(task, error, input=input):
                 task.attempts += 1
                 if task.attempts < max_retries:
                     logger.warning(
@@ -781,13 +865,13 @@ async def main() -> None:
                     await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
                 else:
                     logger.error(
-                        f"Task failed after {max_retries} attempts, " f"moving to error list: {input.issue}"
+                        f"Task failed after {max_retries} attempts, moving to error list: {input.issue}"
                     )
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
                         labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run
+                        dry_run=dry_run,
                     )
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
@@ -795,16 +879,26 @@ async def main() -> None:
                 await tasks.set_jira_labels(
                     jira_issue=input.issue,
                     labels_to_add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                    labels_to_remove=[l for l in JiraLabels.all_labels() if l != JiraLabels.TRIAGE_IN_PROGRESS.value],
-                    dry_run=dry_run
+                    labels_to_remove=[
+                        label
+                        for label in JiraLabels.all_labels()
+                        if label != JiraLabels.TRIAGE_IN_PROGRESS.value
+                    ],
+                    dry_run=dry_run,
                 )
                 logger.info(f"Cleaned up existing labels for {input.issue}")
 
                 logger.info(f"Starting triage processing for {input.issue}")
-                state = await run_workflow(input.issue, dry_run, create_triage_agent, auto_chain=auto_chain, force_cve_triage=input.force_cve_triage)
+                state = await run_workflow(
+                    input.issue,
+                    dry_run,
+                    create_triage_agent,
+                    auto_chain=auto_chain,
+                    force_cve_triage=input.force_cve_triage,
+                )
                 output = state.triage_result
                 logger.info(
-                    f"Triage processing completed for {input.issue}, " f"resolution: {output.resolution.value}"
+                    f"Triage processing completed for {input.issue}, resolution: {output.resolution.value}"
                 )
                 if state.cve_eligibility_result:
                     logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
@@ -814,7 +908,10 @@ async def main() -> None:
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during triage processing for {input.issue}: {error}")
-                await retry(task, ErrorData(details=error, jira_issue=input.issue).model_dump_json())
+                await retry(
+                    task,
+                    ErrorData(details=error, jira_issue=input.issue).model_dump_json(),
+                )
             else:
                 if output.resolution == Resolution.REBASE:
                     logger.info(f"Triage resolved as REBASE for {input.issue}")
@@ -822,7 +919,7 @@ async def main() -> None:
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGED_REBASE.value],
                         labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run
+                        dry_run=dry_run,
                     )
                     if auto_chain:
                         task = Task(metadata=state.model_dump())
@@ -837,7 +934,7 @@ async def main() -> None:
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGED_BACKPORT.value],
                         labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run
+                        dry_run=dry_run,
                     )
                     if auto_chain:
                         task = Task(metadata=state.model_dump())
@@ -851,7 +948,7 @@ async def main() -> None:
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGED_REBUILD.value],
-                        dry_run=dry_run
+                        dry_run=dry_run,
                     )
                     if auto_chain:
                         task = Task(metadata=state.model_dump())
@@ -866,11 +963,16 @@ async def main() -> None:
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.NEEDS_ATTENTION.value],
                         labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run
+                        dry_run=dry_run,
                     )
                     if auto_chain:
                         task = Task(metadata=state.model_dump())
-                        await fix_await(redis.lpush(RedisQueues.CLARIFICATION_NEEDED_QUEUE.value, task.model_dump_json()))
+                        await fix_await(
+                            redis.lpush(
+                                RedisQueues.CLARIFICATION_NEEDED_QUEUE.value,
+                                task.model_dump_json(),
+                            )
+                        )
                         logger.info(f"Pushed {input.issue} to {RedisQueues.CLARIFICATION_NEEDED_QUEUE.value}")
                     else:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
@@ -880,10 +982,15 @@ async def main() -> None:
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGED.value],
                         labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run
+                        dry_run=dry_run,
                     )
                     if auto_chain:
-                        await fix_await(redis.lpush(RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value, output.data.model_dump_json()))
+                        await fix_await(
+                            redis.lpush(
+                                RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value,
+                                output.data.model_dump_json(),
+                            )
+                        )
                         logger.info(f"Pushed {input.issue} to {RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value}")
                     else:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
@@ -893,7 +1000,7 @@ async def main() -> None:
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
                         labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run
+                        dry_run=dry_run,
                     )
                     await retry(task, output.data.model_dump_json())
 

@@ -2,16 +2,15 @@ import pytest
 
 from ymir.supervisor import compare_xunit
 from ymir.supervisor.compare_xunit import (
-    XUnitTestCaseComparison,
-    XUnitTestCaseResult,
     XUnitComparison,
     XUnitComparisonCounts,
     XUnitComparisonStatus,
     XUnitParseError,
+    XUnitTestCaseComparison,
+    XUnitTestCaseResult,
     compare_xunit_files,
     parse_xunit,
 )
-
 
 # Test fixtures - minimal but realistic XUnit XML examples
 
@@ -286,9 +285,7 @@ class TestCompareXunitFiles:
 
         create_mock_http_session([xunit_xml_1, xunit_xml_2], monkeypatch)
 
-        result = await compare_xunit_files(
-            "https://example.com/file1.xml", "https://example.com/file2.xml"
-        )
+        result = await compare_xunit_files("https://example.com/file1.xml", "https://example.com/file2.xml")
 
         # Check the count for the expected category
         assert getattr(result.total_counts, expected_category) == 1
@@ -319,9 +316,7 @@ class TestCompareXunitFiles:
 
         create_mock_http_session([xunit_xml_1, xunit_xml_2], monkeypatch)
 
-        result = await compare_xunit_files(
-            "https://example.com/file1.xml", "https://example.com/file2.xml"
-        )
+        result = await compare_xunit_files("https://example.com/file1.xml", "https://example.com/file2.xml")
 
         # case1: PASS -> PASS = WORKS
         # case2: PASS -> MISSING = DIFFERENCE
@@ -331,12 +326,8 @@ class TestCompareXunitFiles:
         assert len(result.difference) == 2
 
         # Verify one has MISSING in file b, one has MISSING in file a
-        missing_in_file_b = [
-            d for d in result.difference if d.result_b == XUnitTestCaseResult.MISSING
-        ]
-        missing_in_file_a = [
-            d for d in result.difference if d.result_a == XUnitTestCaseResult.MISSING
-        ]
+        missing_in_file_b = [d for d in result.difference if d.result_b == XUnitTestCaseResult.MISSING]
+        missing_in_file_a = [d for d in result.difference if d.result_a == XUnitTestCaseResult.MISSING]
         assert len(missing_in_file_b) == 1
         assert len(missing_in_file_a) == 1
 
@@ -398,9 +389,7 @@ class TestCompareXunitFiles:
 
         create_mock_http_session([xunit_xml_1, xunit_xml_2], monkeypatch)
 
-        result = await compare_xunit_files(
-            "https://example.com/file1.xml", "https://example.com/file2.xml"
-        )
+        result = await compare_xunit_files("https://example.com/file1.xml", "https://example.com/file2.xml")
 
         assert result.total_counts.works == 1
         assert result.total_counts.regression == 1
@@ -422,12 +411,8 @@ class TestCompareXunitFiles:
 
         create_mock_http_session([xunit_xml_1, xunit_xml_2], monkeypatch)
 
-        with pytest.raises(
-            ValueError, match="XUnit files contain different test suites"
-        ):
-            await compare_xunit_files(
-                "https://example.com/file1.xml", "https://example.com/file2.xml"
-            )
+        with pytest.raises(ValueError, match="XUnit files contain different test suites"):
+            await compare_xunit_files("https://example.com/file1.xml", "https://example.com/file2.xml")
 
     @pytest.mark.asyncio
     async def test_compare_multiple_suites_same_tests(self, monkeypatch):
@@ -460,9 +445,7 @@ class TestCompareXunitFiles:
 
         create_mock_http_session([xunit_xml, xunit_xml], monkeypatch)
 
-        result = await compare_xunit_files(
-            "https://example.com/file1.xml", "https://example.com/file2.xml"
-        )
+        result = await compare_xunit_files("https://example.com/file1.xml", "https://example.com/file2.xml")
 
         # Both suites have the same test passing in both files
         assert result.total_counts.works == 2
@@ -489,9 +472,7 @@ class TestXUnitComparisonOutput:
     def test_xunit_comparison_default_values(self):
         """Test that XUnitComparison has correct default values."""
         comparison = XUnitComparison(
-            status=XUnitComparisonStatus(
-                generated=True, reason="Comparison generated successfully"
-            )
+            status=XUnitComparisonStatus(generated=True, reason="Comparison generated successfully")
         )
         assert comparison.status.generated is True
         assert comparison.status.reason == "Comparison generated successfully"
@@ -504,9 +485,7 @@ class TestXUnitComparisonOutput:
     def test_xunit_comparison_to_toml(self):
         """Test TOML output generation with multiple entries and empty list removal."""
         comparison = XUnitComparison(
-            status=XUnitComparisonStatus(
-                generated=True, reason="Comparison generated successfully"
-            )
+            status=XUnitComparisonStatus(generated=True, reason="Comparison generated successfully")
         )
         comparison.total_counts.works = 10
         comparison.total_counts.regression = 2
@@ -586,9 +565,7 @@ class TestXUnitComparisonOutput:
     def test_xunit_comparison_empty_total_counts_removed_from_toml(self):
         """Test that total_counts is removed from TOML when all counts are 0."""
         comparison = XUnitComparison(
-            status=XUnitComparisonStatus(
-                generated=False, reason="XUnit results missing for runs A and B"
-            ),
+            status=XUnitComparisonStatus(generated=False, reason="XUnit results missing for runs A and B"),
             metadata={"build_a": "build1", "build_b": "build2"},
         )
 

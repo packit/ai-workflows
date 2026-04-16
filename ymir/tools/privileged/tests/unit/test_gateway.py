@@ -1,4 +1,5 @@
-""" Unit tests for mcp_server/gateway.py """
+"""Unit tests for mcp_server/gateway.py"""
+
 import pytest
 
 from ymir.tools.privileged.gateway import _redact
@@ -17,7 +18,10 @@ class TestRedactFunction:
 
     def test_redact_anthropic_api_key(self):
         """Test redaction of Anthropic API key."""
-        text = "Key: sk-ant-api03-BDbG2jaStLaS_yflKC9aEuAUWsPR8fLGir3rnUYptbp34Vxj80000Pq5azVXQ6LzeXYM--yDbNVZeaY6uAqVXQ-XVDKQgAA"
+        text = (
+            "Key: sk-ant-api03-BDbG2jaStLaS_yflKC9aEuAUWsPR8fLGir3rnUYptbp34"
+            "Vxj80000Pq5azVXQ6LzeXYM--yDbNVZeaY6uAqVXQ-XVDKQgAA"  # pragma: allowlist secret
+        )
         result = _redact(text)
         assert "sk-ant-" not in result
         assert "[REDACTED]" in result
@@ -51,13 +55,14 @@ class TestRedactFunction:
     def test_redact_generic_token_patterns(self, text: str):
         """Test redaction of generic token/key/password patterns."""
         result = _redact(text)
-        assert "[REDACTED]" == result, f"Failed to redact: {text}"
+        assert result == "[REDACTED]", f"Failed to redact: {text}"
 
     def test_redact_multiple_credentials(self):
         """Test redaction of multiple credentials in the same text."""
         text = (
             "Using token glpat-abc123456789012345678901234 "
-            "and API key sk-ant-api03-xyz789012345678901234567890123456789012345678901234567890123456789012345678901234567890 "
+            "and API key sk-ant-api03-xyz78901234567890123456789012345678901234567890"
+            "1234567890123456789012345678901234567890 "
             "to access gitlab.com"
         )
         result = _redact(text)
@@ -106,7 +111,9 @@ class TestRedactFunction:
 
     def test_redact_real_world_example_git_url(self):
         """Test redaction in a real-world git command output scenario."""
-        text = "Fetching from https://oauth2:glpat-xyz123456789012345678901234@gitlab.com/redhat/rhel/rpms/bash"
+        text = (
+            "Fetching from https://oauth2:glpat-xyz123456789012345678901234@gitlab.com/redhat/rhel/rpms/bash"
+        )
         result = _redact(text)
         assert "glpat-" not in result
         assert "[REDACTED]" in result
@@ -138,7 +145,8 @@ class TestRedactFunction:
         """Test redaction when multiple different credential patterns appear in one line."""
         text = (
             "Authenticating with gitlab token glpat-abc123456789012345678901234 "
-            "and anthropic key sk-ant-api03-xyz789012345678901234567890123456789012345678901234567890123456789012345678901234567890 "
+            "and anthropic key sk-ant-api03-xyz789012345678901234567890123456789"
+            "01234567890123456789012345678901234567890123456789012 "
             "and google key AIzaSyCrbXLEWFA45Jnl1500000DwBF2p7_94Mo"
         )
         result = _redact(text)
@@ -156,7 +164,9 @@ class TestRedactFunction:
 
     def test_redact_jira_cloud_token(self):
         """Test redaction of Jira Cloud API token (ATATT3x... pattern)."""
-        text = "JIRA_API_TOKEN=ATATT3xFfGF0Z123456788888888YjRhMC1hZGY5MjYxNzQ5OTk"  # pragma: allowlist secret
+        text = (
+            "JIRA_API_TOKEN=ATATT3xFfGF0Z123456788888888YjRhMC1hZGY5MjYxNzQ5OTk"  # pragma: allowlist secret
+        )
         result = _redact(text)
         assert "ATATT3x" not in result
         assert "[REDACTED]" in result

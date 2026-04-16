@@ -8,15 +8,21 @@ from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import rpm
-from beeai_framework.tools import ToolError, Tool, ToolRunOptions, StringToolOutput, JSONToolOutput
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
+from beeai_framework.tools import (
+    JSONToolOutput,
+    StringToolOutput,
+    Tool,
+    ToolError,
+    ToolRunOptions,
+)
 from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
 from pydantic import BaseModel, Field
 
 from ymir.common import load_rhel_config
 from ymir.common.constants import AIOHTTP_TIMEOUT
-from ymir.common.utils import init_kerberos_ticket, KerberosError
+from ymir.common.utils import KerberosError, init_kerberos_ticket
 from ymir.common.validators import AbsolutePath
 
 COPR_CONFIG = {
@@ -168,8 +174,10 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                     logger.error(f"Failed to get built packages for Copr build {build.id:08d}: {e}")
                     built_packages = None
                 artifacts = ["builder-live.log.gz", "root.log.gz"]
-                for nevra in (built_packages or {}).get(chroot, {}).get("packages", []):
-                    artifacts.append("{name}-{version}-{release}.{arch}.rpm".format(**nevra))
+                artifacts.extend(
+                    "{name}-{version}-{release}.{arch}.rpm".format(**nevra)
+                    for nevra in (built_packages or {}).get(chroot, {}).get("packages", [])
+                )
                 return [urljoin(baseurl, f) for f in artifacts]
             return None
 
@@ -198,7 +206,9 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                     logger.info(message)
                     return BuildPackageToolOutput(
                         result=BuildResult(
-                            success=False, error_message=message, artifacts_urls=await get_artifacts_urls(build)
+                            success=False,
+                            error_message=message,
+                            artifacts_urls=await get_artifacts_urls(build),
                         )
                     )
 
@@ -238,9 +248,7 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
         majorver, minorver = m.group(1) or m.group(2) or m.group(3), m.group(4)
         # build Y-Streams and 0-day Z-Streams against the dev chroot
         if minorver is not None:
-            if (ver := upcoming_z_streams.get(majorver)) and ver.startswith(
-                f"rhel-{majorver}.{minorver}"
-            ):
+            if (ver := upcoming_z_streams.get(majorver)) and ver.startswith(f"rhel-{majorver}.{minorver}"):
                 suffix = ".dev"
             else:
                 suffix = ""
@@ -257,8 +265,10 @@ class DownloadArtifactsToolInput(BaseModel):
 class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, StringToolOutput]):
     name = "download_artifacts"
     description = """
-    Downloads build artifacts to the specified location. Any gzipped log files will be automatically decompressed,
-    for example `http://example.com/builder-live.log.gz` will be downloaded as `builder-live.log`.
+    Downloads build artifacts to the specified location.
+    Any gzipped log files will be automatically decompressed,
+    for example `http://example.com/builder-live.log.gz`
+    will be downloaded as `builder-live.log`.
     """
     input_schema = DownloadArtifactsToolInput
 
@@ -293,6 +303,6 @@ class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, Str
                             (target_path / target).write_bytes(content)
                         else:
                             raise ToolError(f"Failed to download {url}: {response.status} {response.reason}")
-                except asyncio.TimeoutError as e:
+                except TimeoutError as e:
                     raise ToolError(f"Failed to download {url}: timed out") from e
         return StringToolOutput(result="Successfully downloaded the specified build artifacts")

@@ -7,8 +7,6 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
-
 from beeai_framework.agents.requirement import RequirementAgent
 from beeai_framework.agents.requirement.prompts import RequirementAgentSystemPrompt
 from beeai_framework.agents.requirement.requirements.conditional import (
@@ -21,11 +19,23 @@ from beeai_framework.tools import Tool
 from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
+from pydantic import Field
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import create_build_agent, get_prompt as get_build_prompt
-from ymir.agents.log_agent import create_log_agent, get_prompt as get_log_prompt
-from ymir.agents.package_update_steps import PackageUpdateStep, PackageUpdateState
+from ymir.agents.build_agent import create_build_agent
+from ymir.agents.build_agent import get_prompt as get_build_prompt
+from ymir.agents.constants import I_AM_YMIR, MR_DESCRIPTION_FOOTER
+from ymir.agents.log_agent import create_log_agent
+from ymir.agents.log_agent import get_prompt as get_log_prompt
+from ymir.agents.observability import setup_observability
+from ymir.agents.package_update_steps import PackageUpdateState, PackageUpdateStep
+from ymir.agents.utils import (
+    get_agent_execution_config,
+    get_chat_model,
+    get_tool_call_checker_config,
+    mcp_tools,
+    render_prompt,
+)
 from ymir.common.config import get_package_instructions
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import (
@@ -39,20 +49,17 @@ from ymir.common.models import (
     RebaseOutputSchema,
     Task,
 )
-from ymir.common.utils import redis_client, fix_await, is_cs_branch
-from ymir.agents.constants import I_AM_YMIR, MR_DESCRIPTION_FOOTER
-from ymir.agents.observability import setup_observability
+from ymir.common.utils import fix_await, is_cs_branch, redis_client
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
 from ymir.tools.unprivileged.text import (
     CreateTool,
     InsertAfterSubstringTool,
     InsertTool,
+    SearchTextTool,
     StrReplaceTool,
     ViewTool,
-    SearchTextTool,
 )
-from ymir.agents.utils import get_agent_execution_config, get_chat_model, get_tool_call_checker_config, mcp_tools, render_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +89,12 @@ def get_instructions() -> str:
       5. Download upstream sources using `spectool -g -S <PACKAGE>.spec`.
          Run `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
          to see if everything is in order. It is possible that some *.patch files will fail to apply now
-         that the spec file has been updated. Don't jump to conclusions - if one patch fails to apply, it doesn't mean
-         all other patches fail to apply as well. Go through the errors one by one, fix them and verify the changes
-         by running `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` again.
+         that the spec file has been updated. Don't jump to conclusions -
+         if one patch fails to apply, it doesn't mean all other patches fail
+         to apply as well. Go through the errors one by one, fix them and
+         verify the changes by running
+         `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
+         again.
          Repeat as necessary. Do not remove any patches unless all their hunks have been already applied
          to the upstream sources.
          Note: <PKG_TOOL> is `centpkg` for CentOS Stream branches (c9s, c10s) and `rhpkg` for RHEL branches.
@@ -92,14 +102,19 @@ def get_instructions() -> str:
       6. Upload new upstream sources (files that the `spectool` command downloaded in the previous step)
          to lookaside cache using the `upload_sources` tool.
 
-      7. If you removed any patch file references from the spec file (e.g. because they were already applied upstream),
+      7. If you removed any patch file references from the spec file
+         (e.g. because they were already applied upstream),
          you must remove all the corresponding patch files from the repository as well.
 
-      8. Generate a SRPM using `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+      8. Generate a SRPM using
+         `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
 
-      9. In your output, provide a "files_to_git_add" list containing all files that should be git added for this rebase.
-         This typically includes the updated spec file and any new/modified/deleted patch files or other files you've changed
-         or added/removed during the rebase. Do not include files that were automatically generated or downloaded by spectool.
+      9. In your output, provide a "files_to_git_add" list containing all files
+         that should be git added for this rebase.
+         This typically includes the updated spec file and any new/modified/deleted
+         patch files or other files you've changed or added/removed during
+         the rebase. Do not include files that were automatically generated
+         or downloaded by spectool.
          Make sure to include patch files that were also removed from the spec file.
 
 
@@ -110,9 +125,11 @@ def get_instructions() -> str:
       - Preserve existing formatting and style conventions in spec files and patch headers.
       - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
       - If there are package-specific instructions, incorporate them into your work.
-      - If the package calls `autoreconf` in `%prep` and the rebase fails because of a version constraint,
+      - If the package calls `autoreconf` in `%prep` and the rebase fails
+        because of a version constraint,
         try removing that constraint, but never remove the `autoreconf` call.
-      - If a rebase to <VERSION> was done in Fedora, use that as the primary reference and include all changes,
+      - If a rebase to <VERSION> was done in Fedora, use that as the primary
+        reference and include all changes,
         even if they may seem irrelevant - they are there for a reason.
     """
 
@@ -125,15 +142,17 @@ def get_prompt() -> str:
 
       {{#fedora_clone}}
       Additionally, you have access to the corresponding Fedora repository (rawhide branch) at {{.}}.
-      This can be used as a reference for comparing package versions, spec files, patches, and other packaging details
-      when explicitly instructed to do so.
+      This can be used as a reference for comparing package versions, spec
+      files, patches, and other packaging details when explicitly instructed
+      to do so.
       {{/fedora_clone}}
 
       {{^build_error}}
       Rebase the package to version {{version}}.
       {{#package_instructions}}
 
-      **Package-specific instructions (these are important to follow, incorporate them into your workflow reasonably):**
+      **Package-specific instructions (these are important to follow,
+      incorporate them into your workflow reasonably):**
       {{.}}
       {{/package_instructions}}
       {{/build_error}}
@@ -165,7 +184,8 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
             SearchTextTool(options=local_tool_options),
             GetCWDTool(options=local_tool_options),
             RemoveTool(options=local_tool_options),
-        ] + [t for t in mcp_tools if t.name == "upload_sources"],
+        ]
+        + [t for t in mcp_tools if t.name == "upload_sources"],
         memory=UnconstrainedMemory(),
         requirements=[
             ConditionalRequirement(
@@ -204,9 +224,7 @@ async def main() -> None:
         attempts_remaining: int = Field(default=max_build_attempts)
         all_files_git_to_add: set[str] = Field(default_factory=set)
 
-    async def run_workflow(
-        package, dist_git_branch, version, jira_issue, redis_conn=None
-    ):
+    async def run_workflow(package, dist_git_branch, version, jira_issue, redis_conn=None):
         local_tool_options["working_directory"] = None
 
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
@@ -231,7 +249,12 @@ async def main() -> None:
                 return "fork_and_prepare_dist_git"
 
             async def fork_and_prepare_dist_git(state):
-                state.local_clone, state.update_branch, state.fork_url, state.fedora_clone = await tasks.fork_and_prepare_dist_git(
+                (
+                    state.local_clone,
+                    state.update_branch,
+                    state.fork_url,
+                    state.fedora_clone,
+                ) = await tasks.fork_and_prepare_dist_git(
                     jira_issue=state.jira_issue,
                     package=state.package,
                     dist_git_branch=state.dist_git_branch,
@@ -365,7 +388,10 @@ async def main() -> None:
 
             async def commit_push_and_open_mr(state):
                 try:
-                    state.merge_request_url, state.merge_request_newly_created = await tasks.commit_push_and_open_mr(
+                    (
+                        state.merge_request_url,
+                        state.merge_request_newly_created,
+                    ) = await tasks.commit_push_and_open_mr(
                         local_clone=state.local_clone,
                         commit_message=(
                             f"{state.log_result.title}\n\n"
@@ -395,16 +421,19 @@ async def main() -> None:
                 return "add_fusa_label"
 
             async def add_fusa_label(state):
-                return await PackageUpdateStep.add_fusa_label(state, "comment_in_jira", dry_run=dry_run, gateway_tools=gateway_tools)
+                return await PackageUpdateStep.add_fusa_label(
+                    state,
+                    "comment_in_jira",
+                    dry_run=dry_run,
+                    gateway_tools=gateway_tools,
+                )
 
             async def comment_in_jira(state):
                 if dry_run:
                     return Workflow.END
                 if state.rebase_result.success:
                     comment_text = (
-                        state.merge_request_url
-                        if state.merge_request_url
-                        else state.rebase_result.status
+                        state.merge_request_url if state.merge_request_url else state.rebase_result.status
                     )
                 else:
                     comment_text = f"Agent failed to perform a rebase: {state.rebase_result.error}"
@@ -459,8 +488,14 @@ async def main() -> None:
         max_retries = int(os.getenv("MAX_RETRIES", 3))
         # Determine which rebase queue to listen to based on container version
         container_version = os.getenv("CONTAINER_VERSION", "c10s")
-        rebase_queue = RedisQueues.REBASE_QUEUE_C9S.value if container_version == "c9s" else RedisQueues.REBASE_QUEUE_C10S.value
-        logger.info(f"Connected to Redis, max retries set to {max_retries}, listening to queue: {rebase_queue}")
+        rebase_queue = (
+            RedisQueues.REBASE_QUEUE_C9S.value
+            if container_version == "c9s"
+            else RedisQueues.REBASE_QUEUE_C10S.value
+        )
+        logger.info(
+            f"Connected to Redis, max retries set to {max_retries}, listening to queue: {rebase_queue}"
+        )
 
         while True:
             logger.info(f"Waiting for tasks from {rebase_queue} (timeout: 30s)...")
@@ -482,7 +517,7 @@ async def main() -> None:
                 f"branch: {dist_git_branch}, attempt: {task.attempts + 1}"
             )
 
-            async def retry(task, error):
+            async def retry(task, error, rebase_data=rebase_data):
                 task.attempts += 1
                 if task.attempts < max_retries:
                     logger.warning(
@@ -499,7 +534,7 @@ async def main() -> None:
                         jira_issue=rebase_data.jira_issue,
                         labels_to_add=[JiraLabels.REBASE_ERRORED.value],
                         labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
-                        dry_run=dry_run
+                        dry_run=dry_run,
                     )
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
@@ -513,16 +548,20 @@ async def main() -> None:
                     redis_conn=redis,
                 )
                 logger.info(
-                    f"Rebase processing completed for {rebase_data.jira_issue}, " f"success: {state.rebase_result.success}"
+                    f"Rebase processing completed for {rebase_data.jira_issue}, "
+                    f"success: {state.rebase_result.success}"
                 )
 
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during rebase processing for {rebase_data.jira_issue}: {error}")
-                await retry(task, ErrorData(details=error, jira_issue=rebase_data.jira_issue).model_dump_json())
+                await retry(
+                    task,
+                    ErrorData(details=error, jira_issue=rebase_data.jira_issue).model_dump_json(),
+                )
             else:
                 if state.rebase_result.success:
-                    logger.info(f"Rebase successful for {rebase_data.jira_issue}, " f"adding to completed list")
+                    logger.info(f"Rebase successful for {rebase_data.jira_issue}, adding to completed list")
                     await tasks.set_jira_labels(
                         jira_issue=rebase_data.jira_issue,
                         labels_to_add=[JiraLabels.REBASED.value],
@@ -531,16 +570,21 @@ async def main() -> None:
                             JiraLabels.REBASE_ERRORED.value,
                             JiraLabels.REBASE_FAILED.value,
                         ],
-                        dry_run=dry_run
+                        dry_run=dry_run,
                     )
-                    await fix_await(redis.lpush(RedisQueues.COMPLETED_REBASE_LIST.value, state.rebase_result.model_dump_json()))
+                    await fix_await(
+                        redis.lpush(
+                            RedisQueues.COMPLETED_REBASE_LIST.value,
+                            state.rebase_result.model_dump_json(),
+                        )
+                    )
                 else:
                     logger.warning(f"Rebase failed for {rebase_data.jira_issue}: {state.rebase_result.error}")
                     await tasks.set_jira_labels(
                         jira_issue=rebase_data.jira_issue,
                         labels_to_add=[JiraLabels.REBASE_FAILED.value],
                         labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
-                        dry_run=dry_run
+                        dry_run=dry_run,
                     )
                     await retry(task, state.rebase_result.error)
 

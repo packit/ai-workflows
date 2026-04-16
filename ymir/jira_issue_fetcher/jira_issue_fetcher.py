@@ -22,40 +22,30 @@ import logging
 import os
 import sys
 import time
-from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Dict, List, Any
+from typing import Any
 from urllib.parse import urljoin
 
+import backoff
 import redis.asyncio as redis
 import requests
-import backoff
 
+from ymir.common.constants import JIRA_SEARCH_PATH, JiraLabels, RedisQueues
 from ymir.common.models import (
+    BackportOutputSchema,
+    ErrorData,
+    OpenEndedAnalysisData,
+    RebaseOutputSchema,
     Task,
     TriageInputSchema,
-    RebaseInputSchema,
-    BackportInputSchema,
-    RebaseOutputSchema,
-    BackportOutputSchema,
-    ClarificationNeededData,
-    OpenEndedAnalysisData,
-    ErrorData
 )
-from ymir.common.utils import redis_client, fix_await, get_jira_auth_headers
-from ymir.common.constants import JiraLabels, JIRA_SEARCH_PATH, RedisQueues
+from ymir.common.utils import fix_await, get_jira_auth_headers, redis_client
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-
-
 class JiraIssueFetcher:
-
     DEFAULT_QUERY = "project=RHEL and assignee = jotnar-project"
     MAX_RESULTS_PER_PAGE = 500  # Optimize for fewer, more expensive calls
     RATE_LIMIT_CALLS_PER_SECOND = 5
@@ -94,18 +84,13 @@ class JiraIssueFetcher:
         (requests.RequestException, requests.HTTPError),
         max_tries=4,  # 1 initial + 3 retries
         base=2,
-        logger=logger
+        logger=logger,
     )
-    def _make_request_with_retries(self, url: str, json_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _make_request_with_retries(self, url: str, json_data: dict[str, Any]) -> dict[str, Any]:
         """
         Make HTTP request with exponential backoff retries
         """
-        response = requests.post(
-            url,
-            json=json_data,
-            headers=self.headers,
-            timeout=self.API_TIMEOUT
-        )
+        response = requests.post(url, json=json_data, headers=self.headers, timeout=self.API_TIMEOUT)
 
         # Handle rate limiting specifically
         if response.status_code == 429:
@@ -115,7 +100,7 @@ class JiraIssueFetcher:
         response.raise_for_status()
         return response.json()
 
-    async def search_issues(self) -> List[Dict[str, Any]]:
+    async def search_issues(self) -> list[dict[str, Any]]:
         """
         Search for issues using the configured query with cursor-based pagination.
         The /rest/api/3/search/jql endpoint uses nextPageToken instead of startAt.
@@ -126,8 +111,8 @@ class JiraIssueFetcher:
         next_page_token = None
 
         fields = [
-            "key",        # Issue key (e.g., RHEL-12345)
-            "labels",     # Issue labels
+            "key",  # Issue key (e.g., RHEL-12345)
+            "labels",  # Issue labels
         ]
 
         while True:
@@ -136,13 +121,15 @@ class JiraIssueFetcher:
             json_payload = {
                 "jql": self.query,
                 "maxResults": self.max_results_per_page,
-                "fields": fields
+                "fields": fields,
             }
 
             if next_page_token:
                 json_payload["nextPageToken"] = next_page_token
 
-            logger.info(f"Fetching issues: maxResults={self.max_results_per_page}, nextPageToken={next_page_token}")
+            logger.info(
+                f"Fetching issues: maxResults={self.max_results_per_page}, nextPageToken={next_page_token}"
+            )
 
             try:
                 url = urljoin(self.jira_url, JIRA_SEARCH_PATH)
@@ -152,7 +139,9 @@ class JiraIssueFetcher:
                 all_issues.extend(issues)
 
                 total_issues = response_data.get("total", len(all_issues))
-                logger.info(f"Retrieved {len(issues)} issues (total so far: {len(all_issues)}/{total_issues})")
+                logger.info(
+                    f"Retrieved {len(issues)} issues (total so far: {len(all_issues)}/{total_issues})"
+                )
 
                 next_page_token = response_data.get("nextPageToken")
                 if not next_page_token or len(issues) == 0:
@@ -169,8 +158,6 @@ class JiraIssueFetcher:
 
         logger.info(f"Successfully retrieved {len(all_issues)} issues")
         return all_issues
-
-
 
     async def _get_existing_issue_keys(self, redis_conn: redis.Redis) -> set[str]:
         """
@@ -200,7 +187,15 @@ class JiraIssueFetcher:
                                         case RedisQueues.TRIAGE_QUEUE.value:
                                             schema = TriageInputSchema.model_validate(task.metadata)
                                             issue_key = schema.issue.upper()
-                                        case RedisQueues.REBASE_QUEUE_C9S.value | RedisQueues.REBASE_QUEUE_C10S.value | RedisQueues.BACKPORT_QUEUE_C9S.value | RedisQueues.BACKPORT_QUEUE_C10S.value | RedisQueues.CLARIFICATION_NEEDED_QUEUE.value | RedisQueues.BACKPORT_QUEUE.value | RedisQueues.REBASE_QUEUE.value:
+                                        case (
+                                            RedisQueues.REBASE_QUEUE_C9S.value
+                                            | RedisQueues.REBASE_QUEUE_C10S.value
+                                            | RedisQueues.BACKPORT_QUEUE_C9S.value
+                                            | RedisQueues.BACKPORT_QUEUE_C10S.value
+                                            | RedisQueues.CLARIFICATION_NEEDED_QUEUE.value
+                                            | RedisQueues.BACKPORT_QUEUE.value
+                                            | RedisQueues.REBASE_QUEUE.value
+                                        ):
                                             issue_key = task.metadata.get("jira_issue", "").upper()
                                         case _:
                                             continue
@@ -253,7 +248,7 @@ class JiraIssueFetcher:
             logger.error(f"Error checking existing queue items: {e}")
             return set()
 
-    async def push_issues_to_queue(self, issues: List[Dict[str, Any]]) -> int:
+    async def push_issues_to_queue(self, issues: list[dict[str, Any]]) -> int:
         """
         Push each issue to the Redis triage_queue, but only if it doesn't already exist
         """
@@ -272,7 +267,7 @@ class JiraIssueFetcher:
                 if issue_key:
                     fields = issue.get("fields", {})
                     labels = fields.get("labels", [])
-                    ymir_labels = [label for label in labels if label.startswith('ymir_')]
+                    ymir_labels = [label for label in labels if label.startswith("ymir_")]
 
                     # If issue has Ymir labels and there is no ymir_retry_needed label, mark as existing
                     if ymir_labels and JiraLabels.RETRY_NEEDED.value not in ymir_labels:

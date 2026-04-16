@@ -1,10 +1,9 @@
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
-
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, Tool, ToolRunOptions
+from pydantic import BaseModel, Field
 
 
 class DistgitDetectorInput(BaseModel):
@@ -12,7 +11,9 @@ class DistgitDetectorInput(BaseModel):
 
 
 class DistgitDetectorResult(BaseModel):
-    is_distgit: bool = Field(description="True if URL is from a dist-git source (Fedora, RHEL, CentOS Stream), False otherwise")
+    is_distgit: bool = Field(
+        description="True if URL is from a dist-git source (Fedora, RHEL, CentOS Stream), False otherwise"
+    )
 
 
 class DistgitDetectorOutput(JSONToolOutput[DistgitDetectorResult]):
@@ -61,7 +62,10 @@ class DistgitDetectorTool(Tool[DistgitDetectorInput, ToolRunOptions, DistgitDete
             return False
 
     async def _run(
-        self, tool_input: DistgitDetectorInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: DistgitDetectorInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> DistgitDetectorOutput:
         is_distgit = self._check_distgit_source(tool_input.url)
 

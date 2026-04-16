@@ -1,9 +1,7 @@
-import re
-from pydantic import BaseModel, Field
-
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
+from pydantic import BaseModel, Field
 
 from ..jira_utils import get_issue_attachment
 

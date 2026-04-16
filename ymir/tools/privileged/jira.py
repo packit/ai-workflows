@@ -7,26 +7,27 @@ from typing import Any
 from urllib.parse import urljoin
 
 import aiohttp
-
-logger = logging.getLogger(__name__)
-
-if os.getenv("MOCK_JIRA", "False").lower() == "true":
-    from ymir.tools.privileged.aiohttp_client_session_mock import aiohttpClientSessionMock as aiohttpClientSession
-else:
-    from aiohttp import ClientSession as aiohttpClientSession
-
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, StringToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import (
+    JSONToolOutput,
+    StringToolOutput,
+    Tool,
+    ToolError,
+    ToolRunOptions,
+)
 from pydantic import BaseModel, Field
 
 from ymir.common import CVEEligibilityResult, load_rhel_config
 from ymir.common.constants import AIOHTTP_TIMEOUT, JIRA_SEARCH_PATH
 from ymir.common.utils import get_jira_auth_headers
 
-def _skip_jira_writes() -> bool:
-    return os.getenv("JIRA_DRY_RUN", "False").lower() == "true"
-
+if os.getenv("MOCK_JIRA", "False").lower() == "true":
+    from ymir.tools.privileged.aiohttp_client_session_mock import (
+        aiohttpClientSessionMock as aiohttpClientSession,
+    )
+else:
+    from aiohttp import ClientSession as aiohttpClientSession
 
 # Jira custom field IDs
 SEVERITY_CUSTOM_FIELD = "customfield_10840"
@@ -34,6 +35,13 @@ TARGET_END_CUSTOM_FIELD = "customfield_10023"
 EMBARGO_CUSTOM_FIELD = "customfield_10860"
 
 RH_EMPLOYEE_GROUP = "Red Hat Employee"
+
+logger = logging.getLogger(__name__)
+
+
+def _skip_jira_writes() -> bool:
+    return os.getenv("JIRA_DRY_RUN", "False").lower() == "true"
+
 
 class Severity(Enum):
     NONE = "None"
@@ -94,7 +102,10 @@ class GetJiraDetailsTool(Tool[GetJiraDetailsToolInput, ToolRunOptions, JSONToolO
 
             try:
                 async with session.get(
-                    urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}/remotelink"),
+                    urljoin(
+                        os.getenv("JIRA_URL"),
+                        f"rest/api/3/issue/{issue_key}/remotelink",
+                    ),
                     headers=headers,
                 ) as remote_links_response:
                     remote_links_response.raise_for_status()
@@ -141,13 +152,17 @@ class SetJiraFieldsTool(Tool[SetJiraFieldsToolInput, ToolRunOptions, StringToolO
         target_end = tool_input.target_end
         if os.getenv("SKIP_SETTING_JIRA_FIELDS", "False").lower() == "true":
             return StringToolOutput(
-                result="Skipping of setting Jira fields requested, not doing anything (this is expected, not an error)"
+                result="Skipping of setting Jira fields requested, "
+                "not doing anything (this is expected, not an error)"
             )
         if os.getenv("DRY_RUN", "False").lower() == "true":
-            return StringToolOutput(result="Dry run, not updating Jira fields (this is expected, not an error)")
+            return StringToolOutput(
+                result="Dry run, not updating Jira fields (this is expected, not an error)"
+            )
         if _skip_jira_writes():
             return StringToolOutput(
-                result=f"JIRA_DRY_RUN is set, not updating fields on {issue_key} (this is expected, not an error)"
+                result=f"JIRA_DRY_RUN is set, not updating fields "
+                f"on {issue_key} (this is expected, not an error)"
             )
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
@@ -232,7 +247,8 @@ class AddJiraCommentTool(Tool[AddJiraCommentToolInput, ToolRunOptions, StringToo
             )
         if _skip_jira_writes():
             return StringToolOutput(
-                result=f"JIRA_DRY_RUN is set, not adding comment to {issue_key} (this is expected, not an error)"
+                result=f"JIRA_DRY_RUN is set, not adding comment "
+                f"to {issue_key} (this is expected, not an error)"
             )
 
         jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/comment")
@@ -243,7 +259,16 @@ class AddJiraCommentTool(Tool[AddJiraCommentToolInput, ToolRunOptions, StringToo
                     jira_url,
                     json={
                         "body": comment,
-                        **({"visibility": {"type": "group", "value": RH_EMPLOYEE_GROUP}} if private else {}),
+                        **(
+                            {
+                                "visibility": {
+                                    "type": "group",
+                                    "value": RH_EMPLOYEE_GROUP,
+                                }
+                            }
+                            if private
+                            else {}
+                        ),
                     },
                     headers=get_jira_auth_headers(),
                 ) as response:
@@ -256,8 +281,13 @@ class AddJiraCommentTool(Tool[AddJiraCommentToolInput, ToolRunOptions, StringToo
 class CheckCveTriageEligibilityToolInput(BaseModel):
     issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
 
+
 class CheckCveTriageEligibilityTool(
-    Tool[CheckCveTriageEligibilityToolInput, ToolRunOptions, JSONToolOutput[CVEEligibilityResult]]
+    Tool[
+        CheckCveTriageEligibilityToolInput,
+        ToolRunOptions,
+        JSONToolOutput[CVEEligibilityResult],
+    ]
 ):
     name = "check_cve_triage_eligibility"
     description = """
@@ -397,11 +427,13 @@ class ChangeJiraStatusTool(Tool[ChangeJiraStatusToolInput, ToolRunOptions, Strin
         status = tool_input.status
         if os.getenv("DRY_RUN", "False").lower() == "true":
             return StringToolOutput(
-                result=f"Dry run, not changing status of {issue_key} to {status}  (this is expected, not an error)"
+                result=f"Dry run, not changing status of {issue_key} "
+                f"to {status} (this is expected, not an error)"
             )
         if _skip_jira_writes():
             return StringToolOutput(
-                result=f"JIRA_DRY_RUN is set, not changing status of {issue_key} (this is expected, not an error)"
+                result=f"JIRA_DRY_RUN is set, not changing status "
+                f"of {issue_key} (this is expected, not an error)"
             )
 
         headers = get_jira_auth_headers()
@@ -446,7 +478,9 @@ class ChangeJiraStatusTool(Tool[ChangeJiraStatusToolInput, ToolRunOptions, Strin
 
             try:
                 async with session.post(
-                    jira_url, json={"transition": {"id": transition["id"]}}, headers=headers
+                    jira_url,
+                    json={"transition": {"id": transition["id"]}},
+                    headers=headers,
                 ) as resp:
                     resp.raise_for_status()
             except aiohttp.ClientError as e:
@@ -458,7 +492,9 @@ class ChangeJiraStatusTool(Tool[ChangeJiraStatusToolInput, ToolRunOptions, Strin
 class EditJiraLabelsToolInput(BaseModel):
     issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
     labels_to_add: list[str] | None = Field(default=None, description="List of labels to add to the issue")
-    labels_to_remove: list[str] | None = Field(default=None, description="List of labels to remove from the issue")
+    labels_to_remove: list[str] | None = Field(
+        default=None, description="List of labels to remove from the issue"
+    )
 
 
 class EditJiraLabelsTool(Tool[EditJiraLabelsToolInput, ToolRunOptions, StringToolOutput]):
@@ -492,7 +528,8 @@ class EditJiraLabelsTool(Tool[EditJiraLabelsToolInput, ToolRunOptions, StringToo
             )
         if _skip_jira_writes():
             return StringToolOutput(
-                result=f"JIRA_DRY_RUN is set, not editing labels on {issue_key} (this is expected, not an error)"
+                result=f"JIRA_DRY_RUN is set, not editing labels "
+                f"on {issue_key} (this is expected, not an error)"
             )
 
         jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}")
@@ -577,7 +614,7 @@ class VerifyIssueAuthorTool(Tool[VerifyIssueAuthorToolInput, ToolRunOptions, JSO
 
             try:
                 async with session.get(
-                    urljoin(os.getenv("JIRA_URL"), f"rest/api/3/user"),
+                    urljoin(os.getenv("JIRA_URL"), "rest/api/3/user"),
                     params=params,
                     headers=headers,
                 ) as user_response:
@@ -595,7 +632,9 @@ class VerifyIssueAuthorTool(Tool[VerifyIssueAuthorToolInput, ToolRunOptions, JSO
 
 class SearchJiraIssuesToolInput(BaseModel):
     jql: str = Field(
-        description='JQL query string (e.g., \'component = "fence-agents" AND summary ~ "fix missing statuses"\')',
+        description=(
+            'JQL query string (e.g., \'component = "fence-agents" AND summary ~ "fix missing statuses"\')'
+        ),
     )
     fields: list[str] | None = Field(
         default=None,
@@ -607,7 +646,9 @@ class SearchJiraIssuesToolInput(BaseModel):
     max_results: int = Field(default=50, description="Maximum number of results to return")
 
 
-class SearchJiraIssuesTool(Tool[SearchJiraIssuesToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]):
+class SearchJiraIssuesTool(
+    Tool[SearchJiraIssuesToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]
+):
     name = "search_jira_issues"
     description = """
     Searches Jira using the provided JQL query and returns matching issues
@@ -696,10 +737,7 @@ async def _fetch_dev_status_details(
         raise ToolError(f"Failed to get dev status summary for {issue_key}: {e}") from e
 
     app_types = list(
-        summary_data.get("summary", {})
-        .get(summary_category, {})
-        .get("byInstanceType", {})
-        .keys()
+        summary_data.get("summary", {}).get(summary_category, {}).get("byInstanceType", {}).keys()
     )
 
     details: list[dict[str, Any]] = []
@@ -728,7 +766,9 @@ class GetJiraDevStatusToolInput(BaseModel):
     issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
 
 
-class GetJiraDevStatusTool(Tool[GetJiraDevStatusToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]):
+class GetJiraDevStatusTool(
+    Tool[GetJiraDevStatusToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]
+):
     name = "get_jira_dev_status"
     description = """
     Gets development status (linked commits) for a Jira issue using the
@@ -756,20 +796,24 @@ class GetJiraDevStatusTool(Tool[GetJiraDevStatusToolInput, ToolRunOptions, JSONT
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             details = await _fetch_dev_status_details(
-                session, issue_key, headers, jira_base,
-                summary_category="repository", data_type="repository",
+                session,
+                issue_key,
+                headers,
+                jira_base,
+                summary_category="repository",
+                data_type="repository",
             )
 
-        commits = []
-        for detail in details:
-            for repo in detail.get("repositories", []):
-                repo_url = repo.get("url", "")
-                for commit in repo.get("commits", []):
-                    commits.append({
-                        "url": commit.get("url", ""),
-                        "message": commit.get("message", ""),
-                        "repository_url": repo_url,
-                    })
+        commits = [
+            {
+                "url": commit.get("url", ""),
+                "message": commit.get("message", ""),
+                "repository_url": repo.get("url", ""),
+            }
+            for detail in details
+            for repo in detail.get("repositories", [])
+            for commit in repo.get("commits", [])
+        ]
 
         logger.info(f"Found {len(commits)} commits in development status for {issue_key}")
         return JSONToolOutput(result=commits)
@@ -779,7 +823,13 @@ class GetJiraPullRequestsToolInput(BaseModel):
     issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
 
 
-class GetJiraPullRequestsTool(Tool[GetJiraPullRequestsToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]):
+class GetJiraPullRequestsTool(
+    Tool[
+        GetJiraPullRequestsToolInput,
+        ToolRunOptions,
+        JSONToolOutput[list[dict[str, Any]]],
+    ]
+):
     name = "get_jira_pull_requests"
     description = """
     Gets pull/merge requests linked to a Jira issue via the dev-status API.
@@ -807,8 +857,12 @@ class GetJiraPullRequestsTool(Tool[GetJiraPullRequestsToolInput, ToolRunOptions,
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             details = await _fetch_dev_status_details(
-                session, issue_key, headers, jira_base,
-                summary_category="pullrequest", data_type="pullrequest",
+                session,
+                issue_key,
+                headers,
+                jira_base,
+                summary_category="pullrequest",
+                data_type="pullrequest",
             )
 
         pull_requests: list[dict[str, Any]] = []
@@ -862,7 +916,8 @@ class SetPreliminaryTestingTool(Tool[SetPreliminaryTestingToolInput, ToolRunOpti
 
         if os.getenv("DRY_RUN", "False").lower() == "true":
             return StringToolOutput(
-                result=f"Dry run, not setting Preliminary Testing on {issue_key} (this is expected, not an error)"
+                result=f"Dry run, not setting Preliminary Testing "
+                f"on {issue_key} (this is expected, not an error)"
             )
 
         headers = get_jira_auth_headers()
@@ -886,4 +941,6 @@ class SetPreliminaryTestingTool(Tool[SetPreliminaryTestingToolInput, ToolRunOpti
             except aiohttp.ClientError as e:
                 raise ToolError(f"Failed to set Preliminary Testing on {issue_key}: {e}") from e
 
-        return StringToolOutput(result=f"Successfully set Preliminary Testing to {value.value} on {issue_key}")
+        return StringToolOutput(
+            result=f"Successfully set Preliminary Testing to {value.value} on {issue_key}"
+        )

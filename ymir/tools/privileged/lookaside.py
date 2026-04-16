@@ -12,9 +12,15 @@ from ymir.common.validators import AbsolutePath
 
 logger = logging.getLogger(__name__)
 
+
 def _pkg_cmd(package: str, dist_git_branch: str) -> list[str]:
     tool = "centpkg" if is_cs_branch(dist_git_branch) else "rhpkg"
-    return [tool, f"--name={package}", "--namespace=rpms", f"--release={dist_git_branch}"]
+    return [
+        tool,
+        f"--name={package}",
+        "--namespace=rpms",
+        f"--release={dist_git_branch}",
+    ]
 
 
 async def _try_init_kerberos():
@@ -22,6 +28,7 @@ async def _try_init_kerberos():
         await init_kerberos_ticket()
     except KerberosError as e:
         logger.warning("Kerberos initialization failed, continuing without it: %s", e)
+
 
 class DownloadSourcesToolInput(BaseModel):
     dist_git_path: AbsolutePath = Field(description="Absolute path to cloned dist-git repository")

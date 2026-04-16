@@ -1,11 +1,10 @@
 import asyncio
 from pathlib import Path
 
-from pydantic import BaseModel, Field
-
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
+from pydantic import BaseModel, Field
 
 from ymir.common.utils import get_absolute_path
 
@@ -28,7 +27,10 @@ class GetCWDTool(Tool[GetCWDToolInput, ToolRunOptions, StringToolOutput]):
         )
 
     async def _run(
-        self, tool_input: GetCWDToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: GetCWDToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         return StringToolOutput(result=str(get_absolute_path(Path("."), self)))
 
@@ -51,7 +53,10 @@ class RemoveTool(Tool[RemoveToolInput, ToolRunOptions, StringToolOutput]):
         )
 
     async def _run(
-        self, tool_input: RemoveToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: RemoveToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         file_path = get_absolute_path(tool_input.file, self)
         try:

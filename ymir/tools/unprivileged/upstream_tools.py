@@ -1,20 +1,23 @@
 """Tools for working with upstream repositories and fix URLs."""
 
 import re
-from pathlib import Path
-from urllib.parse import urlparse, quote
+from urllib.parse import quote, urlparse
 
 import aiohttp
+from beeai_framework.context import RunContext
+from beeai_framework.emitter import Emitter
+from beeai_framework.tools import (
+    JSONToolOutput,
+    StringToolOutput,
+    Tool,
+    ToolError,
+    ToolRunOptions,
+)
 from pydantic import BaseModel, Field
 
 from ymir.common.constants import AIOHTTP_TIMEOUT
-
-from beeai_framework.context import RunContext
-from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, StringToolOutput, Tool, ToolError, ToolRunOptions
-
-from ymir.common.validators import AbsolutePath
 from ymir.common.utils import run_subprocess
+from ymir.common.validators import AbsolutePath
 
 
 class ExtractUpstreamRepositoryInput(BaseModel):
@@ -23,22 +26,35 @@ class ExtractUpstreamRepositoryInput(BaseModel):
 
 class UpstreamRepository(BaseModel):
     """Represents an upstream git repository and commit information."""
+
     repo_url: str = Field(description="Git clone URL of the upstream repository")
-    commit_hash: str = Field(description="Commit hash to cherry-pick (for single commits) or target ref (for compare URLs)")
+    commit_hash: str = Field(
+        description="Commit hash to cherry-pick (for single commits) or target ref (for compare URLs)"
+    )
     original_url: str = Field(description="Original upstream fix URL")
-    pr_number: str | None = Field(default=None, description="Pull request or merge request number if this is a PR/MR URL, None otherwise")
+    pr_number: str | None = Field(
+        default=None,
+        description="Pull request or merge request number if this is a PR/MR URL, None otherwise",
+    )
     is_pr: bool = Field(default=False, description="True if this is a pull request or merge request URL")
     is_compare: bool = Field(default=False, description="True if this is a compare/diff URL between two refs")
     base_ref: str | None = Field(default=None, description="Base reference for compare URLs (e.g., v3.7.0)")
-    target_ref: str | None = Field(default=None, description="Target reference for compare URLs (e.g., v3.7.1)")
-    compare_commits: list[str] | None = Field(default=None, description="List of commit hashes in the compare range (ordered oldest to newest)")
+    target_ref: str | None = Field(
+        default=None, description="Target reference for compare URLs (e.g., v3.7.1)"
+    )
+    compare_commits: list[str] | None = Field(
+        default=None,
+        description="List of commit hashes in the compare range (ordered oldest to newest)",
+    )
 
 
 class ExtractUpstreamRepositoryOutput(JSONToolOutput[UpstreamRepository]):
     pass
 
 
-class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRunOptions, ExtractUpstreamRepositoryOutput]):
+class ExtractUpstreamRepositoryTool(
+    Tool[ExtractUpstreamRepositoryInput, ToolRunOptions, ExtractUpstreamRepositoryOutput]
+):
     name = "extract_upstream_repository"
     description = """
     Extract upstream repository URL and commit information from a commit, pull request, or compare URL.
@@ -62,14 +78,20 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
         )
 
     async def _run(
-        self, tool_input: ExtractUpstreamRepositoryInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: ExtractUpstreamRepositoryInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> ExtractUpstreamRepositoryOutput:
         try:
             parsed = urlparse(tool_input.upstream_fix_url)
 
             # Check if this is a pull request URL and extract owner/repo/PR number in one match.
-            pr_match = re.search(r'/([\w\-\.]+)/([\w\-\.]+)/pull/(\d+)(?:\.patch)?', parsed.path)
-            mr_match = re.search(r'/([\w\-\.]+)/([\w\-\.]+)/-/merge_requests/(\d+)(?:\.patch)?', parsed.path)
+            pr_match = re.search(r"/([\w\-\.]+)/([\w\-\.]+)/pull/(\d+)(?:\.patch)?", parsed.path)
+            mr_match = re.search(
+                r"/([\w\-\.]+)/([\w\-\.]+)/-/merge_requests/(\d+)(?:\.patch)?",
+                parsed.path,
+            )
 
             if pr_match or mr_match:
                 # Handle GitHub Pull Request or GitLab Merge Request
@@ -84,32 +106,31 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
                     api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
                 else:
                     # GitLab API
-                    api_url = f"https://{parsed.netloc}/api/v4/projects/{owner}%2F{repo}/merge_requests/{pr_number}"
+                    api_url = (
+                        f"https://{parsed.netloc}/api/v4/projects/{owner}%2F{repo}/merge_requests/{pr_number}"
+                    )
 
                 headers = {
-                    'Accept': 'application/json',
-                    'User-Agent': 'RHEL-Backport-Agent'
+                    "Accept": "application/json",
+                    "User-Agent": "RHEL-Backport-Agent",
                 }
 
                 try:
-                    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-                        async with session.get(api_url, headers=headers) as response:
-                            response.raise_for_status()
-                            data = await response.json()
+                    async with (
+                        aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
+                        session.get(api_url, headers=headers) as response,
+                    ):
+                        response.raise_for_status()
+                        data = await response.json()
 
-                            # Extract commit hash from API response
-                            if pr_match:
-                                # GitHub: get head.sha
-                                commit_hash = data['head']['sha']
-                            else:
-                                # GitLab: get sha
-                                commit_hash = data['sha']
+                        # Extract commit hash from API response
+                        commit_hash = data["head"]["sha"] if pr_match else data["sha"]
 
                 except (aiohttp.ClientError, KeyError) as e:
                     raise ToolError(
                         f"Failed to fetch PR/MR information from {api_url}. "
                         f"The PR/MR might be private, deleted, or the API is unavailable. Error: {e}"
-                    )
+                    ) from e
 
                 # Construct repository URL
                 repo_url = f"https://{parsed.netloc}/{owner}/{repo}.git"
@@ -121,53 +142,61 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
                         commit_hash=commit_hash,
                         original_url=tool_input.upstream_fix_url,
                         pr_number=pr_number,
-                        is_pr=True
+                        is_pr=True,
                     )
                 )
 
             # Try to match compare URL
-            compare_match = re.search(r'/([\w\-\.]+)/([\w\-\.]+)/(?:-/)?compare/(.+?)(\.{2,3})([^\s\?#]+)', parsed.path)
+            compare_match = re.search(
+                r"/([\w\-\.]+)/([\w\-\.]+)/(?:-/)?compare/(.+?)(\.{2,3})([^\s\?#]+)",
+                parsed.path,
+            )
             if compare_match:
                 # Handle GitHub/GitLab Compare URLs
                 owner = compare_match.group(1)
                 repo = compare_match.group(2)
                 base_ref = compare_match.group(3)
                 # Group 4 is the separator (.. or ...) - not used, we always use ... for APIs
-                target_ref = compare_match.group(5).rstrip('.patch')  # Remove .patch if present
+                target_ref = compare_match.group(5).rstrip(".patch")  # Remove .patch if present
                 # Construct repository URL
                 repo_url = f"https://{parsed.netloc}/{owner}/{repo}.git"
                 # Fetch compare information to get the list of commits
                 headers = {
-                    'Accept': 'application/json',
-                    'User-Agent': 'RHEL-Backport-Agent'
+                    "Accept": "application/json",
+                    "User-Agent": "RHEL-Backport-Agent",
                 }
                 commits = []
                 commit_hash = target_ref
                 try:
                     async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
                         # Determine if this is GitHub or GitLab based on the URL pattern
-                        if '/-/' not in parsed.path:
+                        if "/-/" not in parsed.path:
                             # GitHub API - URL-encode refs to handle special characters like / in branch names
-                            api_url = f"https://api.github.com/repos/{owner}/{repo}/compare/{quote(base_ref, safe='')}...{quote(target_ref, safe='')}"
+                            api_url = (
+                                f"https://api.github.com/repos/{owner}/{repo}/compare/"
+                                f"{quote(base_ref, safe='')}...{quote(target_ref, safe='')}"
+                            )
                             async with session.get(api_url, headers=headers) as response:
                                 response.raise_for_status()
                                 data = await response.json()
                                 # GitHub: commits are in 'commits' array (oldest first)
-                                commits = [commit['sha'] for commit in data.get('commits', [])]
+                                commits = [commit["sha"] for commit in data.get("commits", [])]
                         else:
                             # GitLab API - use params dict for automatic URL encoding
-                            api_url = f"https://{parsed.netloc}/api/v4/projects/{owner}%2F{repo}/repository/compare"
-                            params = {'from': base_ref, 'to': target_ref}
+                            api_url = (
+                                f"https://{parsed.netloc}/api/v4/projects/{owner}%2F{repo}/repository/compare"
+                            )
+                            params = {"from": base_ref, "to": target_ref}
                             async with session.get(api_url, params=params, headers=headers) as response:
                                 response.raise_for_status()
                                 data = await response.json()
                                 # GitLab: commits are in 'commits' array (newest first)
-                                commits = [commit['id'] for commit in data.get('commits', [])]
+                                commits = [commit["id"] for commit in data.get("commits", [])]
                                 # Reverse to get oldest first
                                 commits = list(reversed(commits))
                         # Use the last commit (newest) as the commit_hash
                         commit_hash = commits[-1] if commits else target_ref
-                except (aiohttp.ClientError, KeyError) as e:
+                except (aiohttp.ClientError, KeyError):
                     # If API fails, fall back to using target_ref as commit_hash
                     # This allows the tool to still work even if API is unavailable
                     commit_hash = target_ref
@@ -183,33 +212,38 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
                         is_compare=True,
                         base_ref=base_ref,
                         target_ref=target_ref,
-                        compare_commits=commits if commits else None
+                        compare_commits=commits if commits else None,
                     )
                 )
             # Try to match regular commit URL or query parameter format
             repo_path = None
             commit_hash = None
-            commit_match = re.search(r'^(.*?)(?:/(?:-/)?commit(?:s)?/([a-f0-9]{7,40})(?:\.patch)?)', parsed.path)
+            commit_match = re.search(
+                r"^(.*?)(?:/(?:-/)?commit(?:s)?/([a-f0-9]{7,40})(?:\.patch)?)",
+                parsed.path,
+            )
             if commit_match:
                 # Handle regular commit URLs
-                repo_path = commit_match.group(1).strip('/')
+                repo_path = commit_match.group(1).strip("/")
                 commit_hash = commit_match.group(2)
             elif parsed.query:
                 # Handle query parameter format (cgit/gitweb)
-                query_match = re.search(r'(?:id|h)=([a-f0-9]{7,40})', parsed.query)
+                query_match = re.search(r"(?:id|h)=([a-f0-9]{7,40})", parsed.query)
                 if query_match:
                     commit_hash = query_match.group(1)
-                    repo_query_match = re.search(r'[?&]p=([^;&]+)', parsed.query)
+                    repo_query_match = re.search(r"[?&]p=([^;&]+)", parsed.query)
                     if repo_query_match:
                         repo_path = repo_query_match.group(1)
             if commit_hash:
                 if not repo_path:
-                    raise ToolError(f"Could not extract repository path from URL: {tool_input.upstream_fix_url}")
+                    raise ToolError(
+                        f"Could not extract repository path from URL: {tool_input.upstream_fix_url}"
+                    )
                 # Construct clone URL
-                scheme = parsed.scheme or 'https'
+                scheme = parsed.scheme or "https"
                 repo_url = f"{scheme}://{parsed.netloc}/{repo_path}"
-                if not repo_url.endswith('.git'):
-                    repo_url += '.git'
+                if not repo_url.endswith(".git"):
+                    repo_url += ".git"
                 # Return for non-PR/non-compare URLs
                 return ExtractUpstreamRepositoryOutput(
                     result=UpstreamRepository(
@@ -217,7 +251,7 @@ class ExtractUpstreamRepositoryTool(Tool[ExtractUpstreamRepositoryInput, ToolRun
                         commit_hash=commit_hash,
                         original_url=tool_input.upstream_fix_url,
                         pr_number=None,
-                        is_pr=False
+                        is_pr=False,
                     )
                 )
             # If we got here, we couldn't match any pattern
@@ -254,7 +288,10 @@ class CloneUpstreamRepositoryTool(Tool[CloneUpstreamRepositoryToolInput, ToolRun
         )
 
     async def _run(
-        self, tool_input: CloneUpstreamRepositoryToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: CloneUpstreamRepositoryToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         try:
             # Always append -upstream suffix to avoid conflicts with dist-git
@@ -269,7 +306,7 @@ class CloneUpstreamRepositoryTool(Tool[CloneUpstreamRepositoryToolInput, ToolRun
 
             # Clone the repository
             cmd = ["git", "clone", tool_input.repo_url, str(clone_path)]
-            exit_code, stdout, stderr = await run_subprocess(cmd)
+            exit_code, _, stderr = await run_subprocess(cmd)
 
             if exit_code != 0:
                 raise ToolError(f"Git clone failed: {stderr}")
@@ -278,9 +315,7 @@ class CloneUpstreamRepositoryTool(Tool[CloneUpstreamRepositoryToolInput, ToolRun
             if not (clone_path / ".git").exists():
                 raise ToolError(f"Clone completed but .git directory not found in {clone_path}")
 
-            return StringToolOutput(
-                result=f"Successfully cloned repository to {clone_path.absolute()}"
-            )
+            return StringToolOutput(result=f"Successfully cloned repository to {clone_path.absolute()}")
 
         except ToolError:
             raise
@@ -316,7 +351,10 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
         )
 
     async def _run(
-        self, tool_input: FindBaseCommitToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: FindBaseCommitToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         try:
             # Verify it's a git repository
@@ -358,8 +396,12 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
                 cmd = ["git", "tag", "-l"]
                 exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
 
-                available_tags = stdout.strip().split('\n') if stdout.strip() else []
-                tag_info = f"Available tags: {', '.join(available_tags[:10])}" if available_tags else "No tags found in repository"
+                available_tags = stdout.strip().split("\n") if stdout.strip() else []
+                tag_info = (
+                    f"Available tags: {', '.join(available_tags[:10])}"
+                    if available_tags
+                    else "No tags found in repository"
+                )
                 if len(available_tags) > 10:
                     tag_info += f" (and {len(available_tags) - 10} more)"
 
@@ -396,9 +438,13 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
 
 
 class ApplyDownstreamPatchesToolInput(BaseModel):
-    repo_path: AbsolutePath = Field(description="Absolute path to the upstream repository where patches will be applied")
+    repo_path: AbsolutePath = Field(
+        description="Absolute path to the upstream repository where patches will be applied"
+    )
     patch_files: list[str] = Field(description="List of patch filenames to apply in order")
-    patches_directory: AbsolutePath = Field(description="Absolute directory path containing the patch files (usually the dist-git clone)")
+    patches_directory: AbsolutePath = Field(
+        description="Absolute directory path containing the patch files (usually the dist-git clone)"
+    )
 
 
 class ApplyDownstreamPatchesTool(Tool[ApplyDownstreamPatchesToolInput, ToolRunOptions, StringToolOutput]):
@@ -422,7 +468,10 @@ class ApplyDownstreamPatchesTool(Tool[ApplyDownstreamPatchesToolInput, ToolRunOp
         )
 
     async def _run(
-        self, tool_input: ApplyDownstreamPatchesToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: ApplyDownstreamPatchesToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         try:
             # Verify it's a git repository
@@ -441,7 +490,7 @@ class ApplyDownstreamPatchesTool(Tool[ApplyDownstreamPatchesToolInput, ToolRunOp
                 self.options["base_head_commit"] = stdout.strip()
                 return StringToolOutput(
                     result=f"No patches to apply (patch list is empty). "
-                           f"Base commit for patch generation: {self.options['base_head_commit']}"
+                    f"Base commit for patch generation: {self.options['base_head_commit']}"
                 )
 
             applied_patches = []
@@ -495,7 +544,7 @@ class ApplyDownstreamPatchesTool(Tool[ApplyDownstreamPatchesToolInput, ToolRunOp
 
             return StringToolOutput(
                 result=f"Successfully applied {len(applied_patches)} patches: {', '.join(applied_patches)}. "
-                       f"Base commit for patch generation: {self.options['base_head_commit']}"
+                f"Base commit for patch generation: {self.options['base_head_commit']}"
             )
 
         except ToolError:
@@ -527,7 +576,10 @@ class CherryPickCommitTool(Tool[CherryPickCommitToolInput, ToolRunOptions, Strin
         )
 
     async def _run(
-        self, tool_input: CherryPickCommitToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: CherryPickCommitToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         try:
             # Verify it's a git repository
@@ -542,46 +594,50 @@ class CherryPickCommitTool(Tool[CherryPickCommitToolInput, ToolRunOptions, Strin
             if exit_code_check != 0:
                 # Try to fetch the specific commit from origin
                 cmd = ["git", "fetch", "origin", tool_input.commit_hash]
-                exit_code_fetch, stdout_fetch, stderr_fetch = await run_subprocess(cmd, cwd=tool_input.repo_path)
+                exit_code_fetch, _, stderr_fetch = await run_subprocess(cmd, cwd=tool_input.repo_path)
 
                 # Check again if commit exists after fetch
                 cmd = ["git", "cat-file", "-t", tool_input.commit_hash]
                 exit_code_check, _, _ = await run_subprocess(cmd, cwd=tool_input.repo_path)
 
                 if exit_code_check != 0:
+                    fetch_result = (
+                        stderr_fetch if exit_code_fetch != 0 else "succeeded but commit still unavailable"
+                    )
                     raise ToolError(
-                        f"Commit {tool_input.commit_hash} not found in repository even after fetch attempt. "
-                        f"Fetch result: {stderr_fetch if exit_code_fetch != 0 else 'succeeded but commit still unavailable'}. "
+                        f"Commit {tool_input.commit_hash} not found "
+                        "in repository even after fetch attempt. "
+                        f"Fetch result: {fetch_result}. "
                         "Abort cherry-pick approach, use git am workflow."
                     )
 
             # Try to cherry-pick the commit
             cmd = ["git", "cherry-pick", tool_input.commit_hash]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
+            exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
 
             if exit_code == 0:
                 # Success - no conflicts
-                return StringToolOutput(
-                    result=f"Successfully cherry-picked commit {tool_input.commit_hash}"
-                )
+                return StringToolOutput(result=f"Successfully cherry-picked commit {tool_input.commit_hash}")
 
             # Check if it's a conflict or other error
             cmd = ["git", "status", "--porcelain"]
-            exit_code_status, stdout_status, stderr_status = await run_subprocess(cmd, cwd=tool_input.repo_path)
+            exit_code_status, stdout_status, _ = await run_subprocess(cmd, cwd=tool_input.repo_path)
 
             if exit_code_status == 0 and stdout_status:
                 # Get list of conflicting files
-                conflict_files = []
-                for line in stdout_status.strip().split('\n'):
-                    if line.startswith('UU ') or line.startswith('AA ') or line.startswith('DD '):
-                        # UU = both modified, AA = both added, DD = both deleted
-                        conflict_files.append(line[3:].strip())
+                # UU = both modified, AA = both added, DD = both deleted
+                conflict_files = [
+                    line[3:].strip()
+                    for line in stdout_status.strip().split("\n")
+                    if line.startswith(("UU ", "AA ", "DD "))
+                ]
 
                 if conflict_files:
                     return StringToolOutput(
-                        result=f"Cherry-pick has conflicts in the following files: {', '.join(conflict_files)}. "
-                        f"Resolve the conflicts manually, then use cherry_pick_continue tool. "
-                        f"Git error: {stderr}"
+                        result="Cherry-pick has conflicts in the following files: "
+                        f"{', '.join(conflict_files)}. "
+                        "Resolve the conflicts manually, then use "
+                        f"cherry_pick_continue tool. Git error: {stderr}"
                     )
 
             # Some other error
@@ -618,7 +674,10 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
         )
 
     async def _run(
-        self, tool_input: CherryPickContinueToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: CherryPickContinueToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> StringToolOutput:
         try:
             # Verify it's a git repository
@@ -649,8 +708,8 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
 
             # Check for unresolved conflicts by checking git status
             # Files with UU, AA, DD status indicate unresolved conflicts
-            for line in (stdout or "").strip().split('\n') if (stdout or "").strip() else []:
-                if line.startswith('UU ') or line.startswith('AA ') or line.startswith('DD '):
+            for line in (stdout or "").strip().split("\n") if (stdout or "").strip() else []:
+                if line.startswith(("UU ", "AA ", "DD ")):
                     conflict_file = line[3:].strip()
                     raise ToolError(
                         f"Unresolved conflicts still exist in: {conflict_file}. "
@@ -677,9 +736,7 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
                     "Abort cherry-pick approach, use git am workflow."
                 )
 
-            return StringToolOutput(
-                result="Successfully completed cherry-pick after resolving conflicts"
-            )
+            return StringToolOutput(result="Successfully completed cherry-pick after resolving conflicts")
 
         except ToolError:
             raise

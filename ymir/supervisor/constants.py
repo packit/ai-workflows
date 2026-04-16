@@ -1,7 +1,7 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 # Compares correctly - all our dates are tz-aware
-DATETIME_MIN_UTC = datetime.min.replace(tzinfo=timezone.utc)
+DATETIME_MIN_UTC = datetime.min.replace(tzinfo=UTC)
 # Groups within the redhat organization where we can find issues
 GITLAB_GROUPS = ["rhel/rpms", "centos-stream/rpms"]
 # Timeout for post-push testing (e.g., CAT tests) after stage push completes

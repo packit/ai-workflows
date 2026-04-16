@@ -12,18 +12,18 @@ from beeai_framework.tools import Tool
 from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 
+from ymir.agents.utils import get_chat_model, get_tool_call_checker_config
 from ymir.tools.unprivileged.commands import RunShellCommandTool
-from ymir.tools.unprivileged.specfile import AddChangelogEntryTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool
+from ymir.tools.unprivileged.specfile import AddChangelogEntryTool
 from ymir.tools.unprivileged.text import (
     CreateTool,
-    InsertTool,
     InsertAfterSubstringTool,
+    InsertTool,
+    SearchTextTool,
     StrReplaceTool,
     ViewTool,
-    SearchTextTool,
 )
-from ymir.agents.utils import get_chat_model, get_tool_call_checker_config
 
 
 def get_instructions() -> str:
@@ -60,8 +60,10 @@ def get_instructions() -> str:
 
      General instructions:
 
-      - Never change anything in the spec file changelog, you are only allowed to add a single changelog entry.
-      - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
+      - Never change anything in the spec file changelog, you are only allowed to add
+        a single changelog entry.
+      - Prefer native tools, if available, the `run_shell_command` tool should be
+        the last resort.
     """
 
 

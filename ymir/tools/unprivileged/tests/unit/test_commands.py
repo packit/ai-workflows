@@ -1,8 +1,10 @@
 import pytest
-
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 
-from ymir.tools.unprivileged.commands import RunShellCommandTool, RunShellCommandToolInput
+from ymir.tools.unprivileged.commands import (
+    RunShellCommandTool,
+    RunShellCommandToolInput,
+)
 
 
 @pytest.mark.parametrize(
@@ -48,9 +50,9 @@ async def test_run_shell_command(command, exit_code, stdout, stderr):
 async def test_run_shell_command_huge_output(full_output):
     command = "printf 'Line\n%.0s' {1..1000}"
     tool = RunShellCommandTool()
-    output = await tool.run(input=RunShellCommandToolInput(command=command, full_output=full_output)).middleware(
-        GlobalTrajectoryMiddleware(pretty=True)
-    )
+    output = await tool.run(
+        input=RunShellCommandToolInput(command=command, full_output=full_output)
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
     result = output.to_json_safe()
     assert result.exit_code == 0
     assert result.stderr is None

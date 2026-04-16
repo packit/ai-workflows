@@ -34,6 +34,7 @@ def cleanup_stale_directories(git_repos_path: Path, cutoff_time: datetime) -> in
 
     return deleted_count
 
+
 async def clean_stale_repositories() -> int:
     """
     Cleans up stale repositories (older than 14 days).

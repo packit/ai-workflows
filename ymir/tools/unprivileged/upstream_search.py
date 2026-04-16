@@ -1,43 +1,35 @@
-import os
-import asyncio
-import aiohttp
 import logging
+import os
 from enum import Enum
 from urllib.parse import urlparse
 
-from ymir.common.constants import AIOHTTP_TIMEOUT
-
-from pydantic import BaseModel, Field
-
+import aiohttp
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, Tool, ToolRunOptions, ToolError
+from beeai_framework.tools import JSONToolOutput, Tool, ToolError, ToolRunOptions
+from pydantic import BaseModel, Field
+
+from ymir.common.constants import AIOHTTP_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
 
 class UpstreamSearchResult(Enum):
-    FOUND        = "found"
-    NOT_FOUND    = "not_found"
+    FOUND = "found"
+    NOT_FOUND = "not_found"
     NOT_POSSIBLE = "not_possible"
 
 
 class UpstreamSearchToolInput(BaseModel):
-    project:     str = Field(
-        description="name of the upstream project which should be searched through")
-    description: str = Field(
-        description="description of issue for which fixing commit will be looked for")
-    date: str | None = Field(
-        description="date in iso format after which the commit was created")
+    project: str = Field(description="name of the upstream project which should be searched through")
+    description: str = Field(description="description of issue for which fixing commit will be looked for")
+    date: str | None = Field(description="date in iso format after which the commit was created")
 
 
 class UpstreamSearchToolResult(BaseModel):
-    result: UpstreamSearchResult      = Field(
-        description="result of the tool invocation")
-    repository_url: str | None        = Field(
-        description="url of repository where commits reside")
-    related_commits: list[str] | None = Field(
-        description="commits related to given description")
+    result: UpstreamSearchResult = Field(description="result of the tool invocation")
+    repository_url: str | None = Field(description="url of repository where commits reside")
+    related_commits: list[str] | None = Field(description="commits related to given description")
 
 
 class UpstreamSearchToolOutput(JSONToolOutput[UpstreamSearchToolResult]):
@@ -68,22 +60,32 @@ class UpstreamSearchTool(Tool[UpstreamSearchToolInput, ToolRunOptions, UpstreamS
         )
 
     async def _run(
-        self, tool_input: UpstreamSearchToolInput,
-        options: ToolRunOptions | None, context: RunContext) -> UpstreamSearchToolOutput:
+        self,
+        tool_input: UpstreamSearchToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> UpstreamSearchToolOutput:
         try:
             repos = []
             commits = []
             async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-                async with session.get(f"{os.environ['UPSTREAM_SEARCH_API_URL']}/find_repository",
-                                       params={"name": tool_input.project}) as response:
+                async with session.get(
+                    f"{os.environ['UPSTREAM_SEARCH_API_URL']}/find_repository",
+                    params={"name": tool_input.project},
+                ) as response:
                     if response.status != 200:
-                        logger.debug("Searching did not yield repo. status %d response %s",
-                                      response.status, await response.text())
-                        return UpstreamSearchToolOutput(UpstreamSearchToolResult(
-                            result=UpstreamSearchResult.NOT_POSSIBLE,
-                            repository_url=None,
-                            related_commits=None
-                        ))
+                        logger.debug(
+                            "Searching did not yield repo. status %d response %s",
+                            response.status,
+                            await response.text(),
+                        )
+                        return UpstreamSearchToolOutput(
+                            UpstreamSearchToolResult(
+                                result=UpstreamSearchResult.NOT_POSSIBLE,
+                                repository_url=None,
+                                related_commits=None,
+                            )
+                        )
                     repos = await response.json()
 
                 # until we have solid reference to upstream repository through for example VCS
@@ -91,21 +93,29 @@ class UpstreamSearchTool(Tool[UpstreamSearchToolInput, ToolRunOptions, UpstreamS
                 post_params = {"url": repos[0], "text": tool_input.description}
                 if tool_input.date is not None:
                     post_params["date"] = tool_input.date
-                async with session.post(f"{os.environ['UPSTREAM_SEARCH_API_URL']}/find_commit",
-                                        json=post_params, timeout=240) as response:
+                async with session.post(
+                    f"{os.environ['UPSTREAM_SEARCH_API_URL']}/find_commit",
+                    json=post_params,
+                    timeout=240,
+                ) as response:
                     if response.status != 200:
-                        logger.debug("Searching did not yield commits. status %d response %s",
-                                      response.status, await response.text())
-                        return UpstreamSearchToolOutput(UpstreamSearchToolResult(
-                            result=UpstreamSearchResult.NOT_FOUND,
-                            repository_url=None,
-                            related_commits=None
-                        ))
+                        logger.debug(
+                            "Searching did not yield commits. status %d response %s",
+                            response.status,
+                            await response.text(),
+                        )
+                        return UpstreamSearchToolOutput(
+                            UpstreamSearchToolResult(
+                                result=UpstreamSearchResult.NOT_FOUND,
+                                repository_url=None,
+                                related_commits=None,
+                            )
+                        )
                     commits = await response.json()
-        except asyncio.TimeoutError:
-            raise ToolError("Timeout occured while contacting upstream-search backend")
+        except TimeoutError as e:
+            raise ToolError("Timeout occured while contacting upstream-search backend") from e
         except Exception as e:
-            raise ToolError(f"Unexpected internal error occured while contacting backend {e}")
+            raise ToolError(f"Unexpected internal error occured while contacting backend {e}") from e
 
         def get_patch_url(commit):
             parsed_url = urlparse(repos[0])
@@ -119,10 +129,13 @@ class UpstreamSearchTool(Tool[UpstreamSearchToolInput, ToolRunOptions, UpstreamS
                 return commit
             path = f"{prefix}/commit/{commit}.patch"
             return parsed_url._replace(path=parsed_url.path.replace(".git", path)).geturl()
+
         commits = [get_patch_url(commit) for commit in commits]
 
-        return UpstreamSearchToolOutput(UpstreamSearchToolResult(
-            result=UpstreamSearchResult.FOUND,
-            repository_url=repos[0],
-            related_commits=commits
-        ))
+        return UpstreamSearchToolOutput(
+            UpstreamSearchToolResult(
+                result=UpstreamSearchResult.FOUND,
+                repository_url=repos[0],
+                related_commits=commits,
+            )
+        )

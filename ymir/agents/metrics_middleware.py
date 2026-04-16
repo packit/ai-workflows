@@ -1,10 +1,10 @@
 from datetime import datetime
 
 from beeai_framework.context import (
-    RunContextStartEvent,
+    RunContext,
     RunContextFinishEvent,
+    RunContextStartEvent,
     RunMiddlewareProtocol,
-    RunContext
 )
 from beeai_framework.emitter import EmitterOptions, EventMeta
 from beeai_framework.emitter.utils import create_internal_event_matcher

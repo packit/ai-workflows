@@ -1,19 +1,21 @@
 from pathlib import Path
 
 import pytest
-
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import ToolError
 
-from ymir.tools.unprivileged.filesystem import GetCWDTool, GetCWDToolInput, RemoveTool, RemoveToolInput
+from ymir.tools.unprivileged.filesystem import (
+    GetCWDTool,
+    GetCWDToolInput,
+    RemoveTool,
+    RemoveToolInput,
+)
 
 
 @pytest.mark.asyncio
 async def test_get_cwd(tmp_path):
     tool = GetCWDTool(options={"working_directory": tmp_path})
-    output = await tool.run(input=GetCWDToolInput()).middleware(
-        GlobalTrajectoryMiddleware(pretty=True)
-    )
+    output = await tool.run(input=GetCWDToolInput()).middleware(GlobalTrajectoryMiddleware(pretty=True))
     result = output.result
     assert Path(result) == tmp_path
 

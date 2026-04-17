@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-requirements-txt"]
 build-backend = "hatchling.build"
 
 [project]
@@ -7,12 +7,10 @@ name = "ymir-common"
 version = "0.1.0"
 description = "Common utilities shared across Ymir AI workflows"
 requires-python = ">=3.13"
-dependencies = [
-    "aiofiles>=24.1.0",
-    "beeai-framework[mcp]==0.1.55",
-    "pydantic>=2.0",
-    "redis>=6.4.0",
-]
+dynamic = ["dependencies"]
+
+[tool.hatch.metadata.hooks.requirements_txt]
+files = ["../../requirements-global.txt", "requirements.txt"]
 
 [project.optional-dependencies]
 test = [

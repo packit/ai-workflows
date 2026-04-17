@@ -24,12 +24,16 @@ simultaneously throughout the session.
 
 ## 1. Install packages
 
+```bash
+sudo dnf install krb5-devel gcc python3-devel
+```
+
 Install `ymir-common` first because `ymir-tools` depends on it and the package
 is not published on PyPI.
 
 ```bash
-pip install "git+https://github.com/username/repository.git#subdirectory=ymir/common"
-pip install "git+https://github.com/username/repository.git#subdirectory=ymir/tools"
+pip install "git+https://github.com/packit/ai-workflows.git#subdirectory=ymir/common"
+pip install "git+https://github.com/packit/ai-workflows.git#subdirectory=ymir/tools"
 ```
 
 After installation, two console scripts are available:
@@ -46,8 +50,8 @@ Several tools (`BuildPackageTool`, `CheckCveTriageEligibilityTool`,
 directory at runtime. Copy the template and fill in the real values:
 
 ```bash
-cp templates/rhel-config.json ~/rhel-config.json
-# Edit ~/rhel-config.json with actual RHEL stream data
+cp templates/rhel-config.json ./rhel-config.json
+# Edit ./rhel-config.json with actual RHEL stream data
 ```
 
 Set the working directory in the Claude Code server configuration (see below)
@@ -91,18 +95,18 @@ with the CLI or by editing the settings file directly.
 
 ```bash
 claude mcp add ymir-privileged \
-  --command ymir-privileged-gateway \
   --env MCP_TRANSPORT=stdio \
   --env GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx \
-  --env JIRA_URL=https://issues.redhat.com/ \
+  --env JIRA_URL=https://redhat.atlassian.net \
   --env JIRA_EMAIL=you@redhat.com \
   --env JIRA_TOKEN=your-jira-api-token \
-  --env KRB5CCNAME=FILE:/tmp/krb5cc_$(id -u)
+  --env KRB5CCNAME=FILE:/tmp/krb5cc_$(id -u) \
+  -- ymir-privileged-gateway
 
 claude mcp add ymir-unprivileged \
-  --command ymir-unprivileged-gateway \
   --env MCP_TRANSPORT=stdio \
-  --env UPSTREAM_SEARCH_API_URL=http://your-upstream-search-service:port
+  --env UPSTREAM_SEARCH_API_URL=http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1 \
+  -- ymir-unprivileged-gateway
 ```
 
 ### Option B -- Editing `~/.claude.json`
@@ -117,7 +121,7 @@ Add the following to the top-level `mcpServers` object:
       "env": {
         "MCP_TRANSPORT": "stdio",
         "GITLAB_TOKEN": "glpat-xxxxxxxxxxxxxxxxxxxx",
-        "JIRA_URL": "https://issues.redhat.com/",
+        "JIRA_URL": "https://redhat.atlassian.net",
         "JIRA_EMAIL": "you@redhat.com",
         "JIRA_TOKEN": "your-jira-api-token",
         "KRB5CCNAME": "FILE:/tmp/krb5cc_1000"
@@ -127,7 +131,7 @@ Add the following to the top-level `mcpServers` object:
       "command": "ymir-unprivileged-gateway",
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "UPSTREAM_SEARCH_API_URL": "http://your-upstream-search-service:port"
+        "UPSTREAM_SEARCH_API_URL": "http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1"
       }
     }
   }

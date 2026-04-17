@@ -1,0 +1,2 @@
+# Dependencies specific to ymir-common
+redis>=6.4.0

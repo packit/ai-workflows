@@ -5,6 +5,7 @@ from ymir.common.models import (
     ClarificationNeededData,
     ErrorData,
     OpenEndedAnalysisData,
+    PostponedData,
     RebaseData,
     Resolution,
     TriageOutputSchema,
@@ -112,6 +113,25 @@ def test_open_ended_analysis_formatting():
         "*Recommendation*: No action needed — feature requests are not "
         "appropriate for bugfix updates in RHEL."
         f"{AUTOMATED_RESOLUTION_NOT_SUPPORTED}"
+        f"{TRIAGE_DISCLAIMER}"
+    )
+
+
+def test_postponed_formatting_multiple_issues():
+    data = PostponedData(
+        summary="Y-stream CVE (CVE-2025-12345): waiting for at least one Z-stream clone to ship",
+        pending_issues=["RHEL-111", "RHEL-222"],
+        jira_issue="RHEL-99999",
+    )
+    result = TriageOutputSchema(resolution=Resolution.POSTPONED, data=data)
+
+    assert result.format_for_comment() == (
+        "*Resolution*: postponed\n"
+        "*Summary*: Y-stream CVE (CVE-2025-12345): "
+        "waiting for at least one Z-stream clone to ship\n"
+        "*Waiting for at least one of*:\n"
+        "* RHEL-111\n"
+        "* RHEL-222"
         f"{TRIAGE_DISCLAIMER}"
     )
 

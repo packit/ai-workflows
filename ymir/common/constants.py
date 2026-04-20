@@ -27,6 +27,7 @@ class RedisQueues(Enum):
     COMPLETED_REBUILD_LIST = "completed_rebuild_list"
     REBASE_QUEUE = "rebase_queue"
     BACKPORT_QUEUE = "backport_queue"
+    POSTPONED_LIST = "postponed_list"
 
     @classmethod
     def all_queues(cls) -> set[str]:
@@ -58,6 +59,7 @@ class RedisQueues(Enum):
             cls.COMPLETED_REBASE_LIST.value,
             cls.COMPLETED_BACKPORT_LIST.value,
             cls.COMPLETED_REBUILD_LIST.value,
+            cls.POSTPONED_LIST.value,
         }
 
     @classmethod
@@ -113,6 +115,8 @@ class JiraLabels(Enum):
     REBASE_FAILED = "ymir_rebase_failed"
     BACKPORT_FAILED = "ymir_backport_failed"
     REBUILD_FAILED = "ymir_rebuild_failed"
+
+    TRIAGED_POSTPONED = "ymir_triaged_postponed"
 
     RETRY_NEEDED = "ymir_retry_needed"
     FUSA = "ymir_fusa"

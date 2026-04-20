@@ -6,11 +6,19 @@ and components to ensure consistency and type safety.
 """
 
 from datetime import datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field, RootModel
+
+
+class TriageEligibility(StrEnum):
+    """Three-state triage eligibility."""
+
+    IMMEDIATELY = "immediately"
+    PENDING_DEPENDENCIES = "pending-dependencies"
+    NEVER = "never"
 
 
 class CVEEligibilityResult(BaseModel):
@@ -22,13 +30,21 @@ class CVEEligibilityResult(BaseModel):
     """
 
     is_cve: bool = Field(description="Whether this is a CVE (identified by SecurityTracking label)")
-    is_eligible_for_triage: bool = Field(description="Whether triage agent should process this CVE")
+    eligibility: TriageEligibility = Field(description="When triage agent should process this CVE")
     reason: str = Field(description="Explanation of the eligibility decision")
     needs_internal_fix: bool | None = Field(
         default=None,
         description="True for CVEs where internal fix is needed first (only applicable for CVEs)",
     )
     error: str | None = Field(default=None, description="Error message if the issue cannot be processed")
+    pending_zstream_issues: list[str] | None = Field(
+        default=None,
+        description="Jira issue keys of unshipped Z-stream clones; at least one must ship before triage",
+    )
+
+    @property
+    def is_eligible_for_triage(self) -> bool:
+        return self.eligibility == TriageEligibility.IMMEDIATELY
 
 
 class TriageInputSchema(BaseModel):
@@ -37,7 +53,10 @@ class TriageInputSchema(BaseModel):
     issue: str = Field(description="JIRA issue key (e.g., RHEL-12345)")
     force_cve_triage: bool = Field(
         default=False,
-        description="Force triage of CVE issues that would normally be skipped (e.g. Y-stream CVEs)",
+        description=(
+            "Force triage of CVE issues that would normally be deferred or rejected"
+            " (eligibility=PENDING_DEPENDENCIES or NEVER)"
+        ),
     )
 
 
@@ -144,6 +163,7 @@ class Resolution(Enum):
     REBUILD = "rebuild"
     CLARIFICATION_NEEDED = "clarification-needed"
     OPEN_ENDED_ANALYSIS = "open-ended-analysis"
+    POSTPONED = "postponed"
     ERROR = "error"
 
 
@@ -222,6 +242,14 @@ class OpenEndedAnalysisData(BaseModel):
     jira_issue: str = Field(description="Jira issue identifier")
 
 
+class PostponedData(BaseModel):
+    """Data for postponed resolution (waiting on dependencies to ship)."""
+
+    summary: str = Field(description="Reason for postponement")
+    pending_issues: list[str] = Field(description="Jira issue keys of dependencies not yet shipped")
+    jira_issue: str = Field(description="Jira issue identifier")
+
+
 class ErrorData(BaseModel):
     """Data for error resolution."""
 
@@ -254,10 +282,16 @@ class TriageOutputSchema(BaseModel):
 
     resolution: Resolution = Field(
         description="Triage resolution, one of rebase, backport, rebuild, "
-        "clarification-needed, open-ended-analysis, error"
+        "clarification-needed, open-ended-analysis, postponed, error"
     )
     data: (
-        RebaseData | BackportData | RebuildData | ClarificationNeededData | OpenEndedAnalysisData | ErrorData
+        RebaseData
+        | BackportData
+        | RebuildData
+        | ClarificationNeededData
+        | OpenEndedAnalysisData
+        | PostponedData
+        | ErrorData
     ) = Field(description="Associated data")
 
     def format_for_comment(self, auto_chain: bool = False) -> str:
@@ -341,6 +375,19 @@ class TriageOutputSchema(BaseModel):
                     f"*Summary*: {self.data.summary}\n"
                     f"*Recommendation*: {self.data.recommendation}"
                     f"{AUTOMATED_RESOLUTION_NOT_SUPPORTED}"
+                    f"{TRIAGE_DISCLAIMER}"
+                )
+
+            case PostponedData():
+                pending_text = "\n".join(f"* {key}" for key in self.data.pending_issues)
+                if len(self.data.pending_issues) == 1:
+                    heading = "*Waiting for*:"
+                else:
+                    heading = "*Waiting for at least one of*:"
+                return (
+                    f"{resolution}"
+                    f"*Summary*: {self.data.summary}\n"
+                    f"{heading}\n{pending_text}"
                     f"{TRIAGE_DISCLAIMER}"
                 )
 

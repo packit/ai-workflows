@@ -136,6 +136,23 @@ def test_postponed_formatting_multiple_issues():
     )
 
 
+def test_postponed_formatting_single_issue():
+    data = PostponedData(
+        summary="Rebuild waiting for dependency to ship",
+        pending_issues=["RHEL-333"],
+        jira_issue="RHEL-99999",
+    )
+    result = TriageOutputSchema(resolution=Resolution.POSTPONED, data=data)
+
+    assert result.format_for_comment() == (
+        "*Resolution*: postponed\n"
+        "*Summary*: Rebuild waiting for dependency to ship\n"
+        "*Waiting for*:\n"
+        "* RHEL-333"
+        f"{TRIAGE_DISCLAIMER}"
+    )
+
+
 def test_error_formatting():
     data = ErrorData(details="Package 'invalid-pkg' not found in repository", jira_issue="RHEL-33333")
     result = TriageOutputSchema(resolution=Resolution.ERROR, data=data)

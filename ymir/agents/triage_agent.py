@@ -35,8 +35,10 @@ from ymir.common.models import (
     CVEEligibilityResult,
     ErrorData,
     OpenEndedAnalysisData,
+    PostponedData,
     Resolution,
     Task,
+    TriageEligibility,
 )
 from ymir.common.models import (
     TriageInputSchema as InputSchema,
@@ -609,44 +611,70 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
             )
             state.cve_eligibility_result = CVEEligibilityResult.model_validate(result)
 
-            logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
+            eligibility = state.cve_eligibility_result.eligibility
+            logger.info(
+                f"CVE eligibility for {state.jira_issue}: "
+                f"eligibility={eligibility.value}, "
+                f"reason={state.cve_eligibility_result.reason!r}, "
+                f"needs_internal_fix={state.cve_eligibility_result.needs_internal_fix}, "
+                f"pending_zstream_issues={state.cve_eligibility_result.pending_zstream_issues}"
+            )
 
-            # If not eligible for triage, end workflow (unless forced)
-            if not state.cve_eligibility_result.is_eligible_for_triage:
-                if force_cve_triage and not state.cve_eligibility_result.error:
-                    logger.info(
-                        f"Issue {state.jira_issue} not eligible for triage "
-                        f"({state.cve_eligibility_result.reason}), but force_cve_triage is set — proceeding"
-                    )
-                    return "run_triage_analysis"
+            if eligibility == TriageEligibility.IMMEDIATELY:
+                return "run_triage_analysis"
 
+            if force_cve_triage and not state.cve_eligibility_result.error:
                 logger.info(
-                    f"Issue {state.jira_issue} not eligible for triage: {state.cve_eligibility_result.reason}"
+                    f"Issue {state.jira_issue} not eligible for immediate triage "
+                    f"(eligibility={eligibility.value}, reason={state.cve_eligibility_result.reason!r}), "
+                    "but force_cve_triage is set — proceeding"
                 )
-                if state.cve_eligibility_result.error:
-                    state.triage_result = OutputSchema(
-                        resolution=Resolution.ERROR,
-                        data=ErrorData(
-                            details=f"CVE eligibility check error: {state.cve_eligibility_result.error}",
-                            jira_issue=state.jira_issue,
-                        ),
+                return "run_triage_analysis"
+
+            if eligibility == TriageEligibility.PENDING_DEPENDENCIES:
+                pending = state.cve_eligibility_result.pending_zstream_issues or []
+                if not pending:
+                    logger.warning(
+                        f"Issue {state.jira_issue}: eligibility is PENDING_DEPENDENCIES "
+                        f"but no pending Z-stream issues were returned — this is unexpected"
                     )
-                else:
-                    state.triage_result = OutputSchema(
-                        resolution=Resolution.OPEN_ENDED_ANALYSIS,
-                        data=OpenEndedAnalysisData(
-                            summary="CVE eligibility check decided to skip "
-                            f"triaging: {state.cve_eligibility_result.reason}",
-                            recommendation="No action needed — this issue "
-                            "is not eligible for triage processing.",
-                            jira_issue=state.jira_issue,
-                        ),
-                    )
+                logger.info(
+                    f"Issue {state.jira_issue} postponed — waiting for "
+                    f"{len(pending)} Z-stream issue(s): {pending}. "
+                    f"Reason: {state.cve_eligibility_result.reason}"
+                )
+                state.triage_result = OutputSchema(
+                    resolution=Resolution.POSTPONED,
+                    data=PostponedData(
+                        summary=state.cve_eligibility_result.reason,
+                        pending_issues=pending,
+                        jira_issue=state.jira_issue,
+                    ),
+                )
                 return "comment_in_jira"
 
-            reason = state.cve_eligibility_result.reason
-            logger.info(f"Issue {state.jira_issue} is eligible for triage: {reason}")
-            return "run_triage_analysis"
+            logger.info(
+                f"Issue {state.jira_issue} not eligible for triage: {state.cve_eligibility_result.reason}"
+            )
+            if state.cve_eligibility_result.error:
+                state.triage_result = OutputSchema(
+                    resolution=Resolution.ERROR,
+                    data=ErrorData(
+                        details=f"CVE eligibility check error: {state.cve_eligibility_result.error}",
+                        jira_issue=state.jira_issue,
+                    ),
+                )
+            else:
+                state.triage_result = OutputSchema(
+                    resolution=Resolution.OPEN_ENDED_ANALYSIS,
+                    data=OpenEndedAnalysisData(
+                        summary="CVE eligibility check decided to skip "
+                        f"triaging: {state.cve_eligibility_result.reason}",
+                        recommendation="No action needed — this issue is not eligible for triage processing.",
+                        jira_issue=state.jira_issue,
+                    ),
+                )
+            return "comment_in_jira"
 
         async def run_triage_analysis(state):
             """Run the main triage analysis"""
@@ -725,6 +753,7 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
             if state.triage_result.resolution in [
                 Resolution.CLARIFICATION_NEEDED,
                 Resolution.OPEN_ENDED_ANALYSIS,
+                Resolution.POSTPONED,
             ]:
                 return "comment_in_jira"
             return Workflow.END
@@ -994,6 +1023,21 @@ async def main() -> None:
                         logger.info(f"Pushed {input.issue} to {RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value}")
                     else:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
+                elif output.resolution == Resolution.POSTPONED:
+                    logger.info(f"Triage resolved as POSTPONED for {input.issue}")
+                    await tasks.set_jira_labels(
+                        jira_issue=input.issue,
+                        labels_to_add=[JiraLabels.TRIAGED_POSTPONED.value],
+                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                        dry_run=dry_run,
+                    )
+                    await fix_await(
+                        redis.lpush(
+                            RedisQueues.POSTPONED_LIST.value,
+                            output.data.model_dump_json(),
+                        )
+                    )
+                    logger.info(f"Pushed {input.issue} to {RedisQueues.POSTPONED_LIST.value}")
                 elif output.resolution == Resolution.ERROR:
                     logger.warning(f"Triage resolved as ERROR for {input.issue}, retrying")
                     await tasks.set_jira_labels(

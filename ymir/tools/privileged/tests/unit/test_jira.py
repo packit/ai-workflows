@@ -4,18 +4,33 @@ from contextlib import asynccontextmanager
 
 import aiohttp
 import pytest
+from beeai_framework.tools import JSONToolOutput
 from flexmock import flexmock
 
+from ymir.common.models import TriageEligibility
 from ymir.tools.privileged import jira as jira_tools
 from ymir.tools.privileged.jira import (
     AddJiraCommentTool,
     ChangeJiraStatusTool,
+    CheckCveTriageEligibilityTool,
     EditJiraLabelsTool,
     GetJiraDetailsTool,
+    SearchJiraIssuesTool,
     SetJiraFieldsTool,
     Severity,
     VerifyIssueAuthorTool,
+    _check_zstream_clones_shipped,
+    _extract_cve_id,
 )
+
+
+def _create_async_return(value):
+    """Create a coroutine that returns the given value when awaited."""
+
+    async def async_return(*args, **kwargs):
+        return value
+
+    return async_return()
 
 
 @pytest.fixture(autouse=True)
@@ -330,3 +345,399 @@ async def test_verify_issue_author(user_groups, expected_result, use_account_id)
 
     result = (await VerifyIssueAuthorTool().run(input={"issue_key": issue_key})).result
     assert result == expected_result
+
+
+# --- CVE ID extraction tests ---
+
+
+@pytest.mark.parametrize(
+    "summary, expected",
+    [
+        ("CVE-2025-12345 buffer overflow in curl [rhel-9.8]", "CVE-2025-12345"),
+        ("kernel: fix for CVE-2025-99999 buffer overflow", "CVE-2025-99999"),
+        ("No CVE here", None),
+        ("Multiple CVE-2025-1111 and CVE-2025-2222", "CVE-2025-1111"),
+        ("CVE-2024-1 too short", None),
+    ],
+)
+def test_extract_cve_id(summary, expected):
+    assert _extract_cve_id(summary) == expected
+
+
+# --- Z-stream clone check tests ---
+
+RHEL_CONFIG = {
+    "current_y_streams": {"9": "rhel-9.8", "10": "rhel-10.2"},
+    "current_z_streams": {"8": "rhel-8.10.z", "9": "rhel-9.6.z"},
+    "upcoming_z_streams": {"9": "rhel-9.7.z"},
+}
+
+
+@pytest.mark.asyncio
+async def test_check_zstream_clones_all_closed():
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Done-Errata"},
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    any_shipped, pending = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    assert any_shipped is True
+    assert pending == []
+
+
+@pytest.mark.asyncio
+async def test_check_zstream_clones_one_shipped_one_open():
+    """At least one Z-stream clone shipped — proceed even if others are still open."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Done-Errata"},
+            },
+        },
+        {
+            "key": "RHEL-222",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.6.z"}],
+                "status": {"name": "In Progress"},
+                "resolution": None,
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    any_shipped, pending = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    assert any_shipped is True
+    assert pending == []
+
+
+@pytest.mark.asyncio
+async def test_check_zstream_clones_none_shipped():
+    """No Z-stream clones shipped — must wait."""
+    search_result = [
+        {
+            "key": "RHEL-222",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.6.z"}],
+                "status": {"name": "In Progress"},
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    any_shipped, pending = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    assert any_shipped is False
+    assert pending == ["RHEL-222"]
+
+
+@pytest.mark.asyncio
+async def test_check_zstream_clones_none_found():
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=[]))
+    ).once()
+
+    any_shipped, pending = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    assert any_shipped is True
+    assert pending == []
+
+
+@pytest.mark.asyncio
+async def test_check_zstream_clones_eus_filtered_out():
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.2.z"}],
+                "status": {"name": "In Progress"},
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    any_shipped, pending = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    assert any_shipped is True
+    assert pending == []
+
+
+@pytest.mark.asyncio
+async def test_check_zstream_clones_maintenance_filtered_out():
+    """RHEL 8 is maintenance (no Y-stream), so rhel-8.10.z clones are excluded."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-8.10.z"}],
+                "status": {"name": "In Progress"},
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    any_shipped, pending = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    assert any_shipped is True
+    assert pending == []
+
+
+@pytest.mark.asyncio
+async def test_check_zstream_clones_closed_wontdo_ignored():
+    """Clone closed as Won't Do is neither shipped nor pending — treated as irrelevant."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Won't Do"},
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    any_shipped, pending = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    assert any_shipped is True
+    assert pending == []
+
+
+@pytest.mark.asyncio
+async def test_check_zstream_clones_wontdo_with_pending():
+    """Won't Do clone doesn't count as shipped; pending clone still blocks."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Won't Do"},
+            },
+        },
+        {
+            "key": "RHEL-222",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.6.z"}],
+                "status": {"name": "In Progress"},
+                "resolution": None,
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    any_shipped, pending = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    assert any_shipped is False
+    assert pending == ["RHEL-222"]
+
+
+# --- CVE triage eligibility tests ---
+
+
+def _make_jira_issue(
+    labels=None,
+    fix_versions=None,
+    summary="Test issue",
+    embargo="",
+    severity="",
+    components=None,
+):
+    fields = {
+        "summary": summary,
+        "labels": labels or [],
+        "fixVersions": fix_versions or [],
+        "components": components or [],
+    }
+    if embargo:
+        fields["customfield_10860"] = {"value": embargo}
+    if severity:
+        fields["customfield_10840"] = {"value": severity}
+    return {"key": "RHEL-12345", "fields": fields}
+
+
+def _mock_jira_get(issue_data):
+    @asynccontextmanager
+    async def get(url, headers=None):
+        async def json():
+            return issue_data
+
+        yield flexmock(json=json, raise_for_status=lambda: None)
+
+    return get
+
+
+@pytest.mark.asyncio
+async def test_eligibility_non_cve():
+    issue = _make_jira_issue(labels=["SomeOtherLabel"])
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+
+    result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
+    assert result["eligibility"] == TriageEligibility.IMMEDIATELY
+    assert result["is_cve"] is False
+
+
+@pytest.mark.asyncio
+async def test_eligibility_no_fix_version():
+    issue = _make_jira_issue(labels=["SecurityTracking"], fix_versions=[])
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+
+    result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
+    assert result["eligibility"] == TriageEligibility.NEVER
+    assert result["error"] is not None
+
+
+@pytest.mark.asyncio
+async def test_eligibility_ystream_any_clone_shipped():
+    issue = _make_jira_issue(
+        labels=["SecurityTracking"],
+        fix_versions=[{"name": "rhel-9.8"}],
+        summary="CVE-2025-12345 buffer overflow in curl [rhel-9.8]",
+        severity="Important",
+        components=[{"name": "curl"}],
+    )
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+    flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
+        "CVE-2025-12345", "curl", "RHEL-12345"
+    ).and_return(_create_async_return((True, []))).once()
+
+    result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
+    assert result["eligibility"] == TriageEligibility.IMMEDIATELY
+    assert result["needs_internal_fix"] is True
+
+
+@pytest.mark.asyncio
+async def test_eligibility_ystream_clones_pending():
+    issue = _make_jira_issue(
+        labels=["SecurityTracking"],
+        fix_versions=[{"name": "rhel-9.8"}],
+        summary="CVE-2025-12345 buffer overflow in curl [rhel-9.8]",
+        severity="Critical",
+        components=[{"name": "curl"}],
+    )
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+    flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
+        "CVE-2025-12345", "curl", "RHEL-12345"
+    ).and_return(_create_async_return((False, ["RHEL-999"]))).once()
+
+    result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
+    assert result["eligibility"] == TriageEligibility.PENDING_DEPENDENCIES
+    assert result["pending_zstream_issues"] == ["RHEL-999"]
+
+
+@pytest.mark.parametrize("severity", ["Low", "Moderate"])
+@pytest.mark.asyncio
+async def test_eligibility_ystream_low_moderate_skipped(severity):
+    issue = _make_jira_issue(
+        labels=["SecurityTracking"],
+        fix_versions=[{"name": "rhel-9.8"}],
+        summary="CVE-2025-12345 buffer overflow in curl [rhel-9.8]",
+        severity=severity,
+        components=[{"name": "curl"}],
+    )
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+
+    result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
+    assert result["eligibility"] == TriageEligibility.NEVER
+    assert "CentOS Stream path" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_eligibility_ystream_no_cve_id():
+    issue = _make_jira_issue(
+        labels=["SecurityTracking"],
+        fix_versions=[{"name": "rhel-9.8"}],
+        summary="Some issue without CVE ID [rhel-9.8]",
+        severity="Important",
+        components=[{"name": "curl"}],
+    )
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+
+    result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
+    assert result["eligibility"] == TriageEligibility.NEVER
+
+
+@pytest.mark.asyncio
+async def test_eligibility_ystream_no_component():
+    issue = _make_jira_issue(
+        labels=["SecurityTracking"],
+        fix_versions=[{"name": "rhel-9.8"}],
+        summary="CVE-2025-12345 buffer overflow [rhel-9.8]",
+        severity="Critical",
+    )
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+
+    result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
+    assert result["eligibility"] == TriageEligibility.NEVER
+
+
+@pytest.mark.asyncio
+async def test_eligibility_embargoed():
+    issue = _make_jira_issue(
+        labels=["SecurityTracking"],
+        fix_versions=[{"name": "rhel-9.7.z"}],
+        embargo="True",
+    )
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+
+    result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
+    assert result["eligibility"] == TriageEligibility.NEVER
+
+
+@pytest.mark.asyncio
+async def test_eligibility_zstream():
+    issue = _make_jira_issue(
+        labels=["SecurityTracking"],
+        fix_versions=[{"name": "rhel-9.7.z"}],
+        severity="moderate",
+    )
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(
+            {
+                "current_z_streams": {"9": "rhel-9.7.z"},
+                "upcoming_z_streams": {},
+            }
+        )
+    ).once()
+
+    result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
+    assert result["eligibility"] == TriageEligibility.IMMEDIATELY

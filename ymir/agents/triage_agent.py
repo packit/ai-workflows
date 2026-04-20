@@ -310,8 +310,9 @@ TRIAGE_PROMPT = """
          * If the dependency issue has a `Fixed in Build` field set → resolution is "rebuild"
            Set dependency_issue to the issue key AND dependency_component to the component name
            (e.g., "golang", "openssl") from the dependency issue's component field
-         * Otherwise → resolution is "open-ended-analysis"
-           with a recommendation to rebuild once the dependency is ready
+         * Otherwise → resolution is "postponed"
+           Set summary to explain that rebuild is waiting for the dependency to ship,
+           and set pending_issues to the dependency issue key
          3.3. If rebuild: set Jira fields as per the instructions below.
 
       4. **Open-Ended Analysis**

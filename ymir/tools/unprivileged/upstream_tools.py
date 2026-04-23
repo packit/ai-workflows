@@ -532,7 +532,7 @@ class ApplyDownstreamPatchesTool(Tool[ApplyDownstreamPatchesToolInput, ToolRunOp
                     raise ToolError(
                         f"Patch file not found: {patch_path}. "
                         f"Successfully applied: {', '.join(applied_patches) if applied_patches else 'none'}. "
-                        "Abort cherry-pick approach, use git am workflow."
+                        "Downstream patches cannot be applied; cherry-pick workflow is not viable."
                     )
 
                 # Try to apply the patch with git apply and commit
@@ -545,7 +545,7 @@ class ApplyDownstreamPatchesTool(Tool[ApplyDownstreamPatchesToolInput, ToolRunOp
                         f"Failed to apply existing patch '{patch_file}' to upstream base version. "
                         f"Git apply error: {stderr}. "
                         f"Successfully applied: {', '.join(applied_patches) if applied_patches else 'none'}. "
-                        "Abort cherry-pick approach, use git am workflow."
+                        "Downstream patches cannot be applied; cherry-pick workflow is not viable."
                     )
 
                 # Stage the changes
@@ -636,7 +636,8 @@ class CherryPickCommitTool(Tool[CherryPickCommitToolInput, ToolRunOptions, Strin
                         f"Commit {tool_input.commit_hash} not found "
                         "in repository even after fetch attempt. "
                         f"Fetch result: {fetch_result}. "
-                        "Abort cherry-pick approach, use git am workflow."
+                        "Verify the commit hash is correct and the repository "
+                        "has been fully fetched (try: git fetch --all)."
                     )
 
             # Try to cherry-pick the commit
@@ -678,9 +679,9 @@ class CherryPickCommitTool(Tool[CherryPickCommitToolInput, ToolRunOptions, Strin
                 )
 
             raise ToolError(
-                f"Cherry-pick failed with error: {stderr}. "
-                f"This may indicate the commit doesn't exist or is not compatible. "
-                "Abort cherry-pick approach, use git am workflow."
+                f"Cherry-pick failed with unexpected error: {stderr}. "
+                "Investigate the error before proceeding. Check git status, "
+                "verify the commit hash, and inspect the repository state."
             )
 
         except ToolError:
@@ -765,7 +766,8 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
             if exit_code != 0:
                 raise ToolError(
                     f"Failed to continue cherry-pick: {stderr}. "
-                    "Abort cherry-pick approach, use git am workflow."
+                    "Check for remaining unresolved conflicts or "
+                    "unexpected repository state with git status."
                 )
 
             return StringToolOutput(result="Successfully completed cherry-pick after resolving conflicts")

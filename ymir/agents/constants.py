@@ -32,7 +32,7 @@ MR_DESCRIPTION_FOOTER = (
     "\n"
     "## 📞 Questions or Issues?\n"
     "\n"
-    "**Contact:** jotnar@redhat.com | **Slack:** #forum-jötnar-package-automation | "
+    "**Contact:** jotnar@redhat.com | **Slack:** #forum-ymir-package-automation | "
     "**Report AI Issues:** [Jira](https://issues.redhat.com/) "
     "(project: Packit, component: jotnar) "
     "or [GitHub](https://github.com/packit/ai-workflows/issues)\n"

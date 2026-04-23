@@ -662,8 +662,9 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
     description = """
     Continue a cherry-pick operation after conflicts have been resolved.
 
-    Before calling this tool, all conflicts must be resolved and changes staged with 'git add'.
-    This tool will complete the cherry-pick and create the commit.
+    Before calling this tool, all conflicts must be resolved.
+    This tool automatically runs 'git add -A' to stage all changes before continuing,
+    so explicit staging is optional.
     """
     input_schema = CherryPickContinueToolInput
 
@@ -683,14 +684,6 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
             # Verify it's a git repository
             if not (tool_input.repo_path / ".git").exists():
                 raise ToolError(f"Not a git repository: {tool_input.repo_path}")
-            # Log current git state for debugging
-            cmd = ["git", "status", "--short"]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
-            if exit_code == 0:
-                print(f"DEBUG: Git status before cherry-pick continue: {stdout}")
-            else:
-                print(f"DEBUG: Failed to get git status: {stderr}")
-
             # Check if we're in a cherry-pick state
             cmd = ["git", "status", "--porcelain"]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
@@ -713,7 +706,7 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
                     conflict_file = line[3:].strip()
                     raise ToolError(
                         f"Unresolved conflicts still exist in: {conflict_file}. "
-                        "File is still in conflict state. Use `git add` after resolving."
+                        "Resolve the conflict markers in this file first, then call this tool again."
                     )
 
             # If no UU/AA/DD files, conflicts are resolved

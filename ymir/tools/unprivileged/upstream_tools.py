@@ -326,21 +326,30 @@ class CloneUpstreamRepositoryTool(Tool[CloneUpstreamRepositoryToolInput, ToolRun
 class FindBaseCommitToolInput(BaseModel):
     repo_path: AbsolutePath = Field(description="Absolute path to the cloned upstream repository")
     version: str = Field(description="Version string to find (e.g., '2.5.3')")
+    tag: str | None = Field(
+        default=None,
+        description="Exact tag name to checkout, skipping pattern search. "
+        "Use when you already know the correct tag from the available tags list.",
+    )
+    commit: str | None = Field(
+        default=None,
+        description="Exact commit hash to checkout as the base. "
+        "Use when the upstream doesn't use tags or you know the exact release commit.",
+    )
 
 
 class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToolOutput]):
     name = "find_base_commit"
     description = """
-    Find and checkout a git tag matching the specified version in an upstream repository.
+    Find and checkout the base version commit in an upstream repository.
 
-    This tool tries common tag naming patterns:
-    - v{version} (e.g., v2.5.3)
-    - {version} (e.g., 2.5.3)
-    - release-{version} (e.g., release-2.5.3)
-    - {version}-release (e.g., 2.5.3-release)
+    Accepts three modes (highest priority first):
+    - 'commit': checkout an exact commit hash (for repos without tags)
+    - 'tag': checkout an exact tag name (when you know the right tag)
+    - pattern search: tries v{version}, {version}, release-{version}, etc.
 
-    If a matching tag is found, it checks out that tag and returns the commit hash.
-    If no matching tag is found, it returns an error.
+    If pattern search fails, returns available tags so you can retry with
+    'tag' or 'commit'. Always stores the base commit for History/Trace tools.
     """
     input_schema = FindBaseCommitToolInput
 
@@ -368,48 +377,66 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
                 # Non-fatal, continue anyway (might work with existing tags)
                 pass
 
-            # Common tag patterns to try
-            tag_patterns = [
-                f"v{tool_input.version}",
-                f"{tool_input.version}",
-                f"release-{tool_input.version}",
-                f"{tool_input.version}-release",
-                f"rel-{tool_input.version}",
-                f"{tool_input.version}.0",  # Sometimes .0 is added
-                f"v{tool_input.version}.0",
-            ]
+            if tool_input.commit:
+                cmd = ["git", "rev-parse", "--verify", f"{tool_input.commit}^{{commit}}"]
+                exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
+                if exit_code != 0:
+                    raise ToolError(f"Commit '{tool_input.commit}' not found in repository: {stderr}")
+                cmd = ["git", "checkout", tool_input.commit]
+                exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
+                if exit_code != 0:
+                    raise ToolError(f"Failed to checkout commit {tool_input.commit}: {stderr}")
+                self.options["base_tag_commit"] = tool_input.commit
+                return StringToolOutput(result=f"Checked out commit {tool_input.commit} as base")
 
-            found_tag = None
+            if tool_input.tag:
+                cmd = ["git", "rev-parse", "--verify", f"refs/tags/{tool_input.tag}"]
+                exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
+                if exit_code != 0:
+                    raise ToolError(f"Tag '{tool_input.tag}' not found in repository: {stderr}")
+                found_tag = tool_input.tag
+            else:
+                # Common tag patterns to try
+                tag_patterns = [
+                    f"v{tool_input.version}",
+                    f"{tool_input.version}",
+                    f"release-{tool_input.version}",
+                    f"{tool_input.version}-release",
+                    f"rel-{tool_input.version}",
+                    f"{tool_input.version}.0",
+                    f"v{tool_input.version}.0",
+                ]
 
-            # Try each pattern
-            for tag in tag_patterns:
-                # Check if tag exists
-                cmd = ["git", "rev-parse", "--verify", f"refs/tags/{tag}"]
-                exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
+                found_tag = None
+                for tag in tag_patterns:
+                    cmd = ["git", "rev-parse", "--verify", f"refs/tags/{tag}"]
+                    exit_code, _, _ = await run_subprocess(cmd, cwd=tool_input.repo_path)
+                    if exit_code == 0:
+                        found_tag = tag
+                        break
 
-                if exit_code == 0:
-                    found_tag = tag
-                    break
+                if not found_tag:
+                    cmd = ["git", "tag", "-l"]
+                    exit_code, stdout, stderr = await run_subprocess(
+                        cmd,
+                        cwd=tool_input.repo_path,
+                    )
+                    available_tags = stdout.strip().split("\n") if stdout.strip() else []
+                    tag_info = (
+                        f"Available tags: {', '.join(available_tags[:10])}"
+                        if available_tags
+                        else "No tags found in repository"
+                    )
+                    if len(available_tags) > 10:
+                        tag_info += f" (and {len(available_tags) - 10} more)"
 
-            if not found_tag:
-                # Get list of available tags for debugging
-                cmd = ["git", "tag", "-l"]
-                exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
-
-                available_tags = stdout.strip().split("\n") if stdout.strip() else []
-                tag_info = (
-                    f"Available tags: {', '.join(available_tags[:10])}"
-                    if available_tags
-                    else "No tags found in repository"
-                )
-                if len(available_tags) > 10:
-                    tag_info += f" (and {len(available_tags) - 10} more)"
-
-                raise ToolError(
-                    f"Could not find tag matching version {tool_input.version}. "
-                    f"Tried patterns: {', '.join(tag_patterns)}. "
-                    f"{tag_info}. "
-                )
+                    raise ToolError(
+                        f"Could not find tag matching version {tool_input.version}. "
+                        f"Tried patterns: {', '.join(tag_patterns)}. "
+                        f"{tag_info}. "
+                        "Retry with 'tag' set to the exact tag name, "
+                        "or 'commit' set to the release commit hash."
+                    )
 
             # Checkout the found tag
             cmd = ["git", "checkout", found_tag]

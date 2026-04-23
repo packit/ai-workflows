@@ -52,7 +52,7 @@ The team primarily tracks these items using Jira dashboards:
 
 | Level | Channel | Use For |
 |-------|---------|---------|
-| **1. Team** | `#forum-jötnar-package-automation` | Questions, feedback, label reviews |
+| **1. Team** | `#forum-ymir-package-automation` | Questions, feedback, label reviews |
 | **2. Jira** | Packit project, jotnar component | Unresolved issues, bugs, feature requests |
 | **3. Leadership** | Contact team managers directly | Critical CVEs, VP escalations, systemic failures |
 | **4. Anonymous** | [Feedback form](https://docs.google.com/forms/d/1bqPhabn5M_D6qBNW0nAoucdlbU0TNl48AJmgptJQ8hI/viewform) | Sensitive concerns |

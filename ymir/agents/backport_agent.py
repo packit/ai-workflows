@@ -175,62 +175,29 @@ BACKPORT_INSTRUCTIONS = """
                 - If any patch fails to apply, immediately fall back to approach B
 
             4f. Cherry-pick the fix in upstream:
-                FOR PULL REQUESTS (if is_pr is True from step 4a):
-                  * Download the PR patch to see all commits: `curl -L <original_url> -o /tmp/pr.patch`
-                  * Parse the patch file to extract commit hashes (lines starting with "From ")
-                    Each commit appears as "From <hash> Mon Sep DD ..." and has "[PATCH XX/YY]" in subject
-                  * You now have the exact list of commits that are part of the PR
-                  * Fetch PR branch: `git -C <UPSTREAM_REPO> fetch origin pull/<pr_number>/head:pr-branch`
-                  * Cherry-pick each commit from the list, starting from the first (oldest)
-                  * When conflicts occur (EXPECTED when backporting to older version):
-                    - Understand what the commit is trying to do and why it conflicts
-                    - Examine what's different between old and current version
-                    - Identify if the commit depends on changes that aren't in the dist-git version:
-                      * Missing helper functions, types, or macros
-                      * API changes that happened between versions
-                      * Structural changes to the codebase
-                      * Test file reorganization (tests split/merged into different files)
-                    - If prerequisites are missing, you have options:
-                      * Cherry-pick the prerequisite commits first
-                        (from upstream history between dist-git version and PR)
-                      * Or adapt the code to work without them (rewrite to use older APIs)
-                      * Or manually backport just the needed helper functions
-                    - For test file conflicts due to reorganization:
-                      * NEVER SKIP TEST COMMITS - tests validate that your fix actually works!
-                      * Check if test files exist in different locations in the old version
-                      * Use git log in upstream repo to trace test file movements:
-                        `git -C <UPSTREAM_REPO> log --follow --all -- path/to/test_file`
-                      * Merge test changes into existing test files that match the old structure
-                      * Adapt test code to work with older test frameworks or patterns
-                      * Don't skip tests just because file paths don't match - adapt them!
-                      * For CVE fixes: tests often demonstrate the vulnerability - they're CRITICAL
-                    - If adding NEW test files, ensure they're integrated into the build system:
-                        check Makefile/CMakeLists.txt/meson.build and add to test lists if needed,
-                        or verify they follow auto-discovery naming conventions (test_*.py, *_test.c)
-                    - Intelligently adapt the changes to make them work with the older codebase
-                  * Continue until all PR commits are successfully cherry-picked and adapted
+                GETTING COMMITS:
+                  FOR PULL REQUESTS (if is_pr is True from step 4a):
+                    * Download the PR patch: `curl -L <original_url> -o /tmp/pr.patch`
+                    * Parse commit hashes from lines starting with "From <hash>"
+                    * Fetch PR branch: `git -C <UPSTREAM_REPO> fetch origin pull/<pr_number>/head:pr-branch`
+                    * Skip any merge commits — only cherry-pick non-merge commits
+                  FOR SINGLE COMMITS (if is_pr is False):
+                    * Use commit_hash from step 4a
 
-                FOR SINGLE COMMITS (if is_pr is False):
-                  * Use commit_hash from step 4a
-                  * Cherry-pick this single commit
-
-                CHERRY-PICKING PROCESS (ONE commit at a time - NEVER multiple at once):
-                  1. Cherry-pick ONE commit: `cherry_pick_commit` tool with ONE commit hash
-                  2. If conflicts occur (NORMAL for backporting):
-                     a. View conflicting files to understand what's needed
-                     b. Intelligently resolve by editing files with `str_replace`:
-                        - Understand what the commit does
-                        - Adapt to older codebase
-                        - Add missing helpers if needed
-                        - Rewrite to use older APIs if needed
-                        - Prioritize preserving the patch's original logic.
-                          The final backport must still fix the original bug.
-                     c. Stage ALL resolved files: `git -C <UPSTREAM_REPO> add <file>` for each file
-                     d. Complete cherry-pick: `cherry_pick_continue` tool
-                  3. CRITICAL: Only move to next commit after current one is FULLY COMPLETE
-                  4. NEVER try to cherry-pick multiple commits at once
-                  5. Do NOT fall back to approach B - keep cherry-picking through all PR commits
-                  6. NEVER skip any commits - all commits must be adapted and cherry-picked
+                CHERRY-PICKING (one commit at a time, NEVER multiple at once):
+                  1. Use `cherry_pick_commit` tool with ONE commit hash.
+                  2. On conflict:
+                     a. Read the conflicting files from the tool output.
+                     b. Resolve with `str_replace`, adapting the fix to the older codebase.
+                        Preserve the patch's original logic — the backport must still fix the bug.
+                     c. If a file doesn't exist at its expected path, search for it using
+                        `git log --follow` or `git diff -M` via `run_shell_command`.
+                     d. Run `cherry_pick_continue` to complete (auto-stages all files).
+                  3. Only move to the next commit after the current one is FULLY COMPLETE.
+                  4. NEVER skip commits that contain changes. For tests: NEVER skip test
+                     commits — adapt them to the old structure. For CVE fixes, tests are CRITICAL.
+                  5. If a cherry-pick results in an empty commit (changes already present),
+                     use `cherry_pick_continue` with `allow_empty=True`, or skip the commit.
 
             4g. Generate the final patch file from upstream:
                 - Use `git_patch_create` tool with:
@@ -257,15 +224,18 @@ BACKPORT_INSTRUCTIONS = """
             They are called `<JIRA_ISSUE>-<N>.patch` where <N> is a 0-based index. For example,
             for a `RHEL-12345` Jira issue the first patch would be called `RHEL-12345-0.patch`.
 
-            Backport all patches individually using the steps 4a and 4b below.
+            Backport all patches individually using steps B1 and B2 below.
 
-            4a. Backport one patch at a time using the following steps:
+            B1. Backport one patch at a time using the following steps:
+                - If a cherry-pick is in progress, abort it first:
+                  `git -C <UPSTREAM_REPO> cherry-pick --abort`
                 - Use the `git_patch_apply` tool with the patch file: <JIRA_ISSUE>-<N>.patch
+                  This works on <UNPACKED_SOURCES>, NOT <UPSTREAM_REPO>.
                 - Resolve all conflicts and leave the repository in a dirty state. Delete all *.rej files.
                 - Use the `git_apply_finish` tool to finish the patch application.
                 - Repeat for each pre-downloaded patch file.
 
-            4b. After ALL patches have been applied, generate a single combined patch:
+            B2. After ALL patches have been applied, generate a single combined patch:
                 - Use `git_patch_create` tool with:
                   * repository_path: <UNPACKED_SOURCES>
                   * patch_file_path: <JIRA_ISSUE>.patch in the current working
@@ -290,10 +260,13 @@ BACKPORT_INSTRUCTIONS = """
 
       General instructions:
 
+      - Fall back to approach B ONLY when the cherry-pick workflow cannot be set up:
+        URL extraction fails (step 4a), clone fails (step 4c), or downstream patches
+        don't apply (step 4e). Once cherry-picking has started (step 4f), resolve all
+        errors in place — do not abandon to git-am.
       - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
       - Never change anything in the spec file changelog.
       - Preserve existing formatting and style conventions in spec files and patch headers.
-      - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
       - Ignore all changes that cause conflicts in the following kinds of
         files: .github/ workflows, .gitignore, news, changes,
         and internal documentation.
@@ -303,13 +276,12 @@ BACKPORT_INSTRUCTIONS = """
         RPM spec file and read sections `%prep` and `%build`.
       - If there is a complex conflict, you are required to properly resolve
         it by applying the core functionality of the proposed patch.
-      - When a tool explicitly says
-        "Abort cherry-pick approach, use git am workflow",
-        immediately switch to approach B.
       - When using the cherry-pick workflow, you have access to
         <UPSTREAM_REPO> (the cloned upstream repository).
         You can explore it to find clues for resolving conflicts: examine commit history, related changes,
         documentation, test files, or similar fixes that might help understand the proper resolution.
+      - Use the specialized cherry-pick tools (cherry_pick_commit, cherry_pick_continue)
+        rather than running git cherry-pick directly.
       - Never apply the patches yourself, always use the `git_patch_apply` tool.
       - Never run `git am --skip`, always use the `git_apply_finish` tool instead.
       - Never abort the existing git am session.
@@ -380,62 +352,29 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
                 - If any patch fails to apply, immediately fall back to approach B
 
             3f. Cherry-pick the fix in upstream:
-                FOR PULL REQUESTS (if is_pr is True from step 3a):
-                  * Download the PR patch to see all commits: `curl -L <original_url> -o /tmp/pr.patch`
-                  * Parse the patch file to extract commit hashes (lines starting with "From ")
-                    Each commit appears as "From <hash> Mon Sep DD ..." and has "[PATCH XX/YY]" in subject
-                  * You now have the exact list of commits that are part of the PR
-                  * Fetch PR branch: `git -C <UPSTREAM_REPO> fetch origin pull/<pr_number>/head:pr-branch`
-                  * Cherry-pick each commit from the list, starting from the first (oldest)
-                  * When conflicts occur (EXPECTED when backporting to older version):
-                    - Understand what the commit is trying to do and why it conflicts
-                    - Examine what's different between old and current version
-                    - Identify if the commit depends on changes that aren't in the dist-git version:
-                      * Missing helper functions, types, or macros
-                      * API changes that happened between versions
-                      * Structural changes to the codebase
-                      * Test file reorganization (tests split/merged into different files)
-                    - If prerequisites are missing, you have options:
-                      * Cherry-pick the prerequisite commits first
-                        (from upstream history between dist-git version and PR)
-                      * Or adapt the code to work without them (rewrite to use older APIs)
-                      * Or manually backport just the needed helper functions
-                    - For test file conflicts due to reorganization:
-                      * NEVER SKIP TEST COMMITS - tests validate that your fix actually works!
-                      * Check if test files exist in different locations in the old version
-                      * Use git log in upstream repo to trace test file movements:
-                        `git -C <UPSTREAM_REPO> log --follow --all -- path/to/test_file`
-                      * Merge test changes into existing test files that match the old structure
-                      * Adapt test code to work with older test frameworks or patterns
-                      * Don't skip tests just because file paths don't match - adapt them!
-                      * For CVE fixes: tests often demonstrate the vulnerability - they're CRITICAL
-                    - If adding NEW test files, ensure they're integrated into the build system:
-                        check Makefile/CMakeLists.txt/meson.build and add to test lists if needed,
-                        or verify they follow auto-discovery naming conventions (test_*.py, *_test.c)
-                    - Intelligently adapt the changes to make them work with the older codebase
-                  * Continue until all PR commits are successfully cherry-picked and adapted
+                GETTING COMMITS:
+                  FOR PULL REQUESTS (if is_pr is True from step 3a):
+                    * Download the PR patch: `curl -L <original_url> -o /tmp/pr.patch`
+                    * Parse commit hashes from lines starting with "From <hash>"
+                    * Fetch PR branch: `git -C <UPSTREAM_REPO> fetch origin pull/<pr_number>/head:pr-branch`
+                    * Skip any merge commits — only cherry-pick non-merge commits
+                  FOR SINGLE COMMITS (if is_pr is False):
+                    * Use commit_hash from step 3a
 
-                FOR SINGLE COMMITS (if is_pr is False):
-                  * Use commit_hash from step 3a
-                  * Cherry-pick this single commit
-
-                CHERRY-PICKING PROCESS (ONE commit at a time - NEVER multiple at once):
-                  1. Cherry-pick ONE commit: `cherry_pick_commit` tool with ONE commit hash
-                  2. If conflicts occur (NORMAL for backporting):
-                     a. View conflicting files to understand what's needed
-                     b. Intelligently resolve by editing files with `str_replace`:
-                        - Understand what the commit does
-                        - Adapt to older codebase
-                        - Add missing helpers if needed
-                        - Rewrite to use older APIs if needed
-                        - Prioritize preserving the patch's original logic.
-                          The final backport must still fix the original bug.
-                     c. Stage ALL resolved files: `git -C <UPSTREAM_REPO> add <file>` for each file
-                     d. Complete cherry-pick: `cherry_pick_continue` tool
-                  3. CRITICAL: Only move to next commit after current one is FULLY COMPLETE
-                  4. NEVER try to cherry-pick multiple commits at once
-                  5. Do NOT fall back to approach B - keep cherry-picking through all PR commits
-                  6. NEVER skip any commits - all commits must be adapted and cherry-picked
+                CHERRY-PICKING (one commit at a time, NEVER multiple at once):
+                  1. Use `cherry_pick_commit` tool with ONE commit hash.
+                  2. On conflict:
+                     a. Read the conflicting files from the tool output.
+                     b. Resolve with `str_replace`, adapting the fix to the older codebase.
+                        Preserve the patch's original logic — the backport must still fix the bug.
+                     c. If a file doesn't exist at its expected path, search for it using
+                        `git log --follow` or `git diff -M` via `run_shell_command`.
+                     d. Run `cherry_pick_continue` to complete (auto-stages all files).
+                  3. Only move to the next commit after the current one is FULLY COMPLETE.
+                  4. NEVER skip commits that contain changes. For tests: NEVER skip test
+                     commits — adapt them to the old structure. For CVE fixes, tests are CRITICAL.
+                  5. If a cherry-pick results in an empty commit (changes already present),
+                     use `cherry_pick_continue` with `allow_empty=True`, or skip the commit.
 
             3g. Generate the final patch file from upstream:
                 - Use `git_patch_create` tool with:
@@ -462,15 +401,18 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
             They are called `<JIRA_ISSUE>-<N>.patch` where <N> is a 0-based index. For example,
             for a `RHEL-12345` Jira issue the first patch would be called `RHEL-12345-0.patch`.
 
-            Backport all patches individually using the steps 3a and 3b below.
+            Backport all patches individually using steps B1 and B2 below.
 
-            3a. Backport one patch at a time using the following steps:
+            B1. Backport one patch at a time using the following steps:
+                - If a cherry-pick is in progress, abort it first:
+                  `git -C <UPSTREAM_REPO> cherry-pick --abort`
                 - Use the `git_patch_apply` tool with the patch file: <JIRA_ISSUE>-<N>.patch
+                  This works on <UNPACKED_SOURCES>, NOT <UPSTREAM_REPO>.
                 - Resolve all conflicts and leave the repository in a dirty state. Delete all *.rej files.
                 - Use the `git_apply_finish` tool to finish the patch application.
                 - Repeat for each pre-downloaded patch file.
 
-            3b. After ALL patches have been applied, generate a single combined patch:
+            B2. After ALL patches have been applied, generate a single combined patch:
                 - Use `git_patch_create` tool with:
                   * repository_path: <UNPACKED_SOURCES>
                   * patch_file_path: <JIRA_ISSUE>.patch in the current working
@@ -498,11 +440,14 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
 
       General instructions:
 
+      - Fall back to approach B ONLY when the cherry-pick workflow cannot be set up:
+        URL extraction fails (step 3a), clone fails (step 3c), or downstream patches
+        don't apply (step 3e). Once cherry-picking has started (step 3f), resolve all
+        errors in place — do not abandon to git-am.
       - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
       - Never change anything in the spec file changelog.
       - Never change the Release field in the spec file.
       - Preserve existing formatting and style conventions in spec files and patch headers.
-      - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
       - Ignore all changes that cause conflicts in the following kinds of
         files: .github/ workflows, .gitignore, news, changes,
         and internal documentation.
@@ -512,13 +457,12 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
         RPM spec file and read sections `%prep` and `%build`.
       - If there is a complex conflict, you are required to properly resolve
         it by applying the core functionality of the proposed patch.
-      - When a tool explicitly says
-        "Abort cherry-pick approach, use git am workflow",
-        immediately switch to approach B.
       - When using the cherry-pick workflow, you have access to
         <UPSTREAM_REPO> (the cloned upstream repository).
         You can explore it to find clues for resolving conflicts: examine commit history, related changes,
         documentation, test files, or similar fixes that might help understand the proper resolution.
+      - Use the specialized cherry-pick tools (cherry_pick_commit, cherry_pick_continue)
+        rather than running git cherry-pick directly.
       - Never apply the patches yourself, always use the `git_patch_apply` tool.
       - Never run `git am --skip`, always use the `git_apply_finish` tool instead.
       - Never abort the existing git am session.

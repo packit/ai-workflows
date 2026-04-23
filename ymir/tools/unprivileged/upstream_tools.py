@@ -426,6 +426,7 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
                 raise ToolError(f"Failed to get commit hash: {stderr}")
 
             commit_hash = stdout.strip()
+            self.options["base_tag_commit"] = commit_hash
 
             return StringToolOutput(
                 result=f"Successfully checked out tag '{found_tag}' at commit {commit_hash}"
@@ -624,15 +625,17 @@ class CherryPickCommitTool(Tool[CherryPickCommitToolInput, ToolRunOptions, Strin
             exit_code_status, stdout_status, _ = await run_subprocess(cmd, cwd=tool_input.repo_path)
 
             if exit_code_status == 0 and stdout_status:
-                # Get list of conflicting files
-                # UU = both modified, AA = both added, DD = both deleted
+                # Any two-letter code where either letter is U, plus AA/DD,
+                # indicates an unmerged file. This covers UU, AU, UA, UD, DU, AA, DD.
+                unmerged_prefixes = ("UU ", "AA ", "DD ", "AU ", "UA ", "UD ", "DU ")
                 conflict_files = [
                     line[3:].strip()
                     for line in stdout_status.strip().split("\n")
-                    if line.startswith(("UU ", "AA ", "DD "))
+                    if line.startswith(unmerged_prefixes)
                 ]
 
                 if conflict_files:
+                    self.options["fix_commit"] = tool_input.commit_hash
                     return StringToolOutput(
                         result="Cherry-pick has conflicts in the following files: "
                         f"{', '.join(conflict_files)}. "
@@ -640,7 +643,13 @@ class CherryPickCommitTool(Tool[CherryPickCommitToolInput, ToolRunOptions, Strin
                         f"cherry_pick_continue tool. Git error: {stderr}"
                     )
 
-            # Some other error
+            if "nothing to commit" in (stderr or "") or "cherry-pick is now empty" in (stderr or ""):
+                return StringToolOutput(
+                    result=f"Cherry-pick of {tool_input.commit_hash} resulted in an empty commit "
+                    "(all changes already present). Use cherry_pick_continue with "
+                    "allow_empty=True to record it, or skip this commit."
+                )
+
             raise ToolError(
                 f"Cherry-pick failed with error: {stderr}. "
                 f"This may indicate the commit doesn't exist or is not compatible. "
@@ -655,6 +664,11 @@ class CherryPickCommitTool(Tool[CherryPickCommitToolInput, ToolRunOptions, Strin
 
 class CherryPickContinueToolInput(BaseModel):
     repo_path: AbsolutePath = Field(description="Absolute path to the upstream repository")
+    allow_empty: bool = Field(
+        default=False,
+        description="Allow creating an empty commit. Use when cherry-pick results in "
+        "no changes (all changes already present in the codebase).",
+    )
 
 
 class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, StringToolOutput]):
@@ -699,18 +713,14 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
             if not (tool_input.repo_path / ".git" / "CHERRY_PICK_HEAD").exists():
                 raise ToolError("Not in a cherry-pick state. Cannot continue cherry-pick.")
 
-            # Check for unresolved conflicts by checking git status
-            # Files with UU, AA, DD status indicate unresolved conflicts
+            unmerged_prefixes = ("UU ", "AA ", "DD ", "AU ", "UA ", "UD ", "DU ")
             for line in (stdout or "").strip().split("\n") if (stdout or "").strip() else []:
-                if line.startswith(("UU ", "AA ", "DD ")):
+                if line.startswith(unmerged_prefixes):
                     conflict_file = line[3:].strip()
                     raise ToolError(
                         f"Unresolved conflicts still exist in: {conflict_file}. "
                         "Resolve the conflict markers in this file first, then call this tool again."
                     )
-
-            # If no UU/AA/DD files, conflicts are resolved
-            # The agent should have edited files and staged them with `git add`
 
             # Stage all resolved files
             cmd = ["git", "add", "-A"]
@@ -721,6 +731,8 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
 
             # Continue the cherry-pick
             cmd = ["git", "cherry-pick", "--continue"]
+            if tool_input.allow_empty:
+                cmd.append("--allow-empty")
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
 
             if exit_code != 0:

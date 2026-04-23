@@ -484,7 +484,7 @@ class ApplyDownstreamPatchesTool(Tool[ApplyDownstreamPatchesToolInput, ToolRunOp
     all the patches that are already part of the package. After this, we can cherry-pick
     the new fix on top.
 
-    The patches are applied in order using 'git apply' and committed. If a patch fails to apply,
+    The patches are applied in order using patch(1) and committed. If a patch fails to apply,
     the tool returns an error indicating which patch failed.
     """
     input_schema = ApplyDownstreamPatchesToolInput
@@ -535,15 +535,16 @@ class ApplyDownstreamPatchesTool(Tool[ApplyDownstreamPatchesToolInput, ToolRunOp
                         "Downstream patches cannot be applied; cherry-pick workflow is not viable."
                     )
 
-                # Try to apply the patch with git apply and commit
-                # Use git apply instead of git am because dist-git patches can be plain diffs, not mbox format
-                cmd = ["git", "apply", str(patch_path)]
+                # Use patch(1) instead of git-apply to match RPM %prep behavior.
+                # Handles gendiff-style patches, trailing whitespace, fuzz
+                # matching, and other quirks that git-apply rejects.
+                cmd = ["patch", "-p1", "-s", "--batch", "--no-backup-if-mismatch", "-i", str(patch_path)]
                 exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
 
                 if exit_code != 0:
                     raise ToolError(
                         f"Failed to apply existing patch '{patch_file}' to upstream base version. "
-                        f"Git apply error: {stderr}. "
+                        f"Patch error: {stderr or stdout}. "
                         f"Successfully applied: {', '.join(applied_patches) if applied_patches else 'none'}. "
                         "Downstream patches cannot be applied; cherry-pick workflow is not viable."
                     )

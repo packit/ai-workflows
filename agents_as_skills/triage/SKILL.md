@@ -5,7 +5,7 @@ arguments:
     description: "JIRA issue key (e.g., RHEL-12345)"
     required: true
   - name: force_cve_triage
-    description: "Force triage of CVE issues that would normally be skipped (e.g. Y-stream CVEs). Default: false"
+    description: "Force triage of CVE issues that would normally be deferred or rejected (eligibility=PENDING_DEPENDENCIES or NEVER). Default: false"
     required: false
 ---
 
@@ -16,7 +16,7 @@ You are a Red Hat Enterprise Linux developer tasked with analyzing JIRA issues t
 ## Input Arguments
 
 - `jira_issue`: {{jira_issue}} — The JIRA issue key to triage
-- `force_cve_triage`: {{force_cve_triage}} — When true, force triage even if CVE eligibility check says to skip
+- `force_cve_triage`: {{force_cve_triage}} — When true, force triage even if CVE eligibility is PENDING_DEPENDENCIES or NEVER
 
 ## Tools
 
@@ -45,12 +45,14 @@ Execute the following steps in order:
 ### Step 1: Check CVE Eligibility
 
 1. Call `check_cve_triage_eligibility` with `issue_key` set to `{{jira_issue}}`.
-2. The result contains: `is_cve` (bool), `is_eligible_for_triage` (bool), `reason` (string), `needs_internal_fix` (bool|null), `error` (string|null).
-3. **If NOT eligible for triage:**
-   - If `force_cve_triage` is true AND there is no `error` → proceed to Step 2 anyway.
+2. The result contains: `is_cve` (bool), `eligibility` (string: "immediately" | "pending-dependencies" | "never"), `reason` (string), `needs_internal_fix` (bool|null), `error` (string|null), `pending_zstream_issues` (list of strings|null).
+3. **If `eligibility` is "immediately"** → proceed to Step 2. Save the CVE eligibility result (especially `is_cve` and `needs_internal_fix`) for later use.
+4. **If `force_cve_triage` is true AND there is no `error`** → proceed to Step 2 regardless of eligibility.
+5. **If `eligibility` is "pending-dependencies":**
+   - Produce a **postponed** resolution with summary set to the `reason` from the eligibility result and `pending_issues` set to the `pending_zstream_issues` list, then skip to Step 6.
+6. **If `eligibility` is "never":**
    - If there is an `error` → produce an **error** resolution with details about the CVE eligibility check error, then skip to Step 6.
    - Otherwise → produce an **open-ended-analysis** resolution with summary "CVE eligibility check decided to skip triaging: {reason}" and recommendation "No action needed — this issue is not eligible for triage processing.", then skip to Step 6.
-4. **If eligible** → proceed to Step 2. Save the CVE eligibility result (especially `is_cve` and `needs_internal_fix`) for later use.
 
 ### Step 2: Determine Prompt Variant
 
@@ -114,6 +116,7 @@ Format the comment based on the resolution type:
 - **rebuild**: Include resolution, package name, dependency component and issue (if applicable), and fix version (if set).
 - **clarification-needed**: Include resolution, findings, and additional info needed.
 - **open-ended-analysis**: Include summary and recommendation.
+- **postponed**: Include summary and the list of pending issues being waited on.
 - **error**: Include resolution and error details.
 
 ---
@@ -423,8 +426,9 @@ You must decide between one of the following actions. Follow these guidelines to
    * If the dependency issue has a `Fixed in Build` field set → resolution is "rebuild"
      Set `dependency_issue` to the issue key AND `dependency_component` to the component name
      (e.g., "golang", "openssl") from the dependency issue's component field
-   * Otherwise → resolution is "open-ended-analysis"
-     with a recommendation to rebuild once the dependency is ready
+   * Otherwise → resolution is "postponed"
+     Set summary to explain that rebuild is waiting for the dependency to ship,
+     and set pending_issues to the dependency issue key
    3.3. If rebuild: set Jira fields as per the instructions below.
 
 4. **Open-Ended Analysis**
@@ -469,7 +473,7 @@ The final output must be a JSON object with the following structure:
 
 ```json
 {
-    "resolution": "<one of: rebase, backport, rebuild, clarification-needed, open-ended-analysis, error>",
+    "resolution": "<one of: rebase, backport, rebuild, clarification-needed, open-ended-analysis, postponed, error>",
     "data": { ... }
 }
 ```
@@ -537,6 +541,18 @@ The `data` field MUST be a nested JSON object (not a stringified JSON). Its stru
     "data": {
         "summary": "2-3 sentence summary of the issue analysis",
         "recommendation": "1-2 sentence recommended course of action",
+        "jira_issue": "RHEL-12345"
+    }
+}
+```
+
+### Resolution: "postponed"
+```json
+{
+    "resolution": "postponed",
+    "data": {
+        "summary": "Reason for postponement",
+        "pending_issues": ["RHEL-67890"],
         "jira_issue": "RHEL-12345"
     }
 }

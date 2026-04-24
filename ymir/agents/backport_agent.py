@@ -190,6 +190,8 @@ BACKPORT_INSTRUCTIONS = """
                      a. Read the conflicting files from the tool output.
                      b. Resolve with `str_replace`, adapting the fix to the older codebase.
                         Preserve the patch's original logic — the backport must still fix the bug.
+                        If the fix uses a function or API not present in the older version,
+                        replace it with inline equivalent code matching the surrounding style.
                      c. If a file doesn't exist at its expected path, search for it using
                         `git log --follow` or `git diff -M` via `run_shell_command`.
                      d. Run `cherry_pick_continue` to complete (auto-stages all files).
@@ -263,7 +265,7 @@ BACKPORT_INSTRUCTIONS = """
       - Fall back to approach B ONLY when the cherry-pick workflow cannot be set up:
         URL extraction fails (step 4a), clone fails (step 4c), or downstream patches
         don't apply (step 4e). Once cherry-picking has started (step 4f), resolve all
-        errors in place — do not abandon to git-am.
+        errors in place — do not abandon to git-am and do not restart from step 1.
       - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
       - Never change anything in the spec file changelog.
       - Preserve existing formatting and style conventions in spec files and patch headers.
@@ -367,6 +369,8 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
                      a. Read the conflicting files from the tool output.
                      b. Resolve with `str_replace`, adapting the fix to the older codebase.
                         Preserve the patch's original logic — the backport must still fix the bug.
+                        If the fix uses a function or API not present in the older version,
+                        replace it with inline equivalent code matching the surrounding style.
                      c. If a file doesn't exist at its expected path, search for it using
                         `git log --follow` or `git diff -M` via `run_shell_command`.
                      d. Run `cherry_pick_continue` to complete (auto-stages all files).
@@ -443,7 +447,7 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
       - Fall back to approach B ONLY when the cherry-pick workflow cannot be set up:
         URL extraction fails (step 3a), clone fails (step 3c), or downstream patches
         don't apply (step 3e). Once cherry-picking has started (step 3f), resolve all
-        errors in place — do not abandon to git-am.
+        errors in place — do not abandon to git-am and do not restart from step 1.
       - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
       - Never change anything in the spec file changelog.
       - Never change the Release field in the spec file.
@@ -854,7 +858,6 @@ async def create_backport_agent(
             ConditionalRequirement(
                 ThinkTool,
                 force_at_step=1,
-                force_after=Tool,
                 consecutive_allowed=False,
                 only_success_invocations=False,
             ),

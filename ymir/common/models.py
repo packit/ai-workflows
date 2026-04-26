@@ -164,6 +164,7 @@ class Resolution(Enum):
     CLARIFICATION_NEEDED = "clarification-needed"
     OPEN_ENDED_ANALYSIS = "open-ended-analysis"
     POSTPONED = "postponed"
+    NOT_AFFECTED = "not-affected"
     ERROR = "error"
 
 
@@ -197,6 +198,7 @@ class RebuildData(BaseModel):
 
     package: str = Field(description="Package name")
     jira_issue: str = Field(description="Jira issue identifier")
+    cve_id: str | None = Field(description="CVE identifier", default=None)
     dependency_issue: str | None = Field(
         description="Key of the dependency Jira issue that triggered the rebuild",
         default=None,
@@ -250,6 +252,28 @@ class PostponedData(BaseModel):
     jira_issue: str = Field(description="Jira issue identifier")
 
 
+class NotAffectedData(BaseModel):
+    """Data for not-affected resolution (CVE does not apply to this package)."""
+
+    justification_category: str | None = Field(
+        description="Red Hat justification category, e.g. 'Vulnerable Code not Present'",
+        default=None,
+    )
+    explanation: str = Field(description="Detailed explanation of why the CVE does not affect this package")
+    jira_issue: str = Field(description="Jira issue identifier")
+
+
+class ApplicabilityResult(BaseModel):
+    """Output schema for the CVE applicability check agent."""
+
+    is_affected: bool = Field(description="True if affected or inconclusive, False if clearly not affected")
+    justification_category: str | None = Field(
+        description="Red Hat justification category when not affected, None if affected",
+        default=None,
+    )
+    explanation: str = Field(description="Detailed reasoning for the determination")
+
+
 class ErrorData(BaseModel):
     """Data for error resolution."""
 
@@ -291,6 +315,7 @@ class TriageOutputSchema(BaseModel):
         | ClarificationNeededData
         | OpenEndedAnalysisData
         | PostponedData
+        | NotAffectedData
         | ErrorData
     ) = Field(description="Associated data")
 
@@ -389,6 +414,12 @@ class TriageOutputSchema(BaseModel):
                     f"*Summary*: {self.data.summary}\n"
                     f"{heading}\n{pending_text}"
                     f"{TRIAGE_DISCLAIMER}"
+                )
+
+            case NotAffectedData():
+                category = self.data.justification_category or "Not Affected"
+                return (
+                    f"*Recommendation: Not a Bug / {category}*\n\n{self.data.explanation}{TRIAGE_DISCLAIMER}"
                 )
 
             case ErrorData():

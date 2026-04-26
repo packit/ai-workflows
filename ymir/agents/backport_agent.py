@@ -925,37 +925,6 @@ async def create_backport_agent(
     )
 
 
-def get_unpacked_sources(local_clone: Path, package: str) -> Path:
-    """
-    Get a path to the root of extracted archive directory tree (referenced as TLD
-    in RPM documentation) for a given package.
-
-    That's the place where we'll initiate the backporting process.
-    """
-    with Specfile(local_clone / f"{package}.spec") as spec:
-        name = spec.expand("%{name}")
-        version = spec.expand("%{version}")
-        buildsubdir = spec.expand("%{buildsubdir}")
-    if "/" in buildsubdir:
-        # When %setup -n uses a nested path (e.g. libexpat-R_2_6_4/expat),
-        # use the archive root because some specs apply patches at that level
-        # via pushd/popd.  More details: https://github.com/packit/jotnar/issues/217
-        buildsubdir = buildsubdir.split("/")[0]
-
-    # RPM 4.20+ uses a per-build directory named %{NAME}-%{VERSION}-build
-    per_build_dir = local_clone / f"{name}-{version}-build"
-    sources_dir = per_build_dir / buildsubdir
-    if sources_dir.is_dir():
-        return sources_dir
-
-    # Older RPM versions unpack directly under _builddir
-    sources_dir = local_clone / buildsubdir
-    if sources_dir.is_dir():
-        return sources_dir
-
-    raise ValueError(f"Unpacked source directory does not exist: {sources_dir}")
-
-
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
@@ -1048,7 +1017,7 @@ async def main() -> None:
                     ]
                 await check_subprocess([*pkg_cmd, "sources"], cwd=state.local_clone)
                 await check_subprocess([*pkg_cmd, "prep"], cwd=state.local_clone)
-                state.unpacked_sources = get_unpacked_sources(state.local_clone, state.package)
+                state.unpacked_sources = tasks.get_unpacked_sources(state.local_clone, state.package)
                 for idx, upstream_patch in enumerate(state.upstream_patches):
                     patch_name = f"{state.jira_issue}-{idx}.patch"
                     content = await run_tool(

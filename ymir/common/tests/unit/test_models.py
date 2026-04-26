@@ -1,9 +1,11 @@
 from ymir.common.models import (
     AUTOMATED_RESOLUTION_NOT_SUPPORTED,
     TRIAGE_DISCLAIMER,
+    ApplicabilityResult,
     BackportData,
     ClarificationNeededData,
     ErrorData,
+    NotAffectedData,
     OpenEndedAnalysisData,
     PostponedData,
     RebaseData,
@@ -160,3 +162,83 @@ def test_error_formatting():
     assert result.format_for_comment() == (
         f"*Resolution*: error\n*Details*: Package 'invalid-pkg' not found in repository{TRIAGE_DISCLAIMER}"
     )
+
+
+# --- NotAffectedData formatting tests ---
+
+
+def test_not_affected_formatting():
+    data = NotAffectedData(
+        justification_category="Vulnerable Code not Present",
+        explanation="The vulnerable function foo_parse() was introduced in version 3.2. "
+        "This package ships version 3.1, which does not contain the affected code path.",
+        jira_issue="RHEL-44444",
+    )
+    result = TriageOutputSchema(resolution=Resolution.NOT_AFFECTED, data=data)
+
+    assert result.format_for_comment() == (
+        "*Recommendation: Not a Bug / Vulnerable Code not Present*\n\n"
+        "The vulnerable function foo_parse() was introduced in version 3.2. "
+        "This package ships version 3.1, which does not contain the affected code path."
+        f"{TRIAGE_DISCLAIMER}"
+    )
+
+
+def test_not_affected_formatting_no_category():
+    data = NotAffectedData(
+        explanation="Could not conclusively determine the category.",
+        jira_issue="RHEL-66666",
+    )
+    result = TriageOutputSchema(resolution=Resolution.NOT_AFFECTED, data=data)
+
+    comment = result.format_for_comment()
+    assert "*Recommendation: Not a Bug / Not Affected*" in comment
+    assert "None" not in comment
+
+
+def test_not_affected_formatting_component_not_present():
+    data = NotAffectedData(
+        justification_category="Component not Present",
+        explanation="The affected subcomponent libfoo-xml is not included in this package build.",
+        jira_issue="RHEL-55555",
+    )
+    result = TriageOutputSchema(resolution=Resolution.NOT_AFFECTED, data=data)
+
+    comment = result.format_for_comment()
+    assert "*Recommendation: Not a Bug / Component not Present*" in comment
+    assert "libfoo-xml is not included" in comment
+    assert TRIAGE_DISCLAIMER in comment
+
+
+# --- ApplicabilityResult tests ---
+
+
+def test_applicability_result_not_affected():
+    result = ApplicabilityResult(
+        is_affected=False,
+        justification_category="Vulnerable Code not Present",
+        explanation="Function introduced in v3.2, package ships v3.1.",
+    )
+    assert not result.is_affected
+    assert result.justification_category == "Vulnerable Code not Present"
+
+
+def test_applicability_result_affected():
+    result = ApplicabilityResult(
+        is_affected=True,
+        explanation="The vulnerable code path is present and reachable.",
+    )
+    assert result.is_affected
+    assert result.justification_category is None
+
+
+def test_applicability_result_roundtrip():
+    result = ApplicabilityResult(
+        is_affected=False,
+        justification_category="Vulnerable Code not in Execute Path",
+        explanation="The affected API is imported but never called.",
+    )
+    json_str = result.model_dump_json()
+    restored = ApplicabilityResult.model_validate_json(json_str)
+    assert not restored.is_affected
+    assert restored.justification_category == "Vulnerable Code not in Execute Path"

@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from beeai_framework.tools import Tool
+from specfile import Specfile
 
 from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
 from ymir.agents.utils import check_subprocess, mcp_tools, run_subprocess, run_tool
@@ -341,3 +342,122 @@ async def cache_mr_metadata(
     logger.info(f"MR metadata cache stored for {operation_type}/{package}/{details} (key: {cache_key})")
 
     return log_output
+
+
+def get_unpacked_sources(local_clone: Path, package: str) -> Path:
+    """
+    Get a path to the root of extracted archive directory tree (referenced as TLD
+    in RPM documentation) for a given package.
+    """
+    with Specfile(local_clone / f"{package}.spec") as spec:
+        name = spec.expand("%{name}")
+        version = spec.expand("%{version}")
+        buildsubdir = spec.expand("%{buildsubdir}")
+    if "/" in buildsubdir:
+        # When %setup -n uses a nested path (e.g. libexpat-R_2_6_4/expat),
+        # use the archive root because some specs apply patches at that level
+        # via pushd/popd.  More details: https://github.com/packit/jotnar/issues/217
+        buildsubdir = buildsubdir.split("/")[0]
+
+    # RPM 4.20+ uses a per-build directory named %{NAME}-%{VERSION}-build
+    per_build_dir = local_clone / f"{name}-{version}-build"
+    sources_dir = per_build_dir / buildsubdir
+    if sources_dir.is_dir():
+        return sources_dir
+
+    # Older RPM versions unpack directly under _builddir
+    sources_dir = local_clone / buildsubdir
+    if sources_dir.is_dir():
+        return sources_dir
+
+    raise ValueError(f"Unpacked source directory does not exist: {sources_dir}")
+
+
+async def _fallback_extract_sources(local_clone: Path, package: str) -> Path:
+    """
+    Fallback when centpkg/rhpkg prep fails: extract the primary source
+    archive using Source0 from the spec file.
+    """
+    try:
+        with Specfile(local_clone / f"{package}.spec") as spec, spec.sources() as sources:
+            if not sources:
+                raise ValueError(f"No sources defined in {package}.spec")
+            archive = local_clone / sources[0].expanded_filename
+            if not archive.is_file():
+                raise ValueError(f"Source0 '{sources[0].expanded_filename}' not found on disk")
+    except Exception as e:
+        raise ValueError(f"Could not determine source archive for {package}: {e}") from e
+    logger.info(f"Using Source0 from spec: {archive.name}")
+
+    extract_dir = local_clone / "_extracted"
+    extract_dir.mkdir(exist_ok=True)
+
+    cmd = ["/usr/lib/rpm/rpmuncompress", "-x", str(archive)]
+    logger.info(f"Extracting {archive.name} to {extract_dir}")
+
+    exit_code, _, stderr = await run_subprocess(cmd, cwd=extract_dir)
+    if exit_code != 0:
+        raise ValueError(f"Failed to extract {archive.name}: {stderr}")
+
+    subdirs = [d for d in extract_dir.iterdir() if d.is_dir()]
+    if len(subdirs) == 1:
+        return subdirs[0]
+    return extract_dir
+
+
+async def clone_and_prep_sources(
+    package: str,
+    dist_git_branch: str,
+    available_tools: list[Tool],
+    jira_issue: str,
+) -> tuple[Path, Path]:
+    """
+    Clone dist-git repo and run centpkg/rhpkg sources + prep.
+    Returns (local_clone, unpacked_sources) paths.
+    Read-only: no fork, no push — just for source analysis.
+
+    Falls back to manual archive extraction if prep fails (e.g. missing
+    language-specific RPM macros).
+    """
+    working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "applicability" / jira_issue
+    working_dir.mkdir(parents=True, exist_ok=True)
+    local_clone = working_dir / package
+    if local_clone.is_dir():
+        shutil.rmtree(local_clone)
+
+    namespace = "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
+    repository = f"https://gitlab.com/redhat/{namespace}/rpms/{package}"
+    await run_tool(
+        "clone_repository",
+        repository=repository,
+        branch=dist_git_branch,
+        clone_path=str(local_clone),
+        available_tools=available_tools,
+    )
+
+    if is_cs_branch(dist_git_branch):
+        pkg_cmd = [
+            "centpkg",
+            f"--name={package}",
+            "--namespace=rpms",
+            f"--release={dist_git_branch}",
+        ]
+    else:
+        pkg_cmd = [
+            "rhpkg",
+            f"--name={package}",
+            "--namespace=rpms",
+            f"--release={dist_git_branch}",
+            "--offline",
+            "--released",
+        ]
+    await check_subprocess([*pkg_cmd, "sources"], cwd=local_clone)
+
+    exit_code, _, stderr = await run_subprocess([*pkg_cmd, "prep"], cwd=local_clone)
+    if exit_code == 0:
+        unpacked = get_unpacked_sources(local_clone, package)
+        return local_clone, unpacked
+
+    logger.warning(f"prep failed for {package}, falling back to manual extraction: {stderr}")
+    unpacked = await _fallback_extract_sources(local_clone, package)
+    return local_clone, unpacked

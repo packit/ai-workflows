@@ -39,6 +39,11 @@ RUN dnf -y install --allowerasing \
       gawk \
       rsync \
       python3-tabulate \
+      go-srpm-macros \
+      python-srpm-macros \
+      pyproject-srpm-macros \
+      rust-toolset-srpm-macros \
+      perl-srpm-macros \
     && dnf clean all
 
 RUN pip3 install --no-cache-dir \

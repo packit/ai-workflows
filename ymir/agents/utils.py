@@ -1,6 +1,7 @@
 import logging
 import os
 
+import beeai_framework.adapters.litellm.chat as _chat_adapter
 from beeai_framework.agents.tool_calling.utils import ToolCallCheckerConfig
 from beeai_framework.backend import ChatModel, ChatModelParameters
 from beeai_framework.template import PromptTemplate
@@ -15,6 +16,8 @@ from ymir.common.utils import (  # noqa: F401 — re-exported for backward compa
 )
 
 logger = logging.getLogger(__name__)
+
+_prompt_caching_applied = False
 
 
 def get_chat_model() -> ChatModel:
@@ -61,6 +64,59 @@ def get_tool_call_checker_config() -> ToolCallCheckerConfig:
 def render_prompt(template: str, input: BaseModel) -> str:
     """Renders a prompt template with the specified input, according to its schema."""
     return PromptTemplate(template=template, schema=type(input)).render(input)
+
+
+def enable_prompt_caching() -> None:
+    """Inject Anthropic prompt caching on system messages.
+
+    Patches the ``acompletion`` reference inside BeeAI's LiteLLM adapter
+    so that every request to a Claude model carries ``cache_control`` on
+    its system message.  Enabled by default; set ``DISABLE_PROMPT_CACHING=true``
+    to turn off.
+
+    TODO: Remove after upgrading to BeeAI >= 0.1.79, which natively supports
+    cache_control_injection_points in RequirementAgent.
+    """
+    global _prompt_caching_applied
+    if _prompt_caching_applied:
+        return
+    if os.getenv("DISABLE_PROMPT_CACHING", "").lower() == "true":
+        return
+
+    _original_acompletion = _chat_adapter.acompletion
+
+    async def _acompletion_with_caching(*args, **kwargs):
+        model = str(kwargs.get("model") or (args[0] if args else ""))
+        if "claude" in model.lower():
+            for msg in kwargs.get("messages", []):
+                if msg.get("role") == "system":
+                    content = msg.get("content")
+                    if isinstance(content, str):
+                        msg["content"] = [
+                            {
+                                "type": "text",
+                                "text": content,
+                                "cache_control": {"type": "ephemeral"},
+                            }
+                        ]
+                    elif isinstance(content, list) and content and isinstance(content[-1], dict):
+                        content[-1]["cache_control"] = {"type": "ephemeral"}
+                    break
+        response = await _original_acompletion(*args, **kwargs)
+        if "claude" in model.lower():
+            usage = getattr(response, "usage", None)
+            if usage:
+                logger.info(
+                    "Prompt caching usage: prompt=%s, cache_creation=%s, cache_read=%s",
+                    getattr(usage, "prompt_tokens", None),
+                    getattr(usage, "cache_creation_input_tokens", None),
+                    getattr(usage, "cache_read_input_tokens", None),
+                )
+        return response
+
+    _chat_adapter.acompletion = _acompletion_with_caching
+    _prompt_caching_applied = True
+    logger.info("Prompt caching enabled for Anthropic models")
 
 
 def set_litellm_debug() -> None:

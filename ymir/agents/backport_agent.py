@@ -32,6 +32,7 @@ from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState, PackageUpdateStep
 from ymir.agents.utils import (
     check_subprocess,
+    enable_prompt_caching,
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
@@ -960,6 +961,7 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
     setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+    enable_prompt_caching()
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))

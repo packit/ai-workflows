@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 import ymir.agents.tasks as tasks
 from ymir.agents.observability import setup_observability
 from ymir.agents.utils import (
+    enable_prompt_caching,
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
@@ -845,6 +846,7 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
     setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+    enable_prompt_caching()
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     auto_chain = os.getenv("AUTO_CHAIN", "true").lower() == "true"

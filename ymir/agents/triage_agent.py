@@ -1,8 +1,10 @@
 import asyncio
 import logging
 import os
+import shutil
 import sys
 import traceback
+from pathlib import Path
 from textwrap import dedent
 
 from beeai_framework.agents.requirement import RequirementAgent
@@ -20,6 +22,7 @@ from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field
 
 import ymir.agents.tasks as tasks
+from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_applicability_agent
 from ymir.agents.observability import setup_observability
 from ymir.agents.utils import (
     get_agent_execution_config,
@@ -31,9 +34,11 @@ from ymir.agents.utils import (
 from ymir.common.config import load_rhel_config
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import (
+    ApplicabilityResult,
     ClarificationNeededData,
     CVEEligibilityResult,
     ErrorData,
+    NotAffectedData,
     OpenEndedAnalysisData,
     PostponedData,
     Resolution,
@@ -732,6 +737,21 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
                     }}
                     ```
 
+                    **Correct example for a 'rebuild' resolution:**
+                    ```json
+                    {{
+                        "resolution": "rebuild",
+                        "data": {{
+                        "package": "some-package",
+                        "jira_issue": "RHEL-12345",
+                        "cve_id": "CVE-1234-98765",
+                        "dependency_issue": "RHEL-67890",
+                        "dependency_component": "golang",
+                        "fix_version": "rhel-X.Y.Z"
+                        }}
+                    }}
+                    ```
+
                     ```json
                     {output_schema_json}
                     ```
@@ -772,6 +792,13 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
                 logger.info(f"Target branch determined: {state.target_branch}")
             else:
                 logger.warning(f"Could not determine target branch for {state.jira_issue}")
+
+            if (
+                state.cve_eligibility_result
+                and state.cve_eligibility_result.is_cve
+                and state.triage_result.resolution in (Resolution.BACKPORT, Resolution.REBUILD)
+            ):
+                return "check_cve_applicability"
 
             return "comment_in_jira"
 
@@ -818,6 +845,122 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
 
             return "determine_target_branch"
 
+        async def check_cve_applicability(state):
+            """Check if a CVE actually affects the package by analyzing source code."""
+            resolution = state.triage_result.resolution
+            package = state.triage_result.data.package
+            logger.info(
+                f"Checking CVE applicability for {state.jira_issue} ({resolution.value} of {package})"
+            )
+
+            if not state.target_branch:
+                logger.warning("No target branch — skipping applicability check")
+                return "comment_in_jira"
+
+            data = state.triage_result.data
+            cve_id = getattr(data, "cve_id", None)
+            dep_component = getattr(data, "dependency_component", None)
+            dep_issue_key = getattr(data, "dependency_issue", None)
+
+            patch_urls = getattr(data, "patch_urls", None) or []
+
+            # For z-stream branches, check if the branch actually exists;
+            # fall back to CentOS Stream for source analysis since we only
+            # need to read the source, not push to the branch.
+            clone_branch = state.target_branch
+            parsed = parse_rhel_version(state.target_branch)
+            if parsed:
+                major_version = parsed[0]
+                try:
+                    available_branches = await run_tool(
+                        "get_internal_rhel_branches",
+                        available_tools=gateway_tools,
+                        package=package,
+                    )
+                    if state.target_branch not in available_branches:
+                        clone_branch = f"c{major_version}s"
+                        logger.info(
+                            f"Branch {state.target_branch} not found for {package}, "
+                            f"using {clone_branch} for applicability analysis"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to check branches for {package}: {e}")
+
+            working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "applicability" / state.jira_issue
+            try:
+                local_clone, unpacked_sources = await tasks.clone_and_prep_sources(
+                    package=package,
+                    dist_git_branch=clone_branch,
+                    available_tools=gateway_tools,
+                    jira_issue=state.jira_issue,
+                )
+            except Exception as e:
+                logger.warning(f"Could not prep sources for applicability check: {e}")
+                shutil.rmtree(working_dir, ignore_errors=True)
+                return "comment_in_jira"
+
+            try:
+                # Download patches as files (same layout as backport agent)
+                patch_files = []
+                for idx, url in enumerate(patch_urls):
+                    try:
+                        content = await run_tool(
+                            "get_patch_from_url",
+                            patch_url=url,
+                            available_tools=gateway_tools,
+                        )
+                        patch_name = f"{state.jira_issue}-{idx}.patch"
+                        (local_clone / patch_name).write_text(content)
+                        patch_files.append(patch_name)
+                    except Exception:
+                        logger.warning(f"Could not fetch patch from {url}")
+
+                local_tool_options = {"working_directory": local_clone}
+                applicability_agent = create_applicability_agent(gateway_tools, local_tool_options)
+                prompt = build_applicability_prompt(
+                    jira_issue=state.jira_issue,
+                    package=package,
+                    target_branch=state.target_branch,
+                    resolution=resolution,
+                    cve_id=cve_id,
+                    dep_component=dep_component,
+                    dep_issue_key=dep_issue_key,
+                    patch_files=patch_files,
+                    unpacked_sources=unpacked_sources,
+                    local_clone=local_clone,
+                )
+
+                response = await applicability_agent.run(
+                    prompt,
+                    expected_output=ApplicabilityResult,
+                    **get_agent_execution_config(),
+                )
+                applicability = ApplicabilityResult.model_validate_json(response.last_message.text)
+
+                if not applicability.is_affected:
+                    logger.info(
+                        f"CVE not applicable for {state.jira_issue}: {applicability.justification_category}"
+                    )
+                    state.triage_result = OutputSchema(
+                        resolution=Resolution.NOT_AFFECTED,
+                        data=NotAffectedData(
+                            justification_category=applicability.justification_category,
+                            explanation=applicability.explanation,
+                            jira_issue=state.jira_issue,
+                        ),
+                    )
+                    return "comment_in_jira"
+
+                logger.info(
+                    f"CVE confirmed applicable for {state.jira_issue}: {applicability.explanation[:100]}"
+                )
+            except Exception as e:
+                logger.warning(f"Applicability check failed: {e}")
+            finally:
+                shutil.rmtree(working_dir, ignore_errors=True)
+
+            return "comment_in_jira"
+
         async def comment_in_jira(state):
             comment_text = state.triage_result.format_for_comment(auto_chain=auto_chain)
             logger.info(f"Result to be put in Jira comment: {comment_text}")
@@ -835,6 +978,7 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
         workflow.add_step("run_triage_analysis", run_triage_analysis)
         workflow.add_step("verify_rebase_author", verify_rebase_author)
         workflow.add_step("determine_target_branch", determine_target_branch_step)
+        workflow.add_step("check_cve_applicability", check_cve_applicability)
         workflow.add_step("comment_in_jira", comment_in_jira)
 
         response = await workflow.run(TriageState(jira_issue=jira_issue))
@@ -1039,6 +1183,14 @@ async def main() -> None:
                         )
                     )
                     logger.info(f"Pushed {input.issue} to {RedisQueues.POSTPONED_LIST.value}")
+                elif output.resolution == Resolution.NOT_AFFECTED:
+                    logger.info(f"Triage resolved as NOT_AFFECTED for {input.issue}")
+                    await tasks.set_jira_labels(
+                        jira_issue=input.issue,
+                        labels_to_add=[JiraLabels.TRIAGED_NOT_AFFECTED.value],
+                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                        dry_run=dry_run,
+                    )
                 elif output.resolution == Resolution.ERROR:
                     logger.warning(f"Triage resolved as ERROR for {input.issue}, retrying")
                     await tasks.set_jira_labels(

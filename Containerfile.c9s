@@ -38,6 +38,11 @@ RUN dnf -y install --allowerasing \
       sed \
       gawk \
       rsync \
+      go-srpm-macros \
+      python-srpm-macros \
+      pyproject-srpm-macros \
+      rust-srpm-macros \
+      perl-srpm-macros \
     && dnf clean all
 
 # Create Python 3.11 virtual environment and install Python packages

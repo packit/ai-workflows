@@ -117,6 +117,7 @@ class JiraLabels(Enum):
     REBUILD_FAILED = "ymir_rebuild_failed"
 
     TRIAGED_POSTPONED = "ymir_triaged_postponed"
+    TRIAGED_NOT_AFFECTED = "ymir_triaged_not_affected"
 
     RETRY_NEEDED = "ymir_retry_needed"
     FUSA = "ymir_fusa"

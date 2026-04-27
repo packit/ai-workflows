@@ -230,9 +230,7 @@ def _fetch_rhel_streams_snapshot_sync() -> dict[str, dict[str, str]]:
     except requests.RequestException as e:
         raise ToolError(f"Product Pages API network error: {e}") from e
     except json.JSONDecodeError as e:
-        raise ToolError(
-            "Product Pages API returned a response body that is not valid JSON"
-        ) from e
+        raise ToolError("Product Pages API returned a response body that is not valid JSON") from e
     except ValueError as e:
         raise ToolError(f"Product Pages API response could not be processed: {e}") from e
 

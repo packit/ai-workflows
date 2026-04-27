@@ -14,6 +14,9 @@ import_image() {
     oc import-image "$1" --all -n jotnar-ymir--jotnar-ymir
 }
 
+# Egress rules
+apply tenant-egress.yml
+
 # Shared ConfigMaps
 apply configmap-agents-env.yml
 apply configmap-chat-env.yml

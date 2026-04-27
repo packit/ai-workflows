@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 import pytest
@@ -14,8 +15,10 @@ class TriageAgentTestCase:
         self.input: str = input
         self.expected_output: TriageOutputSchema = expected_output
         self.metrics: dict = None
+        self.finished_state: TriageState | None = None
+        self.error: BaseException | None = None
 
-    async def run(self) -> TriageState:
+    async def run(self) -> None:
         metrics_middleware = MetricsMiddleware()
 
         def testing_factory(gateway_tools):
@@ -23,9 +26,12 @@ class TriageAgentTestCase:
             triage_agent.middlewares.append(metrics_middleware)
             return triage_agent
 
-        finished_state = await run_workflow(self.input, False, testing_factory)
-        self.metrics = metrics_middleware.get_metrics()
-        return finished_state
+        try:
+            self.finished_state = await run_workflow(self.input, False, testing_factory)
+        except BaseException as e:
+            self.error = e
+        finally:
+            self.metrics = metrics_middleware.get_metrics()
 
 
 test_cases = [
@@ -102,8 +108,16 @@ def observability_fixture():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def mydata(request):
+def run_test_cases_concurrently(request):
+    """Execute all triage test cases concurrently via asyncio.gather, then collect metrics."""
+
+    async def _run_all():
+        await asyncio.gather(*(tc.run() for tc in test_cases))
+
+    asyncio.run(_run_all())
+
     yield
+
     collected_metrics = []
     for test_case in test_cases:
         if test_case.metrics is None:
@@ -112,19 +126,21 @@ def mydata(request):
     request.config.stash["metrics"] = tabulate(collected_metrics, ["Issue", "Time"])
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "test_case",
     test_cases,
 )
-async def test_triage_agent(test_case: TriageAgentTestCase):
-    def verify_result(real_output: TriageOutputSchema, expected_output: TriageOutputSchema):
-        assert real_output.resolution == expected_output.resolution
-        assert real_output.data.package == expected_output.data.package
-        assert real_output.data.patch_urls == expected_output.data.patch_urls
-        assert real_output.data.jira_issue == expected_output.data.jira_issue
-        assert real_output.data.cve_id == expected_output.data.cve_id
-        assert real_output.data.fix_version == expected_output.data.fix_version
+def test_triage_agent(test_case: TriageAgentTestCase):
+    if test_case.error is not None:
+        raise test_case.error
 
-    finished_state = await test_case.run()
-    verify_result(finished_state.triage_result, test_case.expected_output)
+    assert test_case.finished_state is not None, f"Test case {test_case.input} did not produce a result"
+
+    real_output = test_case.finished_state.triage_result
+    expected_output = test_case.expected_output
+    assert real_output.resolution == expected_output.resolution
+    assert real_output.data.package == expected_output.data.package
+    assert real_output.data.patch_urls == expected_output.data.patch_urls
+    assert real_output.data.jira_issue == expected_output.data.jira_issue
+    assert real_output.data.cve_id == expected_output.data.cve_id
+    assert real_output.data.fix_version == expected_output.data.fix_version

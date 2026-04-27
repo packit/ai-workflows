@@ -1,2 +1,4 @@
 # Dependencies specific to ymir-common
 redis>=6.4.0
+requests>=2.32.0
+requests-gssapi>=1.3.0

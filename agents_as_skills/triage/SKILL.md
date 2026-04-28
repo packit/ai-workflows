@@ -203,6 +203,23 @@ You must decide between one of 5 actions. Follow these guidelines to make your d
      - If you run out of commits to check, use different approach, do not give up. Inability
        of the tool to find proper fix does not mean it does not exist, search bug trackers
        and version control system.
+     - **Handling non-GitHub/non-GitLab repositories**: When the `upstream_search` tool returns
+       `related_commits` that are bare commit hashes (not full URLs), it means the upstream
+       repository is hosted on a platform the tool does not know how to build patch URLs for
+       (e.g. gitweb, cgit, kernel.org, etc.). In this case, do NOT attempt to guess the web URL
+       or immediately call `get_patch_from_url` with a fabricated URL. Instead:
+       1. Clone the upstream repository locally using the `repository_url` returned by the tool:
+          `git clone --bare <repository_url> /tmp/<project_name>`
+       2. Inspect the candidate commits locally with `git show <hash>` to read the commit
+          message and diff, and determine whether any of them is the correct fix.
+       3. Only after you have confirmed the right commit locally, attempt to construct
+          a download URL for the patch. Try common hosting URL patterns:
+          - cgit: `<base_url>/patch/?id=<hash>`
+          - gitweb: `<base_url>;a=patch;h=<hash>`
+          - kernel.org: `<base_url>/patch/?id=<hash>`
+          If none of these patterns work with `get_patch_from_url`, use the repository URL
+          with the commit hash appended as a fragment (e.g. `<repository_url>#<hash>`)
+          as the patch URL in your final answer.
    * Using the details from your analysis, search these sources:
      - Bug Trackers (for fixed bugs matching the issue summary and description)
      - Git / Version Control (for commit messages, using keywords, CVE IDs, function names, etc.)
@@ -355,6 +372,23 @@ You must decide between one of the following actions. Follow these guidelines to
      - If you run out of commits to check, use different approach, do not give up. Inability
        of the tool to find proper fix does not mean it does not exist, search bug trackers
        and version control system.
+     - **Handling non-GitHub/non-GitLab repositories**: When the `upstream_search` tool returns
+       `related_commits` that are bare commit hashes (not full URLs), it means the upstream
+       repository is hosted on a platform the tool does not know how to build patch URLs for
+       (e.g. gitweb, cgit, kernel.org, etc.). In this case, do NOT attempt to guess the web URL
+       or immediately call `get_patch_from_url` with a fabricated URL. Instead:
+       1. Clone the upstream repository locally using the `repository_url` returned by the tool:
+          `git clone --bare <repository_url> /tmp/<project_name>`
+       2. Inspect the candidate commits locally with `git show <hash>` to read the commit
+          message and diff, and determine whether any of them is the correct fix.
+       3. Only after you have confirmed the right commit locally, attempt to construct
+          a download URL for the patch. Try common hosting URL patterns:
+          - cgit: `<base_url>/patch/?id=<hash>`
+          - gitweb: `<base_url>;a=patch;h=<hash>`
+          - kernel.org: `<base_url>/patch/?id=<hash>`
+          If none of these patterns work with `get_patch_from_url`, use the repository URL
+          with the commit hash appended as a fragment (e.g. `<repository_url>#<hash>`)
+          as the patch URL in your final answer.
    * Using the details from your analysis, search these sources:
      - Bug Trackers (for fixed bugs matching the issue summary and description)
      - Git / Version Control (for commit messages, using keywords, CVE IDs, function names, etc.)

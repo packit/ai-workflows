@@ -478,6 +478,10 @@ def create_triage_agent(gateway_tools, local_tool_options=None):
             "to fetch and validate it using get_patch_from_url tool.",
             "Do not modify the patch URL in your final answer after it has been "
             "validated with get_patch_from_url.",
+            "When constructing patch URLs for upstream commits, you MUST preserve "
+            "the exact URL scheme (http:// or https://) from the repository_url "
+            "returned by upstream_search. Do NOT upgrade http:// to https:// or "
+            "vice versa — some upstream repositories only support one protocol.",
             "After completing your triage analysis, if your decision is backport "
             "or rebase, always set appropriate JIRA fields per the instructions "
             "using set_jira_fields tool.",

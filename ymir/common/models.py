@@ -58,6 +58,10 @@ class TriageInputSchema(BaseModel):
             " (eligibility=PENDING_DEPENDENCIES or NEVER)"
         ),
     )
+    is_older_zstream: bool = Field(
+        default=False,
+        description="Whether the issue targets an older Z-stream",
+    )
 
 
 class Task(BaseModel):

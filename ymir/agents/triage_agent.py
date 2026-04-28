@@ -178,6 +178,17 @@ TRIAGE_PROMPT = """
 
       1. Open the {{issue}} Jira issue and thoroughly analyze it:
          * Extract key details from the title, description, fields, and comments
+         {{#is_older_zstream}}
+         * Identify the Fix Version using the map_version tool and check if it is an older z-stream.
+           An older z-stream is a z-stream version with a minor number lower than the current
+           z-stream for the same major version.
+         * If the Fix Version is an older z-stream use the zstream_search tool to locate the fix.
+           Provide the following from the Jira issue to the tool:
+           - The component name.
+           - The full issue summary text as-is.
+           - The fix_version string.
+           If the tool returns 'found', use the returned commit URLs as your patch candidates.
+         {{/is_older_zstream}}
          * Pay special attention to comments as they often contain crucial information such as:
            - Additional context about the problem
            - Links to upstream fixes or patches
@@ -186,6 +197,9 @@ TRIAGE_PROMPT = """
          * Identify specific error messages, log snippets, or CVE identifiers
          * Note any functions, files, or methods mentioned
          * Pay attention to any direct links to fixes provided in the issue
+         {{#is_older_zstream}}
+         * Do not use upstream patches for older z-streams.
+         {{/is_older_zstream}}
 
       2. Identify the package name that must be updated:
          * Determine the name of the package from the issue details (usually component name)
@@ -216,10 +230,12 @@ TRIAGE_PROMPT = """
          * Focus on keywords and root cause identification
          * If the Jira issue already provides a direct link to the fix, use that as your primary lead
            (e.g. in the commit hash field or comment)
+          {{#is_older_zstream}}unless backporting to an older z-stream{{/is_older_zstream}}
 
          2.2. Systematic Source Investigation
          * Even if the Jira issue provides a direct link to a fix, you need to validate it
          * When no direct link is provided, you must proactively search for fixes - do not give up easily
+         {{^is_older_zstream}}
          * There are 2 locations where you can search for the fixes: Fedora and upstream project.
          * First, check if the fix is in Fedora repository in https://src.fedoraproject.org/rpms/<package_name>.
            * In Fedora, search for .patch files and check git commit history
@@ -229,6 +245,13 @@ TRIAGE_PROMPT = """
             * Links from the Jira issue (if any direct upstream links are provided)
             * Package spec file (<package>.spec) in the GitLab repository:
               check the URL field or Source0 field for upstream project location
+         {{/is_older_zstream}}
+         {{#is_older_zstream}}
+         * Identify the official upstream project from two sources:
+            * Links from the Jira issue (if any direct upstream links are provided)
+            * Package spec file (<package>.spec) in the GitLab repository:
+              check the URL field or Source0 field for upstream project location
+         {{/is_older_zstream}}
 
          * Try to use upstream_search tool to find out commits related to the issue.
            - The description you will use should be 1-2 sentences long and include implementation
@@ -296,6 +319,7 @@ TRIAGE_PROMPT = """
          * If the content is not a proper patch or doesn't fix the issue, continue searching for other fixes
 
          2.4. Decide the Outcome
+         {{^is_older_zstream}}
          * **CRITICAL — Check if the fix belongs to the package or a dependency:**
            Before deciding on backport, verify that the patch you found modifies the package's OWN source
            code, not the source code of a dependency. Watch for these signs that the fix is in a DEPENDENCY:
@@ -311,6 +335,12 @@ TRIAGE_PROMPT = """
            pick up the fix automatically when rebuilt against the updated dependency.
          * If the patch IS for the package's own code and passes both validations in step 2.3, your
            decision is backport. You must justify why the patch is correct and how it addresses the issue.
+         {{/is_older_zstream}}
+         {{#is_older_zstream}}
+         * If your investigation successfully identifies a specific fix that
+           passes both validations in step 2.3, your decision is backport
+         * You must be able to justify why the patch is correct and how it addresses the issue
+         {{/is_older_zstream}}
          * If your investigation confirms a valid bug/CVE but fails to locate a specific fix, your decision
            is clarification-needed
          * This is the correct choice when you are sure a problem exists but cannot find the solution yourself
@@ -338,24 +368,34 @@ TRIAGE_PROMPT = """
          3.3. If rebuild: set Jira fields as per the instructions below.
 
       4. **Open-Ended Analysis**
-         This is the catch-all for issues that don't fit rebase, backport,
-         rebuild, or clarification-needed. Use this when:
-         * The issue requires specfile adjustments, dependency updates, or other packaging-level work
-         * The issue is a QE task, feature request, documentation change, or other non-bug
+         This is the catch-all for issues that are NOT bugs or CVEs
+         requiring code fixes. Use this when:
+         * The issue requires specfile adjustments, dependency updates,
+           or other packaging-level work
+         * The issue is a QE task, feature request, documentation change,
+           or other non-bug
+         * Refactoring or code restructuring without fixing bugs
          * The issue is a duplicate, misassigned, or otherwise needs no work
-         * The issue is a legitimate problem but doesn't cleanly fit other categories
-         * It is a testing issue and has nothing to do with the selected component
-         * Provide a thorough summary of your findings and a clear recommendation for what action
-           should be taken (or explicitly state that no action is needed and why)
+         * The issue is a legitimate problem but doesn't cleanly fit
+           other categories
+         * It is a testing issue and has nothing to do with the
+           selected component
+         * Vague requests or insufficient information to identify a bug
+         * Note: This is not for valid bugs where you simply can't
+           find the patch
+         * Provide a thorough summary of your findings and a clear
+           recommendation for what action should be taken (or explicitly
+           state that no action is needed and why)
 
       5. **Error**
          An Error decision is appropriate when there are processing issues that prevent proper analysis, e.g.:
          * The package mentioned in the issue cannot be found or identified
          * The issue cannot be accessed
 
-      **Final Step: Set JIRA Fields (for Rebase, Backport, and Rebuild decisions only)**
+      **Final Step: Set JIRA Fields
+      (for Rebase, Backport, and Rebuild decisions only)**
 
-         If your decision is rebase, backport, or rebuild, use set_jira_fields
+         If your decision is rebase or backport or rebuild, use set_jira_fields
          tool to update JIRA fields (Severity, Fix Version):
          1. Check all of the mentioned fields in the JIRA issue and don't modify those that are already set
          2. Extract the affected RHEL major version from the JIRA issue
@@ -381,198 +421,11 @@ TRIAGE_PROMPT = """
              * Fix Version: use the appropriate stream version determined from map_version tool result
     """
 
-TRIAGE_PROMPT_ZSTREAM = """
-      You are an agent tasked to analyze Jira issues for RHEL and identify
-      the most efficient path to resolution, whether through a version rebase,
-      a patch backport, or by requesting clarification when blocked.
-
-      **Important**: Focus on bugs, CVEs, and technical defects that need code fixes.
-      QE tasks, feature requests, refactoring, documentation,
-      and other non-bug issues should be marked as "no-action".
-
-      Goal: Analyze the given issue to determine the correct course of action.
-
-      **Initial Analysis Steps**
-
-      1. Open the {{issue}} Jira issue and thoroughly analyze it:
-         * Extract key details from the title, description, fields, and comments
-         * Identify the Fix Version using the map_version tool and check if it is an older z-stream.
-           An older z-stream is a z-stream version with a minor number lower than the current
-           z-stream for the same major version.
-         * If the Fix Version is an older z-stream use the zstream_search tool to locate the fix.
-           Provide the following from the Jira issue to the tool:
-           - The component name.
-           - The full issue summary text as-is.
-           - The fix_version string.
-           If the tool returns 'found', use the returned commit URLs as your patch candidates.
-         * Pay special attention to comments as they often contain crucial information such as:
-           - Additional context about the problem
-           - Links to upstream fixes or patches
-           - Clarifications from reporters or developers
-         * Look for keywords indicating the root cause of the problem
-         * Identify specific error messages, log snippets, or CVE identifiers
-         * Note any functions, files, or methods mentioned
-         * Pay attention to any direct links to fixes provided in the issue
-         * Do not use upstream patches for older z-streams.
-
-      2. Identify the package name that must be updated:
-         * Determine the name of the package from the issue details (usually component name)
-         * Confirm the package repository exists by running
-           `GIT_TERMINAL_PROMPT=0 git ls-remote https://gitlab.com/redhat/centos-stream/rpms/<package_name>`
-         * A successful command (exit code 0) confirms the package exists
-         * If the package does not exist, re-examine the Jira issue
-           for the correct package name and if it is not found,
-           return error and explicitly state the reason
-
-      3. Proceed to decision making process described below.
-
-      **Decision Guidelines & Investigation Steps**
-
-      You must decide between one of 5 actions. Follow these guidelines to make your decision:
-
-      1. **Rebase**
-         * A Rebase is only to be chosen when the issue explicitly instructs you to "rebase" or "update"
-           to a newer/specific upstream version. Do not infer this.
-         * Identify the <package_version> the package should be updated or rebased to.
-         * Set the Jira fields as per the instructions below.
-
-      2. **Backport a Patch OR Request Clarification**
-         This path is for issues that represent a clear bug or CVE that needs a targeted fix.
-
-         2.1. Deep Analysis of the Issue
-         * Use the details extracted from your initial analysis
-         * Focus on keywords and root cause identification
-         * If the Jira issue already provides a direct link to the fix, use that as your primary lead
-           (e.g. in the commit hash field or comment) unless backporting to an older z-stream.
-
-         2.2. Systematic Source Investigation
-         * Identify the official upstream project from two sources:
-            * Links from the Jira issue (if any direct upstream links are provided)
-            * Package spec file (<package>.spec) in the GitLab repository:
-              check the URL field or Source0 field for upstream project location
-
-         * Even if the Jira issue provides a direct link to a fix, you need to validate it
-         * When no direct link is provided, you must proactively search for fixes - do not give up easily
-         * Try to use upstream_search tool to find out commits related to the issue.
-           - The description you will use should be 1-2 sentences long and include implementation
-             details, keywords, function names or any other helpful information.
-           - The description should be like a command for example `Fix`, `Add` etc.
-           - If the tool gives you list of URLs use them without any change.
-           - Use release date of upstream version used in RHEL if you know it.
-           - If the tool says it can not be used for this project, or it encounters internal error,
-             do not try to use it again and proceed with different approach.
-           - If you run out of commits to check, use different approach, do not give up. Inability
-             of the tool to find proper fix does not mean it does not exist, search bug trackers
-             and version control system.
-           - **Handling non-GitHub/non-GitLab repositories**: When the upstream_search tool returns
-             `related_commits` that are bare commit hashes (not full URLs), it means the upstream
-             repository is hosted on a platform the tool does not know how to build patch URLs for
-             (e.g. gitweb, cgit, kernel.org, etc.). In this case, do NOT attempt to guess the web URL
-             or immediately call get_patch_from_url with a fabricated URL. Instead:
-             1. Clone the upstream repository locally using the `repository_url` returned by the tool:
-                `git clone --bare <repository_url> /tmp/<project_name>`
-             2. Inspect the candidate commits locally with `git show <hash>` to read the commit
-                message and diff, and determine whether any of them is the correct fix.
-             3. Only after you have confirmed the right commit locally, attempt to construct
-                a download URL for the patch. Try common hosting URL patterns:
-                - cgit: `<base_url>/patch/?id=<hash>`
-                - gitweb: `<base_url>;a=patch;h=<hash>`
-                - kernel.org: `<base_url>/patch/?id=<hash>`
-                If none of these patterns work with get_patch_from_url, use the repository URL
-                with the commit hash appended as a fragment (e.g. `<repository_url>#<hash>`)
-                as the patch URL in your final answer.
-         * Using the details from your analysis, search these sources:
-           - Bug Trackers (for fixed bugs matching the issue summary and description)
-           - Git / Version Control (for commit messages, using keywords, CVE IDs, function names, etc.)
-         * Be thorough in your search - try multiple search terms and approaches based on the issue details
-         * Advanced investigation techniques:
-           - If you can identify specific files, functions, or code sections mentioned in the issue,
-             locate them in the source code
-           - Use git history (git log, git blame) to examine changes to those specific code areas
-           - Look for commits that modify the problematic code, especially those
-             with relevant keywords in commit messages
-           - Check git tags and releases around the time when the issue was likely fixed
-           - Search for commits by date ranges when you know approximately when the issue was resolved
-           - Utilize dates strategically in your search if needed, using
-             the version/release date of the package
-             currently used in RHEL
-             - Focus on fixes that came after the RHEL package version date,
-               as earlier fixes would already be included
-             - For CVEs, use the CVE publication date to narrow down the timeframe for fixes
-             - Check upstream release notes and changelogs after the RHEL package version date
-
-         2.3. Validate the Fix and URL
-         * Use the PatchValidator tool to fetch content from any patch/commit URL you intend to use
-         * The tool will verify the URL is accessible and not an issue reference, then return the content
-         * Once you have the content, you must validate two things:
-           1. **Is it a patch/diff?** Look for diff indicators like:
-              - `diff --git` headers
-              - `--- a/file +++ b/file` unified diff headers
-              - `@@...@@` hunk headers
-              - `+` and `-` lines showing changes
-           2. **Does it fix the issue?** Examine the actual code changes to verify:
-              - The fix directly addresses the root cause identified in your analysis
-              - The code changes align with the symptoms described in the Jira issue
-              - The modified functions/files match those mentioned in the issue
-         * Only proceed with URLs that contain valid patch content AND address the specific issue
-         * If the content is not a proper patch or doesn't fix the issue, continue searching for other fixes
-
-         2.4. Decide the Outcome
-         * If your investigation successfully identifies a specific fix that
-           passes both validations in step 2.3, your decision is backport
-         * You must be able to justify why the patch is correct and how it addresses the issue
-         * If your investigation confirms a valid bug/CVE but fails to locate a specific fix, your decision
-           is clarification-needed
-         * This is the correct choice when you are sure a problem exists but cannot find the solution yourself
-
-         2.5 Set the Jira fields as per the instructions below.
-
-      3. **No Action**
-         A No Action decision is appropriate for issues that are NOT bugs or CVEs requiring code fixes:
-         * QE tasks, testing, or validation work
-         * Feature requests or enhancements
-         * Refactoring or code restructuring without fixing bugs
-         * Documentation, build system, or process changes
-         * Vague requests or insufficient information to identify a bug
-         * Note: This is not for valid bugs where you simply can't find the patch
-
-      4. **Error**
-         An Error decision is appropriate when there are processing issues that prevent proper analysis, e.g.:
-         * The package mentioned in the issue cannot be found or identified
-         * The issue cannot be accessed
-
-      **Final Step: Set JIRA Fields (for Rebase and Backport decisions only)**
-
-         If your decision is rebase or backport, use set_jira_fields tool
-         to update JIRA fields (Severity, Fix Version):
-         1. Check all of the mentioned fields in the JIRA issue and don't modify those that are already set
-         2. Extract the affected RHEL major version from the JIRA issue
-            (look in Affects Version/s field or issue description)
-         3. If the Fix Version field is set, do not change it and use its value in the output.
-         4. If the Fix Version field is not set, use the map_version tool
-            with the major version to get available streams
-            and determine appropriate Fix Version:
-             * The tool will return both Y-stream and Z-stream versions
-               (if available) and indicate if it's a maintenance version
-             * For maintenance versions (no Y-stream available):
-               - Critical issues should be fixed (privilege escalation,
-                 remote code execution, data loss/corruption, system compromise,
-                 regressions, moderate and higher severity CVEs)
-               - Non-critical issues should be marked as no-action with appropriate reasoning
-             * For non-maintenance versions (Y-stream available):
-               - Most critical issues (privilege escalation, RCE, data loss, regressions) should use Z-stream
-               - Other issues should use Y-stream (e.g. performance, usability issues)
-         5. Set non-empty JIRA fields:
-             * Severity: default to 'moderate', for important issues use
-               'important', for most critical use 'critical'
-               (privilege escalation, RCE, data loss)
-             * Fix Version: use the appropriate stream version determined from map_version tool result
-    """
-
 
 async def render_prompt(input: InputSchema, fix_version: str | None = None) -> str:
-    template = TRIAGE_PROMPT_ZSTREAM if fix_version and await is_older_zstream(fix_version) else TRIAGE_PROMPT
-    return PromptTemplate(schema=InputSchema, template=template).render(input)
+    older_zstream = bool(fix_version and await is_older_zstream(fix_version))
+    input_with_flag = input.model_copy(update={"is_older_zstream": older_zstream})
+    return PromptTemplate(schema=InputSchema, template=TRIAGE_PROMPT).render(input_with_flag)
 
 
 class TriageState(BaseModel):

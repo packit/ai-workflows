@@ -268,7 +268,7 @@ TRIAGE_PROMPT = """
              `related_commits` that are bare commit hashes (not full URLs), it means the upstream
              repository is hosted on a platform the tool does not know how to build patch URLs for
              (e.g. gitweb, cgit, kernel.org, etc.). In this case, do NOT attempt to guess the web URL
-             or immediately call get_patch_from_url with a fabricated URL. Instead:
+             nor immediately call get_patch_from_url with a fabricated URL. Instead:
              1. Create a unique temporary directory and clone into it:
                 `CLONE_DIR=$(mktemp -d) && git clone --bare <repository_url> "$CLONE_DIR/repo"`
              2. Inspect the candidate commits locally with `git -C "$CLONE_DIR/repo" show <hash>`

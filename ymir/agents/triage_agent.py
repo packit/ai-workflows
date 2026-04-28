@@ -383,7 +383,9 @@ TRIAGE_PROMPT = """
            (e.g., "golang", "openssl") from the dependency issue's component field
          * Otherwise → resolution is "postponed"
            Set summary to explain that rebuild is waiting for the dependency to ship,
-           and set pending_issues to the dependency issue key
+           and set pending_issues to the dependency issue key.
+           Also set package, fix_version, cve_id, dependency_issue, and dependency_component
+           (same values as you would for a rebuild resolution).
          3.3. If rebuild: set Jira fields as per the instructions below.
 
       4. **Open-Ended Analysis**
@@ -662,6 +664,23 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
                     }}
                     ```
 
+                    **Correct example for a 'postponed' resolution (rebuild waiting for dependency):**
+                    ```json
+                    {{
+                        "resolution": "postponed",
+                        "data": {{
+                        "summary": "Rebuild of some-package waiting for RHEL-67890 (golang) to ship",
+                        "pending_issues": ["RHEL-67890"],
+                        "jira_issue": "RHEL-12345",
+                        "package": "some-package",
+                        "fix_version": "rhel-X.Y.Z",
+                        "cve_id": "CVE-1234-98765",
+                        "dependency_issue": "RHEL-67890",
+                        "dependency_component": "golang"
+                        }}
+                    }}
+                    ```
+
                     ```json
                     {output_schema_json}
                     ```
@@ -684,8 +703,19 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
             if state.triage_result.resolution in [
                 Resolution.CLARIFICATION_NEEDED,
                 Resolution.OPEN_ENDED_ANALYSIS,
-                Resolution.POSTPONED,
             ]:
+                return "comment_in_jira"
+            if state.triage_result.resolution == Resolution.POSTPONED:
+                data = state.triage_result.data
+                # Route postponed-rebuild CVEs through applicability to check
+                # if the CVE actually affects the package — if not, resolve as
+                # NOT_AFFECTED instead of waiting for the dependency to ship.
+                if (
+                    getattr(data, "package", None)
+                    and state.cve_eligibility_result
+                    and state.cve_eligibility_result.is_cve
+                ):
+                    return "determine_target_branch"
                 return "comment_in_jira"
             return Workflow.END
 
@@ -706,7 +736,8 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
             if (
                 state.cve_eligibility_result
                 and state.cve_eligibility_result.is_cve
-                and state.triage_result.resolution in (Resolution.BACKPORT, Resolution.REBUILD)
+                and state.triage_result.resolution
+                in (Resolution.BACKPORT, Resolution.REBUILD, Resolution.POSTPONED)
             ):
                 return "check_cve_applicability"
 

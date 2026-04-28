@@ -254,6 +254,19 @@ class PostponedData(BaseModel):
     summary: str = Field(description="Reason for postponement")
     pending_issues: list[str] = Field(description="Jira issue keys of dependencies not yet shipped")
     jira_issue: str = Field(description="Jira issue identifier")
+    package: str | None = Field(default=None, description="Package name (for rebuild postponements)")
+    fix_version: str | None = Field(
+        default=None, description="Fix version in Jira (for rebuild postponements)"
+    )
+    cve_id: str | None = Field(default=None, description="CVE identifier (for rebuild postponements)")
+    dependency_issue: str | None = Field(
+        default=None,
+        description="Key of the dependency Jira issue that triggered the rebuild (for rebuild postponements)",
+    )
+    dependency_component: str | None = Field(
+        default=None,
+        description="Dependency component name (for rebuild postponements)",
+    )
 
 
 class NotAffectedData(BaseModel):

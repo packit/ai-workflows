@@ -155,6 +155,47 @@ def test_postponed_formatting_single_issue():
     )
 
 
+def test_postponed_rebuild_with_extra_fields():
+    data = PostponedData(
+        summary="Rebuild of butane waiting for RHEL-67890 (golang) to ship",
+        pending_issues=["RHEL-67890"],
+        jira_issue="RHEL-12345",
+        package="butane",
+        fix_version="rhel-10.1",
+        cve_id="CVE-2026-99999",
+        dependency_issue="RHEL-67890",
+        dependency_component="golang",
+    )
+    assert data.package == "butane"
+    assert data.dependency_issue == "RHEL-67890"
+    assert data.dependency_component == "golang"
+    assert data.cve_id == "CVE-2026-99999"
+    assert data.fix_version == "rhel-10.1"
+
+    result = TriageOutputSchema(resolution=Resolution.POSTPONED, data=data)
+    comment = result.format_for_comment()
+    assert "*Summary*: Rebuild of butane" in comment
+    assert "RHEL-67890" in comment
+
+
+def test_postponed_without_rebuild_fields():
+    """Y-stream postponement — no rebuild-specific fields."""
+    data = PostponedData(
+        summary="CVE waiting for Z-stream clone to ship",
+        pending_issues=["RHEL-111"],
+        jira_issue="RHEL-99999",
+    )
+    assert data.package is None
+    assert data.fix_version is None
+    assert data.cve_id is None
+    assert data.dependency_issue is None
+    assert data.dependency_component is None
+
+    result = TriageOutputSchema(resolution=Resolution.POSTPONED, data=data)
+    comment = result.format_for_comment()
+    assert "*Waiting for*:" in comment
+
+
 def test_error_formatting():
     data = ErrorData(details="Package 'invalid-pkg' not found in repository", jira_issue="RHEL-33333")
     result = TriageOutputSchema(resolution=Resolution.ERROR, data=data)

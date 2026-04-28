@@ -269,10 +269,11 @@ TRIAGE_PROMPT = """
              repository is hosted on a platform the tool does not know how to build patch URLs for
              (e.g. gitweb, cgit, kernel.org, etc.). In this case, do NOT attempt to guess the web URL
              or immediately call get_patch_from_url with a fabricated URL. Instead:
-             1. Clone the upstream repository locally using the `repository_url` returned by the tool:
-                `git clone --bare <repository_url> /tmp/<project_name>`
-             2. Inspect the candidate commits locally with `git show <hash>` to read the commit
-                message and diff, and determine whether any of them is the correct fix.
+             1. Create a unique temporary directory and clone into it:
+                `CLONE_DIR=$(mktemp -d) && git clone --bare <repository_url> "$CLONE_DIR/repo"`
+             2. Inspect the candidate commits locally with `git -C "$CLONE_DIR/repo" show <hash>`
+                to read the commit message and diff, and determine whether any of them is the
+                correct fix.
              3. Only after you have confirmed the right commit locally, attempt to construct
                 a download URL for the patch. You MUST use the exact same URL scheme
                 (http or https) as the `repository_url` returned by upstream_search.

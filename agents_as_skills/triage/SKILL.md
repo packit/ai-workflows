@@ -224,8 +224,8 @@ If `is_older_zstream` is true:
   - If you run out of commits to check, use a different approach; inability to find the fix does not mean it does not exist — search bug trackers and version control systems.
   - **Handling non-GitHub/non-GitLab repositories**: When `upstream_search` returns `related_commits` that are bare commit hashes (not full URLs), the upstream repository is on a platform the tool cannot build patch URLs for (e.g., gitweb, cgit, kernel.org). In this case:
     1. Do NOT guess the web URL or immediately call `get_patch_from_url` with a fabricated URL.
-    2. Clone the upstream repository locally: `git clone --bare <repository_url> /tmp/<project_name>`
-    3. Inspect candidate commits locally with `git show <hash>` to read the message and diff.
+    2. Create a unique temporary directory and clone into it: `CLONE_DIR=$(mktemp -d) && git clone --bare <repository_url> "$CLONE_DIR/repo"`
+    3. Inspect candidate commits locally with `git -C "$CLONE_DIR/repo" show <hash>` to read the message and diff.
     4. Only after confirming the right commit locally, attempt to construct a download URL. You MUST use the exact same URL scheme (`http://` or `https://`) as the `repository_url` — do NOT upgrade or downgrade the scheme. Try common patterns:
        - cgit: `<base_url>/patch/?id=<hash>`
        - gitweb: `<base_url>;a=patch;h=<hash>`

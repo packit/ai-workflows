@@ -60,6 +60,7 @@ class RunShellCommandTool(Tool[RunShellCommandToolInput, ToolRunOptions, RunShel
                     tool_input.command,
                     shell=True,
                     cwd=(self.options or {}).get("working_directory"),
+                    env=(self.options or {}).get("env"),
                 ),
                 timeout=TIMEOUT,
             )

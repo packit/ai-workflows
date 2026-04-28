@@ -548,14 +548,14 @@ class TriageState(BaseModel):
     target_branch: str | None = Field(default=None)
 
 
-def create_triage_agent(gateway_tools):
+def create_triage_agent(gateway_tools, local_tool_options=None):
     return RequirementAgent(
         name="TriageAgent",
         llm=get_chat_model(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
             ThinkTool(),
-            RunShellCommandTool(),
+            RunShellCommandTool(options=local_tool_options) if local_tool_options else RunShellCommandTool(),
             VersionMapperTool(),
             UpstreamSearchTool(),
         ]

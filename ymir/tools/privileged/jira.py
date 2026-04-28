@@ -376,6 +376,25 @@ async def _check_zstream_clones_shipped(
     return (True, [])
 
 
+def build_rebuild_siblings_jql(
+    issue_key: str,
+    component: str,
+    fix_version: str,
+) -> str:
+    escaped_component = component.replace('"', '\\"')
+    escaped_fix_version = fix_version.replace('"', '\\"')
+    return (
+        f'project = RHEL AND component = "{escaped_component}" '
+        f'AND fixVersion = "{escaped_fix_version}" '
+        f'AND key != "{issue_key}" '
+        f'AND labels = "SecurityTracking" '
+        f"AND labels not in "
+        f'("ymir_triaged_rebuild", "ymir_rebuilt", '
+        f'"ymir_triaged_not_affected", "ymir_triaged_backport", "ymir_triaged_rebase") '
+        f'AND status in ("New", "Planning")'
+    )
+
+
 class CheckCveTriageEligibilityToolInput(BaseModel):
     issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
 

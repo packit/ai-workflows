@@ -4,11 +4,13 @@ from ymir.common.models import (
     ApplicabilityResult,
     BackportData,
     ClarificationNeededData,
+    ConsolidatedIssue,
     ErrorData,
     NotAffectedData,
     OpenEndedAnalysisData,
     PostponedData,
     RebaseData,
+    RebuildData,
     Resolution,
     TriageOutputSchema,
 )
@@ -283,3 +285,68 @@ def test_applicability_result_roundtrip():
     restored = ApplicabilityResult.model_validate_json(json_str)
     assert not restored.is_affected
     assert restored.justification_category == "Vulnerable Code not in Execute Path"
+
+
+# --- RebuildData consolidation tests ---
+
+
+def test_rebuild_data_all_jira_issues_no_consolidated():
+    data = RebuildData(
+        package="git-lfs",
+        jira_issue="RHEL-100",
+        fix_version="rhel-9.8",
+    )
+    assert data.all_jira_issues == ["RHEL-100"]
+
+
+def test_rebuild_data_all_jira_issues_with_consolidated():
+    data = RebuildData(
+        package="git-lfs",
+        jira_issue="RHEL-100",
+        fix_version="rhel-9.8",
+        consolidated_issues=[
+            ConsolidatedIssue(
+                issue_key="RHEL-101",
+                dependency_issue="RHEL-50",
+                dependency_component="golang",
+            ),
+            ConsolidatedIssue(
+                issue_key="RHEL-102",
+                dependency_issue="RHEL-51",
+                dependency_component="golang",
+            ),
+        ],
+    )
+    assert data.all_jira_issues == ["RHEL-100", "RHEL-101", "RHEL-102"]
+
+
+def test_rebuild_data_backward_compat():
+    payload = {
+        "package": "git-lfs",
+        "jira_issue": "RHEL-100",
+        "dependency_issue": "RHEL-50",
+        "dependency_component": "golang",
+        "fix_version": "rhel-9.8",
+    }
+    data = RebuildData.model_validate(payload)
+    assert data.consolidated_issues == []
+    assert data.all_jira_issues == ["RHEL-100"]
+
+
+def test_rebuild_data_serialization_roundtrip():
+    data = RebuildData(
+        package="git-lfs",
+        jira_issue="RHEL-100",
+        fix_version="rhel-9.8",
+        consolidated_issues=[
+            ConsolidatedIssue(
+                issue_key="RHEL-101",
+                dependency_issue="RHEL-50",
+                dependency_component="golang",
+            ),
+        ],
+    )
+    json_str = data.model_dump_json()
+    restored = RebuildData.model_validate_json(json_str)
+    assert restored.all_jira_issues == ["RHEL-100", "RHEL-101"]
+    assert restored.consolidated_issues[0].dependency_component == "golang"

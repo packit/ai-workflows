@@ -276,7 +276,7 @@ async def set_jira_labels(
     labels_to_remove: list[str] | None = None,
     dry_run: bool = False,
 ) -> None:
-    if dry_run:
+    if dry_run or os.getenv("JIRA_DRY_RUN", "false").lower() == "true":
         logger.info(f"Dry run, not updating labels for {jira_issue}")
         return
 

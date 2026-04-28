@@ -455,6 +455,10 @@ class TriageState(BaseModel):
     cve_eligibility_result: CVEEligibilityResult | None = Field(default=None)
     triage_result: OutputSchema | None = Field(default=None)
     target_branch: str | None = Field(default=None)
+    applicability_local_clone: Path | None = Field(default=None)
+    applicability_unpacked_sources: Path | None = Field(default=None)
+    applicability_used_fallback: bool = Field(default=False)
+    applicability_check_skipped: bool = Field(default=False)
 
 
 def create_triage_agent(gateway_tools, local_tool_options=None):
@@ -830,9 +834,8 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
                 except Exception as e:
                     logger.warning(f"Failed to check branches for {package}: {e}")
 
-            working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "applicability" / state.jira_issue
             try:
-                local_clone, unpacked_sources = await tasks.clone_and_prep_sources(
+                local_clone, unpacked_sources, prep_ok = await tasks.clone_and_prep_sources(
                     package=package,
                     dist_git_branch=clone_branch,
                     available_tools=gateway_tools,
@@ -840,11 +843,17 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
                 )
             except Exception as e:
                 logger.warning(f"Could not prep sources for applicability check: {e}")
-                shutil.rmtree(working_dir, ignore_errors=True)
+                state.applicability_check_skipped = True
                 return "comment_in_jira"
 
+            if not prep_ok:
+                logger.warning(f"Source prep failed for {package} — analyzing unpatched upstream source")
+
+            state.applicability_local_clone = local_clone
+            state.applicability_unpacked_sources = unpacked_sources
+            state.applicability_used_fallback = not prep_ok
+
             try:
-                # Download patches as files (same layout as backport agent)
                 patch_files = []
                 for idx, url in enumerate(patch_urls):
                     try:
@@ -872,6 +881,7 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
                     patch_files=patch_files,
                     unpacked_sources=unpacked_sources,
                     local_clone=local_clone,
+                    prep_ok=prep_ok,
                 )
 
                 response = await applicability_agent.run(
@@ -885,11 +895,23 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
                     logger.info(
                         f"CVE not applicable for {state.jira_issue}: {applicability.justification_category}"
                     )
+                    explanation = applicability.explanation
+                    if state.applicability_used_fallback:
+                        explanation += (
+                            "\n\n_Note: RPM prep failed — analysis was performed on "
+                            "unpatched upstream source (Source0 only). Downstream "
+                            "patches were not applied._"
+                        )
+                    else:
+                        explanation += (
+                            "\n\n_Note: Analysis was performed on fully prepared "
+                            "sources (with downstream patches applied)._"
+                        )
                     state.triage_result = OutputSchema(
                         resolution=Resolution.NOT_AFFECTED,
                         data=NotAffectedData(
                             justification_category=applicability.justification_category,
-                            explanation=applicability.explanation,
+                            explanation=explanation,
                             jira_issue=state.jira_issue,
                         ),
                     )
@@ -900,8 +922,7 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
                 )
             except Exception as e:
                 logger.warning(f"Applicability check failed: {e}")
-            finally:
-                shutil.rmtree(working_dir, ignore_errors=True)
+                state.applicability_check_skipped = True
 
             if state.triage_result.resolution == Resolution.REBUILD:
                 return "consolidate_rebuild_siblings"
@@ -918,7 +939,17 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
             return "comment_in_jira"
 
         async def comment_in_jira(state):
+            applicability_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "applicability" / state.jira_issue
+            if applicability_dir.exists():
+                shutil.rmtree(applicability_dir, ignore_errors=True)
+                state.applicability_local_clone = None
+                state.applicability_unpacked_sources = None
+
             comment_text = state.triage_result.format_for_comment(auto_chain=auto_chain)
+            if state.applicability_check_skipped:
+                comment_text += (
+                    "\n\n_Note: CVE applicability check could not be performed (source preparation failed)._"
+                )
             logger.info(f"Result to be put in Jira comment: {comment_text}")
             if dry_run:
                 return Workflow.END

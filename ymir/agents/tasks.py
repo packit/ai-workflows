@@ -410,14 +410,15 @@ async def clone_and_prep_sources(
     dist_git_branch: str,
     available_tools: list[Tool],
     jira_issue: str,
-) -> tuple[Path, Path]:
+) -> tuple[Path, Path, bool]:
     """
     Clone dist-git repo and run centpkg/rhpkg sources + prep.
-    Returns (local_clone, unpacked_sources) paths.
+    Returns (local_clone, unpacked_sources, prep_succeeded).
     Read-only: no fork, no push — just for source analysis.
 
     Falls back to manual archive extraction if prep fails (e.g. missing
-    language-specific RPM macros).
+    language-specific RPM macros). When using the fallback, downstream
+    patches are NOT applied — the source is pristine upstream.
     """
     working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "applicability" / jira_issue
     working_dir.mkdir(parents=True, exist_ok=True)
@@ -456,8 +457,8 @@ async def clone_and_prep_sources(
     exit_code, _, stderr = await run_subprocess([*pkg_cmd, "prep"], cwd=local_clone)
     if exit_code == 0:
         unpacked = get_unpacked_sources(local_clone, package)
-        return local_clone, unpacked
+        return local_clone, unpacked, True
 
     logger.warning(f"prep failed for {package}, falling back to manual extraction: {stderr}")
     unpacked = await _fallback_extract_sources(local_clone, package)
-    return local_clone, unpacked
+    return local_clone, unpacked, False

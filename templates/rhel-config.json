@@ -1,17 +1,18 @@
 {
     "current_y_streams": {
-      "9": "rhel-9.8",
-      "10": "rhel-10.2"
+      "9": "rhel-9.9",
+      "10": "rhel-10.3"
     },
     "current_z_streams": {
       "8": "rhel-8.10.z",
-      "9": "rhel-9.6.z",
-      "10": "rhel-10.0.z"
+      "9": "rhel-9.8.z",
+      "10": "rhel-10.2.z"
     },
     "upcoming_z_streams": {
-      "9": "rhel-9.7.z",
-      "10": "rhel-10.1.z"
+      "9": "rhel-9.9.z",
+      "10": "rhel-10.3.z"
     },
+    "internal_repos_host": "https://internal.host",
     "package_instructions": {
       "package": {
         "rebase": [

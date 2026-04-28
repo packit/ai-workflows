@@ -59,6 +59,7 @@ def build_applicability_prompt(
     patch_files: list[str],
     unpacked_sources: Path,
     local_clone: Path,
+    prep_ok: bool = True,
 ) -> str:
     cve_label = cve_id or "the CVE"
 
@@ -73,7 +74,14 @@ def build_applicability_prompt(
         rebuild_context += (
             f"\nCheck whether '{package}' actually uses the affected API/module "
             f"of '{dep_component}' (e.g. check Go imports, C includes, "
-            f"Python imports, linked libraries).\n"
+            f"Python imports, linked libraries)."
+            f"\n\nREBUILD CAUTION: The bar for declaring a rebuild 'not affected' "
+            f"is very high. A false negative means skipping a security rebuild "
+            f"entirely. Only classify as not affected if you have strong, concrete "
+            f"evidence — e.g. the package provably does not import/link/use the "
+            f"affected module at all. If there is any ambiguity — transitive "
+            f"dependencies, conditional imports, build-time usage, or you simply "
+            f"cannot verify the full dependency chain — classify as 'Inconclusive'.\n"
         )
 
     sources_rel = unpacked_sources.relative_to(local_clone)
@@ -81,6 +89,15 @@ def build_applicability_prompt(
         patch_info = "Upstream fix patches are available at: " + ", ".join(patch_files)
     else:
         patch_info = "No upstream fix patch available."
+
+    fallback_warning = ""
+    if not prep_ok:
+        fallback_warning = (
+            "\nIMPORTANT: RPM prep failed — the source tree is unpatched upstream "
+            "source (Source0 extraction only). Downstream patches are NOT applied. "
+            "If you find vulnerable code, it may already be patched in the shipped "
+            "version. Factor this into your confidence level.\n"
+        )
 
     return dedent(f"""\
         Analyze whether {cve_label} affects package '{package}'
@@ -90,20 +107,25 @@ def build_applicability_prompt(
         Triage resolution: {resolution.value}
         {rebuild_context}
         {patch_info}
-
+        {fallback_warning}
         The unpacked package source is at: {sources_rel}
 
         Steps:
         1. Use get_jira_details on {jira_issue} to understand the
-           CVE context and what is affected.
+           CVE context and what is affected. Also check the Jira
+           comments — maintainers may have left notes about whether
+           this CVE is relevant to the package.
         2. If upstream fix patches are available, read them to identify
            the specific files and functions modified by the fix.
         3. Search for those files/functions in the package source.
         4. If the vulnerable code is not present, determine why — older
            version that predates the vulnerability? Patched downstream?
-        5. For dependency rebuilds: check if the package actually uses
-           the affected API/module of the dependency. Be very careful here
-           and only classify as affected if you are very confident.
+        5. For dependency rebuilds: verify whether the package uses
+           the specific affected API/module of the dependency. Check
+           direct imports, linked libraries, and build dependencies.
+           Remember: transitive dependencies and build-time usage
+           also count — a package that vendors or bundles the
+           dependency is affected even without a direct import.
 
         Classify using Red Hat justification categories:
         - "Component not Present" — the affected component/subcomponent

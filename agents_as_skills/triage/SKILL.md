@@ -41,7 +41,18 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `map_version` — Map a RHEL major version to the current Y-stream and Z-stream versions
 - `upstream_search` — Search an upstream project's git repository for commits related to a description
 - `run_shell_command` — Execute shell commands (e.g., `git ls-remote` to verify a package repository exists)
-- `think` — Internal reasoning tool; use it before each decision and after each tool call
+- `think` — Internal reasoning tool; use it at the very first step, before each decision, and after each tool call
+
+## Key Instructions
+
+These constraints apply throughout the entire skill execution:
+
+1. **Be proactive** — search thoroughly for fixes and do not give up easily.
+2. **Always validate patch URLs** — for any patch URL you intend to use for a backport, fetch and validate it using `get_patch_from_url` before including it in your result.
+3. **Do not modify validated URLs** — once a patch URL has been validated with `get_patch_from_url`, do not modify it in your final answer.
+4. **Preserve URL scheme** — when constructing patch URLs from `upstream_search` results, you MUST use the exact URL scheme (`http://` or `https://`) from the `repository_url` returned by `upstream_search`. Do NOT upgrade `http://` to `https://` or vice versa — some upstream repositories only support one protocol.
+5. **Set JIRA fields** — after completing triage analysis, if your decision is backport or rebase, always set appropriate JIRA fields using `set_jira_fields`.
+6. **Use `get_jira_details` first** — call `get_jira_details` before using `upstream_search`, `run_shell_command`, `get_patch_from_url`, `set_jira_fields`, or `search_jira_issues`.
 
 ## Workflow
 
@@ -215,7 +226,7 @@ If `is_older_zstream` is true:
     1. Do NOT guess the web URL or immediately call `get_patch_from_url` with a fabricated URL.
     2. Clone the upstream repository locally: `git clone --bare <repository_url> /tmp/<project_name>`
     3. Inspect candidate commits locally with `git show <hash>` to read the message and diff.
-    4. Only after confirming the right commit locally, attempt to construct a download URL. Try common patterns:
+    4. Only after confirming the right commit locally, attempt to construct a download URL. You MUST use the exact same URL scheme (`http://` or `https://`) as the `repository_url` — do NOT upgrade or downgrade the scheme. Try common patterns:
        - cgit: `<base_url>/patch/?id=<hash>`
        - gitweb: `<base_url>;a=patch;h=<hash>`
        - kernel.org: `<base_url>/patch/?id=<hash>`

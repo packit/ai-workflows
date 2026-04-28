@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 import ymir.agents.tasks as tasks
 from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_applicability_agent
 from ymir.agents.observability import setup_observability
+from ymir.agents.rebuild_consolidation import find_rebuild_siblings
 from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
@@ -706,12 +707,11 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
             ]:
                 return "comment_in_jira"
             if state.triage_result.resolution == Resolution.POSTPONED:
-                data = state.triage_result.data
                 # Route postponed-rebuild CVEs through applicability to check
                 # if the CVE actually affects the package — if not, resolve as
                 # NOT_AFFECTED instead of waiting for the dependency to ship.
                 if (
-                    getattr(data, "package", None)
+                    state.triage_result.data.package
                     and state.cve_eligibility_result
                     and state.cve_eligibility_result.is_cve
                 ):
@@ -741,6 +741,8 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
             ):
                 return "check_cve_applicability"
 
+            if state.triage_result.resolution == Resolution.REBUILD:
+                return "consolidate_rebuild_siblings"
             return "comment_in_jira"
 
         async def verify_rebase_author(state):
@@ -799,7 +801,7 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
                 return "comment_in_jira"
 
             data = state.triage_result.data
-            cve_id = getattr(data, "cve_id", None)
+            cve_id = data.cve_id
             dep_component = getattr(data, "dependency_component", None)
             dep_issue_key = getattr(data, "dependency_issue", None)
 
@@ -900,6 +902,18 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
             finally:
                 shutil.rmtree(working_dir, ignore_errors=True)
 
+            if state.triage_result.resolution == Resolution.REBUILD:
+                return "consolidate_rebuild_siblings"
+            return "comment_in_jira"
+
+        async def consolidate_rebuild_siblings(state):
+            """Find and analyze sibling issues that can share a single rebuild MR."""
+            rebuild_data = state.triage_result.data
+            rebuild_data.consolidated_issues = await find_rebuild_siblings(
+                jira_issue=state.jira_issue,
+                rebuild_data=rebuild_data,
+                available_tools=gateway_tools,
+            )
             return "comment_in_jira"
 
         async def comment_in_jira(state):
@@ -920,6 +934,7 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
         workflow.add_step("verify_rebase_author", verify_rebase_author)
         workflow.add_step("determine_target_branch", determine_target_branch_step)
         workflow.add_step("check_cve_applicability", check_cve_applicability)
+        workflow.add_step("consolidate_rebuild_siblings", consolidate_rebuild_siblings)
         workflow.add_step("comment_in_jira", comment_in_jira)
 
         response = await workflow.run(TriageState(jira_issue=jira_issue))
@@ -1063,8 +1078,21 @@ async def main() -> None:
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGED_REBUILD.value],
+                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
                         dry_run=dry_run,
                     )
+                    for consolidated in output.data.consolidated_issues:
+                        try:
+                            await tasks.set_jira_labels(
+                                jira_issue=consolidated.issue_key,
+                                labels_to_add=[JiraLabels.TRIAGED_REBUILD.value],
+                                labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                                dry_run=dry_run,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to set labels on consolidated issue {consolidated.issue_key}: {e}"
+                            )
                     if auto_chain:
                         task = Task(metadata=state.model_dump())
                         rebuild_queue = RedisQueues.get_rebuild_queue_for_branch(state.target_branch)

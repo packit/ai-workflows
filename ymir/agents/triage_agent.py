@@ -277,10 +277,18 @@ TRIAGE_PROMPT = """
              3. Only after you have confirmed the right commit locally, attempt to construct
                 a download URL for the patch. You MUST use the exact same URL scheme
                 (http or https) as the `repository_url` returned by upstream_search.
-                Try common hosting URL patterns:
-                - cgit: `<base_url>/patch/?id=<hash>`
-                - gitweb: `<base_url>;a=patch;h=<hash>`
-                - kernel.org: `<base_url>/patch/?id=<hash>`
+                Try common hosting URL patterns (given a `repository_url` like
+                `http://example.org/git/project.git`):
+                - cgit: `<scheme>://<host>/patch/?id=<hash>` — append to the repo URL
+                  e.g. `http://example.org/git/project.git/patch/?id=<hash>`
+                - gitweb: **WARNING — gitweb patch URLs do NOT share the same path
+                  as the repository URL.** The correct pattern is
+                  `<scheme>://<host>/gitweb/?p=<repo_name>.git;a=patch;h=<hash>`
+                  where `<repo_name>.git` is ONLY the repository filename (last path
+                  component of the repository URL, e.g. `project.git`), NOT the full path.
+                  Example: for `http://example.org/git/project.git` the patch URL is
+                  `http://example.org/gitweb/?p=project.git;a=patch;h=<hash>`
+                - kernel.org cgit: `<repo_url>/patch/?id=<hash>`
                 If none of these patterns work with get_patch_from_url, use the repository URL
                 with the commit hash appended as a fragment (e.g. `<repository_url>#<hash>`)
                 as the patch URL in your final answer.

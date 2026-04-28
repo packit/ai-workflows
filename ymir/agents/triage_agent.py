@@ -704,6 +704,7 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
             if state.triage_result.resolution in [
                 Resolution.CLARIFICATION_NEEDED,
                 Resolution.OPEN_ENDED_ANALYSIS,
+                Resolution.NOT_AFFECTED,
             ]:
                 return "comment_in_jira"
             if state.triage_result.resolution == Resolution.POSTPONED:

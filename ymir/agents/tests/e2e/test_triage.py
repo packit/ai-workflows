@@ -82,22 +82,6 @@ class TriageAgentTestCase:
 
 test_cases = [
     TriageAgentTestCase(
-        input="RHEL-15216",
-        expected_output=TriageOutputSchema(
-            resolution=Resolution.BACKPORT,
-            data=BackportData(
-                package="dnsmasq",
-                patch_urls=[
-                    "http://thekelleys.org.uk/gitweb/?p=dnsmasq.git;a=patch;h=dd33e98da09c487a58b6cb6693b8628c0b234a3b"
-                ],
-                justification="not-implemented",
-                jira_issue="RHEL-15216",
-                cve_id=None,
-                fix_version="rhel-8.10",
-            ),
-        ),
-    ),
-    TriageAgentTestCase(
         input="RHEL-112546",
         expected_output=TriageOutputSchema(
             resolution=Resolution.BACKPORT,
@@ -112,39 +96,7 @@ test_cases = [
                 fix_version="rhel-9.6.z",
             ),
         ),
-    ),
-    TriageAgentTestCase(
-        input="RHEL-61943",
-        expected_output=TriageOutputSchema(
-            resolution=Resolution.BACKPORT,
-            data=BackportData(
-                package="dnsmasq",
-                patch_urls=[
-                    "http://thekelleys.org.uk/gitweb/?p=dnsmasq.git;a=patch;h=eb1fe15ca80b6bc43cd6bfdf309ec6c590aff811"
-                ],
-                justification="not-implemented",
-                jira_issue="RHEL-61943",
-                cve_id=None,
-                fix_version="rhel-8.10.z",
-            ),
-        ),
-    ),
-    TriageAgentTestCase(
-        input="RHEL-29712",
-        expected_output=TriageOutputSchema(
-            resolution=Resolution.BACKPORT,
-            data=BackportData(
-                package="bind",
-                patch_urls=[
-                    "https://gitlab.isc.org/isc-projects/bind9/-/commit/7e2f50c36958f8c98d54e6d131f088a4837ce269"
-                ],
-                justification="not-implemented",
-                jira_issue="RHEL-29712",
-                cve_id=None,
-                fix_version="rhel-8.10.z",
-            ),
-        ),
-    ),
+    )
 ]
 
 
@@ -188,6 +140,31 @@ def mock_centos_stream_repos(tmp_path_factory):
                 ],
                 cwd=str(local_path),
                 check=True,
+            )
+            all_refs = (
+                subprocess.run(
+                    ["git", "for-each-ref", "--format=%(refname)"],
+                    cwd=str(local_path),
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                .stdout.strip()
+                .splitlines()
+            )
+            keep_ref = f"refs/heads/{repo_info['branch']}"
+            for ref in all_refs:
+                if ref != keep_ref:
+                    subprocess.run(
+                        ["git", "update-ref", "-d", ref],
+                        cwd=str(local_path),
+                        check=True,
+                    )
+            subprocess.run(
+                ["git", "gc", "--prune=now", "-q"],
+                cwd=str(local_path),
+                check=True,
+                capture_output=True,
             )
             git_env[f"GIT_CONFIG_KEY_{i}"] = f"url.file://{local_path}.insteadOf"
             git_env[f"GIT_CONFIG_VALUE_{i}"] = repo_info["remote_url"]

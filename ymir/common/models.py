@@ -201,10 +201,6 @@ class ConsolidatedIssue(BaseModel):
     """A sibling Jira issue consolidated into the same rebuild task."""
 
     issue_key: str = Field(description="Jira issue key (e.g. RHEL-67890)")
-    dependency_issue: str | None = Field(
-        description="Key of the dependency Jira issue for this sibling",
-        default=None,
-    )
     dependency_component: str | None = Field(
         description="Component name of the dependency (e.g. 'golang')",
         default=None,
@@ -229,6 +225,10 @@ class RebuildData(BaseModel):
     consolidated_issues: list[ConsolidatedIssue] = Field(
         default_factory=list,
         description="Sibling issues consolidated into this rebuild task",
+    )
+    consolidation_summary: str | None = Field(
+        default=None,
+        description="Summary of sibling consolidation analysis",
     )
 
     @property
@@ -417,12 +417,19 @@ class TriageOutputSchema(BaseModel):
                     else ""
                 )
 
+                consolidation_text = ""
+                if self.data.consolidation_summary:
+                    consolidation_text = (
+                        f"\n\n*Sibling consolidation analysis:*\n{self.data.consolidation_summary}"
+                    )
+
                 return (
                     f"{resolution}"
                     f"*Package*: {self.data.package}"
                     f"{dep_comp_text}"
                     f"{dep_text}"
                     f"{fix_version_text}"
+                    f"{consolidation_text}"
                     f"{follow_up_note}"
                     f"{TRIAGE_DISCLAIMER}"
                 )

@@ -931,11 +931,16 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
         async def consolidate_rebuild_siblings(state):
             """Find and analyze sibling issues that can share a single rebuild MR."""
             rebuild_data = state.triage_result.data
-            rebuild_data.consolidated_issues = await find_rebuild_siblings(
+            included, summary = await find_rebuild_siblings(
                 jira_issue=state.jira_issue,
                 rebuild_data=rebuild_data,
                 available_tools=gateway_tools,
+                local_clone=state.applicability_local_clone,
+                unpacked_sources=state.applicability_unpacked_sources,
+                target_branch=state.target_branch,
             )
+            rebuild_data.consolidated_issues = included
+            rebuild_data.consolidation_summary = summary or None
             return "comment_in_jira"
 
         async def comment_in_jira(state):

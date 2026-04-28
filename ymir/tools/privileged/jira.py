@@ -290,7 +290,7 @@ def _get_maintenance_majors(rhel_config: dict) -> set[str]:
 CVE_ID_PATTERN = re.compile(r"(CVE-\d{4}-\d{4,})")
 
 
-def _extract_cve_id(summary: str) -> str | None:
+def extract_cve_id(summary: str) -> str | None:
     match = CVE_ID_PATTERN.search(summary)
     return match.group(1) if match else None
 
@@ -527,7 +527,7 @@ class CheckCveTriageEligibilityTool(
     ) -> JSONToolOutput[dict[str, Any]] | None:
         """Return a blocker response if no sibling clone has shipped yet, or None if clear."""
         summary = fields.get("summary", "")
-        cve_id = _extract_cve_id(summary)
+        cve_id = extract_cve_id(summary)
 
         if not cve_id:
             logger.warning(f"Cannot extract CVE ID from summary: {summary!r}")

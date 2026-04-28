@@ -307,12 +307,10 @@ def test_rebuild_data_all_jira_issues_with_consolidated():
         consolidated_issues=[
             ConsolidatedIssue(
                 issue_key="RHEL-101",
-                dependency_issue="RHEL-50",
                 dependency_component="golang",
             ),
             ConsolidatedIssue(
                 issue_key="RHEL-102",
-                dependency_issue="RHEL-51",
                 dependency_component="golang",
             ),
         ],
@@ -341,7 +339,6 @@ def test_rebuild_data_serialization_roundtrip():
         consolidated_issues=[
             ConsolidatedIssue(
                 issue_key="RHEL-101",
-                dependency_issue="RHEL-50",
                 dependency_component="golang",
             ),
         ],

@@ -102,7 +102,8 @@ def build_applicability_prompt(
         4. If the vulnerable code is not present, determine why — older
            version that predates the vulnerability? Patched downstream?
         5. For dependency rebuilds: check if the package actually uses
-           the affected API/module of the dependency.
+           the affected API/module of the dependency. Be very careful here
+           and only classify as affected if you are very confident.
 
         Classify using Red Hat justification categories:
         - "Component not Present" — the affected component/subcomponent

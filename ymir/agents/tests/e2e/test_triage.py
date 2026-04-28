@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import shutil
 import subprocess
 
 import pytest
@@ -192,6 +193,31 @@ def mock_centos_stream_repos(tmp_path_factory):
             git_env[f"GIT_CONFIG_VALUE_{i}"] = repo_info["remote_url"]
 
         git_env["GIT_CONFIG_COUNT"] = str(len(repos))
+
+        blocked_urls = [r["remote_url"] for r in repos]
+        wrapper_dir = repo_dir / f"{issue_key}-wrappers"
+        wrapper_dir.mkdir()
+        for cmd in ["curl", "wget"]:
+            real_path = shutil.which(cmd)
+            if not real_path:
+                continue
+            blocked_patterns = " ".join(f'"{url}"' for url in blocked_urls)
+            wrapper = wrapper_dir / cmd
+            wrapper.write_text(
+                f"#!/bin/bash\n"
+                f"BLOCKED=({blocked_patterns})\n"
+                f'for arg in "$@"; do\n'
+                f'  for b in "${{BLOCKED[@]}}"; do\n'
+                f'    if [[ "$arg" == "$b"* ]]; then\n'
+                f'      echo "BLOCKED: $b is mocked locally; use git commands instead of curl/wget" >&2\n'
+                f"      exit 1\n"
+                f"    fi\n"
+                f"  done\n"
+                f"done\n"
+                f'exec {real_path} "$@"\n'
+            )
+            wrapper.chmod(0o755)
+        git_env["PATH"] = f"{wrapper_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"
 
         for tc in test_cases:
             if tc.input == issue_key:

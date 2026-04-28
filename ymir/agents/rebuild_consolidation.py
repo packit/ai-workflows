@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from textwrap import dedent
 
 from beeai_framework.agents.requirement import RequirementAgent
@@ -6,6 +7,7 @@ from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.tools import Tool
 from pydantic import BaseModel, Field
 
+from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_applicability_agent
 from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
@@ -13,9 +15,11 @@ from ymir.agents.utils import (
     run_tool,
 )
 from ymir.common.models import (
+    ApplicabilityResult,
     ConsolidatedIssue,
     CVEEligibilityResult,
     RebuildData,
+    Resolution,
     TriageEligibility,
 )
 from ymir.tools.privileged.jira import build_rebuild_siblings_jql
@@ -38,24 +42,33 @@ class SiblingRebuildAnalysis(BaseModel):
         default=None,
         description="Component name of the dependency (e.g. 'golang', 'openssl')",
     )
+    cve_id: str | None = Field(
+        default=None,
+        description="CVE identifier from the issue summary (e.g. 'CVE-2024-1234')",
+    )
 
 
 async def find_rebuild_siblings(
     jira_issue: str,
     rebuild_data: RebuildData,
     available_tools: list[Tool],
-) -> list[ConsolidatedIssue]:
+    local_clone: Path | None = None,
+    unpacked_sources: Path | None = None,
+    target_branch: str | None = None,
+) -> tuple[list[ConsolidatedIssue], str]:
     """
     Find sibling Jira issues that can share a single rebuild MR.
 
     Searches for other issues against the same package and fix_version,
     then uses an LLM to verify each is a dependency rebuild with a shipped fix.
+    When source clone paths are provided, runs a CVE applicability check per
+    sibling and excludes those whose CVE doesn't affect the package.
 
-    Returns a list of confirmed sibling issues (may be empty).
+    Returns (consolidated_issues, summary_text).
     """
     if not rebuild_data.fix_version:
         logger.info(f"No fix_version for {jira_issue}, skipping consolidation")
-        return []
+        return [], ""
 
     try:
         jql = build_rebuild_siblings_jql(
@@ -72,15 +85,16 @@ async def find_rebuild_siblings(
         )
     except Exception as e:
         logger.warning(f"Failed to find rebuild siblings for {jira_issue}: {e}")
-        return []
+        return [], ""
 
     if not candidates:
-        return []
+        return [], ""
 
     logger.info(f"Analyzing {len(candidates)} sibling candidates for {jira_issue}")
 
     analysis_tools = [t for t in available_tools if t.name in ["get_jira_details", "search_jira_issues"]]
     consolidated: list[ConsolidatedIssue] = []
+    summary_lines: list[str] = []
 
     for candidate in candidates:
         candidate_key = candidate.get("key", "")
@@ -94,9 +108,13 @@ async def find_rebuild_siblings(
             )
             if eligibility_result.eligibility != TriageEligibility.IMMEDIATELY:
                 logger.info(f"Sibling {candidate_key} not eligible: {eligibility_result.reason}")
+                summary_lines.append(
+                    f"* {candidate_key} — excluded (not eligible: {eligibility_result.reason})"
+                )
                 continue
         except Exception as e:
             logger.warning(f"Failed to check eligibility for sibling {candidate_key}: {e}")
+            summary_lines.append(f"* {candidate_key} — excluded (eligibility check failed)")
             continue
 
         try:
@@ -121,26 +139,56 @@ async def find_rebuild_siblings(
             analysis = SiblingRebuildAnalysis.model_validate_json(response.last_message.text)
 
             if analysis.is_dependency_rebuild:
-                consolidated.append(
-                    ConsolidatedIssue(
-                        issue_key=candidate_key,
-                        dependency_issue=analysis.dependency_issue,
-                        dependency_component=analysis.dependency_component,
-                    )
-                )
                 logger.info(
                     f"Sibling {candidate_key} confirmed as dependency rebuild "
                     f"(dependency: {analysis.dependency_component})"
                 )
+                cve_id = analysis.cve_id
+
+                if (
+                    local_clone
+                    and unpacked_sources
+                    and target_branch
+                    and cve_id
+                    and not await _check_sibling_applicability(
+                        candidate_key=candidate_key,
+                        cve_id=cve_id,
+                        package=rebuild_data.package,
+                        target_branch=target_branch,
+                        dep_component=analysis.dependency_component,
+                        dep_issue_key=analysis.dependency_issue,
+                        local_clone=local_clone,
+                        unpacked_sources=unpacked_sources,
+                        available_tools=available_tools,
+                    )
+                ):
+                    summary_lines.append(
+                        f"* {candidate_key} — excluded ({cve_id} does not affect {rebuild_data.package})"
+                    )
+                    continue
+
+                dep_info = (
+                    f" (dependency: {analysis.dependency_component})" if analysis.dependency_component else ""
+                )
+                cve_info = f" [{cve_id}]" if cve_id else ""
+                summary_lines.append(f"* {candidate_key}{cve_info}{dep_info} — included")
+                consolidated.append(
+                    ConsolidatedIssue(
+                        issue_key=candidate_key,
+                        dependency_component=analysis.dependency_component,
+                    )
+                )
             else:
                 logger.info(f"Sibling {candidate_key} is not a dependency rebuild")
+                summary_lines.append(f"* {candidate_key} — excluded (not a dependency rebuild)")
         except Exception as e:
             logger.warning(f"Failed to analyze sibling {candidate_key}: {e}")
+            summary_lines.append(f"* {candidate_key} — excluded (analysis failed)")
 
     if consolidated:
         logger.info(f"Consolidated {len(consolidated)} sibling(s) into rebuild for {jira_issue}")
 
-    return consolidated
+    return consolidated, "\n".join(summary_lines)
 
 
 def _build_sibling_analysis_prompt(
@@ -175,5 +223,53 @@ def _build_sibling_analysis_prompt(
            (non-null/non-empty)
         5. Set is_dependency_rebuild=true ONLY if the dependency has
            'Fixed in Build' set
+        6. Extract the CVE ID from the issue summary (e.g. CVE-2024-1234)
 
         Return your analysis as JSON.""")
+
+
+async def _check_sibling_applicability(
+    *,
+    candidate_key: str,
+    cve_id: str,
+    package: str,
+    target_branch: str,
+    dep_component: str | None,
+    dep_issue_key: str | None,
+    local_clone: Path,
+    unpacked_sources: Path,
+    available_tools: list[Tool],
+) -> bool:
+    """Run CVE applicability check for a sibling issue. Returns True if affected/inconclusive."""
+    logger.info(f"Running applicability check for sibling {candidate_key} ({cve_id})")
+    try:
+        local_tool_options = {"working_directory": local_clone}
+        agent = create_applicability_agent(available_tools, local_tool_options)
+        prompt = build_applicability_prompt(
+            jira_issue=candidate_key,
+            package=package,
+            target_branch=target_branch,
+            resolution=Resolution.REBUILD,
+            cve_id=cve_id,
+            dep_component=dep_component,
+            dep_issue_key=dep_issue_key,
+            patch_files=[],
+            unpacked_sources=unpacked_sources,
+            local_clone=local_clone,
+        )
+        response = await agent.run(
+            prompt,
+            expected_output=ApplicabilityResult,
+            **get_agent_execution_config(),
+        )
+        result = ApplicabilityResult.model_validate_json(response.last_message.text)
+
+        if not result.is_affected:
+            logger.info(f"Sibling {candidate_key} CVE not applicable: {result.justification_category}")
+            return False
+
+        logger.info(f"Sibling {candidate_key} CVE confirmed applicable")
+        return True
+    except Exception as e:
+        logger.warning(f"Applicability check failed for sibling {candidate_key}: {e}")
+        return True

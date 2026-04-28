@@ -20,8 +20,8 @@ from ymir.tools.privileged.jira import (
     Severity,
     VerifyIssueAuthorTool,
     _check_zstream_clones_shipped,
-    _extract_cve_id,
     build_rebuild_siblings_jql,
+    extract_cve_id,
 )
 
 
@@ -362,7 +362,7 @@ async def test_verify_issue_author(user_groups, expected_result, use_account_id)
     ],
 )
 def test_extract_cve_id(summary, expected):
-    assert _extract_cve_id(summary) == expected
+    assert extract_cve_id(summary) == expected
 
 
 # --- Z-stream clone check tests ---

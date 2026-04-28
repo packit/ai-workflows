@@ -274,7 +274,9 @@ TRIAGE_PROMPT = """
              2. Inspect the candidate commits locally with `git show <hash>` to read the commit
                 message and diff, and determine whether any of them is the correct fix.
              3. Only after you have confirmed the right commit locally, attempt to construct
-                a download URL for the patch. Try common hosting URL patterns:
+                a download URL for the patch. You MUST use the exact same URL scheme
+                (http or https) as the `repository_url` returned by upstream_search.
+                Try common hosting URL patterns:
                 - cgit: `<base_url>/patch/?id=<hash>`
                 - gitweb: `<base_url>;a=patch;h=<hash>`
                 - kernel.org: `<base_url>/patch/?id=<hash>`

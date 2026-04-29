@@ -38,7 +38,7 @@ RUN dnf -y install --allowerasing \
       sed \
       gawk \
       rsync \
-      go-srpm-macros \
+      go-rpm-macros \
       python-srpm-macros \
       pyproject-srpm-macros \
       rust-srpm-macros \

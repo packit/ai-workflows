@@ -115,7 +115,7 @@ async def _map_version_to_branch(
     y_streams = config.get("current_y_streams", {})
 
     # Check if this is an older z-stream than the current one
-    older_zstream = await is_older_zstream(version)
+    older_zstream = await is_older_zstream(version, config.get("current_z_streams"))
     if older_zstream:
         logger.info(f"Detected older z-stream: {version}")
 

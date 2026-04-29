@@ -39,7 +39,7 @@ RUN dnf -y install --allowerasing \
       gawk \
       rsync \
       python3-tabulate \
-      go-srpm-macros \
+      go-rpm-macros \
       python-srpm-macros \
       pyproject-srpm-macros \
       rust-toolset-srpm-macros \

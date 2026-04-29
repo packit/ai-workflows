@@ -214,13 +214,15 @@ def mock_centos_stream_repos(tmp_path_factory):
                 .splitlines()
             )
             keep_ref = f"refs/heads/{repo_info['branch']}"
-            for ref in all_refs:
-                if ref != keep_ref:
-                    subprocess.run(
-                        ["git", "update-ref", "-d", ref],
-                        cwd=str(local_path),
-                        check=True,
-                    )
+            refs_to_delete = [ref for ref in all_refs if ref != keep_ref]
+            if refs_to_delete:
+                subprocess.run(
+                    ["git", "update-ref", "--stdin"],
+                    input="".join(f"delete {ref}\n" for ref in refs_to_delete),
+                    cwd=str(local_path),
+                    text=True,
+                    check=True,
+                )
             subprocess.run(
                 ["git", "gc", "--prune=now", "-q"],
                 cwd=str(local_path),

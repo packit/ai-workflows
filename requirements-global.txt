@@ -1,4 +1,4 @@
 # Shared dependencies for ymir subpackages (common + tools)
-beeai-framework[mcp]==0.1.55
+beeai-framework[mcp]==0.1.79
 pydantic>=2.0
 aiofiles>=24.1.0

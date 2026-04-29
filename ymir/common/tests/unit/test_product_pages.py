@@ -26,7 +26,7 @@ async def _fake_init_kerberos_fail() -> None:
 
 
 class _JsonResponse:
-    __slots__ = ("status_code", "_data")
+    __slots__ = ("_data", "status_code")
 
     def __init__(self, status_code: int, data: object | None = None) -> None:
         self.status_code = status_code
@@ -132,9 +132,12 @@ def test_fetch_rhel_streams_snapshot_sync_oidc_not_ok(monkeypatch: pytest.Monkey
         get_responses=[],
     )
 
-    with patch.object(pp.requests, "Session", return_value=fake), pytest.raises(
-        ToolError,
-        match="OIDC authenticate",
+    with (
+        patch.object(pp.requests, "Session", return_value=fake),
+        pytest.raises(
+            ToolError,
+            match="OIDC authenticate",
+        ),
     ):
         pp._fetch_rhel_streams_snapshot_sync()
 
@@ -154,9 +157,12 @@ def test_fetch_rhel_streams_snapshot_sync_ssl_error_includes_ca_hint(
         get_responses=[],
     )
 
-    with patch.object(pp.requests, "Session", return_value=fake), pytest.raises(
-        ToolError,
-        match="REDHAT_IT_CA_BUNDLE",
+    with (
+        patch.object(pp.requests, "Session", return_value=fake),
+        pytest.raises(
+            ToolError,
+            match="REDHAT_IT_CA_BUNDLE",
+        ),
     ):
         pp._fetch_rhel_streams_snapshot_sync()
 

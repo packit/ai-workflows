@@ -3,7 +3,6 @@ Common utility functions shared across the BeeAI system.
 """
 
 import asyncio
-import json
 import logging
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
@@ -54,19 +53,6 @@ def _unpack_tool_result(result: Any) -> Any:
         result = result.text
     if isinstance(result, dict) and len(result) == 1 and "result" in result:
         result = result["result"]
-
-    # loads twice here is neccessary, because beeai mcp server unfortunately wraps the
-    # JSON object twice
-    # this has been fixed in BeeAI 0.1.58
-    # FIXME: Once BeeAI is updated remove this workaround
-    # Only attempt JSON decoding on strings — dicts/lists are already unpacked
-    if isinstance(result, str):
-        try:
-            result = json.loads(result)
-            result = json.loads(result)
-        except (json.JSONDecodeError, TypeError):
-            pass
-
     return result
 
 

@@ -1,5 +1,5 @@
 ---
-description: Triage Jira issues for RHEL packages — analyze bugs and CVEs to determine whether to rebase, backport a patch, rebuild, or request clarification, and post the result as a Jira comment.
+description: Triage Jira issues for RHEL packages — analyze bugs and CVEs to determine whether to rebase, backport a patch, rebuild, or request clarification, check CVE applicability against package source, consolidate rebuild siblings, and post the result as a Jira comment.
 arguments:
   - name: jira_issue
     description: "Jira issue key to triage (e.g., RHEL-12345)"
@@ -9,6 +9,9 @@ arguments:
     required: false
   - name: force_cve_triage
     description: "If true, force triage even when the CVE eligibility check says the issue is not immediately eligible. Default: false"
+    required: false
+  - name: auto_chain
+    description: "If true, suppress the follow-up note in the Jira comment (downstream automation will handle it). Default: false"
     required: false
 ---
 
@@ -21,6 +24,7 @@ You are a Red Hat Enterprise Linux developer performing triage on a Jira issue t
 - `jira_issue`: {{jira_issue}}
 - `dry_run`: {{dry_run}}
 - `force_cve_triage`: {{force_cve_triage}}
+- `auto_chain`: {{auto_chain}}
 
 ## Tools
 
@@ -35,6 +39,7 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `verify_issue_author` — Verify whether the Jira issue author is a Red Hat employee
 - `get_internal_rhel_branches` — List available internal RHEL dist-git branches for a package
 - `add_jira_comment` — Post a comment to a Jira issue
+- `clone_repository` — Clone a Git repository to a local path
 - `zstream_search` — Search for commits related to an older z-stream backport by looking through newer streams
 
 **Local Tools:**
@@ -56,7 +61,7 @@ These constraints apply throughout the entire skill execution:
 
 ## Workflow
 
-Execute the following steps in order. Track state across steps (CVE eligibility result, triage resolution, target branch).
+Execute the following steps in order. Track state across steps (CVE eligibility result, triage resolution, target branch, applicability results).
 
 ### Step 1: Check CVE Eligibility
 
@@ -66,9 +71,9 @@ Record the full result as `cve_eligibility_result`. Interpret it as follows:
 
 - **`eligibility` = `IMMEDIATELY`**: proceed to Step 2.
 - **`force_cve_triage` is true AND no error in result**: proceed to Step 2 regardless of eligibility value.
-- **`eligibility` = `PENDING_DEPENDENCIES`**: set resolution to **POSTPONED** — summary = the eligibility reason, `pending_issues` = the returned list of pending z-stream issue keys. Skip to Step 5.
-- **`error` field is set in the result**: set resolution to **ERROR** with the error details. Skip to Step 5.
-- **Any other non-eligible result**: set resolution to **OPEN_ENDED_ANALYSIS** — summary = `"CVE eligibility check decided to skip triaging: <reason>"`, recommendation = `"No action needed — this issue is not eligible for triage processing."`. Skip to Step 5.
+- **`eligibility` = `PENDING_DEPENDENCIES`**: set resolution to **POSTPONED** — summary = the eligibility reason, `pending_issues` = the returned list of pending z-stream issue keys. Skip to Step 7 (Comment in Jira).
+- **`error` field is set in the result**: set resolution to **ERROR** with the error details. Skip to Step 7.
+- **Any other non-eligible result**: set resolution to **OPEN_ENDED_ANALYSIS** — summary = `"CVE eligibility check decided to skip triaging: <reason>"`, recommendation = `"No action needed — this issue is not eligible for triage processing."`. Skip to Step 7.
 
 ### Step 2: Pre-fetch Fix Version
 
@@ -90,8 +95,12 @@ The analysis produces a `resolution` and accompanying `data`. Record both.
 After analysis, branch as follows:
 
 - **REBASE** → Step 4a (Verify Rebase Author)
-- **BACKPORT or REBUILD** → Step 4b (Determine Target Branch), then Step 5
-- **CLARIFICATION_NEEDED, OPEN_ENDED_ANALYSIS, POSTPONED** → Step 5 directly
+- **BACKPORT or REBUILD** → Step 4b (Determine Target Branch)
+- **CLARIFICATION_NEEDED, OPEN_ENDED_ANALYSIS, NOT_AFFECTED** → Step 7 (Comment in Jira) directly
+- **POSTPONED** — check if the result data has a `package` value AND `cve_eligibility_result.is_cve` is true:
+  - If yes → Step 4b (Determine Target Branch) — the postponed rebuild will go through applicability to verify the CVE actually affects the package.
+  - If no → Step 7 (Comment in Jira) directly
+- **ERROR** → End (no comment)
 
 ### Step 4a: Verify Rebase Author
 
@@ -102,7 +111,7 @@ If the author is **not** a Red Hat employee AND `issue_status` is `"New"`:
 - Override resolution to **CLARIFICATION_NEEDED**:
   - `findings`: `"The rebase resolution was determined, but author verification failed."`
   - `additional_info_needed`: `"Needs human review, as the issue author is not verified as a Red Hat employee."`
-- Proceed to Step 5.
+- Proceed to Step 7.
 
 Otherwise proceed to Step 4b.
 
@@ -124,19 +133,139 @@ Determine `target_branch` from the `fix_version` in the triage result data and `
 
 Record `target_branch`.
 
-### Step 5: Comment in Jira
+After determining the target branch, route as follows:
+
+- If `cve_eligibility_result.is_cve` is true AND resolution is **BACKPORT**, **REBUILD**, or **POSTPONED** → proceed to Step 5 (Check CVE Applicability).
+- If resolution is **REBUILD** (non-CVE) → proceed to Step 6 (Consolidate Rebuild Siblings).
+- Otherwise → proceed to Step 7 (Comment in Jira).
+
+### Step 5: Check CVE Applicability
+
+Check whether the CVE actually affects the package by analyzing the package source code. This step may override the resolution to **NOT_AFFECTED** if the CVE does not apply.
+
+**5.1. Clone and prepare sources**
+
+Determine `clone_branch`:
+- Start with `target_branch` from Step 4b.
+- If the target branch is a z-stream branch (e.g., `rhel-9.6.0`), call `get_internal_rhel_branches` for the package.
+  - If `target_branch` is NOT in the available branches, fall back to `c{major}s` for the clone (we only need to read the source, not push).
+- Use `clone_branch` for all subsequent clone operations.
+
+Clone the package source:
+1. Clone the dist-git repository using `clone_repository` with the appropriate namespace:
+   - If `clone_branch` starts with `c` and ends with `s`: namespace is `centos-stream` → `https://gitlab.com/redhat/centos-stream/rpms/<package>`
+   - Otherwise: namespace is `rhel` → `https://gitlab.com/redhat/rhel/rpms/<package>`
+2. Download sources: run `centpkg sources` (for CentOS Stream branches) or `rhpkg sources` (for RHEL branches) in the cloned directory.
+3. Run `centpkg prep` or `rhpkg prep` to unpack the sources.
+   - If prep succeeds, record the path to the unpacked source directory as `unpacked_sources` and set `prep_ok = true`.
+   - If prep fails, fall back to manual extraction: extract Source0 archive using `rpmuncompress -x <archive>`. Set `prep_ok = false`.
+
+**5.2. Fetch patch files (for backport resolution)**
+
+If the triage resolution is **BACKPORT** and the result data contains `patch_urls`:
+- For each patch URL, call `get_patch_from_url` and save the content to `<local_clone>/<jira_issue>-<index>.patch`.
+- Record the list of saved patch filenames.
+
+**5.3. Analyze CVE applicability**
+
+Perform source code analysis to determine whether the CVE actually affects the package at the version shipped in branch `target_branch`:
+
+1. Use `get_jira_details` on `{{jira_issue}}` to understand the CVE context and what is affected. Also check the Jira comments — maintainers may have left notes about whether this CVE is relevant.
+2. If upstream fix patches are available (from step 5.2), read them to identify the specific files and functions modified by the fix.
+3. Search for those files/functions in the package source under `unpacked_sources`.
+4. If the vulnerable code is not present, determine why — older version that predates the vulnerability? Patched downstream?
+5. For dependency rebuilds (resolution is **REBUILD** or **POSTPONED**):
+   - Check whether the package uses the specific affected API/module of the dependency.
+   - Check direct imports, linked libraries, and build dependencies.
+   - Transitive dependencies and build-time usage also count.
+   - The bar for declaring a rebuild "not affected" is very high. Only classify as not affected if you have strong, concrete evidence (e.g., the package provably does not import/link/use the affected module at all).
+   - If there is any ambiguity — transitive dependencies, conditional imports, build-time usage, or you simply cannot verify the full dependency chain — classify as "Inconclusive".
+
+Classify using Red Hat justification categories:
+- "Component not Present" — the affected component/subcomponent is not included in this package build
+- "Vulnerable Code not Present" — the package includes the component but the specific vulnerable code was introduced in a later version or is patched/removed downstream
+- "Vulnerable Code not in Execute Path" — the vulnerable code exists but is not reachable in normal execution
+- "Vulnerable Code cannot be Controlled by Adversary" — the vulnerable code is present and reachable, but the input that triggers the vulnerability cannot be supplied by an attacker
+- "Inline Mitigations already Exist" — additional hardening or security measures prevent exploitation
+
+If affected or cannot determine with confidence, classify as "Inconclusive".
+
+**5.4. Apply applicability result**
+
+If `prep_ok` is false, append to the explanation: `"Note: RPM prep failed — analysis was performed on unpatched upstream source (Source0 only). Downstream patches were not applied."`
+
+- If the CVE is **not affected** (not "Inconclusive"):
+  - Override resolution to **NOT_AFFECTED** with the justification category and explanation.
+  - Proceed to Step 7 (Comment in Jira).
+- If the CVE **is affected** or "Inconclusive":
+  - If resolution is **REBUILD** → proceed to Step 6 (Consolidate Rebuild Siblings).
+  - Otherwise → proceed to Step 7 (Comment in Jira).
+- If the applicability check **fails** (exception during analysis):
+  - Set `applicability_check_skipped = true`.
+  - If resolution is **REBUILD** → proceed to Step 6.
+  - Otherwise → proceed to Step 7.
+
+### Step 6: Consolidate Rebuild Siblings
+
+Find sibling Jira issues that can share a single rebuild merge request with `{{jira_issue}}`.
+
+**6.1. Search for sibling candidates**
+
+If the triage result data has no `fix_version`, skip consolidation and proceed to Step 7.
+
+Search for sibling issues using `search_jira_issues` with JQL:
+```
+project = RHEL AND component = "<package>" AND fixVersions = "<fix_version>" AND key != "<jira_issue>" AND labels = "SecurityTracking" AND labels != "ymir_triaged_rebuild" AND status in ("New", "Planning")
+```
+Include fields `["key", "summary"]`, max 50 results.
+
+If no candidates found, proceed to Step 7 with empty consolidated issues.
+
+**6.2. Analyze each candidate**
+
+For each candidate issue:
+
+1. **Check eligibility**: Call `check_cve_triage_eligibility` with the candidate's issue key.
+   - If eligibility is NOT `IMMEDIATELY`, exclude the candidate with reason.
+   - Continue to next candidate.
+
+2. **Verify it's a dependency rebuild**: Call `get_jira_details` on the candidate issue and analyze:
+   - Determine if the issue requires the package to be rebuilt against an updated dependency (no source code changes needed).
+   - If yes, find the dependency issue:
+     - Check `issuelinks` for linked issues with a different component than the package.
+     - If not found, extract the CVE ID from the summary and search with `search_jira_issues`: `project = RHEL AND summary ~ "<CVE-ID>" AND component != "<package>"`.
+   - Call `get_jira_details` on the dependency issue to check if its `Fixed in Build` field is set.
+   - Set `is_dependency_rebuild = true` ONLY if the dependency has `Fixed in Build` set.
+   - Extract `dependency_component` and `cve_id` from the candidate.
+
+3. **If it IS a dependency rebuild** and source clone paths are available and the candidate has a `cve_id`:
+   - Run a CVE applicability check for the sibling (same analysis as Step 5.3 but for the sibling's CVE).
+   - If the CVE does NOT affect the package, exclude the candidate.
+
+4. **If confirmed as a rebuild sibling**: add to `consolidated_issues` with `issue_key` and `dependency_component`.
+
+Record all consolidated issues and a summary of the analysis for each candidate (included/excluded with reason).
+
+Proceed to Step 7.
+
+### Step 7: Comment in Jira
+
+Clean up any temporary applicability directories created in Step 5.
+
+If `applicability_check_skipped` is true, append to the comment: `"Note: CVE applicability check could not be performed (source preparation failed)."`
 
 If `dry_run` is true, end the skill without posting.
 
 Otherwise call `add_jira_comment` with `issue_key` = `{{jira_issue}}` and a comment that summarises the triage result. Format the comment based on the resolution type:
 
-- **backport**: package name, patch URL, justification, fix version, CVE ID (if present).
-- **rebase**: package name, target version, fix version.
-- **rebuild**: package name, dependency issue key, dependency component, fix version.
-- **clarification-needed**: findings and what additional information is needed.
+- **backport**: `*Resolution*: backport`, patch URL(s), justification, fix version, CVE ID (if present).
+- **rebase**: `*Resolution*: rebase`, package name, target version, fix version.
+- **rebuild**: `*Resolution*: rebuild`, package name, dependency component, dependency issue key, fix version. If consolidated issues exist, include the consolidation summary.
+- **clarification-needed**: `*Resolution*: clarification-needed`, findings, what additional information is needed.
 - **open-ended-analysis**: summary and recommendation.
-- **postponed**: reason and list of pending issue keys.
-- **error**: error details.
+- **postponed**: `*Resolution*: postponed`, reason, list of pending issue keys.
+- **not-affected**: `*Recommendation: Not a Bug / <justification_category>*`, detailed explanation.
+- **error**: `*Resolution*: error`, error details.
 
 ---
 
@@ -297,6 +426,7 @@ Use when the package needs rebuilding against an updated dependency with NO sour
   Set `dependency_issue` to the issue key AND `dependency_component` to the component name (e.g., `"golang"`, `"openssl"`).
 * Otherwise → resolution is **postponed**.
   Set summary to explain that rebuild is waiting for the dependency to ship, and set `pending_issues` to the dependency issue key.
+  Also set `package`, `fix_version`, `cve_id`, `dependency_issue`, and `dependency_component` (same values as you would for a rebuild resolution).
 
 3.3. If rebuild: set Jira fields as per the Final Step instructions below.
 
@@ -341,14 +471,15 @@ Use `set_jira_fields` to update JIRA fields (Severity, Fix Version):
 
 ## Output
 
-The final output is the triage result, which is posted as a Jira comment in Step 5. It must include:
+The final output is the triage result, which is posted as a Jira comment in Step 7. It must include:
 
-- **resolution**: one of `backport`, `rebase`, `rebuild`, `clarification-needed`, `open-ended-analysis`, `postponed`, `error`
+- **resolution**: one of `backport`, `rebase`, `rebuild`, `clarification-needed`, `open-ended-analysis`, `postponed`, `not-affected`, `error`
 - **data**: resolution-specific fields:
-  - `backport`: `package`, `patch_url`, `justification`, `jira_issue`, `cve_id` (optional), `fix_version`
+  - `backport`: `package`, `patch_urls`, `justification`, `jira_issue`, `cve_id` (optional), `fix_version`
   - `rebase`: `package`, `version`, `jira_issue`, `fix_version`
-  - `rebuild`: `package`, `dependency_issue`, `dependency_component`, `jira_issue`, `fix_version`
+  - `rebuild`: `package`, `dependency_issue`, `dependency_component`, `jira_issue`, `fix_version`, `consolidated_issues` (list of `{issue_key, dependency_component}`), `consolidation_summary`
   - `clarification-needed`: `findings`, `additional_info_needed`, `jira_issue`
   - `open-ended-analysis`: `summary`, `recommendation`, `jira_issue`
-  - `postponed`: `summary`, `pending_issues`, `jira_issue`
+  - `postponed`: `summary`, `pending_issues`, `jira_issue`, `package` (optional), `fix_version` (optional), `cve_id` (optional), `dependency_issue` (optional), `dependency_component` (optional)
+  - `not-affected`: `justification_category`, `explanation`, `jira_issue`
   - `error`: `details`, `jira_issue`

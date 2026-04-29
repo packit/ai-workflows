@@ -287,7 +287,6 @@ TRIAGE_PROMPT = """
                   component of the repository URL, e.g. `project.git`), NOT the full path.
                   Example: for `http://example.org/git/project.git` the patch URL is
                   `http://example.org/gitweb/?p=project.git;a=patch;h=<hash>`
-                - kernel.org cgit: `<repo_url>/patch/?id=<hash>`
                 If none of these patterns work with get_patch_from_url, use the repository URL
                 with the commit hash appended as a fragment (e.g. `<repository_url>#<hash>`)
                 as the patch URL in your final answer.

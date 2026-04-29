@@ -229,7 +229,6 @@ If `is_older_zstream` is true:
     4. Only after confirming the right commit locally, attempt to construct a download URL. You MUST use the exact same URL scheme (`http://` or `https://`) as the `repository_url` — do NOT upgrade or downgrade the scheme. Try common patterns (given a `repository_url` like `http://example.org/git/project.git`):
        - cgit: append `/patch/?id=<hash>` to the repo URL, e.g. `http://example.org/git/project.git/patch/?id=<hash>`
        - gitweb: **WARNING — gitweb patch URLs do NOT share the same path as the repository URL.** The correct pattern is `<scheme>://<host>/gitweb/?p=<repo_name>.git;a=patch;h=<hash>` where `<repo_name>.git` is ONLY the repository filename (last path component), e.g. for `http://example.org/git/project.git` the patch URL is `http://example.org/gitweb/?p=project.git;a=patch;h=<hash>`
-       - kernel.org cgit: `<repo_url>/patch/?id=<hash>`
     5. If none work, use `<repository_url>#<hash>` as the patch URL in your final answer.
 
 * Using the details from your analysis, search these sources:

@@ -79,7 +79,7 @@ def create_build_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]
                 only_success_invocations=False,
             ),
             ConditionalRequirement("build_package", min_invocations=1),
-            ConditionalRequirement("download_artifacts", only_after="build_package"),
+            ConditionalRequirement("download_artifacts", only_after=["build_package"]),
         ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         role="Red Hat Enterprise Linux developer",

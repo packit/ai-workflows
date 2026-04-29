@@ -51,6 +51,7 @@ async def main() -> None:
         dependency_issue: str | None = Field(default=None)
         dependency_component: str | None = Field(default=None)
         consolidated_issues: list[ConsolidatedIssue] = Field(default_factory=list)
+        consolidation_summary: str | None = Field(default=None)
 
     async def run_workflow(
         package,
@@ -59,6 +60,7 @@ async def main() -> None:
         dependency_issue=None,
         dependency_component=None,
         consolidated_issues=None,
+        consolidation_summary=None,
     ):
         local_tool_options["working_directory"] = None
 
@@ -170,6 +172,12 @@ async def main() -> None:
                     all_issues = [state.jira_issue] + [ci.issue_key for ci in state.consolidated_issues]
                     resolves_text = "Resolves: " + ", ".join(all_issues)
 
+                    consolidation_text = ""
+                    if state.consolidation_summary:
+                        consolidation_text = (
+                            f"\nSibling consolidation analysis:\n{state.consolidation_summary}\n"
+                        )
+
                     (
                         state.merge_request_url,
                         state.merge_request_newly_created,
@@ -191,6 +199,7 @@ async def main() -> None:
                             f"{state.log_result.description}\n\n"
                             f"{dep_text}"
                             f"{resolves_text}\n"
+                            f"{consolidation_text}"
                             f"\n\n{MR_DESCRIPTION_FOOTER}"
                         ),
                         available_tools=gateway_tools,
@@ -246,6 +255,7 @@ async def main() -> None:
                     dependency_issue=dependency_issue,
                     dependency_component=dependency_component,
                     consolidated_issues=consolidated_issues or [],
+                    consolidation_summary=consolidation_summary,
                 ),
             )
             return response.state
@@ -352,6 +362,7 @@ async def main() -> None:
                     dependency_issue=rebuild_data.dependency_issue,
                     dependency_component=rebuild_data.dependency_component,
                     consolidated_issues=rebuild_data.consolidated_issues,
+                    consolidation_summary=rebuild_data.consolidation_summary,
                 )
                 logger.info(
                     f"Rebuild processing completed for {rebuild_data.jira_issue}, "

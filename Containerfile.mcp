@@ -20,7 +20,7 @@ RUN dnf -y install \
     && dnf clean all
 
 # Install beeai mcp server
-RUN pip3 install --no-cache-dir "litellm!=1.82.7,!=1.82.8" beeai-framework[mcp]==0.1.55
+RUN pip3 install --no-cache-dir "litellm!=1.82.7,!=1.82.8" beeai-framework[mcp]==0.1.79
 
 # Create user
 RUN useradd -m -G wheel mcp

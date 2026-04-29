@@ -11,6 +11,7 @@ from ymir.agents.metrics_middleware import MetricsMiddleware
 from ymir.agents.observability import setup_observability
 from ymir.agents.triage_agent import TriageState, create_triage_agent, run_workflow
 from ymir.common.models import BackportData, Resolution, TriageOutputSchema
+from ymir.common.version_utils import current_z_streams_override
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,13 @@ logger = logging.getLogger(__name__)
 # Each entry maps a Jira issue key to a list of repos that should be cloned
 # and reset to a pre-fix commit so the agent cannot "cheat" by finding the
 # already-applied backport.
+# Per-test-case overrides for what counts as the "current" z-stream.
+# This lets a test treat an older z-stream as current so the agent follows
+# the normal backport path instead of the restricted older-zstream path.
+ZSTREAM_OVERRIDES: dict[str, dict[str, str]] = {
+    "RHEL-112546": {"9": "rhel-9.2.z"},
+}
+
 REPO_FIXTURES = {
     "RHEL-15216": [
         {
@@ -62,8 +70,12 @@ class TriageAgentTestCase:
         self.finished_state: TriageState | None = None
         self.error: BaseException | None = None
         self.git_env: dict | None = None
+        self.zstream_override: dict[str, str] | None = ZSTREAM_OVERRIDES.get(input)
 
     async def run(self) -> None:
+        if self.zstream_override:
+            current_z_streams_override.set(self.zstream_override)
+
         metrics_middleware = MetricsMiddleware()
 
         def testing_factory(gateway_tools):
@@ -82,21 +94,70 @@ class TriageAgentTestCase:
 
 test_cases = [
     TriageAgentTestCase(
+        input="RHEL-15216",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.BACKPORT,
+            data=BackportData(
+                package="dnsmasq",
+                patch_urls=[
+                    "http://thekelleys.org.uk/gitweb/?p=dnsmasq.git;a=patch;h=dd33e98da09c487a58b6cb6693b8628c0b234a3b"
+                ],
+                justification="not-implemented",
+                jira_issue="RHEL-15216",
+                cve_id=None,
+                fix_version="rhel-8.10",
+            ),
+        ),
+    ),
+    TriageAgentTestCase(
         input="RHEL-112546",
         expected_output=TriageOutputSchema(
             resolution=Resolution.BACKPORT,
             data=BackportData(
                 package="libtiff",
                 patch_urls=[
-                    "https://gitlab.com/libtiff/libtiff/-/commit/d1c0719e004fbb223c571d286c73911569d4dbb6.patch"
+                    "https://github.com/libsdl-org/libtiff/commit/3e0dcf0ec651638b2bd849b2e6f3124b36890d99.patch",
+                    "https://github.com/libsdl-org/libtiff/commit/681694024846f543fe7d4821074b813cd9dccdfa.patch",
                 ],
                 justification="not-implemented",
                 jira_issue="RHEL-112546",
                 cve_id="CVE-2025-9900",
-                fix_version="rhel-9.6.z",
+                fix_version="rhel-9.2.0.z",
             ),
         ),
-    )
+    ),
+    TriageAgentTestCase(
+        input="RHEL-61943",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.BACKPORT,
+            data=BackportData(
+                package="dnsmasq",
+                patch_urls=[
+                    "http://thekelleys.org.uk/gitweb/?p=dnsmasq.git;a=patch;h=eb1fe15ca80b6bc43cd6bfdf309ec6c590aff811"
+                ],
+                justification="not-implemented",
+                jira_issue="RHEL-61943",
+                cve_id=None,
+                fix_version="rhel-8.10.z",
+            ),
+        ),
+    ),
+    TriageAgentTestCase(
+        input="RHEL-29712",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.BACKPORT,
+            data=BackportData(
+                package="bind",
+                patch_urls=[
+                    "https://gitlab.isc.org/isc-projects/bind9/-/commit/7e2f50c36958f8c98d54e6d131f088a4837ce269"
+                ],
+                justification="not-implemented",
+                jira_issue="RHEL-29712",
+                cve_id=None,
+                fix_version="rhel-8.10.z",
+            ),
+        ),
+    ),
 ]
 
 

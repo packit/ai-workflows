@@ -257,6 +257,11 @@ If `is_older_zstream` is true:
   2. **Does it fix the issue?** Verify that the code changes directly address the root cause, align with the symptoms, and modify the functions/files mentioned in the issue.
 * Only proceed with URLs that contain valid patch content AND address the specific issue.
 * If the content is not a proper patch or doesn't fix the issue, continue searching.
+* **Check for follow-up commits**: After identifying a valid fix, check whether there are follow-up commits that complement or complete the fix. Common patterns include:
+  - A second commit that fixes a bug or regression introduced by the first fix.
+  - An incremental commit that addresses the same CVE/issue from a different angle (e.g. fixing a separate code path or variant of the same vulnerability).
+  - A commit whose message explicitly references the first fix (e.g. "follow-up to ...", "fix for ...", same CVE ID, or same bug tracker reference).
+  Search the git log around the date of the primary fix for related commits. If you find follow-up commits, validate them the same way and include ALL of them in your `patch_urls` list, ordered chronologically (earliest first).
 
 **2.4. Decide the Outcome**
 

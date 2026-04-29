@@ -5,7 +5,12 @@ This module provides functions for parsing and comparing RHEL version
 strings in various formats (e.g., rhel-9.8, rhel-9.7.z, rhel-9.0.0.z).
 """
 
+import contextvars
 import re
+
+current_z_streams_override: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "current_z_streams_override", default=None
+)
 
 
 def parse_rhel_version(version: str) -> tuple[str, str, bool] | None:
@@ -74,6 +79,8 @@ async def is_older_zstream(
     Returns:
         True if the version targets an older z-stream, False otherwise.
     """
+    if current_z_streams is None:
+        current_z_streams = current_z_streams_override.get()
     if current_z_streams is None:
         from ymir.common.config import load_rhel_config
 

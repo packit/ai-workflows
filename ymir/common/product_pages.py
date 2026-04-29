@@ -2,8 +2,9 @@
 Product Pages helpers for RHEL y-stream and z-stream labels.
 
 This module authenticates to the internal Product Pages API (Kerberos via
-requests-gssapi) and derives current y-streams, current z-streams, and upcoming
-z-streams from active releases and GA/ZStream release metadata.
+``init_kerberos_ticket`` from ``ymir.common.utils``, then HTTP SPNEGO via
+``requests-gssapi``) and derives current y-streams, current z-streams, and
+upcoming z-streams from active releases and GA/ZStream release metadata.
 
 Public API: ``await fetch_rhel_streams_snapshot()`` (async coroutine). Blocking
 HTTP (``requests``) runs in a thread pool so the event loop is not blocked.
@@ -12,12 +13,16 @@ Everything else in this module is an implementation detail.
 
 import asyncio
 import json
+import os
 import re
 from collections import defaultdict
+from functools import cache
 
 import requests
 import requests_gssapi
 from beeai_framework.tools import ToolError
+
+from ymir.common.utils import KerberosError, init_kerberos_ticket
 
 _PLAIN_SHORTNAME_RE = re.compile(r"^rhel-(\d+)\.(\d+)$")
 _GA_ZSTREAM_RE = re.compile(r"\(GA\/ZStream\)")
@@ -28,6 +33,20 @@ _RELEASES_API_URL = "https://pp.engineering.redhat.com/api/v7/releases/"
 # ``requests`` accepts ``(connect, read)`` in seconds. OIDC/GSSAPI can be slow to
 # establish; the releases listing can return a large JSON payload.
 _PRODUCT_PAGES_TIMEOUT = (30.0, 120.0)
+
+
+@cache
+def _product_pages_verify() -> bool | str:
+    """TLS ``verify`` argument for ``requests``: corporate CA bundle if configured.
+
+    Matches ``ymir.supervisor.errata_utils.ET_verify`` (``REDHAT_IT_CA_BUNDLE``)
+    and OpenShift-style ``REQUESTS_CA_BUNDLE`` when set.
+    """
+    for key in ("REDHAT_IT_CA_BUNDLE", "REQUESTS_CA_BUNDLE"):
+        path = os.getenv(key)
+        if path:
+            return path
+    return True
 
 
 def _rhel_sort_key(shortname: str) -> tuple[int, ...]:
@@ -174,6 +193,7 @@ def _fetch_rhel_streams_snapshot_sync() -> dict[str, dict[str, str]]:
     timeout = _PRODUCT_PAGES_TIMEOUT
     try:
         with requests.Session() as s:
+            s.verify = _product_pages_verify()
             auth = requests_gssapi.HTTPSPNEGOAuth(mutual_authentication=requests_gssapi.OPTIONAL)
             auth_resp = s.post(_OIDC_AUTHENTICATE_URL, auth=auth, timeout=timeout)
             _require_ok(auth_resp, "OIDC authenticate")
@@ -228,7 +248,15 @@ def _fetch_rhel_streams_snapshot_sync() -> dict[str, dict[str, str]]:
             f"Product Pages API request timed out (connect {timeout[0]}s, read {timeout[1]}s)"
         ) from e
     except requests.RequestException as e:
-        raise ToolError(f"Product Pages API network error: {e}") from e
+        msg = f"Product Pages API network error: {e}"
+        err_chain = f"{e!s} {e.__cause__!s}" if e.__cause__ else str(e)
+        err_lower = err_chain.lower()
+        if "certificate" in err_lower or "ssl" in err_lower:
+            msg += (
+                " If this is a corporate TLS trust issue, set REDHAT_IT_CA_BUNDLE or "
+                "REQUESTS_CA_BUNDLE to a CA bundle path (e.g. /etc/pki/tls/certs/ca-bundle.crt)."
+            )
+        raise ToolError(msg) from e
     except json.JSONDecodeError as e:
         raise ToolError("Product Pages API returned a response body that is not valid JSON") from e
     except ValueError as e:
@@ -248,8 +276,12 @@ async def fetch_rhel_streams_snapshot() -> dict[str, dict[str, str]]:
         shortname labels.
 
     Raises:
-        ToolError: On non-success HTTP responses, timeouts, transport errors
-            (``requests.RequestException``), invalid JSON, or unexpected response
-            shape (``ValueError``).
+        ToolError: On Kerberos initialization failure, non-success HTTP responses,
+            timeouts, transport errors (``requests.RequestException``), invalid
+            JSON, or unexpected response shape (``ValueError``).
     """
+    try:
+        await init_kerberos_ticket()
+    except KerberosError as e:
+        raise ToolError(f"Failed to initialize Kerberos ticket: {e}") from e
     return await asyncio.to_thread(_fetch_rhel_streams_snapshot_sync)

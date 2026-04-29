@@ -36,6 +36,7 @@ from ymir.agents.utils import (
     mcp_tools,
     render_prompt,
 )
+from ymir.common.base_utils import fix_await, is_cs_branch, redis_client
 from ymir.common.config import get_package_instructions
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import (
@@ -49,7 +50,6 @@ from ymir.common.models import (
     RebaseOutputSchema,
     Task,
 )
-from ymir.common.utils import fix_await, is_cs_branch, redis_client
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
 from ymir.tools.unprivileged.text import (

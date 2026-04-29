@@ -18,7 +18,7 @@ from ymir.common.models import (
     RebaseData,
     Task,
 )
-from ymir.jira_issue_fetcher import JiraIssueFetcher
+from ymir.jira_issue_fetcher.jira_issue_fetcher import JiraIssueFetcher
 
 
 @pytest.fixture

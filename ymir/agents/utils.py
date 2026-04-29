@@ -6,13 +6,8 @@ from beeai_framework.backend import ChatModel, ChatModelParameters
 from beeai_framework.template import PromptTemplate
 from pydantic import BaseModel
 
-from ymir.common.utils import (  # noqa: F401 — re-exported for backward compatibility
-    check_subprocess,
-    get_absolute_path,
-    mcp_tools,
-    run_subprocess,
-    run_tool,
-)
+from ymir.common.base_utils import check_subprocess, run_subprocess  # noqa: F401 — re-exported
+from ymir.common.utils import get_absolute_path, mcp_tools, run_tool  # noqa: F401 — re-exported
 
 logger = logging.getLogger(__name__)
 

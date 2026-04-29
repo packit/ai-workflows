@@ -10,13 +10,13 @@ from specfile import Specfile
 
 from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
 from ymir.agents.utils import check_subprocess, mcp_tools, run_subprocess, run_tool
+from ymir.common.base_utils import is_cs_branch
 from ymir.common.models import (
     CachedMRMetadata,
     LogOutputSchema,
     MergeRequestDetails,
     OpenMergeRequestResult,
 )
-from ymir.common.utils import is_cs_branch
 from ymir.tools.unprivileged.specfile import UpdateReleaseTool
 
 logger = logging.getLogger(__name__)

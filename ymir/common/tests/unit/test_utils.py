@@ -7,13 +7,8 @@ import pytest
 from flexmock import flexmock
 
 import ymir.common.utils as _ymir_utils
-from ymir.common.utils import (
-    KerberosError,
-    _is_connection_error,
-    extract_principal,
-    init_kerberos_ticket,
-    mcp_tools,
-)
+from ymir.common.base_utils import KerberosError, extract_principal, init_kerberos_ticket
+from ymir.common.utils import _is_connection_error, mcp_tools
 
 
 async def _coro(val):
@@ -152,9 +147,9 @@ class TestInitKerberosTicket:
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
         ).and_return(_coro(mock_proc))
 
-        from ymir.common import utils
+        from ymir.common import base_utils
 
-        flexmock(utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
+        flexmock(base_utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
             _coro("jotnar-bot@IPA.REDHAT.COM")
         )
 
@@ -186,9 +181,9 @@ class TestInitKerberosTicket:
 
         flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(mock_create_subprocess)
 
-        from ymir.common import utils
+        from ymir.common import base_utils
 
-        flexmock(utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
+        flexmock(base_utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
             _coro("jotnar-bot@IPA.REDHAT.COM")
         )
 
@@ -220,9 +215,9 @@ class TestInitKerberosTicket:
 
         flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(mock_create_subprocess)
 
-        from ymir.common import utils
+        from ymir.common import base_utils
 
-        flexmock(utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
+        flexmock(base_utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
             _coro("jotnar-bot@IPA.REDHAT.COM")
         )
 
@@ -235,9 +230,9 @@ class TestInitKerberosTicket:
         monkeypatch.setenv("KEYTAB_FILE", "/path/to/keytab")
         monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
 
-        from ymir.common import utils
+        from ymir.common import base_utils
 
-        flexmock(utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
+        flexmock(base_utils).should_receive("extract_principal").with_args("/path/to/keytab").and_return(
             _coro(None)
         )
 

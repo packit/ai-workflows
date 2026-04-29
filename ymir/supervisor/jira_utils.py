@@ -16,7 +16,7 @@ from urllib.parse import quote as urlquote
 import backoff
 import requests
 
-from ymir.common.utils import get_jira_auth_headers
+from ymir.common.base_utils import get_jira_auth_headers
 
 from .http_utils import requests_session
 from .supervisor_types import (

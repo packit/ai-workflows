@@ -18,8 +18,8 @@ from urllib.parse import quote, urljoin
 
 import aiohttp
 
+from ymir.common.base_utils import get_jira_auth_headers
 from ymir.common.constants import JIRA_SEARCH_PATH
-from ymir.common.utils import get_jira_auth_headers
 
 DEFAULT_DICTIONARY = {
     "mrs_opened": 0,

@@ -3,7 +3,7 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
-from ymir.common.utils import run_subprocess
+from ymir.common.base_utils import run_subprocess
 from ymir.common.validators import AbsolutePath
 
 

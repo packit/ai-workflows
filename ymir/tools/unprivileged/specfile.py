@@ -22,8 +22,8 @@ from specfile.value_parser import (
     ValueParser,
 )
 
-from ymir.common.constants import BREWHUB_URL
 from ymir.common.utils import get_absolute_path
+from ymir.tools.constants import BREWHUB_URL
 
 
 class GetPackageInfoToolInput(BaseModel):

@@ -21,9 +21,9 @@ from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
 from pydantic import BaseModel, Field
 
 from ymir.common import load_rhel_config
-from ymir.common.constants import AIOHTTP_TIMEOUT
-from ymir.common.utils import KerberosError, init_kerberos_ticket
+from ymir.common.base_utils import KerberosError, init_kerberos_ticket
 from ymir.common.validators import AbsolutePath
+from ymir.tools.constants import AIOHTTP_TIMEOUT
 
 COPR_CONFIG = {
     "copr_url": "https://copr.devel.redhat.com",

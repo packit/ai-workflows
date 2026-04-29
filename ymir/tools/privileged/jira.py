@@ -19,9 +19,10 @@ from beeai_framework.tools import (
 from pydantic import BaseModel, Field
 
 from ymir.common import CVEEligibilityResult, TriageEligibility, load_rhel_config
-from ymir.common.constants import AIOHTTP_TIMEOUT, JIRA_SEARCH_PATH
-from ymir.common.utils import get_jira_auth_headers
+from ymir.common.base_utils import get_jira_auth_headers
+from ymir.common.constants import JIRA_SEARCH_PATH
 from ymir.common.version_utils import parse_rhel_version
+from ymir.tools.constants import AIOHTTP_TIMEOUT
 
 if os.getenv("MOCK_JIRA", "False").lower() == "true":
     from ymir.tools.privileged.aiohttp_client_session_mock import (

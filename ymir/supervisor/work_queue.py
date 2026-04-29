@@ -8,7 +8,7 @@ from typing import cast
 import redis.asyncio as redis
 from pydantic import BaseModel
 
-from ymir.common.utils import fix_await, redis_client
+from ymir.common.base_utils import fix_await, redis_client
 
 
 class WorkItemType(StrEnum):

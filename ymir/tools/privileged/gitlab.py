@@ -21,7 +21,6 @@ from ogr.services.gitlab.project import GitlabProject
 from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import BaseModel, Field
 
-from ymir.common.constants import AIOHTTP_TIMEOUT
 from ymir.common.models import (
     CommentReply,
     FailedPipelineJob,
@@ -30,6 +29,7 @@ from ymir.common.models import (
     OpenMergeRequestResult,
 )
 from ymir.common.validators import AbsolutePath
+from ymir.tools.constants import AIOHTTP_TIMEOUT
 from ymir.tools.privileged.utils import clean_stale_repositories
 
 logger = logging.getLogger(__name__)

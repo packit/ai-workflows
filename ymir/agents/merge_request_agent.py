@@ -35,13 +35,13 @@ from ymir.agents.utils import (
     mcp_tools,
     render_prompt,
 )
+from ymir.common.base_utils import is_cs_branch
 from ymir.common.models import (
     BuildInputSchema,
     BuildOutputSchema,
     MergeRequestInputSchema,
     MergeRequestOutputSchema,
 )
-from ymir.common.utils import is_cs_branch
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
 from ymir.tools.unprivileged.text import (

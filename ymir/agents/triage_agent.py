@@ -31,6 +31,7 @@ from ymir.agents.utils import (
     mcp_tools,
     run_tool,
 )
+from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.config import load_rhel_config
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import (
@@ -51,7 +52,6 @@ from ymir.common.models import (
 from ymir.common.models import (
     TriageOutputSchema as OutputSchema,
 )
-from ymir.common.utils import fix_await, redis_client
 from ymir.common.version_utils import is_older_zstream, parse_rhel_version
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.upstream_search import UpstreamSearchTool

@@ -39,6 +39,7 @@ from ymir.agents.utils import (
     render_prompt,
     run_tool,
 )
+from ymir.common.base_utils import fix_await, is_cs_branch, redis_client
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import (
     BackportData,
@@ -51,7 +52,6 @@ from ymir.common.models import (
     LogOutputSchema,
     Task,
 )
-from ymir.common.utils import fix_await, is_cs_branch, redis_client
 from ymir.common.version_utils import is_older_zstream
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.distgit_detector import DistgitDetectorTool

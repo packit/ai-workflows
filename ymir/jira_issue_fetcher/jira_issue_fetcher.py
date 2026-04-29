@@ -29,6 +29,7 @@ import backoff
 import redis.asyncio as redis
 import requests
 
+from ymir.common.base_utils import fix_await, get_jira_auth_headers, redis_client
 from ymir.common.constants import JIRA_SEARCH_PATH, JiraLabels, RedisQueues
 from ymir.common.models import (
     BackportOutputSchema,
@@ -38,7 +39,6 @@ from ymir.common.models import (
     Task,
     TriageInputSchema,
 )
-from ymir.common.utils import fix_await, get_jira_auth_headers, redis_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")

@@ -7,7 +7,7 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
 from pydantic import BaseModel, Field
 
-from ymir.common.constants import AIOHTTP_TIMEOUT
+from ymir.tools.constants import AIOHTTP_TIMEOUT
 
 logger = logging.getLogger(__name__)
 

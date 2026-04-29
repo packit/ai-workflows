@@ -20,6 +20,7 @@ from ymir.agents.utils import (
     render_prompt,
     run_subprocess,
 )
+from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import (
     ErrorData,
@@ -29,7 +30,6 @@ from ymir.common.models import (
     RebuildOutputSchema,
     Task,
 )
-from ymir.common.utils import fix_await, redis_client
 
 logger = logging.getLogger(__name__)
 

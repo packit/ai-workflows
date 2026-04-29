@@ -31,7 +31,7 @@ ENV PYTHONPATH=/src:$PYTHONPATH
 # Install BeeAI Framework and FastMCP
 RUN pip3 install --no-cache-dir \
       "litellm!=1.82.7,!=1.82.8" \
-      beeai-framework[vertexai,mcp,duckduckgo]==0.1.55 \
+      beeai-framework[vertexai,mcp,duckduckgo]==0.1.79 \
       fastmcp redis backoff
 
 # Verify no malicious litellm_init.pth was introduced by compromised litellm packages (e.g. 1.82.7, 1.82.8)

@@ -13,6 +13,9 @@ arguments:
   - name: auto_chain
     description: "If true, suppress the follow-up note in the Jira comment (downstream automation will handle it). Default: false"
     required: false
+  - name: silent_run
+    description: "If true, only post Jira comments and set labels when the resolution is not-affected or postponed. Default: false"
+    required: false
 ---
 
 # Triage Skill
@@ -25,6 +28,7 @@ You are a Red Hat Enterprise Linux developer performing triage on a Jira issue t
 - `dry_run`: {{dry_run}}
 - `force_cve_triage`: {{force_cve_triage}}
 - `auto_chain`: {{auto_chain}}
+- `silent_run`: {{silent_run}}
 
 ## Tools
 
@@ -255,6 +259,8 @@ Clean up any temporary applicability directories created in Step 5.
 If `applicability_check_skipped` is true, append to the comment: `"Note: CVE applicability check could not be performed (source preparation failed)."`
 
 If `dry_run` is true, end the skill without posting.
+
+If `silent_run` is true and the resolution is **not** one of `not-affected` or `postponed`, skip posting the comment and end the skill. In silent mode, only `not-affected` and `postponed` resolutions produce Jira comments and label updates.
 
 Otherwise call `add_jira_comment` with `issue_key` = `{{jira_issue}}` and a comment that summarises the triage result. Format the comment based on the resolution type:
 

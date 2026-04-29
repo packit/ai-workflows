@@ -61,6 +61,13 @@ from ymir.tools.unprivileged.version_mapper import VersionMapperTool
 logger = logging.getLogger(__name__)
 
 
+def _should_update_jira(silent_run: bool, resolution: Resolution) -> bool:
+    """In silent mode, only update Jira for not-affected and postponed resolutions."""
+    if not silent_run:
+        return True
+    return resolution in (Resolution.NOT_AFFECTED, Resolution.POSTPONED)
+
+
 async def determine_target_branch(
     cve_eligibility_result: CVEEligibilityResult | None, triage_data: BaseModel
 ) -> str | None:
@@ -518,7 +525,9 @@ def create_triage_agent(gateway_tools, local_tool_options=None):
     )
 
 
-async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=False, force_cve_triage=False):
+async def run_workflow(
+    jira_issue, dry_run, triage_agent_factory, auto_chain=False, force_cve_triage=False, silent_run=False
+):
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
         triage_agent = triage_agent_factory(gateway_tools)
 
@@ -958,6 +967,12 @@ async def run_workflow(jira_issue, dry_run, triage_agent_factory, auto_chain=Fal
             logger.info(f"Result to be put in Jira comment: {comment_text}")
             if dry_run:
                 return Workflow.END
+            if not _should_update_jira(silent_run, state.triage_result.resolution):
+                logger.info(
+                    f"Silent run: skipping Jira comment for {state.jira_issue} "
+                    f"(resolution={state.triage_result.resolution.value})"
+                )
+                return Workflow.END
             await tasks.comment_in_jira(
                 jira_issue=state.jira_issue,
                 agent_type="Triage",
@@ -986,6 +1001,7 @@ async def main() -> None:
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     auto_chain = os.getenv("AUTO_CHAIN", "true").lower() == "true"
     force_cve_triage = os.getenv("FORCE_CVE_TRIAGE", "false").lower() == "true"
+    silent_run = os.getenv("SILENT_RUN", "false").lower() == "true"
 
     if jira_issue := os.getenv("JIRA_ISSUE", None):
         logger.info("Running in direct mode with environment variable")
@@ -995,6 +1011,7 @@ async def main() -> None:
             create_triage_agent,
             auto_chain=auto_chain,
             force_cve_triage=force_cve_triage,
+            silent_run=silent_run,
         )
         logger.info(f"Direct run completed: {state.triage_result.model_dump_json(indent=4)}")
         if state.cve_eligibility_result:
@@ -1043,17 +1060,18 @@ async def main() -> None:
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
             try:
-                await tasks.set_jira_labels(
-                    jira_issue=input.issue,
-                    labels_to_add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                    labels_to_remove=[
-                        label
-                        for label in JiraLabels.all_labels()
-                        if label != JiraLabels.TRIAGE_IN_PROGRESS.value
-                    ],
-                    dry_run=dry_run,
-                )
-                logger.info(f"Cleaned up existing labels for {input.issue}")
+                if not silent_run:
+                    await tasks.set_jira_labels(
+                        jira_issue=input.issue,
+                        labels_to_add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                        labels_to_remove=[
+                            label
+                            for label in JiraLabels.all_labels()
+                            if label != JiraLabels.TRIAGE_IN_PROGRESS.value
+                        ],
+                        dry_run=dry_run,
+                    )
+                    logger.info(f"Cleaned up existing labels for {input.issue}")
 
                 logger.info(f"Starting triage processing for {input.issue}")
                 state = await run_workflow(
@@ -1062,6 +1080,7 @@ async def main() -> None:
                     create_triage_agent,
                     auto_chain=auto_chain,
                     force_cve_triage=input.force_cve_triage,
+                    silent_run=silent_run,
                 )
                 output = state.triage_result
                 logger.info(
@@ -1080,14 +1099,17 @@ async def main() -> None:
                     ErrorData(details=error, jira_issue=input.issue).model_dump_json(),
                 )
             else:
+                update_jira = _should_update_jira(silent_run, output.resolution)
+
                 if output.resolution == Resolution.REBASE:
                     logger.info(f"Triage resolved as REBASE for {input.issue}")
-                    await tasks.set_jira_labels(
-                        jira_issue=input.issue,
-                        labels_to_add=[JiraLabels.TRIAGED_REBASE.value],
-                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run,
-                    )
+                    if update_jira:
+                        await tasks.set_jira_labels(
+                            jira_issue=input.issue,
+                            labels_to_add=[JiraLabels.TRIAGED_REBASE.value],
+                            labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                            dry_run=dry_run,
+                        )
                     if auto_chain:
                         task = Task(metadata=state.model_dump())
                         rebase_queue = RedisQueues.get_rebase_queue_for_branch(state.target_branch)
@@ -1097,12 +1119,13 @@ async def main() -> None:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
                 elif output.resolution == Resolution.BACKPORT:
                     logger.info(f"Triage resolved as BACKPORT for {input.issue}")
-                    await tasks.set_jira_labels(
-                        jira_issue=input.issue,
-                        labels_to_add=[JiraLabels.TRIAGED_BACKPORT.value],
-                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run,
-                    )
+                    if update_jira:
+                        await tasks.set_jira_labels(
+                            jira_issue=input.issue,
+                            labels_to_add=[JiraLabels.TRIAGED_BACKPORT.value],
+                            labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                            dry_run=dry_run,
+                        )
                     if auto_chain:
                         task = Task(metadata=state.model_dump())
                         backport_queue = RedisQueues.get_backport_queue_for_branch(state.target_branch)
@@ -1112,24 +1135,25 @@ async def main() -> None:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
                 elif output.resolution == Resolution.REBUILD:
                     logger.info(f"Triage resolved as REBUILD for {input.issue}")
-                    await tasks.set_jira_labels(
-                        jira_issue=input.issue,
-                        labels_to_add=[JiraLabels.TRIAGED_REBUILD.value],
-                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run,
-                    )
-                    for consolidated in output.data.consolidated_issues:
-                        try:
-                            await tasks.set_jira_labels(
-                                jira_issue=consolidated.issue_key,
-                                labels_to_add=[JiraLabels.TRIAGED_REBUILD.value],
-                                labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                                dry_run=dry_run,
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to set labels on consolidated issue {consolidated.issue_key}: {e}"
-                            )
+                    if update_jira:
+                        await tasks.set_jira_labels(
+                            jira_issue=input.issue,
+                            labels_to_add=[JiraLabels.TRIAGED_REBUILD.value],
+                            labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                            dry_run=dry_run,
+                        )
+                        for consolidated in output.data.consolidated_issues:
+                            try:
+                                await tasks.set_jira_labels(
+                                    jira_issue=consolidated.issue_key,
+                                    labels_to_add=[JiraLabels.TRIAGED_REBUILD.value],
+                                    labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                                    dry_run=dry_run,
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to set labels on consolidated issue {consolidated.issue_key}: {e}"
+                                )
                     if auto_chain:
                         task = Task(metadata=state.model_dump())
                         rebuild_queue = RedisQueues.get_rebuild_queue_for_branch(state.target_branch)
@@ -1139,12 +1163,13 @@ async def main() -> None:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
                 elif output.resolution == Resolution.CLARIFICATION_NEEDED:
                     logger.info(f"Triage resolved as CLARIFICATION_NEEDED for {input.issue}")
-                    await tasks.set_jira_labels(
-                        jira_issue=input.issue,
-                        labels_to_add=[JiraLabels.NEEDS_ATTENTION.value],
-                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run,
-                    )
+                    if update_jira:
+                        await tasks.set_jira_labels(
+                            jira_issue=input.issue,
+                            labels_to_add=[JiraLabels.NEEDS_ATTENTION.value],
+                            labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                            dry_run=dry_run,
+                        )
                     if auto_chain:
                         task = Task(metadata=state.model_dump())
                         await fix_await(
@@ -1158,12 +1183,13 @@ async def main() -> None:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
                 elif output.resolution == Resolution.OPEN_ENDED_ANALYSIS:
                     logger.info(f"Triage resolved as OPEN_ENDED_ANALYSIS for {input.issue}")
-                    await tasks.set_jira_labels(
-                        jira_issue=input.issue,
-                        labels_to_add=[JiraLabels.TRIAGED.value],
-                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run,
-                    )
+                    if update_jira:
+                        await tasks.set_jira_labels(
+                            jira_issue=input.issue,
+                            labels_to_add=[JiraLabels.TRIAGED.value],
+                            labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                            dry_run=dry_run,
+                        )
                     if auto_chain:
                         await fix_await(
                             redis.lpush(
@@ -1176,12 +1202,13 @@ async def main() -> None:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
                 elif output.resolution == Resolution.POSTPONED:
                     logger.info(f"Triage resolved as POSTPONED for {input.issue}")
-                    await tasks.set_jira_labels(
-                        jira_issue=input.issue,
-                        labels_to_add=[JiraLabels.TRIAGED_POSTPONED.value],
-                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run,
-                    )
+                    if update_jira:
+                        await tasks.set_jira_labels(
+                            jira_issue=input.issue,
+                            labels_to_add=[JiraLabels.TRIAGED_POSTPONED.value],
+                            labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                            dry_run=dry_run,
+                        )
                     await fix_await(
                         redis.lpush(
                             RedisQueues.POSTPONED_LIST.value,
@@ -1191,20 +1218,22 @@ async def main() -> None:
                     logger.info(f"Pushed {input.issue} to {RedisQueues.POSTPONED_LIST.value}")
                 elif output.resolution == Resolution.NOT_AFFECTED:
                     logger.info(f"Triage resolved as NOT_AFFECTED for {input.issue}")
-                    await tasks.set_jira_labels(
-                        jira_issue=input.issue,
-                        labels_to_add=[JiraLabels.TRIAGED_NOT_AFFECTED.value],
-                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run,
-                    )
+                    if update_jira:
+                        await tasks.set_jira_labels(
+                            jira_issue=input.issue,
+                            labels_to_add=[JiraLabels.TRIAGED_NOT_AFFECTED.value],
+                            labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                            dry_run=dry_run,
+                        )
                 elif output.resolution == Resolution.ERROR:
                     logger.warning(f"Triage resolved as ERROR for {input.issue}, retrying")
-                    await tasks.set_jira_labels(
-                        jira_issue=input.issue,
-                        labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
-                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run,
-                    )
+                    if update_jira:
+                        await tasks.set_jira_labels(
+                            jira_issue=input.issue,
+                            labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
+                            labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                            dry_run=dry_run,
+                        )
                     await retry(task, output.data.model_dump_json())
 
 

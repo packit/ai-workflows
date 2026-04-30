@@ -30,6 +30,7 @@ packages = []
 "config.py" = "ymir/common/config.py"
 "constants.py" = "ymir/common/constants.py"
 "models.py" = "ymir/common/models.py"
+"product_pages.py" = "ymir/common/product_pages.py"
 "utils.py" = "ymir/common/utils.py"
 "validators.py" = "ymir/common/validators.py"
 "version_utils.py" = "ymir/common/version_utils.py"

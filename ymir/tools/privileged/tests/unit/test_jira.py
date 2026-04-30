@@ -20,7 +20,6 @@ from ymir.tools.privileged.jira import (
     Severity,
     VerifyIssueAuthorTool,
     _check_zstream_clones_shipped,
-    build_rebuild_siblings_jql,
     extract_cve_id,
 )
 
@@ -787,27 +786,3 @@ async def test_eligibility_maintenance_zstream_clones_pending():
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
     assert result["eligibility"] == TriageEligibility.PENDING_DEPENDENCIES
     assert result["pending_zstream_issues"] == ["RHEL-555"]
-
-
-# --- build_rebuild_siblings_jql tests ---
-
-
-def test_build_rebuild_siblings_jql():
-    jql = build_rebuild_siblings_jql("RHEL-100", "git-lfs", "rhel-9.8")
-    assert 'component = "git-lfs"' in jql
-    assert 'fixVersion = "rhel-9.8"' in jql
-    assert 'key != "RHEL-100"' in jql
-    assert 'labels = "SecurityTracking"' in jql
-    assert "labels not in" in jql
-    assert '"ymir_triaged_rebuild"' in jql
-    assert '"ymir_rebuilt"' in jql
-    assert '"ymir_triaged_not_affected"' in jql
-    assert '"ymir_triaged_backport"' in jql
-    assert '"ymir_triaged_rebase"' in jql
-    assert 'status in ("New", "Planning")' in jql
-
-
-def test_build_rebuild_siblings_jql_escapes_quotes():
-    jql = build_rebuild_siblings_jql("RHEL-100", 'comp"name', 'rhel-9.8"z')
-    assert r'component = "comp\"name"' in jql
-    assert r'fixVersion = "rhel-9.8\"z"' in jql

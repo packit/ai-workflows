@@ -201,6 +201,10 @@ class ConsolidatedIssue(BaseModel):
     """A sibling Jira issue consolidated into the same rebuild task."""
 
     issue_key: str = Field(description="Jira issue key (e.g. RHEL-67890)")
+    dependency_issue: str | None = Field(
+        description="Key of the dependency Jira issue (e.g. RHEL-12345)",
+        default=None,
+    )
     dependency_component: str | None = Field(
         description="Component name of the dependency (e.g. 'golang')",
         default=None,

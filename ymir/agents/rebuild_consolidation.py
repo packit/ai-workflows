@@ -185,14 +185,18 @@ async def find_rebuild_siblings(
                     )
                     continue
 
-                dep_info = (
-                    f" (dependency: {analysis.dependency_component})" if analysis.dependency_component else ""
-                )
+                dep_parts = []
+                if analysis.dependency_component:
+                    dep_parts.append(analysis.dependency_component)
+                if analysis.dependency_issue:
+                    dep_parts.append(analysis.dependency_issue)
+                dep_info = f" (dependency: {', '.join(dep_parts)})" if dep_parts else ""
                 cve_info = f" [{cve_id}]" if cve_id else ""
                 summary_lines.append(f"* {candidate_key}{cve_info}{dep_info} — included")
                 consolidated.append(
                     ConsolidatedIssue(
                         issue_key=candidate_key,
+                        dependency_issue=analysis.dependency_issue,
                         dependency_component=analysis.dependency_component,
                     )
                 )

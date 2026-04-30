@@ -481,6 +481,7 @@ def create_triage_agent(gateway_tools, local_tool_options=None):
                 "set_jira_fields",
                 "get_patch_from_url",
                 "search_jira_issues",
+                "zstream_search",
             ]
         ],
         memory=UnconstrainedMemory(),
@@ -498,6 +499,7 @@ def create_triage_agent(gateway_tools, local_tool_options=None):
             ConditionalRequirement("get_patch_from_url", only_after="get_jira_details"),
             ConditionalRequirement("set_jira_fields", only_after="get_jira_details"),
             ConditionalRequirement("search_jira_issues", only_after="get_jira_details"),
+            ConditionalRequirement("zstream_search", only_after="get_jira_details"),
         ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         role="Red Hat Enterprise Linux developer",

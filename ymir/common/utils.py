@@ -33,7 +33,7 @@ async def run_tool(
     tool: str | Tool,
     available_tools: list[Tool] | None = None,
     **kwargs: Any,
-) -> str | dict:
+) -> str | dict | list:
     if isinstance(tool, str):
         tool = next(t for t in available_tools or [] if t.name == tool)
     output = await tool.run(input=kwargs).middleware(GlobalTrajectoryMiddleware(pretty=True))
@@ -45,7 +45,11 @@ async def run_tool(
         case _:
             result = str(output)
     if isinstance(result, list):
-        [result] = result
+        return [_unpack_tool_result(item) for item in result]
+    return _unpack_tool_result(result)
+
+
+def _unpack_tool_result(result: Any) -> Any:
     if isinstance(result, TextContent):
         result = result.text
     if isinstance(result, dict) and len(result) == 1 and "result" in result:
@@ -55,11 +59,13 @@ async def run_tool(
     # JSON object twice
     # this has been fixed in BeeAI 0.1.58
     # FIXME: Once BeeAI is updated remove this workaround
-    try:
-        result = json.loads(result)
-        result = json.loads(result)
-    except json.JSONDecodeError:
-        pass
+    # Only attempt JSON decoding on strings — dicts/lists are already unpacked
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+            result = json.loads(result)
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     return result
 

@@ -234,7 +234,12 @@ async def comment_in_jira(
     agent_type: str,
     comment_text: str,
     available_tools: list[Tool],
+    is_error: bool = False,
 ) -> None:
+    if is_error and os.getenv("SILENT_RUN", "false").lower() == "true":
+        logger.info(f"Silent run: skipping Jira error comment for {jira_issue}")
+        return
+
     await run_tool(
         "add_jira_comment",
         issue_key=jira_issue,
@@ -270,6 +275,9 @@ async def change_jira_status(
     )
 
 
+_FAILURE_LABEL_SUFFIXES = ("_failed", "_errored")
+
+
 async def set_jira_labels(
     jira_issue: str,
     labels_to_add: list[str] | None = None,
@@ -279,6 +287,16 @@ async def set_jira_labels(
     if dry_run or os.getenv("JIRA_DRY_RUN", "false").lower() == "true":
         logger.info(f"Dry run, not updating labels for {jira_issue}")
         return
+
+    if os.getenv("SILENT_RUN", "false").lower() == "true":
+        original_count = len(labels_to_add or [])
+        labels_to_add = [
+            label for label in (labels_to_add or []) if not label.endswith(_FAILURE_LABEL_SUFFIXES)
+        ]
+        if len(labels_to_add) != original_count:
+            logger.info(f"Silent run: skipping failure labels for {jira_issue}")
+        if not labels_to_add and not (labels_to_remove or []):
+            return
 
     try:
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:

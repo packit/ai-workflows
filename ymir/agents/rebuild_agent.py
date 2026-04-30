@@ -240,8 +240,10 @@ async def main() -> None:
                         if state.merge_request_url
                         else "Rebuild completed successfully"
                     )
+                    is_error = False
                 else:
                     comment_text = f"Agent failed to perform a rebuild: {state.rebuild_error}"
+                    is_error = True
                 logger.info(f"Result to be put in Jira comment: {comment_text}")
 
                 all_issues = [state.jira_issue] + [item.issue_key for item in state.consolidated_issues]
@@ -251,6 +253,7 @@ async def main() -> None:
                             jira_issue=issue_key,
                             agent_type="Rebuild",
                             comment_text=comment_text,
+                            is_error=is_error,
                             available_tools=gateway_tools,
                         )
                     except Exception as e:

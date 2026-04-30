@@ -9,6 +9,7 @@ x-beeai-env: &beeai-env
   DRY_RUN: ${DRY_RUN:-false}
   JIRA_DRY_RUN: ${JIRA_DRY_RUN:-false}
   AUTO_CHAIN: ${AUTO_CHAIN:-true}
+  SILENT_RUN: ${SILENT_RUN:-false}
   REQUESTS_CA_BUNDLE: /etc/pki/tls/certs/ca-bundle.crt
 
 # Base template for BeeAI agents

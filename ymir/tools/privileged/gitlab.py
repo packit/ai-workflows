@@ -346,7 +346,7 @@ class GetInternalRhelBranchesTool(
 
 class CloneRepositoryToolInput(BaseModel):
     repository: str = Field(description="Repository to clone")
-    branch: str = Field(description="Branch to clone")
+    branch: str | None = Field(default=None, description="Branch to clone. If omitted, all refs are fetched.")
     clone_path: AbsolutePath = Field(description="Absolute path where to clone the repository")
 
 
@@ -354,6 +354,9 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
     name = "clone_repository"
     description = """
     Clones the specified repository to the given local path.
+    If branch is specified, only that branch is fetched and checked out.
+    If branch is omitted, all refs are fetched (useful when you need access to
+    specific commits across any branch).
     """
     input_schema = CloneRepositoryToolInput
 
@@ -374,32 +377,29 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
         clone_path = tool_input.clone_path
         await clean_stale_repositories()
 
+        clone_url = _get_authenticated_url(repository)
+
+        clone_url = _get_authenticated_url(repository)
         clone_path.mkdir(parents=True, exist_ok=True)
 
-        proc = await asyncio.create_subprocess_exec("git", "init", cwd=clone_path)
-        if await proc.wait():
-            raise ToolError(f"Failed to initialize git repo at {clone_path}")
+        if branch:
+            proc = await asyncio.create_subprocess_exec("git", "init", cwd=clone_path)
+            if await proc.wait():
+                raise ToolError(f"Failed to initialize git repo at {clone_path}")
 
-        command = [
-            "git",
-            "fetch",
-            _get_authenticated_url(repository),
-            f"{branch}:refs/heads/{branch}",
-        ]
+            command = ["git", "fetch", clone_url, f"{branch}:refs/heads/{branch}"]
+            proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
+            if await proc.wait():
+                raise ToolError(f"Failed to fetch {branch} from {repository}")
 
-        proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
-        if await proc.wait():
-            raise ToolError(f"Failed to fetch {branch} from {repository}")
-
-        command = [
-            "git",
-            "checkout",
-            branch,
-        ]
-
-        proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
-        if await proc.wait():
-            raise ToolError(f"Failed to checkout branch {branch}")
+            proc = await asyncio.create_subprocess_exec("git", "checkout", branch, cwd=clone_path)
+            if await proc.wait():
+                raise ToolError(f"Failed to checkout branch {branch}")
+        else:
+            command = ["git", "clone", clone_url, str(clone_path)]
+            proc = await asyncio.create_subprocess_exec(command[0], *command[1:])
+            if await proc.wait():
+                raise ToolError(f"Failed to clone {repository}")
 
         return StringToolOutput(result=f"Successfully cloned the specified repository to {clone_path}")
 

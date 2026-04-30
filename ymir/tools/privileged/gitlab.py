@@ -866,6 +866,17 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
             + f"\n\n[Content truncated - showing first {max_length} characters of {len(text)} total]"
         )
 
+    @staticmethod
+    def _json_hunks_to_text(hunks: list[dict]) -> str:
+        parts = []
+        for hunk in hunks:
+            old_path = hunk.get("old_path", "")
+            new_path = hunk.get("new_path", "")
+            parts.append(f"--- a/{old_path}")
+            parts.append(f"+++ b/{new_path}")
+            parts.append(hunk.get("diff", ""))
+        return "\n".join(parts)
+
     async def _run(
         self,
         tool_input: GetPatchFromUrlToolInput,
@@ -886,6 +897,13 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
                 text = await response.text()
         except aiohttp.ClientError as e:
             raise ToolError(f"Failed to fetch patch from {patch_url}: {e}") from e
+        try:
+            hunks = json.loads(text)
+        except json.decoder.JSONDecodeError:
+            pass
+        else:
+            if isinstance(hunks, list):
+                text = self._json_hunks_to_text(hunks)
         return StringToolOutput(result=self._truncate(text))
 
 

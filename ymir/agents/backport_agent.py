@@ -289,6 +289,7 @@ BACKPORT_INSTRUCTIONS = """
       - Never abort the existing git am session.
     """
 
+# ruff: disable[E501]
 BACKPORT_INSTRUCTIONS_ZSTREAM = """
       You are an expert on backporting upstream patches to packages in RHEL ecosystem.
 
@@ -306,62 +307,106 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
       2. Use the `git_prepare_package_sources` tool to prepare package sources in directory <UNPACKED_SOURCES>
          for application of the upstream patch.
 
-      3. Determine which backport approach to use:
+      3. Determine URL type and choose the backport approach:
 
-         A. CHERRY-PICK WORKFLOW (Preferred - try this first):
+         First, use the `detect_distgit_source` tool to check the patch URL.
+         IMPORTANT: Always use the tool result to decide — do NOT skip approaches
+         based on your own URL pattern recognition.
+
+         A. DIST-GIT WORKFLOW (when is_distgit is True):
+
+            This is the most common case for z-stream backports. The patch URLs point
+            to commits in a dist-git repository (e.g., a newer z-stream branch).
+            Extract the patch files from those commits and use their spec changes as
+            a reference to update the target branch's spec file.
+
+            This workflow operates on the local dist-git clone — call this <LOCAL_CLONE>. There is no separate
+            <UPSTREAM_REPO>. All commits come from the same repository.
+
+            3a. For each URL in <UPSTREAM_PATCHES>, use `extract_upstream_repository`
+                tool to get the repository URL and commit hash.
+                Collect all commit hashes.
+                If extraction fails for any URL, fall back to approach C.
+
+            3b. Clone the source dist-git repository:
+                - Use `clone_repository` tool with:
+                  * repository: the repository URL from step 3a
+                  * clone_path: current working directory with `-upstream` suffix
+                    (e.g., if working in /git-repos/RHEL-12345/pkg, use
+                    /git-repos/RHEL-12345/pkg-upstream) — call this <DISTGIT_SOURCE>
+                  * Do NOT set branch — omit it so all refs are fetched
+                - If clone fails, fall back to approach C.
+
+            3c. For EACH commit hash from step 3a, examine and extract:
+                - Examine what the commit changed:
+                  `git -C <DISTGIT_SOURCE> show <commit_hash> --stat`
+                - Identify which files are new patch files and what spec changes
+                  were made.
+                - Extract new patch file(s) added by the commit into the local
+                  dist-git clone working tree:
+                  `git -C <DISTGIT_SOURCE> show <commit_hash>:<patch_filename> > <LOCAL_CLONE>/<patch_filename>`
+                - Examine the spec file changes for reference:
+                  `git -C <DISTGIT_SOURCE> diff <commit_hash>^..<commit_hash> -- *.spec`
+                - Note what Patch tags and `%prep` entries were added. Use this as
+                  reference for step 4 to apply equivalent changes to the target
+                  branch's spec file, adapting patch numbering as needed.
+
+            3d. After processing all commits, continue to step 4 to update the
+                spec file with ALL new patches.
+
+         B. UPSTREAM CHERRY-PICK WORKFLOW (when is_distgit is False — try this first):
+
+            Used when the patch URL points to an upstream source repository (e.g.,
+            GitHub, upstream GitLab). This happens when Jira issue comments explicitly
+            instruct to backport from the upstream.
 
             IMPORTANT: This workflow uses TWO separate git repositories:
             - <UNPACKED_SOURCES>: Git repository (from Step 2) containing
               unpacked and committed upstream sources
             - <UPSTREAM_REPO>: A temporary upstream repository clone
-              (created in step 3c with -upstream suffix)
+              (created in step 3g with -upstream suffix)
 
-            When to use this workflow:
-            - <UPSTREAM_PATCHES> is a list of commit or pull request URLs
-            - This includes URLs with .patch suffix (e.g., https://github.com/.../commit/abc123.patch)
-            - If URL extraction fails, fall back to approach B
-
-            3a. Extract upstream repository information:
+            3e. Extract upstream repository information:
                 - Use `extract_upstream_repository` tool with the upstream fix URL
                 - This extracts the repository URL and commit hash
-                - If extraction fails, fall back to approach B
+                - If extraction fails, fall back to approach C
 
-            3b. Get package information from dist-git:
+            3f. Get package information from dist-git:
                 - Use `get_package_info` tool with the spec file path from <UNPACKED_SOURCES>
                 - This provides the package version and list of existing patch filenames
 
-            3c. Clone the upstream repository to a SEPARATE directory:
+            3g. Clone the upstream repository to a SEPARATE directory:
                 - Use `clone_upstream_repository` tool with:
-                  * repository_url: from step 3a
+                  * repository_url: from step 3e
                   * clone_directory: current working directory (the dist-git repository root)
                   * The tool automatically creates a directory with -upstream suffix as <UPSTREAM_REPO>
-                - Steps 3d-3g work in <UPSTREAM_REPO>, NOT in <UNPACKED_SOURCES>
+                - Steps 3h-3k work in <UPSTREAM_REPO>, NOT in <UNPACKED_SOURCES>
 
-            3d. Find and checkout the base version in upstream:
-                - Use `find_base_commit` tool with <UPSTREAM_REPO> path and package version from 3b
+            3h. Find and checkout the base version in upstream:
+                - Use `find_base_commit` tool with <UPSTREAM_REPO> path and package version from 3f
                 - If no matching tag found, try to find the base commit manually
                   using `view` and `run_shell_command` tools
                 - Look for any tags or commits that might correspond to the package version
-                - Only fall back to approach B if you cannot find any reasonable base commit
+                - Only fall back to approach C if you cannot find any reasonable base commit
 
-            3e. Apply existing patches from dist-git to upstream:
+            3i. Apply existing patches from dist-git to upstream:
                 - Use `apply_downstream_patches` tool with:
                   * repo_path: <UPSTREAM_REPO> (where to apply)
                   * patches_directory: current working directory (dist-git root where patch files are located)
-                  * patch_files: list from step 3b
+                  * patch_files: list from step 3f
                 - This recreates the current package state in <UPSTREAM_REPO>
                 - The tool automatically records the base commit for patch generation
-                - If any patch fails to apply, immediately fall back to approach B
+                - If any patch fails to apply, immediately fall back to approach C
 
-            3f. Cherry-pick the fix in upstream:
+            3j. Cherry-pick the fix in upstream:
                 GETTING COMMITS:
-                  FOR PULL REQUESTS (if is_pr is True from step 3a):
+                  FOR PULL REQUESTS (if is_pr is True from step 3e):
                     * Download the PR patch: `curl -L <original_url> -o /tmp/pr.patch`
                     * Parse commit hashes from lines starting with "From <hash>"
                     * Fetch PR branch: `git -C <UPSTREAM_REPO> fetch origin pull/<pr_number>/head:pr-branch`
                     * Skip any merge commits — only cherry-pick non-merge commits
                   FOR SINGLE COMMITS (if is_pr is False):
-                    * Use commit_hash from step 3a
+                    * Use commit_hash from step 3e
 
                 CHERRY-PICKING (one commit at a time, NEVER multiple at once):
                   1. Use `cherry_pick_commit` tool with ONE commit hash.
@@ -380,34 +425,36 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
                   5. If a cherry-pick results in an empty commit (changes already present),
                      use `cherry_pick_continue` with `allow_empty=True`, or skip the commit.
 
-            3g. Generate the final patch file from upstream:
+            3k. Generate the final patch file from upstream:
                 - Use `git_patch_create` tool with:
                   * repository_path: <UPSTREAM_REPO>
                   * patch_file_path: <JIRA_ISSUE>.patch in the current working
                     directory (the dist-git repository root)
                     (e.g., if JIRA is RHEL-114639, use /path/to/distgit/RHEL-114639.patch)
-                - The tool automatically uses the base commit recorded in step 3e to include
+                - The tool automatically uses the base commit recorded in step 3i to include
                   ALL cherry-picked commits, not just the last one
                 - IMPORTANT: Only create NEW patch files. Do NOT modify
                   existing patches in the dist-git repository
                 - This patch file is now ready to be added to the spec file
 
-            3h. The cherry-pick workflow is complete! The generated patch file contains the cleanly
+            3l. The cherry-pick workflow is complete! The generated patch file contains the cleanly
                 cherry-picked fix. Continue with steps 4-6 below to add this patch to the spec file,
                 verify it with `<PKG_TOOL> prep`, and build the SRPM.
 
                 Note: You do NOT need to apply this patch to <UNPACKED_SOURCES>. The patch file
                 will be automatically applied during the RPM build process when you run `<PKG_TOOL> prep`.
 
-         B. GIT AM WORKFLOW (Fallback approach):
+         C. GIT AM WORKFLOW (Fallback approach):
+
+            This is the fallback when approaches A or B cannot be completed.
 
             Note: For this workflow, use the pre-downloaded patch files in the current working directory.
             They are called `<JIRA_ISSUE>-<N>.patch` where <N> is a 0-based index. For example,
             for a `RHEL-12345` Jira issue the first patch would be called `RHEL-12345-0.patch`.
 
-            Backport all patches individually using steps B1 and B2 below.
+            Backport all patches individually using steps C1 and C2 below.
 
-            B1. Backport one patch at a time using the following steps:
+            C1. Backport one patch at a time using the following steps:
                 - If a cherry-pick is in progress, abort it first:
                   `git -C <UPSTREAM_REPO> cherry-pick --abort`
                 - Use the `git_patch_apply` tool with the patch file: <JIRA_ISSUE>-<N>.patch
@@ -416,18 +463,19 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
                 - Use the `git_apply_finish` tool to finish the patch application.
                 - Repeat for each pre-downloaded patch file.
 
-            B2. After ALL patches have been applied, generate a single combined patch:
+            C2. After ALL patches have been applied, generate a single combined patch:
                 - Use `git_patch_create` tool with:
                   * repository_path: <UNPACKED_SOURCES>
                   * patch_file_path: <JIRA_ISSUE>.patch in the current working
                     directory (the dist-git repository root)
                 - The tool automatically captures all applied changes into one patch file.
 
-      4. Update the spec file. Add ONE new `Patch` tag for <JIRA_ISSUE>.patch.
-         Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
-         make sure it has the highest number. Make sure the patch is applied in the "%prep" section
-         and the `-p` argument is correct. Add upstream URLs as comments above
-         the `Patch:` tag - these URLs reference the related upstream commits or pull/merge requests.
+      4. Update the spec file. Add ONE new `Patch` tag for each new patch file.
+         Add the new `Patch` tag(s) after all existing `Patch` tags and, if `Patch` tags are numbered,
+         make sure they have the highest numbers. Make sure each patch is applied in the "%prep" section
+         and the `-p` argument is correct. Do NOT add any comments to the spec file.
+         If you used approach A, use the source commits' spec diffs (from step 3c) as a
+         guide for what to add, adapting patch numbering to the target branch.
          IMPORTANT: Only ADD new patches. Do NOT modify existing Patch tags or their order. Do NOT
          add or change any changelog entries. Do NOT change the Release field.
 
@@ -444,10 +492,14 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
 
       General instructions:
 
-      - Fall back to approach B ONLY when the cherry-pick workflow cannot be set up:
-        URL extraction fails (step 3a), clone fails (step 3c), or downstream patches
-        don't apply (step 3e). Once cherry-picking has started (step 3f), resolve all
-        errors in place — do not abandon to git-am and do not restart from step 1.
+      - Always use `detect_distgit_source` to determine URL type — do NOT skip
+        approach A or B based on your own URL pattern recognition.
+      - For approach A (dist-git): if extraction or fetch fails, fall back to approach C.
+      - For approach B (upstream cherry-pick): fall back to approach C ONLY when the
+        workflow cannot be set up: URL extraction fails (step 3e), clone fails (step 3g),
+        or downstream patches don't apply (step 3i). Once cherry-picking has started
+        (step 3j), resolve all errors in place — do not abandon to git-am and do not
+        restart from step 1.
       - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
       - Never change anything in the spec file changelog.
       - Never change the Release field in the spec file.
@@ -461,7 +513,7 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
         RPM spec file and read sections `%prep` and `%build`.
       - If there is a complex conflict, you are required to properly resolve
         it by applying the core functionality of the proposed patch.
-      - When using the cherry-pick workflow, you have access to
+      - When using approach B (upstream cherry-pick workflow), you have access to
         <UPSTREAM_REPO> (the cloned upstream repository).
         You can explore it to find clues for resolving conflicts: examine commit history, related changes,
         documentation, test files, or similar fixes that might help understand the proper resolution.
@@ -471,6 +523,7 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
       - Never run `git am --skip`, always use the `git_apply_finish` tool instead.
       - Never abort the existing git am session.
     """
+# ruff: enable[E501]
 
 
 async def get_instructions(fix_version: str | None = None) -> str:
@@ -843,6 +896,9 @@ async def create_backport_agent(
         CherryPickCommitTool(options=local_tool_options),
         CherryPickContinueTool(options=local_tool_options),
     ]
+
+    # Add clone_repository from MCP gateway (needed for dist-git workflow with auth)
+    base_tools.extend([t for t in mcp_tools if t.name == "clone_repository"])
 
     # Add build tools if requested (for iterative build error fixing)
     if include_build_tools:

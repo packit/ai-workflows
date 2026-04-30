@@ -397,11 +397,20 @@ TRIAGE_PROMPT = """
          * If no linked issue found, use search_jira_issues to find it. Try JQL queries like:
            - project = RHEL AND summary ~ "<CVE-ID>" AND component != "<this-package>"
            Include fields ["key", "summary", "fixVersions", "status"] in the search
-         * Once found, call get_jira_details on the dependency issue to check its status
-         * If the dependency issue has a `Fixed in Build` field set → resolution is "rebuild"
+         * Once found, call get_jira_details on the dependency issue and thoroughly
+           verify it was actually fixed:
+           - Check if 'Fixed in Build' field is set (non-null/non-empty)
+           - Check the issue status and resolution — if the dependency issue was
+             Closed/Done with resolution like 'NOTABUG', 'WONTFIX', 'DUPLICATE',
+             'CANTFIX', or 'DROPPED', the fix was never actually built and the
+             rebuild is not needed. In this case use "not-affected" resolution
+             with explanation that the dependency fix was dropped/rejected.
+         * If the dependency issue has `Fixed in Build` set AND was not
+           dropped/rejected → resolution is "rebuild"
            Set dependency_issue to the issue key AND dependency_component to the component name
            (e.g., "golang", "openssl") from the dependency issue's component field
-         * Otherwise → resolution is "postponed"
+         * If the dependency issue exists but has no `Fixed in Build` yet
+           and is still open → resolution is "postponed"
            Set summary to explain that rebuild is waiting for the dependency to ship,
            and set pending_issues to the dependency issue key.
            Also set package, fix_version, cve_id, dependency_issue, and dependency_component

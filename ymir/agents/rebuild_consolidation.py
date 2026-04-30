@@ -241,10 +241,18 @@ def _build_sibling_analysis_prompt(
              project = RHEL AND summary ~ "<CVE-ID>" \
         AND component != "{package}"
         4. Once you find the dependency issue, use get_jira_details
-           on it to check if its 'Fixed in Build' field is set
-           (non-null/non-empty)
-        5. Set is_dependency_rebuild=true ONLY if the dependency has
-           'Fixed in Build' set
+           on it and thoroughly verify it was actually fixed:
+           - Check if 'Fixed in Build' field is set (non-null/non-empty)
+           - Check the issue status and resolution — if the dependency
+             issue was Closed/Done with resolution like 'NOTABUG',
+             'WONTFIX', 'DUPLICATE', 'CANTFIX', or 'DROPPED',
+             the fix was never actually built and the rebuild is
+             not needed
+           - Only consider the dependency as fixed if it has
+             'Fixed in Build' set AND was not dropped/rejected
+        5. Set is_dependency_rebuild=true ONLY if the dependency was
+           genuinely fixed (has 'Fixed in Build' and was not
+           dropped/rejected)
         6. Extract the CVE ID from the issue summary (e.g. CVE-2024-1234)
 
         Return your analysis as JSON.""")

@@ -313,6 +313,10 @@ TRIAGE_PROMPT = """
          * Using the details from your analysis, search these sources:
            - Bug Trackers (for fixed bugs matching the issue summary and description)
            - Git / Version Control (for commit messages, using keywords, CVE IDs, function names, etc.)
+         * **Always prefer patches from the canonical upstream repository** over mirrors or forks.
+           For example, if the upstream is `https://gitlab.com/libtiff/libtiff`, use that — not
+           a GitHub mirror like `https://github.com/libsdl-org/libtiff/`. Mirrors may carry
+           extra commits or miss upstream changes.
          * Be thorough in your search - try multiple search terms and approaches based on the issue details
          * Advanced investigation techniques:
            - If you can identify specific files, functions, or code sections mentioned in the issue,

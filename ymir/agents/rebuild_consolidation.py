@@ -22,6 +22,7 @@ from ymir.common.models import (
     Resolution,
     TriageEligibility,
 )
+from ymir.common.version_utils import get_fix_version_variants
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +33,14 @@ def build_rebuild_siblings_jql(
     fix_version: str,
 ) -> str:
     escaped_component = component.replace('"', '\\"')
-    escaped_fix_version = fix_version.replace('"', '\\"')
+
+    variants = get_fix_version_variants(fix_version)
+    quoted = ", ".join(f'"{v}"' for v in variants)
+    version_clause = f"fixVersion in ({quoted})"
+
     return (
         f'project = RHEL AND component = "{escaped_component}" '
-        f'AND fixVersion = "{escaped_fix_version}" '
+        f"AND {version_clause} "
         f'AND key != "{issue_key}" '
         f'AND labels = "SecurityTracking" '
         f"AND labels not in "

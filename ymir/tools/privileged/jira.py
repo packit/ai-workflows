@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from ymir.common import CVEEligibilityResult, TriageEligibility, load_rhel_config
 from ymir.common.base_utils import get_jira_auth_headers
 from ymir.common.constants import JIRA_SEARCH_PATH
-from ymir.common.version_utils import parse_rhel_version
+from ymir.common.version_utils import normalize_fix_version, parse_rhel_version
 from ymir.tools.constants import AIOHTTP_TIMEOUT
 
 if os.getenv("MOCK_JIRA", "False").lower() == "true":
@@ -452,6 +452,9 @@ class CheckCveTriageEligibilityTool(
 
         target_version = fix_versions[0].get("name", "")
 
+        rhel_config = await load_rhel_config()
+        target_version = normalize_fix_version(target_version, rhel_config)
+
         if re.match(r"^rhel-\d+\.\d+$", target_version.lower()):
             return await self._check_ystream_eligibility(issue_key, fields, target_version)
 
@@ -465,7 +468,6 @@ class CheckCveTriageEligibilityTool(
                 ).model_dump()
             )
 
-        rhel_config = await load_rhel_config()
         upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
         current_z_streams = rhel_config.get("current_z_streams", {})
         latest_z_streams = current_z_streams | upcoming_z_streams

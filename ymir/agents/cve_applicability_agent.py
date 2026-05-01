@@ -8,6 +8,7 @@ from beeai_framework.agents.requirement.requirements.conditional import (
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
+from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 
 from ymir.agents.utils import get_chat_model, get_tool_call_checker_config
@@ -30,6 +31,7 @@ def create_applicability_agent(
             ViewTool(options=local_tool_options),
             SearchTextTool(options=local_tool_options),
             RunShellCommandTool(options=local_tool_options),
+            DuckDuckGoSearchTool(),
             *jira_tool,
         ],
         memory=UnconstrainedMemory(),
@@ -114,7 +116,9 @@ def build_applicability_prompt(
         1. Use get_jira_details on {jira_issue} to understand the
            CVE context and what is affected. Also check the Jira
            comments — maintainers may have left notes about whether
-           this CVE is relevant to the package.
+           this CVE is relevant to the package. If the Jira issue
+           does not provide sufficient context about the vulnerability,
+           search for more information about the CVE online.
         2. If upstream fix patches are available, read them to identify
            the specific files and functions modified by the fix.
         3. Search for those files/functions in the package source.

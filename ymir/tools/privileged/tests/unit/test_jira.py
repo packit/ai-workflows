@@ -635,6 +635,9 @@ async def test_eligibility_ystream_any_clone_shipped():
         components=[{"name": "curl"}],
     )
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
     flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
         "CVE-2025-12345", "curl", "RHEL-12345"
     ).and_return(_create_async_return((True, []))).once()
@@ -654,6 +657,9 @@ async def test_eligibility_ystream_clones_pending():
         components=[{"name": "curl"}],
     )
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
     flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
         "CVE-2025-12345", "curl", "RHEL-12345"
     ).and_return(_create_async_return((False, ["RHEL-999"]))).once()
@@ -674,6 +680,9 @@ async def test_eligibility_ystream_low_moderate_skipped(severity):
         components=[{"name": "curl"}],
     )
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
     assert result["eligibility"] == TriageEligibility.NEVER
@@ -690,6 +699,9 @@ async def test_eligibility_ystream_no_cve_id():
         components=[{"name": "curl"}],
     )
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
     assert result["eligibility"] == TriageEligibility.NEVER
@@ -704,6 +716,9 @@ async def test_eligibility_ystream_no_component():
         severity="Critical",
     )
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
     assert result["eligibility"] == TriageEligibility.NEVER
@@ -717,6 +732,9 @@ async def test_eligibility_embargoed():
         embargo="True",
     )
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
     assert result["eligibility"] == TriageEligibility.NEVER

@@ -22,6 +22,7 @@ from ymir.common.models import (
     Resolution,
     TriageEligibility,
 )
+from ymir.common.version_utils import get_fix_version_variants
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +33,14 @@ def build_rebuild_siblings_jql(
     fix_version: str,
 ) -> str:
     escaped_component = component.replace('"', '\\"')
-    escaped_fix_version = fix_version.replace('"', '\\"')
+
+    variants = get_fix_version_variants(fix_version)
+    quoted = ", ".join(f'"{v}"' for v in variants)
+    version_clause = f"fixVersion in ({quoted})"
+
     return (
         f'project = RHEL AND component = "{escaped_component}" '
-        f'AND fixVersion = "{escaped_fix_version}" '
+        f"AND {version_clause} "
         f'AND key != "{issue_key}" '
         f'AND labels = "SecurityTracking" '
         f"AND labels not in "
@@ -185,14 +190,18 @@ async def find_rebuild_siblings(
                     )
                     continue
 
-                dep_info = (
-                    f" (dependency: {analysis.dependency_component})" if analysis.dependency_component else ""
-                )
+                dep_parts = []
+                if analysis.dependency_component:
+                    dep_parts.append(analysis.dependency_component)
+                if analysis.dependency_issue:
+                    dep_parts.append(analysis.dependency_issue)
+                dep_info = f" (dependency: {', '.join(dep_parts)})" if dep_parts else ""
                 cve_info = f" [{cve_id}]" if cve_id else ""
                 summary_lines.append(f"* {candidate_key}{cve_info}{dep_info} — included")
                 consolidated.append(
                     ConsolidatedIssue(
                         issue_key=candidate_key,
+                        dependency_issue=analysis.dependency_issue,
                         dependency_component=analysis.dependency_component,
                     )
                 )
@@ -237,10 +246,18 @@ def _build_sibling_analysis_prompt(
              project = RHEL AND summary ~ "<CVE-ID>" \
         AND component != "{package}"
         4. Once you find the dependency issue, use get_jira_details
-           on it to check if its 'Fixed in Build' field is set
-           (non-null/non-empty)
-        5. Set is_dependency_rebuild=true ONLY if the dependency has
-           'Fixed in Build' set
+           on it and thoroughly verify it was actually fixed:
+           - Check if 'Fixed in Build' field is set (non-null/non-empty)
+           - Check the issue status and resolution — if the dependency
+             issue was Closed/Done with resolution like 'NOTABUG',
+             'WONTFIX', 'DUPLICATE', 'CANTFIX', or 'DROPPED',
+             the fix was never actually built and the rebuild is
+             not needed
+           - Only consider the dependency as fixed if it has
+             'Fixed in Build' set AND was not dropped/rejected
+        5. Set is_dependency_rebuild=true ONLY if the dependency was
+           genuinely fixed (has 'Fixed in Build' and was not
+           dropped/rejected)
         6. Extract the CVE ID from the issue summary (e.g. CVE-2024-1234)
 
         Return your analysis as JSON.""")

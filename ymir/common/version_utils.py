@@ -57,6 +57,50 @@ def parse_branch_name(branch: str) -> tuple[str, str] | None:
     return match.group(1), match.group(2)
 
 
+def normalize_fix_version(fix_version: str, rhel_config: dict) -> str:
+    """
+    Normalize a stale Y-stream fixVersion to its Z-stream equivalent.
+
+    After a Y-stream GA (e.g. 9.8 GA → 9.9 becomes Y-stream, 9.8.z
+    becomes Z-stream), some Jira issues still carry the old Y-stream
+    fixVersion (rhel-9.8). This function detects that and returns
+    the Z-stream form (rhel-9.8.z).
+
+    Returns the input unchanged if it's already Z-stream, is the
+    current Y-stream, or can't be parsed.
+    """
+    parsed = parse_rhel_version(fix_version)
+    if not parsed:
+        return fix_version
+
+    major, minor, is_zstream = parsed
+    if is_zstream:
+        return fix_version
+
+    y_streams = rhel_config.get("current_y_streams", {})
+    if y_streams.get(major, "").lower() == fix_version.lower():
+        return fix_version
+
+    return f"rhel-{major}.{minor}.z"
+
+
+def get_fix_version_variants(fix_version: str) -> list[str]:
+    """
+    Return both Y-stream and Z-stream forms for a given fixVersion.
+
+    During GA transitions, the same release may appear as either
+    rhel-X.Y or rhel-X.Y.z. Returns both so JQL queries can match either.
+
+    Returns [fix_version] unchanged if parsing fails.
+    """
+    parsed = parse_rhel_version(fix_version)
+    if not parsed:
+        return [fix_version]
+
+    major, minor, _is_zstream = parsed
+    return [f"rhel-{major}.{minor}", f"rhel-{major}.{minor}.z"]
+
+
 async def is_older_zstream(
     version_or_branch: str,
     current_z_streams: dict[str, str] | None = None,

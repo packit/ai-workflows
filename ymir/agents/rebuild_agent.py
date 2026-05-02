@@ -108,6 +108,15 @@ async def main() -> None:
                         components.add(item.dependency_component)
                 return sorted(components)
 
+            def _all_dependency_issues(state):
+                issues = set()
+                if state.dependency_issue:
+                    issues.add(state.dependency_issue)
+                for item in state.consolidated_issues:
+                    if item.dependency_issue:
+                        issues.add(item.dependency_issue)
+                return sorted(issues)
+
             async def run_log_agent(state):
                 all_issues = [state.jira_issue] + [item.issue_key for item in state.consolidated_issues]
                 issues_str = ", ".join(all_issues)
@@ -169,6 +178,13 @@ async def main() -> None:
                     else:
                         dep_text = ""
 
+                    dep_issues = _all_dependency_issues(state)
+                    if dep_issues:
+                        dep_issues_header = "Dependency issues" if len(dep_issues) > 1 else "Dependency issue"
+                        dep_issues_text = f"{dep_issues_header}: {', '.join(dep_issues)}\n"
+                    else:
+                        dep_issues_text = ""
+
                     all_issues = [state.jira_issue] + [ci.issue_key for ci in state.consolidated_issues]
                     resolves_text = "Resolves: " + ", ".join(all_issues)
 
@@ -198,6 +214,7 @@ async def main() -> None:
                         mr_description=(
                             f"{state.log_result.description}\n\n"
                             f"{dep_text}"
+                            f"{dep_issues_text}"
                             f"{resolves_text}\n"
                             f"{consolidation_text}"
                             f"\n\n{MR_DESCRIPTION_FOOTER}"
@@ -223,8 +240,10 @@ async def main() -> None:
                         if state.merge_request_url
                         else "Rebuild completed successfully"
                     )
+                    is_error = False
                 else:
                     comment_text = f"Agent failed to perform a rebuild: {state.rebuild_error}"
+                    is_error = True
                 logger.info(f"Result to be put in Jira comment: {comment_text}")
 
                 all_issues = [state.jira_issue] + [item.issue_key for item in state.consolidated_issues]
@@ -234,6 +253,7 @@ async def main() -> None:
                             jira_issue=issue_key,
                             agent_type="Rebuild",
                             comment_text=comment_text,
+                            is_error=is_error,
                             available_tools=gateway_tools,
                         )
                     except Exception as e:

@@ -914,9 +914,10 @@ async def main() -> None:
             log_agent = create_log_agent(gateway_tools, local_tool_options)
 
             workflow = Workflow(State, name="BackportWorkflow")
+            silent_run = os.getenv("SILENT_RUN", "false").lower() == "true"
 
             async def change_jira_status(state):
-                if not dry_run:
+                if not dry_run and not silent_run:
                     try:
                         await tasks.change_jira_status(
                             jira_issue=state.jira_issue,
@@ -1299,13 +1300,16 @@ async def main() -> None:
                     comment_text = (
                         state.merge_request_url if state.merge_request_url else state.backport_result.status
                     )
+                    is_error = False
                 else:
                     comment_text = f"Agent failed to perform a backport: {state.backport_result.error}"
+                    is_error = True
                 logger.info(f"Result to be put in Jira comment: {comment_text}")
                 await tasks.comment_in_jira(
                     jira_issue=state.jira_issue,
                     agent_type="Backport",
                     comment_text=comment_text,
+                    is_error=is_error,
                     available_tools=gateway_tools,
                 )
                 return Workflow.END

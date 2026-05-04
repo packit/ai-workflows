@@ -2,8 +2,10 @@ from urllib.parse import urlparse
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, Tool, ToolRunOptions
+from beeai_framework.tools import JSONToolOutput, ToolRunOptions
 from pydantic import BaseModel, Field
+
+from ymir.tools.base import CloneableTool as Tool
 
 
 class DistgitDetectorInput(BaseModel):

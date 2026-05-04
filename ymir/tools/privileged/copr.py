@@ -13,7 +13,6 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import (
     JSONToolOutput,
     StringToolOutput,
-    Tool,
     ToolError,
     ToolRunOptions,
 )
@@ -23,6 +22,7 @@ from pydantic import BaseModel, Field
 from ymir.common import load_rhel_config
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket
 from ymir.common.validators import AbsolutePath
+from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT
 
 COPR_CONFIG = {

@@ -11,7 +11,6 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import (
     JSONToolOutput,
     StringToolOutput,
-    Tool,
     ToolError,
     ToolRunOptions,
 )
@@ -29,6 +28,7 @@ from ymir.common.models import (
     OpenMergeRequestResult,
 )
 from ymir.common.validators import AbsolutePath
+from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT
 from ymir.tools.privileged.utils import clean_stale_repositories
 

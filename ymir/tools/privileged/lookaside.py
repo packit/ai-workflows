@@ -4,11 +4,12 @@ import os
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket, is_cs_branch
 from ymir.common.validators import AbsolutePath
+from ymir.tools.base import CloneableTool as Tool
 
 logger = logging.getLogger(__name__)
 

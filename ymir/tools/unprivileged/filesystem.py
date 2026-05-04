@@ -3,10 +3,11 @@ from pathlib import Path
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.common.utils import get_absolute_path
+from ymir.tools.base import CloneableTool as Tool
 
 
 class GetCWDToolInput(BaseModel):

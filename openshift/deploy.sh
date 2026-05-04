@@ -10,8 +10,28 @@ apply() {
 }
 
 import_image() {
-    echo "Importing image $1 ..."
-    oc import-image "$1" --all -n jotnar-ymir--jotnar-ymir
+    local image=$1
+    local max_retries=5
+    local retry=0
+    local delay=2
+
+    echo "Importing image $image ..."
+
+    while [ $retry -lt $max_retries ]; do
+        if oc import-image "$image" --all; then
+            return 0
+        fi
+
+        retry=$((retry + 1))
+        if [ $retry -lt $max_retries ]; then
+            echo "Import failed, retrying in ${delay}s... (attempt $retry/$max_retries)"
+            sleep "$delay"
+            delay=$((delay * 2))
+        fi
+    done
+
+    echo "Failed to import image $image after $max_retries attempts"
+    return 1
 }
 
 # Egress rules
@@ -60,7 +80,7 @@ apply imagestream-beeai-agent.yml
 import_image beeai-agent
 apply deployment-triage-agent.yml
 # apply deployment-backport-agent-c9s.yml
-apply deployment-backport-agent-c10s.yml
+# apply deployment-backport-agent-c10s.yml
 # apply deployment-rebase-agent-c9s.yml
 # apply deployment-rebase-agent-c10s.yml
 #

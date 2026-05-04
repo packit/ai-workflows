@@ -1004,6 +1004,13 @@ async def main() -> None:
                     available_tools=gateway_tools,
                 )
                 local_tool_options["working_directory"] = state.local_clone
+                await run_tool(
+                    "download_sources",
+                    dist_git_path=str(state.local_clone),
+                    package=state.package,
+                    dist_git_branch=state.dist_git_branch,
+                    available_tools=gateway_tools,
+                )
                 if is_cs_branch(state.dist_git_branch):
                     pkg_cmd = [
                         "centpkg",
@@ -1020,7 +1027,6 @@ async def main() -> None:
                         "--offline",
                         "--released",
                     ]
-                await check_subprocess([*pkg_cmd, "sources"], cwd=state.local_clone)
                 await check_subprocess([*pkg_cmd, "prep"], cwd=state.local_clone)
                 state.unpacked_sources = tasks.get_unpacked_sources(state.local_clone, state.package)
                 for idx, upstream_patch in enumerate(state.upstream_patches):

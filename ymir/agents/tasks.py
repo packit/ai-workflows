@@ -454,6 +454,14 @@ async def clone_and_prep_sources(
         available_tools=available_tools,
     )
 
+    await run_tool(
+        "download_sources",
+        dist_git_path=str(local_clone),
+        package=package,
+        dist_git_branch=dist_git_branch,
+        available_tools=available_tools,
+    )
+
     if is_cs_branch(dist_git_branch):
         pkg_cmd = [
             "centpkg",
@@ -470,8 +478,6 @@ async def clone_and_prep_sources(
             "--offline",
             "--released",
         ]
-    await check_subprocess([*pkg_cmd, "sources"], cwd=local_clone)
-
     exit_code, _, stderr = await run_subprocess([*pkg_cmd, "prep"], cwd=local_clone)
     if exit_code == 0:
         unpacked = get_unpacked_sources(local_clone, package)

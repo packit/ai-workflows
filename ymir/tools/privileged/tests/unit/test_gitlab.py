@@ -143,7 +143,7 @@ async def test_open_merge_request_with_existing_mr():
 async def test_clone_repository(mock_git_repo_basepath):
     repository = "https://gitlab.com/centos-stream/rpms/bash"
     branch = "rhel-8.10.0"
-    clone_path = Path("/git-repos/bash")
+    clone_path = mock_git_repo_basepath / "bash"
 
     async def create_subprocess_exec(cmd, *args, **kwargs):
         assert cmd == "git"

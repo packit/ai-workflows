@@ -2,6 +2,17 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: redis-commander
+  annotations:
+    image.openshift.io/triggers: |
+      [
+        {
+          "from": {
+            "kind": "ImageStreamTag",
+            "name": "redis-commander:prod"
+          },
+          "fieldPath": "spec.template.spec.containers[?(@.name==\"redis-commander\")].image"
+        }
+      ]
 spec:
   progressDeadlineSeconds: 600
   replicas: 1
@@ -25,7 +36,7 @@ spec:
         - name: REDIS_HOSTS
           value: local:valkey:6379
         image: redis-commander:prod
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         name: redis-commander
         ports:
         - containerPort: 8081

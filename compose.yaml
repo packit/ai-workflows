@@ -111,7 +111,10 @@ services:
     profiles: ["agents", "supervisor", "e2e-test"]
 
   phoenix:
-    image: docker.io/arizephoenix/phoenix:version-11.6.2
+    image: quay.io/antbob/jotnar/phoenix:latest
+    build:
+      context: .
+      dockerfile: Containerfile.phoenix
     ports:
       - "0.0.0.0:6006:6006"
     environment:
@@ -122,7 +125,10 @@ services:
     profiles: ["agents", "supervisor", "e2e-test"]
 
   redis-commander:
-    image: ghcr.io/joeferner/redis-commander:0.9.0
+    image: quay.io/antbob/jotnar/redis-commander:latest
+    build:
+      context: .
+      dockerfile: Containerfile.redis-commander
     environment:
       - REDIS_HOSTS=local:valkey:6379
     ports:

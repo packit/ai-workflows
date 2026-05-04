@@ -1,5 +1,11 @@
 # OpenShift Deployment
 
+## Deployment Location
+
+Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
+- **Server:** https://console-openshift-console.apps.gpc.ocp-hub.prod.psi.redhat.com/k8s/ns/jotnar-ymir--jotnar-ymir
+- **Project:** jotnar-ymir--jotnar-ymir
+
 ## Steps to deploy:
 
 - Ensure secrets exist for the following values:
@@ -65,9 +71,13 @@
 
   If the webhook rejects it, try a different storage class.
 
-- Run `make deploy`. This would apply all the existing configurations to the project.
+- Run the deployment script:
 
-- Run `oc get route phoenix` and verify url listed in `HOST/PORT` column is accessible.
+  ```bash
+  ./openshift/deploy.sh
+  ```
+
+  This applies all configurations: egress rules, ConfigMaps, ImageStreams, PersistentVolumes, Services, and Deployments.
 
 ## Jira Issue Fetcher Deployment
 

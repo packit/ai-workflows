@@ -12,7 +12,7 @@ def minimal_spec(tmp_path) -> Path:
             """
             Name:           test
             Version:        0.1
-            Release:        2%{?dist}
+            Release:        5%{?dist}
             Summary:        Test package
 
             License:        MIT

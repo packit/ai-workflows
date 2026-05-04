@@ -122,7 +122,10 @@ services:
     profiles: ["agents", "supervisor", "e2e-test"]
 
   phoenix:
-    image: docker.io/arizephoenix/phoenix:version-11.6.2
+    image: quay.io/jotnar/phoenix:latest
+    build:
+      context: .
+      dockerfile: Containerfile.phoenix
     ports:
       - "0.0.0.0:6006:6006"
     environment:

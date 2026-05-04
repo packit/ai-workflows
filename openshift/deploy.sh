@@ -49,9 +49,7 @@ apply imagestream-phoenix.yml
 import_image phoenix
 apply pvc-phoenix-data.yml
 apply service-phoenix.yml
-# # TODO: route-phoenix.yml skipped — admission webhook panics on this cluster (platform bug)
-# # Create manually: oc create route edge phoenix --service=phoenix --port=6006-tcp --insecure-policy=Redirect -n jotnar-ymir--jotnar-ymir
-# # apply route-phoenix.yml
+apply route-phoenix.yml
 apply deployment-phoenix.yml
 
 # Valkey

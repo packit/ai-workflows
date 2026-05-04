@@ -570,6 +570,31 @@ async def test_check_zstream_clones_wontdo_with_pending():
     assert pending == ["RHEL-222"]
 
 
+@pytest.mark.asyncio
+async def test_check_zstream_clones_stale_ystream_fixversion():
+    """Clone with stale Y-stream fixVersion (rhel-9.6 instead of rhel-9.6.z) is still recognized."""
+    search_result = [
+        {
+            "key": "RHEL-333",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.6"}],
+                "status": {"name": "In Progress"},
+                "resolution": None,
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    any_shipped, pending = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    assert any_shipped is False
+    assert pending == ["RHEL-333"]
+
+
 # --- CVE triage eligibility tests ---
 
 

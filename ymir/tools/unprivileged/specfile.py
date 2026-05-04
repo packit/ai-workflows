@@ -8,7 +8,6 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import (
     JSONToolOutput,
     StringToolOutput,
-    Tool,
     ToolError,
     ToolRunOptions,
 )
@@ -23,6 +22,7 @@ from specfile.value_parser import (
 )
 
 from ymir.common.utils import get_absolute_path
+from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import BREWHUB_URL
 
 

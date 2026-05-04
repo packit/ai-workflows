@@ -6,9 +6,10 @@ from urllib.parse import urlparse
 import aiohttp
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import JSONToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
+from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT
 
 logger = logging.getLogger(__name__)

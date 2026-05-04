@@ -2,10 +2,11 @@ from typing import Any
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, Tool, ToolRunOptions
+from beeai_framework.tools import JSONToolOutput, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.common.config import load_rhel_config
+from ymir.tools.base import CloneableTool as Tool
 
 
 class VersionMapperInput(BaseModel):

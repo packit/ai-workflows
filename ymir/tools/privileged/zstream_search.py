@@ -6,11 +6,12 @@ from urllib.parse import urlparse
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import JSONToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.common.utils import run_tool
 from ymir.common.version_utils import is_older_zstream, parse_rhel_version
+from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.privileged.jira import (
     GetJiraDevStatusTool,
     SearchJiraIssuesTool,

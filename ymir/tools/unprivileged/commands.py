@@ -6,10 +6,11 @@ import shlex
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import JSONToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.common.base_utils import run_subprocess
+from ymir.tools.base import CloneableTool as Tool
 
 TIMEOUT = 10 * 60  # seconds
 ELLIPSIZED_LINES = 200

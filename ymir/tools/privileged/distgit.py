@@ -8,10 +8,11 @@ import git
 import koji
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket
+from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import BREWHUB_URL
 
 SYNC_TIMEOUT = 1 * 60 * 60  # seconds

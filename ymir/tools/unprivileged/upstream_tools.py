@@ -9,7 +9,6 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import (
     JSONToolOutput,
     StringToolOutput,
-    Tool,
     ToolError,
     ToolRunOptions,
 )
@@ -17,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from ymir.common.base_utils import run_subprocess
 from ymir.common.validators import AbsolutePath
+from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT
 
 

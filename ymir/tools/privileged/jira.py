@@ -12,7 +12,6 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import (
     JSONToolOutput,
     StringToolOutput,
-    Tool,
     ToolError,
     ToolRunOptions,
 )
@@ -22,6 +21,7 @@ from ymir.common import CVEEligibilityResult, TriageEligibility, load_rhel_confi
 from ymir.common.base_utils import get_jira_auth_headers
 from ymir.common.constants import JIRA_SEARCH_PATH
 from ymir.common.version_utils import get_fix_version_variants, normalize_fix_version, parse_rhel_version
+from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT
 
 if os.getenv("MOCK_JIRA", "False").lower() == "true":

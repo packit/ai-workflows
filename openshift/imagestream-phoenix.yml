@@ -9,7 +9,7 @@ spec:
     - name: prod
       from:
         kind: DockerImage
-        name: quay.io/antbob/jotnar/phoenix
+        name: quay.io/jotnar/phoenix
       importPolicy:
         # Periodically query registry to synchronize tag and image metadata.
         scheduled: true

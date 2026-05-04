@@ -45,15 +45,14 @@ apply configmap-jira-env.yml
 apply configmap-kerberos-env.yml
 
 # # Phoenix (observability)
-# # TODO: image quay.io/antbob/jotnar/phoenix is private — skipping until access is sorted
-# apply imagestream-phoenix.yml
-# import_image phoenix
-# apply pvc-phoenix-data.yml
-# apply service-phoenix.yml
+apply imagestream-phoenix.yml
+import_image phoenix
+apply pvc-phoenix-data.yml
+apply service-phoenix.yml
 # # TODO: route-phoenix.yml skipped — admission webhook panics on this cluster (platform bug)
 # # Create manually: oc create route edge phoenix --service=phoenix --port=6006-tcp --insecure-policy=Redirect -n jotnar-ymir--jotnar-ymir
 # # apply route-phoenix.yml
-# apply deployment-phoenix.yml
+apply deployment-phoenix.yml
 
 # Valkey
 apply imagestream-valkey.yml

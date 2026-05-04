@@ -72,7 +72,7 @@ python3-devel podman-compose gcc krb5-devel libpq-devel
 Then, use the provided stub pyproject.toml file to set up the development environment:
 
 ```
-uv sync
+uv sync --extra test
 uv run make -f Makefile.tests check
 ```
 

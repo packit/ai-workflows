@@ -129,7 +129,7 @@ async def test_add_changelog_entry(minimal_spec):
     assert result.startswith("Successfully")
     assert minimal_spec.read_text().splitlines()[-7:-2] == [
         "%changelog",
-        "* Tue Aug 05 2025 RHEL Packaging Agent <jotnar@redhat.com> - 0.1-2",
+        "* Tue Aug 05 2025 RHEL Packaging Agent <jotnar@redhat.com> - 0.1-5",
         "- some change",
         "  second line",
         "",
@@ -173,7 +173,11 @@ async def test_get_package_info(spec_fixture, expected_version, expected_patches
 
 
 @pytest.mark.parametrize(
-    "rebase",
+    "rebase_in_current_stream",
+    [False, True],
+)
+@pytest.mark.parametrize(
+    "rebase_in_higher_stream",
     [False, True],
 )
 @pytest.mark.parametrize(
@@ -181,14 +185,20 @@ async def test_get_package_info(spec_fixture, expected_version, expected_patches
     ["c9s", "c10s", "rhel-9.6.0", "rhel-10.0"],
 )
 @pytest.mark.asyncio
-async def test_update_release(rebase, dist_git_branch, minimal_spec, autorelease_spec):
+async def test_update_release(
+    rebase_in_current_stream, rebase_in_higher_stream, dist_git_branch, minimal_spec, autorelease_spec
+):
     package = "test"
 
-    async def _get_latest_higher_stream_build(*_, **__):
-        return EVR(version="0.1", release="2.elX")
+    async def _get_latest_candidate_build(package, candidate_tag):
+        if candidate_tag.startswith(dist_git_branch):
+            return EVR(version="0.1", release="5.elX")
+        if rebase_in_higher_stream:
+            return EVR(version="0.2", release="2.elX")
+        return EVR(version="0.1", release="8.elX")
 
-    flexmock(UpdateReleaseTool).should_receive("_get_latest_higher_stream_build").replace_with(
-        _get_latest_higher_stream_build
+    flexmock(UpdateReleaseTool).should_receive("_get_latest_candidate_build").replace_with(
+        _get_latest_candidate_build
     )
 
     tool = UpdateReleaseTool()
@@ -200,7 +210,7 @@ async def test_update_release(rebase, dist_git_branch, minimal_spec, autorelease
                     spec=spec,
                     package=package,
                     dist_git_branch=dist_git_branch,
-                    rebase=rebase,
+                    rebase=rebase_in_current_stream,
                 )
             ).middleware(GlobalTrajectoryMiddleware(pretty=True))
         if error:
@@ -211,27 +221,35 @@ async def test_update_release(rebase, dist_git_branch, minimal_spec, autorelease
         return result
 
     if not dist_git_branch.startswith("rhel-"):
-        await run_and_check(minimal_spec, "1%{?dist}" if rebase else "3%{?dist}")
+        await run_and_check(minimal_spec, "1%{?dist}" if rebase_in_current_stream else "6%{?dist}")
         await run_and_check(autorelease_spec, "%autorelease")
     else:
-        await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "2%{?dist}.1")
+        await run_and_check(minimal_spec, "0%{?dist}.1" if rebase_in_current_stream else "5%{?dist}.1")
         await run_and_check(
             autorelease_spec,
-            "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}",
+            "0%{?dist}.%{autorelease -n}"
+            if rebase_in_current_stream
+            else "5%{?dist}.%{autorelease -n}"
+            if rebase_in_higher_stream
+            else "8%{?dist}.%{autorelease -n}",
         )
-        await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "2%{?dist}.2")
+        await run_and_check(minimal_spec, "0%{?dist}.1" if rebase_in_current_stream else "5%{?dist}.2")
         await run_and_check(
             autorelease_spec,
-            "0%{?dist}.%{autorelease -n}" if rebase else "2%{?dist}.%{autorelease -n}",
+            "0%{?dist}.%{autorelease -n}"
+            if rebase_in_current_stream
+            else "5%{?dist}.%{autorelease -n}"
+            if rebase_in_higher_stream
+            else "8%{?dist}.%{autorelease -n}",
         )
 
     with specfile.Specfile(minimal_spec) as spec:
-        spec.raw_release = "2%{?dist}.1"
+        spec.raw_release = "5%{?dist}.1"
     with specfile.Specfile(autorelease_spec) as spec:
-        spec.raw_release = "2%{?dist}.%{autorelease -n}"
+        spec.raw_release = "5%{?dist}.%{autorelease -n}"
 
     if not dist_git_branch.startswith("rhel-"):
-        await run_and_check(minimal_spec, "1%{?dist}" if rebase else "3%{?dist}")
+        await run_and_check(minimal_spec, "1%{?dist}" if rebase_in_current_stream else "6%{?dist}")
         await run_and_check(autorelease_spec, "%autorelease")
 
     with specfile.Specfile(minimal_spec) as spec:
@@ -240,14 +258,18 @@ async def test_update_release(rebase, dist_git_branch, minimal_spec, autorelease
     if not dist_git_branch.startswith("rhel-"):
         await run_and_check(
             minimal_spec,
-            ("1%{?alphatag:.%{alphatag}}%{?dist}" if rebase else "6%{?alphatag:.%{alphatag}}%{?dist}"),
+            (
+                "1%{?alphatag:.%{alphatag}}%{?dist}"
+                if rebase_in_current_stream
+                else "6%{?alphatag:.%{alphatag}}%{?dist}"
+            ),
         )
     else:
         await run_and_check(
             minimal_spec,
-            "0%{?dist}.1" if rebase else "5%{?alphatag:.%{alphatag}}%{?dist}.9",
+            "0%{?dist}.1" if rebase_in_current_stream else "5%{?alphatag:.%{alphatag}}%{?dist}.9",
         )
         await run_and_check(
             minimal_spec,
-            "0%{?dist}.1" if rebase else "5%{?alphatag:.%{alphatag}}%{?dist}.10",
+            "0%{?dist}.1" if rebase_in_current_stream else "5%{?alphatag:.%{alphatag}}%{?dist}.10",
         )

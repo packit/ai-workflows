@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from ymir.common import CVEEligibilityResult, TriageEligibility, load_rhel_config
 from ymir.common.base_utils import get_jira_auth_headers
 from ymir.common.constants import JIRA_SEARCH_PATH
-from ymir.common.version_utils import normalize_fix_version, parse_rhel_version
+from ymir.common.version_utils import get_fix_version_variants, normalize_fix_version, parse_rhel_version
 from ymir.tools.constants import AIOHTTP_TIMEOUT
 
 if os.getenv("MOCK_JIRA", "False").lower() == "true":
@@ -326,10 +326,11 @@ async def _check_zstream_clones_shipped(
         logger.info(f"Maintenance-phase major versions (excluded): {sorted(maintenance_majors)}")
 
     relevant_z_streams = {
-        v.lower()
+        variant.lower()
         for streams in (current_z_streams, upcoming_z_streams)
         for major, v in streams.items()
         if major not in maintenance_majors
+        for variant in get_fix_version_variants(v)
     }
     logger.info(f"Relevant Z-streams from config: {sorted(relevant_z_streams)}")
 

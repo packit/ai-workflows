@@ -80,6 +80,16 @@ spec:
     - type: Allow
       to:
         dnsName: groups.google.com
+    # Google OAuth and Vertex AI
+    - type: Allow
+      to:
+        dnsName: oauth2.googleapis.com
+    - type: Allow
+      to:
+        dnsName: vertexai.googleapis.com
+    - type: Allow
+      to:
+        dnsName: googleapis.com
     # GNU project hosting (gnu.org, ftp.gnu.org, savannah.gnu.org, savannah.nongnu.org)
     # All resolve to 209.51.188.0/24; dnsName selector picks AAAA records which
     # don't match this cluster's IPv4-only egress policy, so use CIDR instead.

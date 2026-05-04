@@ -11,12 +11,26 @@ COMPOSE ?= $(shell if podman compose ls >/dev/null 2>&1; then echo "podman compo
 COMPOSE_AGENTS=$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents
 COMPOSE_SUPERVISOR=$(COMPOSE) -f $(COMPOSE_FILE) --profile=supervisor
 
+# Extract container tool (podman or docker) from COMPOSE
+CONTAINER_TOOL ?= $(shell command -v podman >/dev/null 2>&1 && echo "podman" || echo "docker")
+REGISTRY ?= quay.io/jotnar
+
 .PHONY: build
 build:
 	if [ -f .secrets/build.env ]; then \
 		set -a && . ./.secrets/build.env && set +a; \
 	fi && \
 	$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents --profile=supervisor build
+
+.PHONY: push
+push:
+	@echo "Pushing images to $(REGISTRY)..."
+	$(CONTAINER_TOOL) push $(REGISTRY)/phoenix:latest
+	$(CONTAINER_TOOL) push $(REGISTRY)/redis-commander:latest
+	@echo "All images pushed successfully!"
+
+.PHONY: build-and-push
+build-and-push: build push
 
 .PHONY: run-beeai-bash
 run-beeai-bash:

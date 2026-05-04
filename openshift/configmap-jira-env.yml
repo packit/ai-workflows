@@ -1,7 +1,7 @@
 apiVersion: v1
 data:
   JIRA_URL: https://redhat.atlassian.net/
-  JIRA_EMAIL: jotnar@redhat.com
+  JIRA_EMAIL: redhat-ymir-agent@redhat.com
 immutable: false
 kind: ConfigMap
 metadata:

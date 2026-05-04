@@ -140,11 +140,9 @@ Issues can be re-triggered through the workflow in two ways:
    - Package maintainers who have made changes (e.g., updated some fields, added links, commented)
    - Ymir team members after production code updates to resolve issues
 
-### Maintainer Review Process
+### FuSa (Functional Safety) Packages
 
-Some Jira issues will require a maintainer review by applying the `ymir_needs_maintainer_review` label to an issue. This is currently agreed on for FuSa (Functional Safety) project packages.
-
-The `ymir_fusa` label will be automatically added by the triage agent to JIRA issues involving FuSa packages, and related merge requests will need to be reviewed and handled by subject matter experts.
+The `ymir_fusa` label will be automatically added by the triage agent to JIRA issues involving FuSa packages. Related merge requests will need to be reviewed and approved by subject matter experts before merging.
 
 ## Advanced Usage
 

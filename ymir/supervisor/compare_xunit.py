@@ -1,9 +1,9 @@
 import asyncio
-from enum import StrEnum
 import xml.etree.ElementTree as ET
+from enum import StrEnum
 
-from pydantic import BaseModel, Field
 import tomli_w
+from pydantic import BaseModel, Field
 
 from .http_utils import aiohttp_session
 
@@ -98,9 +98,7 @@ class XUnitComparison(BaseModel):
         if sum(c for c in dict_output["total_counts"].values()) == 0:
             del dict_output["total_counts"]
 
-        empty_lists = [
-            k for k, v in dict_output.items() if isinstance(v, list) and not v
-        ]
+        empty_lists = [k for k, v in dict_output.items() if isinstance(v, list) and not v]
         for k in empty_lists:
             del dict_output[k]
 
@@ -122,9 +120,7 @@ def parse_xunit(xml_content: str) -> list[XUnitTestSuite]:
     for testsuite_el in root.findall("./testsuite"):
         test_cases = []
 
-        arch_el = testsuite_el.find(
-            "./testing-environment[@name='provisioned']/property[@name='arch']"
-        )
+        arch_el = testsuite_el.find("./testing-environment[@name='provisioned']/property[@name='arch']")
         arch = arch_el.get("value") if arch_el is not None else None
         if arch is None:
             raise ValueError("Architecture not found in XUnit XML")
@@ -177,9 +173,7 @@ def parse_xunit(xml_content: str) -> list[XUnitTestSuite]:
     return test_suites
 
 
-def compare_test_suites(
-    suite_a: XUnitTestSuite, suite_b: XUnitTestSuite, output: XUnitComparison
-):
+def compare_test_suites(suite_a: XUnitTestSuite, suite_b: XUnitTestSuite, output: XUnitComparison):
     """Compare two test suites and update the output.
 
     Differences *from* suite_a *to* suite_b are recorded in the output.
@@ -203,10 +197,7 @@ def compare_test_suites(
         log_url_a = tc_a.log_url if tc_a else ""
         log_url_b = tc_b.log_url if tc_b else ""
 
-        if (
-            result_a == XUnitTestCaseResult.PASS
-            and result_b == XUnitTestCaseResult.PASS
-        ):
+        if result_a == XUnitTestCaseResult.PASS and result_b == XUnitTestCaseResult.PASS:
             comparison_result = ComparisonResult.WORKS
         elif result_a == XUnitTestCaseResult.PASS and result_b in (
             XUnitTestCaseResult.FAIL,
@@ -245,7 +236,7 @@ def compare_test_suites(
 
 
 async def compare_xunit_files(
-    xunit_url_a: str, xunit_url_b: str, *, metadata: dict[str, str] = {}
+    xunit_url_a: str, xunit_url_b: str, *, metadata: dict[str, str] | None = None
 ) -> XUnitComparison:
     """
     Download and compare two XUnit files.
@@ -273,6 +264,8 @@ async def compare_xunit_files(
         ValueError: If the XUnit files contain different test suites and cannot be compared.
             test suite identity is determined by (name, arch) pairs.
     """
+    if metadata is None:
+        metadata = {}
     session = aiohttp_session()
 
     async def fetch_url(url: str) -> str:
@@ -314,16 +307,8 @@ async def compare_xunit_files(
     # suite has multiple suites with the same (name, arch), the first one
     # is arbitrarily used.
     for name, arch in test_suite_a_keys:
-        suite_a = next(
-            suite
-            for suite in test_suites_a
-            if suite.name == name and suite.arch == arch
-        )
-        suite_b = next(
-            suite
-            for suite in test_suites_b
-            if suite.name == name and suite.arch == arch
-        )
+        suite_a = next(suite for suite in test_suites_a if suite.name == name and suite.arch == arch)
+        suite_b = next(suite for suite in test_suites_b if suite.name == name and suite.arch == arch)
 
         compare_test_suites(suite_a, suite_b, output)
 
@@ -331,8 +316,9 @@ async def compare_xunit_files(
 
 
 if __name__ == "__main__":
-    from .http_utils import with_aiohttp_session
     import sys
+
+    from .http_utils import with_aiohttp_session
 
     @with_aiohttp_session()
     async def main():

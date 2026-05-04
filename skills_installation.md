@@ -1,8 +1,83 @@
-# Ymir MCP Tools -- Workstation Installation Guide
+# Ymir Skills -- Workstation Installation Guide
 
-This guide covers installing the `ymir-common` and `ymir-tools` packages on a
-local workstation and configuring Claude Code to start both the **privileged**
-and **unprivileged** MCP gateways automatically.
+This guide covers two things:
+
+1. **Installing skills** from the `agents_as_skills/` directory so your AI
+   coding assistant (Claude Code or Cursor) can use them.
+2. **Installing the MCP tools** (`ymir-common` and `ymir-tools`) that the
+   skills depend on, and configuring Claude Code to start both the
+   **privileged** and **unprivileged** MCP gateways automatically.
+
+---
+
+## Installing skills
+
+The `agents_as_skills/` directory in this repository contains ready-to-use
+skills. Each sub-directory (e.g. `backport/`, `rebase/`, `triage/`) holds a
+`SKILL.md` file that your editor picks up once it is placed in the correct
+location.
+
+### Available skills
+
+| Skill | Directory | Description |
+|-------|-----------|-------------|
+| Backport | `agents_as_skills/backport/` | Cherry-pick or git-am upstream patches, verify builds, and create merge requests |
+| Rebase | `agents_as_skills/rebase/` | Rebase a package to a new upstream version |
+| Triage | `agents_as_skills/triage/` | Triage CVE/bug JIRA issues for RHEL packages |
+| Rebuild | `agents_as_skills/rebuild/` | Rebuild a package in the build system |
+| Preliminary Testing | `agents_as_skills/preliminary_testing/` | Run preliminary tests on a package |
+
+### Claude Code
+
+Claude Code discovers skills from `~/.claude/skills/`. Each skill is a
+directory containing a single `SKILL.md` file. You can download them straight
+from GitHub -- no need to clone the repository:
+
+```bash
+REPO_URL="https://raw.githubusercontent.com/packit/ai-workflows/main/agents_as_skills"
+
+# Install all skills at once
+for skill in backport rebase triage rebuild preliminary_testing; do
+  mkdir -p ~/.claude/skills/"$skill"
+  curl -fsSL "$REPO_URL/$skill/SKILL.md" -o ~/.claude/skills/"$skill"/SKILL.md
+done
+```
+
+Or install a single skill:
+
+```bash
+REPO_URL="https://raw.githubusercontent.com/packit/ai-workflows/main/agents_as_skills"
+mkdir -p ~/.claude/skills/backport
+curl -fsSL "$REPO_URL/backport/SKILL.md" -o ~/.claude/skills/backport/SKILL.md
+```
+
+After downloading, restart Claude Code (or start a new session) so that the
+skills are picked up.
+
+### Cursor
+
+Cursor discovers skills from `~/.cursor/skills-cursor/`. The same approach
+applies:
+
+```bash
+REPO_URL="https://raw.githubusercontent.com/packit/ai-workflows/main/agents_as_skills"
+
+# Install all skills at once
+for skill in backport rebase triage rebuild preliminary_testing; do
+  mkdir -p ~/.cursor/skills-cursor/"$skill"
+  curl -fsSL "$REPO_URL/$skill/SKILL.md" -o ~/.cursor/skills-cursor/"$skill"/SKILL.md
+done
+```
+
+After downloading, restart Cursor so that the new skills appear in the skill
+list.
+
+---
+
+## MCP Tools Installation
+
+The skills listed above require the Ymir MCP tools to be installed and
+running. The rest of this guide covers that setup.
 
 ## Overview
 
@@ -24,12 +99,16 @@ simultaneously throughout the session.
 
 ## 1. Install packages
 
+```bash
+sudo dnf install krb5-devel gcc python3-devel
+```
+
 Install `ymir-common` first because `ymir-tools` depends on it and the package
 is not published on PyPI.
 
 ```bash
-pip install "git+https://github.com/username/repository.git#subdirectory=ymir/common"
-pip install "git+https://github.com/username/repository.git#subdirectory=ymir/tools"
+pip install "git+https://github.com/packit/ai-workflows.git#subdirectory=ymir/common"
+pip install "git+https://github.com/packit/ai-workflows.git#subdirectory=ymir/tools"
 ```
 
 After installation, two console scripts are available:
@@ -46,8 +125,8 @@ Several tools (`BuildPackageTool`, `CheckCveTriageEligibilityTool`,
 directory at runtime. Copy the template and fill in the real values:
 
 ```bash
-cp templates/rhel-config.json ~/rhel-config.json
-# Edit ~/rhel-config.json with actual RHEL stream data
+cp templates/rhel-config.json ./rhel-config.json
+# Edit ./rhel-config.json with actual RHEL stream data
 ```
 
 Set the working directory in the Claude Code server configuration (see below)
@@ -71,6 +150,7 @@ to the directory that contains this file.
 | `MOCK_JIRA` | No | Set to `true` to use a mock Jira client (for testing). |
 | `JIRA_MOCK_FILES` | No | Directory with mock Jira JSON fixtures (only when `MOCK_JIRA=true`). |
 | `SKIP_SETTING_JIRA_FIELDS` | No | Set to `true` to skip setting Jira custom fields. |
+| `DEBUG_FILE` | No | Path to a log file. When set, gateway logs are written to this file in addition to stderr. Useful for debugging local installations. |
 
 ### Unprivileged gateway
 
@@ -79,6 +159,7 @@ to the directory that contains this file.
 | `MCP_TRANSPORT` | **Yes** | Set to `stdio` so Claude Code can communicate with the process. |
 | `UPSTREAM_SEARCH_API_URL` | **Yes** | Base URL of the upstream search service (provides `/find_repository` and `/find_commit` endpoints). |
 | `MCP_GATEWAY_URL` | No | SSE URL of a running privileged gateway. See the note on cross-gateway calls below. |
+| `DEBUG_FILE` | No | Path to a log file. When set, gateway logs are written to this file in addition to stderr. Useful for debugging local installations. |
 
 ## 4. Configure Claude Code
 
@@ -89,18 +170,18 @@ with the CLI or by editing the settings file directly.
 
 ```bash
 claude mcp add ymir-privileged \
-  --command ymir-privileged-gateway \
   --env MCP_TRANSPORT=stdio \
-  --env GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx \
-  --env JIRA_URL=https://issues.redhat.com/ \
+  --env GITLAB_TOKEN=<your-gitlab-token> \
+  --env JIRA_URL=https://redhat.atlassian.net \
   --env JIRA_EMAIL=you@redhat.com \
   --env JIRA_TOKEN=your-jira-api-token \
-  --env KRB5CCNAME=FILE:/tmp/krb5cc_$(id -u)
+  --env KRB5CCNAME=FILE:/tmp/krb5cc_$(id -u) \
+  -- ymir-privileged-gateway
 
 claude mcp add ymir-unprivileged \
-  --command ymir-unprivileged-gateway \
   --env MCP_TRANSPORT=stdio \
-  --env UPSTREAM_SEARCH_API_URL=http://your-upstream-search-service:port
+  --env UPSTREAM_SEARCH_API_URL=http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1 \
+  -- ymir-unprivileged-gateway
 ```
 
 ### Option B -- Editing `~/.claude.json`
@@ -114,8 +195,8 @@ Add the following to the top-level `mcpServers` object:
       "command": "ymir-privileged-gateway",
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "GITLAB_TOKEN": "glpat-xxxxxxxxxxxxxxxxxxxx",
-        "JIRA_URL": "https://issues.redhat.com/",
+        "GITLAB_TOKEN": "<your-gitlab-token>",
+        "JIRA_URL": "https://redhat.atlassian.net",
         "JIRA_EMAIL": "you@redhat.com",
         "JIRA_TOKEN": "your-jira-api-token",
         "KRB5CCNAME": "FILE:/tmp/krb5cc_1000"
@@ -125,7 +206,7 @@ Add the following to the top-level `mcpServers` object:
       "command": "ymir-unprivileged-gateway",
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "UPSTREAM_SEARCH_API_URL": "http://your-upstream-search-service:port"
+        "UPSTREAM_SEARCH_API_URL": "http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1"
       }
     }
   }

@@ -1,14 +1,12 @@
 import asyncio
 import math
-from typing import Any
-
-from pydantic import BaseModel, Field
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, Tool, ToolError, ToolRunOptions
+from pydantic import BaseModel, Field
 
-from ymir.common.utils import run_subprocess
+from ymir.common.base_utils import run_subprocess
 
 TIMEOUT = 10 * 60  # seconds
 ELLIPSIZED_LINES = 200
@@ -51,11 +49,19 @@ class RunShellCommandTool(Tool[RunShellCommandToolInput, ToolRunOptions, RunShel
         )
 
     async def _run(
-        self, tool_input: RunShellCommandToolInput, options: ToolRunOptions | None, context: RunContext
+        self,
+        tool_input: RunShellCommandToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
     ) -> RunShellCommandToolOutput:
         try:
             exit_code, stdout, stderr = await asyncio.wait_for(
-                run_subprocess(tool_input.command, shell=True, cwd=(self.options or {}).get("working_directory")),
+                run_subprocess(
+                    tool_input.command,
+                    shell=True,
+                    cwd=(self.options or {}).get("working_directory"),
+                    env=(self.options or {}).get("env"),
+                ),
                 timeout=TIMEOUT,
             )
         except TimeoutError as e:
@@ -70,9 +76,11 @@ class RunShellCommandTool(Tool[RunShellCommandToolInput, ToolRunOptions, RunShel
             if len(lines) <= ELLIPSIZED_LINES:
                 return output
             return "".join(
-                lines[: math.floor((ELLIPSIZED_LINES - 1) / 2)]
-                + ["[...]\n"]
-                + lines[-math.ceil((ELLIPSIZED_LINES - 1) / 2) :]
+                [
+                    *lines[: math.floor((ELLIPSIZED_LINES - 1) / 2)],
+                    "[...]\n",
+                    *lines[-math.ceil((ELLIPSIZED_LINES - 1) / 2) :],
+                ]
             )
 
         result = {

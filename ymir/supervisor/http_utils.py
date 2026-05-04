@@ -1,9 +1,8 @@
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+
 import aiohttp
-
 import requests
-
 
 # We use *both* aiohttp and requests in various places, so we need to
 # set up sessions for both libraries. (We can't convert everything to
@@ -11,9 +10,7 @@ import requests
 # within code that is already async.)
 
 
-_aiohttp_session = ContextVar[aiohttp.ClientSession | None](
-    "aiohttp_session", default=None
-)
+_aiohttp_session = ContextVar[aiohttp.ClientSession | None]("aiohttp_session", default=None)
 
 
 @asynccontextmanager
@@ -51,9 +48,7 @@ def aiohttp_session() -> aiohttp.ClientSession:
     return session
 
 
-_requests_session = ContextVar[requests.Session | None](
-    "requests_session", default=None
-)
+_requests_session = ContextVar[requests.Session | None]("requests_session", default=None)
 
 
 @asynccontextmanager
@@ -96,6 +91,5 @@ async def with_http_sessions():
     """
     Convenience context manager that sets up both aiohttp and requests sessions.
     """
-    async with with_aiohttp_session():
-        async with with_requests_session():
-            yield
+    async with with_aiohttp_session(), with_requests_session():
+        yield

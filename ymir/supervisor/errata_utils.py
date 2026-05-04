@@ -1,13 +1,13 @@
 from __future__ import annotations
-from collections import defaultdict
-from datetime import datetime, timezone
-from enum import StrEnum
-from functools import cache
+
 import logging
 import os
 import re
-from typing import Any, DefaultDict, overload
-from typing_extensions import Literal
+from collections import defaultdict
+from datetime import UTC, datetime
+from enum import StrEnum
+from functools import cache
+from typing import Any, Literal, overload
 
 from bs4 import BeautifulSoup, Tag  # type: ignore
 from pydantic import BaseModel, RootModel
@@ -15,7 +15,7 @@ from requests_gssapi import HTTPSPNEGOAuth
 
 from .constants import DATETIME_MIN_UTC
 from .http_utils import requests_session
-from .supervisor_types import Erratum, FullErratum, ErrataStatus, Comment
+from .supervisor_types import Comment, ErrataStatus, Erratum, FullErratum
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +31,7 @@ def ET_verify() -> bool | str:
     verify = os.getenv("REDHAT_IT_CA_BUNDLE")
     if verify:
         return verify
-    else:
-        return True
+    return True
 
 
 def ET_api_get(path: str, *, params: dict | None = None):
@@ -47,20 +46,14 @@ def ET_api_get(path: str, *, params: dict | None = None):
 
 
 @overload
-def ET_api_post(
-    path: str, data: dict[str, Any], *, decode_response: Literal[False] = False
-) -> None: ...
+def ET_api_post(path: str, data: dict[str, Any], *, decode_response: Literal[False] = False) -> None: ...
 
 
 @overload
-def ET_api_post(
-    path: str, data: dict[str, Any], *, decode_response: Literal[True]
-) -> Any: ...
+def ET_api_post(path: str, data: dict[str, Any], *, decode_response: Literal[True]) -> Any: ...
 
 
-def ET_api_post(
-    path: str, data: dict[str, Any], *, decode_response: bool = False
-) -> Any | None:
+def ET_api_post(path: str, data: dict[str, Any], *, decode_response: bool = False) -> Any | None:
     response = requests_session().post(
         f"{ET_URL}/api/v1/{path}",
         data=data,
@@ -71,23 +64,18 @@ def ET_api_post(
 
     if decode_response:
         return response.json()
+    return None
 
 
 @overload
-def ET_api_put(
-    path: str, data: dict[str, Any], *, decode_response: Literal[False] = False
-) -> None: ...
+def ET_api_put(path: str, data: dict[str, Any], *, decode_response: Literal[False] = False) -> None: ...
 
 
 @overload
-def ET_api_put(
-    path: str, data: dict[str, Any], *, decode_response: Literal[True]
-) -> Any: ...
+def ET_api_put(path: str, data: dict[str, Any], *, decode_response: Literal[True]) -> Any: ...
 
 
-def ET_api_put(
-    path: str, data: dict[str, Any], *, decode_response: bool = False
-) -> Any | None:
+def ET_api_put(path: str, data: dict[str, Any], *, decode_response: bool = False) -> Any | None:
     response = requests_session().put(
         f"{ET_URL}/api/v1/{path}",
         data=data,
@@ -99,6 +87,7 @@ def ET_api_put(
 
     if decode_response:
         return response.json()
+    return None
 
 
 def ET_get_html(path: str):
@@ -112,9 +101,7 @@ def ET_get_html(path: str):
 
 
 def get_utc_timestamp_from_str(timestamp_string: str):
-    return datetime.strptime(timestamp_string, "%Y-%m-%dT%H:%M:%SZ").replace(
-        tzinfo=timezone.utc
-    )
+    return datetime.strptime(timestamp_string, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
 
 
 def get_erratum_advisory_url(erratum_id: str | int) -> str:
@@ -145,13 +132,9 @@ def get_erratum(erratum_id: str | int, full: bool = False) -> Erratum | FullErra
 
     jira_issues = [i["jira_issue"]["key"] for i in data["jira_issues"]["jira_issues"]]
 
-    last_status_transition_timestamp = get_utc_timestamp_from_str(
-        details["status_updated_at"]
-    )
+    last_status_transition_timestamp = get_utc_timestamp_from_str(details["status_updated_at"])
     publish_date = (
-        get_utc_timestamp_from_str(details["publish_date"])
-        if details["publish_date"] is not None
-        else None
+        get_utc_timestamp_from_str(details["publish_date"]) if details["publish_date"] is not None else None
     )
     assigned_to_email = get_errata_user_email(details["assigned_to_id"])
     package_owner_email = get_errata_user_email(details["package_owner_id"])
@@ -177,8 +160,7 @@ def get_erratum(erratum_id: str | int, full: bool = False) -> Erratum | FullErra
             **base_erratum.__dict__,
             comments=comments,
         )
-    else:
-        return base_erratum
+    return base_erratum
 
 
 def get_erratum_comments(erratum_id: str | int) -> list[Comment] | None:
@@ -190,18 +172,14 @@ def get_erratum_comments(erratum_id: str | int) -> list[Comment] | None:
         Comment(
             authorName=comment_data["attributes"]["who"]["realname"],
             authorEmail=comment_data["attributes"]["who"]["login_name"],
-            created=datetime.fromisoformat(
-                comment_data["attributes"]["created_at"].replace("Z", "+00:00")
-            ),
+            created=datetime.fromisoformat(comment_data["attributes"]["created_at"].replace("Z", "+00:00")),
             body=comment_data["attributes"]["text"],
         )
         for comment_data in data["data"]
     ]
 
 
-def erratum_has_magic_string_in_comments(
-    erratum_id: int | str, magic_string: str
-) -> bool:
+def erratum_has_magic_string_in_comments(erratum_id: int | str, magic_string: str) -> bool:
     comments = get_erratum_comments(erratum_id)
     if comments is None:
         return False
@@ -290,7 +268,7 @@ def get_erratum_build_map(erratum_id: int | str) -> ErratumBuildMap:
 
     detail = next(iter(data.values()))
     builds = detail.get("builds", [])
-    build_map = dict()
+    build_map = {}
 
     for build in builds:
         if len(build) != 1:
@@ -301,15 +279,13 @@ def get_erratum_build_map(erratum_id: int | str) -> ErratumBuildMap:
 
         package_file_map = {
             variant_to_base_variant(variant): {
-                arch: set(
-                    [
-                        nvr_to_package_name(
-                            # builds_list API's response has two variant formats
-                            rpm["filename"] if not isinstance(rpm, str) else rpm
-                        )
-                        for rpm in rpms
-                    ]
-                )
+                arch: {
+                    nvr_to_package_name(
+                        # builds_list API's response has two variant formats
+                        rpm["filename"] if not isinstance(rpm, str) else rpm
+                    )
+                    for rpm in rpms
+                }
                 for arch, rpms in arches.items()
             }
             for variant, arches in variant_arch.items()
@@ -364,13 +340,12 @@ class RHELVersion(BaseModel):
                             micro=self.micro,
                             stream="Z.MAIN",
                         )
-                    else:
-                        return RHELVersion(
-                            major=self.major,
-                            minor=one_minor_version_up,
-                            micro=self.micro,
-                            stream="Z.MAIN+EUS",
-                        )
+                    return RHELVersion(
+                        major=self.major,
+                        minor=one_minor_version_up,
+                        micro=self.micro,
+                        stream="Z.MAIN+EUS",
+                    )
 
         return None
 
@@ -391,6 +366,7 @@ class RHELVersion(BaseModel):
             assert version_string == str(version)
 
             return version
+        return None
 
 
 class RHELRelease(BaseModel):
@@ -400,7 +376,7 @@ class RHELRelease(BaseModel):
 
     @property
     def shipped(self):
-        return self.ship_date is None or self.ship_date < datetime.now(tz=timezone.utc)
+        return self.ship_date is None or self.ship_date < datetime.now(tz=UTC)
 
 
 def get_RHEL_release(param: int | str):
@@ -412,11 +388,7 @@ def get_RHEL_release(param: int | str):
     release_data = response["data"][0]
 
     ship_date_string = release_data["attributes"]["ship_date"]
-    ship_date = (
-        get_utc_timestamp_from_str(ship_date_string)
-        if ship_date_string is not None
-        else None
-    )
+    ship_date = get_utc_timestamp_from_str(ship_date_string) if ship_date_string is not None else None
 
     return RHELRelease(
         version=release_data["attributes"]["name"],
@@ -424,7 +396,7 @@ def get_RHEL_release(param: int | str):
     )
 
 
-def _get_rel_prep_lookup(package_name: str) -> DefaultDict[str, list[Erratum]]:
+def _get_rel_prep_lookup(package_name: str) -> defaultdict[str, list[Erratum]]:
     """Builds a lookup of REL_PREP errata for a package, keyed by RHEL release version.
 
     This function queries an API for all errata associated with a given package,
@@ -438,7 +410,7 @@ def _get_rel_prep_lookup(package_name: str) -> DefaultDict[str, list[Erratum]]:
         A defaultdict where keys are RHEL release version strings and values are
         lists of associated Erratum objects in the REL_PREP state.
     """
-    rel_prep_lookup: DefaultDict[str, list[Erratum]] = defaultdict(list)
+    rel_prep_lookup: defaultdict[str, list[Erratum]] = defaultdict(list)
     package_data = ET_api_get("packages", params={"name": package_name})
     related_errata = package_data["data"]["relationships"]["errata"]
     assert isinstance(related_errata, list)
@@ -487,24 +459,17 @@ def get_previous_erratum(
     def is_previous_erratum_applicable(erratum_version: str, erratum: Erratum):
         if erratum_version == target_version:
             return True
-        elif target_release.shipped:
+        if target_release.shipped:
             return False
 
         assert target_release.ship_date is not None
-        return (
-            erratum.publish_date is not None
-            and erratum.publish_date <= target_release.ship_date
-        )
+        return erratum.publish_date is not None and erratum.publish_date <= target_release.ship_date
 
     rel_prep_lookup = _get_rel_prep_lookup(package_name)
     cur_version = target_version
     while cur_version:
         rel_prep_errata = rel_prep_lookup[str(cur_version)]
-        rel_prep = [
-            e
-            for e in rel_prep_errata
-            if is_previous_erratum_applicable(str(cur_version), e)
-        ]
+        rel_prep = [e for e in rel_prep_errata if is_previous_erratum_applicable(str(cur_version), e)]
 
         if rel_prep:
             latest_erratum = max(
@@ -516,7 +481,8 @@ def get_previous_erratum(
 
             if nvr is None:
                 raise RuntimeError(
-                    f"{latest_erratum.id}, returned by Errata tool as an errata for {package_name}, does not have a build for {package_name}"
+                    f"{latest_erratum.id}, returned by Errata tool as an errata "
+                    f"for {package_name}, does not have a build for {package_name}"
                 )
 
             return (
@@ -526,19 +492,16 @@ def get_previous_erratum(
 
         release = get_RHEL_release(str(cur_version))
         if release.shipped:
-            released_build = ET_api_get(
-                f"product_versions/{release.version}/released_builds/{package_name}"
-            )
+            released_build = ET_api_get(f"product_versions/{release.version}/released_builds/{package_name}")
 
             erratum_id_from_released_build: int | None = released_build["errata_id"]
             nvr: str | None = released_build["build"]
 
             if nvr is None:
                 return (None, None)
-            elif erratum_id_from_released_build is None:
+            if erratum_id_from_released_build is None:
                 return (None, nvr)
-            else:
-                return (erratum_id_from_released_build, nvr)
+            return (erratum_id_from_released_build, nvr)
 
         cur_version = cur_version.parent
 
@@ -637,8 +600,7 @@ def get_erratum_transition_rules(erratum_id) -> TransitionRuleSet:
         text = text.strip().upper().replace(" ", "_")
         if text == "SHIPPED":
             return ErrataStatus.SHIPPED_LIVE
-        else:
-            return ErrataStatus(text)
+        return ErrataStatus(text)
 
     from_status = text_to_status(states[0])
     to_status = text_to_status(states[1])
@@ -671,9 +633,7 @@ def get_erratum_transition_rules(erratum_id) -> TransitionRuleSet:
         else:
             outcome = TransitionRuleOutcome.UNKNOWN
 
-        res.append(
-            TransitionRule(name=name, outcome=outcome, details=status.text.strip())
-        )
+        res.append(TransitionRule(name=name, outcome=outcome, details=status.text.strip()))
 
     return TransitionRuleSet(
         from_status=from_status,
@@ -718,13 +678,9 @@ def erratum_get_latest_stage_push_details(erratum_id) -> ErratumPushDetails:
         if timestamps:
             # last timestamp from logs
             last_timestamp = timestamps[-1]
-            updated_at = datetime.strptime(last_timestamp, "%Y-%m-%d %H:%M:%S").replace(
-                tzinfo=timezone.utc
-            )
+            updated_at = datetime.strptime(last_timestamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
 
-    return ErratumPushDetails(
-        status=ErratumPushStatus(status) if status else None, updated_at=updated_at
-    )
+    return ErratumPushDetails(status=ErratumPushStatus(status) if status else None, updated_at=updated_at)
 
 
 def erratum_push_to_stage(erratum_id, *, dry_run: bool = False):
@@ -748,9 +704,7 @@ def erratum_refresh_security_alerts(erratum_id, *, dry_run: bool = False):
 
 def erratum_change_state(erratum_id, new_state: ErrataStatus, *, dry_run: bool = False):
     if dry_run:
-        logger.info(
-            "Dry run: Would change state of erratum %s to %s", erratum_id, new_state
-        )
+        logger.info("Dry run: Would change state of erratum %s to %s", erratum_id, new_state)
         return
 
     ET_api_post(
@@ -759,9 +713,7 @@ def erratum_change_state(erratum_id, new_state: ErrataStatus, *, dry_run: bool =
     )
 
 
-def erratum_change_ownership(
-    erratum_id: int | str, new_owner_email: str, *, dry_run: bool = False
-):
+def erratum_change_ownership(erratum_id: int | str, new_owner_email: str, *, dry_run: bool = False):
     if dry_run:
         logger.info(
             "Dry run: Would change the ownership of erratum %s to %s",
@@ -781,9 +733,7 @@ def erratum_change_ownership(
 
 def erratum_add_comment(erratum_id: int | str, content: str, *, dry_run: bool = False):
     if dry_run:
-        logger.info(
-            "Dry run: Would add '%s' as a comment for erratum %s", content, erratum_id
-        )
+        logger.info("Dry run: Would add '%s' as a comment for erratum %s", content, erratum_id)
         return
 
     ET_api_post(f"erratum/{erratum_id}/add_comment", data={"comment": content})

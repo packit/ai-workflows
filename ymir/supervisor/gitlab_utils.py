@@ -1,8 +1,8 @@
-from functools import cache
-from urllib.parse import quote as urlquote
 import logging
 import os
+from functools import cache
 from typing import Any
+from urllib.parse import quote as urlquote
 
 from .http_utils import requests_session
 from .supervisor_types import MergeRequest, MergeRequestState

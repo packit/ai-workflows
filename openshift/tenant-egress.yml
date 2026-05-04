@@ -1,0 +1,92 @@
+apiVersion: tenant.paas.redhat.com/v1alpha1
+kind: TenantEgress
+metadata:
+  name: default
+  namespace: jotnar-ymir--jotnar-ymir
+spec:
+  egress:
+    # Internal CIDRs
+    - type: Allow
+      to:
+        cidrSelector: 172.0.0.0/8
+    - type: Allow
+      to:
+        cidrSelector: 10.0.0.0/8
+    # AWS S3 CIDRs (pre-existing)
+    - type: Allow
+      to:
+        cidrSelector: 52.218.128.0/17
+    - type: Allow
+      to:
+        cidrSelector: 52.92.128.0/17
+    - type: Allow
+      to:
+        cidrSelector: 52.216.0.0/15
+    # Red Hat services (pre-existing)
+    - type: Allow
+      to:
+        dnsName: api.access.redhat.com
+    - type: Allow
+      to:
+        dnsName: cert-api.access.redhat.com
+    - type: Allow
+      to:
+        dnsName: cdn.redhat.com
+    # Jira REST API
+    - type: Allow
+      to:
+        dnsName: redhat.atlassian.net
+    # CentOS Stream / RHEL package repos and MR management
+    - type: Allow
+      to:
+        dnsName: gitlab.com
+    # Upstream patch and commit lookup
+    - type: Allow
+      to:
+        dnsName: github.com
+    - type: Allow
+      to:
+        dnsName: api.github.com
+    # Fedora package repository
+    - type: Allow
+      to:
+        dnsName: src.fedoraproject.org
+    # Internal Red Hat COPR build system
+    - type: Allow
+      to:
+        dnsName: copr.devel.redhat.com
+    # Red Hat Security Advisories
+    - type: Allow
+      to:
+        dnsName: access.redhat.com
+    # CVE/vulnerability databases
+    - type: Allow
+      to:
+        dnsName: nvd.nist.gov
+    - type: Allow
+      to:
+        dnsName: cve.mitre.org
+    - type: Allow
+      to:
+        dnsName: osv.dev
+    # Go ecosystem
+    - type: Allow
+      to:
+        dnsName: go.dev
+    - type: Allow
+      to:
+        dnsName: pkg.go.dev
+    # Google Groups (mailing list archives)
+    - type: Allow
+      to:
+        dnsName: groups.google.com
+    # GNU project hosting (gnu.org, ftp.gnu.org, savannah.gnu.org, savannah.nongnu.org)
+    # All resolve to 209.51.188.0/24; dnsName selector picks AAAA records which
+    # don't match this cluster's IPv4-only egress policy, so use CIDR instead.
+    - type: Allow
+      to:
+        cidrSelector: 209.51.188.0/24
+    # Catch-all deny
+    - type: Deny
+      to:
+        cidrSelector: 0.0.0.0/0

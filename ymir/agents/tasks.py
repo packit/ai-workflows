@@ -3,15 +3,20 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Tuple
 from urllib.parse import urlparse
 
 from beeai_framework.tools import Tool
+from specfile import Specfile
 
-from ymir.common.models import LogOutputSchema, CachedMRMetadata, MergeRequestDetails
-from ymir.common.utils import is_cs_branch
 from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
-from ymir.agents.utils import check_subprocess, run_subprocess, run_tool, mcp_tools
+from ymir.agents.utils import check_subprocess, mcp_tools, run_subprocess, run_tool
+from ymir.common.base_utils import is_cs_branch
+from ymir.common.models import (
+    CachedMRMetadata,
+    LogOutputSchema,
+    MergeRequestDetails,
+    OpenMergeRequestResult,
+)
 from ymir.tools.unprivileged.specfile import UpdateReleaseTool
 
 logger = logging.getLogger(__name__)
@@ -44,7 +49,7 @@ async def fork_and_prepare_dist_git(
     dist_git_branch: str,
     available_tools: list[Tool],
     with_fedora: bool = False,
-) -> Tuple[Path, str, str, Path | None]:
+) -> tuple[Path, str, str, Path | None]:
     working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / jira_issue
     working_dir.mkdir(parents=True, exist_ok=True)
     namespace = "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
@@ -81,7 +86,7 @@ async def prepare_dist_git_from_merge_request(
     merge_request_url: str,
     available_tools: list[Tool],
     with_fedora: bool = False,
-) -> Tuple[Path, MergeRequestDetails, Path | None]:
+) -> tuple[Path, MergeRequestDetails, Path | None]:
     working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "merge_requests"
     working_dir.mkdir(parents=True, exist_ok=True)
     local_clone = working_dir / urlparse(merge_request_url).path.replace("/", "_")
@@ -132,10 +137,7 @@ async def stage_changes(
 
     for file in files_to_commit:
         logger.info(f"Staging: {file}")
-        exit_code, _, stderr = await run_subprocess(
-            ["git", "add", "--all", file],
-            cwd=local_clone
-        )
+        exit_code, _, stderr = await run_subprocess(["git", "add", "--all", file], cwd=local_clone)
         # for the case agent already staged deleted file which leads to error
         if exit_code != 0:
             logger.warning(f"Failed to stage {file}: {stderr}")
@@ -196,7 +198,7 @@ async def commit_push_and_open_mr(
     available_tools: list[Tool],
     commit_only: bool = False,
     allow_empty: bool = False,
-) -> Tuple[str | None, bool]:
+) -> tuple[str | None, bool]:
     """
     Commits the changes to the local clone and opens a merge request.
 
@@ -214,7 +216,7 @@ async def commit_push_and_open_mr(
         allow_empty,
     ):
         return None, False
-    return await run_tool(
+    result = await run_tool(
         "open_merge_request",
         fork_url=fork_url,
         title=mr_title,
@@ -223,6 +225,8 @@ async def commit_push_and_open_mr(
         source=update_branch,
         available_tools=available_tools,
     )
+    mr = OpenMergeRequestResult.model_validate(result)
+    return mr.url, mr.is_new_mr
 
 
 async def comment_in_jira(
@@ -230,7 +234,12 @@ async def comment_in_jira(
     agent_type: str,
     comment_text: str,
     available_tools: list[Tool],
+    is_error: bool = False,
 ) -> None:
+    if is_error and os.getenv("SILENT_RUN", "false").lower() == "true":
+        logger.info(f"Silent run: skipping Jira error comment for {jira_issue}")
+        return
+
     await run_tool(
         "add_jira_comment",
         issue_key=jira_issue,
@@ -266,15 +275,28 @@ async def change_jira_status(
     )
 
 
+_FAILURE_LABEL_SUFFIXES = ("_failed", "_errored")
+
+
 async def set_jira_labels(
     jira_issue: str,
     labels_to_add: list[str] | None = None,
     labels_to_remove: list[str] | None = None,
-    dry_run: bool = False
+    dry_run: bool = False,
 ) -> None:
-    if dry_run:
+    if dry_run or os.getenv("JIRA_DRY_RUN", "false").lower() == "true":
         logger.info(f"Dry run, not updating labels for {jira_issue}")
         return
+
+    if os.getenv("SILENT_RUN", "false").lower() == "true":
+        original_count = len(labels_to_add or [])
+        labels_to_add = [
+            label for label in (labels_to_add or []) if not label.endswith(_FAILURE_LABEL_SUFFIXES)
+        ]
+        if len(labels_to_add) != original_count:
+            logger.info(f"Silent run: skipping failure labels for {jira_issue}")
+        if not labels_to_add and not (labels_to_remove or []):
+            return
 
     try:
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
@@ -323,10 +345,7 @@ async def cache_mr_metadata(
         try:
             metadata = CachedMRMetadata.model_validate_json(cached)
             # Override the title by value stored in the cache
-            return LogOutputSchema(
-                title=metadata.title,
-                description=log_output.description
-            )
+            return LogOutputSchema(title=metadata.title, description=log_output.description)
         except ValueError as e:
             logger.warning(f"Error validating cached MR metadata for key {cache_key}: {e}")
 
@@ -335,9 +354,129 @@ async def cache_mr_metadata(
         operation_type=operation_type,
         title=log_output.title,
         package=package,
-        details=details
+        details=details,
     )
     await redis_conn.set(cache_key, metadata.model_dump_json())
     logger.info(f"MR metadata cache stored for {operation_type}/{package}/{details} (key: {cache_key})")
 
     return log_output
+
+
+def get_unpacked_sources(local_clone: Path, package: str) -> Path:
+    """
+    Get a path to the root of extracted archive directory tree (referenced as TLD
+    in RPM documentation) for a given package.
+    """
+    with Specfile(local_clone / f"{package}.spec") as spec:
+        name = spec.expand("%{name}")
+        version = spec.expand("%{version}")
+        buildsubdir = spec.expand("%{buildsubdir}")
+    if "/" in buildsubdir:
+        # When %setup -n uses a nested path (e.g. libexpat-R_2_6_4/expat),
+        # use the archive root because some specs apply patches at that level
+        # via pushd/popd.  More details: https://github.com/packit/jotnar/issues/217
+        buildsubdir = buildsubdir.split("/")[0]
+
+    # RPM 4.20+ uses a per-build directory named %{NAME}-%{VERSION}-build
+    per_build_dir = local_clone / f"{name}-{version}-build"
+    sources_dir = per_build_dir / buildsubdir
+    if sources_dir.is_dir():
+        return sources_dir
+
+    # Older RPM versions unpack directly under _builddir
+    sources_dir = local_clone / buildsubdir
+    if sources_dir.is_dir():
+        return sources_dir
+
+    raise ValueError(f"Unpacked source directory does not exist: {sources_dir}")
+
+
+async def _fallback_extract_sources(local_clone: Path, package: str) -> Path:
+    """
+    Fallback when centpkg/rhpkg prep fails: extract the primary source
+    archive using Source0 from the spec file.
+    """
+    try:
+        with Specfile(local_clone / f"{package}.spec") as spec, spec.sources() as sources:
+            if not sources:
+                raise ValueError(f"No sources defined in {package}.spec")
+            archive = local_clone / sources[0].expanded_filename
+            if not archive.is_file():
+                raise ValueError(f"Source0 '{sources[0].expanded_filename}' not found on disk")
+    except Exception as e:
+        raise ValueError(f"Could not determine source archive for {package}: {e}") from e
+    logger.info(f"Using Source0 from spec: {archive.name}")
+
+    extract_dir = local_clone / "_extracted"
+    extract_dir.mkdir(exist_ok=True)
+
+    cmd = ["/usr/lib/rpm/rpmuncompress", "-x", str(archive)]
+    logger.info(f"Extracting {archive.name} to {extract_dir}")
+
+    exit_code, _, stderr = await run_subprocess(cmd, cwd=extract_dir)
+    if exit_code != 0:
+        raise ValueError(f"Failed to extract {archive.name}: {stderr}")
+
+    subdirs = [d for d in extract_dir.iterdir() if d.is_dir()]
+    if len(subdirs) == 1:
+        return subdirs[0]
+    return extract_dir
+
+
+async def clone_and_prep_sources(
+    package: str,
+    dist_git_branch: str,
+    available_tools: list[Tool],
+    jira_issue: str,
+) -> tuple[Path, Path, bool]:
+    """
+    Clone dist-git repo and run centpkg/rhpkg sources + prep.
+    Returns (local_clone, unpacked_sources, prep_succeeded).
+    Read-only: no fork, no push — just for source analysis.
+
+    Falls back to manual archive extraction if prep fails (e.g. missing
+    language-specific RPM macros). When using the fallback, downstream
+    patches are NOT applied — the source is pristine upstream.
+    """
+    working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "applicability" / jira_issue
+    working_dir.mkdir(parents=True, exist_ok=True)
+    local_clone = working_dir / package
+    if local_clone.is_dir():
+        shutil.rmtree(local_clone)
+
+    namespace = "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
+    repository = f"https://gitlab.com/redhat/{namespace}/rpms/{package}"
+    await run_tool(
+        "clone_repository",
+        repository=repository,
+        branch=dist_git_branch,
+        clone_path=str(local_clone),
+        available_tools=available_tools,
+    )
+
+    if is_cs_branch(dist_git_branch):
+        pkg_cmd = [
+            "centpkg",
+            f"--name={package}",
+            "--namespace=rpms",
+            f"--release={dist_git_branch}",
+        ]
+    else:
+        pkg_cmd = [
+            "rhpkg",
+            f"--name={package}",
+            "--namespace=rpms",
+            f"--release={dist_git_branch}",
+            "--offline",
+            "--released",
+        ]
+    await check_subprocess([*pkg_cmd, "sources"], cwd=local_clone)
+
+    exit_code, _, stderr = await run_subprocess([*pkg_cmd, "prep"], cwd=local_clone)
+    if exit_code == 0:
+        unpacked = get_unpacked_sources(local_clone, package)
+        return local_clone, unpacked, True
+
+    logger.warning(f"prep failed for {package}, falling back to manual extraction: {stderr}")
+    unpacked = await _fallback_extract_sources(local_clone, package)
+    return local_clone, unpacked, False

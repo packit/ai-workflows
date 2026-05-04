@@ -1,10 +1,9 @@
-from datetime import datetime, timezone
-from functools import cache
-from json import dumps as json_dumps
 import logging
 import os
+from datetime import UTC, datetime
+from functools import cache
+from json import dumps as json_dumps
 from typing import Any
-
 
 from .http_utils import requests_session
 from .supervisor_types import (
@@ -12,7 +11,6 @@ from .supervisor_types import (
     TestingFarmRequestResult,
     TestingFarmRequestState,
 )
-
 
 TESTING_FARM_URL = "https://api.testing-farm.io/v0.1"
 
@@ -32,9 +30,7 @@ def testing_farm_headers() -> dict[str, str]:
 
 def testing_farm_api_get(path: str, *, params: dict | None = None) -> Any:
     url = f"{TESTING_FARM_URL}/{path}"
-    response = requests_session().get(
-        url, headers=testing_farm_headers(), params=params
-    )
+    response = requests_session().get(url, headers=testing_farm_headers(), params=params)
     if not response.ok:
         logger.error(
             "GET %s%s failed.\nerror:\n%s",
@@ -94,13 +90,7 @@ def testing_farm_reproduce_request_with_build(
         new_env = {
             "arch": env["arch"],
             "os": env["os"],
-            "tmt": {
-                "context": {
-                    k: v
-                    for k, v in env["tmt"]["context"].items()
-                    if not k.startswith("newa_")
-                }
-            },
+            "tmt": {"context": {k: v for k, v in env["tmt"]["context"].items() if not k.startswith("newa_")}},
         }
 
         builds_var = env["variables"].get("BUILDS")
@@ -146,8 +136,8 @@ def testing_farm_reproduce_request_with_build(
             id=test_id,
             url=f"{TESTING_FARM_URL}/requests/{test_id}",
             state=TestingFarmRequestState.NEW,
-            created=datetime.now(tz=timezone.utc),
-            updated=datetime.now(tz=timezone.utc),
+            created=datetime.now(tz=UTC),
+            updated=datetime.now(tz=UTC),
             test_data=body["test"],
             environments_data=body["environments"],
         )
@@ -181,9 +171,7 @@ def testing_farm_get_request(request_id: str) -> TestingFarmRequest:
     result = result_data["overall"] if result_data else TestingFarmRequestResult.UNKNOWN
     # We have a specific error_reason field rather than a general summary field
     # to avoid models relying on a summary rather than doing their own analysis.
-    error_reason = (
-        result_data.get("summary") if result == TestingFarmRequestResult.ERROR else None
-    )
+    error_reason = result_data.get("summary") if result == TestingFarmRequestResult.ERROR else None
 
     return TestingFarmRequest(
         id=response["id"],

@@ -1,7 +1,7 @@
-from dataclasses import dataclass
-from functools import cached_property
 import logging
 import re
+from dataclasses import dataclass
+from functools import cached_property
 
 from ymir.supervisor.compare_xunit import (
     XUnitComparison,
@@ -9,7 +9,6 @@ from ymir.supervisor.compare_xunit import (
     compare_xunit_files,
 )
 from ymir.supervisor.jira_utils import add_issue_attachments
-
 
 from .supervisor_types import FullIssue, TestingFarmRequest, TestingFarmRequestState
 from .testing_farm_utils import (
@@ -37,15 +36,13 @@ class RequestWrapper:
     def request(self) -> TestingFarmRequest:
         if isinstance(self._request, TestingFarmRequest):
             return self._request
-        else:
-            return testing_farm_get_request(self._request)
+        return testing_farm_get_request(self._request)
 
     @property
     def id(self) -> str:
         if isinstance(self._request, TestingFarmRequest):
             return self._request.id
-        else:
-            return self._request
+        return self._request
 
     @property
     def url(self) -> str:
@@ -57,9 +54,7 @@ class RequestWrapper:
 
 
 class BaselineComparison:
-    def __init__(
-        self, failed: str | TestingFarmRequest, baseline: str | TestingFarmRequest
-    ):
+    def __init__(self, failed: str | TestingFarmRequest, baseline: str | TestingFarmRequest):
         self.failed = RequestWrapper(failed)
         self.baseline = RequestWrapper(baseline)
 
@@ -96,6 +91,12 @@ class BaselineTests:
             for comparison in self.comparisons
         )
 
+    @staticmethod
+    def _request_outcome(request: TestingFarmRequest) -> str:
+        if request.state == TestingFarmRequestState.COMPLETE:
+            return request.result
+        return request.state
+
     def format_issue_comment(self, *, include_attachments: bool = False) -> str:
         if self.complete():
             message = "Reproduced"
@@ -119,9 +120,7 @@ class BaselineTests:
                     f"|{', '.join(comparison.failed.request.arches)}"
                     f"|{comparison.failed.link}"
                     f"|{comparison.baseline.link}"
-                    f"|{comparison.baseline.request.result
-                        if comparison.baseline.request.state == TestingFarmRequestState.COMPLETE
-                        else comparison.baseline.request.state}"
+                    f"|{self._request_outcome(comparison.baseline.request)}"
                     f"{('|' + comparison.attachment_link) if include_attachments else ''}"
                     f"|"
                     for comparison in self.comparisons
@@ -151,7 +150,7 @@ class BaselineTests:
             if failed_request.error_reason:
                 metadata["error_reason_b"] = failed_request.error_reason
 
-            def create_not_generated_comparison(reason: str) -> XUnitComparison:
+            def create_not_generated_comparison(reason: str, metadata=metadata) -> XUnitComparison:
                 return XUnitComparison(
                     status=XUnitComparisonStatus(
                         generated=False,
@@ -166,13 +165,9 @@ class BaselineTests:
                         "XUnit results missing for runs A and B"
                     )
                 case (None, _):
-                    comparison_result = create_not_generated_comparison(
-                        "XUnit results missing for run A"
-                    )
+                    comparison_result = create_not_generated_comparison("XUnit results missing for run A")
                 case (_, None):
-                    comparison_result = create_not_generated_comparison(
-                        "XUnit results missing for run B"
-                    )
+                    comparison_result = create_not_generated_comparison("XUnit results missing for run B")
                 case _:
                     comparison_result = await compare_xunit_files(
                         baseline_request.result_xunit_url,
@@ -182,9 +177,7 @@ class BaselineTests:
 
             attachment_bytes = comparison_result.to_toml().encode("utf-8")
             logger.info("About to attach %s", attachment_bytes.decode("utf-8"))
-            attachments.append(
-                (comparison.attachment_name, attachment_bytes, "text/plain")
-            )
+            attachments.append((comparison.attachment_name, attachment_bytes, "text/plain"))
 
         add_issue_attachments(issue_key, attachments, dry_run=dry_run)
 
@@ -212,12 +205,11 @@ class BaselineTests:
                     build_nvr=previous_build_nvr,
                     dry_run=dry_run,
                 )
-                tests.append(
-                    BaselineComparison(failed=failed_request, baseline=baseline_request)
-                )
+                tests.append(BaselineComparison(failed=failed_request, baseline=baseline_request))
             except Exception as e:
                 raise RuntimeError(
-                    f"Failed to start reproduction of test run {failed_request} with previous build {previous_build_nvr}: {e}",
+                    f"Failed to start reproduction of test run {failed_request} "
+                    f"with previous build {previous_build_nvr}: {e}",
                 ) from e
 
         return BaselineTests(
@@ -263,9 +255,7 @@ class BaselineTests:
                     failed_request_id = parts[2].strip()
                     baseline_request_id = parts[3].strip()
                     comparisons.append(
-                        BaselineComparison(
-                            failed=failed_request_id, baseline=baseline_request_id
-                        )
+                        BaselineComparison(failed=failed_request_id, baseline=baseline_request_id)
                     )
             return BaselineTests(
                 failure_comment="\n".join(leading_lines).strip(),

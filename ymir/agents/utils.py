@@ -3,18 +3,11 @@ import os
 
 from beeai_framework.agents.tool_calling.utils import ToolCallCheckerConfig
 from beeai_framework.backend import ChatModel, ChatModelParameters
+from beeai_framework.template import PromptTemplate
 from pydantic import BaseModel
 
-from beeai_framework.template import PromptTemplate
-from beeai_framework.tools import Tool
-
-from ymir.common.utils import (  # noqa: F401 — re-exported for backward compatibility
-    check_subprocess,
-    get_absolute_path,
-    mcp_tools,
-    run_subprocess,
-    run_tool,
-)
+from ymir.common.base_utils import check_subprocess, run_subprocess  # noqa: F401 — re-exported
+from ymir.common.utils import get_absolute_path, mcp_tools, run_tool  # noqa: F401 — re-exported
 
 logger = logging.getLogger(__name__)
 
@@ -37,17 +30,19 @@ def get_chat_model() -> ChatModel:
         model.tool_choice_support = {"single", "none", "auto"}
     return model
 
+
 def get_agent_execution_config() -> dict[str, int]:
-    return dict(
-        max_retries_per_step=int(os.getenv("BEEAI_MAX_RETRIES_PER_STEP", 5)),
+    return {
+        "max_retries_per_step": int(os.getenv("BEEAI_MAX_RETRIES_PER_STEP", 5)),
         # 10 can easily be depleted by one of our tools failing 10 times
         # i.e. str_replace, view, etc.
-        total_max_retries=int(os.getenv("BEEAI_TOTAL_MAX_RETRIES", 25)),
+        "total_max_retries": int(os.getenv("BEEAI_TOTAL_MAX_RETRIES", 25)),
         # 140 is not enough for a more complex rebase
         # 140 is not enough for a more complex rebase or for a backport
         # with 19 commits and numerous merge conflicts, so we have 255 now
-        max_iterations=int(os.getenv("BEEAI_MAX_ITERATIONS", 255)),
-    )
+        "max_iterations": int(os.getenv("BEEAI_MAX_ITERATIONS", 255)),
+    }
+
 
 def get_tool_call_checker_config() -> ToolCallCheckerConfig:
     return ToolCallCheckerConfig(
@@ -78,6 +73,7 @@ def set_litellm_debug() -> None:
     # the following two modules call `litellm_debug(False)` on import
     # import them explicitly now to ensure our call to `litellm_debug()` is not negated later
     import beeai_framework.adapters.litellm.chat
-    import beeai_framework.adapters.litellm.embedding
+    import beeai_framework.adapters.litellm.embedding  # noqa
     from beeai_framework.adapters.litellm.utils import litellm_debug
+
     litellm_debug(True)

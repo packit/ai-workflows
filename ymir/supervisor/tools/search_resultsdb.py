@@ -1,17 +1,15 @@
+import logging
 from datetime import datetime
 from enum import StrEnum
-import logging
 from urllib.parse import quote as urlquote
 
 from aiohttp import client_exceptions
-from pydantic import BaseModel, Field
-
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import ToolOutput, Tool, ToolRunOptions
+from beeai_framework.tools import Tool, ToolOutput, ToolRunOptions
+from pydantic import BaseModel, Field
 
 from ..http_utils import aiohttp_session
-
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +46,7 @@ class ResultsDbResult(BaseModel):
 MAX_RESULTS = 100
 
 
-async def search_resultsdb(
-    package_nvr: str, name_pattern: str
-) -> list[ResultsDbResult]:
+async def search_resultsdb(package_nvr: str, name_pattern: str) -> list[ResultsDbResult]:
     session = aiohttp_session()
     url = (
         f"{RESULTS_DB_URL}/api/v2.0/results"
@@ -92,21 +88,18 @@ async def search_resultsdb(
             )
 
             return list(latest_results.values())
-        else:
-            text = await response.text()
-            raise client_exceptions.ClientResponseError(
-                response.request_info,
-                response.history,
-                status=response.status,
-                message=text,
-                headers=response.headers,
-            )
+        text = await response.text()
+        raise client_exceptions.ClientResponseError(
+            response.request_info,
+            response.history,
+            status=response.status,
+            message=text,
+            headers=response.headers,
+        )
 
 
 class SearchResultsdbInput(BaseModel):
-    package_nvr: str = Field(
-        description="NVR of the package to search in the results database"
-    )
+    package_nvr: str = Field(description="NVR of the package to search in the results database")
     name_pattern: str = Field(
         description="Pattern to search for in the testcase names, e.g. 'frontend.regression.test-%'"
     )
@@ -122,9 +115,7 @@ class SearchResultsdbOutput(BaseModel, ToolOutput):
         return len(self.results) == 0
 
 
-class SearchResultsdbTool(
-    Tool[SearchResultsdbInput, ToolRunOptions, SearchResultsdbOutput]
-):
+class SearchResultsdbTool(Tool[SearchResultsdbInput, ToolRunOptions, SearchResultsdbOutput]):
     """
     Tool to search for results for a specific package build in resultsdb.
     https://github.com/release-engineering/resultsdb

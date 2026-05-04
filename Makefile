@@ -5,12 +5,9 @@ MOCK_JIRA ?= false
 JIRA_DRY_RUN ?= false
 AUTO_CHAIN ?= true
 FORCE_CVE_TRIAGE ?= false
-LOKI_URL ?= http://loki.tft.osci.redhat.com/
-LOKI_SINCE ?= 24h
-LOKI_LIMIT ?= 3000
-LOKI_POD ?= mcp-gateway
+SILENT_RUN ?= false
 
-COMPOSE ?= $(shell command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker-compose")
+COMPOSE ?= $(shell if podman compose ls >/dev/null 2>&1; then echo "podman compose"; elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose"; else echo "docker-compose"; fi)
 COMPOSE_AGENTS=$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents
 COMPOSE_SUPERVISOR=$(COMPOSE) -f $(COMPOSE_FILE) --profile=supervisor
 
@@ -42,7 +39,9 @@ run-triage-agent-standalone:
 		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		-e FORCE_CVE_TRIAGE=$(FORCE_CVE_TRIAGE) \
+		-e SILENT_RUN=$(SILENT_RUN) \
 		triage-agent
 
 .PHONY: run-triage-agent-e2e-tests
@@ -62,6 +61,7 @@ run-rebase-agent-c9s-standalone:
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		rebase-agent-c9s
 
 .PHONY: run-rebase-agent-c10s-standalone
@@ -73,6 +73,7 @@ run-rebase-agent-c10s-standalone:
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		rebase-agent-c10s
 
 .PHONY: run-rebase-agent-standalone
@@ -91,6 +92,7 @@ run-backport-agent-c9s-standalone:
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		-e CVE_ID=$(CVE_ID) \
 		backport-agent-c9s
 
@@ -103,6 +105,7 @@ run-backport-agent-c10s-standalone:
 		-e BRANCH=$(BRANCH) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		-e CVE_ID=$(CVE_ID) \
 		backport-agent-c10s
 
@@ -120,6 +123,8 @@ run-rebuild-agent-c9s-standalone:
 		-e MOCK_JIRA=$(MOCK_JIRA) \
 		-e DEPENDENCY_ISSUE=$(DEPENDENCY_ISSUE) \
 		-e DEPENDENCY_COMPONENT=$(DEPENDENCY_COMPONENT) \
+		-e CONSOLIDATED_ISSUES=$(CONSOLIDATED_ISSUES) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		rebuild-agent-c9s
 
 .PHONY: run-rebuild-agent-c10s-standalone
@@ -132,6 +137,8 @@ run-rebuild-agent-c10s-standalone:
 		-e MOCK_JIRA=$(MOCK_JIRA) \
 		-e DEPENDENCY_ISSUE=$(DEPENDENCY_ISSUE) \
 		-e DEPENDENCY_COMPONENT=$(DEPENDENCY_COMPONENT) \
+		-e CONSOLIDATED_ISSUES=$(CONSOLIDATED_ISSUES) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		rebuild-agent-c10s
 
 .PHONY: run-rebuild-agent-standalone
@@ -178,15 +185,16 @@ build-jira-issue-fetcher:
 
 .PHONY: start
 start:
-	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) AUTO_CHAIN=$(AUTO_CHAIN) $(COMPOSE_AGENTS) up
+	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) AUTO_CHAIN=$(AUTO_CHAIN) SILENT_RUN=$(SILENT_RUN) $(COMPOSE_AGENTS) up
 
 .PHONY: start-detached
 start-detached:
-	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) AUTO_CHAIN=$(AUTO_CHAIN) $(COMPOSE_AGENTS) up -d
+	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) AUTO_CHAIN=$(AUTO_CHAIN) SILENT_RUN=$(SILENT_RUN) $(COMPOSE_AGENTS) up -d
 
 .PHONY: stop
 stop:
-	$(COMPOSE) -f $(COMPOSE_FILE) down
+	$(COMPOSE_AGENTS) stop
+	$(COMPOSE_AGENTS) down
 
 .PHONY: clean
 clean:
@@ -213,32 +221,6 @@ logs-rebuild:
 logs-jira-issue-fetcher:
 	$(COMPOSE) -f $(COMPOSE_FILE) --profile manual logs -f jira-issue-fetcher
 
-
-# Loki logcli targets
-# https://grafana.com/docs/loki/latest/setup/install/local/
-# add their RPM repos and `dnf install logcli`
-LOKI_CMD = logcli --output-timestamp-format=unixdate --addr=$(LOKI_URL) query --since=$(LOKI_SINCE) --limit=$(LOKI_LIMIT) -o raw
-LOKI_FILTER = '{kubernetes_container_name="$(1)",kubernetes_namespace_name="jotnar-prod"} | json | line_format "{{._timestamp}} {{.kubernetes_pod_name}} {{.message}}"'
-
-.PHONY: logs-loki-help
-logs-loki-help:
-	@echo "Available pod names:"
-	@echo "  - triage-agent"
-	@echo "  - backport-agent-c9s"
-	@echo "  - backport-agent-c10s"
-	@echo "  - rebase-agent-c9s"
-	@echo "  - rebase-agent-c10s"
-	@echo "  - rebuild-agent-c9s"
-	@echo "  - rebuild-agent-c10s"
-	@echo "  - supervisor-collector"
-	@echo "  - supervisor-processor"
-	@echo "  - mcp-gateway"
-	@echo "  - valkey"
-	@echo "Usage example: LOKI_SINCE=24h LOKI_POD=<pod-name> make logs-loki"
-
-.PHONY: logs-loki
-logs-loki:
-	$(LOKI_CMD) $(call LOKI_FILTER,$(LOKI_POD))
 
 .PHONY: trigger-pipeline
 trigger-pipeline:
@@ -293,6 +275,14 @@ process-erratum:
 	$(COMPOSE_SUPERVISOR) run --rm \
 		supervisor python -m ymir.supervisor.main $(DEBUG_FLAG) $(IGNORE_NEEDS_ATTENTION_FLAG) $(DRY_RUN_FLAG) process-erratum $(ERRATA_ID)
 
+.PHONY: run-preliminary-testing-agent-standalone
+run-preliminary-testing-agent-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e IGNORE_NEEDS_ATTENTION=$(IGNORE_NEEDS_ATTENTION) \
+		preliminary-testing-agent
+
 
 # Common utility targets
 
@@ -309,13 +299,15 @@ redis-cli:
 build-test-image:
 	$(MAKE) -f Makefile.tests build-test-image
 
-.PHONY: check-in-container check-agents-in-container check-mcp-server-in-container check-ymir-common-in-container
+.PHONY: check-in-container check-agents-in-container check-unprivileged-tools-in-container check-privileged-tools-in-container check-jira-issue-fetcher-in-container check-ymir-common-in-container check-supervisor-in-container
 check-in-container:
 	$(MAKE) -f Makefile.tests check-in-container
 check-agents-in-container:
 	$(MAKE) -f Makefile.tests check-agents-in-container
-check-mcp-server-in-container:
-	$(MAKE) -f Makefile.tests check-mcp-server-in-container
+check-unprivileged-tools-in-container:
+	$(MAKE) -f Makefile.tests check-unprivileged-tools-in-container
+check-privileged-tools-in-container:
+	$(MAKE) -f Makefile.tests check-privileged-tools-in-container
 check-jira-issue-fetcher-in-container:
 	$(MAKE) -f Makefile.tests check-jira-issue-fetcher-in-container
 check-ymir-common-in-container:

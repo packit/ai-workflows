@@ -13,37 +13,46 @@ build-test-image-fedora:
 build-test-image-c9s:
 	$(CONTAINER_ENGINE) build --rm --tag $(TEST_IMAGE_C9S) -f Containerfile.c9s-tests
 
-.PHONY: check check-agents check-mcp-server check-ymir-common check-in-container \
-	check-agents-in-container check-mcp-server-in-container check-jira-issue-fetcher-in-container check-ymir-common-in-container
+.PHONY: check check-agents check-unprivileged-tools check-privileged-tools check-jira-issue-fetcher check-ymir-common \
+	check-supervisor check-in-container check-agents-in-container check-unprivileged-tools-in-container \
+	check-privileged-tools-in-container check-jira-issue-fetcher-in-container check-ymir-common-in-container \
+	check-supervisor-in-container
+
+define RUN_TESTS
+	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(addprefix $(1),$(TEST_TARGET))
+endef
 
 check-agents:
-	cd ./ymir/agents && \
-	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
-check-mcp-server:
-	cd ./ymir/tools/privileged && \
-	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+	$(call RUN_TESTS,ymir/agents/)
+check-unprivileged-tools:
+	$(call RUN_TESTS,ymir/tools/unprivileged/)
+check-privileged-tools:
+	$(call RUN_TESTS,ymir/tools/privileged/)
 check-jira-issue-fetcher:
-	cd ./ymir/jira_issue_fetcher && \
-	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+	$(call RUN_TESTS,ymir/jira_issue_fetcher/)
 check-ymir-common:
-	cd ./ymir/common && \
-	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+	$(call RUN_TESTS,ymir/common/)
 check-supervisor:
-	cd ./ymir/supervisor && \
-	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(TEST_TARGET)
+	$(call RUN_TESTS,ymir/supervisor/)
 
-check: check-agents check-mcp-server check-jira-issue-fetcher check-ymir-common check-supervisor
+check: check-agents check-unprivileged-tools check-privileged-tools check-jira-issue-fetcher check-ymir-common check-supervisor
+
+define RUN_TESTS_IN_CONTAINER
+	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(1) make -f Makefile.tests $(2)
+endef
 
 check-agents-in-container:
-	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE_C9S) make -f Makefile.tests check-agents
-check-mcp-server-in-container:
-	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE) make -f Makefile.tests check-mcp-server
+	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE_C9S),check-agents)
+check-unprivileged-tools-in-container:
+	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE_C9S),check-unprivileged-tools)
+check-privileged-tools-in-container:
+	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE),check-privileged-tools)
 check-jira-issue-fetcher-in-container:
-	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE) make -f Makefile.tests check-jira-issue-fetcher
+	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE),check-jira-issue-fetcher)
 check-ymir-common-in-container:
-	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE_C9S) make -f Makefile.tests check-ymir-common
+	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE_C9S),check-ymir-common)
 check-supervisor-in-container:
-	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(TEST_IMAGE_C9S) make -f Makefile.tests check-supervisor
+	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE_C9S),check-supervisor)
 
-check-in-container: check-agents-in-container check-mcp-server-in-container \
+check-in-container: check-agents-in-container check-unprivileged-tools-in-container check-privileged-tools-in-container \
 	check-jira-issue-fetcher-in-container check-ymir-common-in-container check-supervisor-in-container

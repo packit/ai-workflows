@@ -1,9 +1,8 @@
-from abc import abstractmethod, ABC
+from abc import ABC, abstractmethod
 
 from .supervisor_types import (
     WorkflowResult,
 )
-
 
 WAIT_DELAY = 20 * 60  # 20 minutes
 

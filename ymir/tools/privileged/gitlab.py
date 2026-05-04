@@ -1,24 +1,36 @@
 import asyncio
+import json
 import logging
 import os
 import re
-from typing import Tuple
 from urllib.parse import quote, urlparse
 
 import aiohttp
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, StringToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import (
+    JSONToolOutput,
+    StringToolOutput,
+    Tool,
+    ToolError,
+    ToolRunOptions,
+)
+from ogr.exceptions import GitlabAPIException, OgrException
 from ogr.factory import get_project
-from ogr.exceptions import OgrException, GitlabAPIException
 from ogr.services.gitlab.project import GitlabProject
 from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import BaseModel, Field
 
-from ymir.common.models import CommentReply, FailedPipelineJob, MergeRequestComment, MergeRequestDetails
+from ymir.common.models import (
+    CommentReply,
+    FailedPipelineJob,
+    MergeRequestComment,
+    MergeRequestDetails,
+    OpenMergeRequestResult,
+)
 from ymir.common.validators import AbsolutePath
+from ymir.tools.constants import AIOHTTP_TIMEOUT
 from ymir.tools.privileged.utils import clean_stale_repositories
-
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +40,7 @@ DEVELOPER_ACCESS_LEVEL = 30
 
 GITLAB_HOSTS = {"gitlab.com", "gitlab.cee.redhat.com"}
 
-_GITLAB_COMMIT_RE = re.compile(
-    r"^/(.+?)/-/commit/([0-9a-f]+)\.(?:patch|diff)$", re.IGNORECASE
-)
+_GITLAB_COMMIT_RE = re.compile(r"^/(.+?)/-/commit/([0-9a-f]+)\.(?:patch|diff)$", re.IGNORECASE)
 
 
 def _get_api_diff_url(url: str) -> str:
@@ -50,10 +60,7 @@ def _get_api_diff_url(url: str) -> str:
     project_path = match.group(1)
     sha = match.group(2)
     encoded_path = quote(project_path, safe="")
-    return (
-        f"{parsed.scheme}://{hostname}"
-        f"/api/v4/projects/{encoded_path}/repository/commits/{sha}/diff"
-    )
+    return f"{parsed.scheme}://{hostname}/api/v4/projects/{encoded_path}/repository/commits/{sha}/diff"
 
 
 def _get_auth_headers(url: str) -> dict[str, str]:
@@ -87,7 +94,12 @@ async def _get_merge_request_from_url(merge_request_url: str) -> GitlabPullReque
     # URL format examples:
     # `https://gitlab.com/namespace/project/-/merge_requests/123`
     # `https://gitlab.com/redhat/rhel/rpms/package/-/merge_requests/123`
-    if not (match := re.search(r'gitlab\.com/([^/]+(?:/[^/]+){1,3})/-/merge_requests/(\d+)', merge_request_url)):
+    if not (
+        match := re.search(
+            r"gitlab\.com/([^/]+(?:/[^/]+){1,3})/-/merge_requests/(\d+)",
+            merge_request_url,
+        )
+    ):
         raise ValueError(f"Could not parse merge request URL: {merge_request_url}")
 
     project_path = match.group(1)
@@ -95,14 +107,14 @@ async def _get_merge_request_from_url(merge_request_url: str) -> GitlabPullReque
 
     project_url = f"https://gitlab.com/{project_path}"
     logger.info(f"Connecting to GitLab API for merge request: {project_url}")
-    project = await asyncio.to_thread(
-        get_project, url=project_url, token=os.getenv("GITLAB_TOKEN")
-    )
+    project = await asyncio.to_thread(get_project, url=project_url, token=os.getenv("GITLAB_TOKEN"))
 
     return await asyncio.to_thread(project.get_pr, mr_id)
 
 
-async def _fetch_authorized_comments_from_merge_request_url(merge_request_url: str) -> list[MergeRequestComment]:
+async def _fetch_authorized_comments_from_merge_request_url(
+    merge_request_url: str,
+) -> list[MergeRequestComment]:
     mr = await _get_merge_request_from_url(merge_request_url)
 
     def get_authorized_comments():
@@ -126,12 +138,11 @@ async def _fetch_authorized_comments_from_merge_request_url(merge_request_url: s
                 if not author_id or author_id not in authorized_member_ids:
                     continue
 
-                file_path, line_number, line_type = (
-                    _extract_position_info(first_note)
-                )
+                file_path, line_number, line_type = _extract_position_info(first_note)
 
                 replies = [
-                    reply for note in notes[1:]
+                    reply
+                    for note in notes[1:]
                     if (reply := _process_reply(authorized_member_ids, note)) is not None
                 ]
 
@@ -207,7 +218,11 @@ class ForkRepositoryTool(Tool[ForkRepositoryToolInput, ToolRunOptions, StringToo
             prefix = "_".join(ns.replace("centos-stream", "centos") for ns in namespace[1:])
             fork_name = (f"{prefix}_" if prefix else "") + project.gitlab_repo.name
             fork = project.gitlab_repo.forks.create(data={"name": fork_name, "path": fork_name})
-            return GitlabProject(namespace=fork.namespace["full_path"], service=project.service, repo=fork.path)
+            return GitlabProject(
+                namespace=fork.namespace["full_path"],
+                service=project.service,
+                repo=fork.path,
+            )
 
         fork = await asyncio.to_thread(create_fork)
         if not fork:
@@ -223,7 +238,13 @@ class OpenMergeRequestToolInput(BaseModel):
     source: str = Field(description="Source branch (in the fork)")
 
 
-class OpenMergeRequestTool(Tool[OpenMergeRequestToolInput, ToolRunOptions, JSONToolOutput[Tuple[str, bool]]]):
+class OpenMergeRequestTool(
+    Tool[
+        OpenMergeRequestToolInput,
+        ToolRunOptions,
+        JSONToolOutput[OpenMergeRequestResult],
+    ]
+):
     name = "open_merge_request"
     description = """
     Opens a new merge request from the specified fork against its original repository.
@@ -243,7 +264,7 @@ class OpenMergeRequestTool(Tool[OpenMergeRequestToolInput, ToolRunOptions, JSONT
         tool_input: OpenMergeRequestToolInput,
         options: ToolRunOptions | None,
         context: RunContext,
-    ) -> JSONToolOutput[Tuple[str, bool]]:
+    ) -> JSONToolOutput[OpenMergeRequestResult]:
         fork_url = tool_input.fork_url
         title = tool_input.title
         description = tool_input.description
@@ -253,7 +274,7 @@ class OpenMergeRequestTool(Tool[OpenMergeRequestToolInput, ToolRunOptions, JSONT
         project = await asyncio.to_thread(get_project, url=fork_url, token=os.getenv("GITLAB_TOKEN"))
         if not project:
             raise ToolError("Failed to get the specified fork")
-        is_brand_new_mr = True
+        is_new_mr = True
         try:
             pr = await asyncio.to_thread(project.create_pr, title, description, target, source)
         except GitlabAPIException as ex:
@@ -265,7 +286,7 @@ class OpenMergeRequestTool(Tool[OpenMergeRequestToolInput, ToolRunOptions, JSONT
                         logger.info("Reusing existing MR %s", pr)
                         pr.description = description
                         pr.title = title
-                        is_brand_new_mr = False
+                        is_new_mr = False
                         break
                 else:
                     raise
@@ -274,18 +295,7 @@ class OpenMergeRequestTool(Tool[OpenMergeRequestToolInput, ToolRunOptions, JSONT
         if not pr:
             raise ToolError("Failed to open the merge request")
 
-        for attempt in range(5):
-            try:
-                pr = await asyncio.to_thread(project.parent.get_pr, pr.id)
-                await asyncio.to_thread(pr.add_label, "jotnar_needs_attention")
-                break
-            except OgrException as ex:
-                logger.info("Failed to add label on attempt %d/5, retrying. Error: %s", attempt + 1, ex)
-                await asyncio.sleep(0.5 * (2**attempt))
-        else:
-            logger.error("MR %s does not appear to exist after creation", pr)
-            logger.error("Unable to set label 'jotnar_needs_attention' on the MR")
-        return JSONToolOutput(result=(pr.url, is_brand_new_mr))
+        return JSONToolOutput(result=OpenMergeRequestResult(url=pr.url, is_new_mr=is_new_mr))
 
 
 class GetInternalRhelBranchesToolInput(BaseModel):
@@ -319,7 +329,9 @@ class GetInternalRhelBranchesTool(
         logger.info(f"Connecting to GitLab API to get branches for package: {repository_url}")
 
         try:
-            project = await asyncio.to_thread(get_project, url=repository_url, token=os.getenv("GITLAB_TOKEN"))
+            project = await asyncio.to_thread(
+                get_project, url=repository_url, token=os.getenv("GITLAB_TOKEN")
+            )
             if not project:
                 raise ToolError(f"Failed to get repository for package: {package}")
 
@@ -334,7 +346,7 @@ class GetInternalRhelBranchesTool(
 
 class CloneRepositoryToolInput(BaseModel):
     repository: str = Field(description="Repository to clone")
-    branch: str = Field(description="Branch to clone")
+    branch: str | None = Field(default=None, description="Branch to clone. If omitted, all refs are fetched.")
     clone_path: AbsolutePath = Field(description="Absolute path where to clone the repository")
 
 
@@ -342,6 +354,9 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
     name = "clone_repository"
     description = """
     Clones the specified repository to the given local path.
+    If branch is specified, only that branch is fetched and checked out.
+    If branch is omitted, all refs are fetched (useful when you need access to
+    specific commits across any branch).
     """
     input_schema = CloneRepositoryToolInput
 
@@ -362,32 +377,29 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
         clone_path = tool_input.clone_path
         await clean_stale_repositories()
 
+        clone_url = _get_authenticated_url(repository)
+
+        clone_url = _get_authenticated_url(repository)
         clone_path.mkdir(parents=True, exist_ok=True)
 
-        proc = await asyncio.create_subprocess_exec("git", "init", cwd=clone_path)
-        if await proc.wait():
-            raise ToolError(f"Failed to initialize git repo at {clone_path}")
+        if branch:
+            proc = await asyncio.create_subprocess_exec("git", "init", cwd=clone_path)
+            if await proc.wait():
+                raise ToolError(f"Failed to initialize git repo at {clone_path}")
 
-        command = [
-            "git",
-            "fetch",
-            _get_authenticated_url(repository),
-            f"{branch}:refs/heads/{branch}",
-        ]
+            command = ["git", "fetch", clone_url, f"{branch}:refs/heads/{branch}"]
+            proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
+            if await proc.wait():
+                raise ToolError(f"Failed to fetch {branch} from {repository}")
 
-        proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
-        if await proc.wait():
-            raise ToolError(f"Failed to fetch {branch} from {repository}")
-
-        command = [
-            "git",
-            "checkout",
-            branch,
-        ]
-
-        proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
-        if await proc.wait():
-            raise ToolError(f"Failed to checkout branch {branch}")
+            proc = await asyncio.create_subprocess_exec("git", "checkout", branch, cwd=clone_path)
+            if await proc.wait():
+                raise ToolError(f"Failed to checkout branch {branch}")
+        else:
+            command = ["git", "clone", clone_url, str(clone_path)]
+            proc = await asyncio.create_subprocess_exec(command[0], *command[1:])
+            if await proc.wait():
+                raise ToolError(f"Failed to clone {repository}")
 
         return StringToolOutput(result=f"Successfully cloned the specified repository to {clone_path}")
 
@@ -498,9 +510,7 @@ class AddMergeRequestCommentTool(Tool[AddMergeRequestCommentToolInput, ToolRunOp
         try:
             mr = await _get_merge_request_from_url(merge_request_url)
             await asyncio.to_thread(mr._raw_pr.notes.create, {"body": comment})
-            return StringToolOutput(
-                result=f"Successfully added comment to merge request {merge_request_url}"
-            )
+            return StringToolOutput(result=f"Successfully added comment to merge request {merge_request_url}")
         except Exception as e:
             raise ToolError(f"Failed to add comment to merge request: {e}") from e
 
@@ -510,7 +520,9 @@ class AddBlockingMergeRequestCommentToolInput(BaseModel):
     comment: str = Field(description="Comment text to add as a blocking discussion")
 
 
-class AddBlockingMergeRequestCommentTool(Tool[AddBlockingMergeRequestCommentToolInput, ToolRunOptions, StringToolOutput]):
+class AddBlockingMergeRequestCommentTool(
+    Tool[AddBlockingMergeRequestCommentToolInput, ToolRunOptions, StringToolOutput]
+):
     name = "add_blocking_merge_request_comment"
     description = """
     Adds a blocking (unresolved) comment/discussion to an existing merge request.
@@ -551,7 +563,8 @@ class AddBlockingMergeRequestCommentTool(Tool[AddBlockingMergeRequestCommentTool
             exists = await asyncio.to_thread(check_existing_comment)
             if exists:
                 return StringToolOutput(
-                    result=f"Comment already exists in merge request {merge_request_url}, not adding duplicate"
+                    result=f"Comment already exists in merge request "
+                    f"{merge_request_url}, not adding duplicate"
                 )
 
             await asyncio.to_thread(
@@ -564,65 +577,6 @@ class AddBlockingMergeRequestCommentTool(Tool[AddBlockingMergeRequestCommentTool
             )
         except Exception as e:
             raise ToolError(f"Failed to add blocking comment to merge request: {e}") from e
-
-
-class CreateMergeRequestChecklistToolInput(BaseModel):
-    merge_request_url: str = Field(description="URL of the merge request")
-    note_body: str = Field(description="Body of the note to create")
-
-
-class CreateMergeRequestChecklistTool(Tool[CreateMergeRequestChecklistToolInput, ToolRunOptions, StringToolOutput]):
-    name = "create_merge_request_checklist"
-    description = """
-    Creates our pre/post merge checklist for our dist-git merge requests.
-    Checks for existing checklist to avoid duplicates.
-    """
-    input_schema = CreateMergeRequestChecklistToolInput
-
-    def _create_emitter(self) -> Emitter:
-        return Emitter.root().child(
-            namespace=["tool", "gitlab", self.name],
-            creator=self,
-        )
-
-    async def _run(
-        self,
-        tool_input: CreateMergeRequestChecklistToolInput,
-        options: ToolRunOptions | None,
-        context: RunContext,
-    ) -> StringToolOutput:
-        merge_request_url = tool_input.merge_request_url
-        note_body = tool_input.note_body
-        try:
-            mr = await _get_merge_request_from_url(merge_request_url)
-
-            def check_existing_checklist():
-                notes = mr._raw_pr.notes.list(get_all=True)
-
-                checklist_body = note_body.strip()
-                if not checklist_body:
-                    return False
-                checklist_identifier = checklist_body.splitlines()[0]
-
-                for note in notes:
-                    note_body_text = note.body.strip()
-                    if checklist_identifier in note_body_text or note_body_text == checklist_body:
-                        return True
-
-                return False
-
-            exists = await asyncio.to_thread(check_existing_checklist)
-            if exists:
-                return StringToolOutput(
-                    result=f"Checklist already exists in merge request {merge_request_url}, not adding duplicate"
-                )
-
-            await asyncio.to_thread(mr._raw_pr.notes.create, {"body": note_body}, internal=True)
-            return StringToolOutput(
-                result=f"Successfully created checklist for merge request {merge_request_url}"
-            )
-        except Exception as e:
-            raise ToolError(f"Failed to create checklist for merge request: {e}") from e
 
 
 class RetryPipelineJobToolInput(BaseModel):
@@ -653,9 +607,7 @@ class RetryPipelineJobTool(Tool[RetryPipelineJobToolInput, ToolRunOptions, Strin
         job_id = tool_input.job_id
         logger.info(f"Connecting to GitLab API to retry job {job_id} for project: {project_url}")
         try:
-            project = await asyncio.to_thread(
-                get_project, url=project_url, token=os.getenv("GITLAB_TOKEN")
-            )
+            project = await asyncio.to_thread(get_project, url=project_url, token=os.getenv("GITLAB_TOKEN"))
 
             def retry_gitlab_job():
                 job = project.gitlab_repo.jobs.get(job_id)
@@ -677,7 +629,11 @@ class GetFailedPipelineJobsFromMergeRequestToolInput(BaseModel):
 
 
 class GetFailedPipelineJobsFromMergeRequestTool(
-    Tool[GetFailedPipelineJobsFromMergeRequestToolInput, ToolRunOptions, JSONToolOutput[list[FailedPipelineJob]]]
+    Tool[
+        GetFailedPipelineJobsFromMergeRequestToolInput,
+        ToolRunOptions,
+        JSONToolOutput[list[FailedPipelineJob]],
+    ]
 ):
     name = "get_failed_pipeline_jobs_from_merge_request"
     description = """
@@ -712,7 +668,7 @@ class GetFailedPipelineJobsFromMergeRequestTool(
 
                 namespace = mr.target_project.namespace
                 repo = mr.target_project.repo
-                failed_jobs = [
+                return [
                     FailedPipelineJob(
                         id=str(job.id),
                         name=job.name,
@@ -728,8 +684,6 @@ class GetFailedPipelineJobsFromMergeRequestTool(
                     for job in jobs
                     if job.status == "failed"
                 ]
-
-                return failed_jobs
 
             failed_jobs = await asyncio.to_thread(get_latest_pipeline_jobs)
 
@@ -748,10 +702,7 @@ def _get_authorized_member_ids(project: GitlabProject) -> set[int]:
     """
     try:
         members = project.gitlab_repo.members_all.list(get_all=True)
-        return {
-            member.id for member in members
-            if member.access_level >= DEVELOPER_ACCESS_LEVEL
-        }
+        return {member.id for member in members if member.access_level >= DEVELOPER_ACCESS_LEVEL}
     except Exception as e:
         logger.warning(f"Failed to fetch project members: {e}")
         return set()
@@ -768,17 +719,15 @@ def _extract_position_info(note: dict) -> tuple[str, int | None, str]:
 
     if new_line and old_line:
         return file_path, new_line, "unchanged"
-    elif new_line:
+    if new_line:
         return file_path, new_line, "new"
-    elif old_line:
+    if old_line:
         return file_path, old_line, "old"
 
     return file_path, None, ""
 
 
-def _process_reply(
-    authorized_member_ids: set[int], note: dict
-) -> CommentReply | None:
+def _process_reply(authorized_member_ids: set[int], note: dict) -> CommentReply | None:
     """Process a reply note and return CommentReply if author is authorized."""
     if note.get("system", False):
         return None
@@ -797,6 +746,7 @@ def _process_reply(
     except Exception as e:
         logger.warning(f"Failed to process reply note: {e}")
         return None
+
 
 class GetAuthorizedCommentsFromMergeRequestToolInput(BaseModel):
     merge_request_url: str = Field(description="URL of the merge request")
@@ -841,7 +791,11 @@ class GetMergeRequestDetailsToolInput(BaseModel):
 
 
 class GetMergeRequestDetailsTool(
-    Tool[GetMergeRequestDetailsToolInput, ToolRunOptions, JSONToolOutput[MergeRequestDetails]]
+    Tool[
+        GetMergeRequestDetailsToolInput,
+        ToolRunOptions,
+        JSONToolOutput[MergeRequestDetails],
+    ]
 ):
     name = "get_merge_request_details"
     description = """
@@ -912,6 +866,17 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
             + f"\n\n[Content truncated - showing first {max_length} characters of {len(text)} total]"
         )
 
+    @staticmethod
+    def _json_hunks_to_text(hunks: list[dict]) -> str:
+        parts = []
+        for hunk in hunks:
+            old_path = hunk.get("old_path", "")
+            new_path = hunk.get("new_path", "")
+            parts.append(f"--- a/{old_path}")
+            parts.append(f"+++ b/{new_path}")
+            parts.append(hunk.get("diff", ""))
+        return "\n".join(parts)
+
     async def _run(
         self,
         tool_input: GetPatchFromUrlToolInput,
@@ -923,14 +888,101 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
         headers = _get_auth_headers(request_url)
 
         try:
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(request_url, headers=headers) as response:
-                    if response.status >= 400:
-                        raise ToolError(
-                            f"Failed to fetch patch from {patch_url}: HTTP {response.status}"
-                        )
-                    text = await response.text()
+            async with (
+                aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
+                session.get(request_url, headers=headers) as response,
+            ):
+                if response.status >= 400:
+                    raise ToolError(f"Failed to fetch patch from {patch_url}: HTTP {response.status}")
+                text = await response.text()
         except aiohttp.ClientError as e:
             raise ToolError(f"Failed to fetch patch from {patch_url}: {e}") from e
+        try:
+            hunks = json.loads(text)
+        except json.decoder.JSONDecodeError:
+            pass
+        else:
+            if isinstance(hunks, list):
+                text = self._json_hunks_to_text(hunks)
         return StringToolOutput(result=self._truncate(text))
+
+
+class FetchGitlabMrNotesInput(BaseModel):
+    project: str = Field(description="GitLab project path (e.g. 'redhat/centos-stream/rpms/podman')")
+    mr_iid: int = Field(description="Merge request IID within the project")
+
+
+class FetchGitlabMrNotesTool(Tool[FetchGitlabMrNotesInput, ToolRunOptions, StringToolOutput]):
+    """
+    Tool to fetch comments/notes from a GitLab merge request.
+    This is useful for finding OSCI test results posted as comments
+    on merge requests with titles like "Results for pipeline ...".
+    """
+
+    name = "fetch_gitlab_mr_notes"  # type: ignore
+    description = (  # type: ignore
+        "Fetch comments/notes from a GitLab merge request. "
+        "Returns JSON with a list of notes including author, body, and creation date. "
+        "Use this to find OSCI test results posted as comments on merge requests."
+    )
+    input_schema = FetchGitlabMrNotesInput  # type: ignore
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        input: FetchGitlabMrNotesInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        encoded_project = quote(input.project, safe="")
+        url = f"https://gitlab.com/api/v4/projects/{encoded_project}/merge_requests/{input.mr_iid}/notes"
+        headers = _get_auth_headers(url)
+        logger.info("Fetching MR notes from %s", url)
+
+        try:
+            async with (
+                aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
+                session.get(
+                    url,
+                    headers=headers,
+                    params={
+                        "per_page": "100",
+                        "sort": "desc",
+                        "order_by": "created_at",
+                    },
+                ) as response,
+            ):
+                if response.status != 200:
+                    text = await response.text()
+                    logger.error(
+                        "Failed to fetch MR notes (HTTP %d): %s",
+                        response.status,
+                        text,
+                    )
+                    return StringToolOutput(
+                        result=f"Failed to fetch notes for MR !{input.mr_iid} "
+                        f"in {input.project} (HTTP {response.status}): {text}"
+                    )
+
+                notes = await response.json()
+
+            result = [
+                {
+                    "author": note.get("author", {}).get("name", "Unknown"),
+                    "body": note["body"],
+                    "created_at": note.get("created_at"),
+                    "system": note.get("system", False),
+                }
+                for note in notes
+            ]
+
+            return StringToolOutput(result=json.dumps(result, indent=2))
+
+        except Exception as e:
+            logger.error("Error fetching GitLab MR notes: %s", e)
+            return StringToolOutput(result=f"Error fetching GitLab MR notes: {e}")

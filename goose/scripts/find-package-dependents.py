@@ -10,11 +10,11 @@ import signal
 import subprocess
 import sys
 from collections import deque
+from collections.abc import Generator
 from hashlib import sha256
 from pathlib import Path
-from typing import Dict, List, Set, Generator, Any
+from typing import Any
 from urllib.parse import urlparse
-
 
 EXIT_SUCCESS = 0
 EXIT_REPO_QUERY_ERROR = 1
@@ -23,7 +23,7 @@ EXIT_INVALID_ARGUMENTS = 3
 EXIT_CACHE_UPDATE_ERROR = 4
 EXIT_PACKAGE_NOT_FOUND = 5
 
-KNOWN_ARCHS: Set[str] = {"x86_64", "aarch64", "ppc64le", "s390x", "noarch"}
+KNOWN_ARCHS: set[str] = {"x86_64", "aarch64", "ppc64le", "s390x", "noarch"}
 
 
 class RepoQueryMetrics:
@@ -37,7 +37,7 @@ class RepoQueryMetrics:
 
     def __init__(self):
         self._call_count: int = 0
-        self._calls_by_type: Dict[str, int] = {}
+        self._calls_by_type: dict[str, int] = {}
         self._filter_calls: int = 0
         self._filter_failures: int = 0
 
@@ -64,7 +64,7 @@ class RepoQueryMetrics:
         if not success:
             self._filter_failures += 1
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get current statistics about dnf repoquery usage.
 
@@ -88,7 +88,7 @@ class SourcePackageCache:
     """
 
     def __init__(self):
-        self._cache: Dict[str, str] = {}
+        self._cache: dict[str, str] = {}
 
     def get(self, package_name: str) -> str | None:
         """
@@ -111,12 +111,12 @@ class SourcePackageCache:
             source_package_name: The source package name, or '' if package not found
         """
         self._cache[package_name] = source_package_name
-        if source_package_name == '':
+        if source_package_name == "":
             logging.debug(f"   Cached package not found: {package_name} → not found")
         else:
             logging.debug(f"   Cached source package mapping: {package_name} → {source_package_name}")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get cache statistics.
 
@@ -129,7 +129,7 @@ class SourcePackageCache:
             "cache_size": len(self._cache),
             "found_count": found_count,
             "not_found_count": not_found_count,
-            "cached_packages": list(sorted(self._cache.keys())),
+            "cached_packages": sorted(self._cache.keys()),
         }
 
 
@@ -142,7 +142,7 @@ class FilterCache:
     """
 
     def __init__(self):
-        self._cache: Dict[str, bool] = {}
+        self._cache: dict[str, bool] = {}
 
     def get(self, package_name: str) -> bool | None:
         """
@@ -167,7 +167,7 @@ class FilterCache:
         self._cache[package_name] = passed_filter
         logging.debug(f"   Cached filter result: {package_name} → {'pass' if passed_filter else 'fail'}")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get cache statistics.
 
@@ -180,7 +180,7 @@ class FilterCache:
             "cache_size": len(self._cache),
             "passed_count": passed_count,
             "failed_count": failed_count,
-            "cached_packages": list(sorted(self._cache.keys())),
+            "cached_packages": sorted(self._cache.keys()),
         }
 
 
@@ -194,9 +194,9 @@ class DependencyCache:
     """
 
     def __init__(self):
-        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._cache: dict[str, dict[str, Any]] = {}
 
-    def get(self, package_name: str) -> List[str] | None:
+    def get(self, package_name: str) -> list[str] | None:
         """
         Get cached dependencies for a package.
 
@@ -238,7 +238,7 @@ class DependencyCache:
             return not entry["partial"]
         return False
 
-    def set(self, package_name: str, dependents: List[str], partial: bool = False) -> None:
+    def set(self, package_name: str, dependents: list[str], partial: bool = False) -> None:
         """
         Cache dependency results for a package.
 
@@ -247,14 +247,13 @@ class DependencyCache:
             dependents: List of dependent package names
             partial: Whether the results are partial (limited by max_results)
         """
-        self._cache[package_name] = {
-            "dependents": dependents,
-            "partial": partial
-        }
+        self._cache[package_name] = {"dependents": dependents, "partial": partial}
         partial_info = " (partial)" if partial else ""
-        logging.debug(f"   Cached dependency results: {package_name} → {len(dependents)} dependents{partial_info}")
+        logging.debug(
+            f"   Cached dependency results: {package_name} → {len(dependents)} dependents{partial_info}"
+        )
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get cache statistics.
 
@@ -269,7 +268,7 @@ class DependencyCache:
             "total_dependents": total_dependents,
             "complete_count": complete_count,
             "partial_count": partial_count,
-            "cached_packages": list(sorted(self._cache.keys())),
+            "cached_packages": sorted(self._cache.keys()),
         }
 
 
@@ -299,7 +298,13 @@ class PackageNotFoundError(Exception):
         self.exit_code = EXIT_PACKAGE_NOT_FOUND
 
 
-def run_filter_command(package_name: str, filter_command: str, metrics: RepoQueryMetrics, filter_cache: FilterCache, verbose: bool = False) -> bool:
+def run_filter_command(
+    package_name: str,
+    filter_command: str,
+    metrics: RepoQueryMetrics,
+    filter_cache: FilterCache,
+    verbose: bool = False,
+) -> bool:
     """
     Run a filter command on a package to determine if it should be included.
 
@@ -318,16 +323,15 @@ def run_filter_command(package_name: str, filter_command: str, metrics: RepoQuer
 
     cached_result = filter_cache.get(package_name)
     if cached_result is not None:
-        logging.debug(f"📋 Filter cache hit: Filter result for {package_name} → {'pass' if cached_result else 'fail'}")
+        logging.debug(
+            f"📋 Filter cache hit: Filter result for {package_name} → {'pass' if cached_result else 'fail'}"
+        )
         return cached_result
 
     logging.debug(f"🔍 Running filter command on package: {package_name}")
 
     try:
-        result = run_command(
-            filter_command,
-            extra_environment={"PACKAGE": package_name}
-        )
+        result = run_command(filter_command, extra_environment={"PACKAGE": package_name})
 
         success = result["return_code"] == 0
         metrics.log_filter_call(package_name, success)
@@ -337,7 +341,9 @@ def run_filter_command(package_name: str, filter_command: str, metrics: RepoQuer
         if success:
             logging.debug(f"   ✅ Filter command succeeded for {package_name}")
         else:
-            logging.debug(f"   ❌ Filter command failed for {package_name} (exit code: {result['return_code']})")
+            logging.debug(
+                f"   ❌ Filter command failed for {package_name} (exit code: {result['return_code']})"
+            )
 
         return success
 
@@ -348,7 +354,7 @@ def run_filter_command(package_name: str, filter_command: str, metrics: RepoQuer
         return False
 
 
-def update_dnf_cache(repository_paths: Dict[str, str], verbose: bool = False) -> None:
+def update_dnf_cache(repository_paths: dict[str, str], verbose: bool = False) -> None:
     """
     Update dnf cache for all repositories once upfront.
     This allows subsequent repoquery calls to use --cacheonly for better performance.
@@ -369,7 +375,7 @@ def update_dnf_cache(repository_paths: Dict[str, str], verbose: bool = False) ->
         logging.debug(f"Cache update output: {result}")
     except subprocess.CalledProcessError as error:
         stderr = error.stderr.strip() if error.stderr else "Unknown error"
-        raise RepoQueryError(f"Failed to update dnf cache: {stderr}", EXIT_CACHE_UPDATE_ERROR)
+        raise RepoQueryError(f"Failed to update dnf cache: {stderr}", EXIT_CACHE_UPDATE_ERROR) from error
 
 
 def derive_repository_id_from_url(repository_url: str) -> str:
@@ -453,9 +459,10 @@ def quote_command(args):
         except ValueError:
             quoted_args.append(shlex.quote(arg))
 
-    return ' '.join(quoted_args)
+    return " ".join(quoted_args)
 
-def run_command(command: List[str] | str, extra_environment: Dict[str, str] | None = None) -> Dict[str, Any]:
+
+def run_command(command: list[str] | str, extra_environment: dict[str, str] | None = None) -> dict[str, Any]:
     """
     Run a command and log output.
 
@@ -469,10 +476,7 @@ def run_command(command: List[str] | str, extra_environment: Dict[str, str] | No
     Raises:
         subprocess.CalledProcessError: If the command returns a non-zero exit code
     """
-    if isinstance(command, list):
-        command_string = quote_command(command)
-    else:
-        command_string = command
+    command_string = quote_command(command) if isinstance(command, list) else command
 
     logging.debug(f"\n        ❯ {command_string}")
 
@@ -481,13 +485,7 @@ def run_command(command: List[str] | str, extra_environment: Dict[str, str] | No
         environment = os.environ.copy()
         environment.update(extra_environment)
 
-    result = subprocess.run(
-        command_string,
-        env=environment,
-        capture_output=True,
-        shell=True,
-        text=True
-    )
+    result = subprocess.run(command_string, env=environment, capture_output=True, shell=True, text=True)
 
     for line in result.stderr.splitlines():
         if line.strip():
@@ -504,16 +502,17 @@ def run_command(command: List[str] | str, extra_environment: Dict[str, str] | No
         logging.debug(f"        Process exited with code {result.returncode}")
 
     if result.returncode != 0:
-        raise subprocess.CalledProcessError(
-            result.returncode, command,
-            result.stdout,
-            result.stderr
-        )
+        raise subprocess.CalledProcessError(result.returncode, command, result.stdout, result.stderr)
 
     return {"return_code": result.returncode, "output": result.stdout}
 
 
-def dnf(command: str, repository_paths: Dict[str, str], verbose: bool = False, cache_only: bool = True) -> str:
+def dnf(
+    command: str,
+    repository_paths: dict[str, str],
+    verbose: bool = False,
+    cache_only: bool = True,
+) -> str:
     """
     Execute a dnf command with repository setup and return stdout content.
 
@@ -533,31 +532,32 @@ def dnf(command: str, repository_paths: Dict[str, str], verbose: bool = False, c
         subprocess.CalledProcessError: If the command returns a non-zero exit code
     """
     command_parts = shlex.split(command)
-    full_command = ["dnf"] + command_parts
+    full_command = ["dnf", *command_parts]
 
     full_command.extend(["--disablerepo=*"])
     if not verbose:
         full_command.append("--quiet")
     if cache_only:
         full_command.append("--cacheonly")
-    for repository_id, repository_url in repository_paths.items():
-        full_command.append(f"--repofrompath=repo-{repository_id},{repository_url}")
-    for repository_id in repository_paths:
-        full_command.append(f"--enablerepo=repo-{repository_id}")
+    full_command.extend(
+        f"--repofrompath=repo-{repository_id},{repository_url}"
+        for repository_id, repository_url in repository_paths.items()
+    )
+    full_command.extend(f"--enablerepo=repo-{repository_id}" for repository_id in repository_paths)
 
     result = run_command(full_command)
     return result["output"].strip()
 
 
 def generate_direct_dependents(
-        package_name: str,
-        repository_paths: Dict[str, str],
-        metrics: RepoQueryMetrics,
-        dependency_cache: DependencyCache,
-        verbose: bool = False,
-        cache_only: bool = False,
-        max_results: int | None = None
-    ) -> Generator[str, None, None]:
+    package_name: str,
+    repository_paths: dict[str, str],
+    metrics: RepoQueryMetrics,
+    dependency_cache: DependencyCache,
+    verbose: bool = False,
+    cache_only: bool = False,
+    max_results: int | None = None,
+) -> Generator[str]:
     """
     Generator that yields direct dependents one at a time.
 
@@ -578,33 +578,41 @@ def generate_direct_dependents(
     """
     logging.debug(f"\n🔍 Finding direct dependents for package: {package_name}")
 
-    if (not cache_only and dependency_cache.has_all(package_name)) or (cache_only and dependency_cache.has(package_name)):
+    if (not cache_only and dependency_cache.has_all(package_name)) or (
+        cache_only and dependency_cache.has(package_name)
+    ):
         cached_dependents = dependency_cache.get(package_name)
-        logging.debug(f"📋 Dependency cache hit: Dependents for {package_name} → {len(cached_dependents)} dependents")
-        count = 0
-        for dependent_name in cached_dependents:
+        logging.debug(
+            f"📋 Dependency cache hit: Dependents for {package_name} → {len(cached_dependents)} dependents"
+        )
+        for count, dependent_name in enumerate(cached_dependents):
             if max_results is not None and count >= max_results:
                 break
             yield dependent_name
-            count += 1
         return
 
     if cache_only:
-        logging.debug(f"📋 CACHE ONLY MODE: No sufficient cached dependents for {package_name}, skipping repoquery call")
+        logging.debug(
+            f"📋 CACHE ONLY MODE: No sufficient cached dependents for {package_name}, skipping repoquery call"
+        )
         return
 
     metrics.log_call("dnf repoquery --whatdepends", package_name)
     try:
-        stdout_content = dnf(f"repoquery --whatdepends {package_name} --qf '%{{name}}\\n'", repository_paths, verbose)
+        stdout_content = dnf(
+            f"repoquery --whatdepends {package_name} --qf '%{{name}}\\n'",
+            repository_paths,
+            verbose,
+        )
     except subprocess.CalledProcessError as error:
         stderr = error.stderr.strip() if error.stderr else "Unknown error"
         raise RepoQueryError(
             f"Failed to query reverse dependencies for {package_name!r}: {stderr}"
-        )
+        ) from error
 
-    seen: Set[str] = set()
+    seen: set[str] = set()
     dependents_found = 0
-    dependents_list: List[str] = []
+    dependents_list: list[str] = []
     is_partial = False
     count = 0
 
@@ -626,17 +634,20 @@ def generate_direct_dependents(
                 count += 1
 
     dependency_cache.set(package_name, dependents_list, is_partial)
-    logging.debug(f"\n   Total direct dependents found for {package_name}: {len(dependents_list)} ({'partial' if is_partial else 'complete'})")
+    logging.debug(
+        f"\n   Total direct dependents found for {package_name}: "
+        f"{len(dependents_list)} ({'partial' if is_partial else 'complete'})"
+    )
 
 
 def query_source_package(
-        package_name: str,
-        repository_paths: Dict[str, str],
-        metrics: RepoQueryMetrics,
-        source_cache: SourcePackageCache,
-        verbose: bool = False,
-        allow_missing: bool = False
-    ) -> str:
+    package_name: str,
+    repository_paths: dict[str, str],
+    metrics: RepoQueryMetrics,
+    source_cache: SourcePackageCache,
+    verbose: bool = False,
+    allow_missing: bool = False,
+) -> str:
     """
     Query the source package name for a given binary package.
 
@@ -657,7 +668,7 @@ def query_source_package(
     """
 
     cached_source_package = source_cache.get(package_name)
-    if cached_source_package == '' and not allow_missing:
+    if cached_source_package == "" and not allow_missing:
         logging.debug(f"\n📋 Source cache hit: Package {package_name} → not found")
         raise PackageNotFoundError(package_name)
 
@@ -669,26 +680,26 @@ def query_source_package(
 
     metrics.log_call("dnf repoquery --qf '%{sourcerpm}'", package_name)
     try:
-        stdout_content = dnf(f"repoquery {package_name} --qf '%{{sourcerpm}}\\n'", repository_paths, verbose)
+        stdout_content = dnf(
+            f"repoquery {package_name} --qf '%{{sourcerpm}}\\n'",
+            repository_paths,
+            verbose,
+        )
     except subprocess.CalledProcessError as error:
         stderr = error.stderr.strip() if error.stderr else "Unknown error"
-        raise RepoQueryError(
-            f"Failed to query source package for {package_name!r}: {stderr}"
-        )
+        raise RepoQueryError(f"Failed to query source package for {package_name!r}: {stderr}") from error
 
     source_rpm = stdout_content.strip()
     if not source_rpm:
-        source_cache.set(package_name, '')
+        source_cache.set(package_name, "")
         if allow_missing:
             logging.debug(f"   Package {package_name} not found, but continuing due to --allow-missing")
-            return ''
+            return ""
         raise PackageNotFoundError(package_name)
 
-    m = re.match(r'^(?P<name>.*)-[^-]+-[^-]+\.src\.rpm$', source_rpm)
+    m = re.match(r"^(?P<name>.*)-[^-]+-[^-]+\.src\.rpm$", source_rpm)
     if not m:
-        raise RepoQueryError(
-            f"Unexpected source-RPM format for {package_name!r}: {source_rpm!r}"
-        )
+        raise RepoQueryError(f"Unexpected source-RPM format for {package_name!r}: {source_rpm!r}")
 
     source_package_name = m.group("name")
     logging.debug(f"\n   Source package for {package_name}: {source_package_name}")
@@ -699,11 +710,11 @@ def query_source_package(
 
 
 def query_package_description(
-        package_name: str,
-        repository_paths: Dict[str, str],
-        metrics: RepoQueryMetrics,
-        verbose: bool = False
-    ) -> str:
+    package_name: str,
+    repository_paths: dict[str, str],
+    metrics: RepoQueryMetrics,
+    verbose: bool = False,
+) -> str:
     """
     Query the description for a given package.
 
@@ -727,9 +738,7 @@ def query_package_description(
         stdout_content = dnf(f"repoquery {package_name} --qf %{{description}}", repository_paths, verbose)
     except subprocess.CalledProcessError as error:
         stderr = error.stderr.strip() if error.stderr else "Unknown error"
-        raise RepoQueryError(
-            f"Failed to query description for {package_name!r}: {stderr}"
-        )
+        raise RepoQueryError(f"Failed to query description for {package_name!r}: {stderr}") from error
 
     description = stdout_content.strip()
     if description:
@@ -741,16 +750,16 @@ def query_package_description(
 
 
 def convert_to_source_packages(
-        dependents: Generator[str, None, None],
-        repository_paths: Dict[str, str],
-        metrics: RepoQueryMetrics,
-        source_cache: SourcePackageCache,
-        filter_cache: FilterCache,
-        max_results: int | None = None,
-        verbose: bool = False,
-        filter_command: str | None = None,
-        allow_missing: bool = False
-    ) -> Generator[str, None, None]:
+    dependents: Generator[str],
+    repository_paths: dict[str, str],
+    metrics: RepoQueryMetrics,
+    source_cache: SourcePackageCache,
+    filter_cache: FilterCache,
+    max_results: int | None = None,
+    verbose: bool = False,
+    filter_command: str | None = None,
+    allow_missing: bool = False,
+) -> Generator[str]:
     """
     Generator that converts a stream of binary package names into source package names.
 
@@ -769,7 +778,7 @@ def convert_to_source_packages(
     """
     logging.debug("🔄 Converting binary packages to source packages")
 
-    source_packages: Set[str] = set()
+    source_packages: set[str] = set()
     converted_count = 0
 
     for package in dependents:
@@ -789,10 +798,11 @@ def convert_to_source_packages(
         if source_package not in source_packages:
             source_packages.add(source_package)
 
-            if filter_command:
-                if not run_filter_command(source_package, filter_command, metrics, filter_cache, verbose):
-                    logging.debug(f"   Skipping source package {source_package} due to filter command")
-                    continue
+            if filter_command and not run_filter_command(
+                source_package, filter_command, metrics, filter_cache, verbose
+            ):
+                logging.debug(f"   Skipping source package {source_package} due to filter command")
+                continue
 
             converted_count += 1
             logging.debug(f"   New source package found: {source_package}")
@@ -804,11 +814,11 @@ def convert_to_source_packages(
 
 
 def compute_transitive_closure(
-        root_package: str,
-        dependents_map: Dict[str, Dict[str, Any]],
-        max_results: int | None = None,
-        filter_function = None,
-    ) -> Dict[str, Dict[str, Any]]:
+    root_package: str,
+    dependents_map: dict[str, dict[str, Any]],
+    max_results: int | None = None,
+    filter_function=None,
+) -> dict[str, dict[str, Any]]:
     """
     Compute the transitive closure of the dependency graph.
 
@@ -823,19 +833,20 @@ def compute_transitive_closure(
         root_package: root package name to check for partial results
         dependents_map: Dictionary mapping package names to their dependent packages
         max_results: Maximum number of results to return (including the root package)
-        filter_function: Optional function that takes a package name and dependents list and returns True/False
+        filter_function: Optional function that takes a package name
+            and dependents list and returns True/False
 
     Returns:
         Dictionary mapping package names to dictionaries containing 'dependents' list and 'partial' flag
     """
-    graph: Dict[str, Dict[str, Any]] = {}
+    graph: dict[str, dict[str, Any]] = {}
 
     # The root package gets all results but itself as dependents
     max_root_dependents = max_results - 1 if max_results is not None else None
 
     for package, entry in dependents_map.items():
-        known_packages: Set[str] = set()
-        transitive_dependents: List[str] = []
+        known_packages: set[str] = set()
+        transitive_dependents: list[str] = []
         queue = deque(entry["dependents"])
         is_partial = entry["partial"]
 
@@ -853,7 +864,11 @@ def compute_transitive_closure(
             # If the root package has hit its dependent limit, we don't add this dependent to the results,
             # but we still need to use the dependent to extend the queue so we can know if we're missing out
             # on any results because of the max_results limit
-            if package == root_package and max_root_dependents is not None and len(transitive_dependents) >= max_root_dependents:
+            if (
+                package == root_package
+                and max_root_dependents is not None
+                and len(transitive_dependents) >= max_root_dependents
+            ):
                 root_hit_max_dependents = True
 
             if package != root_package or not root_hit_max_dependents:
@@ -880,26 +895,26 @@ def compute_transitive_closure(
         if not max_results or len(graph.keys()) < max_results:
             graph[package] = {
                 "dependents": transitive_dependents,
-                "partial": is_partial
+                "partial": is_partial,
             }
 
     return graph
 
 
 def build_dependents_list(
-        package_name: str,
-        repository_paths: Dict[str, str],
-        show_source_packages: bool,
-        source_cache: SourcePackageCache,
-        metrics: RepoQueryMetrics,
-        filter_cache: FilterCache,
-        dependency_cache: DependencyCache,
-        max_results: int | None = None,
-        verbose: bool = False,
-        keep_cycles: bool = False,
-        filter_command: str | None = None,
-        allow_missing: bool = False
-    ) -> List[str]:
+    package_name: str,
+    repository_paths: dict[str, str],
+    show_source_packages: bool,
+    source_cache: SourcePackageCache,
+    metrics: RepoQueryMetrics,
+    filter_cache: FilterCache,
+    dependency_cache: DependencyCache,
+    max_results: int | None = None,
+    verbose: bool = False,
+    keep_cycles: bool = False,
+    filter_command: str | None = None,
+    allow_missing: bool = False,
+) -> list[str]:
     """
     Build a list of dependents for a given package.
 
@@ -919,15 +934,29 @@ def build_dependents_list(
     logging.debug(f"   Max results: {max_results}")
     logging.debug(f"   Filter command: {filter_command}")
 
-    dependents = generate_direct_dependents(package_name, repository_paths, metrics, dependency_cache, verbose, cache_only=False)
+    dependents = generate_direct_dependents(
+        package_name,
+        repository_paths,
+        metrics,
+        dependency_cache,
+        verbose,
+        cache_only=False,
+    )
 
     if show_source_packages:
         dependents = convert_to_source_packages(
-            dependents, repository_paths, metrics, source_cache, filter_cache,
-            max_results, verbose, filter_command, allow_missing
+            dependents,
+            repository_paths,
+            metrics,
+            source_cache,
+            filter_cache,
+            max_results,
+            verbose,
+            filter_command,
+            allow_missing,
         )
 
-    collected_packages: List[str] = []
+    collected_packages: list[str] = []
     discovered_count = 0
     is_partial = False
     for dependent_package in dependents:
@@ -938,16 +967,20 @@ def build_dependents_list(
         if not keep_cycles and package_name == dependent_package:
             continue
 
-        if filter_command:
-            if not run_filter_command(dependent_package, filter_command, metrics, filter_cache, verbose):
-                logging.debug(f"   Skipping dependent package {dependent_package} due to filter command")
-                continue
+        if filter_command and not run_filter_command(
+            dependent_package, filter_command, metrics, filter_cache, verbose
+        ):
+            logging.debug(f"   Skipping dependent package {dependent_package} due to filter command")
+            continue
 
         discovered_count += 1
         if max_results is None or discovered_count <= max_results:
             collected_packages.append(dependent_package)
 
-    logging.debug(f"   Total dependents collected: {len(collected_packages)} ({'partial' if is_partial else 'complete'})")
+    logging.debug(
+        f"   Total dependents collected: {len(collected_packages)} "
+        f"({'partial' if is_partial else 'complete'})"
+    )
 
     if len(collected_packages) == 0:
         raise NoDependentsFoundError(package_name)
@@ -956,19 +989,19 @@ def build_dependents_list(
 
 
 def build_dependents_graph(
-        root_package: str,
-        repository_paths: Dict[str, str],
-        show_source_packages: bool,
-        source_cache: SourcePackageCache,
-        metrics: RepoQueryMetrics,
-        filter_cache: FilterCache,
-        dependency_cache: DependencyCache,
-        max_results: int | None = None,
-        keep_cycles: bool = False,
-        verbose: bool = False,
-        filter_command: str | None = None,
-        allow_missing: bool = False
-    ) -> Dict[str, Dict[str, Any]]:
+    root_package: str,
+    repository_paths: dict[str, str],
+    show_source_packages: bool,
+    source_cache: SourcePackageCache,
+    metrics: RepoQueryMetrics,
+    filter_cache: FilterCache,
+    dependency_cache: DependencyCache,
+    max_results: int | None = None,
+    keep_cycles: bool = False,
+    verbose: bool = False,
+    filter_command: str | None = None,
+    allow_missing: bool = False,
+) -> dict[str, dict[str, Any]]:
     """
     Build a transitive graph of reverse dependencies for the given package.
 
@@ -984,20 +1017,24 @@ def build_dependents_graph(
     logging.debug(f"   Max results: {max_results}")
     logging.debug(f"   Filter command: {filter_command}")
 
-    known_packages: Set[str] = {root_package}
+    known_packages: set[str] = {root_package}
     queue = deque([root_package])
-    dependents_map: Dict[str, Dict[str, Any]] = {}
+    dependents_map: dict[str, dict[str, Any]] = {}
     result_count = 0
 
     result_limit_hit = False
     while queue:
         package = queue.popleft()
-        dependents_list: List[str] = []
+        dependents_list: list[str] = []
 
         any_filtered_dependents = False
         for dependent in generate_direct_dependents(
-                package, repository_paths, metrics, dependency_cache, verbose,
-                cache_only=result_limit_hit
+            package,
+            repository_paths,
+            metrics,
+            dependency_cache,
+            verbose,
+            cache_only=result_limit_hit,
         ):
             if show_source_packages:
                 dependent = query_source_package(
@@ -1006,7 +1043,7 @@ def build_dependents_graph(
                     metrics,
                     source_cache,
                     verbose,
-                    allow_missing
+                    allow_missing,
                 )
 
             if not dependent:
@@ -1019,11 +1056,7 @@ def build_dependents_graph(
                 queue.append(dependent)
 
             dependent_is_filtered = filter_command and not run_filter_command(
-                dependent,
-                filter_command,
-                metrics,
-                filter_cache,
-                verbose
+                dependent, filter_command, metrics, filter_cache, verbose
             )
 
             if not dependent_is_filtered:
@@ -1037,14 +1070,19 @@ def build_dependents_graph(
             else:
                 any_filtered_dependents = True
 
-        dependents_map[package] = {"dependents": dependents_list, "partial": result_limit_hit or any_filtered_dependents}
+        dependents_map[package] = {
+            "dependents": dependents_list,
+            "partial": result_limit_hit or any_filtered_dependents,
+        }
 
-    for package, entry in dependents_map.items():
+    for entry in dependents_map.values():
         has_unknown_dependents = any(dependent not in dependents_map for dependent in entry["dependents"])
-        has_partial_dependents = any(not dependency_cache.has_all(dependent) for dependent in entry["dependents"])
+        has_partial_dependents = any(
+            not dependency_cache.has_all(dependent) for dependent in entry["dependents"]
+        )
         entry["partial"] = entry["partial"] or has_unknown_dependents or has_partial_dependents
 
-    def filter_function(package_name: str, dependents_list: List[str]) -> bool:
+    def filter_function(package_name: str, dependents_list: list[str]) -> bool:
         if max_results is not None and len(dependents_list) >= max_results:
             return False
 
@@ -1087,18 +1125,13 @@ def parse_command_line_arguments() -> argparse.Namespace:
     Returns:
         argparse.Namespace: Parsed command line arguments
     """
-    parser = argparse.ArgumentParser(
-        description="Find reverse dependencies of an RPM package."
-    )
-    parser.add_argument(
-        "package_name",
-        help="Name of the package to inspect"
-    )
+    parser = argparse.ArgumentParser(description="Find reverse dependencies of an RPM package.")
+    parser.add_argument("package_name", help="Name of the package to inspect")
     parser.add_argument(
         "--base-url",
         dest="base_url",
         default="http://download.devel.redhat.com/rhel-10/nightly/RHEL-10/latest-RHEL-10",
-        help="Base URL for nightly repositories"
+        help="Base URL for nightly repositories",
     )
     parser.add_argument(
         "--repositories",
@@ -1110,95 +1143,85 @@ def parse_command_line_arguments() -> argparse.Namespace:
             "Examples:\n"
             "  --repositories BaseOS,AppStream,CRB\n"
             "  --repositories BaseOS,https://download.devel.redhat.com/rhel-10/nightly/RHEL-10/latest-RHEL-10/compose/RT/x86_64/os\n"
-        )
+        ),
     )
     parser.add_argument(
         "--arch",
         choices=sorted(KNOWN_ARCHS),
         dest="arch",
         default="x86_64",
-        help="CPU architecture (for example: x86_64, s390x)"
+        help="CPU architecture (for example: x86_64, s390x)",
     )
     parser.add_argument(
         "--output-file",
         dest="output_file",
         type=Path,
-        help="Write output to this file instead of stdout"
+        help="Write output to this file instead of stdout",
     )
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Include transitive reverse dependencies (default is direct only)"
+        help="Include transitive reverse dependencies (default is direct only)",
     )
     parser.add_argument(
         "--source-packages",
         action="store_true",
-        help="Convert dependent package names to their source package names"
+        help="Convert dependent package names to their source package names",
     )
     parser.add_argument(
         "--max-results",
         type=max_result_type,
-        help="Maximum number of results to return (limits both queries and output)"
+        help="Maximum number of results to return (limits both queries and output)",
     )
     parser.add_argument(
         "--format",
         choices=["json", "plain"],
         default="plain",
-        help="Output format: json or plain (one per line)"
+        help="Output format: json or plain (one per line)",
     )
-    parser.add_argument(
-        "-v", "--verbose",
-        action="store_true",
-        help="Enable debug logging"
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
 
     parser.add_argument(
         "--no-refresh",
         action="store_true",
-        help="Skip dnf cache update and use existing cache only"
+        help="Skip dnf cache update and use existing cache only",
     )
     parser.add_argument(
         "--stats",
         action="store_true",
-        help="Print detailed statistics about repoquery calls and cache usage"
+        help="Print detailed statistics about repoquery calls and cache usage",
     )
-    parser.add_argument(
-        "--show-cycles",
-        action="store_true",
-        help="Show cycles in dependency graph"
-    )
+    parser.add_argument("--show-cycles", action="store_true", help="Show cycles in dependency graph")
     parser.add_argument(
         "--filter-command",
         help="Optional shell command to run on each dependent package to filter results. "
-             "The command receives PACKAGE environment variable set to the package name. "
-             "If the command returns a non-zero exit code, the package is pruned from output. "
-             "Example: --filter-command 'echo $PACKAGE | grep -q \"^kernel$\"'"
+        "The command receives PACKAGE environment variable set to the package name. "
+        "If the command returns a non-zero exit code, the package is pruned from output. "
+        "Example: --filter-command 'echo $PACKAGE | grep -q \"^kernel$\"'",
     )
     parser.add_argument(
         "--describe",
         action="store_true",
-        help="Include package descriptions in output. For plain format, descriptions are appended to package names. "
-             "For JSON format, descriptions are added as a 'description' field to each package object."
+        help="Include package descriptions in output. For plain format, "
+        "descriptions are appended to package names. For JSON format, "
+        "descriptions are added as a 'description' field to each package object.",
     )
     parser.add_argument(
         "--log-file",
         type=Path,
-        help="Redirect all log output to this file instead of stderr"
+        help="Redirect all log output to this file instead of stderr",
     )
     parser.add_argument(
         "--allow-missing",
         action="store_true",
         help="Allow missing packages to be non-fatal to operation. "
-             "If a package is not found in repositories, continue with empty results instead of exiting with error."
+        "If a package is not found in repositories, continue with empty "
+        "results instead of exiting with error.",
     )
     return parser.parse_args()
 
 
-def build_repository_paths(
-        base_url: str,
-        repository_names: str,
-        arch: str
-    ) -> Dict[str, str]:
+def build_repository_paths(base_url: str, repository_names: str, arch: str) -> dict[str, str]:
     """
     Build repository paths from base URL and repository names.
 
@@ -1213,16 +1236,13 @@ def build_repository_paths(
     Raises:
         SystemExit: If no valid repositories are provided
     """
-    repositories = [
-        repo.strip() for repo in repository_names.split(",")
-        if repo.strip()
-    ]
+    repositories = [repo.strip() for repo in repository_names.split(",") if repo.strip()]
     if not repositories:
         logging.error("At least one repository alias or URL must be provided")
         sys.exit(EXIT_INVALID_ARGUMENTS)
 
     base = base_url.rstrip("/")
-    paths: Dict[str, str] = {}
+    paths: dict[str, str] = {}
     for repository in repositories:
         if repository.startswith(("http://", "https://")):
             repository_url = repository.rstrip("/")
@@ -1268,13 +1288,13 @@ def set_up_logging(verbose: bool, log_file: Path | None) -> None:
 
 
 def log_operation(
-        package_name: str,
-        all_dependents: bool,
-        source_packages: bool,
-        max_results: int | None,
-        filter_command: str | None,
-        output_file: Path | None
-    ) -> None:
+    package_name: str,
+    all_dependents: bool,
+    source_packages: bool,
+    max_results: int | None,
+    filter_command: str | None,
+    output_file: Path | None,
+) -> None:
     """
     Log information about the operation being performed.
 
@@ -1290,21 +1310,17 @@ def log_operation(
     package_type = "as source packages" if source_packages else ""
     max_info = f" (max {max_results})" if max_results else ""
     filter_info = f" with filter: {filter_command}" if filter_command else ""
-    output_info = f" to \"{output_file}\"" if output_file else ""
+    output_info = f' to "{output_file}"' if output_file else ""
 
     logging.info(
-        f"\n🔍 Finding {operation} reverse dependencies of \"{package_name}\" "
+        f'\n🔍 Finding {operation} reverse dependencies of "{package_name}" '
         f"{package_type}{max_info}{filter_info}{output_info}\n"
     )
 
 
 def set_up_repositories_and_cache(
-        base_url: str,
-        repository_names: str,
-        arch: str,
-        no_refresh: bool,
-        verbose: bool
-    ) -> Dict[str, str]:
+    base_url: str, repository_names: str, arch: str, no_refresh: bool, verbose: bool
+) -> dict[str, str]:
     """
     Set up repositories and update dnf cache if needed.
 
@@ -1329,11 +1345,11 @@ def set_up_repositories_and_cache(
 
 
 def collect_package_descriptions(
-        arguments: argparse.Namespace,
-        repositories: Dict[str, str],
-        metrics: RepoQueryMetrics,
-        dependents_data: List[Dict[str, Any]] | List[str]
-    ) -> Dict[str, str]:
+    arguments: argparse.Namespace,
+    repositories: dict[str, str],
+    metrics: RepoQueryMetrics,
+    dependents_data: list[dict[str, Any]] | list[str],
+) -> dict[str, str]:
     """
     Collect package descriptions for all relevant packages.
 
@@ -1341,7 +1357,8 @@ def collect_package_descriptions(
         arguments: Parsed command line arguments
         repositories: Dictionary mapping repository IDs to URLs
         metrics: Metrics object to track repoquery calls
-        dependents_data: Either a list of package dictionaries (for --all) or a list of strings (for direct only)
+        dependents_data: Either a list of package dictionaries (for --all)
+            or a list of strings (for direct only)
 
     Returns:
         Dictionary mapping package names to their descriptions
@@ -1355,32 +1372,29 @@ def collect_package_descriptions(
             all_packages.update(package_entry["dependents"])
 
         for package in all_packages:
-            description = query_package_description(
-                package, repositories, metrics, arguments.verbose
-            )
+            description = query_package_description(package, repositories, metrics, arguments.verbose)
             package_descriptions[package] = description
     else:
-        all_packages_to_describe = [arguments.package_name] + dependents_data
+        all_packages_to_describe = [arguments.package_name, *dependents_data]
         for package in all_packages_to_describe:
-            description = query_package_description(
-                package, repositories, metrics, arguments.verbose
-            )
+            description = query_package_description(package, repositories, metrics, arguments.verbose)
             package_descriptions[package] = description
 
     return package_descriptions
 
 
 def generate_output(
-        arguments: argparse.Namespace,
-        dependents_data: List[Dict[str, Any]] | List[str],
-        package_descriptions: Dict[str, str] | None
-    ) -> str:
+    arguments: argparse.Namespace,
+    dependents_data: list[dict[str, Any]] | list[str],
+    package_descriptions: dict[str, str] | None,
+) -> str:
     """
     Generate output in the requested format.
 
     Args:
         arguments: Parsed command line arguments
-        dependents_data: Either a list of package dictionaries (for --all) or a list of strings (for direct only)
+        dependents_data: Either a list of package dictionaries (for --all)
+            or a list of strings (for direct only)
         package_descriptions: Dictionary of package descriptions if --describe is used, None otherwise
 
     Returns:
@@ -1388,21 +1402,21 @@ def generate_output(
     """
     if arguments.format == "json":
         return generate_json_output(arguments, dependents_data, package_descriptions)
-    else:
-        return generate_plain_output(arguments, dependents_data, package_descriptions)
+    return generate_plain_output(arguments, dependents_data, package_descriptions)
 
 
 def generate_json_output(
-        arguments: argparse.Namespace,
-        dependents_data: List[Dict[str, Any]] | List[str],
-        package_descriptions: Dict[str, str] | None
-    ) -> str:
+    arguments: argparse.Namespace,
+    dependents_data: list[dict[str, Any]] | list[str],
+    package_descriptions: dict[str, str] | None,
+) -> str:
     """
     Generate JSON formatted output.
 
     Args:
         arguments: Parsed command line arguments
-        dependents_data: Either a list of package dictionaries (for --all) or a list of strings (for direct only)
+        dependents_data: Either a list of package dictionaries (for --all)
+            or a list of strings (for direct only)
         package_descriptions: Dictionary of package descriptions if --describe is used, None otherwise
 
     Returns:
@@ -1421,9 +1435,7 @@ def generate_json_output(
                 package_obj["partial"] = package_entry["partial"]
             output_array.append(package_obj)
     else:
-        output_array = [
-            {"package": arguments.package_name, "dependents": dependents_data}
-        ]
+        output_array = [{"package": arguments.package_name, "dependents": dependents_data}]
         if arguments.describe and package_descriptions:
             description = package_descriptions.get(arguments.package_name)
             if description:
@@ -1433,16 +1445,17 @@ def generate_json_output(
 
 
 def generate_plain_output(
-        arguments: argparse.Namespace,
-        dependents_data: List[Dict[str, Any]] | List[str],
-        package_descriptions: Dict[str, str] | None
-    ) -> str:
+    arguments: argparse.Namespace,
+    dependents_data: list[dict[str, Any]] | list[str],
+    package_descriptions: dict[str, str] | None,
+) -> str:
     """
     Generate plain text formatted output.
 
     Args:
         arguments: Parsed command line arguments
-        dependents_data: Either a list of package dictionaries (for --all) or a list of strings (for direct only)
+        dependents_data: Either a list of package dictionaries (for --all)
+            or a list of strings (for direct only)
         package_descriptions: Dictionary of package descriptions if --describe is used, None otherwise
 
     Returns:
@@ -1456,10 +1469,7 @@ def generate_plain_output(
                 root_package_entry = package_entry
                 break
 
-        if root_package_entry:
-            collected_packages = root_package_entry["dependents"]
-        else:
-            collected_packages = []
+        collected_packages = root_package_entry["dependents"] if root_package_entry else []
     else:
         collected_packages = dependents_data
 
@@ -1472,8 +1482,7 @@ def generate_plain_output(
             else:
                 output_lines.append(package)
         return "\n".join(output_lines)
-    else:
-        return "\n".join(collected_packages)
+    return "\n".join(collected_packages)
 
 
 def write_output(output_data: str, output_file: Path | None) -> None:
@@ -1492,12 +1501,12 @@ def write_output(output_data: str, output_file: Path | None) -> None:
 
 
 def display_statistics(
-        filter_command: str | None,
-        metrics: RepoQueryMetrics,
-        source_cache: SourcePackageCache,
-        filter_cache: FilterCache,
-        dependency_cache: DependencyCache
-    ) -> None:
+    filter_command: str | None,
+    metrics: RepoQueryMetrics,
+    source_cache: SourcePackageCache,
+    filter_cache: FilterCache,
+    dependency_cache: DependencyCache,
+) -> None:
     """
     Display detailed statistics about the operation.
 
@@ -1519,24 +1528,36 @@ def display_statistics(
         print(f"   Filter command failures: {stats['filter_failures']}", file=sys.stderr)
 
     source_cache_stats = source_cache.get_stats()
-    print(f"   Source package cache size: {source_cache_stats['cache_size']}", file=sys.stderr)
-    print(f"   Source package cache hits (found): {source_cache_stats['found_count']}", file=sys.stderr)
-    print(f"   Source package cache hits (not found): {source_cache_stats['not_found_count']}", file=sys.stderr)
+    print(
+        f"   Source package cache size: {source_cache_stats['cache_size']}",
+        file=sys.stderr,
+    )
+    print(
+        f"   Source package cache hits (found): {source_cache_stats['found_count']}",
+        file=sys.stderr,
+    )
+    print(
+        f"   Source package cache hits (not found): {source_cache_stats['not_found_count']}",
+        file=sys.stderr,
+    )
 
     if source_cache_stats["cached_packages"]:
         print("   Cached source packages:", file=sys.stderr)
         for package in source_cache_stats["cached_packages"]:
             result = source_cache.get(package)
-            if result is None:
-                status = "not found"
-            else:
-                status = f"→ {result}"
+            status = "not found" if result is None else f"→ {result}"
             print(f"     {package}: {status}", file=sys.stderr)
 
     filter_cache_stats = filter_cache.get_stats()
     print(f"   Filter cache size: {filter_cache_stats['cache_size']}", file=sys.stderr)
-    print(f"   Filter cache hits (passed): {filter_cache_stats['passed_count']}", file=sys.stderr)
-    print(f"   Filter cache hits (failed): {filter_cache_stats['failed_count']}", file=sys.stderr)
+    print(
+        f"   Filter cache hits (passed): {filter_cache_stats['passed_count']}",
+        file=sys.stderr,
+    )
+    print(
+        f"   Filter cache hits (failed): {filter_cache_stats['failed_count']}",
+        file=sys.stderr,
+    )
 
     if filter_cache_stats["cached_packages"]:
         print("   Cached filter results:", file=sys.stderr)
@@ -1546,10 +1567,22 @@ def display_statistics(
             print(f"     {package}: {status}", file=sys.stderr)
 
     dependency_cache_stats = dependency_cache.get_stats()
-    print(f"   Dependency cache size: {dependency_cache_stats['cache_size']}", file=sys.stderr)
-    print(f"   Dependency cache total dependents: {dependency_cache_stats['total_dependents']}", file=sys.stderr)
-    print(f"   Dependency cache complete results: {dependency_cache_stats['complete_count']}", file=sys.stderr)
-    print(f"   Dependency cache partial results: {dependency_cache_stats['partial_count']}", file=sys.stderr)
+    print(
+        f"   Dependency cache size: {dependency_cache_stats['cache_size']}",
+        file=sys.stderr,
+    )
+    print(
+        f"   Dependency cache total dependents: {dependency_cache_stats['total_dependents']}",
+        file=sys.stderr,
+    )
+    print(
+        f"   Dependency cache complete results: {dependency_cache_stats['complete_count']}",
+        file=sys.stderr,
+    )
+    print(
+        f"   Dependency cache partial results: {dependency_cache_stats['partial_count']}",
+        file=sys.stderr,
+    )
 
     if dependency_cache_stats["cached_packages"]:
         print("   Cached dependency results:", file=sys.stderr)
@@ -1558,7 +1591,10 @@ def display_statistics(
             if dependents is not None:
                 entry = dependency_cache._cache[package]
                 partial_info = " (partial)" if entry["partial"] else " (complete)"
-                print(f"     {package}: {len(dependents)} dependents{partial_info}", file=sys.stderr)
+                print(
+                    f"     {package}: {len(dependents)} dependents{partial_info}",
+                    file=sys.stderr,
+                )
 
 
 def main() -> None:
@@ -1581,7 +1617,7 @@ def main() -> None:
         arguments.source_packages,
         arguments.max_results,
         arguments.filter_command,
-        arguments.output_file
+        arguments.output_file,
     )
 
     repositories = set_up_repositories_and_cache(
@@ -1589,7 +1625,7 @@ def main() -> None:
         arguments.repository_names,
         arguments.arch,
         arguments.no_refresh,
-        arguments.verbose
+        arguments.verbose,
     )
 
     metrics = RepoQueryMetrics()
@@ -1619,7 +1655,7 @@ def main() -> None:
                 package_entry = {
                     "package": package,
                     "dependents": entry["dependents"],
-                    "partial": entry["partial"]
+                    "partial": entry["partial"],
                 }
                 dependents_data.append(package_entry)
         else:
@@ -1649,7 +1685,13 @@ def main() -> None:
         write_output(output_data, arguments.output_file)
 
         if arguments.stats:
-            display_statistics(arguments.filter_command, metrics, source_cache, filter_cache, dependency_cache)
+            display_statistics(
+                arguments.filter_command,
+                metrics,
+                source_cache,
+                filter_cache,
+                dependency_cache,
+            )
 
     except RepoQueryError as error:
         logging.error("%s", error)
@@ -1658,7 +1700,13 @@ def main() -> None:
         if arguments.allow_missing:
             logging.info("%s (continuing with empty results due to --allow-missing)", error)
             if arguments.all:
-                dependents_data = [{"package": arguments.package_name, "dependents": [], "partial": False}]
+                dependents_data = [
+                    {
+                        "package": arguments.package_name,
+                        "dependents": [],
+                        "partial": False,
+                    }
+                ]
             else:
                 dependents_data = []
         else:
@@ -1668,11 +1716,22 @@ def main() -> None:
         if arguments.allow_missing:
             logging.info("%s (continuing with empty results due to --allow-missing)", error)
             if arguments.all:
-                dependents_data = [{"package": arguments.package_name, "dependents": [], "partial": False}]
+                dependents_data = [
+                    {
+                        "package": arguments.package_name,
+                        "dependents": [],
+                        "partial": False,
+                    }
+                ]
             else:
                 dependents_data = []
         else:
-            logging.error("%s", f"Could not query dependents for {arguments.package_name} because repositories are incomplete (at least the {error.package_name} package is missing)")
+            logging.error(
+                "%s",
+                f"Could not query dependents for {arguments.package_name} "
+                f"because repositories are incomplete (at least "
+                f"the {error.package_name} package is missing)",
+            )
             sys.exit(error.exit_code)
     except KeyboardInterrupt:
         sys.exit(0)

@@ -1,15 +1,13 @@
-from datetime import datetime, timezone, timedelta
 import logging
+from datetime import UTC, datetime, timedelta
 from urllib.error import HTTPError
 
+from ymir.common.constants import JiraLabels
 from ymir.supervisor.baseline_tests import BaselineTests
 
-from ymir.common.constants import JiraLabels
-
 from .constants import DATETIME_MIN_UTC, GITLAB_GROUPS
-from .errata_utils import get_erratum_for_link, get_erratum_build_nvr
+from .errata_utils import get_erratum_build_nvr, get_erratum_for_link
 from .gitlab_utils import search_gitlab_project_mrs
-from .work_item_handler import WorkItemHandler
 from .jira_utils import (
     add_issue_label,
     change_issue_status,
@@ -27,6 +25,7 @@ from .supervisor_types import (
     WorkflowResult,
 )
 from .testing_analyst import analyze_issue
+from .work_item_handler import WorkItemHandler
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +36,7 @@ class IssueHandler(WorkItemHandler):
     This includes changing the issue status, adding comments, and adding labels.
     """
 
-    def __init__(
-        self, issue: FullIssue, *, dry_run: bool, ignore_needs_attention: bool
-    ):
+    def __init__(self, issue: FullIssue, *, dry_run: bool, ignore_needs_attention: bool):
         super().__init__(dry_run=dry_run, ignore_needs_attention=ignore_needs_attention)
         self.issue = issue
 
@@ -47,10 +44,7 @@ class IssueHandler(WorkItemHandler):
         comment = f"*Changing status from {self.issue.status} => {status}*\n\n{why}"
         change_issue_status(self.issue.key, status, comment, dry_run=self.dry_run)
 
-        if status in (IssueStatus.RELEASE_PENDING, IssueStatus.CLOSED):
-            reschedule_delay = -1
-        else:
-            reschedule_delay = 0
+        reschedule_delay = -1 if status in (IssueStatus.RELEASE_PENDING, IssueStatus.CLOSED) else 0
 
         return WorkflowResult(status=why, reschedule_in=reschedule_delay)
 
@@ -81,9 +75,7 @@ class IssueHandler(WorkItemHandler):
                 details_comment=comment,
             )
 
-        previous_build_nvr = get_erratum_build_nvr(
-            related_erratum.id, self.issue.components[0]
-        )
+        previous_build_nvr = get_erratum_build_nvr(related_erratum.id, self.issue.components[0])
 
         if previous_build_nvr is None:
             return resolve_on_error(
@@ -126,9 +118,7 @@ class IssueHandler(WorkItemHandler):
         if not baseline_tests.settled():
             return self.resolve_wait("Waiting for baseline tests to complete")
 
-        await baseline_tests.create_attachments(
-            issue_key=self.issue.key, dry_run=self.dry_run
-        )
+        await baseline_tests.create_attachments(issue_key=self.issue.key, dry_run=self.dry_run)
 
         issue_comment = baseline_tests.format_issue_comment(include_attachments=True)
         remove_issue_label(
@@ -169,8 +159,7 @@ class IssueHandler(WorkItemHandler):
         component = issue.components[0]
 
         if (
-            JiraLabels.BACKPORTED.value in issue.labels
-            or JiraLabels.REBASED.value in issue.labels
+            JiraLabels.BACKPORTED.value in issue.labels or JiraLabels.REBASED.value in issue.labels
         ) and JiraLabels.MERGED.value not in issue.labels:
             for group in GITLAB_GROUPS:
                 merged_mrs = search_gitlab_project_mrs(
@@ -183,7 +172,8 @@ class IssueHandler(WorkItemHandler):
                     add_issue_label(
                         issue.key,
                         JiraLabels.MERGED.value,
-                        f"A [merge request| {merged_mr.url}]. resolving this issue has been merged; waiting for errata creation and final testing.",
+                        f"A [merge request| {merged_mr.url}]. resolving this issue "
+                        "has been merged; waiting for errata creation and final testing.",
                         dry_run=self.dry_run,
                     )
 
@@ -224,9 +214,7 @@ class IssueHandler(WorkItemHandler):
             )
             for label in issue.labels
         ):
-            return self.resolve_remove_work_item(
-                f"Issue without target labels: {issue.labels}"
-            )
+            return self.resolve_remove_work_item(f"Issue without target labels: {issue.labels}")
 
         if JiraLabels.MERGED.value not in issue.labels:
             self.label_merge_if_needed()
@@ -238,27 +226,24 @@ class IssueHandler(WorkItemHandler):
             )
 
         latest_merged_timestamp = self.get_latest_merged_timestamp()
-        cur_time = datetime.now(tz=timezone.utc)
+        cur_time = datetime.now(tz=UTC)
         time_diff = abs(cur_time - latest_merged_timestamp)
         if time_diff < timedelta(days=1):
             return self.resolve_wait(
                 "Wait for the associated erratum to be created",
                 reschedule_in=60 * 60,
             )
-        else:
-            return self.resolve_flag_attention(
-                "A merge request was merged for this issue more than 24 hours ago but no errata "
-                "was created. Please investigate and look for gating failures or other reasons that "
-                "might have blocked errata creation."
-            )
+        return self.resolve_flag_attention(
+            "A merge request was merged for this issue more than 24 hours ago but no errata "
+            "was created. Please investigate and look for gating failures or other reasons "
+            "that might have blocked errata creation."
+        )
 
     async def run_after_errata_created(self) -> WorkflowResult:
         issue = self.issue
         assert issue.errata_link is not None
         if issue.fixed_in_build is None:
-            return self.resolve_flag_attention(
-                "Issue has errata_link but no fixed_in_build"
-            )
+            return self.resolve_flag_attention("Issue has errata_link but no fixed_in_build")
 
         if issue.preliminary_testing != PreliminaryTesting.PASS:
             return self.resolve_flag_attention(
@@ -290,9 +275,7 @@ class IssueHandler(WorkItemHandler):
 
                 baseline_tests = BaselineTests.load_from_issue(self.issue)
                 if baseline_tests is not None:
-                    testing_analysis = await analyze_issue(
-                        issue, related_erratum, after_baseline=True
-                    )
+                    testing_analysis = await analyze_issue(issue, related_erratum, after_baseline=True)
                 else:
                     testing_analysis = await analyze_issue(issue, related_erratum)
 
@@ -311,7 +294,7 @@ class IssueHandler(WorkItemHandler):
                             baseline_tests is None
                             or (
                                 set(testing_analysis.failed_test_ids)
-                                != set(c.failed.id for c in baseline_tests.comparisons)
+                                != {c.failed.id for c in baseline_tests.comparisons}
                             )
                         ):
                             return await self.resolve_start_reproduction(
@@ -319,11 +302,10 @@ class IssueHandler(WorkItemHandler):
                                 testing_analysis.comment or "",
                                 testing_analysis.failed_test_ids,
                             )
-                        else:
-                            return self.resolve_flag_attention(
-                                "Tests failed - see details below",
-                                details_comment=testing_analysis.comment,
-                            )
+                        return self.resolve_flag_attention(
+                            "Tests failed - see details below",
+                            details_comment=testing_analysis.comment,
+                        )
                     case TestingState.ERROR:
                         return self.resolve_flag_attention(
                             "An error occurred during testing - see details below",
@@ -341,9 +323,7 @@ class IssueHandler(WorkItemHandler):
                             or "Final testing has been waived, moving to Release Pending.",
                         )
                     case _:
-                        raise ValueError(
-                            f"Unknown testing state: {testing_analysis.state}"
-                        )
+                        raise ValueError(f"Unknown testing state: {testing_analysis.state}")
             case IssueStatus.RELEASE_PENDING | IssueStatus.CLOSED:
                 return self.resolve_remove_work_item(f"Issue status is {issue.status}")
             case _:
@@ -357,13 +337,8 @@ class IssueHandler(WorkItemHandler):
 
         logger.info("Running workflow for issue %s", issue.url)
 
-        if (
-            JiraLabels.NEEDS_ATTENTION.value in issue.labels
-            and not self.ignore_needs_attention
-        ):
-            return self.resolve_remove_work_item(
-                "Issue has the ymir_needs_attention label"
-            )
+        if JiraLabels.NEEDS_ATTENTION.value in issue.labels and not self.ignore_needs_attention:
+            return self.resolve_remove_work_item("Issue has the ymir_needs_attention label")
 
         if len(issue.components) != 1:
             return self.resolve_flag_attention(
@@ -373,5 +348,4 @@ class IssueHandler(WorkItemHandler):
 
         if issue.errata_link is None:
             return await self.run_before_errata_created()
-        else:
-            return await self.run_after_errata_created()
+        return await self.run_after_errata_created()

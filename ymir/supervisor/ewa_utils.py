@@ -1,7 +1,8 @@
 #!/usr/bin/python3
-import typer
 import re
+
 import nitrate
+import typer
 
 # This script extracts information from the TCMS notes fields as generated
 # by Errata Workflow Automation (EWA). An example entry looks like:
@@ -31,9 +32,10 @@ import nitrate
 # we are interested in using a regular expression.
 
 # Include only meaningful lines from the notes
-NOTES_INCLUDE_PATTERN = re.compile(r'CR#|=>|-files|-avc|beaker-task')
+NOTES_INCLUDE_PATTERN = re.compile(r"CR#|=>|-files|-avc|beaker-task")
 # Unless called with --full, skip the Errata Workflow caseruns
-CASERUN_EXCLUDE_PATTERN = re.compile(r'Errata Workflow')
+CASERUN_EXCLUDE_PATTERN = re.compile(r"Errata Workflow")
+
 
 # get the run details from the run specified by its id and return
 # a multiline string containing the results and for tests which didn't
@@ -60,7 +62,7 @@ def get_tcms_run_details(run_id: str, *, full: bool = False, color: bool = False
         caserun_str = str(caserun)
         notes_str = str(caserun.notes)
 
-        passed = (caserun.status == nitrate.Status('PASSED'))
+        passed = caserun.status == nitrate.Status("PASSED")
 
         output_entry = []
         if full:
@@ -76,9 +78,9 @@ def get_tcms_run_details(run_id: str, *, full: bool = False, color: bool = False
             output_entry.append(caserun_str)
             # add the details from notes only for tests that do not pass
             if not passed:
-                for line in notes_str.splitlines():
-                    if NOTES_INCLUDE_PATTERN.search(line):
-                        output_entry.append(line)
+                output_entry.extend(
+                    line for line in notes_str.splitlines() if NOTES_INCLUDE_PATTERN.search(line)
+                )
         if output_entry:
             output.append(output_entry)
 
@@ -87,16 +89,18 @@ def get_tcms_run_details(run_id: str, *, full: bool = False, color: bool = False
     # Join the strings into a single multiline string
     return "\n".join(flattened_output)
 
+
 def main(
     test_run_id: str,
     full: bool = typer.Option(False, help="Show the full, unfiltered output."),
-    color: bool = typer.Option(False, help="Enable colorized output.")
-    ):
+    color: bool = typer.Option(False, help="Enable colorized output."),
+):
 
     # get_tcms_run_details returns a single string.
     result = get_tcms_run_details(test_run_id, full=full, color=color)
     if result:
         print(result)
+
 
 if __name__ == "__main__":
     typer.run(main)

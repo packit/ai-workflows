@@ -1,21 +1,29 @@
 import asyncio
 import re
 from pathlib import Path
-from typing import Any
 
 import koji
+from beeai_framework.context import RunContext
+from beeai_framework.emitter import Emitter
+from beeai_framework.tools import (
+    JSONToolOutput,
+    StringToolOutput,
+    Tool,
+    ToolError,
+    ToolRunOptions,
+)
 from pydantic import BaseModel, Field
 from specfile import Specfile
 from specfile.utils import EVR
-from specfile.value_parser import EnclosedMacroSubstitution, MacroSubstitution, Node, ValueParser
+from specfile.value_parser import (
+    EnclosedMacroSubstitution,
+    MacroSubstitution,
+    Node,
+    ValueParser,
+)
 
-from beeai_framework.context import RunContext
-from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, StringToolOutput, Tool, ToolError, ToolRunOptions
-
-from ymir.common.constants import BREWHUB_URL
-from ymir.common.validators import NonEmptyString
 from ymir.common.utils import get_absolute_path
+from ymir.tools.constants import BREWHUB_URL
 
 
 class GetPackageInfoToolInput(BaseModel):
@@ -24,6 +32,7 @@ class GetPackageInfoToolInput(BaseModel):
 
 class PackageInfo(BaseModel):
     """Package information extracted from spec file."""
+
     version: str = Field(description="Package version from Version field")
     patch_files: list[str] = Field(description="List of patch filenames in order (Patch0, Patch1, etc.)")
 
@@ -64,14 +73,9 @@ class GetPackageInfoTool(Tool[GetPackageInfoToolInput, ToolRunOptions, GetPackag
             with Specfile(spec_path) as spec:
                 version = spec.version
                 with spec.patches() as patches:
-                    patch_files = [p.expanded_location for p in patches if p.expanded_location]
+                    patch_files = [p.expanded_location for p in patches if p.valid and p.expanded_location]
 
-                return GetPackageInfoToolOutput(
-                    result=PackageInfo(
-                        version=version,
-                        patch_files=patch_files
-                    )
-                )
+                return GetPackageInfoToolOutput(result=PackageInfo(version=version, patch_files=patch_files))
 
         except Exception as e:
             raise ToolError(f"Failed to extract package info from {spec_path}: {e}") from e
@@ -137,20 +141,22 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
 
     @staticmethod
     def _process_zstream_branch(dist_git_branch: str) -> tuple[str, str] | None:
-        if not (m := re.match(r"^(?P<prefix>rhel-(?P<x>\d+)\.)(?P<y>\d+)(?P<suffix>\.\d+)?$", dist_git_branch)):
+        if not (
+            m := re.match(
+                r"^(?P<prefix>rhel-(?P<x>\d+)\.)(?P<y>\d+)(?P<suffix>\.\d+)?$",
+                dist_git_branch,
+            )
+        ):
             # not a Z-Stream branch
             return None
-        higher_stream_candidate_tag = (
-            m.group("prefix")
-            # y++, up to 10 (highest RHEL minor version)
-            + str(min(int(m.group("y")) + 1, 10))
-            + (m.group("suffix") or "")
-            + "-candidate"
-        )
-        return higher_stream_candidate_tag
+        y = int(m.group("y"))
+        suffix = (m.group("suffix") or "") + "-candidate"
+        current_stream_candidate_tag = m.group("prefix") + str(y) + suffix
+        higher_stream_candidate_tag = m.group("prefix") + str(min(y + 1, 10)) + suffix
+        return current_stream_candidate_tag, higher_stream_candidate_tag
 
     @staticmethod
-    async def _get_latest_higher_stream_build(package: str, candidate_tag: str) -> EVR:
+    async def _get_latest_candidate_build(package: str, candidate_tag: str) -> EVR:
         builds = await asyncio.to_thread(
             koji.ClientSession(BREWHUB_URL).listTagged,
             package=package,
@@ -162,15 +168,16 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         if not builds:
             raise RuntimeError(f"There are no builds of {package} in {candidate_tag}")
         [build] = builds
-        return EVR(epoch=build["epoch"] or 0, version=build["version"], release=build["release"])
+        return EVR(
+            epoch=build["epoch"] or 0,
+            version=build["version"],
+            release=build["release"],
+        )
 
     @staticmethod
     def _find_macro(name: str, nodes: list[Node]) -> int | None:
         for index, node in reversed(list(enumerate(nodes))):
-            if (
-                isinstance(node, (MacroSubstitution, EnclosedMacroSubstitution))
-                and node.name == name
-            ):
+            if isinstance(node, (MacroSubstitution, EnclosedMacroSubstitution)) and node.name == name:
                 return index
         return None
 
@@ -190,7 +197,7 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                 prefix = current_release
                 suffix = ""
             else:
-                prefix = "".join(str(n) for n in nodes[: dist_index])
+                prefix = "".join(str(n) for n in nodes[:dist_index])
                 suffix = "".join(str(n) for n in nodes[dist_index + 1 :])
             if m := re.match(r"^(\d+)(.*)$", prefix):
                 # increase or reset the main numeric part
@@ -210,10 +217,22 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         spec_path: Path,
         package: str,
         rebase: bool,
+        current_stream_candidate_tag: str,
         higher_stream_candidate_tag: str,
     ) -> None:
-        latest_higher_stream_build = await cls._get_latest_higher_stream_build(package, higher_stream_candidate_tag)
-        higher_stream_base_release, _ = latest_higher_stream_build.release.rsplit(".el", maxsplit=1)
+        latest_current_stream_build = await cls._get_latest_candidate_build(
+            package, current_stream_candidate_tag
+        )
+        latest_higher_stream_build = await cls._get_latest_candidate_build(
+            package, higher_stream_candidate_tag
+        )
+        base_build = (
+            latest_current_stream_build
+            if EVR(epoch=latest_current_stream_build.epoch, version=latest_current_stream_build.version)
+            < EVR(epoch=latest_higher_stream_build.epoch, version=latest_higher_stream_build.version)
+            else latest_higher_stream_build
+        )
+        base_release, _ = base_build.release.rsplit(".el", maxsplit=1)
         with Specfile(spec_path) as spec:
             current_release = spec.raw_release
         nodes = ValueParser.parse(current_release)
@@ -228,8 +247,8 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                 # %autorelease after %dist, most likely already a Z-Stream release, no change needed
                 release = current_release
             else:
-                # no %dist or %autorelease before it, let's create a new release based on the higher stream
-                release = higher_stream_base_release + "%{?dist}.%{autorelease -n}"
+                # no %dist or %autorelease before it, let's create a new release
+                release = base_release + "%{?dist}.%{autorelease -n}"
         else:
             if rebase:
                 # no %autorelease, rebase, reset the release
@@ -244,8 +263,8 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                     # no %autorelease and existing Z-Stream counter after %dist, increase it
                     release = prefix + "." + str(int(m.group(1)) + 1)
                 else:
-                    # invalid Z-Stream counter, let's try to create a new release based on the higher stream
-                    release = higher_stream_base_release + "%{?dist}.1"
+                    # invalid Z-Stream counter, let's try to create a new release
+                    release = base_release + "%{?dist}.1"
             else:
                 # no %autorelease, %dist present, add Z-Stream counter
                 release = current_release + ".1"
@@ -261,14 +280,14 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
     ) -> StringToolOutput:
         spec_path = get_absolute_path(tool_input.spec, self)
         try:
-            if not (higher_stream_candidate_tag := self._process_zstream_branch(tool_input.dist_git_branch)):
+            if not (candidate_tags := self._process_zstream_branch(tool_input.dist_git_branch)):
                 await self._bump_or_reset_release(spec_path, tool_input.rebase)
             else:
                 await self._set_zstream_release(
                     spec_path,
                     tool_input.package,
                     tool_input.rebase,
-                    higher_stream_candidate_tag,
+                    *candidate_tags,
                 )
         except Exception as e:
             raise ToolError(f"Failed to update release: {e}") from e

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-requirements-txt"]
 build-backend = "hatchling.build"
 
 [project]
@@ -8,29 +8,10 @@ version = "0.1.0"
 description = "AI-powered RHEL package maintenance automation"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
-dependencies = [
-    "ymir-common",
-    "ymir-tools",
-    "litellm!=1.82.7,!=1.82.8",
-    "aiohttp>=3.12.15",
-    "aiofiles>=24.1.0",
-    "arize-phoenix-otel>=0.13.0",
-    "beautifulsoup4>=4.13.4",
-    "beeai-framework[mcp,duckduckgo]>=0.1.36",
-    "copr>=1.129",
-    "fastmcp>=2.11.3",
-    "ogr>=0.55.0",
-    "openinference-instrumentation-beeai>=0.1.8",
-    "redis>=6.4.0",
-    "requests-gssapi>=1.3.0",
-    "rpm>=0.4.0",
-    "specfile>=0.36.0",
-    "typer>=0.16.0",
-    "backoff>=2.2.1",
-    "tomli-w>=1.2.0",
-    "flexmock>=0.12.2",
-    "nitrate>=1.9.0",
-]
+dynamic = ["dependencies"]
+
+[tool.hatch.metadata.hooks.requirements_txt]
+files = ["requirements-global.txt", "requirements.txt"]
 
 [project.optional-dependencies]
 test = [

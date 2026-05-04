@@ -1,13 +1,51 @@
 import logging
-import re
-from typing import Any
 import os
+import re
 
-from beeai_framework.adapters.mcp.serve.server import MCPServer, MCPServerConfig, MCPSettings
-from beeai_framework.emitter.emitter import Emitter
+from beeai_framework.adapters.mcp.serve.server import (
+    MCPServer,
+    MCPServerConfig,
+    MCPSettings,
+)
 
-
-logger = logging.getLogger(__name__)
+from ymir.tools.gateway_utils import setup_logging
+from ymir.tools.privileged.copr import BuildPackageTool, DownloadArtifactsTool
+from ymir.tools.privileged.distgit import CreateZstreamBranchTool
+from ymir.tools.privileged.gitlab import (
+    AddBlockingMergeRequestCommentTool,
+    AddMergeRequestCommentTool,
+    AddMergeRequestLabelsTool,
+    CloneRepositoryTool,
+    FetchGitlabMrNotesTool,
+    ForkRepositoryTool,
+    GetAuthorizedCommentsFromMergeRequestTool,
+    GetFailedPipelineJobsFromMergeRequestTool,
+    GetInternalRhelBranchesTool,
+    GetMergeRequestDetailsTool,
+    GetPatchFromUrlTool,
+    OpenMergeRequestTool,
+    PushToRemoteRepositoryTool,
+    RetryPipelineJobTool,
+)
+from ymir.tools.privileged.jira import (
+    AddJiraCommentTool,
+    ChangeJiraStatusTool,
+    CheckCveTriageEligibilityTool,
+    EditJiraLabelsTool,
+    GetJiraDetailsTool,
+    GetJiraDevStatusTool,
+    GetJiraPullRequestsTool,
+    SearchJiraIssuesTool,
+    SetJiraFieldsTool,
+    SetPreliminaryTestingTool,
+    VerifyIssueAuthorTool,
+)
+from ymir.tools.privileged.lookaside import (
+    DownloadSourcesTool,
+    PrepSourcesTool,
+    UploadSourcesTool,
+)
+from ymir.tools.privileged.zstream_search import ZStreamSearchTool
 
 # Patterns that match common credential formats in log output
 _REDACT_PATTERNS = [
@@ -26,8 +64,13 @@ _REDACT_PATTERNS = [
     # Base64 Authorization headers
     re.compile(r"Basic [A-Za-z0-9+/=]{20,}"),
     # Generic long hex/base64 tokens (e.g. Jira PATs)
-    re.compile(r"(?:token|key|password|secret|credential)[\"'=:\s]+[A-Za-z0-9+/=_-]{20,}['\"\s]*", re.IGNORECASE),
+    re.compile(
+        r"(?:token|key|password|secret|credential)[\"'=:\s]+[A-Za-z0-9+/=_-]{20,}['\"\s]*",
+        re.IGNORECASE,
+    ),
 ]
+
+logger = logging.getLogger(__name__)
 
 
 def _redact(text: str) -> str:
@@ -35,62 +78,6 @@ def _redact(text: str) -> str:
     for pattern in _REDACT_PATTERNS:
         text = pattern.sub("[REDACTED]", text)
     return text
-
-from ymir.tools.privileged.copr_tools import BuildPackageTool, DownloadArtifactsTool
-from ymir.tools.privileged.distgit_tools import CreateZstreamBranchTool
-from ymir.tools.privileged.gitlab_tools import (
-    AddBlockingMergeRequestCommentTool,
-    AddMergeRequestCommentTool,
-    AddMergeRequestLabelsTool,
-    CloneRepositoryTool,
-    CreateMergeRequestChecklistTool,
-    ForkRepositoryTool,
-    GetAuthorizedCommentsFromMergeRequestTool,
-    GetFailedPipelineJobsFromMergeRequestTool,
-    GetInternalRhelBranchesTool,
-    GetMergeRequestDetailsTool,
-    GetPatchFromUrlTool,
-    OpenMergeRequestTool,
-    PushToRemoteRepositoryTool,
-    RetryPipelineJobTool,
-)
-from ymir.tools.privileged.jira_tools import (
-    AddJiraCommentTool,
-    ChangeJiraStatusTool,
-    CheckCveTriageEligibilityTool,
-    EditJiraLabelsTool,
-    GetJiraDetailsTool,
-    GetJiraDevStatusTool,
-    SearchJiraIssuesTool,
-    SetJiraFieldsTool,
-    VerifyIssueAuthorTool,
-)
-from ymir.tools.privileged.lookaside_tools import DownloadSourcesTool, PrepSourcesTool, UploadSourcesTool
-from ymir.tools.privileged.zstream_search import ZStreamSearchTool
-
-
-def _setup_logging():
-    logging.basicConfig(level=logging.INFO)
-
-    # Log tool calls via Emitter.
-    # Dotted strings in Emitter.on() are matched exactly (not as globs),
-    # so we use regex patterns to match any tool's events.
-    def on_tool_start(data: Any, meta: Any):
-        logger.info(f"Tool called: {meta.creator}")
-        logger.info(f"Tool arguments: {_redact(str(data))}")
-
-    def on_tool_success(data: Any, meta: Any):
-        logger.info(f"Tool {meta.creator} completed successfully")
-
-    def on_tool_error(data: Any, meta: Any):
-        logger.error(f"Tool {meta.creator} failed with error: {_redact(str(data))}")
-        error = getattr(data, "error", None)
-        if error is not None:
-            logger.error(f"Tool {meta.creator} traceback:", exc_info=error)
-
-    Emitter.root().on(re.compile(r"^tool\..+\.start$"), on_tool_start)
-    Emitter.root().on(re.compile(r"^tool\..+\.success$"), on_tool_success)
-    Emitter.root().on(re.compile(r"^tool\..+\.error$"), on_tool_error)
 
 
 def main():
@@ -103,40 +90,44 @@ def main():
         )
     config = MCPServerConfig(**config_kwargs)
 
-    _setup_logging()
+    setup_logging()
     mcp = MCPServer(config=config)
-    mcp.register_many([
-        BuildPackageTool(),
-        DownloadArtifactsTool(),
-        CreateZstreamBranchTool(),
-        AddBlockingMergeRequestCommentTool(),
-        AddMergeRequestCommentTool(),
-        AddMergeRequestLabelsTool(),
-        CloneRepositoryTool(),
-        CreateMergeRequestChecklistTool(),
-        ForkRepositoryTool(),
-        GetAuthorizedCommentsFromMergeRequestTool(),
-        GetFailedPipelineJobsFromMergeRequestTool(),
-        GetInternalRhelBranchesTool(),
-        GetMergeRequestDetailsTool(),
-        GetPatchFromUrlTool(),
-        OpenMergeRequestTool(),
-        PushToRemoteRepositoryTool(),
-        RetryPipelineJobTool(),
-        AddJiraCommentTool(),
-        ChangeJiraStatusTool(),
-        CheckCveTriageEligibilityTool(),
-        EditJiraLabelsTool(),
-        GetJiraDetailsTool(),
-        GetJiraDevStatusTool(),
-        SearchJiraIssuesTool(),
-        SetJiraFieldsTool(),
-        VerifyIssueAuthorTool(),
-        DownloadSourcesTool(),
-        PrepSourcesTool(),
-        UploadSourcesTool(),
-        ZStreamSearchTool(),
-    ])
+    mcp.register_many(
+        [
+            BuildPackageTool(),
+            DownloadArtifactsTool(),
+            CreateZstreamBranchTool(),
+            AddBlockingMergeRequestCommentTool(),
+            AddMergeRequestCommentTool(),
+            AddMergeRequestLabelsTool(),
+            CloneRepositoryTool(),
+            ForkRepositoryTool(),
+            GetAuthorizedCommentsFromMergeRequestTool(),
+            GetFailedPipelineJobsFromMergeRequestTool(),
+            GetInternalRhelBranchesTool(),
+            GetMergeRequestDetailsTool(),
+            GetPatchFromUrlTool(),
+            OpenMergeRequestTool(),
+            PushToRemoteRepositoryTool(),
+            RetryPipelineJobTool(),
+            FetchGitlabMrNotesTool(),
+            AddJiraCommentTool(),
+            ChangeJiraStatusTool(),
+            CheckCveTriageEligibilityTool(),
+            EditJiraLabelsTool(),
+            GetJiraDetailsTool(),
+            GetJiraDevStatusTool(),
+            GetJiraPullRequestsTool(),
+            SearchJiraIssuesTool(),
+            SetJiraFieldsTool(),
+            SetPreliminaryTestingTool(),
+            VerifyIssueAuthorTool(),
+            DownloadSourcesTool(),
+            PrepSourcesTool(),
+            UploadSourcesTool(),
+            ZStreamSearchTool(),
+        ]
+    )
 
     mcp.serve()
 

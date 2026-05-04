@@ -1,9 +1,8 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-from typing_extensions import Literal
 
 
 class IssueStatus(StrEnum):
@@ -101,7 +100,7 @@ class Issue(BaseModel):
     status: IssueStatus
     labels: list[str]
     fix_versions: list[str]
-    errata_link: Optional[str]  # RHEL only
+    errata_link: str | None  # RHEL only
     fixed_in_build: str | None = None  # RHEL only
     test_coverage: list[TestCoverage] | None = None  # RHEL only
     preliminary_testing: PreliminaryTesting | None = None  # RHEL only
@@ -166,8 +165,7 @@ class TestingFarmRequest(BaseModel):
             id
             for env in self.environments_data
             for artifact in env.get("artifacts", [])
-            if artifact.get("type") == "redhat-brew-build"
-            and (id := artifact.get("id"))
+            if artifact.get("type") == "redhat-brew-build" and (id := artifact.get("id"))
         }
         if len(artifacts) == 1:
             return artifacts.pop()
@@ -195,10 +193,7 @@ class JotnarTag(BaseModel):
 
     def all_formats(self) -> list[str]:
         """Current and legacy tag strings for backwards-compatible search."""
-        return [str(self)] + [
-            f"::: {p} {self.type} E: {self.id.strip()} :::"
-            for p in self._LEGACY_PREFIXES
-        ]
+        return [str(self)] + [f"::: {p} {self.type} E: {self.id.strip()} :::" for p in self._LEGACY_PREFIXES]
 
 
 class TestingState(StrEnum):
@@ -214,9 +209,7 @@ class TestingState(StrEnum):
 class WorkflowResult(BaseModel):
     """Represents the result of running a workflow once."""
 
-    status: str = Field(
-        description="A message describing what happened during the workflow run and why"
-    )
+    status: str = Field(description="A message describing what happened during the workflow run and why")
     reschedule_in: float = Field(
         description="Delay in seconds to reschedule the work item. Negative value means don't reschedule"
     )

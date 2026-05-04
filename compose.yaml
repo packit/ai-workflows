@@ -7,7 +7,9 @@ x-beeai-env: &beeai-env
   GIT_REPO_BASEPATH: /git-repos
   MAX_RETRIES: 3
   DRY_RUN: ${DRY_RUN:-false}
+  JIRA_DRY_RUN: ${JIRA_DRY_RUN:-false}
   AUTO_CHAIN: ${AUTO_CHAIN:-true}
+  SILENT_RUN: ${SILENT_RUN:-false}
   REQUESTS_CA_BUNDLE: /etc/pki/tls/certs/ca-bundle.crt
 
 # Base template for BeeAI agents
@@ -93,7 +95,7 @@ services:
     env_file:
       - .secrets/mcp-gateway.env
     volumes:
-      - ./ymir/tools/privileged:/home/mcp/ymir/tools/privileged:ro,z
+      - ./ymir/tools:/home/mcp/ymir/tools:ro,z
       - ./ymir/tools/privileged/tests/data:/home/mcp/ymir/tools/privileged/tests/data:rw,z
       - ./ymir/common:/home/mcp/ymir/common:ro,z
       - .secrets/keytab:/home/mcp/keytab:ro,z,U
@@ -145,6 +147,13 @@ services:
     command: ["python", "-m", "ymir.agents.triage_agent"]
     profiles: ["agents"]
 
+  preliminary-testing-agent:
+    <<: *beeai-agent-c10s
+    environment:
+      <<: *beeai-env
+    command: ["python", "-m", "ymir.agents.preliminary_testing_agent"]
+    profiles: ["agents"]
+
   triage-agent-e2e-tests:
     <<: *beeai-agent-c10s
     environment:
@@ -176,12 +185,12 @@ services:
 
   rebuild-agent-c9s:
     <<: *beeai-agent-c9s
-    command: ["python", "agents/rebuild_agent.py"]
+    command: ["python", "-m", "ymir.agents.rebuild_agent"]
     profiles: ["agents"]
 
   rebuild-agent-c10s:
     <<: *beeai-agent-c10s
-    command: ["python", "agents/rebuild_agent.py"]
+    command: ["python", "-m", "ymir.agents.rebuild_agent"]
     profiles: ["agents"]
 
   mr-agent-c9s:

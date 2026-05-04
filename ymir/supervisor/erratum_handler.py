@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ymir.common.constants import JiraLabels
 
@@ -10,7 +10,6 @@ from .constants import (
     POST_PUSH_TESTING_TIMEOUT,
     POST_PUSH_TESTING_TIMEOUT_STR,
 )
-from .work_item_handler import WorkItemHandler
 from .errata_utils import (
     ErratumBuild,
     ErratumPushStatus,
@@ -41,7 +40,7 @@ from .supervisor_types import (
     JotnarTag,
     WorkflowResult,
 )
-
+from .work_item_handler import WorkItemHandler
 
 logger = logging.getLogger(__name__)
 
@@ -70,18 +69,17 @@ def all_issues_are_release_pending(issues: list[Issue]) -> bool:
     return all(issue.status == IssueStatus.RELEASE_PENDING for issue in issues)
 
 
-def erratum_get_issues(
-    erratum: Erratum, *, issue_cache: dict[str, Issue] = {}, full: bool = False
-):
+def erratum_get_issues(erratum: Erratum, *, issue_cache: dict[str, Issue] | None = None, full: bool = False):
     # The errata data we fetch from errata-tool includes details
     # of the errata beyond the ID - in particular it has the status
     # of the issue - but due to a bug in errata tool that is returning
     # stale data, so we need to fetch the status from JIRA directly.
     # https://issues.redhat.com/browse/RHELWF-13481
 
+    if issue_cache is None:
+        issue_cache = {}
     return [
-        issue_cache.get(issue_key) or get_issue(issue_key, full=full)
-        for issue_key in erratum.jira_issues
+        issue_cache.get(issue_key) or get_issue(issue_key, full=full) for issue_key in erratum.jira_issues
     ]
 
 
@@ -123,9 +121,7 @@ class ErratumHandler(WorkItemHandler):
     adding comments, or flagging it for human attention.
     """
 
-    def __init__(
-        self, erratum: Erratum, *, dry_run: bool, ignore_needs_attention: bool
-    ):
+    def __init__(self, erratum: Erratum, *, dry_run: bool, ignore_needs_attention: bool):
         super().__init__(dry_run=dry_run, ignore_needs_attention=ignore_needs_attention)
         self.erratum = erratum
 
@@ -160,16 +156,11 @@ class ErratumHandler(WorkItemHandler):
     def resolve_set_status(self, status: ErrataStatus, why: str):
         erratum_change_state(self.erratum.id, status, dry_run=self.dry_run)
 
-        if status in (ErrataStatus.NEW_FILES, ErrataStatus.QE):
-            reschedule_delay = 0
-        else:
-            reschedule_delay = -1
+        reschedule_delay = 0 if status in (ErrataStatus.NEW_FILES, ErrataStatus.QE) else -1
 
         return WorkflowResult(status=why, reschedule_in=reschedule_delay)
 
-    def resolve_wait_for_cat_tests(
-        self, new_status: ErrataStatus, rule_set
-    ) -> WorkflowResult:
+    def resolve_wait_for_cat_tests(self, new_status: ErrataStatus, rule_set) -> WorkflowResult:
         # get stage push details to check completion time
         push_details = erratum_get_latest_stage_push_details(self.erratum.id)
 
@@ -186,26 +177,23 @@ class ErratumHandler(WorkItemHandler):
                 "Cannot determine stage push completion time (no log timestamps available)."
             )
 
-        cur_time = datetime.now(tz=timezone.utc)
+        cur_time = datetime.now(tz=UTC)
         time_elapsed = cur_time - push_details.updated_at
 
         if time_elapsed > POST_PUSH_TESTING_TIMEOUT:
             return self.resolve_flag_attention(
                 f"CAT tests didn't complete successfully after {POST_PUSH_TESTING_TIMEOUT_STR}"
             )
-        else:
-            # within timeout so wait to clear
-            return self.resolve_wait(
-                f"Stage push completed for erratum {self.erratum.id},"
-                f" waiting for CAT tests to complete before moving to {new_status}"
-            )
+        # within timeout so wait to clear
+        return self.resolve_wait(
+            f"Stage push completed for erratum {self.erratum.id},"
+            f" waiting for CAT tests to complete before moving to {new_status}"
+        )
 
     def try_to_advance_erratum(self, new_status: ErrataStatus) -> WorkflowResult:
         rule_set = get_erratum_transition_rules(self.erratum.id)
         if rule_set.to_status != new_status:
-            return self.resolve_flag_attention(
-                f"Next state is {rule_set.to_status} instead of {new_status}"
-            )
+            return self.resolve_flag_attention(f"Next state is {rule_set.to_status} instead of {new_status}")
 
         if rule_set.all_ok:
             if new_status == ErrataStatus.REL_PREP:
@@ -224,9 +212,7 @@ class ErratumHandler(WorkItemHandler):
                             f"jotnar-product-listings-checked({nvr})",
                         )
                     ):
-                        prev_erratum_id, _ = get_previous_erratum(
-                            self.erratum.id, package
-                        )
+                        prev_erratum_id, _ = get_previous_erratum(self.erratum.id, package)
 
                         if prev_erratum_id:
                             other_build_map = get_erratum_build_map(prev_erratum_id)
@@ -241,75 +227,63 @@ class ErratumHandler(WorkItemHandler):
                             if not is_matched:
                                 mismatch_packages.append(package)
 
-                            erratum_add_comment(
-                                self.erratum.id, comment, dry_run=self.dry_run
-                            )
+                            erratum_add_comment(self.erratum.id, comment, dry_run=self.dry_run)
                         else:
                             erratum_add_comment(
                                 self.erratum.id,
                                 f"ymir-product-listings-checked({nvr})\n\n"
-                                "No previous erratum for this package - no need to check package file list change.",
+                                "No previous erratum for this package - "
+                                "no need to check package file list change.",
                                 dry_run=self.dry_run,
                             )
                 if mismatch_packages:
                     return self.resolve_flag_attention(
-                        f"The package file lists of this build don't match all of their previous builds - mismatch packages: {mismatch_packages}.\n"
+                        "The package file lists of this build don't match all "
+                        f"of their previous builds - mismatch packages: {mismatch_packages}.\n"
                         "See erratum comments for details."
                     )
 
-            return self.resolve_set_status(
-                new_status, f"Moving to {new_status}, since all rules are OK"
-            )
-        else:
-            # list of blocking rule names
-            blocking_outcomes = [
-                rule.name
-                for rule in rule_set.rules
-                if rule.outcome != TransitionRuleOutcome.OK
-            ]
+            return self.resolve_set_status(new_status, f"Moving to {new_status}, since all rules are OK")
+        # list of blocking rule names
+        blocking_outcomes = [rule.name for rule in rule_set.rules if rule.outcome != TransitionRuleOutcome.OK]
 
-            # check blocking rules in order of priority
-            if "Stagepush" in blocking_outcomes:
-                # is it already running?
-                push_details = erratum_get_latest_stage_push_details(self.erratum.id)
-                existing = push_details.status
-                # COMPLETE == not valid after respin ...
-                if existing in (
-                    None,
-                    ErratumPushStatus.COMPLETE,
-                ):
-                    erratum_push_to_stage(self.erratum.id, dry_run=self.dry_run)
-                    return self.resolve_wait(
-                        f"Stage-pushing erratum {self.erratum.id} before moving to {new_status}"
-                    )
-                elif existing == ErratumPushStatus.FAILED:
-                    return self.resolve_flag_attention(
-                        f"Stage-push previously FAILED for erratum {self.erratum.id},"
-                        f" needs manual intervention before moving to {new_status}"
-                    )
-                else:
-                    return self.resolve_wait(
-                        f"Stage-push already in progress ({existing}) for erratum {self.erratum.id},"
-                        f" waiting for completion before moving to {new_status}"
-                    )
-            elif "Cat" in blocking_outcomes:
-                return self.resolve_wait_for_cat_tests(new_status, rule_set)
-            elif "Securityalert" in blocking_outcomes:
-                erratum_refresh_security_alerts(self.erratum.id, dry_run=self.dry_run)
+        # check blocking rules in order of priority
+        if "Stagepush" in blocking_outcomes:
+            # is it already running?
+            push_details = erratum_get_latest_stage_push_details(self.erratum.id)
+            existing = push_details.status
+            # COMPLETE == not valid after respin ...
+            if existing in (
+                None,
+                ErratumPushStatus.COMPLETE,
+            ):
+                erratum_push_to_stage(self.erratum.id, dry_run=self.dry_run)
                 return self.resolve_wait(
-                    f"Refreshing security alerts for erratum {self.erratum.id} before moving to {new_status}"
+                    f"Stage-pushing erratum {self.erratum.id} before moving to {new_status}"
                 )
-            else:
-                # unknown blocking rules, flag for attention with details
-                blocking_rules_details = "\n".join(
-                    f"{r.name}: {r.details}"
-                    for r in rule_set.rules
-                    if r.outcome == TransitionRuleOutcome.BLOCK
-                )
+            if existing == ErratumPushStatus.FAILED:
                 return self.resolve_flag_attention(
-                    f"Transition to {new_status} is blocked by:\n"
-                    + blocking_rules_details,
+                    f"Stage-push previously FAILED for erratum {self.erratum.id},"
+                    f" needs manual intervention before moving to {new_status}"
                 )
+            return self.resolve_wait(
+                f"Stage-push already in progress ({existing}) for erratum {self.erratum.id},"
+                f" waiting for completion before moving to {new_status}"
+            )
+        if "Cat" in blocking_outcomes:
+            return self.resolve_wait_for_cat_tests(new_status, rule_set)
+        if "Securityalert" in blocking_outcomes:
+            erratum_refresh_security_alerts(self.erratum.id, dry_run=self.dry_run)
+            return self.resolve_wait(
+                f"Refreshing security alerts for erratum {self.erratum.id} before moving to {new_status}"
+            )
+        # unknown blocking rules, flag for attention with details
+        blocking_rules_details = "\n".join(
+            f"{r.name}: {r.details}" for r in rule_set.rules if r.outcome == TransitionRuleOutcome.BLOCK
+        )
+        return self.resolve_flag_attention(
+            f"Transition to {new_status} is blocked by:\n" + blocking_rules_details,
+        )
 
     async def run(self) -> WorkflowResult:
         erratum = self.erratum
@@ -321,9 +295,7 @@ class ErratumHandler(WorkItemHandler):
         )
 
         if (not self.ignore_needs_attention) and erratum_needs_attention(erratum.id):
-            return self.resolve_remove_work_item(
-                "Erratum already flagged for human attention"
-            )
+            return self.resolve_remove_work_item("Erratum already flagged for human attention")
 
         related_issues = erratum_get_issues(erratum)
         # Try to change the ownership to Ymir if the erratum was not owned by Ymir
@@ -337,22 +309,19 @@ class ErratumHandler(WorkItemHandler):
                     status=f"Changed ownership of erratum {erratum.id} to Ymir bot, re-processing",
                     reschedule_in=0,
                 )
-            else:
-                return self.resolve_flag_attention(
-                    "Erratum has issues not owned by Project Ymir. Please coordinate with QA Contact for these "
-                    "issues to move those issues to Release Pending or change the Assigned Team for the issue to "
-                    "rhel-jotnar. No further action will be taken on the erratum until ymir_needs_attention is "
-                    "cleared on this issue."
-                )
+            return self.resolve_flag_attention(
+                "Erratum has issues not owned by Project Ymir. Please coordinate with QA Contact for these "
+                "issues to move those issues to Release Pending or change the Assigned Team for the issue "
+                "to rhel-jotnar. No further action will be taken on the erratum until ymir_needs_attention "
+                "is cleared on this issue."
+            )
 
         match erratum.status:
             case ErrataStatus.NEW_FILES:
                 return self.try_to_advance_erratum(ErrataStatus.QE)
             case ErrataStatus.QE:
                 if not all_issues_are_release_pending(related_issues):
-                    return self.resolve_remove_work_item(
-                        "Not all issues are release pending"
-                    )
+                    return self.resolve_remove_work_item("Not all issues are release pending")
                 return self.try_to_advance_erratum(ErrataStatus.REL_PREP)
             case _:
                 return self.resolve_remove_work_item(f"status is {erratum.status}")

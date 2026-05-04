@@ -1,30 +1,37 @@
 import asyncio
+import json
 import logging
 import os
 import sys
 import traceback
 
-from pydantic import Field
-
 from beeai_framework.errors import FrameworkError
 from beeai_framework.workflows import Workflow
+from pydantic import Field
 
-import tasks
-from agents.log_agent import create_log_agent, get_prompt as get_log_prompt
-from agents.package_update_steps import PackageUpdateState
-from common.constants import JiraLabels, RedisQueues
-from common.models import (
+import ymir.agents.tasks as tasks
+from ymir.agents.constants import I_AM_YMIR, MR_DESCRIPTION_FOOTER
+from ymir.agents.log_agent import create_log_agent
+from ymir.agents.log_agent import get_prompt as get_log_prompt
+from ymir.agents.observability import setup_observability
+from ymir.agents.package_update_steps import PackageUpdateState
+from ymir.agents.utils import (
+    get_agent_execution_config,
+    mcp_tools,
+    render_prompt,
+    run_subprocess,
+)
+from ymir.common.base_utils import fix_await, redis_client
+from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.models import (
+    ConsolidatedIssue,
+    ErrorData,
     LogInputSchema,
     LogOutputSchema,
-    Task,
     RebuildData,
     RebuildOutputSchema,
-    ErrorData,
+    Task,
 )
-from common.utils import redis_client, fix_await
-from constants import I_AM_JOTNAR, CAREFULLY_REVIEW_CHANGES
-from observability import setup_observability
-from utils import get_agent_execution_config, mcp_tools, render_prompt, run_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +50,18 @@ async def main() -> None:
         rebuild_error: str | None = Field(default=None)
         dependency_issue: str | None = Field(default=None)
         dependency_component: str | None = Field(default=None)
+        consolidated_issues: list[ConsolidatedIssue] = Field(default_factory=list)
+        consolidation_summary: str | None = Field(default=None)
 
-    async def run_workflow(package, dist_git_branch, jira_issue, dependency_issue=None, dependency_component=None):
+    async def run_workflow(
+        package,
+        dist_git_branch,
+        jira_issue,
+        dependency_issue=None,
+        dependency_component=None,
+        consolidated_issues=None,
+        consolidation_summary=None,
+    ):
         local_tool_options["working_directory"] = None
 
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
@@ -52,22 +69,13 @@ async def main() -> None:
 
             workflow = Workflow(State, name="RebuildWorkflow")
 
-            async def change_jira_status(state):
-                if not dry_run:
-                    try:
-                        await tasks.change_jira_status(
-                            jira_issue=state.jira_issue,
-                            status="In Progress",
-                            available_tools=gateway_tools,
-                        )
-                    except Exception as status_error:
-                        logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
-                else:
-                    logger.info(f"Dry run: would change status of {state.jira_issue} to In Progress")
-                return "fork_and_prepare_dist_git"
-
             async def fork_and_prepare_dist_git(state):
-                state.local_clone, state.update_branch, state.fork_url, _ = await tasks.fork_and_prepare_dist_git(
+                (
+                    state.local_clone,
+                    state.update_branch,
+                    state.fork_url,
+                    _,
+                ) = await tasks.fork_and_prepare_dist_git(
                     jira_issue=state.jira_issue,
                     package=state.package,
                     dist_git_branch=state.dist_git_branch,
@@ -91,25 +99,45 @@ async def main() -> None:
                     return "comment_in_jira"
                 return "run_log_agent"
 
-            async def run_log_agent(state):
+            def _all_dependency_components(state):
+                components = set()
                 if state.dependency_component:
+                    components.add(state.dependency_component)
+                for item in state.consolidated_issues:
+                    if item.dependency_component:
+                        components.add(item.dependency_component)
+                return sorted(components)
+
+            def _all_dependency_issues(state):
+                issues = set()
+                if state.dependency_issue:
+                    issues.add(state.dependency_issue)
+                for item in state.consolidated_issues:
+                    if item.dependency_issue:
+                        issues.add(item.dependency_issue)
+                return sorted(issues)
+
+            async def run_log_agent(state):
+                all_issues = [state.jira_issue] + [item.issue_key for item in state.consolidated_issues]
+                issues_str = ", ".join(all_issues)
+                dep_components = _all_dependency_components(state)
+
+                if dep_components:
+                    deps_str = ", ".join(dep_components)
                     summary = (
-                        f"Rebuild of {state.package} for {state.jira_issue} against updated {state.dependency_component}. "
-                        f"The changelog entry and commit title MUST mention {state.dependency_component}."
-                    )
-                elif state.dependency_issue:
-                    summary = (
-                        f"Rebuild of {state.package} for {state.jira_issue} against updated dependency "
-                        f"({state.dependency_issue})."
+                        f"Rebuild of {state.package} for {issues_str} "
+                        f"against updated {deps_str}. "
+                        "The changelog entry and commit title MUST mention "
+                        f"{deps_str}."
                     )
                 else:
-                    summary = f"Rebuild of {state.package} against updated dependencies for {state.jira_issue}."
+                    summary = f"Rebuild of {state.package} against updated dependencies for {issues_str}."
 
                 response = await log_agent.run(
                     render_prompt(
                         template=get_log_prompt(),
                         input=LogInputSchema(
-                            jira_issue=state.jira_issue,
+                            jira_issue=issues_str,
                             changes_summary=summary,
                         ),
                     ),
@@ -139,34 +167,57 @@ async def main() -> None:
                         ["git", "diff", "--cached", "--quiet"],
                         cwd=state.local_clone,
                     )
-                    is_empty_commit = exit_code == 0  # exit code 0 means no staged changes, so commit would be empty
+                    is_empty_commit = (
+                        exit_code == 0
+                    )  # exit code 0 means no staged changes, so commit would be empty
 
-                    dep_lines = []
-                    if state.dependency_component:
-                        dep_lines.append(f"Dependency: {state.dependency_component}")
-                    if state.dependency_issue:
-                        dep_lines.append(f"Dependency issue: {state.dependency_issue}")
-                    dep_text = "\n".join(dep_lines) + "\n" if dep_lines else ""
-                    state.merge_request_url, state.merge_request_newly_created = await tasks.commit_push_and_open_mr(
+                    dep_components = _all_dependency_components(state)
+                    if dep_components:
+                        header = "Dependencies" if len(dep_components) > 1 else "Dependency"
+                        dep_text = f"{header}: {', '.join(dep_components)}\n"
+                    else:
+                        dep_text = ""
+
+                    dep_issues = _all_dependency_issues(state)
+                    if dep_issues:
+                        dep_issues_header = "Dependency issues" if len(dep_issues) > 1 else "Dependency issue"
+                        dep_issues_text = f"{dep_issues_header}: {', '.join(dep_issues)}\n"
+                    else:
+                        dep_issues_text = ""
+
+                    all_issues = [state.jira_issue] + [ci.issue_key for ci in state.consolidated_issues]
+                    resolves_text = "Resolves: " + ", ".join(all_issues)
+
+                    consolidation_text = ""
+                    if state.consolidation_summary:
+                        consolidation_text = (
+                            f"\nSibling consolidation analysis:\n{state.consolidation_summary}\n"
+                        )
+
+                    (
+                        state.merge_request_url,
+                        state.merge_request_newly_created,
+                    ) = await tasks.commit_push_and_open_mr(
                         local_clone=state.local_clone,
                         commit_message=(
                             f"{state.log_result.title}\n\n"
                             f"{state.log_result.description}\n\n"
                             f"{dep_text}"
-                            f"Resolves: {state.jira_issue}\n\n"
-                            f"This commit was created {I_AM_JOTNAR}\n\n"
-                            "Assisted-by: Jotnar\n"
+                            f"{resolves_text}\n\n"
+                            f"This commit was created {I_AM_YMIR}\n\n"
+                            "Assisted-by: Ymir\n"
                         ),
                         fork_url=state.fork_url,
                         dist_git_branch=state.dist_git_branch,
                         update_branch=state.update_branch,
                         mr_title=state.log_result.title,
                         mr_description=(
-                            f"This merge request was created {I_AM_JOTNAR}\n"
-                            f"{CAREFULLY_REVIEW_CHANGES}\n\n"
                             f"{state.log_result.description}\n\n"
                             f"{dep_text}"
-                            f"Resolves: {state.jira_issue}\n"
+                            f"{dep_issues_text}"
+                            f"{resolves_text}\n"
+                            f"{consolidation_text}"
+                            f"\n\n{MR_DESCRIPTION_FOOTER}"
                         ),
                         available_tools=gateway_tools,
                         commit_only=dry_run,
@@ -189,18 +240,26 @@ async def main() -> None:
                         if state.merge_request_url
                         else "Rebuild completed successfully"
                     )
+                    is_error = False
                 else:
                     comment_text = f"Agent failed to perform a rebuild: {state.rebuild_error}"
+                    is_error = True
                 logger.info(f"Result to be put in Jira comment: {comment_text}")
-                await tasks.comment_in_jira(
-                    jira_issue=state.jira_issue,
-                    agent_type="Rebuild",
-                    comment_text=comment_text,
-                    available_tools=gateway_tools,
-                )
+
+                all_issues = [state.jira_issue] + [item.issue_key for item in state.consolidated_issues]
+                for issue_key in all_issues:
+                    try:
+                        await tasks.comment_in_jira(
+                            jira_issue=issue_key,
+                            agent_type="Rebuild",
+                            comment_text=comment_text,
+                            is_error=is_error,
+                            available_tools=gateway_tools,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to comment on issue {issue_key}: {e}")
                 return Workflow.END
 
-            workflow.add_step("change_jira_status", change_jira_status)
             workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
             workflow.add_step("update_release", update_release)
             workflow.add_step("run_log_agent", run_log_agent)
@@ -215,6 +274,8 @@ async def main() -> None:
                     jira_issue=jira_issue,
                     dependency_issue=dependency_issue,
                     dependency_component=dependency_component,
+                    consolidated_issues=consolidated_issues or [],
+                    consolidation_summary=consolidation_summary,
                 ),
             )
             return response.state
@@ -227,6 +288,8 @@ async def main() -> None:
     ):
         dependency_issue = os.getenv("DEPENDENCY_ISSUE", None)
         dependency_component = os.getenv("DEPENDENCY_COMPONENT", None)
+        consolidated_raw = os.getenv("CONSOLIDATED_ISSUES", None)
+        consolidated_issues = json.loads(consolidated_raw) if consolidated_raw else None
         logger.info("Running in direct mode with environment variables")
         state = await run_workflow(
             package=package,
@@ -234,6 +297,7 @@ async def main() -> None:
             jira_issue=jira_issue,
             dependency_issue=dependency_issue,
             dependency_component=dependency_component,
+            consolidated_issues=consolidated_issues,
         )
         logger.info(f"Direct run completed: success={state.rebuild_success}")
         return
@@ -243,8 +307,14 @@ async def main() -> None:
     async with redis_client(os.environ["REDIS_URL"]) as redis:
         max_retries = int(os.getenv("MAX_RETRIES", 3))
         container_version = os.getenv("CONTAINER_VERSION", "c10s")
-        rebuild_queue = RedisQueues.REBUILD_QUEUE_C9S.value if container_version == "c9s" else RedisQueues.REBUILD_QUEUE_C10S.value
-        logger.info(f"Connected to Redis, max retries set to {max_retries}, listening to queue: {rebuild_queue}")
+        rebuild_queue = (
+            RedisQueues.REBUILD_QUEUE_C9S.value
+            if container_version == "c9s"
+            else RedisQueues.REBUILD_QUEUE_C10S.value
+        )
+        logger.info(
+            f"Connected to Redis, max retries set to {max_retries}, listening to queue: {rebuild_queue}"
+        )
 
         while True:
             logger.info(f"Waiting for tasks from {rebuild_queue} (timeout: 30s)...")
@@ -263,10 +333,14 @@ async def main() -> None:
                 dist_git_branch = triage_state["target_branch"]
             except Exception as e:
                 logger.error(f"Failed to parse task payload, skipping: {e}")
-                await fix_await(redis.lpush(
-                    RedisQueues.ERROR_LIST.value,
-                    ErrorData(details=f"Malformed task payload: {e}", jira_issue="unknown").model_dump_json()
-                ))
+                await fix_await(
+                    redis.lpush(
+                        RedisQueues.ERROR_LIST.value,
+                        ErrorData(
+                            details=f"Malformed task payload: {e}", jira_issue="unknown"
+                        ).model_dump_json(),
+                    )
+                )
                 continue
 
             logger.info(
@@ -275,7 +349,7 @@ async def main() -> None:
                 f"attempt: {task.attempts + 1}"
             )
 
-            async def retry(task, error):
+            async def retry(task, error, rebuild_data=rebuild_data):
                 task.attempts += 1
                 if task.attempts < max_retries:
                     logger.warning(
@@ -288,12 +362,16 @@ async def main() -> None:
                         f"Task failed after {max_retries} attempts, "
                         f"moving to error list: {rebuild_data.jira_issue}"
                     )
-                    await tasks.set_jira_labels(
-                        jira_issue=rebuild_data.jira_issue,
-                        labels_to_add=[JiraLabels.REBUILD_ERRORED.value],
-                        labels_to_remove=[JiraLabels.TRIAGED_REBUILD.value],
-                        dry_run=dry_run
-                    )
+                    for issue_key in rebuild_data.all_jira_issues:
+                        try:
+                            await tasks.set_jira_labels(
+                                jira_issue=issue_key,
+                                labels_to_add=[JiraLabels.REBUILD_ERRORED.value],
+                                labels_to_remove=[JiraLabels.TRIAGED_REBUILD.value],
+                                dry_run=dry_run,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to set labels on {issue_key}: {e}")
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
             try:
@@ -303,6 +381,8 @@ async def main() -> None:
                     jira_issue=rebuild_data.jira_issue,
                     dependency_issue=rebuild_data.dependency_issue,
                     dependency_component=rebuild_data.dependency_component,
+                    consolidated_issues=rebuild_data.consolidated_issues,
+                    consolidation_summary=rebuild_data.consolidation_summary,
                 )
                 logger.info(
                     f"Rebuild processing completed for {rebuild_data.jira_issue}, "
@@ -312,36 +392,55 @@ async def main() -> None:
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during rebuild processing for {rebuild_data.jira_issue}: {error}")
-                await retry(task, ErrorData(details=error, jira_issue=rebuild_data.jira_issue).model_dump_json())
+                await retry(
+                    task,
+                    ErrorData(details=error, jira_issue=rebuild_data.jira_issue).model_dump_json(),
+                )
             else:
                 if state.rebuild_success:
                     logger.info(f"Rebuild successful for {rebuild_data.jira_issue}, adding to completed list")
-                    await tasks.set_jira_labels(
-                        jira_issue=rebuild_data.jira_issue,
-                        labels_to_add=[JiraLabels.REBUILT.value],
-                        labels_to_remove=[
-                            JiraLabels.TRIAGED_REBUILD.value,
-                            JiraLabels.REBUILD_ERRORED.value,
-                            JiraLabels.REBUILD_FAILED.value,
-                        ],
-                        dry_run=dry_run
+                    for issue_key in rebuild_data.all_jira_issues:
+                        try:
+                            await tasks.set_jira_labels(
+                                jira_issue=issue_key,
+                                labels_to_add=[JiraLabels.REBUILT.value],
+                                labels_to_remove=[
+                                    JiraLabels.TRIAGED_REBUILD.value,
+                                    JiraLabels.REBUILD_ERRORED.value,
+                                    JiraLabels.REBUILD_FAILED.value,
+                                ],
+                                dry_run=dry_run,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to set labels on {issue_key}: {e}")
+                    await fix_await(
+                        redis.lpush(
+                            RedisQueues.COMPLETED_REBUILD_LIST.value,
+                            RebuildOutputSchema(
+                                success=True,
+                                merge_request_url=state.merge_request_url,
+                            ).model_dump_json(),
+                        )
                     )
-                    await fix_await(redis.lpush(
-                        RedisQueues.COMPLETED_REBUILD_LIST.value,
-                        RebuildOutputSchema(
-                            success=True,
-                            merge_request_url=state.merge_request_url,
-                        ).model_dump_json()
-                    ))
                 else:
                     logger.warning(f"Rebuild failed for {rebuild_data.jira_issue}: {state.rebuild_error}")
-                    await tasks.set_jira_labels(
-                        jira_issue=rebuild_data.jira_issue,
-                        labels_to_add=[JiraLabels.REBUILD_FAILED.value],
-                        labels_to_remove=[JiraLabels.TRIAGED_REBUILD.value],
-                        dry_run=dry_run
+                    for issue_key in rebuild_data.all_jira_issues:
+                        try:
+                            await tasks.set_jira_labels(
+                                jira_issue=issue_key,
+                                labels_to_add=[JiraLabels.REBUILD_FAILED.value],
+                                labels_to_remove=[JiraLabels.TRIAGED_REBUILD.value],
+                                dry_run=dry_run,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to set labels on {issue_key}: {e}")
+                    await retry(
+                        task,
+                        ErrorData(
+                            details=state.rebuild_error,
+                            jira_issue=rebuild_data.jira_issue,
+                        ).model_dump_json(),
                     )
-                    await retry(task, ErrorData(details=state.rebuild_error, jira_issue=rebuild_data.jira_issue).model_dump_json())
 
 
 if __name__ == "__main__":

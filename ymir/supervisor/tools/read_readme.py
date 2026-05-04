@@ -1,8 +1,7 @@
-from pydantic import BaseModel, Field
-
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
+from pydantic import BaseModel, Field
 
 from ..http_utils import aiohttp_session
 

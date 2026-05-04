@@ -20,15 +20,19 @@ RUN dnf -y install \
     && dnf clean all
 
 # Install beeai mcp server
-RUN pip3 install --no-cache-dir "litellm!=1.82.7,!=1.82.8" beeai-framework[mcp]==0.1.55
+RUN pip3 install --no-cache-dir "litellm!=1.82.7,!=1.82.8" beeai-framework[mcp]==0.1.79 \
+    && sed -i \
+      's/structuredContent=to_json_serializable(output)/structuredContent={"result": to_json_serializable(output)}/' \
+      /usr/local/lib/python3.13/site-packages/beeai_framework/adapters/mcp/serve/server.py
 
 # Create user
 RUN useradd -m -G wheel mcp
 
 # Copy required directories
 # Individual directories are mounted as volumes in development
-COPY ymir/tools/privileged/ /home/mcp/ymir/tools/privileged/
+COPY ymir/tools/ /home/mcp/ymir/tools/
 COPY ymir/common/ /home/mcp/ymir/common/
+COPY files/ipa_redhat_com /etc/krb5.conf.d/ipa_redhat_com
 RUN chgrp -R root /home/mcp && chmod -R g+rwX /home/mcp
 RUN mkdir /git-repos && chmod -R o+rwX /git-repos
 

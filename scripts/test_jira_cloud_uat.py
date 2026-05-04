@@ -9,22 +9,22 @@ import time
 from datetime import datetime
 
 # Add current directory to path
-sys.path.insert(0, '.')
+sys.path.insert(0, ".")
 
 from ymir.supervisor.http_utils import with_requests_session
 from ymir.supervisor.jira_utils import (
-    change_issue_status,
-    get_custom_fields,
-    create_issue,
-    get_issue,
+    add_issue_attachments,
     add_issue_comment,
     add_issue_label,
+    change_issue_status,
+    create_issue,
+    get_current_issues,
+    get_custom_fields,
+    get_issue,
+    get_issue_attachment,
+    get_issue_by_jotnar_tag,
     remove_issue_label,
     update_issue_comment,
-    add_issue_attachments,
-    get_issue_attachment,
-    get_current_issues,
-    get_issue_by_jotnar_tag,
 )
 from ymir.supervisor.supervisor_types import IssueStatus, JotnarTag
 
@@ -53,7 +53,7 @@ async def main():
         summary="[TEST] UAT API Test",
         description="Test issue created to verify Jira Cloud API.",
         labels=["uat_test", "automated_test"],
-        components=["jotnar-package-automation"]
+        components=["jotnar-package-automation"],
     )
     print(f"  Created issue: {issue_key}")
 
@@ -66,7 +66,7 @@ async def main():
     # Test 4: Add a simple comment
     print("\n[4/15] Add a simple comment")
     add_issue_comment(issue_key, "This is a test comment from the UAT test script.")
-    print(f"Added comment")
+    print("Added comment")
 
     # Test 5: Add complex Jira markup comment (baseline test format)
     print("\n[5/15] Add complex Jira markup comment")
@@ -89,27 +89,31 @@ Reproduced failed tests with previous build libtiff-4.4.0-13.el9:
 |s390x|[a7fb70cf-0688-4fa2-a00a-6782fe8bb3dd|https://api.testing-farm.io/v0.1/requests/a7fb70cf-0688-4fa2-a00a-6782fe8bb3dd]|[3425b603-d9f7-439a-827b-6d65acd2e066|https://api.testing-farm.io/v0.1/requests/3425b603-d9f7-439a-827b-6d65acd2e066]|failed|[compare|^comparison-3425b603-d9f7-439a-827b-6d65acd2e066--a7fb70cf-0688-4fa2-a00a-6782fe8bb3dd.toml]|
 """
     add_issue_comment(issue_key, baseline_test_comment)
-    print(f"Added complex comment")
+    print("Added complex comment")
 
     # Test 6: Update the comment
     print("\n[6/15] Update the comment")
     full_issue = get_issue(issue_key, full=True)
     if full_issue.comments:
         comment_id = full_issue.comments[-1].id
-        update_issue_comment(issue_key, comment_id, "This is the updated test comment from the UAT test script.")
-        print(f"Updated comment")
+        update_issue_comment(
+            issue_key,
+            comment_id,
+            "This is the updated test comment from the UAT test script.",
+        )
+        print("Updated comment")
     else:
-        print(f"No comments found")
+        print("No comments found")
 
     # Test 7: Add a label
     print("\n[7/15] Add issue label")
     add_issue_label(issue_key, "test_complete")
-    print(f"Added label")
+    print("Added label")
 
     # Test 8: Remove the label
     print("\n[8/15] Remove issue label")
     remove_issue_label(issue_key, "test_complete")
-    print(f"Removed label")
+    print("Removed label")
 
     # Test 9: Get issue status (using get_issue instead of JQL search)
     print("\n[9/15] Get issue status")
@@ -121,18 +125,18 @@ Reproduced failed tests with previous build libtiff-4.4.0-13.el9:
     change_issue_status(
         issue_key,
         IssueStatus.IN_PROGRESS,
-        comment="Status changed to In Progress by UAT test"
+        comment="Status changed to In Progress by UAT test",
     )
-    print(f"Changed status to In Progress")
+    print("Changed status to In Progress")
 
     # Test 11: Add issue attachments
     print("\n[11/15] Added attachment")
-    test_content = f"Test file created at {datetime.now().isoformat()}\n".encode('utf-8')
+    test_content = f"Test file created at {datetime.now().isoformat()}\n".encode()
     test_filename = f"test_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     add_issue_attachments(
         issue_key,
         [(test_filename, test_content, "text/plain")],
-        comment="Test attachment added by UAT script"
+        comment="Test attachment added by UAT script",
     )
     print(f"Added attachment: {test_filename}")
 
@@ -156,7 +160,7 @@ Reproduced failed tests with previous build libtiff-4.4.0-13.el9:
         print(f"Comments: {latest_comment.body[:50]}...")
         # Verify comment update worked
         if "updated" in latest_comment.body.lower():
-            print(f"Comment update verified")
+            print("Comment update verified")
 
     # Test 15: Test get_issue_by_jotnar_tag
     print("\n[15/15] Testing Ymir tag search")
@@ -169,7 +173,7 @@ Reproduced failed tests with previous build libtiff-4.4.0-13.el9:
         summary="[TEST] UAT - Issue with Ymir Tag",
         description=f"Test issue for Ymir tag search\n\n{tag_str}",
         labels=["uat_test", "jotnar_tag_test"],
-        components=["jotnar-package-automation"]
+        components=["jotnar-package-automation"],
     )
     print(f"Created issue with Ymir tag: {tagged_issue_key}")
 
@@ -181,7 +185,7 @@ Reproduced failed tests with previous build libtiff-4.4.0-13.el9:
     if found_issue:
         print(f" Found issue with Ymir tag: {found_issue.key}")
     else:
-        print(f"issue not found by Ymir tag")
+        print("issue not found by Ymir tag")
 
 
 if __name__ == "__main__":

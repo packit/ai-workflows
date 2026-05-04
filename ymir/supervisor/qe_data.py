@@ -1,15 +1,14 @@
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from functools import wraps
-from typing import Awaitable, Coroutine, TypeVar
+from typing import TypeVar
+
 from pydantic import BaseModel
 
 from .http_utils import aiohttp_session
 
 QE_DATA_REPO = "https://gitlab.cee.redhat.com/otaylor/jotnar-qe-data"
-QE_DATA_URL = (
-    f"{QE_DATA_REPO}/-/raw/main/jotnar_qe_data.json?ref_type=heads&inline=false"
-)
+QE_DATA_URL = f"{QE_DATA_REPO}/-/raw/main/jotnar_qe_data.json?ref_type=heads&inline=false"
 
 
 class TestLocationInfo(BaseModel):

@@ -12,17 +12,17 @@ from beeai_framework.tools import Tool
 from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 
+from ymir.agents.utils import get_chat_model, get_tool_call_checker_config
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool
 from ymir.tools.unprivileged.text import (
     CreateTool,
-    InsertTool,
     InsertAfterSubstringTool,
+    InsertTool,
+    SearchTextTool,
     StrReplaceTool,
     ViewTool,
-    SearchTextTool,
 )
-from ymir.agents.utils import get_chat_model, get_tool_call_checker_config
 
 
 def get_instructions() -> str:
@@ -67,7 +67,8 @@ def create_build_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]
             StrReplaceTool(options=local_tool_options),
             SearchTextTool(options=local_tool_options),
             GetCWDTool(options=local_tool_options),
-        ] + [t for t in mcp_tools if t.name in ["build_package", "download_artifacts"]],
+        ]
+        + [t for t in mcp_tools if t.name in ["build_package", "download_artifacts"]],
         memory=UnconstrainedMemory(),
         requirements=[
             ConditionalRequirement(
@@ -78,7 +79,7 @@ def create_build_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]
                 only_success_invocations=False,
             ),
             ConditionalRequirement("build_package", min_invocations=1),
-            ConditionalRequirement("download_artifacts", only_after="build_package"),
+            ConditionalRequirement("download_artifacts", only_after=["build_package"]),
         ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         role="Red Hat Enterprise Linux developer",

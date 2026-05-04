@@ -1,24 +1,24 @@
 import logging
 import os
-from datetime import datetime, timezone
-
-from pydantic import BaseModel, Field
+from datetime import UTC, datetime
 
 from beeai_framework.agents.tool_calling import ToolCallingAgent
 from beeai_framework.agents.types import AgentMeta
 from beeai_framework.backend import ChatModel
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.template import PromptTemplate, PromptTemplateInput
+from pydantic import BaseModel, Field
 
 from ymir.agents.utils import get_agent_execution_config
-from .qe_data import get_qe_data, TestLocationInfo
+
+from .qe_data import TestLocationInfo, get_qe_data
 from .supervisor_types import FullErratum, FullIssue, TestingState
+from .tools.analyze_ewa_testrun import AnalyzeEwaTestRunTool
 from .tools.read_attachment import ReadAttachmentTool
-from .tools.read_readme import ReadReadmeTool
 from .tools.read_issue import ReadIssueTool
 from .tools.read_logfile import ReadLogfileTool
+from .tools.read_readme import ReadReadmeTool
 from .tools.search_resultsdb import SearchResultsdbTool
-from .tools.analyze_ewa_testrun import AnalyzeEwaTestRunTool
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +35,7 @@ class InputSchema(BaseModel):
 class OutputSchema(BaseModel):
     state: TestingState = Field(description="State of tests")
     comment: str | None = Field(description="Comment to add to the JIRA issue")
-    failed_test_ids: list[str] | None = Field(
-        description="List of Testing Farm run IDs with failures"
-    )
+    failed_test_ids: list[str] | None = Field(description="List of Testing Farm run IDs with failures")
 
 
 TEMPLATE_COMMON = """\
@@ -99,7 +97,8 @@ If the tests are complete and passed:
     state: tests-passed
     comment: [Give a brief summary of what was tested with a link to the result.]
 
-If there are *some* test failures, but you are sure they are not regressions and most tests complete successfully:
+If there are *some* test failures, but you are sure they are not regressions
+and most tests complete successfully:
     state: tests-waived
     comment: [Explain which tests failed and why they are not considered regressions]
 
@@ -169,14 +168,10 @@ If it seems highly likely that there are no regressions:
 def render_prompt(input: InputSchema, after_baseline: bool) -> str:
 
     template = TEMPLATE_AFTER_BASELINE if after_baseline else TEMPLATE_NORMAL
-    return PromptTemplate(
-        PromptTemplateInput(schema=InputSchema, template=template)
-    ).render(input)
+    return PromptTemplate(PromptTemplateInput(schema=InputSchema, template=template)).render(input)
 
 
-async def analyze_issue(
-    jira_issue: FullIssue, erratum: FullErratum, after_baseline=False
-) -> OutputSchema:
+async def analyze_issue(jira_issue: FullIssue, erratum: FullErratum, after_baseline=False) -> OutputSchema:
     tools = [
         ReadAttachmentTool(),
         ReadLogfileTool(),
@@ -215,7 +210,7 @@ async def analyze_issue(
             issue=jira_issue,
             test_location_info=await get_qe_data(jira_issue.components[0]),
             erratum=erratum,
-            current_time=datetime.now(timezone.utc),
+            current_time=datetime.now(UTC),
         )
     )
     logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")

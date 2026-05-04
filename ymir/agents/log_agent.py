@@ -12,25 +12,25 @@ from beeai_framework.tools import Tool
 from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 
+from ymir.agents.utils import get_chat_model, get_tool_call_checker_config
 from ymir.tools.unprivileged.commands import RunShellCommandTool
-from ymir.tools.unprivileged.specfile import AddChangelogEntryTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool
+from ymir.tools.unprivileged.specfile import AddChangelogEntryTool
 from ymir.tools.unprivileged.text import (
     CreateTool,
-    InsertTool,
     InsertAfterSubstringTool,
+    InsertTool,
+    SearchTextTool,
     StrReplaceTool,
     ViewTool,
-    SearchTextTool,
 )
-from ymir.agents.utils import get_chat_model, get_tool_call_checker_config
 
 
 def get_instructions() -> str:
     return """
       You are an expert on summarizing packaging changes in RHEL ecosystem.
 
-      To document a change corresponding to <JIRA_ISSUE> Jira issue, having a brief summary
+      To document a change corresponding to <JIRA_ISSUES> Jira issue(s), having a brief summary
       of changes performed, do the following:
 
       1. Run `git diff --cached --stat` to see which files have been changed.
@@ -43,7 +43,8 @@ def get_instructions() -> str:
       3. Add a new changelog entry to the spec file. Use the `add_changelog_entry` tool.
          Examine the previous changelog entries and try to use the same style. In general,
          the entry should contain a short summary of the changes, ideally fitting on a single line,
-         and a line referencing the Jira issue. Use "- Resolves: <JIRA_ISSUE>" unless
+         and a single line referencing all Jira issues. Use
+         "- Resolves: <JIRA_ISSUES>" (comma-separated on one line) unless
          the spec file has historically used a different style.
 
          IMPORTANT: The changelog entry should focus on user-facing changes only. Do not mention
@@ -55,19 +56,22 @@ def get_instructions() -> str:
 
       5. Summarize the changes in a short paragraph that will be used as commit message
          and merge request description. Line length shouldn't exceed 80 characters.
-         There is no need to reference the Jira issue, it will be appended later.
+         Do NOT include "Resolves:" lines — Jira references are appended separately.
 
 
      General instructions:
 
-      - Never change anything in the spec file changelog, you are only allowed to add a single changelog entry.
-      - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
+      - Never change anything in the spec file changelog, you are only allowed to add
+        a single changelog entry.
+      - Never change the Release field in the spec file. Release bumping is handled separately.
+      - Prefer native tools, if available, the `run_shell_command` tool should be
+        the last resort.
     """
 
 
 def get_prompt() -> str:
     return """
-      Document a packaging change done as part of {{jira_issue}} Jira issue, summarized as:
+      Document a packaging change done as part of {{jira_issue}} Jira issue(s), summarized as:
 
       {{changes_summary}}
     """

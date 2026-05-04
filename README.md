@@ -66,7 +66,7 @@ The `goose/` directory contains some automation components that were used in the
 You need to have the following packages installed on your system:
 
 ```
-python3-devel podman-compose gcc krb5-devel
+python3-devel podman-compose gcc krb5-devel libpq-devel
 ```
 
 Then, use the provided stub pyproject.toml file to set up the development environment:

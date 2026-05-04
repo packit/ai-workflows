@@ -2,14 +2,10 @@ apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
   labels:
-    app: phoenix
-    app.kubernetes.io/component: phoenix
-    app.kubernetes.io/instance: phoenix
-    app.kubernetes.io/name: phoenix
-    app.kubernetes.io/part-of: beeai
-    app.openshift.io/runtime-version: version-11.6.2
+    paas.redhat.com/appcode: JTNR-001
   name: phoenix
 spec:
+  host: phoenix-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com
   port:
     targetPort: 6006-tcp
   tls:

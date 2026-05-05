@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ymir-common"
-version = "0.2.0"
+version = "0.3.0"
 description = "Common utilities shared across Ymir AI workflows"
 requires-python = ">=3.13"
 dynamic = ["dependencies"]
@@ -34,3 +34,4 @@ packages = []
 "validators.py" = "ymir/common/validators.py"
 "version_utils.py" = "ymir/common/version_utils.py"
 "base_utils.py" = "ymir/common/base_utils.py"
+"mock_repos.py" = "ymir/common/mock_repos.py"

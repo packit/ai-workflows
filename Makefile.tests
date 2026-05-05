@@ -5,7 +5,9 @@ TEST_TARGET ?= ./tests/unit
 CONTAINER_ENGINE ?= $(shell command -v podman 2>/dev/null || echo "docker")
 
 .PHONY: build-test-image build-test-image-fedora build-test-image-c9s
+ifndef SKIP_IMG_BUILD
 build-test-image: build-test-image-fedora build-test-image-c9s
+endif
 
 build-test-image-fedora:
 	$(CONTAINER_ENGINE) build --rm --tag $(TEST_IMAGE) -f Containerfile.tests

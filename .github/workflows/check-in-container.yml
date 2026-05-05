@@ -32,12 +32,6 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y podman
         podman --version
-    - name: Build Fedora test image from Containerfile.tests
-      run: |
-        podman build --rm --tag beeai-tests -f Containerfile.tests .
-    - name: Build CentOS Stream 9 test image from Containerfile.c9s-tests
-      run: |
-        podman build --rm --tag beeai-tests-c9s -f Containerfile.c9s-tests .
     - name: Run ${{ matrix.target }} target
       env:
         CONTAINER_ENGINE: podman

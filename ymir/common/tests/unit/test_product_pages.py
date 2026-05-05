@@ -14,7 +14,7 @@ import requests.exceptions
 from beeai_framework.tools import ToolError
 
 import ymir.common.product_pages as pp
-from ymir.common.utils import KerberosError
+from ymir.common.base_utils import KerberosError
 
 
 async def _fake_init_kerberos_ok() -> str:

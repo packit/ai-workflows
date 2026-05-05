@@ -129,6 +129,7 @@ async def is_older_zstream(
     if current_z_streams is None:
         current_z_streams = current_z_streams_override.get()
     if current_z_streams is None:
+        from ymir.common.product_pages import fetch_rhel_streams_snapshot
         config = await fetch_rhel_streams_snapshot()
         current_z_streams = config.get("current_z_streams", {})
 

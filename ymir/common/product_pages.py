@@ -2,7 +2,7 @@
 Product Pages helpers for RHEL y-stream and z-stream labels.
 
 This module authenticates to the internal Product Pages API (Kerberos via
-``init_kerberos_ticket`` from ``ymir.common.utils``, then HTTP SPNEGO via
+``init_kerberos_ticket`` from ``ymir.common.base_utils``, then HTTP SPNEGO via
 ``requests-gssapi``) and derives current y-streams, current z-streams, and
 upcoming z-streams from active releases and GA/ZStream release metadata.
 
@@ -22,7 +22,7 @@ import requests
 import requests_gssapi
 from beeai_framework.tools import ToolError
 
-from ymir.common.utils import KerberosError, init_kerberos_ticket
+from ymir.common.base_utils import KerberosError, init_kerberos_ticket
 
 _PLAIN_SHORTNAME_RE = re.compile(r"^rhel-(\d+)\.(\d+)$")
 _GA_ZSTREAM_RE = re.compile(r"\(GA\/ZStream\)")

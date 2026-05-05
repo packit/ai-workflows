@@ -289,15 +289,14 @@ def print_summary(
     print(f"\nYmir CVE Activity Report: {from_str} → {to_str}")
     print("─" * 50)
 
-    print("Solved:")
-    print(f"  {'MRs merged:':<38} {merged_mrs:>6}")
-    print(f"  {'Jiras resolved (from MRs):':<38} {jiras_from_mrs:>6}")
+    print("Solved Jiras:")
+    print(f"  {'Resolved by MRs:':<38} {jiras_from_mrs:>6} Jiras  ({merged_mrs} MRs)")
     print(f"  {'Not-affected (closed):':<38} {triage_closures:>6}")
-    print(f"  {'Total Jiras solved:':<38} {total_solved:>6}")
+    print(f"  {'Total solved:':<38} {total_solved:>6}")
 
     print()
-    print("Active:")
-    print(f"  {'MRs opened (not yet merged):':<38} {non_merged_mrs:>6}")
+    print("In Progress Jiras:")
+    print(f"  {'Open MRs (pending merge):':<38} {non_merged_mrs:>6}")
     print(f"  {'Not-affected (pending closure):':<38} {active_triage:>6}")
 
 

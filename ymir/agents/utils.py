@@ -12,6 +12,17 @@ from ymir.common.utils import get_absolute_path, mcp_tools, run_tool  # noqa: F4
 logger = logging.getLogger(__name__)
 
 
+def resolve_chat_model_override(agent_type: str) -> None:
+    """Override CHAT_MODEL with a per-agent value if set.
+
+    Call once at container startup so all agents in the process inherit the override.
+    """
+    override = os.environ.get(f"CHAT_MODEL_{agent_type.upper()}", "")
+    if override:
+        logger.info("Using model override for %s: %s", agent_type, override)
+        os.environ["CHAT_MODEL"] = override
+
+
 def get_chat_model() -> ChatModel:
     chat_model = os.environ["CHAT_MODEL"]
     model = ChatModel.from_name(

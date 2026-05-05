@@ -18,6 +18,9 @@ def _get_blocked_urls() -> list[str]:
     """Return the list of blocked URL prefixes from ``MOCK_BLOCKED_URLS``.
 
     The env var accepts either a JSON array or a comma-separated string.
+
+    Returns:
+        A list of URL prefix strings to block.
     """
     raw = os.getenv("MOCK_BLOCKED_URLS", "")
     if not raw:
@@ -31,7 +34,15 @@ def _get_blocked_urls() -> list[str]:
 
 
 def _check_blocked_urls(command: str, blocked_urls: list[str]) -> str | None:
-    """If *command* invokes curl/wget targeting a blocked URL, return the URL."""
+    """Check whether a shell command targets a blocked URL via curl/wget.
+
+    Args:
+        command: The shell command string to inspect.
+        blocked_urls: URL prefixes that should be blocked.
+
+    Returns:
+        The matched blocked URL prefix, or ``None`` if no match is found.
+    """
     try:
         tokens = shlex.split(command)
     except ValueError:

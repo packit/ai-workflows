@@ -37,6 +37,7 @@ from ymir.agents.utils import (
     get_tool_call_checker_config,
     mcp_tools,
     render_prompt,
+    resolve_chat_model_override,
     run_tool,
 )
 from ymir.common.base_utils import fix_await, is_cs_branch, redis_client
@@ -931,6 +932,7 @@ async def create_backport_agent(
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    resolve_chat_model_override("backport")
 
     setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 

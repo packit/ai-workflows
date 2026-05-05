@@ -35,6 +35,7 @@ from ymir.agents.utils import (
     get_tool_call_checker_config,
     mcp_tools,
     render_prompt,
+    resolve_chat_model_override,
 )
 from ymir.common.base_utils import fix_await, is_cs_branch, redis_client
 from ymir.common.config import get_package_instructions
@@ -208,6 +209,7 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    resolve_chat_model_override("rebase")
 
     setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 

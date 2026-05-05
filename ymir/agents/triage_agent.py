@@ -30,6 +30,7 @@ from ymir.agents.utils import (
     get_chat_model,
     get_tool_call_checker_config,
     mcp_tools,
+    resolve_chat_model_override,
     run_tool,
 )
 from ymir.common.base_utils import fix_await, redis_client
@@ -1029,6 +1030,7 @@ async def run_workflow(
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    resolve_chat_model_override("triage")
 
     setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 

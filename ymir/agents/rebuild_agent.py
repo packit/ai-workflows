@@ -19,6 +19,7 @@ from ymir.agents.utils import (
     get_agent_execution_config,
     mcp_tools,
     render_prompt,
+    resolve_chat_model_override,
     run_subprocess,
 )
 from ymir.common.base_utils import fix_await, redis_client
@@ -38,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    resolve_chat_model_override("rebuild")
 
     setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 

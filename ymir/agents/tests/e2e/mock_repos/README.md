@@ -1,9 +1,8 @@
-# Where are the Jira files?
-This directory is meant to contain Jira mock files from
+# Where are the mock data files?
+This directory is meant to contain mock repo fixture files from
 `git@gitlab.cee.redhat.com:jotnar-project/testing-jiras.git` if you have the access.
 
-Clone the repository and copy (or symlink) the contents of its `jiras/` directory here.
-If you want agents to be able to write to them, add the writing permission bit for all users.
+Clone the repository and copy (or symlink) the contents of its `mock_data/` directory here.
 
 The expected layout of the private repository is:
 
@@ -21,3 +20,7 @@ The expected layout of the private repository is:
 │   └── RHEL-61943.json
 └── README.md
 ```
+
+Each JSON file in `mock_data/` describes the repos to clone at a pre-fix state
+and an optional z-stream override for a given Jira issue. See
+`ymir/common/mock_repos.py` for the schema documentation.

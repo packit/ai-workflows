@@ -1028,6 +1028,34 @@ async def run_workflow(
         return response.state
 
 
+def _build_mock_agent_factory(jira_issue: str):
+    """If ``MOCK_REPOS_DIR`` is set, prepare mock repos and return a
+    triage-agent factory that injects the resulting ``git_env``.
+
+    Also applies ``MOCK_ZSTREAMS`` (standalone env-var) and any per-issue
+    ``zstream_override`` found in the config file.
+
+    Returns ``create_triage_agent`` unchanged when mocking is not configured.
+    """
+    from ymir.common.mock_repos import (
+        apply_zstream_override_from_env,
+        setup_mock_repos_from_env,
+    )
+
+    apply_zstream_override_from_env()
+
+    git_env = setup_mock_repos_from_env(jira_issue)
+    if git_env is None:
+        return create_triage_agent
+
+    logger.info("Mock repos configured for %s via MOCK_REPOS_DIR", jira_issue)
+
+    def _factory(gateway_tools, local_tool_options=None):
+        return create_triage_agent(gateway_tools, {"env": git_env})
+
+    return _factory
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     resolve_chat_model_override("triage")
@@ -1041,10 +1069,11 @@ async def main() -> None:
 
     if jira_issue := os.getenv("JIRA_ISSUE", None):
         logger.info("Running in direct mode with environment variable")
+        agent_factory = _build_mock_agent_factory(jira_issue)
         state = await run_workflow(
             jira_issue,
             dry_run,
-            create_triage_agent,
+            agent_factory,
             auto_chain=auto_chain,
             force_cve_triage=force_cve_triage,
             silent_run=silent_run,

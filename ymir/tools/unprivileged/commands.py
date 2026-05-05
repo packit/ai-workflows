@@ -1,5 +1,7 @@
 import asyncio
 import math
+import os
+import shlex
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
@@ -10,6 +12,40 @@ from ymir.common.base_utils import run_subprocess
 
 TIMEOUT = 10 * 60  # seconds
 ELLIPSIZED_LINES = 200
+
+
+def _get_blocked_urls() -> list[str]:
+    """Return the list of blocked URL prefixes from ``MOCK_BLOCKED_URLS``.
+
+    The env var accepts either a JSON array or a comma-separated string.
+    """
+    raw = os.getenv("MOCK_BLOCKED_URLS", "")
+    if not raw:
+        return []
+    raw = raw.strip()
+    if raw.startswith("["):
+        import json
+
+        return json.loads(raw)
+    return [url.strip() for url in raw.split(",") if url.strip()]
+
+
+def _check_blocked_urls(command: str, blocked_urls: list[str]) -> str | None:
+    """If *command* invokes curl/wget targeting a blocked URL, return the URL."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+
+    has_curl_or_wget = any(tok in ("curl", "wget") or tok.endswith(("/curl", "/wget")) for tok in tokens)
+    if not has_curl_or_wget:
+        return None
+
+    for token in tokens:
+        for blocked in blocked_urls:
+            if token.startswith(blocked):
+                return blocked
+    return None
 
 
 class RunShellCommandToolInput(BaseModel):
@@ -54,6 +90,14 @@ class RunShellCommandTool(Tool[RunShellCommandToolInput, ToolRunOptions, RunShel
         options: ToolRunOptions | None,
         context: RunContext,
     ) -> RunShellCommandToolOutput:
+        blocked_urls = _get_blocked_urls()
+        if blocked_urls:
+            blocked = _check_blocked_urls(tool_input.command, blocked_urls)
+            if blocked:
+                raise ToolError(
+                    f"BLOCKED: {blocked} is mocked locally; use git commands instead of curl/wget"
+                )
+
         try:
             exit_code, stdout, stderr = await asyncio.wait_for(
                 run_subprocess(

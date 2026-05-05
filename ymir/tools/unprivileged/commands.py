@@ -1,4 +1,5 @@
 import asyncio
+import json
 import math
 import os
 import shlex
@@ -27,8 +28,6 @@ def _get_blocked_urls() -> list[str]:
         return []
     raw = raw.strip()
     if raw.startswith("["):
-        import json
-
         return json.loads(raw)
     return [url.strip() for url in raw.split(",") if url.strip()]
 

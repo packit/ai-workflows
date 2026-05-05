@@ -127,14 +127,17 @@ def observability_fixture():
 
 @pytest.fixture(scope="session", autouse=True)
 def mock_centos_stream_repos(tmp_path_factory):
-    """Clone CentOS Stream RPM repos at pre-fix state, one per (test_case, package).
+    """Clone CentOS Stream RPM repos at pre-fix state for each test case.
 
     Fixture configs are loaded from ``MOCK_REPOS_DIR`` (env var) or the
-    ``mock_repos/`` directory next to this test file.  Each bare clone has its
-    branch ref rewound to the pre-fix commit.  A per-test-case env dict is
-    built with GIT_CONFIG_COUNT / GIT_CONFIG_KEY_* / GIT_CONFIG_VALUE_* so that
-    git's ``insteadOf`` URL rewriting transparently redirects the agent's git
-    commands to the local clone.
+    ``mock_repos/`` directory next to this test file. Each bare clone has its
+    branch ref rewound to the pre-fix commit. A per-test-case env dict is
+    built with ``GIT_CONFIG_COUNT`` / ``GIT_CONFIG_KEY_*`` /
+    ``GIT_CONFIG_VALUE_*`` so that git's ``insteadOf`` URL rewriting
+    transparently redirects the agent's git commands to the local clone.
+
+    Yields:
+        Control to the test session after repos are prepared.
     """
     mock_dir = os.getenv("MOCK_REPOS_DIR", str(DEFAULT_MOCK_REPOS_DIR))
     configs = load_all_mock_configs(mock_dir)

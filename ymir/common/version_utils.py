@@ -162,3 +162,47 @@ async def is_older_zstream(
     current_minor = int(current_parsed[1])
     target_minor = int(minor_str)
     return target_minor < current_minor
+
+
+def get_branch_from_version(version: str) -> str | None:
+    """
+    Get dist-git branch name from RHEL version.
+
+    Examples:
+      - rhel-9.7.z  -> rhel-9.7.0
+      - rhel-10.1.z -> rhel-10.1.0
+    """
+    parsed = parse_rhel_version(version)
+    if parsed is None:
+        return None
+    major, minor, _ = parsed
+    return f"rhel-{major}.{minor}.0"
+
+
+def get_brew_target_from_version(version: str) -> str | None:
+    """
+    Get Brew build target from RHEL version.
+
+    Examples:
+      - rhel-9.7.z  -> rhel-9.7.0-candidate
+      - rhel-10.1.z -> rhel-10.1.0-candidate
+    """
+    branch = get_branch_from_version(version)
+    if branch is None:
+        return None
+    return f"{branch}-candidate"
+
+
+def get_short_version(version: str) -> str | None:
+    """
+    Get short version string (e.g., for Jira queries).
+
+    Examples:
+      - rhel-9.7.z  -> 9.7
+      - rhel-10.1.z -> 10.1
+    """
+    parsed = parse_rhel_version(version)
+    if parsed is None:
+        return None
+    major, minor, _ = parsed
+    return f"{major}.{minor}"

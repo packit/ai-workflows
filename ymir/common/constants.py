@@ -22,6 +22,9 @@ class RedisQueues(Enum):
     REBASE_QUEUE = "rebase_queue"
     BACKPORT_QUEUE = "backport_queue"
     POSTPONED_LIST = "postponed_list"
+    GOLANG_REBUILD_QUEUE_C9S = "golang_rebuild_queue_c9s"
+    GOLANG_REBUILD_QUEUE_C10S = "golang_rebuild_queue_c10s"
+    GOLANG_REBUILD_COMPLETED = "completed_golang_rebuild_list"
 
     @classmethod
     def all_queues(cls) -> set[str]:
@@ -39,6 +42,8 @@ class RedisQueues(Enum):
             cls.BACKPORT_QUEUE_C10S.value,
             cls.REBUILD_QUEUE_C9S.value,
             cls.REBUILD_QUEUE_C10S.value,
+            cls.GOLANG_REBUILD_QUEUE_C9S.value,
+            cls.GOLANG_REBUILD_QUEUE_C10S.value,
             cls.CLARIFICATION_NEEDED_QUEUE.value,
             cls.REBASE_QUEUE.value,
             cls.BACKPORT_QUEUE.value,
@@ -53,6 +58,7 @@ class RedisQueues(Enum):
             cls.COMPLETED_REBASE_LIST.value,
             cls.COMPLETED_BACKPORT_LIST.value,
             cls.COMPLETED_REBUILD_LIST.value,
+            cls.GOLANG_REBUILD_COMPLETED.value,
             cls.POSTPONED_LIST.value,
         }
 
@@ -76,6 +82,13 @@ class RedisQueues(Enum):
         if target_branch and cls._use_c9s_branch(target_branch):
             return cls.REBUILD_QUEUE_C9S.value
         return cls.REBUILD_QUEUE_C10S.value
+
+    @classmethod
+    def get_golang_rebuild_queue_for_branch(cls, target_branch: str | None) -> str:
+        """Return appropriate golang rebuild queue based on target branch"""
+        if target_branch and cls._use_c9s_branch(target_branch):
+            return cls.GOLANG_REBUILD_QUEUE_C9S.value
+        return cls.GOLANG_REBUILD_QUEUE_C10S.value
 
     @classmethod
     def _use_c9s_branch(cls, branch: str) -> bool:
@@ -116,7 +129,18 @@ class JiraLabels(Enum):
     RETRY_NEEDED = "ymir_retry_needed"
     FUSA = "ymir_fusa"
 
+    # Golang rebuild labels
+    GOLANG_REBUILD_TRIAGED = "ymir_golang_rebuild_triaged"
+    GOLANG_REBUILD_IN_PROGRESS = "ymir_golang_rebuild_in_progress"
+    GOLANG_REBUILD_COMPLETED = "ymir_golang_rebuild_completed"
+    GOLANG_REBUILD_ERRORED = "ymir_golang_rebuild_errored"
+    GOLANG_REBUILD_FAILED = "ymir_golang_rebuild_failed"
+    GOLANG_REBUILD_APPROVED = "golang-rebuild-approved"
+
     @classmethod
     def all_labels(cls) -> set[str]:
         """Return all Ymir labels for cleanup operations"""
         return {label.value for label in cls}
+
+
+GOLANG_REBUILD_QUEUE_LABEL = "golang-rebuild-queue"

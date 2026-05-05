@@ -14,11 +14,11 @@ Prerequisites:
 """
 
 import argparse
-import atexit
 import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -173,7 +173,6 @@ def main() -> None:
     mcp_config = build_mcp_config(jira_mock_dir, mock_data_dir, upstream_search_url, blocked_urls, log_dir)
 
     tmp_fd, tmp_path = tempfile.mkstemp(prefix="mock-triage-mcp-", suffix=".json")
-    atexit.register(lambda: os.unlink(tmp_path))
 
     with os.fdopen(tmp_fd, "w") as fh:
         json.dump(mcp_config, fh, indent=2)
@@ -192,17 +191,19 @@ def main() -> None:
     print("============================")
     print()
 
-    os.chdir(REPO_ROOT)
-
-    os.execvp(
-        "claude",
-        [
-            "claude",
-            f"Use the triage skill with jira_issue={issue} and dry_run=true",
-            "--mcp-config",
-            tmp_path,
-        ],
-    )
+    try:
+        result = subprocess.run(
+            [
+                "claude",
+                f"Use the triage skill with jira_issue={issue} and dry_run=true",
+                "--mcp-config",
+                tmp_path,
+            ],
+            cwd=REPO_ROOT,
+        )
+        sys.exit(result.returncode)
+    finally:
+        os.unlink(tmp_path)
 
 
 if __name__ == "__main__":

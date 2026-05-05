@@ -415,6 +415,7 @@ async def main() -> None:
                         ),
                         available_tools=gateway_tools,
                         commit_only=dry_run,
+                        labels=["ymir_rebase"],
                     )
                 except Exception as e:
                     logger.warning(f"Error committing and opening MR: {e}")

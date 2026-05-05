@@ -198,6 +198,7 @@ async def commit_push_and_open_mr(
     available_tools: list[Tool],
     commit_only: bool = False,
     allow_empty: bool = False,
+    labels: list[str] | None = None,
 ) -> tuple[str | None, bool]:
     """
     Commits the changes to the local clone and opens a merge request.
@@ -226,6 +227,16 @@ async def commit_push_and_open_mr(
         available_tools=available_tools,
     )
     mr = OpenMergeRequestResult.model_validate(result)
+    if mr.url and labels:
+        try:
+            await run_tool(
+                "add_merge_request_labels",
+                merge_request_url=mr.url,
+                labels=labels,
+                available_tools=available_tools,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to add labels {labels} to MR {mr.url}: {e}")
     return mr.url, mr.is_new_mr
 
 

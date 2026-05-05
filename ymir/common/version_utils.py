@@ -8,6 +8,8 @@ strings in various formats (e.g., rhel-9.8, rhel-9.7.z, rhel-9.0.0.z).
 import contextvars
 import re
 
+from ymir.common.product_pages import fetch_rhel_streams_snapshot
+
 current_z_streams_override: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
     "current_z_streams_override", default=None
 )
@@ -127,8 +129,6 @@ async def is_older_zstream(
     if current_z_streams is None:
         current_z_streams = current_z_streams_override.get()
     if current_z_streams is None:
-        from ymir.common.product_pages import fetch_rhel_streams_snapshot
-
         config = await fetch_rhel_streams_snapshot()
         current_z_streams = config.get("current_z_streams", {})
 

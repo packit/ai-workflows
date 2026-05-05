@@ -54,6 +54,7 @@ from ymir.common.models import (
 from ymir.common.models import (
     TriageOutputSchema as OutputSchema,
 )
+from ymir.common.product_pages import fetch_rhel_streams_snapshot
 from ymir.common.version_utils import is_older_zstream, normalize_fix_version, parse_rhel_version
 from ymir.common.product_pages import fetch_rhel_streams_snapshot
 from ymir.tools.unprivileged.commands import RunShellCommandTool

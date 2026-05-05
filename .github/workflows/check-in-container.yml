@@ -23,6 +23,7 @@ jobs:
           - target: check-jira-issue-fetcher-in-container
           - target: check-ymir-common-in-container
           - target: check-supervisor-in-container
+          - target: check-mcp-install-in-container
     steps:
     - name: Checkout code
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

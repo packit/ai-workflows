@@ -47,8 +47,9 @@ noarch/
 
 # Testing Jira files
 ymir/tools/privileged/tests/data/*
-!ymir/tools/privileged/tests/data/README.md
 
 # Testing mock repo fixtures
 ymir/agents/tests/e2e/mock_repos/*
-!ymir/agents/tests/e2e/mock_repos/README.md
+
+# MCP gateway debug logs
+logs/

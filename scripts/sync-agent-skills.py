@@ -19,7 +19,7 @@ AGENTS_DIR = Path("ymir/agents")
 SKILLS_DIR = Path("agents_as_skills")
 
 CLAUDE_CMD_TEMPLATE = (
-    "claude --model claude-sonnet-4-6 --effort high"
+    "claude --model claude-opus-4-6 --effort high"
     ' "Please take a look at the BeeAI workflows implemented in agents'
     " directory. Please convert Workflow in {workflow_file} to Claude skill and"
     f" save that skill to {SKILLS_DIR} directory.\n"

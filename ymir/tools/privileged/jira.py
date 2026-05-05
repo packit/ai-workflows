@@ -17,9 +17,10 @@ from beeai_framework.tools import (
 )
 from pydantic import BaseModel, Field
 
-from ymir.common import CVEEligibilityResult, TriageEligibility, load_rhel_config
+from ymir.common import CVEEligibilityResult, TriageEligibility
 from ymir.common.base_utils import get_jira_auth_headers
 from ymir.common.constants import JIRA_SEARCH_PATH
+from ymir.common.product_pages import fetch_rhel_streams_snapshot
 from ymir.common.version_utils import get_fix_version_variants, normalize_fix_version
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT
@@ -318,7 +319,7 @@ async def _check_zstream_clones_shipped(
 
     logger.info(f"Found {len(issues)} clone(s) for {cve_id} in component {component}")
 
-    rhel_config = await load_rhel_config()
+    rhel_config = await fetch_rhel_streams_snapshot()
     current_z_streams = rhel_config.get("current_z_streams", {})
     upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
     maintenance_majors = _get_maintenance_majors(rhel_config)
@@ -453,7 +454,7 @@ class CheckCveTriageEligibilityTool(
 
         target_version = fix_versions[0].get("name", "")
 
-        rhel_config = await load_rhel_config()
+        rhel_config = await fetch_rhel_streams_snapshot()
         target_version = normalize_fix_version(target_version, rhel_config)
 
         if re.match(r"^rhel-\d+\.\d+$", target_version.lower()):

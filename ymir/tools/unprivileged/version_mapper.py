@@ -5,7 +5,7 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, ToolRunOptions
 from pydantic import BaseModel, Field
 
-from ymir.common.config import load_rhel_config
+from ymir.common.product_pages import fetch_rhel_streams_snapshot
 from ymir.common.version_utils import current_z_streams_override, parse_rhel_version
 from ymir.tools.base import CloneableTool as Tool
 
@@ -67,7 +67,7 @@ class VersionMapperTool(Tool[VersionMapperInput, ToolRunOptions, VersionMapperOu
         major_version = tool_input.major_version
         major_version_str = str(major_version)
 
-        config = await load_rhel_config()
+        config = await fetch_rhel_streams_snapshot()
 
         override = current_z_streams_override.get()
         overridden_zstream = override.get(major_version_str) if override else None

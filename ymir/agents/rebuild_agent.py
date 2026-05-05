@@ -224,6 +224,7 @@ async def main() -> None:
                         available_tools=gateway_tools,
                         commit_only=dry_run,
                         allow_empty=is_empty_commit,
+                        labels=["ymir_rebuild"],
                     )
                     state.rebuild_success = True
                 except Exception as e:

@@ -36,6 +36,10 @@ from ymir.agents.utils import (
 from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.config import load_rhel_config
 from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.mock_repos import (
+    apply_zstream_override_from_env,
+    setup_mock_repos_from_env,
+)
 from ymir.common.models import (
     ApplicabilityResult,
     ClarificationNeededData,
@@ -1043,11 +1047,6 @@ def _build_mock_agent_factory(jira_issue: str):
         A triage-agent factory callable. Returns ``create_triage_agent``
         unchanged when mocking is not configured.
     """
-    from ymir.common.mock_repos import (
-        apply_zstream_override_from_env,
-        setup_mock_repos_from_env,
-    )
-
     apply_zstream_override_from_env()
 
     git_env = setup_mock_repos_from_env(jira_issue)

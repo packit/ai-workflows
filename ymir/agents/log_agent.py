@@ -61,7 +61,8 @@ def get_instructions() -> str:
 
       - Never change anything in the spec file changelog, you are only allowed to add
         a single changelog entry.
-      - Never change the Release field in the spec file. Release bumping is handled separately.
+      - Never modify the Release field in the spec file. The Release field has already been
+        updated by a previous workflow step - do not revert or modify it.
       - Prefer native tools, if available, the `run_shell_command` tool should be
         the last resort.
     """

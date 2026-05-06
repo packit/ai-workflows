@@ -24,13 +24,13 @@ def _get_blocked_urls() -> list[str]:
     Returns:
         A list of URL prefix strings to block.
     """
-    raw = os.getenv("MOCK_BLOCKED_URLS", "")
-    if not raw:
+    if not (raw := os.getenv("MOCK_BLOCKED_URLS", "")):
         return []
     raw = raw.strip()
-    if raw.startswith("["):
+    try:
         return json.loads(raw)
-    return [url.strip() for url in raw.split(",") if url.strip()]
+    except json.decoder.JSONDecodeError:
+        return [stripped for url in raw.split(",") if (stripped := url.strip())]
 
 
 def _check_blocked_urls(command: str, blocked_urls: list[str]) -> str | None:

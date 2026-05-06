@@ -26,6 +26,7 @@ from ymir.agents.cve_applicability_agent import build_applicability_prompt, crea
 from ymir.agents.observability import setup_observability
 from ymir.agents.rebuild_consolidation import find_rebuild_siblings
 from ymir.agents.utils import (
+    build_agent_factory_with_mock_repos,
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
@@ -36,10 +37,6 @@ from ymir.agents.utils import (
 from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.config import load_rhel_config
 from ymir.common.constants import JiraLabels, RedisQueues
-from ymir.common.mock_repos import (
-    apply_zstream_override_from_env,
-    setup_mock_repos_from_env,
-)
 from ymir.common.models import (
     ApplicabilityResult,
     ClarificationNeededData,
@@ -1032,35 +1029,6 @@ async def run_workflow(
         return response.state
 
 
-def _build_mock_agent_factory(jira_issue: str):
-    """Build a triage-agent factory with mock repo support when configured.
-
-    If ``MOCK_REPOS_DIR`` is set, prepares mock repos and returns a factory
-    that injects the resulting ``git_env``. Also applies ``MOCK_ZSTREAMS``
-    (standalone env-var) and any per-issue ``zstream_override`` found in the
-    config file.
-
-    Args:
-        jira_issue: The Jira issue key (e.g. ``RHEL-15216``).
-
-    Returns:
-        A triage-agent factory callable. Returns ``create_triage_agent``
-        unchanged when mocking is not configured.
-    """
-    apply_zstream_override_from_env()
-
-    git_env = setup_mock_repos_from_env(jira_issue)
-    if git_env is None:
-        return create_triage_agent
-
-    logger.info("Mock repos configured for %s via MOCK_REPOS_DIR", jira_issue)
-
-    def _factory(gateway_tools, local_tool_options=None):
-        return create_triage_agent(gateway_tools, {"env": git_env})
-
-    return _factory
-
-
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     resolve_chat_model_override("triage")
@@ -1074,7 +1042,7 @@ async def main() -> None:
 
     if jira_issue := os.getenv("JIRA_ISSUE", None):
         logger.info("Running in direct mode with environment variable")
-        agent_factory = _build_mock_agent_factory(jira_issue)
+        agent_factory = build_agent_factory_with_mock_repos(create_triage_agent, jira_issue)
         state = await run_workflow(
             jira_issue,
             dry_run,

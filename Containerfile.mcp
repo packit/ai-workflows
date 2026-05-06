@@ -20,10 +20,7 @@ RUN dnf -y install \
     && dnf clean all
 
 # Install beeai mcp server
-RUN pip3 install --no-cache-dir "litellm!=1.82.7,!=1.82.8" beeai-framework[mcp]==0.1.79 \
-    && sed -i \
-      's/structuredContent=to_json_serializable(output)/structuredContent={"result": to_json_serializable(output)}/' \
-      /usr/local/lib/python3.13/site-packages/beeai_framework/adapters/mcp/serve/server.py
+RUN pip3 install --no-cache-dir "litellm!=1.82.7,!=1.82.8" beeai-framework[mcp]==0.1.80
 
 # Create user
 RUN useradd -m -G wheel mcp

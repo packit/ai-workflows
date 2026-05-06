@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import logging
 import os
 import sys
@@ -8,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from beeai_framework.agents.requirement import RequirementAgent
-from beeai_framework.agents.requirement.prompts import RequirementAgentSystemPrompt
 from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
 )
@@ -923,10 +921,6 @@ async def create_backport_agent(
         middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         role="Red Hat Enterprise Linux developer",
         instructions=await get_instructions(fix_version),
-        # role and instructions above set defaults for the system prompt input
-        # but the `RequirementAgentSystemPrompt` instance is shared so the defaults
-        # affect all requirement agents - use our own copy to prevent that
-        templates={"system": copy.deepcopy(RequirementAgentSystemPrompt)},
     )
 
 

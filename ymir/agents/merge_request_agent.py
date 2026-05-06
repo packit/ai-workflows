@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import logging
 import os
 import re
@@ -10,7 +9,6 @@ from textwrap import dedent
 from typing import Any
 
 from beeai_framework.agents.requirement import RequirementAgent
-from beeai_framework.agents.requirement.prompts import RequirementAgentSystemPrompt
 from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
 )
@@ -173,10 +171,6 @@ def create_merge_request_agent(mcp_tools: list[Tool], local_tool_options: dict[s
         middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         role="Red Hat Enterprise Linux developer",
         instructions=get_instructions(),
-        # role and instructions above set defaults for the system prompt input
-        # but the `RequirementAgentSystemPrompt` instance is shared so the defaults
-        # affect all requirement agents - use our own copy to prevent that
-        templates={"system": copy.deepcopy(RequirementAgentSystemPrompt)},
     )
 
 

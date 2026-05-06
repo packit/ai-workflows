@@ -391,6 +391,12 @@ If `is_older_zstream` is true:
   2. **Does it fix the issue?** Verify that the code changes directly address the root cause, align with the symptoms, and modify the functions/files mentioned in the issue.
 * Only proceed with URLs that contain valid patch content AND address the specific issue.
 * If the content is not a proper patch or doesn't fix the issue, continue searching.
+* **Only use merged/accepted fixes**: Patches must come from commits that have been merged into the upstream repository (or Fedora). Do NOT use patches from:
+  - Unmerged pull requests or merge requests
+  - Bug tracker attachments or discussion threads (e.g. SourceForge, Bugzilla attachments)
+  - Mailing list proposals that have not been accepted upstream
+  - Forks or personal branches that are not part of the official repository
+  If you find a relevant but unmerged patch during your investigation, mention it in the clarification-needed note so a human can evaluate it, but do not use it as the basis for a backport decision.
 * **Check for follow-up commits**: After identifying a valid fix, check whether there are follow-up commits that complement or complete the fix. Common patterns include:
   - A second commit that fixes a bug or regression introduced by the first fix.
   - An incremental commit that addresses the same CVE/issue from a different angle (e.g. fixing a separate code path or variant of the same vulnerability).
@@ -406,10 +412,10 @@ If `is_older_zstream` is false:
   - The package bundles or vendors dependencies: check the spec file for `Provides: bundled(...)` entries or vendor tarballs like `Source1: *-vendor.tar.gz`.
   - The CVE describes a vulnerability in a library, runtime, or language that the package merely uses or vendors.
   - **If the fix is in a dependency**, use the **rebuild** resolution instead.
-* If the patch IS for the package's own code and passes both validations in step 2.3, your decision is **backport**. Justify why the patch is correct and how it addresses the issue.
+* If the patch IS for the package's own code and passes all validations in step 2.3, your decision is **backport**. Justify why the patch is correct and how it addresses the issue.
 
 If `is_older_zstream` is true:
-* If your investigation successfully identifies a specific fix that passes both validations in step 2.3, your decision is **backport**.
+* If your investigation successfully identifies a specific fix that passes all validations in step 2.3, your decision is **backport**.
 * Justify why the patch is correct and how it addresses the issue.
 
 * If your investigation confirms a valid bug/CVE but fails to locate a specific fix, your decision is **clarification-needed**. This is the correct choice when you are sure a problem exists but cannot find the solution yourself.

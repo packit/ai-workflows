@@ -352,6 +352,15 @@ TRIAGE_PROMPT = """
               - The modified functions/files match those mentioned in the issue
          * Only proceed with URLs that contain valid patch content AND address the specific issue
          * If the content is not a proper patch or doesn't fix the issue, continue searching for other fixes
+         * **Only use merged/accepted fixes**: Patches must come from commits that have been
+           merged into the upstream repository (or Fedora). Do NOT use patches from:
+           - Unmerged pull requests or merge requests
+           - Bug tracker attachments or discussion threads (e.g. SourceForge, Bugzilla attachments)
+           - Mailing list proposals that have not been accepted upstream
+           - Forks or personal branches that are not part of the official repository
+           If you find a relevant but unmerged patch during your investigation, mention it in the
+           clarification-needed note so a human can evaluate it, but do not use it as the basis
+           for a backport decision.
          * **Check for follow-up commits**: After identifying a valid fix, check whether there
            are follow-up commits that complement or complete the fix. Common patterns include:
            - A second commit that fixes a bug or regression introduced by the first fix
@@ -378,12 +387,12 @@ TRIAGE_PROMPT = """
              OpenSSL) that the package merely uses or vendors, not in the package's own code
            **If the fix is in a dependency**, use the "rebuild" resolution instead. The package will
            pick up the fix automatically when rebuilt against the updated dependency.
-         * If the patch IS for the package's own code and passes both validations in step 2.3, your
+         * If the patch IS for the package's own code and passes all validations in step 2.3, your
            decision is backport. You must justify why the patch is correct and how it addresses the issue.
          {{/is_older_zstream}}
          {{#is_older_zstream}}
          * If your investigation successfully identifies a specific fix that
-           passes both validations in step 2.3, your decision is backport
+           passes all validations in step 2.3, your decision is backport
          * You must be able to justify why the patch is correct and how it addresses the issue
          {{/is_older_zstream}}
          * If your investigation confirms a valid bug/CVE but fails to locate a specific fix, your decision

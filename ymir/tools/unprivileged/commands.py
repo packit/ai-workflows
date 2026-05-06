@@ -13,6 +13,7 @@ from ymir.common.base_utils import run_subprocess
 
 TIMEOUT = 10 * 60  # seconds
 ELLIPSIZED_LINES = 200
+URL_FETCH_COMMANDS = ["curl", "wget"]
 
 
 def _get_blocked_urls() -> list[str]:
@@ -47,8 +48,9 @@ def _check_blocked_urls(command: str, blocked_urls: list[str]) -> str | None:
     except ValueError:
         tokens = command.split()
 
-    has_curl_or_wget = any(tok in ("curl", "wget") or tok.endswith(("/curl", "/wget")) for tok in tokens)
-    if not has_curl_or_wget:
+    suffixes = tuple(f"/{cmd}" for cmd in URL_FETCH_COMMANDS)
+    has_url_fetch_cmd = any(tok in URL_FETCH_COMMANDS or tok.endswith(suffixes) for tok in tokens)
+    if not has_url_fetch_cmd:
         return None
 
     for token in tokens:
@@ -105,7 +107,8 @@ class RunShellCommandTool(Tool[RunShellCommandToolInput, ToolRunOptions, RunShel
             blocked = _check_blocked_urls(tool_input.command, blocked_urls)
             if blocked:
                 raise ToolError(
-                    f"BLOCKED: {blocked} is mocked locally; use git commands instead of curl/wget"
+                    f"BLOCKED: {blocked} is mocked locally; "
+                    f"use git commands instead of {'/'.join(URL_FETCH_COMMANDS)}"
                 )
 
         try:

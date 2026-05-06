@@ -56,7 +56,8 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
          arize-phoenix-otel \
          redis \
          specfile \
-         koji
+         koji \
+         GitPython>=3.1.0
 
 # Verify no malicious litellm_init.pth was introduced by compromised litellm packages (e.g. 1.82.7, 1.82.8)
 RUN MALICIOUS=$(find /usr /opt -name "litellm_init.pth" 2>/dev/null); \

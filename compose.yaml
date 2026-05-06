@@ -38,6 +38,9 @@ x-beeai-agent-c9s: &beeai-agent-c9s
   build:
     context: .
     dockerfile: Containerfile.c9s
+    args:
+      INTERNAL_REPO_URL: ${INTERNAL_REPO_URL_C9S:-}
+      EXTRA_PACKAGES: ${INTERNAL_PACKAGES_C9S:-}
   environment:
     <<: *beeai-env
     CONTAINER_VERSION: c9s
@@ -49,6 +52,9 @@ x-beeai-agent-c10s: &beeai-agent-c10s
   build:
     context: .
     dockerfile: Containerfile.c10s
+    args:
+      INTERNAL_REPO_URL: ${INTERNAL_REPO_URL_C10S:-}
+      EXTRA_PACKAGES: ${INTERNAL_PACKAGES_C10S:-}
   environment:
     <<: *beeai-env
     CONTAINER_VERSION: c10s
@@ -82,6 +88,9 @@ services:
     build:
       context: .
       dockerfile: Containerfile.mcp
+      args:
+        INTERNAL_REPO_URL: ${INTERNAL_REPO_URL_MCP:-}
+        EXTRA_PACKAGES: ${INTERNAL_PACKAGES_MCP:-}
     environment:
       - SSE_PORT=8000
       - KEYTAB_FILE=/home/mcp/keytab

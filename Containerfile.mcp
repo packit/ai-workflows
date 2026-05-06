@@ -1,5 +1,15 @@
 FROM fedora:42
 
+# Install RH IT Root CAs for access to internal services
+COPY files/Current-IT-Root-CAs.pem /etc/pki/ca-trust/source/anchors/
+RUN update-ca-trust
+
+ARG INTERNAL_REPO_URL=""
+RUN if [ -n "$INTERNAL_REPO_URL" ]; then \
+      curl -fsSL -o /etc/yum.repos.d/internal.repo "$INTERNAL_REPO_URL"; \
+    fi
+
+ARG EXTRA_PACKAGES=""
 # Install system dependencies
 RUN dnf -y install \
       python3 \
@@ -17,6 +27,7 @@ RUN dnf -y install \
       krb5-workstation \
       centpkg \
       git \
+      ${EXTRA_PACKAGES} \
     && dnf clean all
 
 # Install beeai mcp server
@@ -32,10 +43,6 @@ COPY ymir/common/ /home/mcp/ymir/common/
 COPY files/ipa_redhat_com /etc/krb5.conf.d/ipa_redhat_com
 RUN chgrp -R root /home/mcp && chmod -R g+rwX /home/mcp
 RUN mkdir /git-repos && chmod -R o+rwX /git-repos
-
-# Install RH IT Root CAs for lookaside cache access
-COPY files/Current-IT-Root-CAs.pem /etc/pki/ca-trust/source/anchors/
-RUN update-ca-trust
 
 # Configure jump host for internal dist-git
 COPY files/internal_dist-git_ssh.conf /etc/ssh/ssh_config.d/00-dist-git.conf

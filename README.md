@@ -81,6 +81,20 @@ the `rpm` module installed from PyPI is [rpm-shim](https://github.com/packit/rpm
 and just pulls the files from python3-rpm into the venv.
 In an IDE, select .venv/bin/python as the Python interpreter.
 
+### Building with internal repos
+
+Some tools are only available from internal repos that cannot be committed
+to this upstream repository. To include them in your local container builds:
+
+1. Copy the template: `cp templates/build.env .secrets/build.env`
+2. Fill in the internal repo URLs and package names in `.secrets/build.env`
+3. Run `make build` as usual — the Makefile sources `.secrets/build.env`
+   automatically if it exists, passing the values as build args to the
+   Containerfiles.
+
+Without `.secrets/build.env`, containers build normally but without any
+internal-only packages.
+
 ## Contact & Feedback
 
 **Questions or issues with the agents?**

@@ -8,6 +8,12 @@ RUN dnf -y install epel-release \
 COPY files/Current-IT-Root-CAs.pem /etc/pki/ca-trust/source/anchors/
 RUN update-ca-trust
 
+ARG INTERNAL_REPO_URL=""
+RUN if [ -n "$INTERNAL_REPO_URL" ]; then \
+      curl -fsSL -o /etc/yum.repos.d/internal.repo "$INTERNAL_REPO_URL"; \
+    fi
+
+ARG EXTRA_PACKAGES=""
 RUN dnf -y install --allowerasing \
       centpkg \
       curl \
@@ -44,6 +50,7 @@ RUN dnf -y install --allowerasing \
       pyproject-srpm-macros \
       rust-toolset-srpm-macros \
       perl-srpm-macros \
+      ${EXTRA_PACKAGES} \
     && dnf clean all
 
 RUN pip3 install --no-cache-dir \

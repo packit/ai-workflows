@@ -148,7 +148,8 @@ BACKPORT_INSTRUCTIONS = """
 
             4b. Get package information from dist-git:
                 - Use `get_package_info` tool with the spec file path from <UNPACKED_SOURCES>
-                - This provides the package version and list of existing patch filenames
+                - This provides the package version, list of existing patch filenames,
+                  and per-patch strip levels (patch_strip_levels)
 
             4c. Clone the upstream repository to a SEPARATE directory:
                 - Use `clone_upstream_repository` tool with:
@@ -169,6 +170,7 @@ BACKPORT_INSTRUCTIONS = """
                   * repo_path: <UPSTREAM_REPO> (where to apply)
                   * patches_directory: current working directory (dist-git root where patch files are located)
                   * patch_files: list from step 4b
+                  * patch_strip_levels: dict from step 4b (maps each patch filename to its -p strip level)
                 - This recreates the current package state in <UPSTREAM_REPO>
                 - The tool automatically records the base commit for patch generation
                 - If any patch fails to apply, immediately fall back to approach B
@@ -372,7 +374,8 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
 
             3f. Get package information from dist-git:
                 - Use `get_package_info` tool with the spec file path from <UNPACKED_SOURCES>
-                - This provides the package version and list of existing patch filenames
+                - This provides the package version, list of existing patch filenames,
+                  and per-patch strip levels (patch_strip_levels)
 
             3g. Clone the upstream repository to a SEPARATE directory:
                 - Use `clone_upstream_repository` tool with:
@@ -393,6 +396,7 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
                   * repo_path: <UPSTREAM_REPO> (where to apply)
                   * patches_directory: current working directory (dist-git root where patch files are located)
                   * patch_files: list from step 3f
+                  * patch_strip_levels: dict from step 3f (maps each patch filename to its -p strip level)
                 - This recreates the current package state in <UPSTREAM_REPO>
                 - The tool automatically records the base commit for patch generation
                 - If any patch fails to apply, immediately fall back to approach C

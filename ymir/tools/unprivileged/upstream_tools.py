@@ -473,6 +473,11 @@ class ApplyDownstreamPatchesToolInput(BaseModel):
     patches_directory: AbsolutePath = Field(
         description="Absolute directory path containing the patch files (usually the dist-git clone)"
     )
+    patch_strip_levels: dict[str, int] | None = Field(
+        default=None,
+        description="Mapping of patch filename to strip level (-p value). "
+        "Obtained from get_package_info. Falls back to -p1 when not provided.",
+    )
 
 
 class ApplyDownstreamPatchesTool(Tool[ApplyDownstreamPatchesToolInput, ToolRunOptions, StringToolOutput]):
@@ -535,10 +540,16 @@ class ApplyDownstreamPatchesTool(Tool[ApplyDownstreamPatchesToolInput, ToolRunOp
                         "Downstream patches cannot be applied; cherry-pick workflow is not viable."
                     )
 
-                # Use patch(1) instead of git-apply to match RPM %prep behavior.
-                # Handles gendiff-style patches, trailing whitespace, fuzz
-                # matching, and other quirks that git-apply rejects.
-                cmd = ["patch", "-p1", "-s", "--batch", "--no-backup-if-mismatch", "-i", str(patch_path)]
+                strip = (tool_input.patch_strip_levels or {}).get(patch_file, 1)
+                cmd = [
+                    "patch",
+                    f"-p{strip}",
+                    "-s",
+                    "--batch",
+                    "--no-backup-if-mismatch",
+                    "-i",
+                    str(patch_path),
+                ]
                 exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
 
                 if exit_code != 0:

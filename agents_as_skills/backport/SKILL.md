@@ -317,7 +317,8 @@ and must remain unchanged.
 
       3b. Get package information from dist-git:
           - Use `get_package_info` tool with the spec file path from <UNPACKED_SOURCES>
-          - This provides the package version and list of existing patch filenames
+          - This provides the package version, list of existing patch filenames,
+            and per-patch strip levels (patch_strip_levels)
 
       3c. Clone the upstream repository to a SEPARATE directory:
           - Use `clone_upstream_repository` tool with:
@@ -338,6 +339,7 @@ and must remain unchanged.
             * repo_path: <UPSTREAM_REPO> (where to apply)
             * patches_directory: current working directory (dist-git root where patch files are located)
             * patch_files: list from step 3b
+            * patch_strip_levels: dict from step 3b (maps each patch filename to its -p strip level)
           - This recreates the current package state in <UPSTREAM_REPO>
           - The tool automatically records the base commit for patch generation
           - If any patch fails to apply, immediately fall back to approach B
@@ -530,7 +532,8 @@ and must remain unchanged.
 
       4b. Get package information from dist-git:
           - Use `get_package_info` tool with the spec file path from <UNPACKED_SOURCES>
-          - This provides the package version and list of existing patch filenames
+          - This provides the package version, list of existing patch filenames,
+            and per-patch strip levels (patch_strip_levels)
 
       4c. Clone the upstream repository to a SEPARATE directory:
           - Use `clone_upstream_repository` tool with:
@@ -551,6 +554,7 @@ and must remain unchanged.
             * repo_path: <UPSTREAM_REPO> (where to apply)
             * patches_directory: current working directory (dist-git root where patch files are located)
             * patch_files: list from step 4b
+            * patch_strip_levels: dict from step 4b (maps each patch filename to its -p strip level)
           - This recreates the current package state in <UPSTREAM_REPO>
           - The tool automatically records the base commit for patch generation
           - If any patch fails to apply, immediately fall back to approach B

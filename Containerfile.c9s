@@ -97,7 +97,7 @@ WORKDIR $HOME
 ENV PYTHONPATH=$HOME:$PYTHONPATH
 
 # so that we can start working with gitlab.com immediately
-RUN git config --global user.email "jotnar@redhat.com" \
+RUN git config --global user.email "redhat-ymir-agent@redhat.com" \
     && git config --global user.name "RHEL Packaging Agent" \
     && git config --global core.editor "true"
 

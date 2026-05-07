@@ -13,6 +13,7 @@ from beeai_framework.tools import (
 )
 from pydantic import BaseModel, Field
 from specfile import Specfile
+from specfile.prep import AutopatchMacro, AutosetupMacro, PatchMacro
 from specfile.utils import EVR
 from specfile.value_parser import (
     EnclosedMacroSubstitution,
@@ -35,20 +36,60 @@ class PackageInfo(BaseModel):
 
     version: str = Field(description="Package version from Version field")
     patch_files: list[str] = Field(description="List of patch filenames in order (Patch0, Patch1, etc.)")
+    patch_strip_levels: dict[str, int] = Field(
+        description="Mapping of patch filename to its strip level (-p value) from the spec's %prep section"
+    )
 
 
 class GetPackageInfoToolOutput(JSONToolOutput[PackageInfo]):
     pass
 
 
+_DEFAULT_STRIP_LEVEL = 1
+
+
+def _extract_strip_levels(spec: Specfile, number_to_filename: dict[int, str]) -> dict[str, int]:
+    """Build a mapping of patch filename to strip level from %prep macros.
+
+    Handles %autosetup (global -p), %autopatch (global -p), and
+    individual %patch macros (per-patch -p).  Falls back to 1 for any
+    patch not covered by a macro (e.g. conditionally applied patches).
+    """
+    strip_levels: dict[str, int] = {}
+
+    try:
+        with spec.prep() as prep:
+            for macro in prep.macros:
+                if isinstance(macro, (AutosetupMacro, AutopatchMacro)):
+                    p = macro.options.get("p")
+                    level = p if isinstance(p, int) else _DEFAULT_STRIP_LEVEL
+                    for filename in number_to_filename.values():
+                        strip_levels[filename] = level
+                elif isinstance(macro, PatchMacro):
+                    p = macro.options.get("p")
+                    level = p if isinstance(p, int) else _DEFAULT_STRIP_LEVEL
+                    filename = number_to_filename.get(macro.number)
+                    if filename is not None:
+                        strip_levels[filename] = level
+    except Exception:
+        pass
+
+    for filename in number_to_filename.values():
+        strip_levels.setdefault(filename, _DEFAULT_STRIP_LEVEL)
+
+    return strip_levels
+
+
 class GetPackageInfoTool(Tool[GetPackageInfoToolInput, ToolRunOptions, GetPackageInfoToolOutput]):
     name = "get_package_info"
     description = """
-    Extract package version and patch files from a spec file.
+    Extract package version, patch files, and patch strip levels from a spec file.
 
     Returns:
     - version: The package version (from Version: field)
     - patch_files: List of patch filenames in the order they appear (Patch0:, Patch1:, etc.)
+    - patch_strip_levels: Mapping of each patch filename to its strip level (-p value)
+      extracted from the %prep section (%autosetup, %autopatch, or individual %patch macros)
 
     This is useful for determining the base version to checkout in upstream repository
     and which existing patches need to be applied before cherry-picking a new fix.
@@ -73,9 +114,19 @@ class GetPackageInfoTool(Tool[GetPackageInfoToolInput, ToolRunOptions, GetPackag
             with Specfile(spec_path) as spec:
                 version = spec.version
                 with spec.patches() as patches:
-                    patch_files = [p.expanded_location for p in patches if p.valid and p.expanded_location]
+                    valid_patches = [p for p in patches if p.valid and p.expanded_location]
+                    patch_files = [p.expanded_location for p in valid_patches]
+                    number_to_filename = {p.number: p.expanded_location for p in valid_patches}
 
-                return GetPackageInfoToolOutput(result=PackageInfo(version=version, patch_files=patch_files))
+                strip_levels = _extract_strip_levels(spec, number_to_filename)
+
+                return GetPackageInfoToolOutput(
+                    result=PackageInfo(
+                        version=version,
+                        patch_files=patch_files,
+                        patch_strip_levels=strip_levels,
+                    )
+                )
 
         except Exception as e:
             raise ToolError(f"Failed to extract package info from {spec_path}: {e}") from e

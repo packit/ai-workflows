@@ -111,6 +111,146 @@ def spec_with_macro_patches(tmp_path):
     return spec
 
 
+@pytest.fixture
+def spec_with_autosetup_gendiff(tmp_path):
+    spec = tmp_path / "gendiff.spec"
+    source_file = tmp_path / "source.tar.gz"
+    source_file.touch()
+    spec.write_text(
+        dedent(
+            """
+            Name:           test
+            Version:        5.0.0
+            Release:        1%{?dist}
+            Summary:        Test package
+
+            License:        MIT
+
+            Source0:        source.tar.gz
+            Patch0:         fix-one.patch
+            Patch1:         fix-two.patch
+
+            %description
+            Test package with autosetup gendiff
+
+            %prep
+            %autosetup -p1 -S gendiff
+
+            %changelog
+            * Thu Jan 13 3770 Test User <test@redhat.com> - 5.0.0-1
+            - first version
+            """
+        )
+    )
+    return spec
+
+
+@pytest.fixture
+def spec_with_autosetup_no_p(tmp_path):
+    spec = tmp_path / "no_p.spec"
+    source_file = tmp_path / "source.tar.gz"
+    source_file.touch()
+    spec.write_text(
+        dedent(
+            """
+            Name:           test
+            Version:        6.0.0
+            Release:        1%{?dist}
+            Summary:        Test package
+
+            License:        MIT
+
+            Source0:        source.tar.gz
+            Patch0:         only-fix.patch
+
+            %description
+            Test package with bare autosetup (no -p flag)
+
+            %prep
+            %autosetup
+
+            %changelog
+            * Thu Jan 13 3770 Test User <test@redhat.com> - 6.0.0-1
+            - first version
+            """
+        )
+    )
+    return spec
+
+
+@pytest.fixture
+def spec_with_individual_patch_strips(tmp_path):
+    spec = tmp_path / "individual_strips.spec"
+    source_file = tmp_path / "source.tar.gz"
+    source_file.touch()
+    spec.write_text(
+        dedent(
+            """
+            Name:           test
+            Version:        2.0.0
+            Release:        1%{?dist}
+            Summary:        Test package
+
+            License:        MIT
+
+            Source0:        source.tar.gz
+            Patch0:         fix-p0.patch
+            Patch1:         fix-p2.patch
+            Patch2:         fix-default.patch
+
+            %description
+            Test package with individual patch macros using different strip levels
+
+            %prep
+            %setup -q
+            %patch 0 -p0
+            %patch 1 -p2
+            %patch 2 -p1
+
+            %changelog
+            * Thu Jan 13 3770 Test User <test@redhat.com> - 2.0.0-1
+            - first version
+            """
+        )
+    )
+    return spec
+
+
+@pytest.fixture
+def spec_with_autopatch(tmp_path):
+    spec = tmp_path / "autopatch.spec"
+    source_file = tmp_path / "source.tar.gz"
+    source_file.touch()
+    spec.write_text(
+        dedent(
+            """
+            Name:           test
+            Version:        4.1.0
+            Release:        1%{?dist}
+            Summary:        Test package
+
+            License:        MIT
+
+            Source0:        source.tar.gz
+            Patch0:         backport-fix.patch
+            Patch1:         memory-fix.patch
+
+            %description
+            Test package with autopatch
+
+            %prep
+            %setup -q
+            %autopatch -p2
+
+            %changelog
+            * Thu Jan 13 3770 Test User <test@redhat.com> - 4.1.0-1
+            - first version
+            """
+        )
+    )
+    return spec
+
+
 @pytest.mark.asyncio
 async def test_add_changelog_entry(minimal_spec):
     content = ["- some change", "  second line"]
@@ -137,7 +277,7 @@ async def test_add_changelog_entry(minimal_spec):
 
 
 @pytest.mark.parametrize(
-    "spec_fixture, expected_version, expected_patches",
+    "spec_fixture, expected_version, expected_patches, expected_strip_levels",
     [
         (
             "spec_with_patches",
@@ -147,6 +287,11 @@ async def test_add_changelog_entry(minimal_spec):
                 "fix-memory-leak.patch",
                 "update-documentation.patch",
             ],
+            {
+                "fix-cve-2024-1234.patch": 1,
+                "fix-memory-leak.patch": 1,
+                "update-documentation.patch": 1,
+            },
         ),
         (
             "spec_with_macro_patches",
@@ -154,12 +299,57 @@ async def test_add_changelog_entry(minimal_spec):
             [
                 "mypackage-3.5.3-Fix-CVE-2026-4111.patch",
             ],
+            {
+                "mypackage-3.5.3-Fix-CVE-2026-4111.patch": 1,
+            },
         ),
-        ("minimal_spec", "0.1", []),
+        ("minimal_spec", "0.1", [], {}),
+        (
+            "spec_with_individual_patch_strips",
+            "2.0.0",
+            ["fix-p0.patch", "fix-p2.patch", "fix-default.patch"],
+            {
+                "fix-p0.patch": 0,
+                "fix-p2.patch": 2,
+                "fix-default.patch": 1,
+            },
+        ),
+        (
+            "spec_with_autopatch",
+            "4.1.0",
+            ["backport-fix.patch", "memory-fix.patch"],
+            {
+                "backport-fix.patch": 2,
+                "memory-fix.patch": 2,
+            },
+        ),
+        (
+            "spec_with_autosetup_gendiff",
+            "5.0.0",
+            ["fix-one.patch", "fix-two.patch"],
+            {
+                "fix-one.patch": 1,
+                "fix-two.patch": 1,
+            },
+        ),
+        (
+            "spec_with_autosetup_no_p",
+            "6.0.0",
+            ["only-fix.patch"],
+            {
+                "only-fix.patch": 1,
+            },
+        ),
     ],
 )
 @pytest.mark.asyncio
-async def test_get_package_info(spec_fixture, expected_version, expected_patches, request):
+async def test_get_package_info(
+    spec_fixture,
+    expected_version,
+    expected_patches,
+    expected_strip_levels,
+    request,
+):
     spec = request.getfixturevalue(spec_fixture)
     tool = GetPackageInfoTool()
 
@@ -170,6 +360,7 @@ async def test_get_package_info(spec_fixture, expected_version, expected_patches
 
     assert result.version == expected_version
     assert result.patch_files == expected_patches
+    assert result.patch_strip_levels == expected_strip_levels
 
 
 @pytest.mark.parametrize(

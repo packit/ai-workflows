@@ -22,44 +22,45 @@ jobs:
           docker_context: "."
           image_name: "goose"
 
-  build-and-push-beeai-containers:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - dockerfile: "Containerfile.c9s"
-            tag: "c9s"
-            description: "CentOS Stream 9"
-          - dockerfile: "Containerfile.c10s"
-            tag: "c10s"
-            description: "CentOS Stream 10"
-    steps:
-      - name: Build and push beeai:${{ matrix.tag }} to quay.io registry (${{ matrix.description }})
-        uses: sclorg/build-and-push-action@adf1dee2b786ccbb2e2a708c3510a90e2ab3392d # v4.1.5
-        with:
-          registry: "quay.io"
-          registry_namespace: "jotnar"
-          registry_username: ${{ secrets.REGISTRY_LOGIN }}
-          registry_token: ${{ secrets.REGISTRY_TOKEN }}
-          dockerfile: ${{ matrix.dockerfile }}
-          docker_context: "."
-          image_name: "beeai"
-          tag: ${{ matrix.tag }}
-
-  build-and-push-mcp-server:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Build and push mcp-server to quay.io registry
-        uses: sclorg/build-and-push-action@adf1dee2b786ccbb2e2a708c3510a90e2ab3392d # v4.1.5
-        with:
-          registry: "quay.io"
-          registry_namespace: "jotnar"
-          registry_username: ${{ secrets.REGISTRY_LOGIN }}
-          registry_token: ${{ secrets.REGISTRY_TOKEN }}
-          dockerfile: "Containerfile.mcp"
-          docker_context: "."
-          image_name: "mcp-server"
-          # tag: "staging"
+#   # these are built internally because we need rhpkg
+#   build-and-push-beeai-containers:
+#     runs-on: ubuntu-latest
+#     strategy:
+#       matrix:
+#         include:
+#           - dockerfile: "Containerfile.c9s"
+#             tag: "c9s"
+#             description: "CentOS Stream 9"
+#           - dockerfile: "Containerfile.c10s"
+#             tag: "c10s"
+#             description: "CentOS Stream 10"
+#     steps:
+#       - name: Build and push beeai:${{ matrix.tag }} to quay.io registry (${{ matrix.description }})
+#         uses: sclorg/build-and-push-action@adf1dee2b786ccbb2e2a708c3510a90e2ab3392d # v4.1.5
+#         with:
+#           registry: "quay.io"
+#           registry_namespace: "jotnar"
+#           registry_username: ${{ secrets.REGISTRY_LOGIN }}
+#           registry_token: ${{ secrets.REGISTRY_TOKEN }}
+#           dockerfile: ${{ matrix.dockerfile }}
+#           docker_context: "."
+#           image_name: "beeai"
+#           tag: ${{ matrix.tag }}
+#
+#   build-and-push-mcp-server:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Build and push mcp-server to quay.io registry
+#         uses: sclorg/build-and-push-action@adf1dee2b786ccbb2e2a708c3510a90e2ab3392d # v4.1.5
+#         with:
+#           registry: "quay.io"
+#           registry_namespace: "jotnar"
+#           registry_username: ${{ secrets.REGISTRY_LOGIN }}
+#           registry_token: ${{ secrets.REGISTRY_TOKEN }}
+#           dockerfile: "Containerfile.mcp"
+#           docker_context: "."
+#           image_name: "mcp-server"
+#           # tag: "staging"
 
   build-and-push-testing-farm-sse-bridge:
     runs-on: ubuntu-latest

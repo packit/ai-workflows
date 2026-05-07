@@ -286,6 +286,20 @@ async def change_jira_status(
     )
 
 
+async def get_jira_labels(jira_issue: str) -> list[str]:
+    try:
+        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+            details = await run_tool(
+                "get_jira_details",
+                issue_key=jira_issue,
+                available_tools=gateway_tools,
+            )
+            return details.get("fields", {}).get("labels", [])
+    except Exception as e:
+        logger.warning(f"Failed to get labels for {jira_issue}: {e}")
+        return []
+
+
 _FAILURE_LABEL_SUFFIXES = ("_failed", "_errored")
 
 

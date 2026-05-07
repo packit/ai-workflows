@@ -1086,6 +1086,20 @@ async def main() -> None:
             input = InputSchema.model_validate(task.metadata)
             logger.info(f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}")
 
+            current_labels = await tasks.get_jira_labels(input.issue)
+            all_labels = JiraLabels.all_labels()
+            terminal_ymir_labels = [
+                label
+                for label in current_labels
+                if label in all_labels and label != JiraLabels.TRIAGE_IN_PROGRESS.value
+            ]
+            if terminal_ymir_labels and JiraLabels.RETRY_NEEDED.value not in current_labels:
+                logger.info(
+                    f"Skipping duplicate triage for {input.issue} — "
+                    f"already has labels: {terminal_ymir_labels}"
+                )
+                continue
+
             async def retry(task, error, input=input):
                 task.attempts += 1
                 if task.attempts < max_retries:

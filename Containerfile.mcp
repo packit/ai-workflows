@@ -42,7 +42,13 @@ COPY ymir/tools/ /home/mcp/ymir/tools/
 COPY ymir/common/ /home/mcp/ymir/common/
 COPY files/ipa_redhat_com /etc/krb5.conf.d/ipa_redhat_com
 RUN chgrp -R root /home/mcp && chmod -R g+rwX /home/mcp
-RUN mkdir /git-repos && chmod -R o+rwX /git-repos
+
+# "fatal: detected dubious ownership in repository at '/git-repos/"
+# we tell git that all repos in /git-repos/* and .../applicability/* are safe to fetch into
+# because this is a volume that has different owner than our container process
+RUN mkdir /git-repos && chmod -R o+rwX /git-repos && \
+    git config --system --add safe.directory '/git-repos/*' && \
+    git config --system --add safe.directory '/git-repos/applicability/*'
 
 # Configure jump host for internal dist-git
 COPY files/internal_dist-git_ssh.conf /etc/ssh/ssh_config.d/00-dist-git.conf

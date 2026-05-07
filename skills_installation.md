@@ -92,7 +92,9 @@ simultaneously throughout the session.
 
 ## Prerequisites
 
-- Python >= 3.13
+- Python 3.13 (`python3.13` package) -- the BeeAI framework used by the tools
+  does not support Python >= 3.14 yet, and Fedora 42+ ships Python 3.14 as the
+  default. Install Python 3.13 explicitly and create a virtual environment.
 - Kerberos client tools (`kinit`, `klist`) -- required for Koji and dist-git operations
 - System RPM bindings (`rpm` Python package)
 - A valid `rhel-config.json` file (template provided in `templates/rhel-config.json`)
@@ -100,22 +102,30 @@ simultaneously throughout the session.
 ## 1. Install packages
 
 ```bash
-sudo dnf install krb5-devel gcc python3-devel
+sudo dnf install python3.13 krb5-devel gcc python3.13-devel
+```
+
+Create a dedicated virtual environment with Python 3.13 and include access to
+the system `rpm` package (installed as an RPM, not available on PyPI):
+
+```bash
+python3.13 -m venv ~/.local/share/ymir-venv --system-site-packages
 ```
 
 Install `ymir-common` first because `ymir-tools` depends on it and the package
 is not published on PyPI.
 
 ```bash
-pip install "git+https://github.com/packit/ai-workflows.git#subdirectory=ymir/common"
-pip install "git+https://github.com/packit/ai-workflows.git#subdirectory=ymir/tools"
+~/.local/share/ymir-venv/bin/pip install "git+https://github.com/packit/ai-workflows.git#subdirectory=ymir/common"
+~/.local/share/ymir-venv/bin/pip install "git+https://github.com/packit/ai-workflows.git#subdirectory=ymir/tools"
 ```
 
-After installation, two console scripts are available:
+After installation, two console scripts are available inside the virtual
+environment:
 
 ```
-ymir-privileged-gateway
-ymir-unprivileged-gateway
+~/.local/share/ymir-venv/bin/ymir-privileged-gateway
+~/.local/share/ymir-venv/bin/ymir-unprivileged-gateway
 ```
 
 ## 2. Prepare `rhel-config.json`
@@ -169,6 +179,8 @@ with the CLI or by editing the settings file directly.
 ### Option A -- Using `claude mcp add`
 
 ```bash
+VENV="$HOME/.local/share/ymir-venv"
+
 claude mcp add ymir-privileged \
   --env MCP_TRANSPORT=stdio \
   --env GITLAB_TOKEN=<your-gitlab-token> \
@@ -176,23 +188,26 @@ claude mcp add ymir-privileged \
   --env JIRA_EMAIL=you@redhat.com \
   --env JIRA_TOKEN=your-jira-api-token \
   --env KRB5CCNAME=FILE:/tmp/krb5cc_$(id -u) \
-  -- ymir-privileged-gateway
+  -- "$VENV/bin/ymir-privileged-gateway"
 
 claude mcp add ymir-unprivileged \
   --env MCP_TRANSPORT=stdio \
   --env UPSTREAM_SEARCH_API_URL=http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1 \
-  -- ymir-unprivileged-gateway
+  -- "$VENV/bin/ymir-unprivileged-gateway"
 ```
 
 ### Option B -- Editing `~/.claude.json`
 
 Add the following to the top-level `mcpServers` object:
 
+Replace `<your-home>` with the absolute path to your home directory
+(e.g. `/home/you`). The `~` shorthand is **not** expanded inside JSON values.
+
 ```json
 {
   "mcpServers": {
     "ymir-privileged": {
-      "command": "ymir-privileged-gateway",
+      "command": "<your-home>/.local/share/ymir-venv/bin/ymir-privileged-gateway",
       "env": {
         "MCP_TRANSPORT": "stdio",
         "GITLAB_TOKEN": "<your-gitlab-token>",
@@ -203,7 +218,7 @@ Add the following to the top-level `mcpServers` object:
       }
     },
     "ymir-unprivileged": {
-      "command": "ymir-unprivileged-gateway",
+      "command": "<your-home>/.local/share/ymir-venv/bin/ymir-unprivileged-gateway",
       "env": {
         "MCP_TRANSPORT": "stdio",
         "UPSTREAM_SEARCH_API_URL": "http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1"

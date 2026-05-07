@@ -48,6 +48,7 @@ from ymir.tools.privileged.lookaside import (
     PrepSourcesTool,
     UploadSourcesTool,
 )
+from ymir.tools.privileged.maintainer_rules import MaintainerRulesTool
 from ymir.tools.privileged.zstream_search import ZStreamSearchTool
 
 # Patterns that match common credential formats in log output
@@ -181,6 +182,7 @@ def main():
             UploadSourcesTool(),
             ZStreamSearchTool(),
             AnalyzeLogsTool(),
+            MaintainerRulesTool(),
         ]
     )
 

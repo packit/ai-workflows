@@ -350,6 +350,17 @@ TRIAGE_PROMPT = """
               - The fix directly addresses the root cause identified in your analysis
               - The code changes align with the symptoms described in the Jira issue
               - The modified functions/files match those mentioned in the issue
+           3. **For CVE issues - Verify CVE ID match**: If the issue is a CVE (contains CVE-YYYY-NNNNN):
+              - Check if the patch content or commit message mentions the EXACT CVE ID
+              - If the CVE ID is NOT mentioned in the patch, verify that:
+                * The vulnerability description in the CVE matches what the patch fixes
+                * The code changes address the specific vulnerability type
+                  (buffer overflow, integer overflow, etc.)
+                * The affected functions/files align with the CVE details
+              - **WARNING**: Patches from bundled CVE updates (e.g., Oracle CPU, bundled library updates)
+                may fix MULTIPLE CVEs - verify you have the correct patch for THIS specific CVE
+              - If you cannot confirm the patch matches the CVE, search for alternative patches or
+                request clarification
          * Only proceed with URLs that contain valid patch content AND address the specific issue
          * If the content is not a proper patch or doesn't fix the issue, continue searching for other fixes
          * **Only use merged/accepted fixes**: Patches must come from commits that have been

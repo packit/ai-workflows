@@ -190,7 +190,11 @@ class BackportData(BaseModel):
         "that were validated using the get_patch_from_url tool"
     )
     justification: str = Field(
-        description="Clear explanation of why this patch fixes the issue, linking it to the root cause"
+        description=(
+            "Clear explanation of why this patch fixes the issue, linking it to the root cause. "
+            "For CVE issues: explicitly state whether the patch mentions the CVE ID, and if not, "
+            "explain how you verified the patch addresses the specific vulnerability described in the CVE."
+        )
     )
     jira_issue: str = Field(description="Jira issue identifier")
     cve_id: str | None = Field(description="CVE identifier", default=None)

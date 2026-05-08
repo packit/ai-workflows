@@ -50,6 +50,9 @@ RUN dnf -y install --allowerasing \
       pyproject-srpm-macros \
       rust-toolset-srpm-macros \
       perl-srpm-macros \
+      javapackages-tools \
+      javapackages-local \
+      xmvn-tools \
       ${EXTRA_PACKAGES} \
     && dnf clean all
 

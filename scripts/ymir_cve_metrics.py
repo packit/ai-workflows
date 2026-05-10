@@ -81,16 +81,23 @@ def _paginate_gitlab_mrs(
 ) -> list[dict]:
     encoded = quote(group, safe="")
     url = f"{GITLAB_API_URL}/groups/{encoded}/merge_requests"
+    # GitLab API filter params are created_after/updated_after (no _at),
+    # but order_by uses created_at/updated_at.
+    filter_prefix = date_field.removesuffix("_at")
     params = {
         "state": state,
         "author_username": author,
-        f"{date_field}_after": date_from.isoformat(),
-        f"{date_field}_before": date_to.isoformat(),
+        f"{filter_prefix}_after": date_from.isoformat(),
         "per_page": PER_PAGE,
         "order_by": date_field,
         "sort": "asc",
         "include_subgroups": "true",
     }
+    # For non-merged states, constrain the upper bound via the API.
+    # For merged MRs we skip this — updated_at can drift past the range
+    # (e.g. post-merge comments), and the in-code merged_at filter handles it.
+    if state != "merged":
+        params[f"{filter_prefix}_before"] = date_to.isoformat()
 
     result = []
     page = 1
@@ -273,31 +280,84 @@ def fetch_active_triage(
 # ─── Reporting ─────────────────────────────────────────────────────────────────
 
 
-def print_summary(
+def _gitlab_mr_search_url(
+    authors: list[str],
+    *,
+    state: str,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> str:
+    # GitLab web UI only supports a single author_username filter.
+    base = "https://gitlab.com/groups/redhat/-/merge_requests"
+    params = f"?state={state}&author_username={authors[0]}&first_page_size=20"
+    if state == "merged" and date_from and date_to:
+        params += (
+            f"&merged_after={date_from.strftime('%Y-%m-%d')}"
+            f"&merged_before={date_to.strftime('%Y-%m-%d')}"
+            f"&sort=merged_at_desc"
+        )
+    elif state == "opened":
+        params += "&sort=created_date"
+    return base + params
+
+
+def _jira_search_url(jira_url: str, jira_keys: set[str]) -> str:
+    if not jira_keys:
+        return ""
+    keys_csv = ",".join(sorted(jira_keys))
+    jql = quote(f"issuekey in ({keys_csv})", safe="")
+    return f"{jira_url.rstrip('/')}/issues/?jql={jql}"
+
+
+def _md_link(text: str, url: str) -> str:
+    return f"[{text}]({url})" if url else text
+
+
+def print_report(
     date_from: datetime,
     date_to: datetime,
     merged_mrs: int,
     jiras_from_mrs: int,
-    triage_closures: int,
     total_solved: int,
     non_merged_mrs: int,
-    active_triage: int,
+    *,
+    authors: list[str],
+    jira_url: str,
+    resolved_jira_keys: set[str],
+    triage_closure_keys: set[str],
+    pending_jira_keys: set[str],
+    active_triage_keys: set[str],
 ) -> None:
     from_str = date_from.strftime("%Y-%m-%d")
     to_str = date_to.strftime("%Y-%m-%d")
 
-    print(f"\nYmir CVE Activity Report: {from_str} → {to_str}")
-    print("─" * 50)
+    merged_url = _gitlab_mr_search_url(authors, state="merged", date_from=date_from, date_to=date_to)
+    opened_url = _gitlab_mr_search_url(authors, state="opened")
+    resolved_url = _jira_search_url(jira_url, resolved_jira_keys)
+    closure_url = _jira_search_url(jira_url, triage_closure_keys)
+    pending_url = _jira_search_url(jira_url, pending_jira_keys)
+    active_url = _jira_search_url(jira_url, active_triage_keys)
 
-    print("Solved Jiras:")
-    print(f"  {'Resolved by MRs:':<38} {jiras_from_mrs:>6} Jiras  ({merged_mrs} MRs)")
-    print(f"  {'Not-affected (closed):':<38} {triage_closures:>6}")
-    print(f"  {'Total solved:':<38} {total_solved:>6}")
+    open_mrs_line = f"- {_md_link('Open MRs', opened_url)} (pending merge): {non_merged_mrs}"
+    if pending_jira_keys:
+        open_mrs_line += f" ({_md_link(f'{len(pending_jira_keys)} Jiras', pending_url)})"
 
-    print()
-    print("In Progress Jiras:")
-    print(f"  {'Open MRs (pending merge):':<38} {non_merged_mrs:>6}")
-    print(f"  {'Not-affected (pending closure):':<38} {active_triage:>6}")
+    lines = [
+        f"# Ymir CVE Activity Report: {from_str} → {to_str}",
+        "",
+        "## Solved Jiras",
+        f"- Resolved by MRs: {_md_link(f'{jiras_from_mrs} Jiras', resolved_url)}"
+        f" ({_md_link(f'{merged_mrs} MRs', merged_url)})",
+        f"- Not-affected (closed): {_md_link(str(len(triage_closure_keys)), closure_url)}",
+        f"- Total solved: {total_solved}",
+        "",
+        "## In Progress Jiras",
+        open_mrs_line,
+        f"- Not-affected (pending closure): {_md_link(str(len(active_triage_keys)), active_url)}",
+        "",
+    ]
+
+    print("\n".join(lines))
 
 
 # ─── CLI ───────────────────────────────────────────────────────────────────────
@@ -345,6 +405,7 @@ def main() -> None:
         help=f"GitLab username to filter MRs (default: {GITLAB_AUTHOR_DEFAULT}). "
         "Can be specified multiple times for multiple authors.",
     )
+
     args = parser.parse_args()
 
     if args.gitlab_author is None:
@@ -359,8 +420,6 @@ def main() -> None:
     session = get_gitlab_session()
 
     print("Fetching merged MRs from GitLab...")
-    # GitLab doesn't support filtering by merged_at directly, so we use updated_at
-    # as a proxy and then filter by merged_at in the pagination loop.
     merged_mrs = _fetch_mrs(
         session,
         GITLAB_GROUPS,
@@ -384,6 +443,9 @@ def main() -> None:
         date_field="created_at",
     )
 
+    print("Extracting pending Jiras from open MRs...")
+    pending_jiras, _ = extract_resolved_jiras(session, opened_mrs)
+
     triage_closures: list[dict] = []
     active_triage: list[dict] = []
 
@@ -406,17 +468,22 @@ def main() -> None:
     # ── Deduplicate & report ──
     jiras_from_mrs = len(resolved_jiras) + unmatched_mrs
     triage_keys = {issue["key"] for issue in triage_closures}
+    active_triage_keys = {issue["key"] for issue in active_triage}
     total_solved = len(resolved_jiras | triage_keys) + unmatched_mrs
 
-    print_summary(
+    print_report(
         date_from,
         date_to,
         merged_mrs=len(merged_mrs),
         jiras_from_mrs=jiras_from_mrs,
-        triage_closures=len(triage_closures),
         total_solved=total_solved,
         non_merged_mrs=len(opened_mrs),
-        active_triage=len(active_triage),
+        authors=args.gitlab_author,
+        jira_url=jira_url,
+        resolved_jira_keys=resolved_jiras,
+        triage_closure_keys=triage_keys,
+        pending_jira_keys=pending_jiras,
+        active_triage_keys=active_triage_keys,
     )
 
 

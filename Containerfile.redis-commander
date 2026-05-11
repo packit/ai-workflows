@@ -1,0 +1,13 @@
+FROM fedora:44
+ENV NODE_ENV=production
+
+# the tilde means to update to latest patch releases
+RUN dnf install -y nodejs npm \
+    && dnf clean all \
+    && npm install -g redis-commander@~0.9.0 \
+    && npm cache clean --force \
+    && useradd -u 1001 -g 0 -m -s /sbin/nologin rediscommander
+
+USER 1001
+EXPOSE 8081
+CMD exec redis-commander --redis-host $REDIS_HOST --redis-port $REDIS_PORT

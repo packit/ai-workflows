@@ -191,7 +191,7 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         )
 
     @staticmethod
-    def _process_zstream_branch(dist_git_branch: str) -> tuple[str, str] | None:
+    def _get_higher_stream_branch(dist_git_branch: str) -> str | None:
         if not (
             m := re.match(
                 r"^(?P<prefix>rhel-(?P<x>\d+)\.)(?P<y>\d+)(?P<suffix>\.\d+)?$",
@@ -201,29 +201,40 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
             # not a Z-Stream branch
             return None
         y = int(m.group("y"))
-        suffix = (m.group("suffix") or "") + "-candidate"
-        current_stream_candidate_tag = m.group("prefix") + str(y) + suffix
-        higher_stream_candidate_tag = m.group("prefix") + str(min(y + 1, 10)) + suffix
-        return current_stream_candidate_tag, higher_stream_candidate_tag
+        suffix = m.group("suffix") or ""
+        return m.group("prefix") + str(min(y + 1, 10)) + suffix
 
     @staticmethod
-    async def _get_latest_candidate_build(package: str, candidate_tag: str) -> EVR:
-        builds = await asyncio.to_thread(
-            koji.ClientSession(BREWHUB_URL).listTagged,
-            package=package,
-            tag=candidate_tag,
-            latest=True,
-            inherit=True,
-            strict=True,
+    async def _get_latest_candidate_build(package: str, branch: str) -> EVR:
+        candidate_tags = {branch + "-candidate", branch + "-z-candidate"}
+
+        def get_latest_build(tag):
+            builds = koji.ClientSession(BREWHUB_URL).listTagged(
+                package=package,
+                tag=tag,
+                latest=True,
+                inherit=True,
+                strict=False,
+            )
+            if not builds:
+                return None
+            [build] = builds
+            return EVR(
+                epoch=build["epoch"] or 0,
+                version=build["version"],
+                release=build["release"],
+            )
+
+        results = await asyncio.gather(
+            *(asyncio.to_thread(get_latest_build, tag) for tag in candidate_tags),
         )
-        if not builds:
-            raise RuntimeError(f"There are no builds of {package} in {candidate_tag}")
-        [build] = builds
-        return EVR(
-            epoch=build["epoch"] or 0,
-            version=build["version"],
-            release=build["release"],
-        )
+        latest: EVR | None = None
+        for result in results:
+            if result is not None and (latest is None or latest < result):
+                latest = result
+        if latest is None:
+            raise RuntimeError(f"There are no builds of {package} corresponding to {branch}")
+        return latest
 
     @staticmethod
     def _find_macro(name: str, nodes: list[Node]) -> int | None:
@@ -268,14 +279,12 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         spec_path: Path,
         package: str,
         rebase: bool,
-        current_stream_candidate_tag: str,
-        higher_stream_candidate_tag: str,
+        current_stream_branch: str,
+        higher_stream_branch: str,
     ) -> None:
-        latest_current_stream_build = await cls._get_latest_candidate_build(
-            package, current_stream_candidate_tag
-        )
-        latest_higher_stream_build = await cls._get_latest_candidate_build(
-            package, higher_stream_candidate_tag
+        latest_current_stream_build, latest_higher_stream_build = await asyncio.gather(
+            cls._get_latest_candidate_build(package, current_stream_branch),
+            cls._get_latest_candidate_build(package, higher_stream_branch),
         )
         base_build = (
             latest_current_stream_build
@@ -331,14 +340,15 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
     ) -> StringToolOutput:
         spec_path = get_absolute_path(tool_input.spec, self)
         try:
-            if not (candidate_tags := self._process_zstream_branch(tool_input.dist_git_branch)):
+            if not (higher_stream_branch := self._get_higher_stream_branch(tool_input.dist_git_branch)):
                 await self._bump_or_reset_release(spec_path, tool_input.rebase)
             else:
                 await self._set_zstream_release(
                     spec_path,
                     tool_input.package,
                     tool_input.rebase,
-                    *candidate_tags,
+                    tool_input.dist_git_branch,
+                    higher_stream_branch,
                 )
         except Exception as e:
             raise ToolError(f"Failed to update release: {e}") from e

@@ -1,0 +1,44 @@
+diff --git a/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/processors/chat.py b/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/processors/chat.py
+index a135b4b7..a8a7a0f4 100644
+--- a/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/processors/chat.py
++++ b/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/processors/chat.py
+@@ -5,6 +5,7 @@ from beeai_framework.backend import (
+     AnyMessage,
+     ChatModel,
+     MessageImageContent,
++    MessageReasoningContent,
+     MessageTextContent,
+     MessageToolCallContent,
+     MessageToolResultContent,
+@@ -218,6 +219,11 @@ def _process_messages(
+                                 ),
+                             }
+                             if isinstance(content, MessageToolResultContent)
++                            else {
++                                MessageContentAttributes.MESSAGE_CONTENT_TYPE: "reasoning",
++                                MessageContentAttributes.MESSAGE_CONTENT_TEXT: content.text,
++                            }
++                            if isinstance(content, MessageReasoningContent)
+                             else None
+                         )
+                         for content in msg.content
+@@ -244,7 +250,7 @@ def _process_messages(
+ 
+ 
+ def _aggregate_msg_content(message: "AnyMessage") -> None:
+-    from beeai_framework.backend import MessageTextContent, MessageToolCallContent
++    from beeai_framework.backend import MessageReasoningContent, MessageTextContent, MessageToolCallContent
+ 
+     contents = message.content.copy()
+     aggregated_content: list[Any] = []
+@@ -257,6 +263,10 @@ def _aggregate_msg_content(message: "AnyMessage") -> None:
+             content, MessageToolCallContent
+         ):
+             last_content.args += content.args
++        elif isinstance(last_content, MessageReasoningContent) and isinstance(
++            content, MessageReasoningContent
++        ):
++            last_content.text += content.text
+         else:
+             aggregated_content.append(content)
+ 

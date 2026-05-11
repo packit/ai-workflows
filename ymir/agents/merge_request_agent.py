@@ -8,7 +8,6 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
-from beeai_framework.agents.requirement import RequirementAgent
 from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
 )
@@ -26,10 +25,12 @@ from ymir.agents.build_agent import create_build_agent
 from ymir.agents.build_agent import get_prompt as get_build_prompt
 from ymir.agents.constants import I_AM_YMIR
 from ymir.agents.observability import setup_observability
+from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
+    is_reasoning_enabled,
     mcp_tools,
     render_prompt,
 )
@@ -133,10 +134,11 @@ def get_prompt() -> str:
     """
 
 
-def create_merge_request_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> RequirementAgent:
-    return RequirementAgent(
+def create_merge_request_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> ReasoningAgent:
+    return ReasoningAgent(
         name="MergeRequestAgent",
         llm=get_chat_model(),
+        unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
             ThinkTool(),

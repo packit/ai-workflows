@@ -49,11 +49,15 @@ class DistgitDetectorTool(Tool[DistgitDetectorInput, ToolRunOptions, DistgitDete
             path = parsed.path.lower()
 
             # Fedora dist-git
-            if "src.fedoraproject.org" in hostname:
+            if hostname == "src.fedoraproject.org":
+                return True
+
+            # RHEL dist-git
+            if hostname == "pkgs.devel.redhat.com":
                 return True
 
             # RHEL/CentOS Stream GitLab
-            if "gitlab.com" in hostname:
+            if hostname == "gitlab.com":
                 return "/redhat/centos-stream/rpms/" in path or "/redhat/rhel/rpms/" in path
 
             # Not a recognized dist-git source

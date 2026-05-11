@@ -133,9 +133,13 @@ services:
     profiles: ["agents", "supervisor", "e2e-test"]
 
   redis-commander:
-    image: ghcr.io/joeferner/redis-commander:0.9.0
+    image: quay.io/jotnar/redis-commander
+    build:
+      context: .
+      dockerfile: Containerfile.redis-commander
     environment:
-      - REDIS_HOSTS=local:valkey:6379
+      - REDIS_HOST=valkey
+      - REDIS_PORT=6379
     ports:
       - "8081:8081"
     depends_on:

@@ -93,7 +93,7 @@ simultaneously throughout the session.
 ## Prerequisites
 
 - Python 3.13 (`python3.13` package) -- the BeeAI framework used by the tools
-  does not support Python >= 3.14 yet, and Fedora 42+ ships Python 3.14 as the
+  does not support Python >= 3.14 yet, and Fedora 43+ ships Python 3.14 as the
   default. Install Python 3.13 explicitly and create a virtual environment.
 - Kerberos client tools (`kinit`, `klist`) -- required for Koji and dist-git operations
 - System RPM bindings (`rpm` Python package)
@@ -105,11 +105,10 @@ simultaneously throughout the session.
 sudo dnf install python3.13 krb5-devel gcc python3.13-devel
 ```
 
-Create a dedicated virtual environment with Python 3.13 and include access to
-the system `rpm` package (installed as an RPM, not available on PyPI):
+Create a dedicated virtual environment with Python 3.13.
 
 ```bash
-python3.13 -m venv ~/.local/share/ymir-venv --system-site-packages
+python3.13 -m venv ~/.local/share/ymir-venv
 ```
 
 Install `ymir-common` first because `ymir-tools` depends on it and the package

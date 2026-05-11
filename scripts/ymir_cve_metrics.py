@@ -313,13 +313,30 @@ def _md_link(text: str, url: str) -> str:
     return f"[{text}]({url})" if url else text
 
 
+YMIR_ACTION_LABELS = ["ymir_backport", "ymir_rebuild", "ymir_rebase"]
+
+
+def _mr_category_summary(mrs: list[dict]) -> str:
+    counts: dict[str, int] = {}
+    for mr in mrs:
+        labels = mr.get("labels", [])
+        for action in YMIR_ACTION_LABELS:
+            if action in labels:
+                short = action.removeprefix("ymir_")
+                counts[short] = counts.get(short, 0) + 1
+    if not counts:
+        return ""
+    parts = [f"{count} {name}" for name, count in counts.items()]
+    return " — " + ", ".join(parts)
+
+
 def print_report(
     date_from: datetime,
     date_to: datetime,
-    merged_mrs: int,
+    merged_mrs: list[dict],
     jiras_from_mrs: int,
     total_solved: int,
-    non_merged_mrs: int,
+    opened_mrs: list[dict],
     *,
     authors: list[str],
     jira_url: str,
@@ -338,7 +355,18 @@ def print_report(
     pending_url = _jira_search_url(jira_url, pending_jira_keys)
     active_url = _jira_search_url(jira_url, active_triage_keys)
 
-    open_mrs_line = f"- {_md_link('Open MRs', opened_url)} (pending merge): {non_merged_mrs}"
+    merged_count = len(merged_mrs)
+    opened_count = len(opened_mrs)
+
+    resolved_line = (
+        f"- Resolved by MRs: {_md_link(f'{jiras_from_mrs} Jiras', resolved_url)}"
+        f" ({_md_link(f'{merged_count} MRs', merged_url)}{_mr_category_summary(merged_mrs)})"
+    )
+
+    open_mrs_line = (
+        f"- {_md_link('Open MRs', opened_url)} (pending merge):"
+        f" {opened_count}{_mr_category_summary(opened_mrs)}"
+    )
     if pending_jira_keys:
         open_mrs_line += f" ({_md_link(f'{len(pending_jira_keys)} Jiras', pending_url)})"
 
@@ -346,8 +374,7 @@ def print_report(
         f"# Ymir CVE Activity Report: {from_str} → {to_str}",
         "",
         "## Solved Jiras",
-        f"- Resolved by MRs: {_md_link(f'{jiras_from_mrs} Jiras', resolved_url)}"
-        f" ({_md_link(f'{merged_mrs} MRs', merged_url)})",
+        resolved_line,
         f"- Not-affected (closed): {_md_link(str(len(triage_closure_keys)), closure_url)}",
         f"- Total solved: {total_solved}",
         "",
@@ -474,10 +501,10 @@ def main() -> None:
     print_report(
         date_from,
         date_to,
-        merged_mrs=len(merged_mrs),
+        merged_mrs=merged_mrs,
         jiras_from_mrs=jiras_from_mrs,
         total_solved=total_solved,
-        non_merged_mrs=len(opened_mrs),
+        opened_mrs=opened_mrs,
         authors=args.gitlab_author,
         jira_url=jira_url,
         resolved_jira_keys=resolved_jiras,

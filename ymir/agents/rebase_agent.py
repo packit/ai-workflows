@@ -6,7 +6,6 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from beeai_framework.agents.requirement import RequirementAgent
 from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
 )
@@ -27,11 +26,13 @@ from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState, PackageUpdateStep
+from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import (
     format_mr_justification,
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
+    is_reasoning_enabled,
     mcp_tools,
     render_prompt,
     resolve_chat_model_override,
@@ -169,10 +170,11 @@ def get_prompt() -> str:
     """
 
 
-def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> RequirementAgent:
-    return RequirementAgent(
+def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> ReasoningAgent:
+    return ReasoningAgent(
         name="RebaseAgent",
         llm=get_chat_model(),
+        unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
             ThinkTool(),

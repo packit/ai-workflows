@@ -2,16 +2,17 @@ import logging
 from pathlib import Path
 from textwrap import dedent
 
-from beeai_framework.agents.requirement import RequirementAgent
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.tools import Tool
 from pydantic import BaseModel, Field
 
 from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_applicability_agent
+from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
+    is_reasoning_enabled,
     run_tool,
 )
 from ymir.common.models import (
@@ -141,9 +142,10 @@ async def find_rebuild_siblings(
             continue
 
         try:
-            analysis_agent = RequirementAgent(
+            analysis_agent = ReasoningAgent(
                 name="SiblingRebuildAnalyzer",
                 llm=get_chat_model(),
+                unconstrained=is_reasoning_enabled(),
                 tool_call_checker=get_tool_call_checker_config(),
                 tools=analysis_tools,
                 memory=UnconstrainedMemory(),

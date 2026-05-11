@@ -26,16 +26,25 @@ def resolve_chat_model_override(agent_type: str) -> None:
         os.environ["CHAT_MODEL"] = override
 
 
+def is_reasoning_enabled() -> bool:
+    chat_model = os.environ.get("CHAT_MODEL", "")
+    return "claude" in chat_model and bool(os.getenv("REASONING_EFFORT"))
+
+
 def get_chat_model() -> ChatModel:
     chat_model = os.environ["CHAT_MODEL"]
+    # lowering the temperature makes the model stop backporting too soon
+    # but should yield more predictable results, similar for top_p (tried 0.5)
+    temperature = float(os.getenv("TEMPERATURE", "0.6"))
+    reasoning_effort = os.getenv("REASONING_EFFORT")
     model = ChatModel.from_name(
         chat_model,
         # this the preferred way to set parameters, don't do options=...
         # it was changed in beeai 0.1.48
         ChatModelParameters(
-            # lowering the temperature makes the model stop backporting too soon
-            # but should yield more predictable results, similar for top_p (tried 0.5)
-            temperature=0.6
+            # Anthropic requires temperature=1 when extended thinking is enabled
+            temperature=1 if "claude" in chat_model and reasoning_effort else temperature,
+            reasoning_effort=reasoning_effort,
         ),
         timeout=1200,
         # beeai hardcodes max_retries=0 in its litellm adapter; num_retries
@@ -46,6 +55,7 @@ def get_chat_model() -> ChatModel:
     if "gemini" in chat_model:
         # disable `required` for Gemini models
         model.tool_choice_support = {"single", "none", "auto"}
+        model.allow_prompt_caching = False
     return model
 
 

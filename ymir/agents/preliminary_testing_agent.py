@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from beeai_framework.agents.requirement import RequirementAgent
 from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
 )
@@ -22,10 +21,12 @@ from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field
 
 from ymir.agents.observability import setup_observability
+from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
+    is_reasoning_enabled,
     mcp_tools,
     run_tool,
 )
@@ -137,14 +138,15 @@ def render_prompt(input: InputSchema) -> str:
     return PromptTemplate(PromptTemplateInput(schema=InputSchema, template=TEMPLATE)).render(input)
 
 
-def create_preliminary_testing_agent(gateway_tools: list) -> RequirementAgent:
-    return RequirementAgent(
+def create_preliminary_testing_agent(gateway_tools: list) -> ReasoningAgent:
+    return ReasoningAgent(
         name="PreliminaryTestingAnalyst",
         description=(
             "Agent that analyzes GreenWave gating and MR comment results"
             " to determine preliminary testing status"
         ),
         llm=get_chat_model(),
+        unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
             ThinkTool(),

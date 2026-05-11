@@ -7,7 +7,6 @@ import traceback
 from pathlib import Path
 from textwrap import dedent
 
-from beeai_framework.agents.requirement import RequirementAgent
 from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
 )
@@ -24,12 +23,14 @@ from pydantic import BaseModel, Field
 import ymir.agents.tasks as tasks
 from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_applicability_agent
 from ymir.agents.observability import setup_observability
+from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.rebuild_consolidation import find_rebuild_siblings
 from ymir.agents.utils import (
     build_agent_factory_with_mock_repos,
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
+    is_reasoning_enabled,
     mcp_tools,
     resolve_chat_model_override,
     run_tool,
@@ -505,10 +506,11 @@ class TriageState(BaseModel):
     applicability_check_skipped: bool = Field(default=False)
 
 
-def create_triage_agent(gateway_tools, local_tool_options=None):
-    return RequirementAgent(
+def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgent:
+    return ReasoningAgent(
         name="TriageAgent",
         llm=get_chat_model(),
+        unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
             ThinkTool(),

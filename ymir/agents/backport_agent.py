@@ -7,7 +7,6 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from beeai_framework.agents.requirement import RequirementAgent
 from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
 )
@@ -29,12 +28,14 @@ from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState, PackageUpdateStep
+from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import (
     check_subprocess,
     format_mr_justification,
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
+    is_reasoning_enabled,
     mcp_tools,
     render_prompt,
     resolve_chat_model_override,
@@ -885,7 +886,7 @@ async def create_backport_agent(
     local_tool_options: dict[str, Any],
     include_build_tools: bool = False,
     fix_version: str | None = None,
-) -> RequirementAgent:
+) -> ReasoningAgent:
     """
     Create a backport agent.
 
@@ -934,9 +935,10 @@ async def create_backport_agent(
     if include_build_tools:
         base_tools.extend([t for t in mcp_tools if t.name in ["build_package", "download_artifacts"]])
 
-    return RequirementAgent(
+    return ReasoningAgent(
         name="BackportAgent",
         llm=get_chat_model(),
+        unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=base_tools,
         memory=UnconstrainedMemory(),

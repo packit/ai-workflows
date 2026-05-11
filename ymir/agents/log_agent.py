@@ -1,6 +1,5 @@
 from typing import Any
 
-from beeai_framework.agents.requirement import RequirementAgent
 from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
 )
@@ -10,7 +9,8 @@ from beeai_framework.tools import Tool
 from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 
-from ymir.agents.utils import get_chat_model, get_tool_call_checker_config
+from ymir.agents.reasoning_agent import ReasoningAgent
+from ymir.agents.utils import get_chat_model, get_tool_call_checker_config, is_reasoning_enabled
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool
 from ymir.tools.unprivileged.specfile import AddChangelogEntryTool
@@ -90,10 +90,11 @@ def get_prompt() -> str:
     """
 
 
-def create_log_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> RequirementAgent:
-    return RequirementAgent(
+def create_log_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> ReasoningAgent:
+    return ReasoningAgent(
         name="LogAgent",
         llm=get_chat_model(),
+        unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
             ThinkTool(),

@@ -40,6 +40,9 @@ spec:
     - type: Allow
       to:
         dnsName: gitlab.com
+    - type: Allow
+      to:
+        dnsName: sources.stream.centos.org
     # Upstream patch and commit lookup
     - type: Allow
       to:

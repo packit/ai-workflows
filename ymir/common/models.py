@@ -99,7 +99,6 @@ class RebaseInputSchema(BaseModel):
     version: str = Field(description="Version to update to")
     jira_issue: str = Field(description="Jira issue to reference as resolved")
     build_error: str | None = Field(description="Error encountered during package build")
-    package_instructions: str | None = Field(description="Package-specific instructions for rebase")
 
 
 class RebaseOutputSchema(BaseModel):

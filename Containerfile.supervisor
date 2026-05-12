@@ -54,12 +54,8 @@ COPY ymir/common/ /home/beeai/ymir/common/
 COPY ymir/supervisor/ /home/beeai/ymir/supervisor/
 RUN chgrp -R root /home/beeai && chmod -R g+rX /home/beeai
 
-COPY <<EOF /etc/nitrate.conf
-[nitrate]
-url = https://tcms.engineering.redhat.com/xmlrpc/
-username=anon
-password=whatever
-EOF
+COPY files/nitrate.conf /etc/nitrate.conf
+RUN sed -i 's/^username[[:space:]]*=.*/username=anon/; s/^password[[:space:]]*=.*/password=whatever/' /etc/nitrate.conf
 
 USER beeai
 ENV HOME=/home/beeai

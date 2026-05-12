@@ -121,12 +121,6 @@ def get_prompt() -> str:
 
       {{^build_error}}
       Make changes necessary to accomodate user feedback provided in the comments.
-      {{#package_instructions}}
-
-      **Package-specific instructions (these are important to follow,
-      incorporate them into your workflow reasonably):**
-      {{.}}
-      {{/package_instructions}}
       {{/build_error}}
       {{#build_error}}
       This is a retry, after the previous attempt the generated SRPM failed to build:

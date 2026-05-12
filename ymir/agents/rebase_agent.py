@@ -37,7 +37,6 @@ from ymir.agents.utils import (
     resolve_chat_model_override,
 )
 from ymir.common.base_utils import fix_await, is_cs_branch, redis_client
-from ymir.common.config import get_package_instructions
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import (
     BuildInputSchema,
@@ -134,7 +133,6 @@ def get_instructions() -> str:
       - Never change anything in the spec file changelog.
       - Preserve existing formatting and style conventions in spec files and patch headers.
       - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
-      - If there are package-specific instructions, incorporate them into your work.
       - If the package calls `autoreconf` in `%prep` and the rebase fails
         because of a version constraint,
         try removing that constraint, but never remove the `autoreconf` call.
@@ -159,12 +157,6 @@ def get_prompt() -> str:
 
       {{^build_error}}
       Rebase the package to version {{version}}.
-      {{#package_instructions}}
-
-      **Package-specific instructions (these are important to follow,
-      incorporate them into your workflow reasonably):**
-      {{.}}
-      {{/package_instructions}}
       {{/build_error}}
       {{#build_error}}
       This is a repeated rebase, after the previous attempt the generated SRPM failed to build:
@@ -276,7 +268,6 @@ async def main() -> None:
                 return "run_rebase_agent"
 
             async def run_rebase_agent(state):
-                package_instructions = await get_package_instructions(state.package, "rebase")
                 pkg_tool = "centpkg" if is_cs_branch(state.dist_git_branch) else "rhpkg"
                 response = await rebase_agent.run(
                     render_prompt(
@@ -289,7 +280,6 @@ async def main() -> None:
                             version=state.version,
                             jira_issue=state.jira_issue,
                             build_error=state.build_error,
-                            package_instructions=package_instructions,
                             pkg_tool=pkg_tool,
                         ),
                     ),

@@ -12,13 +12,5 @@
       "9": "rhel-9.9.z",
       "10": "rhel-10.3.z"
     },
-    "internal_repos_host": "https://internal.host",
-    "package_instructions": {
-      "package": {
-        "rebase": [
-          "Instruction 1",
-          "Instruction 2"
-        ]
-      }
-    }
+    "internal_repos_host": "https://internal.host"
   }

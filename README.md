@@ -44,7 +44,7 @@ the goal of this workflow is that once a merge request is merged and we have a c
 we want to move the issue and the associated erratum,
 through testing and the remainder of the RHEL process to the point where the build is ready to be released.
 
-The `goose/` directory contains some automation components that were used in the early stages of this project. These components are **mostly unmaintained** and preserved primarily for reference. For active development and production use, focus on the main workflows described above.
+This project previously used [Goose](https://github.com/block/goose) as an AI agent framework in its early stages. The `goose/` directory and related automation have since been removed. For active development and production use, focus on the main workflows described above.
 
 ## Documentation
 

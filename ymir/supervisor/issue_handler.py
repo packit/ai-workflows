@@ -16,6 +16,7 @@ from .jira_utils import (
     update_issue_comment,
 )
 from .supervisor_types import (
+    ErrataStatus,
     Erratum,
     FullIssue,
     IssueStatus,
@@ -272,6 +273,11 @@ class IssueHandler(WorkItemHandler):
                     return await self.resolve_check_reproduction()
 
                 related_erratum = get_erratum_for_link(issue.errata_link, full=True)
+
+                if related_erratum.status == ErrataStatus.NEW_FILES:
+                    return self.resolve_wait(
+                        "Erratum is still in NEW_FILES status, waiting for QE testing to begin",
+                    )
 
                 baseline_tests = BaselineTests.load_from_issue(self.issue)
                 if baseline_tests is not None:

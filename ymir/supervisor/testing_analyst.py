@@ -70,6 +70,12 @@ results from the TCMS test run posted by EWA.
 In all other cases, if the tests are supposed to be started by NEWA, ignore any comments with
 links to TCMS or Beaker.
 
+IMPORTANT: OSCI gating tests run as part of the GitLab merge request pipeline and
+they do NOT constitute final testing. You must find evidence of full integration
+and regression testing triggered by NEWA or EWA (posted as comments on the erratum)
+before concluding tests-passed or tests-waived. If only OSCI gating results are
+available, return tests-pending.
+
 You cannot assume that tests have passed just because a comment says they have
 finished, it is mandatory to check the actual test results in the JIRA issue or TCMS.
 Make sure that the JIRA issue or TCMS Test Run is the correct one for the latest build in the

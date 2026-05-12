@@ -181,6 +181,30 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
     name = "update_release"
     description = """
     Updates the value of the `Release` field in the specified spec file.
+
+    If branch is a Z-Stream branch (rhel-X.Y or rhel-X.Y.Z), release is updated in the following way:
+        - base release is established - from the latest current stream candidate build unless the latest
+          higher stream (Y + 1) candidate build shares the same version but has a higher release
+        - if %autorelease is present in the current Release:
+            - if %autorelease is after the dist tag, nothing is changed
+            - otherwise, Release is set to "N%{?dist}.%{autorelease -n}", where N is base release
+              or 0 in case of rebase
+        - if there is no %autorelease:
+            - in case of rebase, Release is set to "0%{?dist}.1"
+            - if the dist tag in the current Release is followed by "." and a number, the number is increased
+            - otherwise, ".1" is appended, unless there is a non-numeric suffix after the dist tag,
+              in which case Release is set to "N%{?dist}.1", where N is base release
+
+    If branch is not a Z-Stream branch, release is updated in the following way:
+        - if %autorelease is present in the current Release in any form, Release is set to plain %autorelease
+        - otherwise, initial numeric part of Release is increased by one or reset to 1 in case of rebase
+        - if there is no numeric part, ".1" is appended to whatever is before the dist tag
+        - if the dist tag is followed by "." and a number, such suffix is removed
+        - if there is no dist tag, it is added
+
+    For Z-Stream, the goal is to ensure EVR of the build resulting from this spec file is higher than EVR
+    of the latest current stream candidate build and at the same time lower than EVR of (potential) future
+    higher stream candidate build.
     """
     input_schema = UpdateReleaseToolInput
 
@@ -282,6 +306,10 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         current_stream_branch: str,
         higher_stream_branch: str,
     ) -> None:
+        def extract_numeric_release(evr):
+            release = evr.release.rsplit(".el", maxsplit=1)[0]
+            return int(release)
+
         latest_current_stream_build, latest_higher_stream_build = await asyncio.gather(
             cls._get_latest_candidate_build(package, current_stream_branch),
             cls._get_latest_candidate_build(package, higher_stream_branch),
@@ -289,10 +317,12 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         base_build = (
             latest_current_stream_build
             if EVR(epoch=latest_current_stream_build.epoch, version=latest_current_stream_build.version)
-            < EVR(epoch=latest_higher_stream_build.epoch, version=latest_higher_stream_build.version)
+            != EVR(epoch=latest_higher_stream_build.epoch, version=latest_higher_stream_build.version)
+            or extract_numeric_release(latest_current_stream_build)
+            > extract_numeric_release(latest_higher_stream_build)
             else latest_higher_stream_build
         )
-        base_release, _ = base_build.release.rsplit(".el", maxsplit=1)
+        base_release = extract_numeric_release(base_build)
         with Specfile(spec_path) as spec:
             current_release = spec.raw_release
         nodes = ValueParser.parse(current_release)
@@ -308,7 +338,7 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                 release = current_release
             else:
                 # no %dist or %autorelease before it, let's create a new release
-                release = base_release + "%{?dist}.%{autorelease -n}"
+                release = f"{base_release}%{{?dist}}.%{{autorelease -n}}"
         else:
             if rebase:
                 # no %autorelease, rebase, reset the release
@@ -324,7 +354,7 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                     release = prefix + "." + str(int(m.group(1)) + 1)
                 else:
                     # invalid Z-Stream counter, let's try to create a new release
-                    release = base_release + "%{?dist}.1"
+                    release = f"{base_release}%{{?dist}}.1"
             else:
                 # no %autorelease, %dist present, add Z-Stream counter
                 release = current_release + ".1"

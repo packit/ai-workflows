@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -928,6 +929,72 @@ async def create_backport_agent(
     )
 
 
+def _extract_commit_hash(url: str) -> str | None:
+    """Extract a commit hash from a dist-git commit URL."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    match = re.search(r"(?:commit(?:s)?|c)/([a-f0-9]{7,40})", parsed.path)
+    if match:
+        return match.group(1)
+    query_match = re.search(r"(?:id|h)=([a-f0-9]{7,40})", parsed.query or "")
+    if query_match:
+        return query_match.group(1)
+    return None
+
+
+async def extract_source_changelog(
+    local_clone: Path, upstream_patches: list[str], package: str
+) -> str | None:
+    """Extract changelog messages from source dist-git commits.
+
+    Iterates all upstream patch URLs, extracts the newest changelog entry
+    from each commit's spec file, strips Resolves/Related lines, and
+    combines the descriptive lines (deduplicating across commits).
+    """
+    upstream_clone = Path(f"{local_clone}-upstream")
+    if not upstream_clone.exists():
+        return None
+
+    collected_lines: list[str] = []
+    seen: set[str] = set()
+
+    for url in upstream_patches:
+        commit_hash = _extract_commit_hash(url)
+        if not commit_hash:
+            continue
+
+        try:
+            stdout, _ = await check_subprocess(
+                ["git", "-C", str(upstream_clone), "show", f"{commit_hash}:{package}.spec"],
+            )
+        except Exception:
+            logger.debug(f"Could not read spec from {commit_hash} in {upstream_clone}")
+            continue
+
+        try:
+            spec = Specfile(content=stdout, sourcedir=upstream_clone)
+            with spec.changelog() as changelog:
+                if not changelog:
+                    continue
+                entry = changelog[-1]
+        except Exception:
+            logger.debug(f"Could not parse spec from {commit_hash}")
+            continue
+
+        for line in entry.content:
+            if re.match(r"^\s*(resolves|related):", line, re.IGNORECASE):
+                continue
+            if line not in seen:
+                seen.add(line)
+                collected_lines.append(line)
+
+    if not collected_lines:
+        return None
+
+    return "\n".join(collected_lines)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     resolve_chat_model_override("backport")
@@ -1279,12 +1346,19 @@ async def main() -> None:
                 return "run_log_agent"
 
             async def run_log_agent(state):
+                source_changelog = await extract_source_changelog(
+                    state.local_clone, state.upstream_patches, state.package
+                )
+                if source_changelog:
+                    logger.info(f"Extracted source changelog for reuse: {source_changelog}")
+
                 response = await log_agent.run(
                     render_prompt(
                         template=get_log_prompt(),
                         input=LogInputSchema(
                             jira_issue=state.jira_issue,
                             changes_summary=state.backport_log[-1],
+                            source_changelog=source_changelog,
                         ),
                     ),
                     expected_output=LogOutputSchema,

@@ -39,7 +39,14 @@ def get_instructions() -> str:
          and could overflow the context. Always examine files one by one.
 
       3. Add a new changelog entry to the spec file. Use the `add_changelog_entry` tool.
-         Examine the previous changelog entries and try to use the same style. In general,
+         Examine the previous changelog entries and try to use the same style.
+
+         If a source changelog message is provided in the prompt, use those lines as the
+         exact changelog message content. Keep the descriptive lines exactly as-is — do not
+         rephrase, summarize, or add to them. Add the Resolves/Related line
+         for <JIRA_ISSUES>, matching the style of existing changelog entries.
+
+         If no source changelog message is provided, write a new entry. In general,
          the entry should contain a short summary of the changes, ideally fitting on a single line,
          and a single line referencing all Jira issues. Use
          "- Resolves: <JIRA_ISSUES>" (comma-separated on one line) unless
@@ -73,6 +80,13 @@ def get_prompt() -> str:
       Document a packaging change done as part of {{jira_issue}} Jira issue(s), summarized as:
 
       {{changes_summary}}
+
+      {{#source_changelog}}
+      The following changelog message was used in the source commit. Use it as the
+      exact changelog message content:
+
+      {{source_changelog}}
+      {{/source_changelog}}
     """
 
 

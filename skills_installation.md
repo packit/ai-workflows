@@ -213,7 +213,9 @@ Replace `<your-home>` with the absolute path to your home directory
         "JIRA_URL": "https://redhat.atlassian.net",
         "JIRA_EMAIL": "you@redhat.com",
         "JIRA_TOKEN": "your-jira-api-token",
-        "KRB5CCNAME": "FILE:/tmp/krb5cc_1000"
+        "KRB5CCNAME": "FILE:/tmp/krb5cc_1000",
+        "LOG_DETECTIVE_URL": "https://logdetective-placeholder-server.com/",
+        "LOG_DETECTIVE_TOKEN": "your-log-detective-api-token"
       }
     },
     "ymir-unprivileged": {

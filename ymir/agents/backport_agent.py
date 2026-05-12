@@ -983,7 +983,7 @@ async def extract_source_changelog(
             continue
 
         for line in entry.content:
-            if re.match(r"^\s*(resolves|related):", line, re.IGNORECASE):
+            if re.match(r"^\s*[-\*]?\s*(resolves|related):", line, re.IGNORECASE):
                 continue
             if line not in seen:
                 seen.add(line)

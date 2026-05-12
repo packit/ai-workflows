@@ -516,6 +516,10 @@ class LogInputSchema(BaseModel):
 
     jira_issue: str = Field(description="Jira issue to reference as resolved")
     changes_summary: str = Field(description="Summary of performed changes")
+    source_changelog: str | None = Field(
+        default=None,
+        description="Changelog message from the source commit to reuse, if available",
+    )
 
 
 class LogOutputSchema(BaseModel):

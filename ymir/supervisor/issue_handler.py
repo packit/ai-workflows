@@ -276,8 +276,7 @@ class IssueHandler(WorkItemHandler):
 
                 if related_erratum.status == ErrataStatus.NEW_FILES:
                     return self.resolve_wait(
-                        "Erratum is still in NEW_FILES status, "
-                        "waiting for QE testing to begin",
+                        "Erratum is still in NEW_FILES status, waiting for QE testing to begin",
                     )
 
                 baseline_tests = BaselineTests.load_from_issue(self.issue)

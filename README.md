@@ -86,13 +86,12 @@ In an IDE, select .venv/bin/python as the Python interpreter.
 Some tools are only available from internal repos that cannot be committed
 to this upstream repository. To include them in your local container builds:
 
-1. Copy the template: `cp templates/build.env .secrets/build.env`
-2. Fill in the internal repo URLs and package names in `.secrets/build.env`
-3. Run `make build` as usual — the Makefile sources `.secrets/build.env`
-   automatically if it exists, passing the values as build args to the
-   Containerfiles.
+1. Copy the template: `cp -n templates/build.env .env` (or append its contents to your existing `.env` file)
+2. Fill in the internal repo URLs and package names in `.env`
+3. Run `make build` or `podman-compose build` — podman-compose automatically
+   loads `.env` and passes the values as build args to the Containerfiles.
 
-Without `.secrets/build.env`, containers build normally but without any
+Without `.env`, containers build normally but without any
 internal-only packages.
 
 ## Contact & Feedback

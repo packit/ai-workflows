@@ -81,6 +81,8 @@ apply deployment-backport-agent-c9s.yml
 apply deployment-backport-agent-c10s.yml
 apply deployment-rebase-agent-c9s.yml
 apply deployment-rebase-agent-c10s.yml
+apply deployment-rebuild-agent-c9s.yml
+apply deployment-rebuild-agent-c10s.yml
 #
 # # Supervisor
 # apply imagestream-supervisor.yml

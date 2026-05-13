@@ -164,6 +164,12 @@ class AddChangelogEntryTool(Tool[AddChangelogEntryToolInput, ToolRunOptions, Str
         spec_path = get_absolute_path(tool_input.spec, self)
         try:
             with Specfile(spec_path) as spec:
+                if spec.has_autochangelog:
+                    return StringToolOutput(
+                        result=f"Spec file {spec_path} uses %autochangelog. "
+                        "Changelog is generated automatically, no manual entry needed. "
+                        "Do not modify the changelog file."
+                    )
                 spec.add_changelog_entry(tool_input.content)
         except Exception as e:
             raise ToolError(f"Failed to add changelog entry: {e}") from e

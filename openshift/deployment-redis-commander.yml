@@ -31,6 +31,14 @@ spec:
         app: redis-commander
         deployment: redis-commander
     spec:
+      initContainers:
+      - name: copy-config
+        image: redis-commander:prod
+        imagePullPolicy: Always
+        command: ["sh", "-c", "cp -r /usr/local/lib/node_modules/redis-commander/config/. /config/"]
+        volumeMounts:
+        - name: config
+          mountPath: /config
       containers:
       - env:
         - name: REDIS_HOST
@@ -48,6 +56,12 @@ spec:
             cpu: "200m"
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
+        volumeMounts:
+        - name: config
+          mountPath: /usr/local/lib/node_modules/redis-commander/config
+      volumes:
+      - name: config
+        emptyDir: {}
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler

@@ -124,3 +124,18 @@ def build_agent_factory_with_mock_repos(
         return agent_factory(gateway_tools, {"env": git_env})
 
     return _factory
+
+
+def format_mr_justification(justification: str | None) -> str:
+    """Format justification text for MR descriptions.
+
+    Args:
+        justification: Optional justification text from triage agent
+
+    Returns:
+        Formatted string with "Justification:" header and trailing newlines,
+        or empty string if justification is None
+    """
+    if justification:
+        return f"Justification:\n{justification}\n\n"
+    return ""

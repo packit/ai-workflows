@@ -177,6 +177,9 @@ class RebaseData(BaseModel):
 
     package: str = Field(description="Package name")
     version: str = Field(description="Target upstream package version to rebase to (e.g., '2.4.1')")
+    justification: str | None = Field(
+        default=None, description="Clear explanation of why this version fixes the issue"
+    )
     jira_issue: str = Field(description="Jira issue identifier")
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
 
@@ -221,6 +224,10 @@ class RebuildData(BaseModel):
     package: str = Field(description="Package name")
     jira_issue: str = Field(description="Jira issue identifier")
     cve_id: str | None = Field(description="CVE identifier", default=None)
+    justification: str | None = Field(
+        default=None,
+        description="Clear explanation of why a rebuild is needed and how it addresses the issue",
+    )
     dependency_issue: str | None = Field(
         description="Key of the dependency Jira issue that triggered the rebuild",
         default=None,
@@ -401,11 +408,15 @@ class TriageOutputSchema(BaseModel):
                 fix_version_text = (
                     f"\n*Fix Version*: {self.data.fix_version}" if self.data.fix_version else ""
                 )
+                justification_text = (
+                    f"\n*Justification*: {self.data.justification}" if self.data.justification else ""
+                )
 
                 return (
                     f"{resolution}"
                     f"*Package*: {self.data.package}\n"
-                    f"*Version*: {self.data.version}{fix_version_text}"
+                    f"*Version*: {self.data.version}"
+                    f"{justification_text}{fix_version_text}"
                     f"{follow_up_note}"
                     f"{TRIAGE_DISCLAIMER}"
                 )
@@ -413,6 +424,9 @@ class TriageOutputSchema(BaseModel):
             case RebuildData():
                 fix_version_text = (
                     f"\n*Fix Version*: {self.data.fix_version}" if self.data.fix_version else ""
+                )
+                justification_text = (
+                    f"\n*Justification*: {self.data.justification}" if self.data.justification else ""
                 )
                 dep_text = (
                     f"\n*Dependency Issue*: {self.data.dependency_issue}"
@@ -434,6 +448,7 @@ class TriageOutputSchema(BaseModel):
                 return (
                     f"{resolution}"
                     f"*Package*: {self.data.package}"
+                    f"{justification_text}"
                     f"{dep_comp_text}"
                     f"{dep_text}"
                     f"{fix_version_text}"

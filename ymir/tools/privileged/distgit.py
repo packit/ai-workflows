@@ -65,6 +65,8 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
             raise ToolError(f"Failed to check GitLab remote: {_sanitize_url(str(e))}") from e
         try:
             with tempfile.TemporaryDirectory() as path:
+                # Username is taken from the Kerberos principal and embedded in
+                # the URL explicitly — do not rely on the SSH config User setting.
                 repo = await asyncio.to_thread(
                     git.Repo.clone_from,
                     f"ssh://{username}@pkgs.devel.redhat.com/rpms/{package}",
@@ -86,6 +88,11 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                     raise RuntimeError(f"There are no builds of {package} in {candidate_tag}")
                 [build] = builds
                 metadata = await asyncio.to_thread(session.getBuild, build["build_id"], strict=True)
+                # ref is a commit SHA from the Koji build source URL (git+https://...#<sha>).
+                # It may point to a commit on an older Z-stream branch (via tag inheritance)
+                # which is expected — we're branching from the last known good build.
+                # The push can fail transiently due to bastion network issues; the beeai
+                # framework will retry the whole tool call in that case.
                 ref = metadata["source"].split("#")[-1]
                 await asyncio.to_thread(repo.remotes.origin.push, f"{ref}:refs/heads/{branch}")
                 start_time = time.monotonic()

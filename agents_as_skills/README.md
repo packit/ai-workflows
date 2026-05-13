@@ -1,5 +1,7 @@
 # These files are skills built from agents
 
+If you want to use these skills, we have documentation in this markdown page: https://github.com/packit/ai-workflows/blob/main/skills_installation.md
+
 ## How to build
 
 ```bash

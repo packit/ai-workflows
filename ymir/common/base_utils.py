@@ -88,6 +88,17 @@ class KerberosError(Exception):
     pass
 
 
+def parse_klist_principals(output: str) -> list[str]:
+    """Return non-expired principals from the text output of `klist -l`."""
+    return [
+        parts[0]
+        for line in output.splitlines()
+        if "Expired" not in line
+        for parts in (line.split(),)
+        if len(parts) >= 1 and "@" in parts[0]
+    ]
+
+
 async def extract_principal(keytab_file: str) -> str:
     """
     Extracts principal from the specified keytab file. Assumes that there is
@@ -167,13 +178,7 @@ async def init_kerberos_ticket() -> str:
             logger.error("klist command failed:\nstdout: %s\nstderr: %s", stdout.decode(), stderr.decode())
             raise KerberosError("Failed to list Kerberos tickets")
 
-        principals = [
-            parts[0]
-            for line in stdout.decode().splitlines()
-            if "Expired" not in line
-            for parts in (line.split(),)
-            if len(parts) >= 1 and "@" in parts[0]
-        ]
+        principals = parse_klist_principals(stdout.decode())
     else:
         principals = []
 

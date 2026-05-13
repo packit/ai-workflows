@@ -59,11 +59,12 @@ apply pvc-valkey-data.yml
 apply service-valkey.yml
 apply deployment-valkey.yml
 
-# # Redis Commander
-# apply imagestream-redis-commander.yml
-# import_image redis-commander
-# apply service-redis-commander.yml
-# apply deployment-redis-commander.yml
+# Redis Commander
+apply imagestream-redis-commander.yml
+import_image redis-commander
+apply service-redis-commander.yml
+apply route-redis-commander.yml
+apply deployment-redis-commander.yml
 
 # MCP Server
 apply imagestream-mcp-gateway.yml
@@ -76,10 +77,10 @@ apply deployment-mcp-gateway.yml
 apply imagestream-beeai-agent.yml
 import_image beeai-agent
 apply deployment-triage-agent.yml
-# apply deployment-backport-agent-c9s.yml
-# apply deployment-backport-agent-c10s.yml
-# apply deployment-rebase-agent-c9s.yml
-# apply deployment-rebase-agent-c10s.yml
+apply deployment-backport-agent-c9s.yml
+apply deployment-backport-agent-c10s.yml
+apply deployment-rebase-agent-c9s.yml
+apply deployment-rebase-agent-c10s.yml
 #
 # # Supervisor
 # apply imagestream-supervisor.yml

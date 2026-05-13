@@ -13,9 +13,8 @@ COMPOSE_SUPERVISOR=$(COMPOSE) -f $(COMPOSE_FILE) --profile=supervisor
 
 .PHONY: build
 build:
-	if [ -f .secrets/build.env ]; then \
-		set -a && . ./.secrets/build.env && set +a; \
-	fi && \
+	@if [ -f .secrets/build.env ]; then echo "Warning: .secrets/build.env is deprecated, please move its contents to .env"; fi
+	if [ -f .secrets/build.env ] && [ ! -f .env ]; then set -a && . ./.secrets/build.env && set +a; fi && \
 	$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents --profile=supervisor build
 
 .PHONY: run-beeai-bash

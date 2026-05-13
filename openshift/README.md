@@ -86,3 +86,13 @@ Manually run jira issue fetcher:
 ```bash
 make run-jira-issue-fetcher
 ```
+
+## Triggering the Pipeline Manually
+
+To push a Jira issue into the triage queue (e.g. to force CVE triage):
+
+```bash
+oc rsh deployment/valkey redis-cli LPUSH triage_queue '{"metadata": {"issue": "RHEL-XXXXXX", "force_cve_triage": true}}'
+```
+
+Set `force_cve_triage` to `false` for a normal triage run. This mirrors the `make trigger-pipeline` target used locally.

@@ -374,7 +374,12 @@ async def test_run_full_workflow_with_labeled_issues(fetcher, mock_redis_context
         "jira_issue": "ISSUE-2",
         "triage_result": {
             "resolution": "rebase",
-            "data": RebaseData(jira_issue="ISSUE-2", package="test-package", version="1.0.0").model_dump(),
+            "data": RebaseData(
+                jira_issue="ISSUE-2",
+                package="test-package",
+                version="1.0.0",
+                justification="Update to latest upstream version",
+            ).model_dump(),
         },
     }
     task_for_rebase = Task(metadata=triage_state_for_rebase).model_dump_json()

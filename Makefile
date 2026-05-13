@@ -64,6 +64,7 @@ run-rebase-agent-c9s-standalone:
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
 		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
+		-e "JUSTIFICATION=$(JUSTIFICATION)" \
 		rebase-agent-c9s
 
 .PHONY: run-rebase-agent-c10s-standalone
@@ -76,6 +77,7 @@ run-rebase-agent-c10s-standalone:
 		-e DRY_RUN=$(DRY_RUN) \
 		-e MOCK_JIRA=$(MOCK_JIRA) \
 		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
+		-e "JUSTIFICATION=$(JUSTIFICATION)" \
 		rebase-agent-c10s
 
 .PHONY: run-rebase-agent-standalone
@@ -96,6 +98,7 @@ run-backport-agent-c9s-standalone:
 		-e MOCK_JIRA=$(MOCK_JIRA) \
 		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		-e CVE_ID=$(CVE_ID) \
+		-e "JUSTIFICATION=$(JUSTIFICATION)" \
 		backport-agent-c9s
 
 .PHONY: run-backport-agent-c10s-standalone
@@ -109,6 +112,7 @@ run-backport-agent-c10s-standalone:
 		-e MOCK_JIRA=$(MOCK_JIRA) \
 		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		-e CVE_ID=$(CVE_ID) \
+		-e "JUSTIFICATION=$(JUSTIFICATION)" \
 		backport-agent-c10s
 
 .PHONY: run-backport-agent-standalone
@@ -127,6 +131,7 @@ run-rebuild-agent-c9s-standalone:
 		-e DEPENDENCY_COMPONENT=$(DEPENDENCY_COMPONENT) \
 		-e CONSOLIDATED_ISSUES=$(CONSOLIDATED_ISSUES) \
 		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
+		-e "JUSTIFICATION=$(JUSTIFICATION)" \
 		rebuild-agent-c9s
 
 .PHONY: run-rebuild-agent-c10s-standalone
@@ -141,6 +146,7 @@ run-rebuild-agent-c10s-standalone:
 		-e DEPENDENCY_COMPONENT=$(DEPENDENCY_COMPONENT) \
 		-e CONSOLIDATED_ISSUES=$(CONSOLIDATED_ISSUES) \
 		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
+		-e "JUSTIFICATION=$(JUSTIFICATION)" \
 		rebuild-agent-c10s
 
 .PHONY: run-rebuild-agent-standalone

@@ -28,6 +28,7 @@ from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState, PackageUpdateStep
 from ymir.agents.utils import (
+    format_mr_justification,
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
@@ -214,13 +215,16 @@ async def main() -> None:
 
     class State(PackageUpdateState):
         version: str
+        justification: str | None = Field(default=None)
         fedora_clone: Path | None = Field(default=None)
         rebase_log: list[str] = Field(default=[])
         rebase_result: RebaseOutputSchema | None = Field(default=None)
         attempts_remaining: int = Field(default=max_build_attempts)
         all_files_git_to_add: set[str] = Field(default_factory=set)
 
-    async def run_workflow(package, dist_git_branch, version, jira_issue, redis_conn=None):
+    async def run_workflow(
+        package, dist_git_branch, version, jira_issue, justification=None, redis_conn=None
+    ):
         local_tool_options["working_directory"] = None
 
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
@@ -385,6 +389,7 @@ async def main() -> None:
 
             async def commit_push_and_open_mr(state):
                 try:
+                    justification_text = format_mr_justification(state.justification)
                     (
                         state.merge_request_url,
                         state.merge_request_newly_created,
@@ -403,6 +408,7 @@ async def main() -> None:
                         mr_title=state.log_result.title,
                         mr_description=(
                             f"{state.log_result.description}\n\n"
+                            f"{justification_text}"
                             f"Resolves: {state.jira_issue}\n\n"
                             f"Status of the rebase:\n\n{state.rebase_log[-1]}"
                             f"\n\n{MR_DESCRIPTION_FOOTER}"
@@ -463,6 +469,7 @@ async def main() -> None:
                     dist_git_branch=dist_git_branch,
                     version=version,
                     jira_issue=jira_issue,
+                    justification=justification,
                 ),
             )
             return response.state
@@ -479,6 +486,7 @@ async def main() -> None:
             dist_git_branch=branch,
             version=version,
             jira_issue=jira_issue,
+            justification=os.getenv("JUSTIFICATION", None),
             redis_conn=None,
         )
         logger.info(f"Direct run completed: {state.rebase_result.model_dump_json(indent=4)}")
@@ -546,6 +554,7 @@ async def main() -> None:
                     dist_git_branch=dist_git_branch,
                     version=rebase_data.version,
                     jira_issue=rebase_data.jira_issue,
+                    justification=rebase_data.justification,
                     redis_conn=redis,
                 )
                 logger.info(

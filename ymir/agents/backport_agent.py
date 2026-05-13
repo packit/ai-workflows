@@ -31,6 +31,7 @@ from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState, PackageUpdateStep
 from ymir.agents.utils import (
     check_subprocess,
+    format_mr_justification,
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
@@ -1012,6 +1013,7 @@ async def main() -> None:
     class State(PackageUpdateState):
         upstream_patches: list[str]
         cve_id: str | None
+        justification: str | None = Field(default=None)
         unpacked_sources: Path | None = Field(default=None)
         backport_log: list[str] = Field(default=[])
         backport_result: BackportOutputSchema | None = Field(default=None)
@@ -1026,6 +1028,7 @@ async def main() -> None:
         upstream_patches,
         jira_issue,
         cve_id,
+        justification=None,
         fix_version=None,
         redis_conn=None,
     ):
@@ -1385,6 +1388,7 @@ async def main() -> None:
             async def commit_push_and_open_mr(state):
                 try:
                     formatted_patches = "\n".join(f" - {p}" for p in state.upstream_patches)
+                    justification_text = format_mr_justification(state.justification)
                     (
                         state.merge_request_url,
                         state.merge_request_newly_created,
@@ -1407,7 +1411,8 @@ async def main() -> None:
                         mr_title=state.log_result.title,
                         mr_description=(
                             f"{state.log_result.description}\n\n"
-                            f"Upstream patches:\n{formatted_patches}\n"
+                            f"Upstream patches:\n{formatted_patches}\n\n"
+                            f"{justification_text}"
                             f"Resolves: {state.jira_issue}\n\n"
                             f"Backporting steps:\n\n{state.backport_log[-1]}"
                             f"\n\n{MR_DESCRIPTION_FOOTER}"
@@ -1471,6 +1476,7 @@ async def main() -> None:
                     upstream_patches=upstream_patches,
                     jira_issue=jira_issue,
                     cve_id=cve_id,
+                    justification=justification,
                     fix_version=fix_version,
                 ),
             )
@@ -1490,6 +1496,7 @@ async def main() -> None:
             upstream_patches=upstream_patches,
             jira_issue=jira_issue,
             cve_id=os.getenv("CVE_ID", None),
+            justification=os.getenv("JUSTIFICATION", None),
             fix_version=branch,
             redis_conn=None,
         )
@@ -1559,6 +1566,7 @@ async def main() -> None:
                     upstream_patches=backport_data.patch_urls,
                     jira_issue=backport_data.jira_issue,
                     cve_id=backport_data.cve_id,
+                    justification=backport_data.justification,
                     fix_version=backport_data.fix_version,
                     redis_conn=redis,
                 )

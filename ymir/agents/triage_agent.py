@@ -241,6 +241,7 @@ TRIAGE_PROMPT = """
          * A Rebase is only to be chosen when the issue explicitly instructs you to "rebase" or "update"
            to a newer/specific upstream version. Do not infer this.
          * Identify the <package_version> the package should be updated or rebased to.
+         * You must provide a clear justification explaining why this version addresses the issue.
          * Set the Jira fields as per the instructions below.
 
       2. **Backport a Patch OR Request Clarification**
@@ -441,7 +442,9 @@ TRIAGE_PROMPT = """
            and set pending_issues to the dependency issue key.
            Also set package, fix_version, cve_id, dependency_issue, and dependency_component
            (same values as you would for a rebuild resolution).
-         3.3. If rebuild: set Jira fields as per the instructions below.
+         3.3. You must provide a clear justification explaining why a rebuild is needed
+              and how it addresses the issue.
+         3.4. If rebuild: set Jira fields as per the instructions below.
 
       4. **Open-Ended Analysis**
          This is the catch-all for issues that are NOT bugs or CVEs
@@ -712,6 +715,20 @@ async def run_workflow(
                     }}
                     ```
 
+                    **Correct example for a 'rebase' resolution:**
+                    ```json
+                    {{
+                        "resolution": "rebase",
+                        "data": {{
+                        "package": "some-package",
+                        "version": "2.4.1",
+                        "justification": "The issue is fixed in upstream version 2.4.1 available in Fedora.",
+                        "jira_issue": "RHEL-12345",
+                        "fix_version": "rhel-X.Y.Z"
+                        }}
+                    }}
+                    ```
+
                     **Correct example for a 'rebuild' resolution:**
                     ```json
                     {{
@@ -720,6 +737,7 @@ async def run_workflow(
                         "package": "some-package",
                         "jira_issue": "RHEL-12345",
                         "cve_id": "CVE-1234-98765",
+                        "justification": "Rebuild needed, links against golang which received security fix.",
                         "dependency_issue": "RHEL-67890",
                         "dependency_component": "golang",
                         "fix_version": "rhel-X.Y.Z"

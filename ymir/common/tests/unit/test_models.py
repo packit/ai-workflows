@@ -60,6 +60,7 @@ def test_rebase_formatting():
         version="2.4.55",
         jira_issue="RHEL-67890",
         fix_version="rhel-9.5",
+        justification="Update to upstream version 2.4.55 to fix the issue",
     )
     result = TriageOutputSchema(resolution=Resolution.REBASE, data=data)
 
@@ -67,6 +68,7 @@ def test_rebase_formatting():
         "*Resolution*: rebase\n"
         "*Package*: httpd\n"
         "*Version*: 2.4.55\n"
+        "*Justification*: Update to upstream version 2.4.55 to fix the issue\n"
         "*Fix Version*: rhel-9.5"
         "\n\n_Automated individual follow-up workflow for this "
         "resolution type is planned for Q2 2026. Stay tuned._"
@@ -80,12 +82,29 @@ def test_rebase_formatting_auto_chain():
         version="2.4.55",
         jira_issue="RHEL-67890",
         fix_version="rhel-9.5",
+        justification="Update to upstream version 2.4.55 to fix the issue",
     )
     result = TriageOutputSchema(resolution=Resolution.REBASE, data=data)
 
     comment = result.format_for_comment(auto_chain=True)
     assert "planned for Q2 2026" not in comment
     assert "*Resolution*: rebase" in comment
+
+
+def test_rebase_formatting_without_justification():
+    """Test backward compatibility for RebaseData without justification field."""
+    data = RebaseData(
+        package="httpd",
+        version="2.4.55",
+        jira_issue="RHEL-67890",
+        fix_version="rhel-9.5",
+    )
+    result = TriageOutputSchema(resolution=Resolution.REBASE, data=data)
+
+    comment = result.format_for_comment()
+    assert "*Justification*" not in comment
+    assert "*Package*: httpd" in comment
+    assert "*Version*: 2.4.55" in comment
 
 
 def test_clarification_needed_formatting():
@@ -295,6 +314,7 @@ def test_rebuild_data_all_jira_issues_no_consolidated():
         package="git-lfs",
         jira_issue="RHEL-100",
         fix_version="rhel-9.8",
+        justification="Rebuild needed against updated dependency",
     )
     assert data.all_jira_issues == ["RHEL-100"]
 
@@ -304,6 +324,7 @@ def test_rebuild_data_all_jira_issues_with_consolidated():
         package="git-lfs",
         jira_issue="RHEL-100",
         fix_version="rhel-9.8",
+        justification="Rebuild needed against updated dependency",
         consolidated_issues=[
             ConsolidatedIssue(
                 issue_key="RHEL-101",
@@ -325,6 +346,7 @@ def test_rebuild_data_backward_compat():
         "dependency_issue": "RHEL-50",
         "dependency_component": "golang",
         "fix_version": "rhel-9.8",
+        "justification": "Rebuild needed against updated dependency",
     }
     data = RebuildData.model_validate(payload)
     assert data.consolidated_issues == []
@@ -336,6 +358,7 @@ def test_rebuild_data_serialization_roundtrip():
         package="git-lfs",
         jira_issue="RHEL-100",
         fix_version="rhel-9.8",
+        justification="Rebuild needed against updated dependency",
         consolidated_issues=[
             ConsolidatedIssue(
                 issue_key="RHEL-101",
@@ -347,3 +370,17 @@ def test_rebuild_data_serialization_roundtrip():
     restored = RebuildData.model_validate_json(json_str)
     assert restored.all_jira_issues == ["RHEL-100", "RHEL-101"]
     assert restored.consolidated_issues[0].dependency_component == "golang"
+
+
+def test_rebuild_data_without_justification():
+    """Test backward compatibility for RebuildData without justification field."""
+    data = RebuildData(
+        package="git-lfs",
+        jira_issue="RHEL-100",
+        fix_version="rhel-9.8",
+    )
+    result = TriageOutputSchema(resolution=Resolution.REBUILD, data=data)
+
+    comment = result.format_for_comment()
+    assert "*Justification*" not in comment
+    assert "*Package*: git-lfs" in comment

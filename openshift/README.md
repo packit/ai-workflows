@@ -20,9 +20,9 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   JIRA_TOKEN
   ```
 
-  `jotnar-bot-keytab`:
+  `redhat-ymir-agent-keytab`:
   ```
-  oc create secret generic jotnar-bot-keytab --from-file=jotnar-bot.keytab
+  oc create secret generic redhat-ymir-agent-keytab --from-file=redhat-ymir-agent.keytab
   ```
 
   `testing-farm-env`:

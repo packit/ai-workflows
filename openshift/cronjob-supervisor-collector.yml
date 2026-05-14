@@ -59,9 +59,9 @@ spec:
                 drop:
                 - ALL
             volumeMounts:
-            - mountPath: /etc/secrets/jotnar-bot.keytab
-              name: jotnar-bot-keytab
-              subPath: jotnar-bot.keytab
+            - mountPath: /etc/secrets/redhat-ymir-agent.keytab
+              name: redhat-ymir-agent-keytab
+              subPath: redhat-ymir-agent.keytab
             - mountPath: /etc/secrets/jotnar-vertex-prod.json
               name: vertex-key
               subPath: jotnar-vertex-prod.json
@@ -73,9 +73,9 @@ spec:
           schedulerName: default-scheduler
           terminationGracePeriodSeconds: 30
           volumes:
-          - name: jotnar-bot-keytab
+          - name: redhat-ymir-agent-keytab
             secret:
-              secretName: jotnar-bot-keytab
+              secretName: redhat-ymir-agent-keytab  # pragma: allowlist secret
           - name: vertex-key
             secret:
               secretName: vertex-key

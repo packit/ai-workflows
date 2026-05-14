@@ -61,9 +61,9 @@ spec:
         volumeMounts:
         - mountPath: /git-repos  # NOTE: This path must match GIT_REPO_BASEPATH in configmap/agents-env
           name: mcp-server-git-repos
-        - mountPath: /etc/secrets/jotnar-bot.keytab
-          name: jotnar-bot-keytab
-          subPath: jotnar-bot.keytab
+        - mountPath: /etc/secrets/redhat-ymir-agent.keytab
+          name: redhat-ymir-agent-keytab
+          subPath: redhat-ymir-agent.keytab
         - mountPath: /home/mcp/rhel-config.json
           name: rhel-config
           subPath: rhel-config.json
@@ -79,9 +79,9 @@ spec:
       - name: mcp-server-git-repos
         persistentVolumeClaim:
           claimName: mcp-server-git-repos
-      - name: jotnar-bot-keytab
+      - name: redhat-ymir-agent-keytab
         secret:
-          secretName: jotnar-bot-keytab
+          secretName: redhat-ymir-agent-keytab  # pragma: allowlist secret
       - name: rhel-config
         configMap:
           name: rhel-config

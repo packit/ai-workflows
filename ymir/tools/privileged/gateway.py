@@ -110,7 +110,7 @@ def check_distgit_ssh_access() -> None:
     krb_username = principal.split("@")[0]
 
     result = subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "pkgs.devel.redhat.com"],
+        ["ssh", "-o", "BatchMode=yes", f"{krb_username}@pkgs.devel.redhat.com"],
         capture_output=True,
         text=True,
         timeout=30,

@@ -98,7 +98,7 @@ internal-only packages.
 
 **Questions or issues with the agents?**
 
-- **Email**: jotnar@redhat.com
+- **Email**: redhat-ymir-agent@redhat.com
 - **Slack**: #forum-ymir-package-automation
 - **Report AI Issues**: [Jira Issues](https://issues.redhat.com/) (project: Packit, component: jotnar) or [GitHub Issues](https://github.com/packit/ai-workflows/issues)
 

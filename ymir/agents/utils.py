@@ -137,5 +137,5 @@ def format_mr_justification(justification: str | None) -> str:
         or empty string if justification is None
     """
     if justification:
-        return f"Justification:\n{justification}\n\n"
+        return f"Triage Decision Justification:\n{justification}\n\n"
     return ""

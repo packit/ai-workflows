@@ -10,10 +10,7 @@ spec:
     matchLabels:
       app: rebase-agent-c10s
   strategy:
-    rollingUpdate:
-      maxSurge: 25%
-      maxUnavailable: 25%
-    type: RollingUpdate
+    type: Recreate
   template:
     metadata:
       labels:

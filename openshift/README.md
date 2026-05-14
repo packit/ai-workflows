@@ -96,3 +96,11 @@ oc rsh deployment/valkey redis-cli LPUSH triage_queue '{"metadata": {"issue": "R
 ```
 
 Set `force_cve_triage` to `false` for a normal triage run. This mirrors the `make trigger-pipeline` target used locally.
+
+## Image rebuilds of MCP Gateway and agent images
+
+They are built internally. If you need a rebuild right now, head over
+to [the Gitlab jobs view](https://gitlab.cee.redhat.com/jotnar-project/deployment/-/jobs?kind=BUILD)
+and respin those that you need.
+
+Otherwise they are rebuilt nightly at 3:00.

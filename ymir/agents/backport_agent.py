@@ -131,7 +131,7 @@ BACKPORT_INSTRUCTIONS = """
             - Only apply relevant changes that address the logic of the patch,
               do not modify the Release field or changelog section.
             - If successful, the spec file is now updated, skip to step 6
-              to verify with `centpkg prep` and step 7 to generate SRPM
+              to verify with `<PKG_TOOL> prep` and step 7 to generate SRPM
             - Do NOT add Patch tags (step 5) since this was a spec-only change, not a source code patch
             - If not successful, end with `success=False` and `status="Failed to apply spec changes"`
 
@@ -228,10 +228,10 @@ BACKPORT_INSTRUCTIONS = """
 
             4h. The cherry-pick workflow is complete! The generated patch file contains the cleanly
                 cherry-picked fix. Continue with steps 5-7 below to add this patch to the spec file,
-                verify it with `centpkg prep`, and build the SRPM.
+                verify it with `<PKG_TOOL> prep`, and build the SRPM.
 
                 Note: You do NOT need to apply this patch to <UNPACKED_SOURCES>. The patch file
-                will be automatically applied during the RPM build process when you run `centpkg prep`.
+                will be automatically applied during the RPM build process when you run `<PKG_TOOL> prep`.
 
          B. GIT AM WORKFLOW (Fallback approach):
 
@@ -265,12 +265,14 @@ BACKPORT_INSTRUCTIONS = """
          IMPORTANT: Only ADD new patches. Do NOT modify existing Patch tags or their order.
 
       6. Run
-         `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
+         `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
          to see if the new patch applies cleanly. When `prep` command
          finishes with "exit 0", it's a success. Ignore errors from
          libtoolize that warn about newer files: "use '--force' to overwrite".
+         Note: <PKG_TOOL> is the package tool command provided in the prompt.
 
-      7. Generate a SRPM using `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+      7. Generate a SRPM using
+         `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
 
 
       General instructions:
@@ -681,10 +683,10 @@ BACKPORT_FIX_BUILD_ERROR_PROMPT = """
       STEP 5: Test the build
       - The spec file should already reference {{jira_issue}}.patch
       - Run
-        `centpkg --name={{package}} --namespace=rpms --release={{dist_git_branch}} prep`
+        `{{pkg_tool}} --name={{package}} --namespace=rpms --release={{dist_git_branch}} prep`
         to verify patch applies
       - Run
-        `centpkg --name={{package}} --namespace=rpms --release={{dist_git_branch}} srpm`
+        `{{pkg_tool}} --name={{package}} --namespace=rpms --release={{dist_git_branch}} srpm`
         to generate SRPM
       - Test if the SRPM builds successfully using the `build_package` tool:
         * Call build_package with the SRPM path, dist_git_branch, and jira_issue

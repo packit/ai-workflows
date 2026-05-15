@@ -31,10 +31,11 @@ log = logging.getLogger(__name__)
 
 def api_call(session: requests.Session, method: str, url: str, **kwargs) -> requests.Response:
     while True:
-        resp = session.request(method, url, **kwargs)
+        resp = session.request(method, url, timeout=60, **kwargs)
         if resp.status_code != 429:
             return resp
-        retry_after = int(resp.headers.get("Retry-After", 60))
+        retry_after_header = resp.headers.get("Retry-After", "60")
+        retry_after = int(retry_after_header) if retry_after_header.isdigit() else 60
         log.warning("\nRate limited, sleeping %ds", retry_after)
         time.sleep(retry_after)
 
@@ -86,8 +87,13 @@ def main():
     if args.name:
         components = args.name
     elif args.input:
-        with open(args.input) as f:
-            components = json.load(f)
+        try:
+            with open(args.input) as f:
+                components = json.load(f)
+            if not isinstance(components, list):
+                sys.exit(f"Error: {args.input} must contain a JSON list")
+        except (json.JSONDecodeError, OSError) as e:
+            sys.exit(f"Error reading {args.input}: {e}")
     else:
         sys.exit("Provide --input or --name")
     if args.offset:
@@ -153,6 +159,9 @@ def main():
             created += 1
             if commit_resp.status_code != 201:
                 log.error("\nProject %s created but README commit failed: %s", comp, commit_resp.status_code)
+                errors.append(
+                    {"component": comp, "status": commit_resp.status_code, "error": "README commit failed"}
+                )
         elif resp.status_code == 400 and "has already been taken" in resp.text:
             skipped += 1
         else:

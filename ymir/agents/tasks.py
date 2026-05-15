@@ -50,14 +50,16 @@ async def fork_and_prepare_dist_git(
     available_tools: list[Tool],
     with_fedora: bool = False,
 ) -> tuple[Path, str, str, Path | None]:
+    if not jira_issue or Path(jira_issue).is_absolute() or ".." in jira_issue:
+        raise ValueError(f"Invalid jira_issue: {jira_issue}")
     working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / jira_issue
+    if working_dir.is_dir():
+        shutil.rmtree(working_dir, ignore_errors=False)
     working_dir.mkdir(parents=True, exist_ok=True)
     namespace = "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
     repository = f"https://gitlab.com/redhat/{namespace}/rpms/{package}"
     fork_url = await run_tool("fork_repository", repository=repository, available_tools=available_tools)
     local_clone = working_dir / package
-    if local_clone.is_dir():
-        shutil.rmtree(local_clone, ignore_errors=False)
     if not is_cs_branch(dist_git_branch):
         await run_tool(
             "create_zstream_branch",

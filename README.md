@@ -46,6 +46,22 @@ through testing and the remainder of the RHEL process to the point where the bui
 
 This project previously used [Goose](https://github.com/block/goose) as an AI agent framework in its early stages. The `goose/` directory and related automation have since been removed. For active development and production use, focus on the main workflows described above.
 
+## Agents as Skills
+
+The [`agents_as_skills/`](agents_as_skills/) directory contains Ymir workflows packaged as **AI coding assistant skills** for [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) and [Cursor](https://www.cursor.com/). The goal is to give individual contributors an easy way to run Ymir workflows directly in their own development environment — helping them with day-to-day package maintenance tasks and potentially surfacing areas for improvement in the workflows themselves.
+
+Available skills:
+
+| Skill | Description |
+|-------|-------------|
+| **Triage** | Triage CVE/bug Jira issues for RHEL packages |
+| **Backport** | Cherry-pick or git-am upstream patches, verify builds, and create merge requests |
+| **Rebase** | Rebase a package to a new upstream version |
+| **Rebuild** | Rebuild a package in the build system |
+| **Preliminary Testing** | Analyze gating and OSCI results to determine preliminary testing status |
+
+For installation instructions (skill setup and MCP tool configuration), see the [Skills Installation Guide](skills_installation.md).
+
 ## Documentation
 
 **Data flow documentation for external service integrations:**

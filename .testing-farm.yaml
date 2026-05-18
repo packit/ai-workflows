@@ -1,0 +1,20 @@
+# Testing Farm encrypted secrets.
+#
+# GITLAB_CI_TOKEN: Personal access token (or deploy token) with read access
+# to both the CI secrets repo and the testing-jiras repo on
+# gitlab.cee.redhat.com.
+#
+# To generate the encrypted value, run:
+#
+#   testing-farm encrypt \
+#     --git-url https://github.com/<org>/ai-workflows \
+#     --token-id ea2a89aa-6a78-40e0-906e-140f623c45b0 \
+#     "<your-gitlab-token>"
+#
+# Then paste the output as the value of GITLAB_CI_TOKEN below.
+
+version: 1
+
+environments:
+  secrets:
+    GITLAB_CI_TOKEN: "<paste encrypted value here>"

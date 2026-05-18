@@ -1,0 +1,3 @@
+# Keep secret files out of the container build context.
+# Secrets reach containers via compose env_file / volume mounts, never COPY.
+.secrets/

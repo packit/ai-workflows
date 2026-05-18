@@ -1214,6 +1214,33 @@ async def main() -> None:
                         )
                         return "fork_and_prepare_dist_git"
 
+                    log_dir = upstream_repo / "build-logs"
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    attempt_num = state.incremental_fix_attempts + 1
+
+                    # Move any leftover logs from previous fix attempt into attempt-N dir
+                    attempt_log_dir = log_dir / f"attempt-{attempt_num}"
+                    attempt_log_dir.mkdir(parents=True, exist_ok=True)
+                    for log_file in state.local_clone.glob("*.log*"):
+                        if log_file.suffix in (".log", ".gz"):
+                            log_file.rename(attempt_log_dir / log_file.name)
+
+                    attempts_log = log_dir / "fix-attempts.md"
+
+                    if not attempts_log.exists():
+                        attempts_log.write_text(
+                            f"# Fix Attempts Log\n\n"
+                            f"## Initial build failure\n\n```\n{state.build_error}\n```\n\n"
+                            f"## Attempt {attempt_num}\n\n"
+                            f"**Build error to fix:**\n```\n{state.build_error}\n```\n\n"
+                        )
+                    else:
+                        with attempts_log.open("a") as f:
+                            f.write(
+                                f"\n## Attempt {attempt_num}\n\n"
+                                f"**Build error to fix:**\n```\n{state.build_error}\n```\n\n"
+                            )
+
                     # Create a fresh backport agent with build tools enabled for iterative testing
                     fix_agent = await create_backport_agent(
                         gateway_tools,

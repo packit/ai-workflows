@@ -218,7 +218,7 @@ services:
     <<: *supervisor
     command: ["sh", "-c", "echo 'This service isn't run directly' && exit 1"]
     profiles: []
-    restart: no
+    restart: "no"
 
 
   jira-issue-fetcher:

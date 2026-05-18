@@ -95,7 +95,7 @@ test_cases = [
             data=BackportData(
                 package="dnsmasq",
                 patch_urls=[
-                    "http://thekelleys.org.uk/gitweb/?p=dnsmasq.git;a=patch;h=dd33e98da09c487a58b6cb6693b8628c0b234a3b"
+                    "https://thekelleys.org.uk/gitweb/?p=dnsmasq.git;a=patch;h=dd33e98da09c487a58b6cb6693b8628c0b234a3b"
                 ],
                 justification="not-implemented",
                 jira_issue="RHEL-15216",
@@ -111,8 +111,8 @@ test_cases = [
             data=BackportData(
                 package="libtiff",
                 patch_urls=[
-                    "https://github.com/libsdl-org/libtiff/commit/3e0dcf0ec651638b2bd849b2e6f3124b36890d99.patch",
-                    "https://github.com/libsdl-org/libtiff/commit/681694024846f543fe7d4821074b813cd9dccdfa.patch",
+                    "https://gitlab.com/libtiff/libtiff/-/commit/3e0dcf0ec651638b2bd849b2e6f3124b36890d99.patch",
+                    "https://gitlab.com/libtiff/libtiff/-/commit/681694024846f543fe7d4821074b813cd9dccdfa.patch",
                 ],
                 justification="not-implemented",
                 jira_issue="RHEL-112546",

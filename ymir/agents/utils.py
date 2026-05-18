@@ -38,6 +38,10 @@ def get_chat_model() -> ChatModel:
             temperature=0.6
         ),
         timeout=1200,
+        # beeai hardcodes max_retries=0 in its litellm adapter; num_retries
+        # bypasses that and enables litellm's built-in retry with back-off
+        # for transient 429 / rate-limit errors from the provider.
+        settings={"num_retries": int(os.getenv("LITELLM_NUM_RETRIES", 3))},
     )
     if "gemini" in chat_model:
         # disable `required` for Gemini models

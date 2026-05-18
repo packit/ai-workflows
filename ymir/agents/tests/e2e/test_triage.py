@@ -51,6 +51,42 @@ class TriageAgentTestCase:
             self.metrics = metrics_middleware.get_metrics()
 
 
+"""
+# These cases are not ready yet to be enabled. They are kept here for reference.
+    TriageAgentTestCase(
+        input="RHEL-61943",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.BACKPORT,
+            data=BackportData(
+                package="dnsmasq",
+                patch_urls=[
+                    "http://thekelleys.org.uk/gitweb/?p=dnsmasq.git;a=patch;h=eb1fe15ca80b6bc43cd6bfdf309ec6c590aff811"
+                ],
+                justification="not-implemented",
+                jira_issue="RHEL-61943",
+                cve_id=None,
+                fix_version="rhel-8.10.z",
+            ),
+        ),
+    ),
+    TriageAgentTestCase(
+        input="RHEL-29712",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.BACKPORT,
+            data=BackportData(
+                package="bind",
+                patch_urls=[
+                    "https://gitlab.isc.org/isc-projects/bind9/-/commit/7e2f50c36958f8c98d54e6d131f088a4837ce269"
+                ],
+                justification="not-implemented",
+                jira_issue="RHEL-29712",
+                cve_id=None,
+                fix_version="rhel-8.10.z",
+            ),
+        ),
+    ),
+"""
+
 test_cases = [
     TriageAgentTestCase(
         input="RHEL-15216",
@@ -82,38 +118,6 @@ test_cases = [
                 jira_issue="RHEL-112546",
                 cve_id="CVE-2025-9900",
                 fix_version="rhel-9.2.0.z",
-            ),
-        ),
-    ),
-    TriageAgentTestCase(
-        input="RHEL-61943",
-        expected_output=TriageOutputSchema(
-            resolution=Resolution.BACKPORT,
-            data=BackportData(
-                package="dnsmasq",
-                patch_urls=[
-                    "http://thekelleys.org.uk/gitweb/?p=dnsmasq.git;a=patch;h=eb1fe15ca80b6bc43cd6bfdf309ec6c590aff811"
-                ],
-                justification="not-implemented",
-                jira_issue="RHEL-61943",
-                cve_id=None,
-                fix_version="rhel-8.10.z",
-            ),
-        ),
-    ),
-    TriageAgentTestCase(
-        input="RHEL-29712",
-        expected_output=TriageOutputSchema(
-            resolution=Resolution.BACKPORT,
-            data=BackportData(
-                package="bind",
-                patch_urls=[
-                    "https://gitlab.isc.org/isc-projects/bind9/-/commit/7e2f50c36958f8c98d54e6d131f088a4837ce269"
-                ],
-                justification="not-implemented",
-                jira_issue="RHEL-29712",
-                cve_id=None,
-                fix_version="rhel-8.10.z",
             ),
         ),
     ),

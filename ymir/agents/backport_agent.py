@@ -1206,6 +1206,14 @@ async def main() -> None:
                 )
 
                 try:
+                    upstream_repo = Path(f"{state.local_clone}-upstream")
+                    if not upstream_repo.exists():
+                        logger.error(
+                            f"Upstream repo {upstream_repo} missing, cannot do incremental fix — "
+                            "falling back to full reset"
+                        )
+                        return "fork_and_prepare_dist_git"
+
                     # Create a fresh backport agent with build tools enabled for iterative testing
                     fix_agent = await create_backport_agent(
                         gateway_tools,

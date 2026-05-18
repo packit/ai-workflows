@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 # Maintainer (40), Owner (50)
 DEVELOPER_ACCESS_LEVEL = 30
 
+FORK_GROUP_NAMESPACE = "redhat/rhel/bot-branches"
+
 _GITLAB_COMMIT_RE = re.compile(r"^/(.+?)/-/commit/([0-9a-f]+)\.(?:patch|diff)$", re.IGNORECASE)
 _REDHAT_PATH_PREFIX = "/redhat/"
 
@@ -213,9 +215,8 @@ class ForkRepositoryTool(Tool[ForkRepositoryToolInput, ToolRunOptions, StringToo
             raise ToolError("Unexpected GitLab project, expected gitlab.com/redhat")
 
         def get_fork():
-            username = project.service.user.get_username()
             for fork in project.get_forks():
-                if fork.gitlab_repo.namespace["full_path"] == username:
+                if fork.gitlab_repo.namespace["full_path"] == FORK_GROUP_NAMESPACE:
                     return fork
             return None
 
@@ -225,7 +226,15 @@ class ForkRepositoryTool(Tool[ForkRepositoryToolInput, ToolRunOptions, StringToo
         def create_fork():
             prefix = "_".join(ns.replace("centos-stream", "centos") for ns in namespace[1:])
             fork_name = (f"{prefix}_" if prefix else "") + project.gitlab_repo.name
-            fork = project.gitlab_repo.forks.create(data={"name": fork_name, "path": fork_name})
+            data = {"name": fork_name, "path": fork_name, "namespace": FORK_GROUP_NAMESPACE}
+            try:
+                fork = project.gitlab_repo.forks.create(data=data)
+            except GitlabAPIException:
+                logger.info("Fork creation failed, checking if it was created by another deployment")
+                fork = get_fork()
+                if not fork:
+                    raise
+                return fork
             return GitlabProject(
                 namespace=fork.namespace["full_path"],
                 service=project.service,

@@ -594,285 +594,65 @@ BACKPORT_FIX_BUILD_ERROR_PROMPT = """
       - {{.}}
       {{/upstream_patches}}
 
-      The backport of upstream patches was initially successful using the cherry-pick workflow,
-      but the build failed with the following error:
+      The cherry-pick workflow succeeded but the build failed:
 
       {{build_error}}
 
-      CRITICAL: The upstream repository ({{local_clone}}-upstream) still exists
-      with all your previous work intact.
-      DO NOT clone it again. DO NOT reset to base commit. DO NOT modify
-      anything in {{local_clone}} dist-git repository.
-      Your cherry-picked commits are still there in {{local_clone}}-upstream.
+      CRITICAL CONSTRAINTS:
+      - The upstream repository at {{local_clone}}-upstream has all your previous work intact.
+        DO NOT clone it again. DO NOT reset to base commit.
+      - DO NOT modify anything in {{local_clone}} dist-git repository except
+        {{jira_issue}}.patch (by regenerating it from upstream repo).
+      - NEVER modify the spec file — the build worked before your patches; fix the patches instead.
+      - Fix BOTH compilation errors AND test failures. NEVER skip or disable tests.
+      - Make ONE attempt — you will be called again if the build still fails.
 
-      The package built successfully before your patches were added -
-      the spec file and build configuration are correct.
-      Your task is to fix this build error by improving the patches - NOT by modifying the spec file.
-      This includes BOTH compilation errors AND test failures during the check section.
-      Make ONE attempt to fix the issue - you will be called again if the build still fails.
+      Before you start: Read {{local_clone}}-upstream/build-logs/fix-attempts.md for a log of
+      previous fix attempts. Do NOT repeat strategies that already failed.
 
-      Follow these steps:
+      WORKFLOW:
 
-      STEP 1: Analyze the build error
-      - Identify if it's a compilation error (undefined symbols, headers) or test failure (in check section)
-      - Identify what's missing: undefined functions, types, macros, symbols, headers, or API changes
-      - Look for patterns like "undefined reference", "implicit declaration", "undeclared identifier", etc.
-      - Note the specific names of missing symbols
+      1. Analyze the build error and identify what's missing (functions, types, headers, etc.)
 
-      STEP 2: Explore the upstream repository for solutions
-      You have FULL ACCESS to the upstream repository ({{local_clone}}-upstream) as a reference:
+      2. Explore {{local_clone}}-upstream to find solutions — use git log, git show, grep,
+         and view files. The full upstream history is available.
 
-      - Examine the history between versions:
-        * `git -C {{local_clone}}-upstream log --oneline <base_version>..<target_commit>`
-
-      - Search for how missing symbols are implemented:
-        * Search in commit messages:
-          `git -C {{local_clone}}-upstream log --all --grep="function_name" --oneline`
-        * Search in code changes:
-          `git -C {{local_clone}}-upstream log --all -S"function_name" --oneline`
-        * Show commit details: `git -C {{local_clone}}-upstream show <commit_hash>`
-
-      - Look at current implementation in newer versions:
-        * View files to see how things work: `view` tool on files in {{local_clone}}-upstream
-        * Understand the context and dependencies
-        * See how the code evolved over time
-
-      - Explore related changes:
-        * Check header files, documentation, tests
-        * Look for API changes, refactorings, helper functions
-        * Understand the bigger picture
-
-      STEP 3: Choose the best fix approach
-      You have TWO options for fixing the issue:
-
-      OPTION A: Cherry-pick prerequisite commits
-      - If you find clean, self-contained commits that add what's missing
-      - Use `cherry_pick_commit` tool ONE commit at a time (chronological order, oldest first)
-      - Resolve conflicts using `str_replace` tool
-      - Stage resolved files: `git -C {{local_clone}}-upstream add <file>`
-      - Complete cherry-pick: use `cherry_pick_continue` tool
-
-      OPTION B: Manually adapt the code
-      - If cherry-picking would pull in too many dependencies
-      - If the commit doesn't apply cleanly and needs significant adaptation
-      - If you need to backport just a small piece of functionality
-      - Directly edit files in {{local_clone}}-upstream using `str_replace` or `insert` tools
-      - Make minimal changes to fix the specific build error
-      - Commit your changes: `git -C {{local_clone}}-upstream add <files>` then
-        `git -C {{local_clone}}-upstream commit -m "Manually backport: <description>"`
-
-      You can MIX both approaches:
-      - Cherry-pick some commits, then manually adapt code where needed
-      - Use the upstream repo as a reference while writing your own backport
+      3. Fix the issue using one or both approaches:
+         A. Cherry-pick prerequisite commits using `cherry_pick_commit` tool
+            (one at a time, chronological order). Resolve conflicts with `str_replace`,
+            then use `cherry_pick_continue`.
+         B. Manually edit files in {{local_clone}}-upstream and commit.
 
       SPECIAL CONSIDERATIONS FOR TEST FAILURES:
-      - Tests validate the fix - they MUST pass
+      - Tests validate the fix — they MUST pass
       - If tests use missing functions/helpers: backport ONLY the minimal necessary test helpers
         (search upstream history for test utility commits and cherry-pick or manually add them)
       - If tests fail due to API changes: adapt test code to work with older APIs
-      - NEVER skip or disable tests - fix them instead
+      - NEVER skip or disable tests — fix them instead
 
-      STEP 4: Regenerate the patch
-      - After making your fixes (cherry-picked or manual), regenerate the patch file
-      - Use `git_patch_create` tool with:
-        * repository_path: {{local_clone}}-upstream
-        * patch_file_path: {{local_clone}}/{{jira_issue}}.patch
-      - The tool automatically uses the base commit to include all changes
-      - This creates a single patch with all changes: original commits + prerequisites/fixes
-      - This improved patch now includes all missing dependencies needed for a successful build
+      4. Regenerate the patch using `git_patch_create` tool with:
+         - repository_path: {{local_clone}}-upstream
+         - patch_file_path: {{local_clone}}/{{jira_issue}}.patch
 
-      STEP 5: Test the build
-      - The spec file should already reference {{jira_issue}}.patch
-      - Run
-        `{{pkg_tool}} --name={{package}} --namespace=rpms --release={{dist_git_branch}} prep`
-        to verify patch applies
-      - Run
-        `{{pkg_tool}} --name={{package}} --namespace=rpms --release={{dist_git_branch}} srpm`
-        to generate SRPM
-      - Test if the SRPM builds successfully using the `build_package` tool:
-        * Call build_package with the SRPM path, dist_git_branch, and jira_issue
-        * Wait for build results
-        * If build PASSES: Report success=true with the SRPM path
-        * If build FAILS: Use `download_artifacts` to get build logs if available
-        * Extract the new error message from the logs:
-          - IMPORTANT: Before viewing log files, check their size using `wc -l` command
-          - If a log file has more than 2000 lines, use the view tool with offset and limit
-            parameters to read only the LAST 1000 lines
-            (calculate offset as total_lines - 1000, limit as 1000)
-          - Build failures are almost always at the end of logs, avoiding context overflow
-          - Alternatively, use the `search_text` tool to search for error
-            patterns (e.g., "ERROR", "FAILED", "error:", "fatal:")
-            and then use the view tool to read targeted sections around the matching line numbers
-          - Combine strategies as needed to understand the failure without reading the entire file
-        * Report success=false with the extracted error
+      5. Test the build:
+         - `{{pkg_tool}} --name={{package}} --namespace=rpms --release={{dist_git_branch}} prep`
+         - `{{pkg_tool}} --name={{package}} --namespace=rpms --release={{dist_git_branch}} srpm`
+         - Call `build_package` with the SRPM path, dist_git_branch, and jira_issue
+         - If build fails: use `download_artifacts` to get logs, identify the new error,
+           and save the log files to {{local_clone}}-upstream/build-logs/
 
-      Report your results:
-      - If build passes → Report success=true with the SRPM path
-      - If build fails → Report success=false with the extracted error message
-      - If you can't find a fix → Report success=false explaining why
+      6. Append a summary to {{local_clone}}-upstream/build-logs/fix-attempts.md documenting:
+         - What you identified as the root cause
+         - Which commits you cherry-picked or what manual edits you made
+         - The build result (pass/fail and error if applicable)
 
-      IMPORTANT RULES:
-      - Work in the EXISTING {{local_clone}}-upstream directory (don't clone again)
-      - NEVER modify the spec file - build failures are caused by incomplete patches, not spec issues
-      - The ONLY dist-git file you can modify is {{jira_issue}}.patch
-        (by regenerating it from upstream repo)
-      - Fix build errors (compilation AND test failures) by adding missing
-        prerequisites/dependencies to your patches in upstream repo
-      - For test failures: backport minimal necessary test helpers/functions to make tests pass
-      - You can freely explore, edit, cherry-pick, and commit in the upstream repo - it's your workspace
-      - Use the upstream repo as a rich source of information and examples
-      - Be creative and pragmatic - the goal is a working build with passing tests, not perfect git history
-      - Make ONE solid attempt to fix the issue - if the build fails, report the error clearly
-      - Your work will persist in the upstream repo for the next attempt if needed
+      Report success=true with SRPM path if build passes.
+      Report success=false with the extracted error if build fails or you can't find a fix.
 
-      Remember: Unpacked upstream sources are in {{unpacked_sources}}.
-      The upstream repository at {{local_clone}}-upstream is your playground - explore it freely!
+      Unpacked upstream sources are in {{unpacked_sources}}.
     """
 
-BACKPORT_FIX_BUILD_ERROR_PROMPT_ZSTREAM = """
-      Your working directory is {{local_clone}}, a clone of dist-git repository of package {{package}}.
-      {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
-      {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
-
-      Upstream patches that were backported:
-      {{#upstream_patches}}
-      - {{.}}
-      {{/upstream_patches}}
-
-      The backport of upstream patches was initially successful using the cherry-pick workflow,
-      but the build failed with the following error:
-
-      {{build_error}}
-
-      CRITICAL: The upstream repository ({{local_clone}}-upstream) still exists
-      with all your previous work intact.
-      DO NOT clone it again. DO NOT reset to base commit. DO NOT modify
-      anything in {{local_clone}} dist-git repository.
-      Your cherry-picked commits are still there in {{local_clone}}-upstream.
-
-      The package built successfully before your patches were added -
-      the spec file and build configuration are correct.
-      Your task is to fix this build error by improving the patches - NOT by modifying the spec file.
-      This includes BOTH compilation errors AND test failures during the check section.
-      Make ONE attempt to fix the issue - you will be called again if the build still fails.
-
-      Follow these steps:
-
-      STEP 1: Analyze the build error
-      - Identify if it's a compilation error (undefined symbols, headers) or test failure (in check section)
-      - Identify what's missing: undefined functions, types, macros, symbols, headers, or API changes
-      - Look for patterns like "undefined reference", "implicit declaration", "undeclared identifier", etc.
-      - Note the specific names of missing symbols
-
-      STEP 2: Explore the upstream repository for solutions
-      You have FULL ACCESS to the upstream repository ({{local_clone}}-upstream) as a reference:
-
-      - Examine the history between versions:
-        * `git -C {{local_clone}}-upstream log --oneline <base_version>..<target_commit>`
-
-      - Search for how missing symbols are implemented:
-        * Search in commit messages:
-          `git -C {{local_clone}}-upstream log --all --grep="function_name" --oneline`
-        * Search in code changes:
-          `git -C {{local_clone}}-upstream log --all -S"function_name" --oneline`
-        * Show commit details: `git -C {{local_clone}}-upstream show <commit_hash>`
-
-      - Look at current implementation in newer versions:
-        * View files to see how things work: `view` tool on files in {{local_clone}}-upstream
-        * Understand the context and dependencies
-        * See how the code evolved over time
-
-      - Explore related changes:
-        * Check header files, documentation, tests
-        * Look for API changes, refactorings, helper functions
-        * Understand the bigger picture
-
-      STEP 3: Choose the best fix approach
-      You have TWO options for fixing the issue:
-
-      OPTION A: Cherry-pick prerequisite commits
-      - If you find clean, self-contained commits that add what's missing
-      - Use `cherry_pick_commit` tool ONE commit at a time (chronological order, oldest first)
-      - Resolve conflicts using `str_replace` tool
-      - Stage resolved files: `git -C {{local_clone}}-upstream add <file>`
-      - Complete cherry-pick: use `cherry_pick_continue` tool
-
-      OPTION B: Manually adapt the code
-      - If cherry-picking would pull in too many dependencies
-      - If the commit doesn't apply cleanly and needs significant adaptation
-      - If you need to backport just a small piece of functionality
-      - Directly edit files in {{local_clone}}-upstream using `str_replace` or `insert` tools
-      - Make minimal changes to fix the specific build error
-      - Commit your changes: `git -C {{local_clone}}-upstream add <files>` then
-        `git -C {{local_clone}}-upstream commit -m "Manually backport: <description>"`
-
-      You can MIX both approaches:
-      - Cherry-pick some commits, then manually adapt code where needed
-      - Use the upstream repo as a reference while writing your own backport
-
-      SPECIAL CONSIDERATIONS FOR TEST FAILURES:
-      - Tests validate the fix - they MUST pass
-      - If tests use missing functions/helpers: backport ONLY the minimal necessary test helpers
-        (search upstream history for test utility commits and cherry-pick or manually add them)
-      - If tests fail due to API changes: adapt test code to work with older APIs
-      - NEVER skip or disable tests - fix them instead
-
-      STEP 4: Regenerate the patch
-      - After making your fixes (cherry-picked or manual), regenerate the patch file
-      - Use `git_patch_create` tool with:
-        * repository_path: {{local_clone}}-upstream
-        * patch_file_path: {{local_clone}}/{{jira_issue}}.patch
-      - The tool automatically uses the base commit to include all changes
-      - This creates a single patch with all changes: original commits + prerequisites/fixes
-      - This improved patch now includes all missing dependencies needed for a successful build
-
-      STEP 5: Test the build
-      - The spec file should already reference {{jira_issue}}.patch
-      - Run
-        `{{pkg_tool}} --name={{package}} --namespace=rpms --release={{dist_git_branch}} prep`
-        to verify patch applies
-      - Run
-        `{{pkg_tool}} --name={{package}} --namespace=rpms --release={{dist_git_branch}} srpm`
-        to generate SRPM
-      - Test if the SRPM builds successfully using the `build_package` tool:
-        * Call build_package with the SRPM path, dist_git_branch, and jira_issue
-        * Wait for build results
-        * If build PASSES: Report success=true with the SRPM path
-        * If build FAILS: Use `download_artifacts` to get build logs if available
-        * Extract the new error message from the logs:
-          - IMPORTANT: Before viewing log files, check their size using `wc -l` command
-          - If a log file has more than 2000 lines, use the view tool with offset and limit
-            parameters to read only the LAST 1000 lines
-            (calculate offset as total_lines - 1000, limit as 1000)
-          - Build failures are almost always at the end of logs, avoiding context overflow
-          - Alternatively, use the `search_text` tool to search for error
-            patterns (e.g., "ERROR", "FAILED", "error:", "fatal:")
-            and then use the view tool to read targeted sections around the matching line numbers
-          - Combine strategies as needed to understand the failure without reading the entire file
-        * Report success=false with the extracted error
-
-      Report your results:
-      - If build passes → Report success=true with the SRPM path
-      - If build fails → Report success=false with the extracted error message
-      - If you can't find a fix → Report success=false explaining why
-
-      IMPORTANT RULES:
-      - Work in the EXISTING {{local_clone}}-upstream directory (don't clone again)
-      - NEVER modify the spec file - build failures are caused by incomplete patches, not spec issues
-      - The ONLY dist-git file you can modify is {{jira_issue}}.patch
-        (by regenerating it from upstream repo)
-      - Fix build errors (compilation AND test failures) by adding missing
-        prerequisites/dependencies to your patches in upstream repo
-      - For test failures: backport minimal necessary test helpers/functions to make tests pass
-      - You can freely explore, edit, cherry-pick, and commit in the upstream repo - it's your workspace
-      - Use the upstream repo as a rich source of information and examples
-      - Be creative and pragmatic - the goal is a working build with passing tests, not perfect git history
-      - Make ONE solid attempt to fix the issue - if the build fails, report the error clearly
-      - Your work will persist in the upstream repo for the next attempt if needed
-
-      Remember: Unpacked upstream sources are in {{unpacked_sources}}.
-      The upstream repository at {{local_clone}}-upstream is your playground - explore it freely!
-    """
+BACKPORT_FIX_BUILD_ERROR_PROMPT_ZSTREAM = BACKPORT_FIX_BUILD_ERROR_PROMPT
 
 
 async def get_fix_build_error_prompt(fix_version: str | None = None) -> str:

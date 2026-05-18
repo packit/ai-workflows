@@ -57,7 +57,9 @@ from ymir.common.models import (
 )
 from ymir.common.version_utils import is_older_zstream, normalize_fix_version, parse_rhel_version
 from ymir.tools.unprivileged.commands import RunShellCommandTool
-from ymir.tools.unprivileged.upstream_search import UpstreamSearchTool
+
+## UpstreamSearchTool is currently unmaintained and disabled.
+# from ymir.tools.unprivileged.upstream_search import UpstreamSearchTool
 from ymir.tools.unprivileged.version_mapper import VersionMapperTool
 
 logger = logging.getLogger(__name__)
@@ -288,44 +290,6 @@ TRIAGE_PROMPT = """
               check the URL field or Source0 field for upstream project location
          {{/is_older_zstream}}
 
-         * Try to use upstream_search tool to find out commits related to the issue.
-           - The description you will use should be 1-2 sentences long and include implementation
-             details, keywords, function names or any other helpful information.
-           - The description should be like a command for example `Fix`, `Add` etc.
-           - If the tool gives you list of URLs use them without any change.
-           - Use release date of upstream version used in RHEL if you know it.
-           - If the tool says it can not be used for this project, or it encounters internal error,
-             do not try to use it again and proceed with different approach.
-           - If you run out of commits to check, use different approach, do not give up. Inability
-             of the tool to find proper fix does not mean it does not exist, search bug trackers
-             and version control system.
-           - **Handling non-GitHub/non-GitLab repositories**: When the upstream_search tool returns
-             `related_commits` that are bare commit hashes (not full URLs), it means the upstream
-             repository is hosted on a platform the tool does not know how to build patch URLs for
-             (e.g. gitweb, cgit, kernel.org, etc.). In this case, do NOT attempt to guess the web URL
-             nor immediately call get_patch_from_url with a fabricated URL. Instead:
-             1. Create a unique temporary directory and clone into it:
-                `CLONE_DIR=$(mktemp -d) && git clone --bare <repository_url> "$CLONE_DIR/repo"`
-             2. Inspect the candidate commits locally with `git -C "$CLONE_DIR/repo" show <hash>`
-                to read the commit message and diff, and determine whether any of them is the
-                correct fix.
-             3. Only after you have confirmed the right commit locally, attempt to construct
-                a download URL for the patch. You MUST use the exact same URL scheme
-                (http or https) as the `repository_url` returned by upstream_search.
-                Try common hosting URL patterns (given a `repository_url` like
-                `http://example.org/git/project.git`):
-                - cgit: `<scheme>://<host>/patch/?id=<hash>` — append to the repo URL
-                  e.g. `http://example.org/git/project.git/patch/?id=<hash>`
-                - gitweb: **WARNING — gitweb patch URLs do NOT share the same path
-                  as the repository URL.** The correct pattern is
-                  `<scheme>://<host>/gitweb/?p=<repo_name>.git;a=patch;h=<hash>`
-                  where `<repo_name>.git` is ONLY the repository filename (last path
-                  component of the repository URL, e.g. `project.git`), NOT the full path.
-                  Example: for `http://example.org/git/project.git` the patch URL is
-                  `http://example.org/gitweb/?p=project.git;a=patch;h=<hash>`
-                If none of these patterns work with get_patch_from_url, use the repository URL
-                with the commit hash appended as a fragment (e.g. `<repository_url>#<hash>`)
-                as the patch URL in your final answer.
          * Using the details from your analysis, search these sources:
            - Bug Trackers (for fixed bugs matching the issue summary and description)
            - Git / Version Control (for commit messages, using keywords, CVE IDs, function names, etc.)
@@ -540,7 +504,6 @@ def create_triage_agent(gateway_tools, local_tool_options=None):
             ThinkTool(),
             RunShellCommandTool(options=local_tool_options) if local_tool_options else RunShellCommandTool(),
             VersionMapperTool(),
-            UpstreamSearchTool(),
         ]
         + [
             t
@@ -565,7 +528,6 @@ def create_triage_agent(gateway_tools, local_tool_options=None):
                 only_success_invocations=False,
             ),
             ConditionalRequirement("get_jira_details", min_invocations=1),
-            ConditionalRequirement(UpstreamSearchTool, only_after=["get_jira_details"]),
             ConditionalRequirement("get_maintainer_rules", only_after=["get_jira_details"]),
             ConditionalRequirement(RunShellCommandTool, only_after=["get_jira_details"]),
             ConditionalRequirement("get_patch_from_url", only_after=["get_jira_details"]),
@@ -582,9 +544,9 @@ def create_triage_agent(gateway_tools, local_tool_options=None):
             "Do not modify the patch URL in your final answer after it has been "
             "validated with get_patch_from_url.",
             "When constructing patch URLs for upstream commits, you MUST preserve "
-            "the exact URL scheme (http:// or https://) from the repository_url "
-            "returned by upstream_search. Do NOT upgrade http:// to https:// or "
-            "vice versa — some upstream repositories only support one protocol.",
+            "the exact URL scheme (http:// or https://) from the repository URL. "
+            "Do NOT upgrade http:// to https:// or vice versa — some upstream "
+            "repositories only support one protocol.",
             "After completing your triage analysis, if your decision is backport "
             "or rebase, always set appropriate JIRA fields per the instructions "
             "using set_jira_fields tool.",

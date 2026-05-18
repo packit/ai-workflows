@@ -43,6 +43,8 @@ spec:
         resources:
           limits:
             memory: 1Gi
+          requests:
+            memory: 512Mi
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
         volumeMounts:

@@ -43,7 +43,9 @@ spec:
           protocol: TCP
         resources:
           limits:
-            memory: 4Gi
+            memory: 5Gi
+          requests:
+            memory: 2Gi
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
         volumeMounts:

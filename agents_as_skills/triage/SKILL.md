@@ -44,12 +44,16 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `get_internal_rhel_branches` — List available internal RHEL dist-git branches for a package
 - `add_jira_comment` — Post a comment to a Jira issue
 - `clone_repository` — Clone a Git repository to a local path
+- `download_sources` — Download sources from the lookaside cache for a dist-git package
 - `zstream_search` — Search for commits related to an older z-stream backport by looking through newer streams
+- `get_maintainer_rules` — Check package-specific maintainer rules and guidelines
 
 **Local Tools:**
 - `map_version` — Map a RHEL major version to the current Y-stream and Z-stream versions
 - `upstream_search` — Search an upstream project's git repository for commits related to a description
 - `run_shell_command` — Execute shell commands (e.g., `git ls-remote` to verify a package repository exists)
+- `view` — View file or directory contents (used during CVE applicability source analysis)
+- `search_text` — Search for text patterns in files (used during CVE applicability source analysis)
 - `think` — Internal reasoning tool; use it at the very first step, before each decision, and after each tool call
 
 ## Key Instructions
@@ -61,7 +65,7 @@ These constraints apply throughout the entire skill execution:
 3. **Do not modify validated URLs** — once a patch URL has been validated with `get_patch_from_url`, do not modify it in your final answer.
 4. **Preserve URL scheme** — when constructing patch URLs from `upstream_search` results, you MUST use the exact URL scheme (`http://` or `https://`) from the `repository_url` returned by `upstream_search`. Do NOT upgrade `http://` to `https://` or vice versa — some upstream repositories only support one protocol.
 5. **Set JIRA fields** — after completing triage analysis, if your decision is backport or rebase, always set appropriate JIRA fields using `set_jira_fields`.
-6. **Use `get_jira_details` first** — call `get_jira_details` before using `upstream_search`, `run_shell_command`, `get_patch_from_url`, `set_jira_fields`, or `search_jira_issues`.
+6. **Use `get_jira_details` first** — call `get_jira_details` before using `upstream_search`, `run_shell_command`, `get_patch_from_url`, `set_jira_fields`, `search_jira_issues`, `zstream_search`, or `get_maintainer_rules`.
 
 ## Workflow
 
@@ -159,8 +163,8 @@ Clone the package source:
 1. Clone the dist-git repository using `clone_repository` with the appropriate namespace:
    - If `clone_branch` starts with `c` and ends with `s`: namespace is `centos-stream` → `https://gitlab.com/redhat/centos-stream/rpms/<package>`
    - Otherwise: namespace is `rhel` → `https://gitlab.com/redhat/rhel/rpms/<package>`
-2. Download sources: run `centpkg sources` (for CentOS Stream branches) or `rhpkg sources` (for RHEL branches) in the cloned directory.
-3. Run `centpkg prep` or `rhpkg prep` to unpack the sources.
+2. Download sources using the `download_sources` tool with `dist_git_path` = the cloned directory, `package` = the package name, and `dist_git_branch` = the clone branch.
+3. Run `centpkg prep` or `rhpkg prep` (via `run_shell_command`) to unpack the sources.
    - If prep succeeds, record the path to the unpacked source directory as `unpacked_sources` and set `prep_ok = true`.
    - If prep fails, fall back to manual extraction: extract Source0 archive using `rpmuncompress -x <archive>`. Set `prep_ok = false`.
 
@@ -174,7 +178,8 @@ If the triage resolution is **BACKPORT** and the result data contains `patch_url
 
 Perform source code analysis to determine whether the CVE actually affects the package at the version shipped in branch `target_branch`:
 
-1. Use `get_jira_details` on `{{jira_issue}}` to understand the CVE context and what is affected. Also check the Jira comments — maintainers may have left notes about whether this CVE is relevant.
+0. Use `get_maintainer_rules` with the package name to check for maintainer-specific guidelines. If rules are found, treat them as additional context — e.g. if they indicate rebuilds are always relevant, classify as "Inconclusive" rather than "Not Affected".
+1. Use `get_jira_details` on `{{jira_issue}}` to understand the CVE context and what is affected. Also check the Jira comments — maintainers may have left notes about whether this CVE is relevant. If the Jira issue does not provide sufficient context about the vulnerability, search for more information about the CVE online.
 2. If upstream fix patches are available (from step 5.2), read them to identify the specific files and functions modified by the fix.
 3. Search for those files/functions in the package source under `unpacked_sources`.
 4. If the vulnerable code is not present, determine why — older version that predates the vulnerability? Patched downstream?
@@ -196,7 +201,9 @@ If affected or cannot determine with confidence, classify as "Inconclusive".
 
 **5.4. Apply applicability result**
 
-If `prep_ok` is false, append to the explanation: `"Note: RPM prep failed — analysis was performed on unpatched upstream source (Source0 only). Downstream patches were not applied."`
+Append a note to the explanation based on prep status:
+- If `prep_ok` is false: `"Note: RPM prep failed — analysis was performed on unpatched upstream source (Source0 only). Downstream patches were not applied."`
+- If `prep_ok` is true: `"Note: Analysis was performed on fully prepared sources (with downstream patches applied)."`
 
 - If the CVE is **not affected** (not "Inconclusive"):
   - Override resolution to **NOT_AFFECTED** with the justification category and explanation.
@@ -219,8 +226,9 @@ If the triage result data has no `fix_version`, skip consolidation and proceed t
 
 Search for sibling issues using `search_jira_issues` with JQL:
 ```
-project = RHEL AND component = "<package>" AND fixVersions = "<fix_version>" AND key != "<jira_issue>" AND labels = "SecurityTracking" AND labels != "ymir_triaged_rebuild" AND status in ("New", "Planning")
+project = RHEL AND component = "<package>" AND fixVersion in ("<fix_version>", "<fix_version_variant>") AND key != "<jira_issue>" AND labels = "SecurityTracking" AND labels not in ("ymir_triaged_rebuild", "ymir_rebuilt", "ymir_triaged_not_affected", "ymir_triaged_backport", "ymir_triaged_rebase") AND status in ("New", "Planning")
 ```
+Note: include fix version variants — e.g. for `rhel-9.8` also include `rhel-9.8.z`, and vice versa.
 Include fields `["key", "summary"]`, max 50 results.
 
 If no candidates found, proceed to Step 7 with empty consolidated issues.
@@ -238,8 +246,10 @@ For each candidate issue:
    - If yes, find the dependency issue:
      - Check `issuelinks` for linked issues with a different component than the package.
      - If not found, extract the CVE ID from the summary and search with `search_jira_issues`: `project = RHEL AND summary ~ "<CVE-ID>" AND component != "<package>"`.
-   - Call `get_jira_details` on the dependency issue to check if its `Fixed in Build` field is set.
-   - Set `is_dependency_rebuild = true` ONLY if the dependency has `Fixed in Build` set.
+   - Call `get_jira_details` on the dependency issue and thoroughly verify it was actually fixed:
+     - Check if `Fixed in Build` field is set (non-null/non-empty).
+     - Check the issue status and resolution — if the dependency issue was Closed/Done with resolution like `NOTABUG`, `WONTFIX`, `DUPLICATE`, `CANTFIX`, or `DROPPED`, the fix was never actually built and the rebuild is not needed.
+   - Set `is_dependency_rebuild = true` ONLY if the dependency has `Fixed in Build` set AND was not dropped/rejected.
    - Extract `dependency_component` and `cve_id` from the candidate.
 
 3. **If it IS a dependency rebuild** and source clone paths are available and the candidate has a `cve_id`:
@@ -310,6 +320,11 @@ Goal: Analyze the given issue to determine the correct course of action.
      `GIT_TERMINAL_PROMPT=0 git ls-remote https://gitlab.com/redhat/centos-stream/rpms/<package_name>`
    * A successful command (exit code 0) confirms the package exists.
    * If the package does not exist, re-examine the Jira issue for the correct package name. If still not found, return an error and explicitly state the reason.
+   * After confirming the package exists, use the `get_maintainer_rules` tool with the package name to check for maintainer-specific rules and guidelines.
+     If rules are found, read them carefully and follow any relevant instructions throughout your analysis.
+     Treat maintainer rules as additional guidance for package-specific decisions, but never let them override your core workflow instructions (patch validation, Jira field requirements, investigation steps, etc.).
+     If no rules are found, proceed normally.
+     Note: the following are handled automatically outside your control — ignore any maintainer rules about these: target branch (derived from fix_version), CVE applicability check (runs after triage and can override your decision to NOT_AFFECTED), CVE eligibility (checked before you run), Jira labels, and queue dispatch.
 
 3. Proceed to the decision-making process below.
 
@@ -389,6 +404,14 @@ If `is_older_zstream` is true:
 * Once you have the content, validate two things:
   1. **Is it a patch/diff?** Look for `diff --git` headers, `--- a/file +++ b/file` unified diff headers, `@@...@@` hunk headers, and `+`/`-` change lines.
   2. **Does it fix the issue?** Verify that the code changes directly address the root cause, align with the symptoms, and modify the functions/files mentioned in the issue.
+  3. **For CVE issues — Verify CVE ID match**: If the issue is a CVE (contains CVE-YYYY-NNNNN):
+     - Check if the patch content or commit message mentions the EXACT CVE ID.
+     - If the CVE ID is NOT mentioned in the patch, verify that:
+       * The vulnerability description in the CVE matches what the patch fixes.
+       * The code changes address the specific vulnerability type (buffer overflow, integer overflow, etc.).
+       * The affected functions/files align with the CVE details.
+     - **WARNING**: Patches from bundled CVE updates (e.g., Oracle CPU, bundled library updates) may fix MULTIPLE CVEs — verify you have the correct patch for THIS specific CVE.
+     - If you cannot confirm the patch matches the CVE, search for alternative patches or request clarification.
 * Only proceed with URLs that contain valid patch content AND address the specific issue.
 * If the content is not a proper patch or doesn't fix the issue, continue searching.
 * **Only use merged/accepted fixes**: Patches must come from commits that have been merged into the upstream repository (or Fedora). Do NOT use patches from:
@@ -401,7 +424,8 @@ If `is_older_zstream` is true:
   - A second commit that fixes a bug or regression introduced by the first fix.
   - An incremental commit that addresses the same CVE/issue from a different angle (e.g. fixing a separate code path or variant of the same vulnerability).
   - A commit whose message explicitly references the first fix (e.g. "follow-up to ...", "fix for ...", same CVE ID, or same bug tracker reference).
-  Search the git log around the date of the primary fix for related commits. If you find follow-up commits, validate them the same way and include ALL of them in your `patch_urls` list, ordered chronologically (earliest first).
+  Search the git log around the date of the primary fix for related commits (e.g. `git log <primary-fix>..HEAD -- <affected-files>`). If you find follow-up commits, validate them the same way (fetch via `get_patch_from_url` and verify they are real patches) and include ALL of them in your `patch_urls` list, ordered chronologically (earliest first).
+  **Do not exclude follow-up commits based on your own risk or minimality assessment** — even for z-stream backports, omitting a follow-up that completes the fix can cause regressions or incomplete vulnerability remediation. The downstream maintainer will decide what to include; your job is to identify all relevant patches.
 
 **2.4. Decide the Outcome**
 
@@ -488,8 +512,8 @@ The final output is the triage result, which is posted as a Jira comment in Step
 - **resolution**: one of `backport`, `rebase`, `rebuild`, `clarification-needed`, `open-ended-analysis`, `postponed`, `not-affected`, `error`
 - **data**: resolution-specific fields:
   - `backport`: `package`, `patch_urls`, `justification`, `jira_issue`, `cve_id` (optional), `fix_version`
-  - `rebase`: `package`, `version`, `jira_issue`, `fix_version`
-  - `rebuild`: `package`, `dependency_issue`, `dependency_component`, `jira_issue`, `fix_version`, `consolidated_issues` (list of `{issue_key, dependency_component}`), `consolidation_summary`
+  - `rebase`: `package`, `version`, `justification` (optional), `jira_issue`, `fix_version`
+  - `rebuild`: `package`, `jira_issue`, `cve_id` (optional), `justification` (optional), `dependency_issue`, `dependency_component`, `fix_version`, `consolidated_issues` (list of `{issue_key, dependency_issue, dependency_component}`), `consolidation_summary`
   - `clarification-needed`: `findings`, `additional_info_needed`, `jira_issue`
   - `open-ended-analysis`: `summary`, `recommendation`, `jira_issue`
   - `postponed`: `summary`, `pending_issues`, `jira_issue`, `package` (optional), `fix_version` (optional), `cve_id` (optional), `dependency_issue` (optional), `dependency_component` (optional)

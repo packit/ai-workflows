@@ -106,7 +106,12 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                     # The push can fail transiently due to bastion network issues; the beeai
                     # framework will retry the whole tool call in that case.
                     ref = metadata["source"].split("#")[-1]
-                    await asyncio.to_thread(repo.remotes.origin.push, f"{ref}:refs/heads/{branch}")
+                    push_infos = await asyncio.to_thread(
+                        repo.remotes.origin.push, f"{ref}:refs/heads/{branch}"
+                    )
+                    for info in push_infos:
+                        if info.flags & git.remote.PushInfo.ERROR:
+                            raise RuntimeError(f"Push rejected: {info.summary.strip()}")
                 start_time = time.monotonic()
                 while time.monotonic() - start_time < SYNC_TIMEOUT:
                     if await asyncio.to_thread(repo.git.ls_remote, gitlab_repo_url, branch, branches=True):

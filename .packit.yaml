@@ -1,0 +1,50 @@
+# Packit CI configuration for triage agent e2e tests.
+#
+# Tests run on the private Red Hat Testing Farm ranch (use_internal_tf),
+# which provides internal network access and keeps logs private.
+#
+# Triggers:
+#   - pull_request (manual): maintainer posts "/packit test" to run
+#   - commit to main: runs automatically after merge
+#
+# Prerequisites:
+#   - Packit GitHub App installed on this repo
+#   - Project approved for use_internal_tf (contact Packit team)
+#   - Encrypted GITLAB_CI_TOKEN in .testing-farm.yaml
+
+jobs:
+  - job: tests
+    trigger: pull_request
+    identifier: triage-e2e
+    skip_build: true
+    manual_trigger: true
+    use_internal_tf: true
+    targets:
+      - centos-stream-10-x86_64
+    tf_extra_params:
+      environments:
+        - settings:
+            provisioning:
+              tags:
+                - m1.large
+          tmt:
+            context:
+              how: full
+
+  - job: tests
+    trigger: commit
+    branch: main
+    identifier: triage-e2e
+    skip_build: true
+    use_internal_tf: true
+    targets:
+      - centos-stream-10-x86_64
+    tf_extra_params:
+      environments:
+        - settings:
+            provisioning:
+              tags:
+                - m1.large
+          tmt:
+            context:
+              how: full

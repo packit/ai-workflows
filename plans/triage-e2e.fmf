@@ -1,0 +1,60 @@
+summary: Triage agent end-to-end tests
+description: |
+    Runs the triage agent against mock Jira fixtures and mock CentOS Stream
+    repos, validating that it produces the expected structured output.
+    Requires the GITLAB_CI_TOKEN secret (injected via .testing-farm.yaml)
+    for cloning internal fixture and secrets repos.
+
+environment:
+    DRY_RUN: "true"
+    LITELLM_DEBUG: ""
+
+prepare:
+  - name: Install container tooling
+    how: install
+    package:
+      - podman
+      - podman-compose
+      - git
+      - make
+
+  - name: Fetch test fixtures and secrets
+    how: shell
+    script: |
+        set -euo pipefail
+        cd $TMT_TREE
+
+        # Clone testing-jiras for mock Jira data and mock_repos fixtures
+        git clone --depth 1 \
+            "https://oauth2:${GITLAB_CI_TOKEN}@gitlab.cee.redhat.com/jotnar-project/testing-jiras.git" \
+            /tmp/testing-jiras
+
+        cp /tmp/testing-jiras/mock_data/*.json \
+            ymir/agents/tests/e2e/mock_repos/
+
+        cp -r /tmp/testing-jiras/jiras/* \
+            ymir/tools/privileged/tests/data/
+
+        # Clone CI secrets repo and populate .secrets/
+        git clone --depth 1 \
+            "https://oauth2:${GITLAB_CI_TOKEN}@gitlab.cee.redhat.com/jotnar-project/ci-secrets.git" \
+            /tmp/ci-secrets
+
+        mkdir -p .secrets
+        cp /tmp/ci-secrets/beeai-agent.env .secrets/
+        cp /tmp/ci-secrets/mcp-gateway.env .secrets/
+        cp /tmp/ci-secrets/rhel-config.json .secrets/
+        cp /tmp/ci-secrets/jotnar-vertex-dev.json .secrets/
+        touch .secrets/keytab
+
+        rm -rf /tmp/testing-jiras /tmp/ci-secrets
+
+discover:
+    how: shell
+    tests:
+      - name: triage-agent-e2e
+        test: make run-triage-agent-e2e-tests
+        duration: 45m
+
+execute:
+    how: tmt

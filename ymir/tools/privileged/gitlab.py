@@ -38,21 +38,30 @@ logger = logging.getLogger(__name__)
 # Maintainer (40), Owner (50)
 DEVELOPER_ACCESS_LEVEL = 30
 
-GITLAB_HOSTS = {"gitlab.com", "gitlab.cee.redhat.com"}
-
 _GITLAB_COMMIT_RE = re.compile(r"^/(.+?)/-/commit/([0-9a-f]+)\.(?:patch|diff)$", re.IGNORECASE)
+_REDHAT_PATH_PREFIX = "/redhat/"
+
+
+def _is_private_gitlab(url: str) -> bool:
+    """Return True if *url* points to a Red Hat GitLab project that needs token auth."""
+    parsed = urlparse(url)
+    hostname = parsed.hostname or ""
+    if hostname == "gitlab.cee.redhat.com":
+        return True
+    return hostname == "gitlab.com" and parsed.path.startswith(_REDHAT_PATH_PREFIX)
 
 
 def _get_api_diff_url(url: str) -> str:
     """Convert a GitLab commit .patch/.diff web URL to an API diff URL.
 
-    Returns the API URL for known GitLab hosts, or the original URL unchanged.
+    Returns the API URL for private Red Hat GitLab repos, or the original URL
+    unchanged for public repos and non-GitLab hosts.
     """
-    parsed = urlparse(url)
-    hostname = parsed.hostname or ""
-    if hostname not in GITLAB_HOSTS:
+    if not _is_private_gitlab(url):
         return url
 
+    parsed = urlparse(url)
+    hostname = parsed.hostname or ""
     match = _GITLAB_COMMIT_RE.match(parsed.path)
     if not match:
         return url
@@ -64,9 +73,8 @@ def _get_api_diff_url(url: str) -> str:
 
 
 def _get_auth_headers(url: str) -> dict[str, str]:
-    """Return PRIVATE-TOKEN header if *url* points to a known GitLab host."""
-    hostname = urlparse(url).hostname or ""
-    if hostname in GITLAB_HOSTS:
+    """Return PRIVATE-TOKEN header if *url* points to a private Red Hat GitLab project."""
+    if _is_private_gitlab(url):
         token = os.getenv("GITLAB_TOKEN")
         if token:
             return {"PRIVATE-TOKEN": token}

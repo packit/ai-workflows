@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import re
 import tempfile
@@ -14,6 +15,8 @@ from pydantic import BaseModel, Field
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import BREWHUB_URL
+
+logger = logging.getLogger(__name__)
 
 SYNC_TIMEOUT = 1 * 60 * 60  # seconds
 
@@ -73,28 +76,37 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                     path,
                 )
                 if branch in [ref.name.split("/")[-1] for ref in repo.remotes.origin.refs]:
-                    raise RuntimeError(f"Z-Stream branch {branch} exists in dist-git but not on GitLab")
-                session = koji.ClientSession(BREWHUB_URL)
-                candidate_tag = f"{branch}-candidate"
-                builds = await asyncio.to_thread(
-                    session.listTagged,
-                    package=package,
-                    tag=candidate_tag,
-                    latest=True,
-                    inherit=True,
-                    strict=True,
-                )
-                if not builds:
-                    raise RuntimeError(f"There are no builds of {package} in {candidate_tag}")
-                [build] = builds
-                metadata = await asyncio.to_thread(session.getBuild, build["build_id"], strict=True)
-                # ref is a commit SHA from the Koji build source URL (git+https://...#<sha>).
-                # It may point to a commit on an older Z-stream branch (via tag inheritance)
-                # which is expected — we're branching from the last known good build.
-                # The push can fail transiently due to bastion network issues; the beeai
-                # framework will retry the whole tool call in that case.
-                ref = metadata["source"].split("#")[-1]
-                await asyncio.to_thread(repo.remotes.origin.push, f"{ref}:refs/heads/{branch}")
+                    # Branch already exists in dist-git but not yet mirrored to GitLab.
+                    # This happens when a previous push succeeded server-side but the SSH
+                    # connection dropped before the client received the ACK. Skip the push
+                    # and fall through to poll GitLab for the sync.
+                    logger.warning(
+                        "Branch %s already exists in dist-git but not yet on GitLab; "
+                        "skipping push and waiting for mirror sync",
+                        branch,
+                    )
+                else:
+                    session = koji.ClientSession(BREWHUB_URL)
+                    candidate_tag = f"{branch}-candidate"
+                    builds = await asyncio.to_thread(
+                        session.listTagged,
+                        package=package,
+                        tag=candidate_tag,
+                        latest=True,
+                        inherit=True,
+                        strict=True,
+                    )
+                    if not builds:
+                        raise RuntimeError(f"There are no builds of {package} in {candidate_tag}")
+                    [build] = builds
+                    metadata = await asyncio.to_thread(session.getBuild, build["build_id"], strict=True)
+                    # ref is a commit SHA from the Koji build source URL (git+https://...#<sha>).
+                    # It may point to a commit on an older Z-stream branch (via tag inheritance)
+                    # which is expected — we're branching from the last known good build.
+                    # The push can fail transiently due to bastion network issues; the beeai
+                    # framework will retry the whole tool call in that case.
+                    ref = metadata["source"].split("#")[-1]
+                    await asyncio.to_thread(repo.remotes.origin.push, f"{ref}:refs/heads/{branch}")
                 start_time = time.monotonic()
                 while time.monotonic() - start_time < SYNC_TIMEOUT:
                     if await asyncio.to_thread(repo.git.ls_remote, gitlab_repo_url, branch, branches=True):

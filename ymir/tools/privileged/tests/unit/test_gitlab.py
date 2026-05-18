@@ -38,7 +38,7 @@ from ymir.tools.privileged.gitlab import (
 @pytest.mark.asyncio
 async def test_fork_repository(repository, fork_exists):
     package = "bash"
-    fork_namespace = "ai-bot"
+    fork_namespace = "redhat/rhel/bot-branches"
     fork_name = f"{'rhel' if '/rhel/' in repository else 'centos'}_rpms_{package}"
     clone_url = f"https://gitlab.com/{fork_namespace}/{fork_name}.git"
     fork = flexmock(
@@ -52,7 +52,7 @@ async def test_fork_repository(repository, fork_exists):
             gitlab_repo=flexmock(
                 forks=flexmock()
                 .should_receive("create")
-                .with_args(data={"name": fork_name, "path": fork_name})
+                .with_args(data={"name": fork_name, "path": fork_name, "namespace": fork_namespace})
                 .and_return(fork.gitlab_repo)
                 .mock(),
                 name=package,
@@ -63,7 +63,6 @@ async def test_fork_repository(repository, fork_exists):
             ),
             service=flexmock(
                 instance_url="https://gitlab.com",
-                user=flexmock(get_username=lambda: fork_namespace),
             ),
         )
     )

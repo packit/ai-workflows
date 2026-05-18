@@ -350,16 +350,26 @@ TRIAGE_PROMPT = """
            If you find a relevant but unmerged patch during your investigation, mention it in the
            clarification-needed note so a human can evaluate it, but do not use it as the basis
            for a backport decision.
-         * **Check for follow-up commits**: After identifying a valid fix, check whether there
-           are follow-up commits that complement or complete the fix. Common patterns include:
+         * **Check for follow-up commits**: After identifying a valid fix, you MUST check
+           whether there are follow-up commits that complement or complete the fix.
+           Common patterns include:
            - A second commit that fixes a bug or regression introduced by the first fix
            - An incremental commit that addresses the same CVE/issue from a different angle
              (e.g. fixing a separate code path or variant of the same vulnerability)
+           - A commit by the same or related author modifying the same files/functions
+             shortly after the primary fix
            - A commit whose message explicitly references the first fix (e.g. "follow-up to ...",
              "fix for ...", same CVE ID, or same bug tracker reference)
-           Search the git log around the date of the primary fix for related commits.
-           If you find follow-up commits, validate them the same way and include ALL of them
+           Search the git log around the date of the primary fix for related commits
+           (e.g. `git log <primary-fix>..HEAD -- <affected-files>`).
+           If you find follow-up commits, validate them the same way (fetch via
+           get_patch_from_url and verify they are real patches) and include ALL of them
            in your patch_urls list, ordered chronologically (earliest first).
+           **Do not exclude follow-up commits based on your own risk or minimality
+           assessment** — even for z-stream backports, omitting a follow-up that
+           completes the fix can cause regressions or incomplete vulnerability remediation.
+           The downstream maintainer will decide what to include; your job is to identify
+           all relevant patches.
 
          2.4. Decide the Outcome
          {{^is_older_zstream}}
@@ -543,10 +553,9 @@ def create_triage_agent(gateway_tools, local_tool_options=None):
             "to fetch and validate it using get_patch_from_url tool.",
             "Do not modify the patch URL in your final answer after it has been "
             "validated with get_patch_from_url.",
-            "When constructing patch URLs for upstream commits, you MUST preserve "
-            "the exact URL scheme (http:// or https://) from the repository URL. "
-            "Do NOT upgrade http:// to https:// or vice versa — some upstream "
-            "repositories only support one protocol.",
+            "When constructing patch URLs for upstream commits, always use https://. "
+            "If https:// fails when validating the patch with get_patch_from_url, "
+            "retry with http:// instead.",
             "After completing your triage analysis, if your decision is backport "
             "or rebase, always set appropriate JIRA fields per the instructions "
             "using set_jira_fields tool.",

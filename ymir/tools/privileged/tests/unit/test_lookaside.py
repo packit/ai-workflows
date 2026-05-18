@@ -37,6 +37,7 @@ async def test_download_sources(branch):
 
         return flexmock(wait=wait)
 
+    _mock_kerberos()
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
     result = (
         await DownloadSourcesTool().run(

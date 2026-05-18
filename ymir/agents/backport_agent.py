@@ -1331,6 +1331,13 @@ async def main() -> None:
                 state.build_error = build_result.error
                 # Try to fix build error incrementally if cherry-pick workflow was used
                 if state.used_cherry_pick_workflow:
+                    upstream_repo = Path(f"{state.local_clone}-upstream")
+                    if upstream_repo.exists():
+                        log_dir = upstream_repo / "build-logs" / "attempt-0"
+                        log_dir.mkdir(parents=True, exist_ok=True)
+                        for log_file in state.local_clone.glob("*.log*"):
+                            if log_file.suffix in (".log", ".gz"):
+                                log_file.rename(log_dir / log_file.name)
                     logger.info("Cherry-pick workflow was used - starting incremental fix")
                     return "fix_build_error"
                 # Git am workflow was used - reset and try again

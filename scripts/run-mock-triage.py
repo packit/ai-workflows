@@ -60,24 +60,21 @@ def extract_zstream_override(fixture: dict) -> str:
     return json.dumps(override) if override else ""
 
 
-def setup_mock_repos(fixture_path: Path, base_dir: Path) -> dict[str, str]:
+def setup_mock_repos(fixture: dict, base_dir: Path) -> dict[str, str]:
     """Clone repos at pre-fix state and return git env vars for URL rewriting.
 
     Each bare clone has its branch ref rewound to the pre-fix commit so that
     the agent sees the repository state *before* the fix was applied.
 
     Args:
-        fixture_path: Path to the fixture JSON file describing repos to mock.
+        fixture: The loaded fixture data describing repos to mock.
         base_dir: Directory in which bare clones are created.
 
     Returns:
         A dict with ``GIT_CONFIG_COUNT``/``KEY``/``VALUE`` entries for
         ``insteadOf`` URL rewriting.
     """
-    with open(fixture_path) as fh:
-        data = json.load(fh)
-
-    repos = data.get("repos", [])
+    repos = fixture.get("repos", [])
     if not repos:
         return {}
 
@@ -235,7 +232,7 @@ def main() -> None:
     mock_repo_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Setting up mock repos in {mock_repo_dir} ...")
-    git_env = setup_mock_repos(fixture_file, mock_repo_dir)
+    git_env = setup_mock_repos(fixture, mock_repo_dir)
 
     # -- Ensure JIRA mock files are writable ----------------------------------
 

@@ -23,6 +23,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import git as gitpython
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_UPSTREAM_SEARCH_URL = "http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1"
 
@@ -50,6 +52,55 @@ def extract_blocked_urls(fixture_path: Path) -> str:
     return ",".join(urls)
 
 
+def setup_mock_repos(fixture_path: Path, base_dir: Path) -> dict[str, str]:
+    """Clone repos at pre-fix state and return git env vars for URL rewriting.
+
+    Each bare clone has its branch ref rewound to the pre-fix commit so that
+    the agent sees the repository state *before* the fix was applied.
+
+    Args:
+        fixture_path: Path to the fixture JSON file describing repos to mock.
+        base_dir: Directory in which bare clones are created.
+
+    Returns:
+        A dict with ``GIT_CONFIG_COUNT``/``KEY``/``VALUE`` entries for
+        ``insteadOf`` URL rewriting.
+    """
+    with open(fixture_path) as fh:
+        data = json.load(fh)
+
+    repos = data.get("repos", [])
+    if not repos:
+        return {}
+
+    git_env: dict[str, str] = {}
+
+    for i, repo_info in enumerate(repos):
+        package = repo_info["package"]
+        local_path = base_dir / f"{package}.git"
+
+        if local_path.exists():
+            shutil.rmtree(local_path)
+
+        print(f"  Cloning {repo_info['remote_url']} (bare) -> {local_path}")
+        repo = gitpython.Repo.clone_from(repo_info["remote_url"], str(local_path), bare=True)
+
+        branch = repo_info["branch"]
+        repo.git.update_ref(f"refs/heads/{branch}", repo_info["pre_fix_ref"])
+
+        keep_ref = f"refs/heads/{branch}"
+        for ref in repo.references:
+            if ref.path != keep_ref:
+                repo.git.update_ref("-d", ref.path)
+        repo.git.gc("--prune=now", "-q")
+
+        git_env[f"GIT_CONFIG_KEY_{i}"] = f"url.file://{local_path}.insteadOf"
+        git_env[f"GIT_CONFIG_VALUE_{i}"] = repo_info["remote_url"]
+
+    git_env["GIT_CONFIG_COUNT"] = str(len(repos))
+    return git_env
+
+
 def ensure_writable(directory: Path) -> None:
     for root, _dirs, files in os.walk(directory):
         for name in files:
@@ -62,25 +113,30 @@ def build_mcp_config(
     mock_data_dir: Path,
     upstream_search_url: str,
     blocked_urls: str,
+    git_env: dict[str, str],
     log_dir: Path,
 ) -> dict:
+    privileged_env = {
+        "MCP_TRANSPORT": "stdio",
+        "MOCK_JIRA": "true",
+        "JIRA_MOCK_FILES": str(jira_mock_dir),
+        "JIRA_DRY_RUN": "true",
+        "JIRA_URL": os.environ.get("JIRA_URL", "https://redhat.atlassian.net"),
+        "JIRA_EMAIL": os.environ.get("JIRA_EMAIL", ""),
+        "JIRA_TOKEN": os.environ.get("JIRA_TOKEN", ""),
+        "GITLAB_TOKEN": os.environ.get("GITLAB_TOKEN", ""),
+        "KRB5CCNAME": os.environ.get("KRB5CCNAME", f"FILE:/tmp/krb5cc_{os.getuid()}"),
+        "GIT_REPO_BASEPATH": os.environ.get("GIT_REPO_BASEPATH", "/tmp/ymir-git-repos"),
+        "MOCK_BLOCKED_URLS": blocked_urls,
+        "DEBUG_FILE": str(log_dir / "ymir-privileged.log"),
+    }
+    privileged_env.update(git_env)
+
     return {
         "mcpServers": {
             "ymir-privileged": {
                 "command": "ymir-privileged-gateway",
-                "env": {
-                    "MCP_TRANSPORT": "stdio",
-                    "MOCK_JIRA": "true",
-                    "JIRA_MOCK_FILES": str(jira_mock_dir),
-                    "JIRA_DRY_RUN": "true",
-                    "JIRA_URL": os.environ.get("JIRA_URL", "https://redhat.atlassian.net"),
-                    "JIRA_EMAIL": os.environ.get("JIRA_EMAIL", ""),
-                    "JIRA_TOKEN": os.environ.get("JIRA_TOKEN", ""),
-                    "GITLAB_TOKEN": os.environ.get("GITLAB_TOKEN", ""),
-                    "KRB5CCNAME": os.environ.get("KRB5CCNAME", f"FILE:/tmp/krb5cc_{os.getuid()}"),
-                    "GIT_REPO_BASEPATH": os.environ.get("GIT_REPO_BASEPATH", "/tmp/ymir-git-repos"),
-                    "DEBUG_FILE": str(log_dir / "ymir-privileged.log"),
-                },
+                "env": privileged_env,
             },
             "ymir-unprivileged": {
                 "command": "ymir-unprivileged-gateway",
@@ -159,6 +215,14 @@ def main() -> None:
 
     blocked_urls = extract_blocked_urls(fixture_file)
 
+    # -- Prepare mock repos (bare clones at pre-fix state) --------------------
+
+    mock_repo_dir = REPO_ROOT / "logs" / "mock-triage" / "mock-repos"
+    mock_repo_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Setting up mock repos in {mock_repo_dir} ...")
+    git_env = setup_mock_repos(fixture_file, mock_repo_dir)
+
     # -- Ensure JIRA mock files are writable ----------------------------------
 
     ensure_writable(jira_mock_dir)
@@ -170,7 +234,9 @@ def main() -> None:
     log_dir = REPO_ROOT / "logs" / "mock-triage"
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    mcp_config = build_mcp_config(jira_mock_dir, mock_data_dir, upstream_search_url, blocked_urls, log_dir)
+    mcp_config = build_mcp_config(
+        jira_mock_dir, mock_data_dir, upstream_search_url, blocked_urls, git_env, log_dir
+    )
 
     tmp_fd, tmp_path = tempfile.mkstemp(prefix="mock-triage-mcp-", suffix=".json")
 

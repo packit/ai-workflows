@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import logging
 import os
 import re
@@ -739,9 +740,11 @@ async def create_backport_agent(
 def _move_build_logs(source_dir: Path, target_dir: Path) -> None:
     """Move build log files from source_dir into target_dir."""
     target_dir.mkdir(parents=True, exist_ok=True)
-    for log_file in source_dir.glob("*.log*"):
-        if log_file.suffix in (".log", ".gz"):
-            log_file.rename(target_dir / log_file.name)
+    for log_file in itertools.chain(
+        source_dir.glob("*.log"),
+        source_dir.glob("*.log.gz"),
+    ):
+        log_file.rename(target_dir / log_file.name)
 
 
 def _extract_commit_hash(url: str) -> str | None:

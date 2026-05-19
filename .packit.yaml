@@ -15,7 +15,7 @@
 jobs:
   - job: tests
     trigger: pull_request
-    identifier: triage-e2e
+    identifier: pr-test-triage-e2e
     skip_build: true
     manual_trigger: true
     use_internal_tf: true
@@ -34,7 +34,7 @@ jobs:
   - job: tests
     trigger: commit
     branch: main
-    identifier: triage-e2e
+    identifier: commit-test-triage-e2e
     skip_build: true
     use_internal_tf: true
     targets:

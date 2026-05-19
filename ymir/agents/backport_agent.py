@@ -747,6 +747,21 @@ def _move_build_logs(source_dir: Path, target_dir: Path) -> None:
         log_file.rename(target_dir / log_file.name)
 
 
+def _update_fix_attempts_log(log_dir: Path, attempt_num: int, build_error: str) -> None:
+    """Create or append to fix-attempts.md with the current build error."""
+    attempts_log = log_dir / "fix-attempts.md"
+    if not attempts_log.exists():
+        attempts_log.write_text(
+            f"# Fix Attempts Log\n\n"
+            f"## Initial build failure\n\n```\n{build_error}\n```\n\n"
+            f"## Attempt {attempt_num}\n\n"
+            f"**Build error to fix:**\n```\n{build_error}\n```\n\n"
+        )
+    else:
+        with attempts_log.open("a") as f:
+            f.write(f"\n## Attempt {attempt_num}\n\n**Build error to fix:**\n```\n{build_error}\n```\n\n")
+
+
 def _extract_commit_hash(url: str) -> str | None:
     """Extract a commit hash from a dist-git commit URL."""
     from urllib.parse import urlparse
@@ -1010,22 +1025,7 @@ async def main() -> None:
                     attempt_num = state.incremental_fix_attempts + 1
 
                     _move_build_logs(state.local_clone, log_dir / f"attempt-{attempt_num}")
-
-                    attempts_log = log_dir / "fix-attempts.md"
-
-                    if not attempts_log.exists():
-                        attempts_log.write_text(
-                            f"# Fix Attempts Log\n\n"
-                            f"## Initial build failure\n\n```\n{state.build_error}\n```\n\n"
-                            f"## Attempt {attempt_num}\n\n"
-                            f"**Build error to fix:**\n```\n{state.build_error}\n```\n\n"
-                        )
-                    else:
-                        with attempts_log.open("a") as f:
-                            f.write(
-                                f"\n## Attempt {attempt_num}\n\n"
-                                f"**Build error to fix:**\n```\n{state.build_error}\n```\n\n"
-                            )
+                    _update_fix_attempts_log(log_dir, attempt_num, state.build_error)
 
                     # Create a fresh backport agent with build tools enabled for iterative testing
                     fix_agent = await create_backport_agent(

@@ -112,6 +112,7 @@ def check_distgit_ssh_access() -> None:
 
     result = subprocess.run(
         ["ssh", "-o", "BatchMode=yes", f"{krb_username}@pkgs.devel.redhat.com"],
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         timeout=30,

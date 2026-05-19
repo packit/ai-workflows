@@ -254,8 +254,14 @@ TRIAGE_PROMPT = """
       You must decide between one of the following actions. Follow these guidelines to make your decision:
 
       1. **Rebase**
-         * A Rebase is only to be chosen when the issue explicitly instructs you to "rebase" or "update"
-           to a newer/specific upstream version. Do not infer this.
+         * A Rebase may be chosen when:
+           a) The issue explicitly instructs you to "rebase" or "update"
+              to a newer/specific upstream version, OR
+           b) The maintainer rules for the package (fetched via get_maintainer_rules)
+              define criteria under which a rebase is the preferred resolution and
+              those criteria are met for this issue.
+         * Do not infer a rebase on your own — it must be justified by one of the
+           two conditions above.
          * Identify the <package_version> the package should be updated or rebased to.
          * You must provide a clear justification explaining why this version addresses the issue.
          * Set the Jira fields as per the instructions below.

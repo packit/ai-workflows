@@ -66,6 +66,8 @@ class aiohttpClientSessionMock:
     comment_post_regex = re.compile(
         re.escape(urljoin(os.getenv("JIRA_URL"), "rest/api/")) + "[2-3]/issue/([A-Z0-9-]+)/comment"
     )
+    # mocking endpoint for JQL search
+    search_post_regex = re.compile(re.escape(urljoin(os.getenv("JIRA_URL"), "rest/api/3/search/jql")))
     # mocking endpoint for retrieval of information about users
     user_get_regex = re.compile(re.escape(urljoin(os.getenv("JIRA_URL"), "rest/api/3/user")))
 
@@ -96,7 +98,8 @@ class aiohttpClientSessionMock:
                 or kwargs["params"].get("accountId") == "verified_user"
             ):
                 yield flexmock(raise_for_status=lambda: None, json=_get_verified_user)
-            yield flexmock(raise_for_status=lambda: None, json=_get_unverified_user)
+            else:
+                yield flexmock(raise_for_status=lambda: None, json=_get_unverified_user)
         else:
             raise NotImplementedError()
 
@@ -147,6 +150,12 @@ class aiohttpClientSessionMock:
             current_issue["fields"]["comment"]["total"] += 1
             await _write_jira_mock(match_data.group(1), current_issue)
             yield flexmock(raise_for_status=lambda: None)
+        elif self.search_post_regex.fullmatch(args[0]):
+
+            async def _empty_search():
+                return {"issues": []}
+
+            yield flexmock(raise_for_status=lambda: None, json=_empty_search)
         elif match_data := self.transitions_get_regex.fullmatch(args[0]):
             jira_data = await _read_jira_mock(match_data.group(1))
             if kwargs["json"]["transition"]["id"] == 1:

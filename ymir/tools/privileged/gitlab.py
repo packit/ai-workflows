@@ -44,6 +44,18 @@ _GITLAB_COMMIT_RE = re.compile(r"^/(.+?)/-/commit/([0-9a-f]+)\.(?:patch|diff)$",
 _REDHAT_PATH_PREFIX = "/redhat/"
 
 
+def _has_mock_url_rewrites() -> bool:
+    """Check whether ``GIT_CONFIG_*`` env vars configure ``insteadOf`` rewrites.
+
+    Returns:
+        True if ``GIT_CONFIG_COUNT`` is set and positive.
+    """
+    try:
+        return int(os.getenv("GIT_CONFIG_COUNT", "0")) > 0
+    except ValueError:
+        return False
+
+
 def _is_private_gitlab(url: str) -> bool:
     """Return True if *url* points to a Red Hat GitLab project that needs token auth."""
     parsed = urlparse(url)
@@ -394,9 +406,11 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
         clone_path = tool_input.clone_path
         await clean_stale_repositories()
 
-        clone_url = _get_authenticated_url(repository)
+        # When GIT_CONFIG_* env vars define insteadOf rewrites (mock repos),
+        # pass the original URL so git applies the rewrite itself.
+        # Otherwise embed the auth token in the URL as usual.
+        clone_url = repository if _has_mock_url_rewrites() else _get_authenticated_url(repository)
 
-        clone_url = _get_authenticated_url(repository)
         clone_path.mkdir(parents=True, exist_ok=True)
 
         if branch:

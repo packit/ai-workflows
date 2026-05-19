@@ -50,11 +50,10 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 
 **Local Tools:**
 - `map_version` — Map a RHEL major version to the current Y-stream and Z-stream versions
-- `upstream_search` — Search an upstream project's git repository for commits related to a description
 - `run_shell_command` — Execute shell commands (e.g., `git ls-remote` to verify a package repository exists)
 - `view` — View file or directory contents (used during CVE applicability source analysis)
 - `search_text` — Search for text patterns in files (used during CVE applicability source analysis)
-- `think` — Internal reasoning tool; use it at the very first step, before each decision, and after each tool call
+- Web search — Search the web for information about CVEs when Jira issue details are insufficient (used during CVE applicability analysis in Step 5)
 
 ## Key Instructions
 
@@ -63,9 +62,9 @@ These constraints apply throughout the entire skill execution:
 1. **Be proactive** — search thoroughly for fixes and do not give up easily.
 2. **Always validate patch URLs** — for any patch URL you intend to use for a backport, fetch and validate it using `get_patch_from_url` before including it in your result.
 3. **Do not modify validated URLs** — once a patch URL has been validated with `get_patch_from_url`, do not modify it in your final answer.
-4. **Preserve URL scheme** — when constructing patch URLs from `upstream_search` results, you MUST use the exact URL scheme (`http://` or `https://`) from the `repository_url` returned by `upstream_search`. Do NOT upgrade `http://` to `https://` or vice versa — some upstream repositories only support one protocol.
+4. **Preserve URL scheme** — when constructing patch URLs for upstream commits, always use `https://`. If `https://` fails when validating the patch with `get_patch_from_url`, retry with `http://` instead.
 5. **Set JIRA fields** — after completing triage analysis, if your decision is backport or rebase, always set appropriate JIRA fields using `set_jira_fields`.
-6. **Use `get_jira_details` first** — call `get_jira_details` before using `upstream_search`, `run_shell_command`, `get_patch_from_url`, `set_jira_fields`, `search_jira_issues`, `zstream_search`, or `get_maintainer_rules`.
+6. **Use `get_jira_details` first** — call `get_jira_details` before using `run_shell_command`, `get_patch_from_url`, `set_jira_fields`, `search_jira_issues`, `zstream_search`, or `get_maintainer_rules`.
 
 ## Workflow
 
@@ -334,9 +333,14 @@ You must decide between one of the following actions:
 
 #### 1. Rebase
 
-A Rebase is **only** to be chosen when the issue explicitly instructs you to "rebase" or "update" to a newer/specific upstream version. Do not infer this.
+A Rebase may be chosen when:
+* The issue explicitly instructs you to "rebase" or "update" to a newer/specific upstream version, OR
+* The maintainer rules for the package (fetched via `get_maintainer_rules`) define criteria under which a rebase is the preferred resolution and those criteria are met for this issue.
+
+Do not infer a rebase on your own — it must be justified by one of the two conditions above.
 
 * Identify the `<package_version>` the package should be updated or rebased to.
+* You must provide a clear justification explaining why this version addresses the issue.
 * Set the Jira fields as per the instructions in the **Final Step** section.
 
 #### 2. Backport a Patch OR Request Clarification
@@ -365,21 +369,7 @@ If `is_older_zstream` is true:
   - Links from the Jira issue (if any direct upstream links are provided).
   - Package spec file (`<package>.spec`) in the GitLab repository: check the `URL` field or `Source0` field.
 
-* Try using the `upstream_search` tool to find commits related to the issue:
-  - The description should be 1–2 sentences long and include implementation details, keywords, function names, or other helpful information.
-  - The description should be like a command (e.g., `Fix`, `Add`).
-  - If the tool returns a list of URLs, use them without modification.
-  - Use the release date of the upstream version used in RHEL if known.
-  - If the tool says it cannot be used for this project or encounters an internal error, do not try again — proceed with a different approach.
-  - If you run out of commits to check, use a different approach; inability to find the fix does not mean it does not exist — search bug trackers and version control systems.
-  - **Handling non-GitHub/non-GitLab repositories**: When `upstream_search` returns `related_commits` that are bare commit hashes (not full URLs), the upstream repository is on a platform the tool cannot build patch URLs for (e.g., gitweb, cgit, kernel.org). In this case:
-    1. Do NOT guess the web URL nor immediately call `get_patch_from_url` with a fabricated URL.
-    2. Create a unique temporary directory and clone into it: `CLONE_DIR=$(mktemp -d) && git clone --bare <repository_url> "$CLONE_DIR/repo"`
-    3. Inspect candidate commits locally with `git -C "$CLONE_DIR/repo" show <hash>` to read the message and diff.
-    4. Only after confirming the right commit locally, attempt to construct a download URL. You MUST use the exact same URL scheme (`http://` or `https://`) as the `repository_url` — do NOT upgrade or downgrade the scheme. Try common patterns (given a `repository_url` like `http://example.org/git/project.git`):
-       - cgit: append `/patch/?id=<hash>` to the repo URL, e.g. `http://example.org/git/project.git/patch/?id=<hash>`
-       - gitweb: **WARNING — gitweb patch URLs do NOT share the same path as the repository URL.** The correct pattern is `<scheme>://<host>/gitweb/?p=<repo_name>.git;a=patch;h=<hash>` where `<repo_name>.git` is ONLY the repository filename (last path component), e.g. for `http://example.org/git/project.git` the patch URL is `http://example.org/gitweb/?p=project.git;a=patch;h=<hash>`
-    5. If none work, use `<repository_url>#<hash>` as the patch URL in your final answer.
+* **Always prefer patches from the canonical upstream repository** over mirrors or forks. For example, if the upstream is `https://gitlab.com/libtiff/libtiff`, use that — not a GitHub mirror like `https://github.com/libsdl-org/libtiff/`. Mirrors may carry extra commits or miss upstream changes.
 
 * Using the details from your analysis, search these sources:
   - Bug trackers (for fixed bugs matching the issue summary and description)
@@ -388,6 +378,10 @@ If `is_older_zstream` is true:
 * Be thorough — try multiple search terms and approaches based on the issue details.
 
 * Advanced investigation techniques:
+  - **Use targeted git searches when the issue describes specific code**:
+    * `git log -S "<code_expression>" -- <file>` finds commits that added or removed an exact string (e.g. a vulnerable expression quoted in a CVE description)
+    * `git log --grep="<function_name>"` finds commits whose message mentions a specific function
+    * These are far more precise than scanning `git log | head` and should be your first approach when the issue provides specific code patterns, expressions, or function names
   - If you can identify specific files, functions, or code sections mentioned in the issue, locate them in the source code.
   - Use git history (`git log`, `git blame`) to examine changes to those specific code areas.
   - Look for commits that modify the problematic code, especially those with relevant keywords in commit messages.
@@ -403,7 +397,11 @@ If `is_older_zstream` is true:
 * Use the `get_patch_from_url` tool to fetch content from any patch/commit URL you intend to use.
 * Once you have the content, validate two things:
   1. **Is it a patch/diff?** Look for `diff --git` headers, `--- a/file +++ b/file` unified diff headers, `@@...@@` hunk headers, and `+`/`-` change lines.
-  2. **Does it fix the issue?** Verify that the code changes directly address the root cause, align with the symptoms, and modify the functions/files mentioned in the issue.
+  2. **Does it fix the issue?** Examine the actual code changes to verify:
+     - The fix directly addresses the root cause identified in your analysis.
+     - The code changes align with the symptoms described in the Jira issue.
+     - The modified functions/files match those mentioned in the issue.
+     - If the CVE description quotes specific code expressions or variable names involved in the vulnerability, verify that the patch modifies those exact expressions — not just the same file or neighboring functions.
   3. **For CVE issues — Verify CVE ID match**: If the issue is a CVE (contains CVE-YYYY-NNNNN):
      - Check if the patch content or commit message mentions the EXACT CVE ID.
      - If the CVE ID is NOT mentioned in the patch, verify that:
@@ -457,10 +455,12 @@ Use when the package needs rebuilding against an updated dependency with NO sour
 * If no linked issue is found, use `search_jira_issues` to find it. Try JQL queries like:
   - `project = RHEL AND summary ~ "<CVE-ID>" AND component != "<this-package>"`
   - Include fields `["key", "summary", "fixVersions", "status"]`.
-* Once found, call `get_jira_details` on the dependency issue to check its status.
-* If the dependency issue has a `Fixed in Build` field set → resolution is **rebuild**.
-  Set `dependency_issue` to the issue key AND `dependency_component` to the component name (e.g., `"golang"`, `"openssl"`).
-* Otherwise → resolution is **postponed**.
+* Once found, call `get_jira_details` on the dependency issue and thoroughly verify it was actually fixed:
+  - Check if `Fixed in Build` field is set (non-null/non-empty).
+  - Check the issue status and resolution — if the dependency issue was Closed/Done with resolution like `NOTABUG`, `WONTFIX`, `DUPLICATE`, `CANTFIX`, or `DROPPED`, the fix was never actually built and the rebuild is not needed. In this case use **not-affected** resolution with explanation that the dependency fix was dropped/rejected.
+* If the dependency issue has `Fixed in Build` set AND was not dropped/rejected → resolution is **rebuild**.
+  Set `dependency_issue` to the issue key AND `dependency_component` to the component name (e.g., `"golang"`, `"openssl"`) from the dependency issue's component field.
+* If the dependency issue exists but has no `Fixed in Build` yet and is still open → resolution is **postponed**.
   Set summary to explain that rebuild is waiting for the dependency to ship, and set `pending_issues` to the dependency issue key.
   Also set `package`, `fix_version`, `cve_id`, `dependency_issue`, and `dependency_component` (same values as you would for a rebuild resolution).
 

@@ -43,7 +43,7 @@ spec:
           protocol: TCP
         resources:
           limits:
-            memory: 5Gi
+            memory: 4Gi
           requests:
             memory: 2Gi
         terminationMessagePath: /dev/termination-log

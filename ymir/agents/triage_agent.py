@@ -306,6 +306,15 @@ TRIAGE_PROMPT = """
            extra commits or miss upstream changes.
          * Be thorough in your search - try multiple search terms and approaches based on the issue details
          * Advanced investigation techniques:
+           - **Use targeted git searches when the issue describes specific code**:
+             * `git log -S "<code_expression>" -- <file>` finds commits that
+               added or removed an exact string (e.g. a vulnerable expression
+               quoted in a CVE description)
+             * `git log --grep="<function_name>"` finds commits whose message
+               mentions a specific function
+             * These are far more precise than scanning `git log | head` and
+               should be your first approach when the issue provides specific
+               code patterns, expressions, or function names
            - If you can identify specific files, functions, or code sections mentioned in the issue,
              locate them in the source code
            - Use git history (git log, git blame) to examine changes to those specific code areas
@@ -335,6 +344,10 @@ TRIAGE_PROMPT = """
               - The fix directly addresses the root cause identified in your analysis
               - The code changes align with the symptoms described in the Jira issue
               - The modified functions/files match those mentioned in the issue
+              - If the CVE description quotes specific code expressions or
+                variable names involved in the vulnerability, verify that the
+                patch modifies those exact expressions — not just the same
+                file or neighboring functions
            3. **For CVE issues - Verify CVE ID match**: If the issue is a CVE (contains CVE-YYYY-NNNNN):
               - Check if the patch content or commit message mentions the EXACT CVE ID
               - If the CVE ID is NOT mentioned in the patch, verify that:

@@ -736,6 +736,14 @@ async def create_backport_agent(
     )
 
 
+def _move_build_logs(source_dir: Path, target_dir: Path) -> None:
+    """Move build log files from source_dir into target_dir."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for log_file in source_dir.glob("*.log*"):
+        if log_file.suffix in (".log", ".gz"):
+            log_file.rename(target_dir / log_file.name)
+
+
 def _extract_commit_hash(url: str) -> str | None:
     """Extract a commit hash from a dist-git commit URL."""
     from urllib.parse import urlparse
@@ -998,12 +1006,7 @@ async def main() -> None:
                     log_dir.mkdir(parents=True, exist_ok=True)
                     attempt_num = state.incremental_fix_attempts + 1
 
-                    # Move any leftover logs from previous fix attempt into attempt-N dir
-                    attempt_log_dir = log_dir / f"attempt-{attempt_num}"
-                    attempt_log_dir.mkdir(parents=True, exist_ok=True)
-                    for log_file in state.local_clone.glob("*.log*"):
-                        if log_file.suffix in (".log", ".gz"):
-                            log_file.rename(attempt_log_dir / log_file.name)
+                    _move_build_logs(state.local_clone, log_dir / f"attempt-{attempt_num}")
 
                     attempts_log = log_dir / "fix-attempts.md"
 
@@ -1140,11 +1143,10 @@ async def main() -> None:
                 if state.used_cherry_pick_workflow:
                     upstream_repo = Path(f"{state.local_clone}-upstream")
                     if upstream_repo.exists():
-                        log_dir = upstream_repo / "build-logs" / "attempt-0"
-                        log_dir.mkdir(parents=True, exist_ok=True)
-                        for log_file in state.local_clone.glob("*.log*"):
-                            if log_file.suffix in (".log", ".gz"):
-                                log_file.rename(log_dir / log_file.name)
+                        _move_build_logs(
+                            state.local_clone,
+                            upstream_repo / "build-logs" / "attempt-0",
+                        )
                     logger.info("Cherry-pick workflow was used - starting incremental fix")
                     return "fix_build_error"
                 # Git am workflow was used - reset and try again

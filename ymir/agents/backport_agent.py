@@ -639,8 +639,7 @@ BACKPORT_FIX_BUILD_ERROR_PROMPT = """
          - `{{pkg_tool}} --name={{package}} --namespace=rpms --release={{dist_git_branch}} prep`
          - `{{pkg_tool}} --name={{package}} --namespace=rpms --release={{dist_git_branch}} srpm`
          - Call `build_package` with the SRPM path, dist_git_branch, and jira_issue
-         - If build fails: use `download_artifacts` to get logs, identify the new error,
-           and save the log files to {{local_clone}}-upstream/build-logs/
+         - If build fails: use `download_artifacts` to get logs and identify the new error
 
       6. Append a summary to {{local_clone}}-upstream/build-logs/fix-attempts.md documenting:
          - What you identified as the root cause
@@ -1024,7 +1023,11 @@ async def main() -> None:
                     log_dir.mkdir(parents=True, exist_ok=True)
                     attempt_num = state.incremental_fix_attempts + 1
 
-                    _move_build_logs(state.local_clone, log_dir / f"attempt-{attempt_num}")
+                    if state.incremental_fix_attempts > 0:
+                        _move_build_logs(
+                            state.local_clone,
+                            log_dir / f"attempt-{state.incremental_fix_attempts}",
+                        )
                     _update_fix_attempts_log(log_dir, attempt_num, state.build_error)
 
                     # Create a fresh backport agent with build tools enabled for iterative testing

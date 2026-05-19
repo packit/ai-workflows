@@ -11,11 +11,13 @@ The expected layout of the private repository is:
 .
 ├── jiras
 │   ├── RHEL-112546
+│   ├── RHEL-114607
 │   ├── RHEL-15216
 │   ├── RHEL-29712
 │   └── RHEL-61943
 ├── mock_data
 │   ├── RHEL-112546.json
+│   ├── RHEL-114607.json
 │   ├── RHEL-15216.json
 │   ├── RHEL-29712.json
 │   └── RHEL-61943.json

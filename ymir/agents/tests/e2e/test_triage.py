@@ -14,7 +14,7 @@ from ymir.common.mock_repos import (
     load_all_mock_configs,
     setup_mock_repos,
 )
-from ymir.common.models import BackportData, Resolution, TriageOutputSchema
+from ymir.common.models import BackportData, RebaseData, Resolution, TriageOutputSchema
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,19 @@ test_cases = [
             ),
         ),
     ),
+    TriageAgentTestCase(
+        input="RHEL-114607",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.REBASE,
+            data=RebaseData(
+                package="expat",
+                version="2.7.3",
+                justification="not-implemented",
+                jira_issue="RHEL-114607",
+                fix_version="rhel-10.2",
+            ),
+        ),
+    ),
 ]
 
 
@@ -196,7 +209,11 @@ def test_triage_agent(test_case: TriageAgentTestCase):
     expected_output = test_case.expected_output
     assert real_output.resolution == expected_output.resolution
     assert real_output.data.package == expected_output.data.package
-    assert real_output.data.patch_urls == expected_output.data.patch_urls
     assert real_output.data.jira_issue == expected_output.data.jira_issue
-    assert real_output.data.cve_id == expected_output.data.cve_id
     assert real_output.data.fix_version == expected_output.data.fix_version
+
+    if expected_output.resolution == Resolution.BACKPORT:
+        assert real_output.data.patch_urls == expected_output.data.patch_urls
+        assert real_output.data.cve_id == expected_output.data.cve_id
+    elif expected_output.resolution == Resolution.REBASE:
+        assert real_output.data.version == expected_output.data.version

@@ -45,11 +45,19 @@ def list_scenarios(mock_data_dir: Path) -> list[str]:
     return sorted(p.stem for p in mock_data_dir.glob("*.json"))
 
 
-def extract_blocked_urls(fixture_path: Path) -> str:
+def load_fixture(fixture_path: Path) -> dict:
     with open(fixture_path) as fh:
-        data = json.load(fh)
-    urls = [r["remote_url"] for r in data.get("repos", [])]
+        return json.load(fh)
+
+
+def extract_blocked_urls(fixture: dict) -> str:
+    urls = [r["remote_url"] for r in fixture.get("repos", [])]
     return ",".join(urls)
+
+
+def extract_zstream_override(fixture: dict) -> str:
+    override = fixture.get("zstream_override")
+    return json.dumps(override) if override else ""
 
 
 def setup_mock_repos(fixture_path: Path, base_dir: Path) -> dict[str, str]:
@@ -113,6 +121,7 @@ def build_mcp_config(
     mock_data_dir: Path,
     upstream_search_url: str,
     blocked_urls: str,
+    mock_zstreams: str,
     git_env: dict[str, str],
     log_dir: Path,
 ) -> dict:
@@ -128,9 +137,10 @@ def build_mcp_config(
         "KRB5CCNAME": os.environ.get("KRB5CCNAME", f"FILE:/tmp/krb5cc_{os.getuid()}"),
         "GIT_REPO_BASEPATH": os.environ.get("GIT_REPO_BASEPATH", "/tmp/ymir-git-repos"),
         "MOCK_BLOCKED_URLS": blocked_urls,
+        "MOCK_ZSTREAMS": mock_zstreams,
         "DEBUG_FILE": str(log_dir / "ymir-privileged.log"),
+        **git_env,
     }
-    privileged_env.update(git_env)
 
     return {
         "mcpServers": {
@@ -145,7 +155,9 @@ def build_mcp_config(
                     "UPSTREAM_SEARCH_API_URL": upstream_search_url,
                     "MOCK_REPOS_DIR": str(mock_data_dir),
                     "MOCK_BLOCKED_URLS": blocked_urls,
+                    "MOCK_ZSTREAMS": mock_zstreams,
                     "DEBUG_FILE": str(log_dir / "ymir-unprivileged.log"),
+                    **git_env,
                 },
             },
         }
@@ -211,9 +223,11 @@ def main() -> None:
         else:
             fail(f"rhel-config.json not found in {REPO_ROOT} and no template available.")
 
-    # -- Extract blocked URLs -------------------------------------------------
+    # -- Load fixture and extract config --------------------------------------
 
-    blocked_urls = extract_blocked_urls(fixture_file)
+    fixture = load_fixture(fixture_file)
+    blocked_urls = extract_blocked_urls(fixture)
+    mock_zstreams = extract_zstream_override(fixture)
 
     # -- Prepare mock repos (bare clones at pre-fix state) --------------------
 
@@ -235,7 +249,7 @@ def main() -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
 
     mcp_config = build_mcp_config(
-        jira_mock_dir, mock_data_dir, upstream_search_url, blocked_urls, git_env, log_dir
+        jira_mock_dir, mock_data_dir, upstream_search_url, blocked_urls, mock_zstreams, git_env, log_dir
     )
 
     tmp_fd, tmp_path = tempfile.mkstemp(prefix="mock-triage-mcp-", suffix=".json")
@@ -250,6 +264,7 @@ def main() -> None:
     print(f"JIRA mock dir:    {jira_mock_dir}")
     print(f"Repo fixtures:    {mock_data_dir}")
     print(f"Blocked URLs:     {blocked_urls}")
+    print(f"Mock zstreams:    {mock_zstreams or '(none)'}")
     print(f"MCP config:       {tmp_path}")
     print(f"Logs:             {log_dir}/")
     print(f"  privileged:     {log_dir / 'ymir-privileged.log'}")

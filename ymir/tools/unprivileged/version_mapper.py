@@ -6,6 +6,7 @@ from beeai_framework.tools import JSONToolOutput, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.common.config import load_rhel_config
+from ymir.common.version_utils import current_z_streams_override, parse_rhel_version
 from ymir.tools.base import CloneableTool as Tool
 
 
@@ -68,13 +69,21 @@ class VersionMapperTool(Tool[VersionMapperInput, ToolRunOptions, VersionMapperOu
 
         config = await load_rhel_config()
 
-        upcoming_z_streams = config.get("upcoming_z_streams", {})
-        current_z_streams = config.get("current_z_streams", {})
-        current_y_streams = config.get("current_y_streams", {})
+        override = current_z_streams_override.get()
+        overridden_zstream = override.get(major_version_str) if override else None
 
-        y_stream = current_y_streams.get(major_version_str)
-        # 0-day Z-Stream during stabilization phase, regular Z-Stream otherwise
-        z_stream = upcoming_z_streams.get(major_version_str) or current_z_streams.get(major_version_str)
+        if overridden_zstream:
+            z_stream = overridden_zstream
+            parsed = parse_rhel_version(overridden_zstream)
+            y_stream = f"rhel-{parsed[0]}.{parsed[1]}" if parsed else None
+        else:
+            upcoming_z_streams = config.get("upcoming_z_streams", {})
+            current_z_streams = config.get("current_z_streams", {})
+            current_y_streams = config.get("current_y_streams", {})
+
+            y_stream = current_y_streams.get(major_version_str)
+            z_stream = upcoming_z_streams.get(major_version_str) or current_z_streams.get(major_version_str)
+
         is_maintenance_version = y_stream is None
 
         return VersionMapperOutput(

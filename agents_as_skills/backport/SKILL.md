@@ -16,6 +16,12 @@ arguments:
   - name: cve_id
     description: "CVE identifier if the JIRA issue is a CVE (e.g., CVE-2025-12345). Default: null"
     required: false
+  - name: justification
+    description: "Justification text for the backport, included in the merge request description. Default: null"
+    required: false
+  - name: fix_version
+    description: "Fix version string used to determine Z-stream instruction variant (e.g., 'rhel-9.4.0'). Default: same as dist_git_branch"
+    required: false
   - name: dry_run
     description: "If true, skip JIRA status changes, MR creation, and label updates. Default: false"
     required: false
@@ -38,6 +44,8 @@ You are a Red Hat Enterprise Linux developer performing an end-to-end backport o
 - `upstream_patches`: {{upstream_patches}} (comma-separated URLs)
 - `jira_issue`: {{jira_issue}}
 - `cve_id`: {{cve_id}}
+- `justification`: {{justification}}
+- `fix_version`: {{fix_version}} (defaults to `dist_git_branch` if not provided)
 - `dry_run`: {{dry_run}}
 - `max_build_attempts`: {{max_build_attempts}}
 - `max_incremental_fix_attempts`: {{max_incremental_fix_attempts}}
@@ -125,9 +133,9 @@ If `dry_run` is true, skip this step.
 
 ### Step 3: Determine Instruction Variant
 
-Determine whether this is an older Z-stream branch:
-- Use `map_version` to get the current Z-stream version for the RHEL major version derived from `dist_git_branch`.
-- If `dist_git_branch` targets an older Z-stream (a minor version lower than the current Z-stream for the same major version) → use **Section A: Z-Stream Backport Instructions**.
+Determine whether this is an older Z-stream branch using `fix_version` (or `dist_git_branch` if `fix_version` is not set):
+- Use `map_version` to get the current Z-stream version for the RHEL major version derived from `fix_version`.
+- If `fix_version` targets an older Z-stream (a minor version lower than the current Z-stream for the same major version) → use **Section A: Z-Stream Backport Instructions**.
 - Otherwise → use **Section B: Standard Backport Instructions**.
 
 ### Step 4: Run Backport
@@ -245,6 +253,8 @@ Then go back to **Step 7** to re-stage changes (the changelog was just modified)
      Upstream patches:
       - <patch_url_1>
       - <patch_url_2>
+
+     [<justification> — only if justification is set]
      Resolves: {{jira_issue}}
 
      Backporting steps:

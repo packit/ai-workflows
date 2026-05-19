@@ -53,6 +53,7 @@ RUN dnf -y install --allowerasing \
       javapackages-tools \
       javapackages-local \
       xmvn-tools \
+      xmlto \
       ${EXTRA_PACKAGES} \
     && dnf clean all
 

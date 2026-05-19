@@ -116,6 +116,13 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                 while time.monotonic() - start_time < SYNC_TIMEOUT:
                     if await asyncio.to_thread(repo.git.ls_remote, gitlab_repo_url, branch, branches=True):
                         return StringToolOutput(result=f"Successfully created Z-Stream branch {branch}")
+                    elapsed = int(time.monotonic() - start_time)
+                    logger.info(
+                        "Waiting for GitLab mirror sync of %s branch %s (%ds elapsed)",
+                        package,
+                        branch,
+                        elapsed,
+                    )
                     await asyncio.sleep(30)
                 raise RuntimeError(
                     f"The {branch} branch wasn't synced to GitLab after {SYNC_TIMEOUT} seconds"

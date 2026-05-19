@@ -10,6 +10,7 @@ from beeai_framework.adapters.mcp.serve.server import (
 )
 
 from ymir.common.base_utils import parse_klist_principals
+from ymir.common.mock_repos import apply_zstream_override_from_env
 from ymir.tools.gateway_utils import setup_logging
 from ymir.tools.privileged.copr import BuildPackageTool, DownloadArtifactsTool
 from ymir.tools.privileged.distgit import CreateZstreamBranchTool
@@ -106,6 +107,7 @@ def main():
     config = MCPServerConfig(**config_kwargs)
 
     setup_logging()
+    apply_zstream_override_from_env()
     mcp = MCPServer(config=config)
     mcp.register_many(
         [

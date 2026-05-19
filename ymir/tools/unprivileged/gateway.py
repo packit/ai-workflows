@@ -6,6 +6,7 @@ from beeai_framework.adapters.mcp.serve.server import (
     MCPSettings,
 )
 
+from ymir.common.mock_repos import apply_zstream_override_from_env
 from ymir.tools.gateway_utils import setup_logging
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.distgit_detector import DistgitDetectorTool
@@ -52,6 +53,7 @@ def main():
     config = MCPServerConfig(**config_kwargs)
 
     setup_logging()
+    apply_zstream_override_from_env()
     mcp = MCPServer(config=config)
     mcp.register_many(
         [

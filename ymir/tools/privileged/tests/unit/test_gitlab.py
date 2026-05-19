@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 
 import gitlab
@@ -35,14 +36,25 @@ from ymir.tools.privileged.gitlab import (
     "fork_exists",
     [False, True],
 )
+@pytest.mark.parametrize(
+    "fork_namespace",
+    [None, "redhat/rhel/bot-branches"],
+)
 @pytest.mark.asyncio
-async def test_fork_repository(repository, fork_exists):
+async def test_fork_repository(repository, fork_exists, fork_namespace):
     package = "bash"
-    fork_namespace = "redhat/rhel/bot-branches"
+    bot_username = "test-bot"
+    os.environ.pop("FORK_NAMESPACE", None)
+    if fork_namespace:
+        os.environ["FORK_NAMESPACE"] = fork_namespace
+    target_namespace = fork_namespace or bot_username
     fork_name = f"{'rhel' if '/rhel/' in repository else 'centos'}_rpms_{package}"
-    clone_url = f"https://gitlab.com/{fork_namespace}/{fork_name}.git"
+    clone_url = f"https://gitlab.com/{target_namespace}/{fork_name}.git"
+    expected_data = {"name": fork_name, "path": fork_name}
+    if fork_namespace:
+        expected_data["namespace"] = fork_namespace
     fork = flexmock(
-        gitlab_repo=flexmock(namespace={"full_path": fork_namespace}, path=fork_name),
+        gitlab_repo=flexmock(namespace={"full_path": target_namespace}, path=fork_name),
         get_git_urls=lambda: {"git": clone_url},
     )
     flexmock(GitlabProject).new_instances(fork)
@@ -52,7 +64,7 @@ async def test_fork_repository(repository, fork_exists):
             gitlab_repo=flexmock(
                 forks=flexmock()
                 .should_receive("create")
-                .with_args(data={"name": fork_name, "path": fork_name, "namespace": fork_namespace})
+                .with_args(data=expected_data)
                 .and_return(fork.gitlab_repo)
                 .mock(),
                 name=package,
@@ -63,6 +75,7 @@ async def test_fork_repository(repository, fork_exists):
             ),
             service=flexmock(
                 instance_url="https://gitlab.com",
+                user=flexmock(get_username=lambda: bot_username),
             ),
         )
     )

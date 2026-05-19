@@ -33,6 +33,8 @@ spec:
           value: "true"
         - name: SSE_PORT
           value: "8000"
+        - name: FORK_NAMESPACE
+          value: redhat/rhel/bot-branches
         - name: REQUESTS_CA_BUNDLE
           value: /etc/pki/tls/certs/ca-bundle.crt
         envFrom:

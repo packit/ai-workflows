@@ -833,124 +833,210 @@ async def extract_source_changelog(
     return "\n".join(collected_lines)
 
 
-async def main() -> None:
-    logging.basicConfig(level=logging.INFO)
-    resolve_chat_model_override("backport")
+class BackportState(PackageUpdateState):
+    upstream_patches: list[str]
+    cve_id: str | None
+    justification: str | None = Field(default=None)
+    unpacked_sources: Path | None = Field(default=None)
+    backport_log: list[str] = Field(default=[])
+    backport_result: BackportOutputSchema | None = Field(default=None)
+    attempts_remaining: int = Field(default=10)
+    used_cherry_pick_workflow: bool = Field(default=False)
+    incremental_fix_attempts: int = Field(default=0)
+    fix_version: str | None = Field(default=None)
 
-    setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
-    dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
-    max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
-    # When using cherry-pick workflow, allow the same number of incremental fix attempts as build attempts
-    # since the agent iterates internally to fix build errors
-    max_incremental_fix_attempts = int(os.getenv("MAX_INCREMENTAL_FIX_ATTEMPTS", str(max_build_attempts)))
+async def run_workflow(
+    package,
+    dist_git_branch,
+    upstream_patches,
+    jira_issue,
+    cve_id,
+    justification=None,
+    fix_version=None,
+    redis_conn=None,
+    dry_run=False,
+    backport_agent_factory=None,
+    max_build_attempts=10,
+    max_incremental_fix_attempts=None,
+):
+    if max_incremental_fix_attempts is None:
+        max_incremental_fix_attempts = max_build_attempts
 
     local_tool_options = {"working_directory": None}
+    silent_run = os.getenv("SILENT_RUN", "false").lower() == "true"
 
-    class State(PackageUpdateState):
-        upstream_patches: list[str]
-        cve_id: str | None
-        justification: str | None = Field(default=None)
-        unpacked_sources: Path | None = Field(default=None)
-        backport_log: list[str] = Field(default=[])
-        backport_result: BackportOutputSchema | None = Field(default=None)
-        attempts_remaining: int = Field(default=max_build_attempts)
-        used_cherry_pick_workflow: bool = Field(default=False)  # Track if cherry-pick was used
-        incremental_fix_attempts: int = Field(default=0)  # Track how many times we tried incremental fix
-        fix_version: str | None = Field(default=None)
-
-    async def run_workflow(
-        package,
-        dist_git_branch,
-        upstream_patches,
-        jira_issue,
-        cve_id,
-        justification=None,
-        fix_version=None,
-        redis_conn=None,
-    ):
-        local_tool_options["working_directory"] = None
-
-        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+        if backport_agent_factory:
+            result = backport_agent_factory(gateway_tools, local_tool_options)
+            backport_agent = await result if asyncio.iscoroutine(result) else result
+        else:
             backport_agent = await create_backport_agent(
                 gateway_tools, local_tool_options, fix_version=fix_version
             )
-            log_agent = create_log_agent(gateway_tools, local_tool_options)
+        log_agent = create_log_agent(gateway_tools, local_tool_options)
 
-            workflow = Workflow(State, name="BackportWorkflow")
-            silent_run = os.getenv("SILENT_RUN", "false").lower() == "true"
+        workflow = Workflow(BackportState, name="BackportWorkflow")
 
-            async def change_jira_status(state):
-                if not dry_run and not silent_run:
-                    try:
-                        await tasks.change_jira_status(
-                            jira_issue=state.jira_issue,
-                            status="In Progress",
-                            available_tools=gateway_tools,
-                        )
-                    except Exception as status_error:
-                        logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
-                else:
-                    logger.info(f"Dry run: would change status of {state.jira_issue} to In Progress")
-                return "fork_and_prepare_dist_git"
-
-            async def fork_and_prepare_dist_git(state):
-                # Reset workflow flags since we're starting fresh
-                state.used_cherry_pick_workflow = False
-                state.incremental_fix_attempts = 0
-
-                (
-                    state.local_clone,
-                    state.update_branch,
-                    state.fork_url,
-                    _,
-                ) = await tasks.fork_and_prepare_dist_git(
-                    jira_issue=state.jira_issue,
-                    package=state.package,
-                    dist_git_branch=state.dist_git_branch,
-                    available_tools=gateway_tools,
-                )
-                local_tool_options["working_directory"] = state.local_clone
-                await run_tool(
-                    "download_sources",
-                    dist_git_path=str(state.local_clone),
-                    package=state.package,
-                    dist_git_branch=state.dist_git_branch,
-                    available_tools=gateway_tools,
-                )
-                if is_cs_branch(state.dist_git_branch):
-                    pkg_cmd = [
-                        "centpkg",
-                        f"--name={state.package}",
-                        "--namespace=rpms",
-                        f"--release={state.dist_git_branch}",
-                    ]
-                else:
-                    pkg_cmd = [
-                        "rhpkg",
-                        f"--name={state.package}",
-                        "--namespace=rpms",
-                        f"--release={state.dist_git_branch}",
-                        "--offline",
-                        "--released",
-                    ]
-                await check_subprocess([*pkg_cmd, "prep"], cwd=state.local_clone)
-                state.unpacked_sources = tasks.get_unpacked_sources(state.local_clone, state.package)
-                for idx, upstream_patch in enumerate(state.upstream_patches):
-                    patch_name = f"{state.jira_issue}-{idx}.patch"
-                    content = await run_tool(
-                        "get_patch_from_url",
+        async def change_jira_status(state):
+            if not dry_run and not silent_run:
+                try:
+                    await tasks.change_jira_status(
+                        jira_issue=state.jira_issue,
+                        status="In Progress",
                         available_tools=gateway_tools,
-                        patch_url=upstream_patch,
                     )
-                    (state.local_clone / patch_name).write_text(content)
-                return "run_backport_agent"
+                except Exception as status_error:
+                    logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
+            else:
+                logger.info(f"Dry run: would change status of {state.jira_issue} to In Progress")
+            return "fork_and_prepare_dist_git"
 
-            async def run_backport_agent(state):
+        async def fork_and_prepare_dist_git(state):
+            state.used_cherry_pick_workflow = False
+            state.incremental_fix_attempts = 0
+
+            (
+                state.local_clone,
+                state.update_branch,
+                state.fork_url,
+                _,
+            ) = await tasks.fork_and_prepare_dist_git(
+                jira_issue=state.jira_issue,
+                package=state.package,
+                dist_git_branch=state.dist_git_branch,
+                available_tools=gateway_tools,
+            )
+            local_tool_options["working_directory"] = state.local_clone
+            await run_tool(
+                "download_sources",
+                dist_git_path=str(state.local_clone),
+                package=state.package,
+                dist_git_branch=state.dist_git_branch,
+                available_tools=gateway_tools,
+            )
+            if is_cs_branch(state.dist_git_branch):
+                pkg_cmd = [
+                    "centpkg",
+                    f"--name={state.package}",
+                    "--namespace=rpms",
+                    f"--release={state.dist_git_branch}",
+                ]
+            else:
+                pkg_cmd = [
+                    "rhpkg",
+                    f"--name={state.package}",
+                    "--namespace=rpms",
+                    f"--release={state.dist_git_branch}",
+                    "--offline",
+                    "--released",
+                ]
+            await check_subprocess([*pkg_cmd, "prep"], cwd=state.local_clone)
+            state.unpacked_sources = tasks.get_unpacked_sources(state.local_clone, state.package)
+            for idx, upstream_patch in enumerate(state.upstream_patches):
+                patch_name = f"{state.jira_issue}-{idx}.patch"
+                content = await run_tool(
+                    "get_patch_from_url",
+                    available_tools=gateway_tools,
+                    patch_url=upstream_patch,
+                )
+                (state.local_clone / patch_name).write_text(content)
+            return "run_backport_agent"
+
+        async def run_backport_agent(state):
+            pkg_tool = "centpkg" if is_cs_branch(state.dist_git_branch) else "rhpkg --offline --released"
+            response = await backport_agent.run(
+                render_prompt(
+                    template=get_prompt(),
+                    input=BackportInputSchema(
+                        local_clone=state.local_clone,
+                        unpacked_sources=state.unpacked_sources,
+                        package=state.package,
+                        dist_git_branch=state.dist_git_branch,
+                        jira_issue=state.jira_issue,
+                        cve_id=state.cve_id,
+                        upstream_patches=state.upstream_patches,
+                        build_error=state.build_error,
+                        pkg_tool=pkg_tool,
+                    ),
+                ),
+                expected_output=BackportOutputSchema,
+                **get_agent_execution_config(),
+            )
+            state.backport_result = BackportOutputSchema.model_validate_json(response.last_message.text)
+            if state.backport_result.success:
+                state.backport_log.append(state.backport_result.status)
+
+                upstream_repo = Path(f"{state.local_clone}-upstream")
+                if upstream_repo.exists():
+                    try:
+                        stdout, _ = await check_subprocess(
+                            [
+                                "git",
+                                "-C",
+                                str(upstream_repo),
+                                "rev-list",
+                                "--count",
+                                "HEAD",
+                            ]
+                        )
+                        commit_count = int(stdout.strip())
+                        if commit_count > 1:
+                            state.used_cherry_pick_workflow = True
+                            logger.info(
+                                f"Cherry-pick workflow detected: {commit_count} commits in upstream repo"
+                            )
+                        else:
+                            state.used_cherry_pick_workflow = False
+                            logger.info("Git am workflow detected: no commits in upstream repo")
+                    except Exception as e:
+                        logger.warning(f"Could not determine workflow type: {e}")
+                        state.used_cherry_pick_workflow = False
+                else:
+                    state.used_cherry_pick_workflow = False
+                    logger.info("Git am workflow detected: no upstream repo exists")
+
+                return "run_build_agent"
+            return "comment_in_jira"
+
+        async def fix_build_error(state):
+            """Try to fix build errors by finding and cherry-picking prerequisite commits."""
+            logger.info(
+                f"Attempting incremental fix for cherry-pick workflow "
+                f"(attempt {state.incremental_fix_attempts}/{max_incremental_fix_attempts})"
+            )
+
+            try:
+                upstream_repo = Path(f"{state.local_clone}-upstream")
+                if not upstream_repo.exists():
+                    logger.error(
+                        f"Upstream repo {upstream_repo} missing, cannot do incremental fix — "
+                        "falling back to full reset"
+                    )
+                    return "fork_and_prepare_dist_git"
+
+                log_dir = upstream_repo / "build-logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                attempt_num = state.incremental_fix_attempts + 1
+
+                if state.incremental_fix_attempts > 0:
+                    _move_build_logs(
+                        state.local_clone,
+                        log_dir / f"attempt-{state.incremental_fix_attempts}",
+                    )
+                _update_fix_attempts_log(log_dir, attempt_num, state.build_error)
+
+                fix_agent = await create_backport_agent(
+                    gateway_tools,
+                    local_tool_options,
+                    include_build_tools=True,
+                    fix_version=state.fix_version,
+                )
+
                 pkg_tool = "centpkg" if is_cs_branch(state.dist_git_branch) else "rhpkg --offline --released"
-                response = await backport_agent.run(
+                response = await fix_agent.run(
                     render_prompt(
-                        template=get_prompt(),
+                        template=await get_fix_build_error_prompt(fix_version=state.fix_version),
                         input=BackportInputSchema(
                             local_clone=state.local_clone,
                             unpacked_sources=state.unpacked_sources,
@@ -966,383 +1052,276 @@ async def main() -> None:
                     expected_output=BackportOutputSchema,
                     **get_agent_execution_config(),
                 )
-                state.backport_result = BackportOutputSchema.model_validate_json(response.last_message.text)
-                if state.backport_result.success:
-                    state.backport_log.append(state.backport_result.status)
 
-                    # Detect if cherry-pick workflow was used by checking for upstream repo with commits
-                    upstream_repo = Path(f"{state.local_clone}-upstream")
-                    if upstream_repo.exists():
-                        try:
-                            stdout, _ = await check_subprocess(
-                                [
-                                    "git",
-                                    "-C",
-                                    str(upstream_repo),
-                                    "rev-list",
-                                    "--count",
-                                    "HEAD",
-                                ]
-                            )
-                            commit_count = int(stdout.strip())
-                            if commit_count > 1:  # More than just initial commit
-                                state.used_cherry_pick_workflow = True
-                                logger.info(
-                                    f"Cherry-pick workflow detected: {commit_count} commits in upstream repo"
-                                )
-                            else:
-                                state.used_cherry_pick_workflow = False
-                                logger.info("Git am workflow detected: no commits in upstream repo")
-                        except Exception as e:
-                            logger.warning(f"Could not determine workflow type: {e}")
-                            state.used_cherry_pick_workflow = False
-                    else:
-                        state.used_cherry_pick_workflow = False
-                        logger.info("Git am workflow detected: no upstream repo exists")
+                fix_result = BackportOutputSchema.model_validate_json(response.last_message.text)
 
-                    return "run_build_agent"
-                return "comment_in_jira"
-
-            async def fix_build_error(state):
-                """Try to fix build errors by finding and cherry-picking prerequisite commits.
-
-                The agent will be called iteratively, with each attempt trying to fix the build error.
-                The workflow loop ensures we keep trying until we succeed or exhaust attempts.
-                """
-                # We only reach here if cherry-pick workflow was used
-                # (state.used_cherry_pick_workflow == True)
-                logger.info(
-                    f"Attempting incremental fix for cherry-pick workflow "
-                    f"(attempt {state.incremental_fix_attempts}/{max_incremental_fix_attempts})"
-                )
-
-                try:
-                    upstream_repo = Path(f"{state.local_clone}-upstream")
-                    if not upstream_repo.exists():
-                        logger.error(
-                            f"Upstream repo {upstream_repo} missing, cannot do incremental fix — "
-                            "falling back to full reset"
-                        )
-                        return "fork_and_prepare_dist_git"
-
-                    log_dir = upstream_repo / "build-logs"
-                    log_dir.mkdir(parents=True, exist_ok=True)
-                    attempt_num = state.incremental_fix_attempts + 1
-
-                    if state.incremental_fix_attempts > 0:
-                        _move_build_logs(
-                            state.local_clone,
-                            log_dir / f"attempt-{state.incremental_fix_attempts}",
-                        )
-                    _update_fix_attempts_log(log_dir, attempt_num, state.build_error)
-
-                    # Create a fresh backport agent with build tools enabled for iterative testing
-                    fix_agent = await create_backport_agent(
-                        gateway_tools,
-                        local_tool_options,
-                        include_build_tools=True,
-                        fix_version=state.fix_version,
-                    )
-
-                    # Give the agent the current build error and let it try to fix it
-                    pkg_tool = (
-                        "centpkg" if is_cs_branch(state.dist_git_branch) else "rhpkg --offline --released"
-                    )
-                    response = await fix_agent.run(
-                        render_prompt(
-                            template=await get_fix_build_error_prompt(fix_version=state.fix_version),
-                            input=BackportInputSchema(
-                                local_clone=state.local_clone,
-                                unpacked_sources=state.unpacked_sources,
-                                package=state.package,
-                                dist_git_branch=state.dist_git_branch,
-                                jira_issue=state.jira_issue,
-                                cve_id=state.cve_id,
-                                upstream_patches=state.upstream_patches,
-                                build_error=state.build_error,
-                                pkg_tool=pkg_tool,
-                            ),
-                        ),
-                        expected_output=BackportOutputSchema,
-                        **get_agent_execution_config(),
-                    )
-
-                    fix_result = BackportOutputSchema.model_validate_json(response.last_message.text)
-
-                    if fix_result.success:
-                        # Build passed! Update state and proceed
-                        state.backport_result = fix_result
-                        state.backport_log.append(fix_result.status)
-                        logger.info("Incremental fix succeeded with passing build")
-                        state.incremental_fix_attempts = 0  # Reset for potential future failures
-                        return "update_release"
-
-                    # Build still failing - update the error for next iteration
-                    logger.info(f"Build still failing after fix attempt: {fix_result.error}")
-                    state.build_error = fix_result.error
+                if fix_result.success:
                     state.backport_result = fix_result
-
-                    # Check if we should try again
-                    state.incremental_fix_attempts += 1
-                    if state.incremental_fix_attempts < max_incremental_fix_attempts:
-                        logger.info(
-                            f"Will retry incremental fix "
-                            f"(attempt {state.incremental_fix_attempts + 1}/{max_incremental_fix_attempts})"
-                        )
-                        return "fix_build_error"  # Try again with the new error
-                    # Exhausted all incremental fix attempts - give up
-                    logger.error(
-                        f"Exhausted all {max_incremental_fix_attempts} incremental fix attempts, giving up"
-                    )
-                    state.backport_result.success = False
-                    state.backport_result.error = (
-                        f"Unable to fix build errors after "
-                        f"{max_incremental_fix_attempts} incremental fix attempts. "
-                        f"Last error: {fix_result.error}"
-                    )
-                    return "comment_in_jira"
-
-                except Exception as e:
-                    # If anything goes wrong in fix_build_error, give up
-                    logger.error(f"Exception during incremental fix: {e}", exc_info=True)
-                    state.backport_result.success = False
-                    state.backport_result.error = f"Exception during incremental fix: {e!s}"
-                    return "comment_in_jira"
-
-            async def run_build_agent(state):
-                # Ensure we have a valid backport result with SRPM path
-                if not state.backport_result or not state.backport_result.srpm_path:
-                    logger.error("Cannot run build agent: no valid backport result or SRPM path")
-                    state.backport_result = state.backport_result or BackportOutputSchema(
-                        success=False,
-                        srpm_path=None,
-                        status="",
-                        error="No SRPM generated by backport agent",
-                    )
-                    return "comment_in_jira"
-
-                # Create a fresh build agent instance to avoid state issues when called multiple times
-                fresh_build_agent = create_build_agent(gateway_tools, local_tool_options)
-                response = await fresh_build_agent.run(
-                    render_prompt(
-                        template=get_build_prompt(),
-                        input=BuildInputSchema(
-                            srpm_path=state.backport_result.srpm_path,
-                            dist_git_branch=state.dist_git_branch,
-                            jira_issue=state.jira_issue,
-                        ),
-                    ),
-                    expected_output=BuildOutputSchema,
-                    **get_agent_execution_config(),
-                )
-                build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
-                if build_result.success:
-                    # Build succeeded - reset incremental fix counter for potential future failures
+                    state.backport_log.append(fix_result.status)
+                    logger.info("Incremental fix succeeded with passing build")
                     state.incremental_fix_attempts = 0
                     return "update_release"
-                if build_result.is_timeout:
-                    logger.info(f"Build timed out for {state.jira_issue}, proceeding")
-                    return "update_release"
-                state.attempts_remaining -= 1
-                if state.attempts_remaining <= 0:
-                    state.backport_result.success = False
-                    state.backport_result.error = (
-                        f"Unable to successfully build the package in {max_build_attempts} attempts"
+
+                logger.info(f"Build still failing after fix attempt: {fix_result.error}")
+                state.build_error = fix_result.error
+                state.backport_result = fix_result
+
+                state.incremental_fix_attempts += 1
+                if state.incremental_fix_attempts < max_incremental_fix_attempts:
+                    logger.info(
+                        f"Will retry incremental fix "
+                        f"(attempt {state.incremental_fix_attempts + 1}/{max_incremental_fix_attempts})"
                     )
-                    return "comment_in_jira"
-                state.build_error = build_result.error
-                # Try to fix build error incrementally if cherry-pick workflow was used
-                if state.used_cherry_pick_workflow:
-                    upstream_repo = Path(f"{state.local_clone}-upstream")
-                    if upstream_repo.exists():
-                        _move_build_logs(
-                            state.local_clone,
-                            upstream_repo / "build-logs" / "attempt-0",
-                        )
-                    logger.info("Cherry-pick workflow was used - starting incremental fix")
                     return "fix_build_error"
-                # Git am workflow was used - reset and try again
-                logger.info("Git am workflow was used - resetting for retry")
-                return "fork_and_prepare_dist_git"
-
-            async def update_release(state):
-                try:
-                    await tasks.update_release(
-                        local_clone=state.local_clone,
-                        package=state.package,
-                        dist_git_branch=state.dist_git_branch,
-                        rebase=False,
-                    )
-                except Exception as e:
-                    logger.warning(f"Error updating release: {e}")
-                    state.backport_result.success = False
-                    state.backport_result.error = f"Could not update release: {e}"
-                    return "comment_in_jira"
-                return "stage_changes"
-
-            async def stage_changes(state):
-                try:
-                    # Use the spec file as the source of truth for which patches
-                    # to commit.  The agent may create temporary or pre-downloaded
-                    # .patch files in the working directory that should NOT be
-                    # committed; only patches referenced by Patch tags in the spec
-                    # belong in the final commit.
-                    spec_path = state.local_clone / f"{state.package}.spec"
-                    with Specfile(spec_path) as spec, spec.patches() as patches:
-                        patch_files = [p.expanded_location for p in patches if p.expanded_location]
-
-                    if not patch_files:
-                        raise RuntimeError(f"Backport completed but no Patch tags found in {spec_path}")
-
-                    files_to_git_add = [f"{state.package}.spec", *patch_files]
-                    logger.info(f"Staging files: {files_to_git_add}")
-
-                    await tasks.stage_changes(
-                        local_clone=state.local_clone,
-                        files_to_commit=files_to_git_add,
-                    )
-                except Exception as e:
-                    logger.warning(f"Error staging changes: {e}")
-                    state.backport_result.success = False
-                    state.backport_result.error = f"Could not stage changes: {e}"
-                    return "comment_in_jira"
-                if state.log_result:
-                    return "commit_push_and_open_mr"
-                return "run_log_agent"
-
-            async def run_log_agent(state):
-                source_changelog = await extract_source_changelog(
-                    state.local_clone, state.upstream_patches, state.package
+                logger.error(
+                    f"Exhausted all {max_incremental_fix_attempts} incremental fix attempts, giving up"
                 )
-                if source_changelog:
-                    logger.info(f"Extracted source changelog for reuse: {source_changelog}")
+                state.backport_result.success = False
+                state.backport_result.error = (
+                    f"Unable to fix build errors after "
+                    f"{max_incremental_fix_attempts} incremental fix attempts. "
+                    f"Last error: {fix_result.error}"
+                )
+                return "comment_in_jira"
 
-                response = await log_agent.run(
-                    render_prompt(
-                        template=get_log_prompt(),
-                        input=LogInputSchema(
-                            jira_issue=state.jira_issue,
-                            changes_summary=state.backport_log[-1],
-                            source_changelog=source_changelog,
-                        ),
+            except Exception as e:
+                logger.error(f"Exception during incremental fix: {e}", exc_info=True)
+                state.backport_result.success = False
+                state.backport_result.error = f"Exception during incremental fix: {e!s}"
+                return "comment_in_jira"
+
+        async def run_build_agent(state):
+            if not state.backport_result or not state.backport_result.srpm_path:
+                logger.error("Cannot run build agent: no valid backport result or SRPM path")
+                state.backport_result = state.backport_result or BackportOutputSchema(
+                    success=False,
+                    srpm_path=None,
+                    status="",
+                    error="No SRPM generated by backport agent",
+                )
+                return "comment_in_jira"
+
+            fresh_build_agent = create_build_agent(gateway_tools, local_tool_options)
+            response = await fresh_build_agent.run(
+                render_prompt(
+                    template=get_build_prompt(),
+                    input=BuildInputSchema(
+                        srpm_path=state.backport_result.srpm_path,
+                        dist_git_branch=state.dist_git_branch,
+                        jira_issue=state.jira_issue,
                     ),
-                    expected_output=LogOutputSchema,
-                    **get_agent_execution_config(),
-                )
-                log_output = LogOutputSchema.model_validate_json(response.last_message.text)
-
-                if redis_conn and not dry_run:
-                    # Cache MR metadata for sharing MR titles
-                    # for the same upstream fix across different streams if redis
-                    # is available.
-                    # Do not modify the cache during a dry run.
-                    log_output = await tasks.cache_mr_metadata(
-                        redis_conn,
-                        log_output=log_output,
-                        operation_type="backport",
-                        package=state.package,
-                        details=str(state.upstream_patches),
-                    )
-                state.log_result = log_output
-
-                return "stage_changes"
-
-            async def commit_push_and_open_mr(state):
-                try:
-                    formatted_patches = "\n".join(f" - {p}" for p in state.upstream_patches)
-                    justification_text = format_mr_justification(state.justification)
-                    (
-                        state.merge_request_url,
-                        state.merge_request_newly_created,
-                    ) = await tasks.commit_push_and_open_mr(
-                        local_clone=state.local_clone,
-                        commit_message=(
-                            f"{state.log_result.title}\n\n"
-                            f"{state.log_result.description}\n\n"
-                            + (f"CVE: {state.cve_id}\n" if state.cve_id else "")
-                            + "Upstream patches:\n"
-                            + formatted_patches
-                            + "\n"
-                            + f"Resolves: {state.jira_issue}\n\n"
-                            f"This commit was backported {I_AM_YMIR}\n\n"
-                            "Assisted-by: Ymir\n"
-                        ),
-                        fork_url=state.fork_url,
-                        dist_git_branch=state.dist_git_branch,
-                        update_branch=state.update_branch,
-                        mr_title=state.log_result.title,
-                        mr_description=(
-                            f"{state.log_result.description}\n\n"
-                            f"Upstream patches:\n{formatted_patches}\n\n"
-                            f"{justification_text}"
-                            f"Resolves: {state.jira_issue}\n\n"
-                            f"Backporting steps:\n\n{state.backport_log[-1]}"
-                            f"\n\n{MR_DESCRIPTION_FOOTER}"
-                        ),
-                        available_tools=gateway_tools,
-                        commit_only=dry_run,
-                        labels=["ymir_backport"],
-                    )
-                except Exception as e:
-                    logger.warning(f"Error committing and opening MR: {e}")
-                    state.merge_request_url = None
-                    state.backport_result.success = False
-                    state.backport_result.error = f"Could not commit and open MR: {e}"
-                return "add_fusa_label"
-
-            async def add_fusa_label(state):
-                return await PackageUpdateStep.add_fusa_label(
-                    state,
-                    "comment_in_jira",
-                    dry_run=dry_run,
-                    gateway_tools=gateway_tools,
-                )
-
-            async def comment_in_jira(state):
-                if dry_run:
-                    return Workflow.END
-                if state.backport_result.success:
-                    comment_text = (
-                        state.merge_request_url if state.merge_request_url else state.backport_result.status
-                    )
-                    is_error = False
-                else:
-                    comment_text = f"Agent failed to perform a backport: {state.backport_result.error}"
-                    is_error = True
-                logger.info(f"Result to be put in Jira comment: {comment_text}")
-                await tasks.comment_in_jira(
-                    jira_issue=state.jira_issue,
-                    agent_type="Backport",
-                    comment_text=comment_text,
-                    is_error=is_error,
-                    available_tools=gateway_tools,
-                )
-                return Workflow.END
-
-            workflow.add_step("change_jira_status", change_jira_status)
-            workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
-            workflow.add_step("run_backport_agent", run_backport_agent)
-            workflow.add_step("fix_build_error", fix_build_error)
-            workflow.add_step("run_build_agent", run_build_agent)
-            workflow.add_step("update_release", update_release)
-            workflow.add_step("stage_changes", stage_changes)
-            workflow.add_step("run_log_agent", run_log_agent)
-            workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
-            workflow.add_step("add_fusa_label", add_fusa_label)
-            workflow.add_step("comment_in_jira", comment_in_jira)
-
-            response = await workflow.run(
-                State(
-                    package=package,
-                    dist_git_branch=dist_git_branch,
-                    upstream_patches=upstream_patches,
-                    jira_issue=jira_issue,
-                    cve_id=cve_id,
-                    justification=justification,
-                    fix_version=fix_version,
                 ),
+                expected_output=BuildOutputSchema,
+                **get_agent_execution_config(),
             )
-            return response.state
+            build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
+            if build_result.success:
+                state.incremental_fix_attempts = 0
+                return "update_release"
+            if build_result.is_timeout:
+                logger.info(f"Build timed out for {state.jira_issue}, proceeding")
+                return "update_release"
+            state.attempts_remaining -= 1
+            if state.attempts_remaining <= 0:
+                state.backport_result.success = False
+                state.backport_result.error = (
+                    f"Unable to successfully build the package in {max_build_attempts} attempts"
+                )
+                return "comment_in_jira"
+            state.build_error = build_result.error
+            if state.used_cherry_pick_workflow:
+                upstream_repo = Path(f"{state.local_clone}-upstream")
+                if upstream_repo.exists():
+                    _move_build_logs(
+                        state.local_clone,
+                        upstream_repo / "build-logs" / "attempt-0",
+                    )
+                logger.info("Cherry-pick workflow was used - starting incremental fix")
+                return "fix_build_error"
+            logger.info("Git am workflow was used - resetting for retry")
+            return "fork_and_prepare_dist_git"
+
+        async def update_release(state):
+            try:
+                await tasks.update_release(
+                    local_clone=state.local_clone,
+                    package=state.package,
+                    dist_git_branch=state.dist_git_branch,
+                    rebase=False,
+                )
+            except Exception as e:
+                logger.warning(f"Error updating release: {e}")
+                state.backport_result.success = False
+                state.backport_result.error = f"Could not update release: {e}"
+                return "comment_in_jira"
+            return "stage_changes"
+
+        async def stage_changes(state):
+            try:
+                spec_path = state.local_clone / f"{state.package}.spec"
+                with Specfile(spec_path) as spec, spec.patches() as patches:
+                    patch_files = [p.expanded_location for p in patches if p.expanded_location]
+
+                if not patch_files:
+                    raise RuntimeError(f"Backport completed but no Patch tags found in {spec_path}")
+
+                files_to_git_add = [f"{state.package}.spec", *patch_files]
+                logger.info(f"Staging files: {files_to_git_add}")
+
+                await tasks.stage_changes(
+                    local_clone=state.local_clone,
+                    files_to_commit=files_to_git_add,
+                )
+            except Exception as e:
+                logger.warning(f"Error staging changes: {e}")
+                state.backport_result.success = False
+                state.backport_result.error = f"Could not stage changes: {e}"
+                return "comment_in_jira"
+            if state.log_result:
+                return "commit_push_and_open_mr"
+            return "run_log_agent"
+
+        async def run_log_agent(state):
+            source_changelog = await extract_source_changelog(
+                state.local_clone, state.upstream_patches, state.package
+            )
+            if source_changelog:
+                logger.info(f"Extracted source changelog for reuse: {source_changelog}")
+
+            response = await log_agent.run(
+                render_prompt(
+                    template=get_log_prompt(),
+                    input=LogInputSchema(
+                        jira_issue=state.jira_issue,
+                        changes_summary=state.backport_log[-1],
+                        source_changelog=source_changelog,
+                    ),
+                ),
+                expected_output=LogOutputSchema,
+                **get_agent_execution_config(),
+            )
+            log_output = LogOutputSchema.model_validate_json(response.last_message.text)
+
+            if redis_conn and not dry_run:
+                log_output = await tasks.cache_mr_metadata(
+                    redis_conn,
+                    log_output=log_output,
+                    operation_type="backport",
+                    package=state.package,
+                    details=str(state.upstream_patches),
+                )
+            state.log_result = log_output
+
+            return "stage_changes"
+
+        async def commit_push_and_open_mr(state):
+            try:
+                formatted_patches = "\n".join(f" - {p}" for p in state.upstream_patches)
+                justification_text = format_mr_justification(state.justification)
+                (
+                    state.merge_request_url,
+                    state.merge_request_newly_created,
+                ) = await tasks.commit_push_and_open_mr(
+                    local_clone=state.local_clone,
+                    commit_message=(
+                        f"{state.log_result.title}\n\n"
+                        f"{state.log_result.description}\n\n"
+                        + (f"CVE: {state.cve_id}\n" if state.cve_id else "")
+                        + "Upstream patches:\n"
+                        + formatted_patches
+                        + "\n"
+                        + f"Resolves: {state.jira_issue}\n\n"
+                        f"This commit was backported {I_AM_YMIR}\n\n"
+                        "Assisted-by: Ymir\n"
+                    ),
+                    fork_url=state.fork_url,
+                    dist_git_branch=state.dist_git_branch,
+                    update_branch=state.update_branch,
+                    mr_title=state.log_result.title,
+                    mr_description=(
+                        f"{state.log_result.description}\n\n"
+                        f"Upstream patches:\n{formatted_patches}\n\n"
+                        f"{justification_text}"
+                        f"Resolves: {state.jira_issue}\n\n"
+                        f"Backporting steps:\n\n{state.backport_log[-1]}"
+                        f"\n\n{MR_DESCRIPTION_FOOTER}"
+                    ),
+                    available_tools=gateway_tools,
+                    commit_only=dry_run,
+                    labels=["ymir_backport"],
+                )
+            except Exception as e:
+                logger.warning(f"Error committing and opening MR: {e}")
+                state.merge_request_url = None
+                state.backport_result.success = False
+                state.backport_result.error = f"Could not commit and open MR: {e}"
+            return "add_fusa_label"
+
+        async def add_fusa_label(state):
+            return await PackageUpdateStep.add_fusa_label(
+                state,
+                "comment_in_jira",
+                dry_run=dry_run,
+                gateway_tools=gateway_tools,
+            )
+
+        async def comment_in_jira(state):
+            if dry_run:
+                return Workflow.END
+            if state.backport_result.success:
+                comment_text = (
+                    state.merge_request_url if state.merge_request_url else state.backport_result.status
+                )
+                is_error = False
+            else:
+                comment_text = f"Agent failed to perform a backport: {state.backport_result.error}"
+                is_error = True
+            logger.info(f"Result to be put in Jira comment: {comment_text}")
+            await tasks.comment_in_jira(
+                jira_issue=state.jira_issue,
+                agent_type="Backport",
+                comment_text=comment_text,
+                is_error=is_error,
+                available_tools=gateway_tools,
+            )
+            return Workflow.END
+
+        workflow.add_step("change_jira_status", change_jira_status)
+        workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
+        workflow.add_step("run_backport_agent", run_backport_agent)
+        workflow.add_step("fix_build_error", fix_build_error)
+        workflow.add_step("run_build_agent", run_build_agent)
+        workflow.add_step("update_release", update_release)
+        workflow.add_step("stage_changes", stage_changes)
+        workflow.add_step("run_log_agent", run_log_agent)
+        workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
+        workflow.add_step("add_fusa_label", add_fusa_label)
+        workflow.add_step("comment_in_jira", comment_in_jira)
+
+        response = await workflow.run(
+            BackportState(
+                package=package,
+                dist_git_branch=dist_git_branch,
+                upstream_patches=upstream_patches,
+                jira_issue=jira_issue,
+                cve_id=cve_id,
+                justification=justification,
+                fix_version=fix_version,
+                attempts_remaining=max_build_attempts,
+            ),
+        )
+        return response.state
+
+
+async def main() -> None:
+    logging.basicConfig(level=logging.INFO)
+    resolve_chat_model_override("backport")
+
+    setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+
+    dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
+    max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
+    max_incremental_fix_attempts = int(os.getenv("MAX_INCREMENTAL_FIX_ATTEMPTS", str(max_build_attempts)))
 
     if (
         (package := os.getenv("PACKAGE", None))
@@ -1361,6 +1340,9 @@ async def main() -> None:
             justification=os.getenv("JUSTIFICATION", None),
             fix_version=branch,
             redis_conn=None,
+            dry_run=dry_run,
+            max_build_attempts=max_build_attempts,
+            max_incremental_fix_attempts=max_incremental_fix_attempts,
         )
         logger.info(f"Direct run completed: {state.backport_result.model_dump_json(indent=4)}")
         return
@@ -1431,6 +1413,9 @@ async def main() -> None:
                     justification=backport_data.justification,
                     fix_version=backport_data.fix_version,
                     redis_conn=redis,
+                    dry_run=dry_run,
+                    max_build_attempts=max_build_attempts,
+                    max_incremental_fix_attempts=max_incremental_fix_attempts,
                 )
                 logger.info(
                     f"Backport processing completed for {backport_data.jira_issue}, "

@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import aiohttp
@@ -45,15 +46,23 @@ _REDHAT_API_PREFIX = "/api/v4/projects/redhat%2F"
 
 
 def _has_mock_url_rewrites() -> bool:
-    """Check whether ``GIT_CONFIG_*`` env vars configure ``insteadOf`` rewrites.
+    """Check whether git is configured with ``insteadOf`` URL rewrites.
+
+    Rewrites can be provided via ``GIT_CONFIG_COUNT``/``GIT_CONFIG_KEY_*``
+    env vars (used by local tools) or via ``GIT_CONFIG_GLOBAL`` pointing
+    to a gitconfig file (used when the MCP gateway shares a volume with the
+    test runner).
 
     Returns:
-        True if ``GIT_CONFIG_COUNT`` is set and positive.
+        True when either mechanism is active.
     """
     try:
-        return int(os.getenv("GIT_CONFIG_COUNT", "0")) > 0
+        if int(os.getenv("GIT_CONFIG_COUNT", "0")) > 0:
+            return True
     except ValueError:
-        return False
+        pass
+    global_cfg = os.getenv("GIT_CONFIG_GLOBAL", "")
+    return bool(global_cfg) and Path(global_cfg).is_file()
 
 
 def _is_private_gitlab(url: str) -> bool:

@@ -41,7 +41,7 @@ DEVELOPER_ACCESS_LEVEL = 30
 
 _GITLAB_COMMIT_RE = re.compile(r"^/(.+?)/-/commit/([0-9a-f]+)\.(?:patch|diff)$", re.IGNORECASE)
 _REDHAT_WEB_PREFIX = "/redhat/"
-_REDHAT_API_PREFIX = "/api/v4/projects/redhat"
+_REDHAT_API_PREFIX = "/api/v4/projects/redhat%2F"
 
 
 def _is_private_gitlab(url: str) -> bool:

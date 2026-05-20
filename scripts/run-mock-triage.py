@@ -23,7 +23,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-import git as gitpython
+import git
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_UPSTREAM_SEARCH_URL = "http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1"
@@ -88,7 +88,7 @@ def setup_mock_repos(fixture: dict, base_dir: Path) -> dict[str, str]:
             shutil.rmtree(local_path)
 
         print(f"  Cloning {repo_info['remote_url']} (bare) -> {local_path}")
-        repo = gitpython.Repo.clone_from(repo_info["remote_url"], str(local_path), bare=True)
+        repo = git.Repo.clone_from(repo_info["remote_url"], str(local_path), bare=True)
 
         branch = repo_info["branch"]
         repo.git.update_ref(f"refs/heads/{branch}", repo_info["pre_fix_ref"])

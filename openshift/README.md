@@ -3,7 +3,7 @@
 ## Deployment Location
 
 Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
-- **Server:** https://console-openshift-console.apps.gpc.ocp-hub.prod.psi.redhat.com/k8s/ns/jotnar-ymir--jotnar-ymir
+- **Console:** https://console-openshift-console.apps.gpc.ocp-hub.prod.psi.redhat.com/k8s/cluster/projects/jotnar-ymir--jotnar-ymir
 - **Project:** jotnar-ymir--jotnar-ymir
 
 ## Steps to deploy:

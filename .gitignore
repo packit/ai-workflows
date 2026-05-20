@@ -48,8 +48,16 @@ noarch/
 # Testing Jira files
 ymir/tools/privileged/tests/data/*
 
-# Testing mock repo fixtures
+# Testing mock repo fixtures (JSON configs come from the testing-jiras repo)
 ymir/agents/tests/e2e/mock_repos/*
+!ymir/agents/tests/e2e/mock_repos/README.md
+!ymir/agents/tests/e2e/mock_repos/triage/
+!ymir/agents/tests/e2e/mock_repos/backport/
+ymir/agents/tests/e2e/mock_repos/triage/*
+ymir/agents/tests/e2e/mock_repos/backport/*
+
+# E2E test output artifacts
+ymir/agents/tests/e2e/test_output/
 
 # MCP gateway debug logs
 logs/

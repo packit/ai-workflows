@@ -18,7 +18,7 @@ from ymir.common.models import BackportData, RebaseData, Resolution, TriageOutpu
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MOCK_REPOS_DIR = Path(__file__).parent / "mock_repos"
+DEFAULT_MOCK_REPOS_DIR = Path(__file__).parent / "mock_repos" / "triage"
 
 
 class TriageAgentTestCase:

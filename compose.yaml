@@ -101,6 +101,8 @@ services:
       - JIRA_DRY_RUN=${JIRA_DRY_RUN:-false}
       - GIT_REPO_BASEPATH=/git-repos
       - JIRA_MOCK_FILES=ymir/tools/privileged/tests/data
+      # e2e tests write insteadOf rewrites here; ignored when the file is absent
+      - GIT_CONFIG_GLOBAL=/git-repos/.mock_gitconfig
     env_file:
       - .secrets/mcp-gateway.env
     volumes:
@@ -171,6 +173,13 @@ services:
     # the option about default loop is here because of litellm issue
     # https://github.com/BerriAI/litellm/issues/14521
     command: ["pytest", "ymir/agents/tests/e2e/test_triage.py", "-o", "asyncio_default_test_loop_scope=session"]
+    profiles: ["e2e-test"]
+
+  backport-agent-e2e-tests:
+    <<: *beeai-agent-c10s
+    environment:
+      <<: *beeai-env
+    command: ["pytest", "ymir/agents/tests/e2e/backport_agent/test_backport.py", "-o", "asyncio_default_test_loop_scope=session"]
     profiles: ["e2e-test"]
 
   backport-agent-c9s:

@@ -6,6 +6,7 @@ JIRA_DRY_RUN ?= false
 AUTO_CHAIN ?= true
 FORCE_CVE_TRIAGE ?= false
 SILENT_RUN ?= false
+RUN_LLM_JUDGE ?= true
 
 COMPOSE ?= $(shell if podman compose ls >/dev/null 2>&1; then echo "podman compose"; elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose"; else echo "docker-compose"; fi)
 COMPOSE_AGENTS=$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents
@@ -52,6 +53,14 @@ run-triage-agent-e2e-tests:
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN=$(DRY_RUN) \
 		triage-agent-e2e-tests
+
+.PHONY: run-backport-agent-e2e-tests
+run-backport-agent-e2e-tests:
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+		-e MOCK_JIRA="true" \
+		-e DRY_RUN="true" \
+		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \
+		backport-agent-e2e-tests
 
 
 .PHONY: run-rebase-agent-c9s-standalone

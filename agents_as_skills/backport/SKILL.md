@@ -179,10 +179,14 @@ This step attempts to fix build errors by finding and cherry-picking prerequisit
 
 1. Increment `incremental_fix_attempts`.
 2. If `incremental_fix_attempts > max_incremental_fix_attempts` → set `success=false`, `error="Unable to fix build errors after N incremental fix attempts. Last error: ..."`, skip to Step 11.
-3. Follow the **Fix Build Error Instructions** (Section C or D depending on the branch variant) with the current `build_error`.
-4. The fix attempt produces a new `success`/`error`/`srpm_path`.
-5. If the fix **succeeds** (build passes) → reset `incremental_fix_attempts = 0`, proceed to Step 6.
-6. If the fix **fails** → update `build_error` with the new error, go back to Step 5a.
+3. Archive build logs and record the error:
+   a. Create `<local_clone>-upstream/build-logs/` directory if it doesn't exist.
+   b. If `incremental_fix_attempts > 1`, move all `.log` and `.log.gz` files from `<local_clone>` to `<local_clone>-upstream/build-logs/attempt-<previous_attempt>/`.
+   c. Create or append to `<local_clone>-upstream/build-logs/fix-attempts.md` with the current attempt number and the build error text.
+4. Follow the **Fix Build Error Instructions** (Section C or D depending on the branch variant) with the current `build_error`.
+5. The fix attempt produces a new `success`/`error`/`srpm_path`.
+6. If the fix **succeeds** (build passes) → reset `incremental_fix_attempts = 0`, proceed to Step 6.
+7. If the fix **fails** → update `build_error` with the new error, go back to Step 5a.
 
 ### Step 6: Update Release
 
@@ -520,9 +524,12 @@ General instructions:
 - Never change anything in the spec file changelog.
 - Never change the Release field in the spec file.
 - Preserve existing formatting and style conventions in spec files and patch headers.
-- Ignore all changes that cause conflicts in the following kinds of
-  files: .github/ workflows, .gitignore, news, changes,
-  and internal documentation.
+- Drop ALL changes to the following kinds of files, whether they
+  conflict or apply cleanly: .github/ workflows, .gitignore,
+  news/changelog files (e.g. Changes, NEWS, ChangeLog), and
+  internal project documentation. Discard conflicts in these files
+  and revert any cleanly-applied changes before generating the
+  final patch so they don't appear in the backport.
 - Apply all changes that modify the core library of the package,
   and all binaries, manpages, and user-facing documentation.
 - For more information how the package is being built, inspect the
@@ -742,9 +749,12 @@ General instructions:
 - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
 - Never change anything in the spec file changelog.
 - Preserve existing formatting and style conventions in spec files and patch headers.
-- Ignore all changes that cause conflicts in the following kinds of
-  files: .github/ workflows, .gitignore, news, changes,
-  and internal documentation.
+- Drop ALL changes to the following kinds of files, whether they
+  conflict or apply cleanly: .github/ workflows, .gitignore,
+  news/changelog files (e.g. Changes, NEWS, ChangeLog), and
+  internal project documentation. Discard conflicts in these files
+  and revert any cleanly-applied changes before generating the
+  final patch so they don't appear in the backport.
 - Apply all changes that modify the core library of the package,
   and all binaries, manpages, and user-facing documentation.
 - For more information how the package is being built, inspect the
@@ -784,6 +794,9 @@ Your task is to fix this build error by improving the patches - NOT by modifying
 This includes BOTH compilation errors AND test failures during the check section.
 Make ONE attempt to fix the issue - you will be called again if the build still fails.
 
+Before you start: Read <LOCAL_CLONE>-upstream/build-logs/fix-attempts.md for a log of
+previous fix attempts. Do NOT repeat strategies that already failed.
+
 Follow these steps:
 
 STEP 1: Analyze the build error
@@ -887,6 +900,12 @@ IMPORTANT RULES:
 - Be creative and pragmatic - the goal is a working build with passing tests, not perfect git history
 - Make ONE solid attempt to fix the issue - if the build fails, report the error clearly
 - Your work will persist in the upstream repo for the next attempt if needed
+
+STEP 6: Document the fix attempt
+- Append a summary to <LOCAL_CLONE>-upstream/build-logs/fix-attempts.md documenting:
+  * What you identified as the root cause
+  * Which commits you cherry-picked or what manual edits you made
+  * The build result (pass/fail and error if applicable)
 
 ---
 
@@ -911,6 +930,9 @@ Your task is to fix this build error by improving the patches - NOT by modifying
 This includes BOTH compilation errors AND test failures during the check section.
 Make ONE attempt to fix the issue - you will be called again if the build still fails.
 
+Before you start: Read <LOCAL_CLONE>-upstream/build-logs/fix-attempts.md for a log of
+previous fix attempts. Do NOT repeat strategies that already failed.
+
 Follow these steps:
 
 STEP 1: Analyze the build error
@@ -1014,6 +1036,12 @@ IMPORTANT RULES:
 - Be creative and pragmatic - the goal is a working build with passing tests, not perfect git history
 - Make ONE solid attempt to fix the issue - if the build fails, report the error clearly
 - Your work will persist in the upstream repo for the next attempt if needed
+
+STEP 6: Document the fix attempt
+- Append a summary to <LOCAL_CLONE>-upstream/build-logs/fix-attempts.md documenting:
+  * What you identified as the root cause
+  * Which commits you cherry-picked or what manual edits you made
+  * The build result (pass/fail and error if applicable)
 
 ---
 

@@ -286,9 +286,12 @@ BACKPORT_INSTRUCTIONS = """
       - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
       - Never change anything in the spec file changelog.
       - Preserve existing formatting and style conventions in spec files and patch headers.
-      - Ignore all changes that cause conflicts in the following kinds of
-        files: .github/ workflows, .gitignore, news, changes,
-        and internal documentation.
+      - Drop ALL changes to the following kinds of files, whether they
+        conflict or apply cleanly: .github/ workflows, .gitignore,
+        news/changelog files (e.g. Changes, NEWS, ChangeLog), and
+        internal project documentation. Discard conflicts in these files
+        and revert any cleanly-applied changes before generating the
+        final patch so they don't appear in the backport.
       - Apply all changes that modify the core library of the package,
         and all binaries, manpages, and user-facing documentation.
       - For more information how the package is being built, inspect the
@@ -533,9 +536,12 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
       - Never change anything in the spec file changelog.
       - Never change the Release field in the spec file.
       - Preserve existing formatting and style conventions in spec files and patch headers.
-      - Ignore all changes that cause conflicts in the following kinds of
-        files: .github/ workflows, .gitignore, news, changes,
-        and internal documentation.
+      - Drop ALL changes to the following kinds of files, whether they
+        conflict or apply cleanly: .github/ workflows, .gitignore,
+        news/changelog files (e.g. Changes, NEWS, ChangeLog), and
+        internal project documentation. Discard conflicts in these files
+        and revert any cleanly-applied changes before generating the
+        final patch so they don't appear in the backport.
       - Apply all changes that modify the core library of the package,
         and all binaries, manpages, and user-facing documentation.
       - For more information how the package is being built, inspect the

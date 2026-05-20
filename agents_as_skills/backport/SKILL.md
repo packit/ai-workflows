@@ -107,6 +107,22 @@ Execute the following steps in order. Track state across steps (paths, flags, re
 
 Determine `pkg_tool` from the branch: if `dist_git_branch` starts with `c` and ends with `s` (e.g., `c10s`, `c9s`), use `centpkg`; otherwise use `rhpkg --offline --released`.
 
+### Patch File Naming
+
+All patch files in dist-git (and pre-downloaded upstream patches from Step 2) must use descriptive names — not Jira issue keys. Follow these rules:
+
+1. **Descriptive filenames**: Hyphen-separated words, prefixed with the package name (`{{package}}`). The name should describe the fix (from the diff, commit message, or upstream change), not the Jira key.
+2. **Single-file patches**: When a patch modifies only one source file, use that file's base name as the second field after the package prefix (e.g., `openssl-configure.ac-fix-dependency-check.patch`).
+3. **`PatchN` numbering in the spec**: Assign the next sequential `Patch` number after existing entries. Use `get_package_info` to find the highest numbered patch; numbering starts at `Patch0` and increases (`Patch1`, `Patch2`, …, `Patch25`, etc.).
+4. **Security fixes**: When `cve_id` is set or the backport addresses a security issue, include the CVE identifier (or equivalent) in the filename (e.g., `openssl-fix-CVE-2007-0123.patch`).
+
+**Examples** (package `openssl`, next free slots `Patch42` and `Patch43`):
+
+- `Patch42: openssl-configure.ac-fix-dependency-check.patch`
+- `Patch43: openssl-fix-CVE-2007-0123.patch`
+
+When generating or saving a new dist-git patch, choose `<NEW_PATCH_FILE>` using these rules and use that path consistently in `git_patch_create`, spec `Patch:` tags, and build-fix steps.
+
 ### Step 1: Change JIRA Status
 
 If `dry_run` is false:
@@ -128,7 +144,7 @@ If `dry_run` is true, skip this step.
 3. Call `download_sources` with `dist_git_path` = `local_clone`, `package` = `{{package}}`, `dist_git_branch` = `{{dist_git_branch}}`.
 4. Run `<pkg_tool> --name={{package}} --namespace=rpms --release={{dist_git_branch}} prep` to unpack sources.
 5. Determine `unpacked_sources` — the path to the unpacked source directory tree. This is typically `<local_clone>/<name>-<version>-build/<buildsubdir>` (RPM 4.20+) or `<local_clone>/<buildsubdir>` (older RPM). Read the spec file to find `%{name}`, `%{version}`, and `%{buildsubdir}`.
-6. Download each upstream patch URL to a local file named `{{jira_issue}}-<N>.patch` (0-indexed) using `get_patch_from_url`, and save the content to `<local_clone>/{{jira_issue}}-<N>.patch`.
+6. Download each upstream patch URL using `get_patch_from_url`. Save each file under `<local_clone>/` with a **descriptive** name per **Patch File Naming** above (inspect the patch diff or commit message to choose the suffix). Do not use `{{jira_issue}}-<N>.patch` or other issue-key-based names. If multiple upstream URLs are provided, give each download its own descriptive filename.
 7. Initialize workflow tracking flags: `used_cherry_pick_workflow = false`, `incremental_fix_attempts = 0`.
 
 ### Step 3: Determine Instruction Variant
@@ -442,11 +458,13 @@ and must remain unchanged.
                use `cherry_pick_continue` with `allow_empty=True`, or skip the commit.
 
       3k. Generate the final patch file from upstream:
+          - Choose `<NEW_PATCH_FILE>` per **Patch File Naming** (package prefix, descriptive
+            suffix, CVE in name if applicable).
+          - Use `get_package_info` to determine the next `PatchN` number for the spec.
           - Use `git_patch_create` tool with:
             * repository_path: <UPSTREAM_REPO>
-            * patch_file_path: <JIRA_ISSUE>.patch in the current working
-              directory (the dist-git repository root)
-              (e.g., if JIRA is RHEL-114639, use /path/to/distgit/RHEL-114639.patch)
+            * patch_file_path: `<LOCAL_CLONE>/<NEW_PATCH_FILE>`
+              (e.g., `openssl-configure.ac-fix-dependency-check.patch`)
           - The tool automatically uses the base commit recorded in step 3i to include
             ALL cherry-picked commits, not just the last one
           - IMPORTANT: Only create NEW patch files. Do NOT modify
@@ -464,29 +482,31 @@ and must remain unchanged.
 
       This is the fallback when approaches A or B cannot be completed.
 
-      Note: For this workflow, use the pre-downloaded patch files in the current working directory.
-      They are called `<JIRA_ISSUE>-<N>.patch` where <N> is a 0-based index. For example,
-      for a `RHEL-12345` Jira issue the first patch would be called `RHEL-12345-0.patch`.
+      Note: For this workflow, use the pre-downloaded patch files from Step 2 in the
+      current working directory (`<LOCAL_CLONE>/`). Each file has a descriptive name per
+      **Patch File Naming** (e.g., `openssl-configure.ac-fix-dependency-check.patch`).
 
       Backport all patches individually using steps C1 and C2 below.
 
       C1. Backport one patch at a time using the following steps:
           - If a cherry-pick is in progress, abort it first:
             `git -C <UPSTREAM_REPO> cherry-pick --abort`
-          - Use the `git_patch_apply` tool with the patch file: <JIRA_ISSUE>-<N>.patch
+          - Use the `git_patch_apply` tool with each pre-downloaded patch file.
             This works on <UNPACKED_SOURCES>, NOT <UPSTREAM_REPO>.
           - Resolve all conflicts and leave the repository in a dirty state. Delete all *.rej files.
           - Use the `git_apply_finish` tool to finish the patch application.
           - Repeat for each pre-downloaded patch file.
 
       C2. After ALL patches have been applied, generate a single combined patch:
+          - Choose `<NEW_PATCH_FILE>` per **Patch File Naming**.
+          - Use `get_package_info` to determine the next `PatchN` number for the spec.
           - Use `git_patch_create` tool with:
             * repository_path: <UNPACKED_SOURCES>
-            * patch_file_path: <JIRA_ISSUE>.patch in the current working
-              directory (the dist-git repository root)
+            * patch_file_path: `<LOCAL_CLONE>/<NEW_PATCH_FILE>`
           - The tool automatically captures all applied changes into one patch file.
 
-4. Update the spec file. Add ONE new `Patch` tag for each new patch file.
+4. Update the spec file. Add ONE new `Patch` tag for each new patch file (use the next
+   sequential `PatchN` number per **Patch File Naming**).
    Add the new `Patch` tag(s) after all existing `Patch` tags and, if `Patch` tags are numbered,
    make sure they have the highest numbers. Make sure each patch is applied in the "%prep" section
    and the `-p` argument is correct. Do NOT add any comments to the spec file.
@@ -580,7 +600,8 @@ and must remain unchanged.
       - If is_distgit is False, proceed to step 4
       - If is_distgit is True, continue to check if it's a spec-only change
 
-   b. Examine the pre-downloaded patch file <JIRA_ISSUE>-0.patch
+   b. Examine the first pre-downloaded patch file from Step 2 (descriptive name per
+      **Patch File Naming**)
 
    c. Check what files the patch modifies by looking at the "diff --git" lines
 
@@ -674,11 +695,13 @@ and must remain unchanged.
                use `cherry_pick_continue` with `allow_empty=True`, or skip the commit.
 
       4g. Generate the final patch file from upstream:
+          - Choose `<NEW_PATCH_FILE>` per **Patch File Naming** (package prefix, descriptive
+            suffix, CVE in name if applicable).
+          - Use `get_package_info` to determine the next `PatchN` number for the spec.
           - Use `git_patch_create` tool with:
             * repository_path: <UPSTREAM_REPO>
-            * patch_file_path: <JIRA_ISSUE>.patch in the current working
-              directory (the dist-git repository root)
-              (e.g., if JIRA is RHEL-114639, use /path/to/distgit/RHEL-114639.patch)
+            * patch_file_path: `<LOCAL_CLONE>/<NEW_PATCH_FILE>`
+              (e.g., `openssl-fix-CVE-2007-0123.patch`)
           - The tool automatically uses the base commit recorded in step 4e to include
             ALL cherry-picked commits, not just the last one
           - IMPORTANT: Only create NEW patch files. Do NOT modify
@@ -694,29 +717,31 @@ and must remain unchanged.
 
    B. GIT AM WORKFLOW (Fallback approach):
 
-      Note: For this workflow, use the pre-downloaded patch files in the current working directory.
-      They are called `<JIRA_ISSUE>-<N>.patch` where <N> is a 0-based index. For example,
-      for a `RHEL-12345` Jira issue the first patch would be called `RHEL-12345-0.patch`.
+      Note: For this workflow, use the pre-downloaded patch files from Step 2 in the
+      current working directory (`<LOCAL_CLONE>/`). Each file has a descriptive name per
+      **Patch File Naming**.
 
       Backport all patches individually using steps B1 and B2 below.
 
       B1. Backport one patch at a time using the following steps:
           - If a cherry-pick is in progress, abort it first:
             `git -C <UPSTREAM_REPO> cherry-pick --abort`
-          - Use the `git_patch_apply` tool with the patch file: <JIRA_ISSUE>-<N>.patch
+          - Use the `git_patch_apply` tool with each pre-downloaded patch file.
             This works on <UNPACKED_SOURCES>, NOT <UPSTREAM_REPO>.
           - Resolve all conflicts and leave the repository in a dirty state. Delete all *.rej files.
           - Use the `git_apply_finish` tool to finish the patch application.
           - Repeat for each pre-downloaded patch file.
 
       B2. After ALL patches have been applied, generate a single combined patch:
+          - Choose `<NEW_PATCH_FILE>` per **Patch File Naming**.
+          - Use `get_package_info` to determine the next `PatchN` number for the spec.
           - Use `git_patch_create` tool with:
             * repository_path: <UNPACKED_SOURCES>
-            * patch_file_path: <JIRA_ISSUE>.patch in the current working
-              directory (the dist-git repository root)
+            * patch_file_path: `<LOCAL_CLONE>/<NEW_PATCH_FILE>`
           - The tool automatically captures all applied changes into one patch file.
 
-5. Update the spec file. Add ONE new `Patch` tag for <JIRA_ISSUE>.patch.
+5. Update the spec file. Add ONE new `Patch` tag for `<NEW_PATCH_FILE>` with the next
+   sequential `PatchN` number per **Patch File Naming**.
    Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
    make sure it has the highest number. Make sure the patch is applied in the "%prep" section
    and the `-p` argument is correct. Add upstream URLs as comments above
@@ -845,15 +870,17 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
 
 STEP 4: Regenerate the patch
 - After making your fixes (cherry-picked or manual), regenerate the patch file
+- Use the same `<NEW_PATCH_FILE>` path as in the backport instructions (descriptive name per
+  **Patch File Naming** — do not rename to a Jira-key-based filename)
 - Use `git_patch_create` tool with:
   * repository_path: <LOCAL_CLONE>-upstream
-  * patch_file_path: <LOCAL_CLONE>/<JIRA_ISSUE>.patch
+  * patch_file_path: <LOCAL_CLONE>/<NEW_PATCH_FILE>
 - The tool automatically uses the base commit to include all changes
 - This creates a single patch with all changes: original commits + prerequisites/fixes
 - This improved patch now includes all missing dependencies needed for a successful build
 
 STEP 5: Test the build
-- The spec file should already reference <JIRA_ISSUE>.patch
+- The spec file should already reference <NEW_PATCH_FILE>
 - Run `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` to verify patch applies
 - Run `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm` to generate SRPM
 - Test if the SRPM builds successfully using the `build_package` tool:
@@ -879,7 +906,7 @@ Report your results:
 IMPORTANT RULES:
 - Work in the EXISTING <LOCAL_CLONE>-upstream directory (don't clone again)
 - NEVER modify the spec file - build failures are caused by incomplete patches, not spec issues
-- The ONLY dist-git file you can modify is <JIRA_ISSUE>.patch (by regenerating it from upstream repo)
+- The ONLY dist-git file you can modify is <NEW_PATCH_FILE> (by regenerating it from upstream repo)
 - Fix build errors (compilation AND test failures) by adding missing prerequisites/dependencies to your patches in upstream repo
 - For test failures: backport minimal necessary test helpers/functions to make tests pass
 - You can freely explore, edit, cherry-pick, and commit in the upstream repo - it's your workspace
@@ -972,15 +999,17 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
 
 STEP 4: Regenerate the patch
 - After making your fixes (cherry-picked or manual), regenerate the patch file
+- Use the same `<NEW_PATCH_FILE>` path as in the backport instructions (descriptive name per
+  **Patch File Naming** — do not rename to a Jira-key-based filename)
 - Use `git_patch_create` tool with:
   * repository_path: <LOCAL_CLONE>-upstream
-  * patch_file_path: <LOCAL_CLONE>/<JIRA_ISSUE>.patch
+  * patch_file_path: <LOCAL_CLONE>/<NEW_PATCH_FILE>
 - The tool automatically uses the base commit to include all changes
 - This creates a single patch with all changes: original commits + prerequisites/fixes
 - This improved patch now includes all missing dependencies needed for a successful build
 
 STEP 5: Test the build
-- The spec file should already reference <JIRA_ISSUE>.patch
+- The spec file should already reference <NEW_PATCH_FILE>
 - Run `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep` to verify patch applies
 - Run `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm` to generate SRPM
 - Test if the SRPM builds successfully using the `build_package` tool:
@@ -1006,7 +1035,7 @@ Report your results:
 IMPORTANT RULES:
 - Work in the EXISTING <LOCAL_CLONE>-upstream directory (don't clone again)
 - NEVER modify the spec file - build failures are caused by incomplete patches, not spec issues
-- The ONLY dist-git file you can modify is <JIRA_ISSUE>.patch (by regenerating it from upstream repo)
+- The ONLY dist-git file you can modify is <NEW_PATCH_FILE> (by regenerating it from upstream repo)
 - Fix build errors (compilation AND test failures) by adding missing prerequisites/dependencies to your patches in upstream repo
 - For test failures: backport minimal necessary test helpers/functions to make tests pass
 - You can freely explore, edit, cherry-pick, and commit in the upstream repo - it's your workspace

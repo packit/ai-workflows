@@ -40,7 +40,8 @@ DEVELOPER_ACCESS_LEVEL = 30
 
 
 _GITLAB_COMMIT_RE = re.compile(r"^/(.+?)/-/commit/([0-9a-f]+)\.(?:patch|diff)$", re.IGNORECASE)
-_REDHAT_PATH_PREFIX = "/redhat/"
+_REDHAT_WEB_PREFIX = "/redhat/"
+_REDHAT_API_PREFIX = "/api/v4/projects/redhat"
 
 
 def _is_private_gitlab(url: str) -> bool:
@@ -49,7 +50,9 @@ def _is_private_gitlab(url: str) -> bool:
     hostname = parsed.hostname or ""
     if hostname == "gitlab.cee.redhat.com":
         return True
-    return hostname == "gitlab.com" and parsed.path.startswith(_REDHAT_PATH_PREFIX)
+    if hostname != "gitlab.com":
+        return False
+    return parsed.path.startswith(_REDHAT_WEB_PREFIX) or parsed.path.startswith(_REDHAT_API_PREFIX)
 
 
 def _get_api_diff_url(url: str) -> str:

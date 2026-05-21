@@ -393,6 +393,31 @@ TRIAGE_PROMPT = """
 
          2.4. Decide the Outcome
          {{^is_older_zstream}}
+         * **CRITICAL — CVE version range check (CVE issues only):**
+           Before deciding on backport for a CVE, verify that the downstream
+           package version is within the CVE's affected upstream version range:
+           1. Extract the affected upstream version range from the CVE description
+              or advisory text (e.g. "affects versions 10.0 through 10.6").
+              The CVE description, Jira issue summary, or linked NVD/advisory
+              page typically states which upstream versions are vulnerable.
+           2. Determine the downstream package version by reading the `Version:`
+              field from the package spec file in the CentOS Stream / RHEL
+              dist-git repository (you already checked this repo exists in
+              step 2 of the initial analysis).
+           3. If the downstream package version is clearly **outside** the
+              affected range (e.g. the downstream ships version 7.5.1 but
+              the CVE only affects 10.0+), the vulnerable code was never
+              present in the shipped version. In this case, use the
+              "not-affected" resolution with justification category
+              "Vulnerable Code not Present" and explain that the downstream
+              version is outside the affected upstream version range.
+           4. If the CVE description does not specify an affected version
+              range, or if the downstream version is ambiguously close to
+              the boundary, proceed with the backport decision and let the
+              post-triage applicability check handle it.
+           This check prevents wasted effort on backports that will produce
+           empty cherry-picks because the vulnerable code path does not exist
+           in the downstream version.
          * **CRITICAL — Check if the fix belongs to the package or a dependency:**
            Before deciding on backport, verify that the patch you found modifies the package's OWN source
            code, not the source code of a dependency. Watch for these signs that the fix is in a DEPENDENCY:

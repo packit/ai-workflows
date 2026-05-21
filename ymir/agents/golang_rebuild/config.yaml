@@ -1,0 +1,87 @@
+# =============================================================================
+# Golang CVE Rebuild Agent - Configuration
+# =============================================================================
+#
+# This agent automates rebuilding RHEL 9.x and 10.x z-stream components
+# affected by Golang CVE fixes. It integrates with jotnar-se infrastructure.
+#
+# Prerequisites:
+#   - Jira API credentials (JIRA_EMAIL + JIRA_API_TOKEN)
+#   - Kerberos authentication (kinit <user>@REDHAT.COM)
+#   - MCP gateway running (for GitLab fork/MR operations)
+#   - rhpkg and spectool installed
+#
+# See README.md for full setup instructions.
+# =============================================================================
+
+# =============================================================================
+# RHEL Versions
+# =============================================================================
+# Only RHEL 9.x and 10.x z-streams are supported.
+# Update these when new z-streams are released.
+
+current_z_streams:
+  "9": "rhel-9.7.z"
+  "10": "rhel-10.1.z"
+
+rhel_versions:
+  "9.0.z":
+    branch: "rhel-9.0.0"
+    build_target: "rhel-9.0.0-candidate"
+
+  "9.2.z":
+    branch: "rhel-9.2.0"
+    build_target: "rhel-9.2.0-candidate"
+
+  "9.4.z":
+    branch: "rhel-9.4.0"
+    build_target: "rhel-9.4.0-candidate"
+
+  "9.6.z":
+    branch: "rhel-9.6.0"
+    build_target: "rhel-9.6.0-candidate"
+
+  "9.7.z":
+    branch: "rhel-9.7.0"
+    build_target: "rhel-9.7.0-candidate"
+
+  "10.1.z":
+    branch: "c10s"
+    build_target: "c10s-candidate"
+
+  # Add new z-streams here as they are released:
+  # "9.8.z":
+  #   branch: "rhel-9.8.0"
+  #   build_target: "rhel-9.8.0-candidate"
+
+# =============================================================================
+# Component Filter
+# =============================================================================
+# Only these components will be rebuilt. Others are skipped.
+# Set enabled: false to process ALL golang-dependent components.
+
+component_filter:
+  enabled: true
+  allowed_components:
+    - "podman"
+    - "buildah"
+    - "skopeo"
+    - "containernetworking-plugins"
+    - "runc"
+    - "gvisor-tap-vsock"
+    - "grafana"
+    - "grafana-pcp"
+
+# =============================================================================
+# Brew Build Settings
+# =============================================================================
+brew:
+  url: "https://brewweb.engineering.redhat.com/brew"
+  poll_interval: 30      # seconds between scratch build status checks
+  max_wait_time: 7200    # max wait for scratch build (2 hours)
+
+# =============================================================================
+# Git Settings
+# =============================================================================
+git:
+  default_tool: "rhpkg"

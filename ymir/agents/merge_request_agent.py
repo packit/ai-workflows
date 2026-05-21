@@ -199,7 +199,7 @@ async def main() -> None:
         merge_request_comments: str | None = Field(default=None)
         build_error: str | None = Field(default=None)
         fedora_clone: Path | None = Field(default=None)
-        mr_update_log: list[str] = Field(default=[])
+        mr_update_log: list[str] = Field(default_factory=list)
         mr_update_result: MergeRequestOutputSchema | None = Field(default=None)
         attempts_remaining: int = Field(default=max_build_attempts)
         all_files_git_to_add: set[str] = Field(default_factory=set)

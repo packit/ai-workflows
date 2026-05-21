@@ -221,7 +221,7 @@ async def main() -> None:
         version: str
         justification: str | None = Field(default=None)
         fedora_clone: Path | None = Field(default=None)
-        rebase_log: list[str] = Field(default=[])
+        rebase_log: list[str] = Field(default_factory=list)
         rebase_result: RebaseOutputSchema | None = Field(default=None)
         attempts_remaining: int = Field(default=max_build_attempts)
         all_files_git_to_add: set[str] = Field(default_factory=set)

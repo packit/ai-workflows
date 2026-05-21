@@ -390,6 +390,28 @@ TRIAGE_PROMPT = """
            completes the fix can cause regressions or incomplete vulnerability remediation.
            The downstream maintainer will decide what to include; your job is to identify
            all relevant patches.
+         * **Prefer PR/MR URL when commits originate from a single PR/MR**:
+           When all the commits fixing the issue are part of a single upstream
+           pull request or merge request (GitHub PR, GitLab MR), you MUST output
+           the PR/MR URL as the sole entry in `patch_urls` instead of listing
+           individual commit URLs. Procedure:
+           1. Construct the PR `.patch` URL: for a GitHub PR at
+              `https://github.com/org/repo/pull/N`, the patch URL is
+              `https://github.com/org/repo/pull/N.patch`.
+              For a GitLab MR at
+              `https://gitlab.com/org/repo/-/merge_requests/N`,
+              the patch URL is
+              `https://gitlab.com/org/repo/-/merge_requests/N.patch`.
+           2. Fetch and validate the PR `.patch` URL via `get_patch_from_url` —
+              it returns a combined diff of all commits in the PR. Verify it
+              contains the expected changes.
+           3. If the PR `.patch` URL cannot be fetched or is invalid, fall back
+              to individual commit URLs.
+           Only use individual commit URLs when:
+           - Maintainer explicitly stated their preference in the rules.
+           - The commits come from different PRs/MRs or were committed directly
+             to the default branch without a PR/MR, OR
+           - The PR `.patch` URL fetch fails.
 
          2.4. Decide the Outcome
          {{^is_older_zstream}}
@@ -741,7 +763,7 @@ async def run_workflow(
                         "resolution": "backport",
                         "data": {{
                         "package": "some-package",
-                        "patch_url": "https://example.com/some.patch",
+                        "patch_urls": ["https://github.com/example-org/example-repo/pull/42.patch"],
                         "justification": "This patch fixes the bug by doing X, Y, and Z.",
                         "jira_issue": "RHEL-12345",
                         "cve_id": "CVE-1234-98765",

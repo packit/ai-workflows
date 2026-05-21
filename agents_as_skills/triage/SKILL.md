@@ -14,7 +14,7 @@ arguments:
     description: "If true, skip all Jira updates (comments, labels, status changes). Default: false"
     required: false
   - name: auto_chain
-    description: "If true, include follow-up workflow note in Jira comment. Default: true"
+    description: "If true, the automated follow-up workflow will handle next steps, so no follow-up note is appended to the Jira comment. If false, a note is appended indicating that automated follow-up is planned. Default: true"
     required: false
 ---
 
@@ -290,11 +290,10 @@ You must analyze the Jira issue and decide between one of the following resoluti
         the patch URL is `https://gitlab.com/org/repo/-/merge_requests/N.patch`.
      2. Fetch and validate the PR `.patch` URL via `get_patch_from_url` — it returns
         a combined diff of all commits in the PR. Verify it contains the expected changes.
-     3. If the PR `.patch` URL is valid, use the non-.patch form of the URL
-        (e.g. `https://github.com/org/repo/pull/N`) as the single entry in `patch_urls`.
-     4. If the PR `.patch` URL cannot be fetched or is invalid, fall back to individual
+     3. If the PR `.patch` URL cannot be fetched or is invalid, fall back to individual
         commit URLs.
      Only use individual commit URLs when:
+     - Maintainer explicitly stated their preference in the rules.
      - The commits come from different PRs/MRs or were committed directly to the default
        branch without a PR/MR, OR
      - The PR `.patch` URL fetch fails.
@@ -613,7 +612,8 @@ Format the triage result and post it as a Jira comment.
    ```
    *Resolution*: postponed
    *Summary*: <summary>
-   *Waiting for*:
+   *Waiting for*:          (if single pending issue)
+   *Waiting for at least one of*:   (if multiple pending issues)
    * <pending_issue_1>
    * <pending_issue_2>
    ```
@@ -631,18 +631,30 @@ Format the triage result and post it as a Jira comment.
    *Details*: <details>
    ```
 
-2. If the applicability check was skipped, append:
+2. For **backport**, **rebase**, and **rebuild** resolutions: if `auto_chain` is false,
+   append the following note after the formatted text:
+   `_Automated individual follow-up workflow for this resolution type is planned for Q2 2026. Stay tuned._`
+   (When `auto_chain` is true, omit this note — the automated workflow handles follow-up.)
+
+3. For **open-ended-analysis** resolution, append:
+   `_Note: Automated resolution for this resolution type is not yet supported by Ymir. Manual action is required._`
+
+4. Append the following disclaimer to ALL resolution types:
+   `_By following Ymir suggestions, you agree to comply with the [Guidelines on Use of AI Generated Content|https://source.redhat.com/departments/legal/legal_compliance_ethics/compliance_folder/appendix_1_to_policy_on_the_use_of_ai_technologypdf] and [Guidelines for Responsible Use of AI Code Assistants|https://source.redhat.com/projects_and_programs/ai/wiki/code_assistants_guidelines_for_responsible_use_of_ai_code_assistants]._`
+
+5. If the applicability check was skipped, append:
    `_Note: CVE applicability check could not be performed (source preparation failed)._`
 
-3. If `dry_run` is true, end the workflow without posting.
+6. If `dry_run` is true, end the workflow without posting.
 
-4. Check whether to update Jira:
+7. Check whether to update Jira:
    - If `silent_run` is false → post the comment.
    - If `silent_run` is true → only post for `not-affected` and `postponed` resolutions;
      skip for all others.
 
-5. Post the comment using `add_jira_comment` with `issue_key` = `{{jira_issue}}`,
-   `agent_type` = `"Triage"`, and the formatted comment text.
+8. Post the comment using `add_jira_comment` with `issue_key` = `{{jira_issue}}`,
+   `agent_type` = `"Triage"`, and the formatted comment text. The comment is wrapped
+   in the template: `Output from Ymir Triage Agent: \n\n<comment>\n\n<agent warning>`
 
 ---
 

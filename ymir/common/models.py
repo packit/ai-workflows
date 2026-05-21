@@ -188,8 +188,11 @@ class BackportData(BaseModel):
 
     package: str = Field(description="Package name")
     patch_urls: list[str] = Field(
-        description="A list of URLs to the sources of the fixes "
-        "that were validated using the get_patch_from_url tool"
+        description="A list of URLs to the sources of the fixes, each validated "
+        "using the get_patch_from_url tool. Prefer a single GitHub PR / GitLab MR "
+        "URL when all commits originate from one PR/MR (e.g. "
+        "'https://github.com/org/repo/pull/42.patch'). Use individual commit URLs only "
+        "when commits come from different PRs or are committed directly."
     )
     justification: str = Field(
         description=(

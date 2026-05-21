@@ -277,6 +277,8 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
     async def _bump_or_reset_release(cls, spec_path: Path, rebase: bool) -> None:
         with Specfile(spec_path) as spec:
             current_release = spec.raw_release
+            expanded_raw_release = spec.expanded_raw_release
+            dist = spec.expand("%{?dist}")
         nodes = ValueParser.parse(current_release)
 
         autorelease_index = cls._find_macro("autorelease", nodes)
@@ -286,8 +288,11 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
             release = "%autorelease"
         else:
             if dist_index is None:
-                prefix = current_release
-                suffix = ""
+                if dist and expanded_raw_release and dist in expanded_raw_release:
+                    prefix, suffix = expanded_raw_release.split(dist, 1)
+                else:
+                    prefix = current_release
+                    suffix = ""
             else:
                 prefix = "".join(str(n) for n in nodes[:dist_index])
                 suffix = "".join(str(n) for n in nodes[dist_index + 1 :])
@@ -331,6 +336,8 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         base_release = extract_numeric_release(base_build)
         with Specfile(spec_path) as spec:
             current_release = spec.raw_release
+            expanded_raw_release = spec.expanded_raw_release
+            dist = spec.expand("%{?dist}")
         nodes = ValueParser.parse(current_release)
 
         autorelease_index = cls._find_macro("autorelease", nodes)
@@ -350,8 +357,16 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                 # no %autorelease, rebase, reset the release
                 release = "0%{?dist}.1"
             elif dist_index is None:
-                # no %autorelease and no %dist, add %dist and Z-Stream counter
-                release = current_release + "%{?dist}.1"
+                # no %autorelease and no %dist
+                if dist and expanded_raw_release and dist in expanded_raw_release:
+                    # %dist is embedded in a macro, use the expanded form
+                    before_dist, after_dist = expanded_raw_release.split(dist, 1)
+                    if m := re.match(r"^\.(\d+)$", after_dist):
+                        release = f"{before_dist}%{{?dist}}.{int(m.group(1)) + 1}"
+                    else:
+                        release = before_dist + "%{?dist}.1"
+                else:
+                    release = current_release + "%{?dist}.1"
             elif dist_index + 1 < len(nodes):
                 prefix = "".join(str(n) for n in nodes[: dist_index + 1])
                 suffix = "".join(str(n) for n in nodes[dist_index + 1 :])

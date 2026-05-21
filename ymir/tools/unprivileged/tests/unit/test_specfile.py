@@ -44,6 +44,33 @@ def autorelease_spec(tmp_path):
 
 
 @pytest.fixture
+def release_macro_spec(tmp_path):
+    spec = tmp_path / "release_macro.spec"
+    spec.write_text(
+        dedent(
+            """\
+            %global my_release 5%{?dist}
+
+            Name:           test
+            Version:        0.1
+            Release:        %{my_release}
+            Summary:        Test package
+
+            License:        MIT
+
+            %description
+            Test package
+
+            %changelog
+            * Thu Jun 07 2018 Nikola Forró <nforro@redhat.com> - 0.1-5
+            - first version
+            """
+        )
+    )
+    return spec
+
+
+@pytest.fixture
 def spec_with_patches(tmp_path):
     spec = tmp_path / "with_patches.spec"
     source_file = tmp_path / "source.tar.gz"
@@ -377,7 +404,12 @@ async def test_get_package_info(
 )
 @pytest.mark.asyncio
 async def test_update_release(
-    rebase_in_current_stream, rebase_in_higher_stream, dist_git_branch, minimal_spec, autorelease_spec
+    rebase_in_current_stream,
+    rebase_in_higher_stream,
+    dist_git_branch,
+    minimal_spec,
+    autorelease_spec,
+    release_macro_spec,
 ):
     package = "test"
 
@@ -408,12 +440,14 @@ async def test_update_release(
             return e.value.message
         result = output.result
         assert result.startswith("Successfully")
-        assert spec.read_text().splitlines()[3] == f"Release:        {expected_release}"
+        release_line = next(line for line in spec.read_text().splitlines() if line.startswith("Release:"))
+        assert release_line == f"Release:        {expected_release}"
         return result
 
     if not dist_git_branch.startswith("rhel-"):
         await run_and_check(minimal_spec, "1%{?dist}" if rebase_in_current_stream else "6%{?dist}")
         await run_and_check(autorelease_spec, "%autorelease")
+        await run_and_check(release_macro_spec, "1%{?dist}" if rebase_in_current_stream else "6%{?dist}")
     else:
         await run_and_check(minimal_spec, "0%{?dist}.1" if rebase_in_current_stream else "5%{?dist}.1")
         await run_and_check(
@@ -424,6 +458,10 @@ async def test_update_release(
             if rebase_in_higher_stream
             else "8%{?dist}.%{autorelease -n}",
         )
+        await run_and_check(
+            release_macro_spec,
+            "0%{?dist}.1" if rebase_in_current_stream else "5%{?dist}.1",
+        )
         await run_and_check(minimal_spec, "0%{?dist}.1" if rebase_in_current_stream else "5%{?dist}.2")
         await run_and_check(
             autorelease_spec,
@@ -432,6 +470,10 @@ async def test_update_release(
             else "5%{?dist}.%{autorelease -n}"
             if rebase_in_higher_stream
             else "8%{?dist}.%{autorelease -n}",
+        )
+        await run_and_check(
+            release_macro_spec,
+            "0%{?dist}.1" if rebase_in_current_stream else "5%{?dist}.2",
         )
 
     with specfile.Specfile(minimal_spec) as spec:

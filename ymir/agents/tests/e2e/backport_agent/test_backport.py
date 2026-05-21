@@ -18,13 +18,13 @@ from ymir.agents.tests.e2e.backport_agent.artifact_capture import (
 from ymir.agents.tests.e2e.backport_agent.evaluation import BackportEvaluator
 from ymir.common.mock_repos import (
     apply_zstream_override,
-    load_all_mock_configs,
+    load_all_fixture_configs,
     setup_mock_repos,
 )
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MOCK_REPOS_DIR = Path(__file__).parent.parent / "mock_repos" / "backport"
+DEFAULT_FIXTURES_DIR = Path(__file__).parent.parent / "mock_repos" / "backport"
 DEFAULT_ARTIFACTS_DIR = Path("/tmp/backport_e2e_artifacts")
 
 
@@ -80,9 +80,9 @@ class BackportAgentTestCase:
             self.metrics = metrics_middleware.get_metrics()
 
 
-def _load_test_cases(mock_dir: str | Path) -> list[BackportAgentTestCase]:
+def _load_test_cases(fixtures_dir: str | Path) -> list[BackportAgentTestCase]:
     """Load all backport test case configs from the given directory."""
-    configs = load_all_mock_configs(mock_dir)
+    configs = load_all_fixture_configs(fixtures_dir)
     cases = []
     for config in configs.values():
         if "input" not in config:
@@ -91,7 +91,7 @@ def _load_test_cases(mock_dir: str | Path) -> list[BackportAgentTestCase]:
     return cases
 
 
-test_cases = _load_test_cases(os.getenv("BACKPORT_MOCK_REPOS_DIR", str(DEFAULT_MOCK_REPOS_DIR)))
+test_cases = _load_test_cases(os.getenv("BACKPORT_MOCK_REPOS_DIR", str(DEFAULT_FIXTURES_DIR)))
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -99,7 +99,7 @@ def observability_fixture():
     return setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
 
-SHARED_MOCK_DIR = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / "mock_bare"
+SHARED_BARE_REPOS_DIR = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / "mock_bare"
 SHARED_GITCONFIG = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / ".mock_gitconfig"
 
 
@@ -112,12 +112,12 @@ def mock_centos_stream_repos():
     ``.mock_gitconfig`` file with ``insteadOf`` entries is written to the same
     volume; the gateway picks it up via ``GIT_CONFIG_GLOBAL``.
     """
-    mock_dir = os.getenv("BACKPORT_MOCK_REPOS_DIR", str(DEFAULT_MOCK_REPOS_DIR))
-    configs = load_all_mock_configs(mock_dir)
+    fixtures_dir = os.getenv("BACKPORT_MOCK_REPOS_DIR", str(DEFAULT_FIXTURES_DIR))
+    configs = load_all_fixture_configs(fixtures_dir)
 
-    if SHARED_MOCK_DIR.exists():
-        shutil.rmtree(SHARED_MOCK_DIR)
-    SHARED_MOCK_DIR.mkdir(parents=True, exist_ok=True)
+    if SHARED_BARE_REPOS_DIR.exists():
+        shutil.rmtree(SHARED_BARE_REPOS_DIR)
+    SHARED_BARE_REPOS_DIR.mkdir(parents=True, exist_ok=True)
 
     per_issue_envs: list[dict[str, str]] = []
 
@@ -126,7 +126,7 @@ def mock_centos_stream_repos():
         if not repos:
             continue
 
-        git_env = setup_mock_repos(repos, issue_key, SHARED_MOCK_DIR)
+        git_env = setup_mock_repos(repos, issue_key, SHARED_BARE_REPOS_DIR)
         per_issue_envs.append(git_env)
 
         for tc in test_cases:
@@ -180,8 +180,8 @@ def _load_reference_patch(test_case: "BackportAgentTestCase") -> str | None:
     ref_patch_rel = test_case.expected.get("reference_patch")
     if not ref_patch_rel:
         return None
-    mock_dir = Path(os.getenv("BACKPORT_MOCK_REPOS_DIR", str(DEFAULT_MOCK_REPOS_DIR)))
-    ref_patch_path = mock_dir / ref_patch_rel
+    fixtures_dir = Path(os.getenv("BACKPORT_MOCK_REPOS_DIR", str(DEFAULT_FIXTURES_DIR)))
+    ref_patch_path = fixtures_dir / ref_patch_rel
     if ref_patch_path.is_file():
         return ref_patch_path.read_text()
     return None

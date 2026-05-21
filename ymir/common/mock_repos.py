@@ -47,36 +47,36 @@ from ymir.common.version_utils import current_z_streams_override
 logger = logging.getLogger(__name__)
 
 
-def load_mock_config(issue_key: str, mock_dir: str | Path) -> dict | None:
-    """Load the mock config for a given issue key.
+def load_fixture_config(issue_key: str, fixtures_dir: str | Path) -> dict | None:
+    """Load the test fixture config for a given issue key.
 
     Args:
         issue_key: The Jira issue key (e.g. ``RHEL-15216``).
-        mock_dir: Directory containing per-issue JSON config files.
+        fixtures_dir: Directory containing per-issue JSON config files.
 
     Returns:
         The parsed config dict, or ``None`` when no config file exists
         for the given issue.
     """
-    config_path = Path(mock_dir) / f"{issue_key}.json"
+    config_path = Path(fixtures_dir) / f"{issue_key}.json"
     if not config_path.exists():
         return None
     with open(config_path) as fh:
         return json.load(fh)
 
 
-def load_all_mock_configs(mock_dir: str | Path) -> dict[str, dict]:
-    """Load every ``<ISSUE_KEY>.json`` in a mock directory.
+def load_all_fixture_configs(fixtures_dir: str | Path) -> dict[str, dict]:
+    """Load every ``<ISSUE_KEY>.json`` fixture config in a directory.
 
     Args:
-        mock_dir: Directory containing per-issue JSON config files.
+        fixtures_dir: Directory containing per-issue JSON config files.
 
     Returns:
         A dict mapping issue keys to their parsed config dicts.
     """
     configs: dict[str, dict] = {}
-    mock_path = Path(mock_dir)
-    for config_file in sorted(mock_path.glob("*.json")):
+    fixtures_path = Path(fixtures_dir)
+    for config_file in sorted(fixtures_path.glob("*.json")):
         issue_key = config_file.stem
         with open(config_file) as fh:
             configs[issue_key] = json.load(fh)
@@ -184,7 +184,7 @@ def setup_mock_repos_from_env(issue_key: str, base_dir: Path | None = None) -> d
     if not mock_dir:
         return None
 
-    config = load_mock_config(issue_key, mock_dir)
+    config = load_fixture_config(issue_key, mock_dir)
     if config is None:
         return None
 

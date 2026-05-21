@@ -11,16 +11,21 @@ Usage in tests::
 """
 
 import json
-import logging
 import os
 from dataclasses import dataclass
 
 from beeai_framework.backend import ChatModel, ChatModelParameters
 from beeai_framework.backend.message import UserMessage
+from pydantic import BaseModel, Field
 
 from ymir.agents.tests.e2e.backport_agent.artifact_capture import CapturedArtifacts
 
-logger = logging.getLogger(__name__)
+
+class VerdictSchema(BaseModel):
+    """Schema for structured LLM judge output."""
+
+    passed: bool = Field(description="Whether the backport passes all evaluation criteria")
+    reasoning: str = Field(description="Detailed explanation for each evaluation criterion")
 
 
 @dataclass
@@ -66,7 +71,10 @@ class LLMJudgeEvaluator:
             LLM response.
         """
         prompt = self.build_prompt(artifacts, context)
-        response = await self._model.run([UserMessage(prompt)])
+        response = await self._model.run(
+            [UserMessage(prompt)],
+            response_format=VerdictSchema,
+        )
         raw = response.get_text_content()
 
         passed, reasoning = self._parse_verdict(raw)
@@ -84,20 +92,9 @@ class LLMJudgeEvaluator:
 
     @staticmethod
     def _parse_verdict(text: str) -> tuple[bool, str]:
-        """Extract PASS/FAIL and reasoning from the judge response.
-
-        Expects the LLM to include ``VERDICT: PASS`` or ``VERDICT: FAIL``
-        somewhere in its response.
-        """
-        text_upper = text.upper()
-        if "VERDICT: PASS" in text_upper:
-            passed = True
-        elif "VERDICT: FAIL" in text_upper:
-            passed = False
-        else:
-            passed = False
-            text = f"[Could not parse verdict from response]\n\n{text}"
-        return passed, text
+        """Parse the structured JSON verdict returned by the model."""
+        verdict = VerdictSchema.model_validate_json(text)
+        return verdict.passed, verdict.reasoning
 
 
 class BackportEvaluator(LLMJudgeEvaluator):
@@ -190,12 +187,6 @@ Evaluate the backport on these criteria and explain your reasoning for each:
 4. **Completeness**: Was the backport reported as successful? Was an SRPM generated?
 {similarity_criterion}
 
-## Output format
-
-End your response with exactly one of:
-
-    VERDICT: PASS
-    VERDICT: FAIL
-
-Before the verdict, provide a brief explanation for each criterion.
+Set `passed` to true only if the backport passes ALL criteria. Provide a brief
+explanation for each criterion inside the `reasoning` field.
 """

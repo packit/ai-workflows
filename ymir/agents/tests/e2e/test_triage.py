@@ -11,14 +11,14 @@ from ymir.agents.observability import setup_observability
 from ymir.agents.triage_agent import TriageState, create_triage_agent, run_workflow
 from ymir.common.mock_repos import (
     apply_zstream_override,
-    load_all_mock_configs,
+    load_all_fixture_configs,
     setup_mock_repos,
 )
 from ymir.common.models import BackportData, RebaseData, Resolution, TriageOutputSchema
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MOCK_REPOS_DIR = Path(__file__).parent / "mock_repos" / "triage"
+DEFAULT_FIXTURES_DIR = Path(__file__).parent / "mock_repos" / "triage"
 
 
 class TriageAgentTestCase:
@@ -156,8 +156,8 @@ def mock_centos_stream_repos(tmp_path_factory):
     Yields:
         Control to the test session after repos are prepared.
     """
-    mock_dir = os.getenv("MOCK_REPOS_DIR", str(DEFAULT_MOCK_REPOS_DIR))
-    configs = load_all_mock_configs(mock_dir)
+    fixtures_dir = os.getenv("MOCK_REPOS_DIR", str(DEFAULT_FIXTURES_DIR))
+    configs = load_all_fixture_configs(fixtures_dir)
     repo_dir = tmp_path_factory.mktemp("centos_stream_repos")
 
     for issue_key, config in configs.items():

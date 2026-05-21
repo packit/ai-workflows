@@ -16,6 +16,24 @@ This directory contains Ymir workflows packaged as **AI coding assistant skills*
 
 For installation instructions (skill setup and MCP tool configuration), see the [Skills Installation Guide](https://github.com/packit/ai-workflows/blob/main/skills_installation.md).
 
+## Available skills
+
+- `backport/` — Backport fix agent
+- `preliminary_testing/` — Preliminary testing agent
+- `rebase/` — Rebase fix agent
+- `rebuild/` — Rebuild agent
+- `triage/` — Triage agent
+- `issue_verification/` — Issue verification agent (post-fix lifecycle management)
+
+## Available skills
+
+- `backport/` — Backport fix agent
+- `preliminary_testing/` — Preliminary testing agent
+- `rebase/` — Rebase fix agent
+- `rebuild/` — Rebuild agent
+- `triage/` — Triage agent
+- `issue_verification/` — Issue verification agent (post-fix lifecycle management)
+
 ## How to build
 
 ```bash

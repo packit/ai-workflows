@@ -173,13 +173,15 @@ async def test_found_in_closest_stream():
             },
         },
     ]
-    dev_status_result = [
-        {
-            "url": "https://gitlab.com/redhat/rhel/rpms/fence-agents/-/commit/abc123",
-            "message": "fix missing statuses",
-            "repository_url": "https://gitlab.com/redhat/rhel/rpms/fence-agents",
-        },
-    ]
+    dev_status_result = {
+        "commits": [
+            {
+                "url": "https://gitlab.com/redhat/rhel/rpms/fence-agents/-/commit/abc123",
+                "message": "fix missing statuses",
+                "repository_url": "https://gitlab.com/redhat/rhel/rpms/fence-agents",
+            },
+        ]
+    }
 
     mock_run_tool = AsyncMock(side_effect=[search_result, dev_status_result])
 
@@ -226,14 +228,16 @@ async def test_cascade_to_further_version():
             },
         },
     ]
-    dev_status_empty = []
-    dev_status_with_commits = [
-        {
-            "url": "https://gitlab.com/redhat/centos-stream/rpms/fence-agents/-/commit/def456",
-            "message": "fix issue",
-            "repository_url": "https://gitlab.com/redhat/centos-stream/rpms/fence-agents",
-        },
-    ]
+    dev_status_empty = {"commits": []}
+    dev_status_with_commits = {
+        "commits": [
+            {
+                "url": "https://gitlab.com/redhat/centos-stream/rpms/fence-agents/-/commit/def456",
+                "message": "fix issue",
+                "repository_url": "https://gitlab.com/redhat/centos-stream/rpms/fence-agents",
+            },
+        ]
+    }
 
     mock_run_tool = AsyncMock(side_effect=[search_result, dev_status_empty, dev_status_with_commits])
 
@@ -271,7 +275,7 @@ async def test_not_found_anywhere():
             },
         },
     ]
-    dev_status_empty = []
+    dev_status_empty = {"commits": []}
 
     mock_run_tool = AsyncMock(side_effect=[search_result, dev_status_empty])
 
@@ -342,13 +346,15 @@ async def test_version_proximity_sorting():
         },
     ]
     # The closer issue (9.7.z) should be tried first and has commits
-    dev_status_with_commits = [
-        {
-            "url": "https://gitlab.com/repo/-/commit/abc",
-            "message": "fix",
-            "repository_url": "https://gitlab.com/repo",
-        },
-    ]
+    dev_status_with_commits = {
+        "commits": [
+            {
+                "url": "https://gitlab.com/repo/-/commit/abc",
+                "message": "fix",
+                "repository_url": "https://gitlab.com/repo",
+            },
+        ]
+    }
 
     mock_run_tool = AsyncMock(side_effect=[search_result, dev_status_with_commits])
 

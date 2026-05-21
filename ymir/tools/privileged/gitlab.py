@@ -4,6 +4,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote, urlparse
 
 import aiohttp
@@ -1035,3 +1036,83 @@ class FetchGitlabMrNotesTool(Tool[FetchGitlabMrNotesInput, ToolRunOptions, Strin
         except Exception as e:
             logger.error("Error fetching GitLab MR notes: %s", e)
             return StringToolOutput(result=f"Error fetching GitLab MR notes: {e}")
+
+
+class SearchGitlabProjectMrsToolInput(BaseModel):
+    project: str = Field(description="GitLab project path (e.g. 'redhat/rhel/rpms/podman')")
+    search: str = Field(description="Search string to match against merge requests (e.g. a JIRA issue key)")
+    state: str | None = Field(
+        default=None,
+        description="Filter MRs by state: 'opened', 'closed', 'merged', or null for all",
+    )
+
+
+class SearchGitlabProjectMrsTool(
+    Tool[
+        SearchGitlabProjectMrsToolInput,
+        ToolRunOptions,
+        JSONToolOutput[list[dict[str, Any]]],
+    ]
+):
+    name = "search_gitlab_project_mrs"
+    description = """
+    Searches for merge requests in a GitLab project matching a search string
+    (typically a JIRA issue key). Returns a list of matching MRs with their
+    project, iid, url, title, description, state, and merged_at timestamp.
+    """
+    input_schema = SearchGitlabProjectMrsToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: SearchGitlabProjectMrsToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[list[dict[str, Any]]]:
+        project = tool_input.project
+        search = tool_input.search
+        state = tool_input.state
+
+        encoded_project = quote(project, safe="")
+        url = f"https://gitlab.com/api/v4/projects/{encoded_project}/merge_requests"
+
+        params: dict[str, str] = {"search": search}
+        if state is not None:
+            params["state"] = state
+
+        headers = _get_auth_headers(f"https://gitlab.com/{project}")
+        logger.info("Searching MRs for %s in %s (state=%s)", search, project, state)
+
+        try:
+            async with (
+                aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
+                session.get(url, headers=headers, params=params) as response,
+            ):
+                response.raise_for_status()
+                data = await response.json()
+
+            results = [
+                {
+                    "project": project,
+                    "iid": mr["iid"],
+                    "url": mr["web_url"],
+                    "title": mr["title"],
+                    "description": mr.get("description", ""),
+                    "state": mr["state"],
+                    "merged_at": mr.get("merged_at"),
+                }
+                for mr in data
+            ]
+
+            logger.info("Found %d MR(s) for %s in %s", len(results), search, project)
+            return JSONToolOutput(result=results)
+
+        except Exception as e:
+            from beeai_framework.tools import ToolError
+
+            raise ToolError(f"Failed to search MRs in {project}: {e}") from e

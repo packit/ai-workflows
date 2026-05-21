@@ -1,6 +1,15 @@
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 
 JIRA_SEARCH_PATH = "rest/api/3/search/jql"
+
+# Compares correctly - all our dates are tz-aware
+DATETIME_MIN_UTC = datetime.min.replace(tzinfo=UTC)
+# Groups within the redhat organization where we can find issues
+GITLAB_GROUPS = ["rhel/rpms", "centos-stream/rpms"]
+# Timeout for post-push testing (e.g., CAT tests) after stage push completes
+POST_PUSH_TESTING_TIMEOUT = timedelta(hours=3)
+POST_PUSH_TESTING_TIMEOUT_STR = "3 hours"
 
 
 class RedisQueues(Enum):

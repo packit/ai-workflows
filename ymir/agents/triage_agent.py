@@ -577,6 +577,9 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
             "When constructing patch URLs for upstream commits, always use https://. "
             "If https:// fails when validating the patch with get_patch_from_url, "
             "retry with http:// instead.",
+            "For gitweb-hosted projects (URLs containing 'gitweb'), always use "
+            "the 'a=patch' action (not 'a=commitdiff_plain') when constructing "
+            "patch URLs. Example: ?p=project.git;a=patch;h=<commit_hash>",
             "After completing your triage analysis, if your decision is backport "
             "or rebase, always set appropriate JIRA fields per the instructions "
             "using set_jira_fields tool.",

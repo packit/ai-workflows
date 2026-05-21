@@ -163,9 +163,9 @@ def build_mcp_config(
 
 def main() -> None:
     testing_jiras_dir = os.environ.get("TESTING_JIRAS_DIR", "")
-    mock_data_dir = Path(testing_jiras_dir) / "mock_data" if testing_jiras_dir else None
+    mock_data_dir = Path(testing_jiras_dir) / "mock_data" / "triage" if testing_jiras_dir else None
 
-    epilog_lines = ["available test scenarios (from testing-jiras/mock_data/):"]
+    epilog_lines = ["available test scenarios (from testing-jiras/mock_data/triage/):"]
     if mock_data_dir and mock_data_dir.is_dir():
         epilog_lines.extend(f"  {scenario}" for scenario in list_scenarios(mock_data_dir))
     else:
@@ -201,7 +201,7 @@ def main() -> None:
         fail(f"TESTING_JIRAS_DIR={testing_jiras_dir} does not exist.")
 
     jira_mock_dir = testing_jiras_path / "jiras"
-    mock_data_dir = testing_jiras_path / "mock_data"
+    mock_data_dir = testing_jiras_path / "mock_data" / "triage"
 
     jira_mock_file = jira_mock_dir / issue
     if not jira_mock_file.is_file():

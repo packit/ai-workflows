@@ -787,8 +787,9 @@ async def extract_source_changelog(
     """Extract changelog messages from source dist-git commits.
 
     Iterates all upstream patch URLs, extracts the newest changelog entry
-    from each commit's spec file, strips Resolves/Related lines, and
-    combines the descriptive lines (deduplicating across commits).
+    from each commit's spec file, and combines the lines (deduplicating
+    across commits). The content is passed through as-is; the LogAgent
+    handles replacing Jira references.
     """
     upstream_clone = Path(f"{local_clone}-upstream")
     if not upstream_clone.exists():
@@ -821,8 +822,6 @@ async def extract_source_changelog(
             continue
 
         for line in entry.content:
-            if re.match(r"^\s*[-\*]?\s*(resolves|related):", line, re.IGNORECASE):
-                continue
             if line not in seen:
                 seen.add(line)
                 collected_lines.append(line)

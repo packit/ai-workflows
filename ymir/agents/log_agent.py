@@ -43,8 +43,8 @@ def get_instructions() -> str:
 
          If a source changelog message is provided in the prompt, use those lines as the
          exact changelog message content. Keep the descriptive lines exactly as-is — do not
-         rephrase, summarize, or add to them. Add the Resolves/Related line
-         for <JIRA_ISSUES>, matching the style of existing changelog entries.
+         rephrase, summarize, or add to them. In any Resolves/Related lines, replace all
+         original Jira issue references with <JIRA_ISSUES>, ensuring no duplicates remain.
 
          If no source changelog message is provided, write a new entry. In general,
          the entry should contain a short summary of the changes, ideally fitting on a single line,

@@ -33,8 +33,11 @@ def _new_patch_files(repo_path: Path) -> list[Path]:
     try:
         repo = git.Repo(repo_path)
         changed = repo.git.diff("HEAD~1", "HEAD", "--name-only").splitlines()
+        patch_extensions = (".patch", ".diff")
         return [
-            Path(repo_path) / f for f in changed if f.endswith(".patch") and (Path(repo_path) / f).is_file()
+            Path(repo_path) / f
+            for f in changed
+            if f.endswith(patch_extensions) and (Path(repo_path) / f).is_file()
         ]
     except Exception as exc:
         logger.warning("Could not list new patches from %s: %s", repo_path, exc)

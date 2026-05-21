@@ -838,7 +838,7 @@ class BackportState(PackageUpdateState):
     cve_id: str | None
     justification: str | None = Field(default=None)
     unpacked_sources: Path | None = Field(default=None)
-    backport_log: list[str] = Field(default=[])
+    backport_log: list[str] = Field(default_factory=list)
     backport_result: BackportOutputSchema | None = Field(default=None)
     attempts_remaining: int = Field(default=10)
     used_cherry_pick_workflow: bool = Field(default=False)
@@ -864,6 +864,9 @@ async def run_workflow(
         max_incremental_fix_attempts = max_build_attempts
 
     local_tool_options = {"working_directory": None}
+    # In tests SILENT_RUN is typically unset, so Jira status updates are
+    # attempted (and skipped via dry_run).  Set SILENT_RUN=true to suppress
+    # Jira transitions even when dry_run is False.
     silent_run = os.getenv("SILENT_RUN", "false").lower() == "true"
 
     async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:

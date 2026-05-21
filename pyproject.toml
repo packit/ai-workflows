@@ -26,6 +26,7 @@ test = [
     "httpx>=0.28.0",
     "koji",
     "pyforgejo==2.0.4",
+    "unidiff>=0.7.0",
 ]
 
 [tool.hatch.build.targets.wheel]

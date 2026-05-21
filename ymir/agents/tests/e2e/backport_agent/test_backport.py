@@ -1,12 +1,12 @@
 import asyncio
 import logging
 import os
-import re
 import shutil
 from pathlib import Path
 
 import pytest
 from tabulate import tabulate
+from unidiff import PatchSet
 
 from ymir.agents.backport_agent import BackportState, create_backport_agent, run_workflow
 from ymir.agents.metrics_middleware import MetricsMiddleware
@@ -167,12 +167,10 @@ def _write_mock_gitconfig(envs: list[dict[str, str]]) -> None:
         SHARED_GITCONFIG.write_text("\n".join(lines) + "\n")
 
 
-_DIFF_FILE_RE = re.compile(r"^diff --git a/(.+?) b/(.+?)$", re.MULTILINE)
-
-
 def _files_touched_by_patch(patch_text: str) -> set[str]:
     """Extract the set of file paths modified by a unified diff."""
-    return {m.group(2) for m in _DIFF_FILE_RE.finditer(patch_text)}
+    patch_set = PatchSet(patch_text)
+    return {patched_file.path for patched_file in patch_set}
 
 
 def _load_reference_patch(test_case: "BackportAgentTestCase") -> str | None:

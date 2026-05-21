@@ -295,11 +295,12 @@ async def run_preliminary_testing(
             state.build_nvr = fields.get(FIXED_IN_BUILD_CUSTOM_FIELD)
 
             try:
-                state.pull_requests = await run_tool(
+                pr_result = await run_tool(
                     "get_jira_pull_requests",
                     available_tools=gateway_tools,
                     issue_key=state.jira_issue,
                 )
+                state.pull_requests = pr_result.get("pull_requests", [])
             except Exception as e:
                 logger.warning("Failed to get pull requests for %s: %s", state.jira_issue, e)
 

@@ -292,6 +292,14 @@ process-erratum:
 	$(COMPOSE_SUPERVISOR) run --rm \
 		supervisor python -m ymir.supervisor.main $(DEBUG_FLAG) $(IGNORE_NEEDS_ATTENTION_FLAG) $(DRY_RUN_FLAG) process-erratum $(ERRATA_ID)
 
+.PHONY: run-issue-verification-agent-standalone
+run-issue-verification-agent-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e IGNORE_NEEDS_ATTENTION=$(IGNORE_NEEDS_ATTENTION) \
+		issue-verification-agent
+
 .PHONY: run-preliminary-testing-agent-standalone
 run-preliminary-testing-agent-standalone:
 	$(COMPOSE_AGENTS) run --rm \

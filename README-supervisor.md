@@ -38,6 +38,10 @@ This will have to be repeated when the ticket expires. (Exporting the kcm-cache
 socket to the container seems better, but I wasn't able to get it to work due
 to various difficult to work around permission issues.)
 
+## Note on IssueHandler migration
+
+The `IssueHandler` has been migrated to `ymir/agents/issue_verification_agent.py` as part of the BeeAI Framework refactoring. The supervisor still handles errata processing via `ErratumHandler`. For processing individual issues, prefer using the new agent directly (see README-agents.md).
+
 ## Processing a single issue or erratum
 
 To process a single issue or erratum, you can run:

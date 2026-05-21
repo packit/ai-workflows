@@ -981,13 +981,13 @@ class GetJiraDevStatusToolInput(BaseModel):
 
 
 class GetJiraDevStatusTool(
-    Tool[GetJiraDevStatusToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]
+    Tool[GetJiraDevStatusToolInput, ToolRunOptions, JSONToolOutput[dict[str, list[dict[str, Any]]]]]
 ):
     name = "get_jira_dev_status"
     description = """
     Gets development status (linked commits) for a Jira issue using the
-    Jira Dev-Status API. Returns a list of commit objects with
-    url, message, and repository_url fields.
+    Jira Dev-Status API. Returns a dictionary with a 'commits' key containing
+    a list of commit objects with url, message, and repository_url fields.
     """
     input_schema = GetJiraDevStatusToolInput
 
@@ -1002,7 +1002,7 @@ class GetJiraDevStatusTool(
         tool_input: GetJiraDevStatusToolInput,
         options: ToolRunOptions | None,
         context: RunContext,
-    ) -> JSONToolOutput[list[dict[str, Any]]]:
+    ) -> JSONToolOutput[dict[str, list[dict[str, Any]]]]:
         issue_key = tool_input.issue_key
         headers = get_jira_auth_headers()
         jira_base = os.getenv("JIRA_URL")
@@ -1030,7 +1030,7 @@ class GetJiraDevStatusTool(
         ]
 
         logger.info(f"Found {len(commits)} commits in development status for {issue_key}")
-        return JSONToolOutput(result=commits)
+        return JSONToolOutput(result={"commits": commits})
 
 
 class GetJiraPullRequestsToolInput(BaseModel):
@@ -1041,14 +1041,15 @@ class GetJiraPullRequestsTool(
     Tool[
         GetJiraPullRequestsToolInput,
         ToolRunOptions,
-        JSONToolOutput[list[dict[str, Any]]],
+        JSONToolOutput[dict[str, list[dict[str, Any]]]],
     ]
 ):
     name = "get_jira_pull_requests"
     description = """
     Gets pull/merge requests linked to a Jira issue via the dev-status API.
-    Returns a list of pull request dicts with keys: id, name, status, url,
-    source, destination, repositoryName, repositoryUrl.
+    Returns a dictionary with a 'pull_requests' key containing a list of pull
+    request dicts with keys: id, name, status, url, source, destination,
+    repositoryName, repositoryUrl.
     """
     input_schema = GetJiraPullRequestsToolInput
 
@@ -1063,7 +1064,7 @@ class GetJiraPullRequestsTool(
         tool_input: GetJiraPullRequestsToolInput,
         options: ToolRunOptions | None,
         context: RunContext,
-    ) -> JSONToolOutput[list[dict[str, Any]]]:
+    ) -> JSONToolOutput[dict[str, list[dict[str, Any]]]]:
         issue_key = tool_input.issue_key
         headers = get_jira_auth_headers()
         jira_base = os.getenv("JIRA_URL")
@@ -1084,7 +1085,7 @@ class GetJiraPullRequestsTool(
             pull_requests.extend(detail.get("pullRequests", []))
 
         logger.info(f"Found {len(pull_requests)} pull requests for {issue_key}")
-        return JSONToolOutput(result=pull_requests)
+        return JSONToolOutput(result={"pull_requests": pull_requests})
 
 
 class SetPreliminaryTestingToolInput(BaseModel):
@@ -1158,3 +1159,202 @@ class SetPreliminaryTestingTool(Tool[SetPreliminaryTestingToolInput, ToolRunOpti
         return StringToolOutput(
             result=f"Successfully set Preliminary Testing to {value.value} on {issue_key}"
         )
+
+
+class UpdateJiraCommentToolInput(BaseModel):
+    issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
+    comment_id: str = Field(description="ID of the comment to update")
+    comment: str = Field(description="New comment text")
+
+
+class UpdateJiraCommentTool(Tool[UpdateJiraCommentToolInput, ToolRunOptions, StringToolOutput]):
+    name = "update_jira_comment"
+    description = """
+    Updates an existing comment on a Jira issue.
+    """
+    input_schema = UpdateJiraCommentToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "jira", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: UpdateJiraCommentToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        issue_key = tool_input.issue_key
+        comment_id = tool_input.comment_id
+        comment = tool_input.comment
+
+        if os.getenv("DRY_RUN", "False").lower() == "true":
+            return StringToolOutput(
+                result=f"Dry run, not updating comment {comment_id} on {issue_key} "
+                f"(this is expected, not an error)"
+            )
+        if _skip_jira_writes():
+            return StringToolOutput(
+                result=f"JIRA_DRY_RUN is set, not updating comment {comment_id} "
+                f"on {issue_key} (this is expected, not an error)"
+            )
+
+        jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/comment/{comment_id}")
+        logger.info("Updating comment %s on %s", comment_id, issue_key)
+
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            try:
+                async with session.put(
+                    jira_url,
+                    json={"body": comment},
+                    headers=get_jira_auth_headers(),
+                ) as response:
+                    response.raise_for_status()
+            except aiohttp.ClientError as e:
+                raise ToolError(f"Failed to update comment {comment_id} on {issue_key}: {e}") from e
+
+        return StringToolOutput(result=f"Successfully updated comment {comment_id} on {issue_key}")
+
+
+class AddJiraAttachmentsToolInput(BaseModel):
+    issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
+    attachments: list[dict[str, str]] = Field(
+        description="List of attachments, each with 'filename' and 'content' (text content) keys"
+    )
+
+
+class AddJiraAttachmentsTool(Tool[AddJiraAttachmentsToolInput, ToolRunOptions, StringToolOutput]):
+    name = "add_jira_attachments"
+    description = """
+    Adds attachments to a Jira issue.
+    """
+    input_schema = AddJiraAttachmentsToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "jira", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: AddJiraAttachmentsToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        issue_key = tool_input.issue_key
+        attachments = tool_input.attachments
+
+        if not attachments:
+            return StringToolOutput(result=f"No attachments to add to {issue_key}")
+
+        if os.getenv("DRY_RUN", "False").lower() == "true":
+            filenames = ", ".join(a["filename"] for a in attachments)
+            return StringToolOutput(
+                result=f"Dry run, not adding attachments ({filenames}) to {issue_key} "
+                f"(this is expected, not an error)"
+            )
+        if _skip_jira_writes():
+            return StringToolOutput(
+                result=f"JIRA_DRY_RUN is set, not adding attachments "
+                f"to {issue_key} (this is expected, not an error)"
+            )
+
+        jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/attachments")
+        headers = dict(get_jira_auth_headers())
+        # Remove Content-Type so aiohttp sets multipart correctly
+        headers.pop("Content-Type", None)
+        headers["X-Atlassian-Token"] = "no-check"
+
+        logger.info("Adding %d attachment(s) to %s", len(attachments), issue_key)
+
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            try:
+                data = aiohttp.FormData()
+                for attachment in attachments:
+                    content = attachment["content"].encode("utf-8")
+                    data.add_field(
+                        "file",
+                        content,
+                        filename=attachment["filename"],
+                        content_type="text/plain",
+                    )
+
+                async with session.post(
+                    jira_url,
+                    data=data,
+                    headers=headers,
+                ) as response:
+                    response.raise_for_status()
+            except aiohttp.ClientError as e:
+                raise ToolError(f"Failed to add attachments to {issue_key}: {e}") from e
+
+        filenames = ", ".join(a["filename"] for a in attachments)
+        return StringToolOutput(result=f"Successfully added attachments ({filenames}) to {issue_key}")
+
+
+class GetJiraAttachmentToolInput(BaseModel):
+    issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
+    filename: str = Field(description="Filename of the attachment to download")
+
+
+class GetJiraAttachmentTool(Tool[GetJiraAttachmentToolInput, ToolRunOptions, StringToolOutput]):
+    name = "get_jira_attachment"
+    description = """
+    Downloads an attachment from a Jira issue by filename and returns its text content.
+    """
+    input_schema = GetJiraAttachmentToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "jira", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: GetJiraAttachmentToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        issue_key = tool_input.issue_key
+        filename = tool_input.filename
+        headers = get_jira_auth_headers()
+        jira_base = os.getenv("JIRA_URL")
+
+        logger.info("Downloading attachment %s from %s", filename, issue_key)
+
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            # Get issue attachments
+            issue_url = urljoin(jira_base, f"rest/api/2/issue/{issue_key}?fields=attachment")
+            try:
+                async with session.get(issue_url, headers=headers) as response:
+                    response.raise_for_status()
+                    issue_data = await response.json()
+            except aiohttp.ClientError as e:
+                raise ToolError(f"Failed to get issue {issue_key}: {e}") from e
+
+            attachments = issue_data.get("fields", {}).get("attachment", [])
+            matching = [a for a in attachments if a.get("filename") == filename]
+
+            if len(matching) == 0:
+                raise ToolError(f"Issue {issue_key} has no attachment named {filename}")
+            if len(matching) > 1:
+                raise ToolError(f"Issue {issue_key} has multiple attachments named {filename}")
+
+            content_url = matching[0]["content"]
+            try:
+                async with session.get(content_url, headers=headers) as response:
+                    response.raise_for_status()
+                    content = await response.read()
+            except aiohttp.ClientError as e:
+                raise ToolError(f"Failed to download attachment {filename}: {e}") from e
+
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            return StringToolOutput(result=f"Failed to decode attachment {filename} as UTF-8")
+
+        return StringToolOutput(result=text)

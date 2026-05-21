@@ -14,6 +14,7 @@ from ymir.common.mock_repos import apply_zstream_override_from_env
 from ymir.tools.gateway_utils import setup_logging
 from ymir.tools.privileged.copr import BuildPackageTool, DownloadArtifactsTool
 from ymir.tools.privileged.distgit import CreateZstreamBranchTool
+from ymir.tools.privileged.errata import GetErratumBuildNvrTool, GetErratumTool
 from ymir.tools.privileged.gitlab import (
     AddBlockingMergeRequestCommentTool,
     AddMergeRequestCommentTool,
@@ -29,18 +30,22 @@ from ymir.tools.privileged.gitlab import (
     OpenMergeRequestTool,
     PushToRemoteRepositoryTool,
     RetryPipelineJobTool,
+    SearchGitlabProjectMrsTool,
 )
 from ymir.tools.privileged.jira import (
+    AddJiraAttachmentsTool,
     AddJiraCommentTool,
     ChangeJiraStatusTool,
     CheckCveTriageEligibilityTool,
     EditJiraLabelsTool,
+    GetJiraAttachmentTool,
     GetJiraDetailsTool,
     GetJiraDevStatusTool,
     GetJiraPullRequestsTool,
     SearchJiraIssuesTool,
     SetJiraFieldsTool,
     SetPreliminaryTestingTool,
+    UpdateJiraCommentTool,
     VerifyIssueAuthorTool,
 )
 from ymir.tools.privileged.logdetective import AnalyzeLogsTool
@@ -50,6 +55,10 @@ from ymir.tools.privileged.lookaside import (
     UploadSourcesTool,
 )
 from ymir.tools.privileged.maintainer_rules import MaintainerRulesTool
+from ymir.tools.privileged.testing_farm import (
+    GetTestingFarmRequestTool,
+    ReproduceTestingFarmRequestTool,
+)
 from ymir.tools.privileged.zstream_search import ZStreamSearchTool
 
 # Patterns that match common credential formats in log output
@@ -128,16 +137,24 @@ def main():
             PushToRemoteRepositoryTool(),
             RetryPipelineJobTool(),
             FetchGitlabMrNotesTool(),
+            SearchGitlabProjectMrsTool(),
+            GetErratumTool(),
+            GetErratumBuildNvrTool(),
+            GetTestingFarmRequestTool(),
+            ReproduceTestingFarmRequestTool(),
+            AddJiraAttachmentsTool(),
             AddJiraCommentTool(),
             ChangeJiraStatusTool(),
             CheckCveTriageEligibilityTool(),
             EditJiraLabelsTool(),
+            GetJiraAttachmentTool(),
             GetJiraDetailsTool(),
             GetJiraDevStatusTool(),
             GetJiraPullRequestsTool(),
             SearchJiraIssuesTool(),
             SetJiraFieldsTool(),
             SetPreliminaryTestingTool(),
+            UpdateJiraCommentTool(),
             VerifyIssueAuthorTool(),
             DownloadSourcesTool(),
             PrepSourcesTool(),

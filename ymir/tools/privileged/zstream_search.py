@@ -236,7 +236,8 @@ class ZStreamSearchTool(Tool[ZStreamSearchToolInput, ToolRunOptions, ZStreamSear
                         GetJiraDevStatusTool(),
                         issue_key=issue_key,
                     )
-                    commits = json.loads(dev_status) if isinstance(dev_status, str) else dev_status
+                    dev_status_data = json.loads(dev_status) if isinstance(dev_status, str) else dev_status
+                    commits = dev_status_data.get("commits", [])
                 except Exception as e:
                     logger.debug(f"Dev status request error for {issue_key}: {e}")
                     continue

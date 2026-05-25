@@ -134,6 +134,22 @@ test_cases = [
             ),
         ),
     ),
+    TriageAgentTestCase(
+        input="RHEL-177992",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.BACKPORT,
+            data=BackportData(
+                package="expat",
+                patch_urls=[
+                    "https://github.com/libexpat/libexpat/pull/1216.patch",
+                ],
+                justification="not-implemented",
+                jira_issue="RHEL-177992",
+                cve_id="CVE-2026-45186",
+                fix_version="rhel-10.2.z",
+            ),
+        ),
+    ),
 ]
 
 

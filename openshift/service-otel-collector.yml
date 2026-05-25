@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+spec:
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: 4318-tcp
+    port: 4318
+    protocol: TCP
+    targetPort: 4318
+  - name: 8080-tcp
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: otel-collector
+    deployment: otel-collector
+  sessionAffinity: None
+  type: ClusterIP

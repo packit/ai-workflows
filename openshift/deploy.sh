@@ -52,6 +52,15 @@ apply service-phoenix.yml
 apply route-phoenix.yml
 apply deployment-phoenix.yml
 
+# OTel Collector + Trace Server
+apply imagestream-trace-server.yml
+import_image trace-server
+apply configmap-otel-collector-config.yml
+apply pvc-trace-server-data.yml
+apply service-otel-collector.yml
+apply route-trace-server.yml
+apply deployment-otel-collector.yml
+
 # Valkey
 apply imagestream-valkey.yml
 import_image valkey

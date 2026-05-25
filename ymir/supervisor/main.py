@@ -264,7 +264,7 @@ def main(
 
     collector_endpoint = os.environ.get("COLLECTOR_ENDPOINT")
     if collector_endpoint is not None:
-        setup_observability(collector_endpoint)
+        setup_observability(collector_endpoint, agent_type="supervisor")
 
 
 if __name__ == "__main__":

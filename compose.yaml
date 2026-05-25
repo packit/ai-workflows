@@ -3,7 +3,7 @@ x-beeai-env: &beeai-env
   MCP_GATEWAY_URL: http://mcp-gateway:8000/sse
   UPSTREAM_SEARCH_API_URL: http://upstream-sea.hosted.upshift.rdu2.redhat.com:80/v1
   REDIS_URL: redis://valkey:6379/0
-  COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
+  COLLECTOR_ENDPOINT: http://otel-collector:4318/v1/traces
   GIT_REPO_BASEPATH: /git-repos
   MAX_RETRIES: 3
   DRY_RUN: ${DRY_RUN:-false}
@@ -17,7 +17,7 @@ x-beeai-agent: &beeai-agent
   depends_on:
     - mcp-gateway
     - valkey
-    - phoenix
+    - otel-collector
   environment:
     <<: *beeai-env
   env_file:
@@ -62,14 +62,14 @@ x-beeai-agent-c10s: &beeai-agent-c10s
 x-supervisor: &supervisor
   depends_on:
     - valkey
-    - phoenix
+    - otel-collector
   image: supervisor
   build:
     context: .
     dockerfile: Containerfile.supervisor
   environment:
     - REDIS_URL=redis://valkey:6379/0
-    - COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces
+    - COLLECTOR_ENDPOINT=http://otel-collector:4318/v1/traces
     - GIT_REPO_BASEPATH=/git-repos
     - "KRB5CCNAME=FILE:/home/beeai/ccache/krb5cc"
   env_file:
@@ -134,6 +134,31 @@ services:
       - PHOENIX_WORKING_DIR=/mnt/data
     volumes:
       - phoenix-data:/mnt/data
+    restart: unless-stopped
+    profiles: ["agents", "supervisor", "e2e-test"]
+
+  trace-server:
+    image: trace-server
+    build:
+      context: .
+      dockerfile: Containerfile.trace-server
+    ports:
+      - "8082:8080"
+    environment:
+      - TRACE_DB_PATH=/data/traces.db
+    volumes:
+      - ./trace_server:/app:ro,z
+      - trace-server-data:/data:U
+    restart: unless-stopped
+    profiles: ["agents", "supervisor", "e2e-test"]
+
+  otel-collector:
+    image: docker.io/otel/opentelemetry-collector-contrib
+    depends_on:
+      - phoenix
+      - trace-server
+    volumes:
+      - .secrets/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro,z
     restart: unless-stopped
     profiles: ["agents", "supervisor", "e2e-test"]
 
@@ -251,7 +276,9 @@ services:
     restart: "no"
     profiles: ["manual"]  # Don't start by default, run manually for testing
 
+
 volumes:
   valkey-data:
   phoenix-data:
+  trace-server-data:
   git-repos:

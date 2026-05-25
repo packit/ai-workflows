@@ -210,7 +210,7 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     resolve_chat_model_override("rebase")
 
-    setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"], agent_type="rebase")
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
@@ -483,16 +483,17 @@ async def main() -> None:
         and (branch := os.getenv("BRANCH", None))
     ):
         logger.info("Running in direct mode with environment variables")
-        state = await run_workflow(
-            package=package,
-            dist_git_branch=branch,
-            version=version,
-            jira_issue=jira_issue,
-            justification=os.getenv("JUSTIFICATION", None),
-            redis_conn=None,
-        )
-        logger.info(f"Direct run completed: {state.rebase_result.model_dump_json(indent=4)}")
-        return
+        with span_processor.jira_issue_context(jira_issue):
+            state = await run_workflow(
+                package=package,
+                dist_git_branch=branch,
+                version=version,
+                jira_issue=jira_issue,
+                justification=os.getenv("JUSTIFICATION", None),
+                redis_conn=None,
+            )
+            logger.info(f"Direct run completed: {state.rebase_result.model_dump_json(indent=4)}")
+            return
 
     logger.info("Starting rebase agent in queue mode")
     async with redis_client(os.environ["REDIS_URL"]) as redis:
@@ -551,18 +552,19 @@ async def main() -> None:
 
             try:
                 logger.info(f"Starting rebase processing for {rebase_data.jira_issue}")
-                state = await run_workflow(
-                    package=rebase_data.package,
-                    dist_git_branch=dist_git_branch,
-                    version=rebase_data.version,
-                    jira_issue=rebase_data.jira_issue,
-                    justification=rebase_data.justification,
-                    redis_conn=redis,
-                )
-                logger.info(
-                    f"Rebase processing completed for {rebase_data.jira_issue}, "
-                    f"success: {state.rebase_result.success}"
-                )
+                with span_processor.jira_issue_context(rebase_data.jira_issue):
+                    state = await run_workflow(
+                        package=rebase_data.package,
+                        dist_git_branch=dist_git_branch,
+                        version=rebase_data.version,
+                        jira_issue=rebase_data.jira_issue,
+                        justification=rebase_data.justification,
+                        redis_conn=redis,
+                    )
+                    logger.info(
+                        f"Rebase processing completed for {rebase_data.jira_issue}, "
+                        f"success: {state.rebase_result.success}"
+                    )
 
             except Exception as e:
                 error = "".join(traceback.format_exception(e))

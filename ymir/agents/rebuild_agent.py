@@ -42,7 +42,7 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     resolve_chat_model_override("rebuild")
 
-    setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"], agent_type="rebuild")
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
 
@@ -301,16 +301,17 @@ async def main() -> None:
         consolidated_raw = os.getenv("CONSOLIDATED_ISSUES", None)
         consolidated_issues = json.loads(consolidated_raw) if consolidated_raw else None
         logger.info("Running in direct mode with environment variables")
-        state = await run_workflow(
-            package=package,
-            dist_git_branch=branch,
-            jira_issue=jira_issue,
-            justification=os.getenv("JUSTIFICATION", None),
-            dependency_issue=dependency_issue,
-            dependency_component=dependency_component,
-            consolidated_issues=consolidated_issues,
-        )
-        logger.info(f"Direct run completed: success={state.rebuild_success}")
+        with span_processor.jira_issue_context(jira_issue):
+            state = await run_workflow(
+                package=package,
+                dist_git_branch=branch,
+                jira_issue=jira_issue,
+                justification=os.getenv("JUSTIFICATION", None),
+                dependency_issue=dependency_issue,
+                dependency_component=dependency_component,
+                consolidated_issues=consolidated_issues,
+            )
+            logger.info(f"Direct run completed: success={state.rebuild_success}")
         return
 
     # Queue mode
@@ -386,20 +387,21 @@ async def main() -> None:
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
             try:
-                state = await run_workflow(
-                    package=rebuild_data.package,
-                    dist_git_branch=dist_git_branch,
-                    jira_issue=rebuild_data.jira_issue,
-                    justification=rebuild_data.justification,
-                    dependency_issue=rebuild_data.dependency_issue,
-                    dependency_component=rebuild_data.dependency_component,
-                    consolidated_issues=rebuild_data.consolidated_issues,
-                    consolidation_summary=rebuild_data.consolidation_summary,
-                )
-                logger.info(
-                    f"Rebuild processing completed for {rebuild_data.jira_issue}, "
-                    f"success: {state.rebuild_success}"
-                )
+                with span_processor.jira_issue_context(rebuild_data.jira_issue):
+                    state = await run_workflow(
+                        package=rebuild_data.package,
+                        dist_git_branch=dist_git_branch,
+                        jira_issue=rebuild_data.jira_issue,
+                        justification=rebuild_data.justification,
+                        dependency_issue=rebuild_data.dependency_issue,
+                        dependency_component=rebuild_data.dependency_component,
+                        consolidated_issues=rebuild_data.consolidated_issues,
+                        consolidation_summary=rebuild_data.consolidation_summary,
+                    )
+                    logger.info(
+                        f"Rebuild processing completed for {rebuild_data.jira_issue}, "
+                        f"success: {state.rebuild_success}"
+                    )
 
             except Exception as e:
                 error = "".join(traceback.format_exception(e))

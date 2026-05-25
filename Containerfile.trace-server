@@ -1,0 +1,8 @@
+FROM fedora:44
+RUN dnf install -y python3 \
+    && dnf clean all
+RUN mkdir -p /data && chown 1001:0 /data && chmod 775 /data
+COPY trace_server/ /app/
+USER 1001
+EXPOSE 8080
+CMD ["python3", "/app/server.py"]

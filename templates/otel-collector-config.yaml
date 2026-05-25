@@ -1,0 +1,18 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+        # default 20 MiB is too small for non-reasoning agent runs
+        max_request_body_size: 104857600  # 100 MiB
+exporters:
+  otlphttp/phoenix:
+    endpoint: http://phoenix:6006
+  otlphttp/trace-server:
+    endpoint: http://trace-server:8080
+    encoding: json
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp/phoenix, otlphttp/trace-server]

@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  annotations:
+    image.openshift.io/triggers: |
+      [
+        {
+          "from": {
+            "kind": "ImageStreamTag",
+            "name": "trace-server:prod"
+          },
+          "fieldPath": "spec.template.spec.containers[?(@.name==\"trace-server\")].image"
+        }
+      ]
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: otel-collector
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+        deployment: otel-collector
+    spec:
+      containers:
+      - name: otel-collector
+        image: docker.io/otel/opentelemetry-collector-contrib
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 4318
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: 5
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: 3
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: "250m"
+            memory: 256Mi
+          requests:
+            cpu: "25m"
+            memory: 64Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /etc/otelcol-contrib
+          name: otel-config
+      - name: trace-server
+        image: trace-server:prod
+        imagePullPolicy: Always
+        env:
+        - name: TRACE_DB_PATH
+          value: /data/traces.db
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 2
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: "100m"
+            memory: 128Mi
+          requests:
+            cpu: "10m"
+            memory: 32Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /data
+          name: trace-server-data
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: otel-config
+        configMap:
+          name: otel-collector-config
+      - name: trace-server-data
+        persistentVolumeClaim:
+          claimName: trace-server-data

@@ -24,7 +24,7 @@ from specfile import Specfile
 import ymir.agents.tasks as tasks
 from ymir.agents.build_agent import create_build_agent
 from ymir.agents.build_agent import get_prompt as get_build_prompt
-from ymir.agents.constants import I_AM_YMIR, MR_DESCRIPTION_FOOTER
+from ymir.agents.constants import I_AM_YMIR, mr_description_footer
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
@@ -1270,7 +1270,7 @@ async def run_workflow(
                         f"{justification_text}"
                         f"Resolves: {state.jira_issue}\n\n"
                         f"Backporting steps:\n\n{state.backport_log[-1]}"
-                        f"\n\n{MR_DESCRIPTION_FOOTER}"
+                        f"\n\n{mr_description_footer(state.package)}"
                     ),
                     available_tools=gateway_tools,
                     commit_only=dry_run,

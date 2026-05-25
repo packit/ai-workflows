@@ -227,10 +227,13 @@ BACKPORT_INSTRUCTIONS = """
                 - Use `git_patch_create` tool with:
                   * repository_path: <UPSTREAM_REPO>
                   * patch_file_path: use the naming convention from step 0
-                    (default: <JIRA_ISSUE>.patch) in the current working
+                    (default: `<JIRA_ISSUE>.patch`) in the current working
                     directory (the dist-git repository root)
                 - The tool automatically uses the base commit recorded in step 4e to include
                   ALL cherry-picked commits, not just the last one
+                - For multi-patch (when maintainer rules request one patch per commit),
+                  use `run_shell_command` with `git format-patch -1 <hash> --stdout > <name>`
+                  per commit instead of `git_patch_create`
                 - IMPORTANT: Only create NEW patch files. Do NOT modify
                   existing patches in the dist-git repository
 
@@ -261,9 +264,11 @@ BACKPORT_INSTRUCTIONS = """
                 - Use `git_patch_create` tool with:
                   * repository_path: <UNPACKED_SOURCES>
                   * patch_file_path: use the naming convention from step 0
-                    (default: <JIRA_ISSUE>.patch) in the current working
+                    (default: `<JIRA_ISSUE>.patch`) in the current working
                     directory (the dist-git repository root)
                 - The tool automatically captures all applied changes into one patch file.
+                - For multi-patch, use `run_shell_command` with `git format-patch`
+                  per commit instead of `git_patch_create`
 
       5. Update the spec file. Add new `Patch` tag(s) for each patch file generated in step 4.
          Add the new `Patch` tag(s) after all existing `Patch` tags and, if `Patch` tags are numbered,
@@ -474,10 +479,13 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
                 - Use `git_patch_create` tool with:
                   * repository_path: <UPSTREAM_REPO>
                   * patch_file_path: use the naming convention from step 0
-                    (default: <JIRA_ISSUE>.patch) in the current working
+                    (default: `<JIRA_ISSUE>.patch`) in the current working
                     directory (the dist-git repository root)
                 - The tool automatically uses the base commit recorded in step 3i to include
                   ALL cherry-picked commits, not just the last one
+                - For multi-patch (when maintainer rules request one patch per commit),
+                  use `run_shell_command` with `git format-patch -1 <hash> --stdout > <name>`
+                  per commit instead of `git_patch_create`
                 - IMPORTANT: Only create NEW patch files. Do NOT modify
                   existing patches in the dist-git repository
 
@@ -510,9 +518,11 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
                 - Use `git_patch_create` tool with:
                   * repository_path: <UNPACKED_SOURCES>
                   * patch_file_path: use the naming convention from step 0
-                    (default: <JIRA_ISSUE>.patch) in the current working
+                    (default: `<JIRA_ISSUE>.patch`) in the current working
                     directory (the dist-git repository root)
                 - The tool automatically captures all applied changes into one patch file.
+                - For multi-patch, use `run_shell_command` with `git format-patch`
+                  per commit instead of `git_patch_create`
 
       4. Update the spec file. Add new `Patch` tag(s) for each patch file generated above.
          Add the new `Patch` tag(s) after all existing `Patch` tags and, if `Patch` tags are numbered,

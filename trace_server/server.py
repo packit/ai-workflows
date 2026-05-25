@@ -48,6 +48,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from renderer import render_issues_html, render_spans_html
+
 DB_PATH = os.environ.get("TRACE_DB_PATH", "/data/traces.db")
 PORT = int(os.environ.get("TRACE_SERVER_PORT", "8080"))
 MAX_PAYLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
@@ -282,6 +284,10 @@ class TraceHandler(BaseHTTPRequestHandler):
         else:
             self._send_json(404, {"error": "not found"})
 
+    def _wants_html(self) -> bool:
+        accept = self.headers.get("Accept", "")
+        return "text/html" in accept
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
@@ -291,11 +297,17 @@ class TraceHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"status": "ok"})
         elif path == "/traces" or path == "":
             issues = query_issues()
-            self._send_json(200, {"issues": issues})
+            if self._wants_html():
+                self._send_html(200, render_issues_html(issues))
+            else:
+                self._send_json(200, {"issues": issues})
         elif path.startswith("/traces/"):
             issue = path[len("/traces/") :]
             spans = query_spans(issue, params)
-            self._send_json(200, {"spans": spans, "count": len(spans)})
+            if self._wants_html():
+                self._send_html(200, render_spans_html(issue, spans, params))
+            else:
+                self._send_json(200, {"spans": spans, "count": len(spans)})
         else:
             self._send_json(404, {"error": "not found"})
 
@@ -303,6 +315,14 @@ class TraceHandler(BaseHTTPRequestHandler):
         body = json.dumps(data, indent=2).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_html(self, code: int, html: str):
+        body = html.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

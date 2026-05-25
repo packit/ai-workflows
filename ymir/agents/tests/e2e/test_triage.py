@@ -139,7 +139,7 @@ test_cases = [
 
 @pytest.fixture(scope="session", autouse=True)
 def observability_fixture():
-    return setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+    return setup_observability(os.environ["COLLECTOR_ENDPOINT"], agent_type="triage")
 
 
 @pytest.fixture(scope="session", autouse=True)

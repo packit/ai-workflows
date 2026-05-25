@@ -1343,7 +1343,7 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     resolve_chat_model_override("backport")
 
-    setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"], agent_type="backport")
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
@@ -1357,21 +1357,22 @@ async def main() -> None:
     ):
         upstream_patches = upstream_patches_raw.split(",")
         logger.info("Running in direct mode with environment variables")
-        state = await run_workflow(
-            package=package,
-            dist_git_branch=branch,
-            upstream_patches=upstream_patches,
-            jira_issue=jira_issue,
-            cve_id=os.getenv("CVE_ID", None),
-            justification=os.getenv("JUSTIFICATION", None),
-            fix_version=branch,
-            redis_conn=None,
-            dry_run=dry_run,
-            max_build_attempts=max_build_attempts,
-            max_incremental_fix_attempts=max_incremental_fix_attempts,
-        )
-        logger.info(f"Direct run completed: {state.backport_result.model_dump_json(indent=4)}")
-        return
+        with span_processor.jira_issue_context(jira_issue):
+            state = await run_workflow(
+                package=package,
+                dist_git_branch=branch,
+                upstream_patches=upstream_patches,
+                jira_issue=jira_issue,
+                cve_id=os.getenv("CVE_ID", None),
+                justification=os.getenv("JUSTIFICATION", None),
+                fix_version=branch,
+                redis_conn=None,
+                dry_run=dry_run,
+                max_build_attempts=max_build_attempts,
+                max_incremental_fix_attempts=max_incremental_fix_attempts,
+            )
+            logger.info(f"Direct run completed: {state.backport_result.model_dump_json(indent=4)}")
+            return
 
     logger.info("Starting backport agent in queue mode")
     async with redis_client(os.environ["REDIS_URL"]) as redis:
@@ -1430,23 +1431,24 @@ async def main() -> None:
 
             try:
                 logger.info(f"Starting backport processing for {backport_data.jira_issue}")
-                state = await run_workflow(
-                    package=backport_data.package,
-                    dist_git_branch=dist_git_branch,
-                    upstream_patches=backport_data.patch_urls,
-                    jira_issue=backport_data.jira_issue,
-                    cve_id=backport_data.cve_id,
-                    justification=backport_data.justification,
-                    fix_version=backport_data.fix_version,
-                    redis_conn=redis,
-                    dry_run=dry_run,
-                    max_build_attempts=max_build_attempts,
-                    max_incremental_fix_attempts=max_incremental_fix_attempts,
-                )
-                logger.info(
-                    f"Backport processing completed for {backport_data.jira_issue}, "
-                    f"success: {state.backport_result.success}"
-                )
+                with span_processor.jira_issue_context(backport_data.jira_issue):
+                    state = await run_workflow(
+                        package=backport_data.package,
+                        dist_git_branch=dist_git_branch,
+                        upstream_patches=backport_data.patch_urls,
+                        jira_issue=backport_data.jira_issue,
+                        cve_id=backport_data.cve_id,
+                        justification=backport_data.justification,
+                        fix_version=backport_data.fix_version,
+                        redis_conn=redis,
+                        dry_run=dry_run,
+                        max_build_attempts=max_build_attempts,
+                        max_incremental_fix_attempts=max_incremental_fix_attempts,
+                    )
+                    logger.info(
+                        f"Backport processing completed for {backport_data.jira_issue}, "
+                        f"success: {state.backport_result.success}"
+                    )
 
             except Exception as e:
                 error = "".join(traceback.format_exception(e))

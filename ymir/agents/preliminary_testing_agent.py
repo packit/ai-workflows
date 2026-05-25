@@ -450,7 +450,7 @@ async def _flag_attention(
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
-    setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"], agent_type="preliminary_testing")
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     ignore_needs_attention = os.getenv("IGNORE_NEEDS_ATTENTION", "false").lower() == "true"
@@ -461,14 +461,15 @@ async def main() -> None:
         sys.exit(1)
 
     logger.info("Running preliminary testing analysis for %s (dry_run=%s)", jira_issue, dry_run)
-    result = await run_preliminary_testing(
-        jira_issue,
-        dry_run=dry_run,
-        ignore_needs_attention=ignore_needs_attention,
-    )
-    logger.info("Completed: state=%s", result.state)
-    if result.comment:
-        logger.info("Comment: %s", result.comment)
+    with span_processor.jira_issue_context(jira_issue):
+        result = await run_preliminary_testing(
+            jira_issue,
+            dry_run=dry_run,
+            ignore_needs_attention=ignore_needs_attention,
+        )
+        logger.info("Completed: state=%s", result.state)
+        if result.comment:
+            logger.info("Comment: %s", result.comment)
 
 
 if __name__ == "__main__":

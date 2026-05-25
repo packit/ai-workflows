@@ -179,7 +179,7 @@ def extract_jira_issue(mr_description: str) -> str:
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
-    setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"], agent_type="merge_request")
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
@@ -233,6 +233,7 @@ async def main() -> None:
                 state.update_branch = mr_details.source_branch
                 state.fork_url = mr_details.source_repo
                 state.jira_issue = extract_jira_issue(mr_details.description)
+                span_processor.set_jira_issue(state.jira_issue)
                 state.merge_request_title = mr_details.title
                 state.merge_request_description = mr_details.description
 

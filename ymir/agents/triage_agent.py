@@ -1081,7 +1081,7 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     resolve_chat_model_override("triage")
 
-    setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"], agent_type="triage")
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     auto_chain = os.getenv("AUTO_CHAIN", "true").lower() == "true"
@@ -1090,21 +1090,22 @@ async def main() -> None:
 
     if jira_issue := os.getenv("JIRA_ISSUE", None):
         logger.info("Running in direct mode with environment variable")
-        agent_factory = build_agent_factory_with_mock_repos(create_triage_agent, jira_issue)
-        state = await run_workflow(
-            jira_issue,
-            dry_run,
-            agent_factory,
-            auto_chain=auto_chain,
-            force_cve_triage=force_cve_triage,
-            silent_run=silent_run,
-        )
-        logger.info(f"Direct run completed: {state.triage_result.model_dump_json(indent=4)}")
-        if state.cve_eligibility_result:
-            logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
-        if state.target_branch:
-            logger.info(f"Target branch: {state.target_branch}")
-        return
+        with span_processor.jira_issue_context(jira_issue):
+            agent_factory = build_agent_factory_with_mock_repos(create_triage_agent, jira_issue)
+            state = await run_workflow(
+                jira_issue,
+                dry_run,
+                agent_factory,
+                auto_chain=auto_chain,
+                force_cve_triage=force_cve_triage,
+                silent_run=silent_run,
+            )
+            logger.info(f"Direct run completed: {state.triage_result.model_dump_json(indent=4)}")
+            if state.cve_eligibility_result:
+                logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
+            if state.target_branch:
+                logger.info(f"Target branch: {state.target_branch}")
+            return
 
     logger.info(f"Starting triage agent in queue mode (AUTO_CHAIN={'enabled' if auto_chain else 'disabled'})")
     async with redis_client(os.environ["REDIS_URL"]) as redis:
@@ -1174,22 +1175,24 @@ async def main() -> None:
                     logger.info(f"Cleaned up existing labels for {input.issue}")
 
                 logger.info(f"Starting triage processing for {input.issue}")
-                state = await run_workflow(
-                    input.issue,
-                    dry_run,
-                    create_triage_agent,
-                    auto_chain=auto_chain,
-                    force_cve_triage=input.force_cve_triage,
-                    silent_run=silent_run,
-                )
-                output = state.triage_result
-                logger.info(
-                    f"Triage processing completed for {input.issue}, resolution: {output.resolution.value}"
-                )
-                if state.cve_eligibility_result:
-                    logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
-                if state.target_branch:
-                    logger.info(f"Target branch: {state.target_branch}")
+                with span_processor.jira_issue_context(input.issue):
+                    state = await run_workflow(
+                        input.issue,
+                        dry_run,
+                        create_triage_agent,
+                        auto_chain=auto_chain,
+                        force_cve_triage=input.force_cve_triage,
+                        silent_run=silent_run,
+                    )
+                    output = state.triage_result
+                    logger.info(
+                        f"Triage processing completed for {input.issue}, "
+                        f"resolution: {output.resolution.value}"
+                    )
+                    if state.cve_eligibility_result:
+                        logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
+                    if state.target_branch:
+                        logger.info(f"Target branch: {state.target_branch}")
 
             except Exception as e:
                 error = "".join(traceback.format_exception(e))

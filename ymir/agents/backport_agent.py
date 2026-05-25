@@ -107,6 +107,13 @@ BACKPORT_INSTRUCTIONS = """
          commit message footers (Jira/CVE references appended automatically),
          and MR creation/description.
 
+         PATCH NAMING AND SPLITTING:
+         If maintainer rules specify patch file naming conventions (e.g., descriptive
+         names like `<PACKAGE>-<description>.patch`, or splitting into one patch per
+         upstream commit), follow those conventions for all new patch files and spec
+         `Patch` tags. Otherwise use the default: a single squashed patch named
+         `<JIRA_ISSUE>.patch`.
+
       1. Knowing Jira issue <JIRA_ISSUE>, CVE ID <CVE_ID> or both, use the `git_log_search` tool to check
          in the dist-git repository whether the issue/CVE has already been resolved. If it has,
          end the process with `success=True` and `status="Backport already applied"`.
@@ -216,23 +223,21 @@ BACKPORT_INSTRUCTIONS = """
                   5. If a cherry-pick results in an empty commit (changes already present),
                      use `cherry_pick_continue` with `allow_empty=True`, or skip the commit.
 
-            4g. Generate the final patch file from upstream:
+            4g. Generate the final patch file(s) from upstream:
                 - Use `git_patch_create` tool with:
                   * repository_path: <UPSTREAM_REPO>
-                  * patch_file_path: <JIRA_ISSUE>.patch in the current working
+                  * patch_file_path: use the naming convention from step 0
+                    (default: <JIRA_ISSUE>.patch) in the current working
                     directory (the dist-git repository root)
-                    (e.g., if JIRA is RHEL-114639, use /path/to/distgit/RHEL-114639.patch)
                 - The tool automatically uses the base commit recorded in step 4e to include
                   ALL cherry-picked commits, not just the last one
                 - IMPORTANT: Only create NEW patch files. Do NOT modify
                   existing patches in the dist-git repository
-                - This patch file is now ready to be added to the spec file
 
-            4h. The cherry-pick workflow is complete! The generated patch file contains the cleanly
-                cherry-picked fix. Continue with steps 5-7 below to add this patch to the spec file,
-                verify it with `<PKG_TOOL> prep`, and build the SRPM.
+            4h. The cherry-pick workflow is complete! Continue with steps 5-7 below to add
+                the patch(es) to the spec file, verify with `<PKG_TOOL> prep`, and build the SRPM.
 
-                Note: You do NOT need to apply this patch to <UNPACKED_SOURCES>. The patch file
+                Note: You do NOT need to apply patches to <UNPACKED_SOURCES>. The patch files
                 will be automatically applied during the RPM build process when you run `<PKG_TOOL> prep`.
 
          B. GIT AM WORKFLOW (Fallback approach):
@@ -252,18 +257,19 @@ BACKPORT_INSTRUCTIONS = """
                 - Use the `git_apply_finish` tool to finish the patch application.
                 - Repeat for each pre-downloaded patch file.
 
-            B2. After ALL patches have been applied, generate a single combined patch:
+            B2. After ALL patches have been applied, generate the output patch(es):
                 - Use `git_patch_create` tool with:
                   * repository_path: <UNPACKED_SOURCES>
-                  * patch_file_path: <JIRA_ISSUE>.patch in the current working
+                  * patch_file_path: use the naming convention from step 0
+                    (default: <JIRA_ISSUE>.patch) in the current working
                     directory (the dist-git repository root)
                 - The tool automatically captures all applied changes into one patch file.
 
-      5. Update the spec file. Add ONE new `Patch` tag for <JIRA_ISSUE>.patch.
-         Add the new `Patch` tag after all existing `Patch` tags and, if `Patch` tags are numbered,
-         make sure it has the highest number. Make sure the patch is applied in the "%prep" section
+      5. Update the spec file. Add new `Patch` tag(s) for each patch file generated in step 4.
+         Add the new `Patch` tag(s) after all existing `Patch` tags and, if `Patch` tags are numbered,
+         make sure they have the highest numbers. Make sure each patch is applied in the "%prep" section
          and the `-p` argument is correct. Add upstream URLs as comments above
-         the `Patch:` tag - these URLs reference the related upstream commits or pull/merge requests.
+         the `Patch:` tag(s) - these URLs reference the related upstream commits or pull/merge requests.
          IMPORTANT: Only ADD new patches. Do NOT modify existing Patch tags or their order.
 
       6. Run
@@ -329,6 +335,13 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
          build triggering (automatic after you finish), Release field updates,
          commit message footers (Jira/CVE references appended automatically),
          and MR creation/description.
+
+         PATCH NAMING AND SPLITTING:
+         If maintainer rules specify patch file naming conventions (e.g., descriptive
+         names like `<PACKAGE>-<description>.patch`, or splitting into one patch per
+         upstream commit), follow those conventions for all new patch files and spec
+         `Patch` tags. Otherwise use the default: a single squashed patch named
+         `<JIRA_ISSUE>.patch`.
 
       1. Knowing Jira issue <JIRA_ISSUE>, CVE ID <CVE_ID> or both, use the `git_log_search` tool to check
          in the dist-git repository whether the issue/CVE has already been resolved. If it has,
@@ -457,23 +470,21 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
                   5. If a cherry-pick results in an empty commit (changes already present),
                      use `cherry_pick_continue` with `allow_empty=True`, or skip the commit.
 
-            3k. Generate the final patch file from upstream:
+            3k. Generate the final patch file(s) from upstream:
                 - Use `git_patch_create` tool with:
                   * repository_path: <UPSTREAM_REPO>
-                  * patch_file_path: <JIRA_ISSUE>.patch in the current working
+                  * patch_file_path: use the naming convention from step 0
+                    (default: <JIRA_ISSUE>.patch) in the current working
                     directory (the dist-git repository root)
-                    (e.g., if JIRA is RHEL-114639, use /path/to/distgit/RHEL-114639.patch)
                 - The tool automatically uses the base commit recorded in step 3i to include
                   ALL cherry-picked commits, not just the last one
                 - IMPORTANT: Only create NEW patch files. Do NOT modify
                   existing patches in the dist-git repository
-                - This patch file is now ready to be added to the spec file
 
-            3l. The cherry-pick workflow is complete! The generated patch file contains the cleanly
-                cherry-picked fix. Continue with steps 4-6 below to add this patch to the spec file,
-                verify it with `<PKG_TOOL> prep`, and build the SRPM.
+            3l. The cherry-pick workflow is complete! Continue with steps 4-6 below to add
+                the patch(es) to the spec file, verify with `<PKG_TOOL> prep`, and build the SRPM.
 
-                Note: You do NOT need to apply this patch to <UNPACKED_SOURCES>. The patch file
+                Note: You do NOT need to apply patches to <UNPACKED_SOURCES>. The patch files
                 will be automatically applied during the RPM build process when you run `<PKG_TOOL> prep`.
 
          C. GIT AM WORKFLOW (Fallback approach):
@@ -495,14 +506,15 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
                 - Use the `git_apply_finish` tool to finish the patch application.
                 - Repeat for each pre-downloaded patch file.
 
-            C2. After ALL patches have been applied, generate a single combined patch:
+            C2. After ALL patches have been applied, generate the output patch(es):
                 - Use `git_patch_create` tool with:
                   * repository_path: <UNPACKED_SOURCES>
-                  * patch_file_path: <JIRA_ISSUE>.patch in the current working
+                  * patch_file_path: use the naming convention from step 0
+                    (default: <JIRA_ISSUE>.patch) in the current working
                     directory (the dist-git repository root)
                 - The tool automatically captures all applied changes into one patch file.
 
-      4. Update the spec file. Add ONE new `Patch` tag for each new patch file.
+      4. Update the spec file. Add new `Patch` tag(s) for each patch file generated above.
          Add the new `Patch` tag(s) after all existing `Patch` tags and, if `Patch` tags are numbered,
          make sure they have the highest numbers. Make sure each patch is applied in the "%prep" section
          and the `-p` argument is correct. Do NOT add any comments to the spec file.
@@ -609,7 +621,8 @@ BACKPORT_FIX_BUILD_ERROR_PROMPT = """
       - The upstream repository at {{local_clone}}-upstream has all your previous work intact.
         DO NOT clone it again. DO NOT reset to base commit.
       - DO NOT modify anything in {{local_clone}} dist-git repository except
-        {{jira_issue}}.patch (by regenerating it from upstream repo).
+        the backport patch file(s) you created (by regenerating them from upstream repo).
+        Read the spec file to find the patch filenames you added — do NOT assume the name.
       - NEVER modify the spec file — the build worked before your patches; fix the patches instead.
       - Fix BOTH compilation errors AND test failures. NEVER skip or disable tests.
       - Make ONE attempt — you will be called again if the build still fails.
@@ -637,9 +650,10 @@ BACKPORT_FIX_BUILD_ERROR_PROMPT = """
       - If tests fail due to API changes: adapt test code to work with older APIs
       - NEVER skip or disable tests — fix them instead
 
-      4. Regenerate the patch using `git_patch_create` tool with:
+      4. Regenerate the patch file(s) you created. Read the spec file to find the
+         patch filenames you added, then regenerate them using `git_patch_create` tool with:
          - repository_path: {{local_clone}}-upstream
-         - patch_file_path: {{local_clone}}/{{jira_issue}}.patch
+         - patch_file_path: the path to each patch file in {{local_clone}}/
 
       5. Test the build:
          - `{{pkg_tool}} --name={{package}} --namespace=rpms --release={{dist_git_branch}} prep`

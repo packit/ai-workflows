@@ -145,6 +145,116 @@ Issues can be re-triggered through the workflow in two ways:
 
 The `ymir_fusa` label will be automatically added by the triage agent to JIRA issues involving FuSa packages. Related merge requests will need to be reviewed and approved by subject matter experts before merging.
 
+## Troubleshooting
+
+### Phoenix: Alembic migration failure after version rollback
+
+When Phoenix is rolled back to an older version (e.g. v16 → v15), the SQLite database
+contains an Alembic revision from the newer version that the older code doesn't
+recognize. Phoenix crashes on startup with:
+
+```
+alembic.util.exc.CommandError: Can't locate revision identified by '0ff41b5b118f'
+```
+
+The fix is to stamp the database with the head revision the running Phoenix version
+expects. For the v16 → v15 rollback, the known revisions are:
+
+| Version | Alembic head revision |
+|---------|-----------------------|
+| v15     | `575aa27302ee`        |
+| v16     | `0ff41b5b118f`        |
+
+#### Fix locally (podman-compose)
+
+1. Stop Phoenix:
+
+   ```bash
+   podman-compose stop phoenix
+   ```
+
+2. Find the volume mount path:
+
+   ```bash
+   podman volume inspect ai-workflows_phoenix-data --format '{{.Mountpoint}}'
+   ```
+
+3. Stamp the database:
+
+   ```bash
+   python3 -c "
+   import sqlite3, sys
+   db = '$(podman volume inspect ai-workflows_phoenix-data --format '{{.Mountpoint}}')/phoenix.db'
+   conn = sqlite3.connect(db)
+   cur = conn.cursor()
+   cur.execute('SELECT version_num FROM alembic_version')
+   print('Current:', cur.fetchall())
+   cur.execute(\"UPDATE alembic_version SET version_num = '575aa27302ee' WHERE version_num = '0ff41b5b118f'\")
+   print('Rows updated:', cur.rowcount)
+   conn.commit()
+   cur.execute('SELECT version_num FROM alembic_version')
+   print('Updated:', cur.fetchall())
+   conn.close()
+   "
+   ```
+
+4. Start Phoenix again:
+
+   ```bash
+   podman-compose start phoenix
+   ```
+
+#### Fix in OpenShift
+
+1. Scale down Phoenix to release the PVC:
+
+   ```bash
+   oc scale deployment phoenix --replicas=0
+   ```
+
+2. Find the head revision the current Phoenix image expects:
+
+   ```bash
+   oc debug deployment/phoenix --container=phoenix -- python3 -c "
+   from alembic.config import Config
+   from alembic.script import ScriptDirectory
+   c = Config()
+   c.set_main_option('script_location', '/usr/local/lib/python3.14/site-packages/phoenix/db/migrations')
+   s = ScriptDirectory.from_config(c)
+   print('Head revision:', s.get_current_head())
+   "
+   ```
+
+3. Update the `alembic_version` in the SQLite database (replace `OLD_REV` and
+   `NEW_REV` with the values from the table above, or use step 2 output for a
+   different version pair):
+
+   ```bash
+   oc debug deployment/phoenix --container=phoenix -- python3 -c "
+   import sqlite3
+   conn = sqlite3.connect('/mnt/data/phoenix.db')
+   cur = conn.cursor()
+   cur.execute('SELECT version_num FROM alembic_version')
+   print('Current:', cur.fetchall())
+   cur.execute(\"UPDATE alembic_version SET version_num = 'NEW_REV' WHERE version_num = 'OLD_REV'\")
+   print('Rows updated:', cur.rowcount)
+   conn.commit()
+   cur.execute('SELECT version_num FROM alembic_version')
+   print('Updated:', cur.fetchall())
+   conn.close()
+   "
+   ```
+
+4. Scale Phoenix back up:
+
+   ```bash
+   oc scale deployment phoenix --replicas=1
+   ```
+
+The stamp only updates Alembic's tracking metadata — any extra columns or indexes
+added by the newer version's migrations remain in the database. SQLite tolerates
+unused columns, so this is generally safe.
+
 ## Advanced Usage
 
 ### Automatic Issue Fetching

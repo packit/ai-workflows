@@ -1,7 +1,7 @@
 apiVersion: v1
 data:
-  CHAT_MODEL: vertexai:claude-sonnet-4-6
-  CHAT_MODEL_TRIAGE: vertexai:claude-opus-4-6
+  CHAT_MODEL: vertexai:claude-opus-4-6
+  CHAT_MODEL_TRIAGE: ""
   CHAT_MODEL_BACKPORT: ""
   CHAT_MODEL_REBASE: ""
   CHAT_MODEL_REBUILD: ""

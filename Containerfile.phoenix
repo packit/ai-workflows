@@ -2,7 +2,7 @@
 FROM fedora:44
 RUN dnf install -y python3-pip python3-numpy python3-scipy \
     && dnf clean all \
-    && pip3 install --no-cache-dir arize-phoenix \
+    && pip3 install --no-cache-dir 'arize-phoenix<16' \
     && useradd -u 1001 -g 0 -m -s /sbin/nologin phoenix
 USER 1001
 EXPOSE 6006 4317

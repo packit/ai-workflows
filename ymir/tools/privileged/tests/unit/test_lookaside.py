@@ -61,7 +61,7 @@ async def test_prep_sources(branch):
 
     async def create_subprocess_exec(cmd, *args, **kwargs):
         assert cmd == "rhpkg" if branch.startswith("rhel") else "centpkg"
-        assert args[-1] == "prep"
+        assert args[3] == "prep"
 
         async def wait():
             return 0

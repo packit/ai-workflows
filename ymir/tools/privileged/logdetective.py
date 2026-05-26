@@ -8,6 +8,7 @@ from beeai_framework.tools import JSONToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ymir.tools.base import CloneableTool as Tool
+from ymir.tools.constants import YMIR_USER_AGENT
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +165,7 @@ class AnalyzeLogsTool(Tool[AnalyzeLogsToolInput, ToolRunOptions, AnalyzeLogsTool
             if metadata:
                 payload["build_metadata"] = metadata
 
-        headers: dict = {"Content-Type": "application/json"}
+        headers: dict = {"Content-Type": "application/json", "User-Agent": YMIR_USER_AGENT}
         if LOG_DETECTIVE_TOKEN:
             headers["Authorization"] = f"Bearer {LOG_DETECTIVE_TOKEN}"
 

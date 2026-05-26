@@ -6,6 +6,8 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
 from pydantic import BaseModel, Field
 
+from ymir.tools.constants import YMIR_USER_AGENT
+
 logger = logging.getLogger(__name__)
 
 README_PATTERNS = [
@@ -39,7 +41,7 @@ class ReadReadmeTool(Tool[ReadReadmeInput, ToolRunOptions, StringToolOutput]):
         options: ToolRunOptions | None,
         context: RunContext,
     ) -> StringToolOutput:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(headers={"User-Agent": YMIR_USER_AGENT}) as session:
             for prefix, suffix in README_PATTERNS:
                 if input.repo_url.startswith(prefix):
                     url = input.repo_url.removesuffix("/") + suffix

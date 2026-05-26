@@ -9,6 +9,8 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import Tool, ToolError, ToolOutput, ToolRunOptions
 from pydantic import BaseModel, Field
 
+from ymir.tools.constants import YMIR_USER_AGENT
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,7 +54,10 @@ async def search_resultsdb(package_nvr: str, name_pattern: str) -> list[ResultsD
         f"&limit={MAX_RESULTS}"
     )
     logger.info("Fetching resultsdb data from %s", url)
-    async with aiohttp.ClientSession() as session, session.get(url) as response:
+    async with (
+        aiohttp.ClientSession(headers={"User-Agent": YMIR_USER_AGENT}) as session,
+        session.get(url) as response,
+    ):
         if response.status == 200:
             response_json = await response.json()
 

@@ -10,6 +10,7 @@ data:
   # The maximum number of iterations for the agent execution.
   # This was increased from 140 to handle complex rebases and backports.
   BEEAI_MAX_ITERATIONS: "255"
+  REASONING_EFFORT: high
 immutable: false
 kind: ConfigMap
 metadata:

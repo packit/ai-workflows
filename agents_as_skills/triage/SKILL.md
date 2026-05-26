@@ -212,6 +212,9 @@ You must analyze the Jira issue and decide between one of the following resoluti
      - Bug Trackers (for fixed bugs matching the issue)
      - Git / Version Control (commit messages, CVE IDs, function names)
    * **Always prefer patches from the canonical upstream repository** over mirrors or forks.
+   * **Never use shallow clones** (`--depth`) when cloning upstream repositories.
+     Shallow clones hide merge-request branches and make follow-up commits invisible
+     to git log searches.
    * Be thorough - try multiple search terms and approaches
    * Advanced investigation techniques:
      - Use targeted git searches: `git log -S "<code_expression>" -- <file>`,
@@ -270,8 +273,16 @@ You must analyze the Jira issue and decide between one of the following resoluti
        shortly after the primary fix
      - A commit whose message explicitly references the first fix (e.g. "follow-up to ...",
        "fix for ...", same CVE ID, or same bug tracker reference)
-     Search the git log around the date of the primary fix for related commits
-     (e.g. `git log <primary-fix>..HEAD -- <affected-files>`).
+     Use multiple search strategies — any single strategy can miss commits:
+     1. Ancestry search on affected files:
+        `git log <primary-fix>..HEAD -- <affected-files>`
+     2. Author-based search — find commits by the same author on the same files
+        within ~2 months after the primary fix:
+        `git log --all --author="<author>" --since="<fix-date>"
+         --until="<fix-date + 2 months>" -- <affected-files>`
+     3. Keyword search — search for the issue/CVE ID or related function names
+        in commit messages:
+        `git log --all --grep="<issue-number-or-CVE-ID>"`
      If you find follow-up commits, validate them the same way (fetch via `get_patch_from_url`
      and verify they are real patches) and include ALL of them in your `patch_urls` list,
      ordered chronologically (earliest first).

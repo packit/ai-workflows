@@ -489,17 +489,27 @@ async def clone_and_prep_sources(
         available_tools=available_tools,
     )
 
-    try:
-        await run_tool(
-            "prep_sources",
-            dist_git_path=str(local_clone),
-            package=package,
-            dist_git_branch=dist_git_branch,
-            available_tools=available_tools,
-        )
+    if is_cs_branch(dist_git_branch):
+        pkg_cmd = [
+            "centpkg",
+            f"--name={package}",
+            "--namespace=rpms",
+            f"--release={dist_git_branch}",
+        ]
+    else:
+        pkg_cmd = [
+            "rhpkg",
+            f"--name={package}",
+            "--namespace=rpms",
+            f"--release={dist_git_branch}",
+            "--offline",
+            "--released",
+        ]
+    exit_code, _, stderr = await run_subprocess([*pkg_cmd, "prep"], cwd=local_clone)
+    if exit_code == 0:
         unpacked = get_unpacked_sources(local_clone, package)
         return local_clone, unpacked, True
-    except Exception as e:
-        logger.warning(f"prep failed for {package}, falling back to manual extraction: {e}")
-        unpacked = await _fallback_extract_sources(local_clone, package)
-        return local_clone, unpacked, False
+
+    logger.warning(f"prep failed for {package}, falling back to manual extraction: {stderr}")
+    unpacked = await _fallback_extract_sources(local_clone, package)
+    return local_clone, unpacked, False

@@ -51,6 +51,7 @@ def get_chat_model() -> ChatModel:
         # bypasses that and enables litellm's built-in retry with back-off
         # for transient 429 / rate-limit errors from the provider.
         settings={"num_retries": int(os.getenv("LITELLM_NUM_RETRIES", 3))},
+        allow_parallel_tool_calls=bool(reasoning_effort),
     )
     if "gemini" in chat_model:
         # disable `required` for Gemini models

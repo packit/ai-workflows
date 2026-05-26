@@ -93,9 +93,12 @@ class PrepSourcesTool(Tool[PrepSourcesToolInput, ToolRunOptions, StringToolOutpu
         context: RunContext,
     ) -> StringToolOutput:
         await _try_init_kerberos()
+        cmd = _pkg_cmd(tool_input.package, tool_input.dist_git_branch)
+        if not is_cs_branch(tool_input.dist_git_branch):
+            cmd.extend(["--offline", "--released"])
+        cmd.append("prep")
         proc = await asyncio.create_subprocess_exec(
-            *_pkg_cmd(tool_input.package, tool_input.dist_git_branch),
-            "prep",
+            *cmd,
             cwd=tool_input.dist_git_path,
         )
         if await proc.wait():

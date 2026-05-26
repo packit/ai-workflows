@@ -14,7 +14,6 @@ from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.template import PromptTemplate
-from beeai_framework.tools import Tool
 from beeai_framework.tools.think import ThinkTool
 from beeai_framework.utils.strings import to_json
 from beeai_framework.workflows import Workflow
@@ -397,28 +396,19 @@ TRIAGE_PROMPT = """
            completes the fix can cause regressions or incomplete vulnerability remediation.
            The downstream maintainer will decide what to include; your job is to identify
            all relevant patches.
-         * **Prefer PR/MR URL when commits originate from a single PR/MR**:
-           When all the commits fixing the issue are part of a single upstream
-           pull request or merge request (GitHub PR, GitLab MR), you MUST output
-           the PR/MR URL as the sole entry in `patch_urls` instead of listing
-           individual commit URLs. Procedure:
-           1. Construct the PR `.patch` URL: for a GitHub PR at
-              `https://github.com/org/repo/pull/N`, the patch URL is
-              `https://github.com/org/repo/pull/N.patch`.
-              For a GitLab MR at
-              `https://gitlab.com/org/repo/-/merge_requests/N`,
-              the patch URL is
-              `https://gitlab.com/org/repo/-/merge_requests/N.patch`.
-           2. Fetch and validate the PR `.patch` URL via `get_patch_from_url` —
-              it returns a combined diff of all commits in the PR. Verify it
-              contains the expected changes.
-           3. If the PR `.patch` URL cannot be fetched or is invalid, fall back
-              to individual commit URLs.
-           Only use individual commit URLs when:
-           - Maintainer explicitly stated their preference in the rules.
-           - The commits come from different PRs/MRs or were committed directly
-             to the default branch without a PR/MR, OR
-           - The PR `.patch` URL fetch fails.
+         * **Prefer individual commit URLs; collapse to PR/MR when appropriate**:
+           Start by searching for individual fixing commits and use their
+           `.patch` URLs in your `patch_urls` list. This is the default.
+           However, use a single PR/MR `.patch` URL instead when either:
+           - You discover that ALL the fixing commits you collected originate
+             from the same pull request or merge request — in that case,
+             replace the individual commit URLs with the PR/MR `.patch` URL, OR
+           - The maintainer rules for the package explicitly instruct you to
+             look for pull requests or merge requests as fixes.
+           When using a PR/MR URL, construct it as:
+           - GitHub PR: `https://github.com/org/repo/pull/N.patch`
+           - GitLab MR: `https://gitlab.com/org/repo/-/merge_requests/N.patch`
+           Fetch and validate any URL via `get_patch_from_url` before using it.
 
          2.4. Decide the Outcome
          {{^is_older_zstream}}
@@ -608,7 +598,6 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
             ConditionalRequirement(
                 ThinkTool,
                 force_at_step=1,
-                force_after=Tool,
                 consecutive_allowed=False,
                 only_success_invocations=False,
             ),
@@ -773,7 +762,7 @@ async def run_workflow(
                         "resolution": "backport",
                         "data": {{
                         "package": "some-package",
-                        "patch_urls": ["https://github.com/example-org/example-repo/pull/42.patch"],
+                        "patch_urls": ["https://github.com/example-org/example-repo/commit/abc123def456.patch"],
                         "justification": "This patch fixes the bug by doing X, Y, and Z.",
                         "jira_issue": "RHEL-12345",
                         "cve_id": "CVE-1234-98765",

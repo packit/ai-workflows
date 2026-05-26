@@ -31,7 +31,7 @@ from ymir.common.models import (
 )
 from ymir.common.validators import AbsolutePath
 from ymir.tools.base import CloneableTool as Tool
-from ymir.tools.constants import AIOHTTP_TIMEOUT
+from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.tools.privileged.utils import clean_stale_repositories
 
 logger = logging.getLogger(__name__)
@@ -99,12 +99,13 @@ def _get_api_diff_url(url: str) -> str:
 
 
 def _get_auth_headers(url: str) -> dict[str, str]:
-    """Return PRIVATE-TOKEN header if *url* points to a private Red Hat GitLab project."""
+    """Return headers for requests; always includes User-Agent, adds PRIVATE-TOKEN for private GitLab."""
+    headers: dict[str, str] = {"User-Agent": YMIR_USER_AGENT}
     if _is_private_gitlab(url):
         token = os.getenv("GITLAB_TOKEN")
         if token:
-            return {"PRIVATE-TOKEN": token}
-    return {}
+            headers["PRIVATE-TOKEN"] = token
+    return headers
 
 
 def _get_authenticated_url(repository_url: str) -> str:

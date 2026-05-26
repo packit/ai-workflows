@@ -4,6 +4,8 @@ from contextvars import ContextVar
 import aiohttp
 import requests
 
+from ymir.tools.constants import YMIR_USER_AGENT
+
 # We use *both* aiohttp and requests in various places, so we need to
 # set up sessions for both libraries. (We can't convert everything to
 # aiohttp because of our usage of requests_gssapi, but aiohttp is nice
@@ -26,7 +28,7 @@ async def with_aiohttp_session():
     session = _aiohttp_session.get()
 
     if session is None:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(headers={"User-Agent": YMIR_USER_AGENT}) as session:
             token = _aiohttp_session.set(session)
             try:
                 yield session

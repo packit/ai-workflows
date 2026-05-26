@@ -8,7 +8,7 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
-from ymir.tools.constants import AIOHTTP_TIMEOUT
+from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,9 @@ class MaintainerRulesTool(Tool[MaintainerRulesInput, ToolRunOptions, StringToolO
         file_path = quote(tool_input.file_path, safe="")
         url = f"{GITLAB_API_URL}/projects/{project_path}/repository/files/{file_path}/raw?ref=main"
 
-        headers = {"PRIVATE-TOKEN": token} if (token := os.getenv("GITLAB_TOKEN")) else {}
+        headers: dict[str, str] = {"User-Agent": YMIR_USER_AGENT}
+        if token := os.getenv("GITLAB_TOKEN"):
+            headers["PRIVATE-TOKEN"] = token
 
         try:
             async with (

@@ -2,8 +2,9 @@
 
 ## Running E2E Tests Locally
 
-E2E tests exercise a real LLM against mock Jira fixtures and git repos. They require access to
-the private `git@gitlab.cee.redhat.com:jotnar-project/testing-jiras.git` repository.
+E2E tests exercise a real LLM against mock Jira fixtures and git repos. They require test data
+from the private `git@gitlab.cee.redhat.com:jotnar-project/testing-jiras.git` repository — you
+only need to clone it once; the tests run entirely offline against the local copy.
 
 ### Setup
 

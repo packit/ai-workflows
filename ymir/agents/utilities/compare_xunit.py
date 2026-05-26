@@ -6,6 +6,8 @@ import aiohttp
 import tomli_w
 from pydantic import BaseModel, Field
 
+from ymir.tools.constants import YMIR_USER_AGENT
+
 
 class XUnitComparisonStatus(BaseModel):
     generated: bool
@@ -267,7 +269,7 @@ async def compare_xunit_files(
     if metadata is None:
         metadata = {}
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(headers={"User-Agent": YMIR_USER_AGENT}) as session:
 
         async def fetch_url(url: str) -> str:
             async with session.get(url) as response:

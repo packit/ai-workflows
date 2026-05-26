@@ -121,7 +121,7 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 await asyncio.to_thread(project_proxy.edit, **kwargs)
         except Exception as e:
             raise ToolError(f"Failed to create or update Copr project: {e}") from e
-        if not chroot.removesuffix(f"-{build_arch}").endswith(".dev"):
+        if chroot.startswith("custom-"):
             # make sure the chroot has access to corresponding buildroot repository
             logger.info(f"Connecting to Copr API to update chroot configuration for {chroot}")
             chroot_proxy = ProjectChrootProxy({"username": copr_user, **COPR_CONFIG})
@@ -138,15 +138,24 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                     projectname=jira_issue,
                     chrootname=chroot,
                 )
+                kwargs = {}
                 if buildroot_repo_url not in chroot_config.additional_repos:
+                    kwargs["additional_repos"] = sorted(
+                        set(chroot_config.additional_repos) | {buildroot_repo_url}
+                    )
+                # make sure base build packages are present in the chroot
+                build_group = "@build"
+                if build_group not in chroot_config.additional_packages:
+                    kwargs["additional_packages"] = sorted(
+                        set(chroot_config.additional_packages) | {build_group}
+                    )
+                if kwargs:
                     await asyncio.to_thread(
                         chroot_proxy.edit,
                         ownername=copr_user,
                         projectname=jira_issue,
                         chrootname=chroot,
-                        additional_repos=sorted(
-                            set(chroot_config.additional_repos) | {buildroot_repo_url},
-                        ),
+                        **kwargs,
                     )
             except Exception as e:
                 raise ToolError(f"Failed to update Copr chroot: {e}") from e
@@ -254,6 +263,9 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 suffix = ""
         else:
             suffix = ".dev"
+        if not suffix:
+            # use fully custom chroot for regular Z-Streams
+            return "custom-1"
         return f"rhel-{majorver}{suffix}"
 
 

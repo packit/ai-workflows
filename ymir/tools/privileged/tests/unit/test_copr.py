@@ -37,7 +37,7 @@ async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
     jira_issue = "RHEL-12345"
     suffix = "" if dist_git_branch == "rhel-10.0" else ".dev"
     build_arch = exclusive_arch or "x86_64"
-    chroot = f"rhel-10{suffix}-{build_arch}"
+    chroot = f"rhel-10{suffix}-{build_arch}" if suffix else f"custom-1-{build_arch}"
     existing_chroot = "rhel-9.dev-x86_64"
     internal_repos_host = "http://example.com"
 
@@ -81,7 +81,7 @@ async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
         ownername=ownername,
         projectname=jira_issue,
         chrootname=chroot,
-    ).and_return(flexmock(additional_repos=[])).times(0 if suffix else 1)
+    ).and_return(flexmock(additional_repos=[], additional_packages=[])).times(0 if suffix else 1)
     flexmock(ProjectChrootProxy).should_receive("edit").with_args(
         ownername=ownername,
         projectname=jira_issue,
@@ -89,6 +89,7 @@ async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
         additional_repos=[
             f"{internal_repos_host}/brewroot/repos/{dist_git_branch}-z-build/latest/{build_arch}",
         ],
+        additional_packages=["@build"],
     ).times(0 if suffix else 1)
     flexmock(BuildProxy).should_receive("create_from_file").with_args(
         ownername=ownername,

@@ -57,11 +57,15 @@ class DownloadSourcesTool(Tool[DownloadSourcesToolInput, ToolRunOptions, StringT
         context: RunContext,
     ) -> StringToolOutput:
         await _try_init_kerberos()
-        proc = await asyncio.create_subprocess_exec(
-            *_pkg_cmd(tool_input.package, tool_input.dist_git_branch),
-            "sources",
-            cwd=tool_input.dist_git_path,
-        )
+        cmd = _pkg_cmd(tool_input.package, tool_input.dist_git_branch)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                "sources",
+                cwd=tool_input.dist_git_path,
+            )
+        except FileNotFoundError as e:
+            raise ToolError(f"Failed to download sources: {cmd[0]} is not installed") from e
         if await proc.wait():
             raise ToolError("Failed to download sources")
         return StringToolOutput(result="Successfully downloaded sources from lookaside cache")
@@ -93,11 +97,17 @@ class PrepSourcesTool(Tool[PrepSourcesToolInput, ToolRunOptions, StringToolOutpu
         context: RunContext,
     ) -> StringToolOutput:
         await _try_init_kerberos()
-        proc = await asyncio.create_subprocess_exec(
-            *_pkg_cmd(tool_input.package, tool_input.dist_git_branch),
-            "prep",
-            cwd=tool_input.dist_git_path,
-        )
+        cmd = _pkg_cmd(tool_input.package, tool_input.dist_git_branch)
+        if not is_cs_branch(tool_input.dist_git_branch):
+            cmd.extend(["--offline", "--released"])
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                "prep",
+                cwd=tool_input.dist_git_path,
+            )
+        except FileNotFoundError as e:
+            raise ToolError(f"Failed to prep sources: {cmd[0]} is not installed") from e
         if await proc.wait():
             raise ToolError("Failed to prep sources")
         return StringToolOutput(result="Successfully prepped sources")

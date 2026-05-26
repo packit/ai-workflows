@@ -489,6 +489,9 @@ async def clone_and_prep_sources(
         available_tools=available_tools,
     )
 
+    # Run prep locally rather than via MCP gateway: the agent container is
+    # RHEL-based so rpmbuild evaluates %prep macros correctly, whereas the
+    # MCP gateway runs Fedora and would expand them differently.
     if is_cs_branch(dist_git_branch):
         pkg_cmd = [
             "centpkg",
@@ -505,7 +508,15 @@ async def clone_and_prep_sources(
             "--offline",
             "--released",
         ]
-    exit_code, _, stderr = await run_subprocess([*pkg_cmd, "prep"], cwd=local_clone)
+    try:
+        exit_code, _, stderr = await run_subprocess([*pkg_cmd, "prep"], cwd=local_clone)
+    except FileNotFoundError:
+        logger.warning(
+            f"prep failed for {package}: {pkg_cmd[0]} is not installed, falling back to manual extraction"
+        )
+        unpacked = await _fallback_extract_sources(local_clone, package)
+        return local_clone, unpacked, False
+
     if exit_code == 0:
         unpacked = get_unpacked_sources(local_clone, package)
         return local_clone, unpacked, True

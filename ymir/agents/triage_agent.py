@@ -380,8 +380,15 @@ TRIAGE_PROMPT = """
              shortly after the primary fix
            - A commit whose message explicitly references the first fix (e.g. "follow-up to ...",
              "fix for ...", same CVE ID, or same bug tracker reference)
-           Search the git log around the date of the primary fix for related commits
-           (e.g. `git log <primary-fix>..HEAD -- <affected-files>`).
+           Use multiple search strategies — any single strategy can miss commits:
+           1. Ancestry search on affected files:
+              `git log <primary-fix>..HEAD -- <affected-files>`
+           2. Author-based search — find commits by the same author on the
+              same files within ~2 months after the primary fix:
+              `git log --all --author="<author>" --since="<fix-date>" --until="<fix-date+2months>" -- <files>`
+           3. Keyword search — search for the issue/CVE ID or related
+              function names in commit messages:
+              `git log --all --grep="<issue-number-or-CVE-ID>"`
            If you find follow-up commits, validate them the same way (fetch via
            get_patch_from_url and verify they are real patches) and include ALL of them
            in your patch_urls list, ordered chronologically (earliest first).
@@ -630,6 +637,9 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
             "After completing your triage analysis, if your decision is backport "
             "or rebase, always set appropriate JIRA fields per the instructions "
             "using set_jira_fields tool.",
+            "Never use shallow clones (--depth) when cloning upstream repositories. "
+            "Shallow clones hide merge-request branches and make follow-up commits "
+            "invisible to git log searches.",
         ],
     )
 

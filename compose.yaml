@@ -1,6 +1,7 @@
 # Environment variables shared by all agents
 x-beeai-env: &beeai-env
   MCP_GATEWAY_URL: http://mcp-gateway:8000/sse
+  GITLAB_TOKEN: ${GITLAB_TOKEN:-}
   UPSTREAM_SEARCH_API_URL: http://upstream-sea.hosted.upshift.rdu2.redhat.com:80/v1
   REDIS_URL: redis://valkey:6379/0
   COLLECTOR_ENDPOINT: http://otel-collector:4318/v1/traces

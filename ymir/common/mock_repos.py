@@ -102,16 +102,24 @@ def setup_mock_repos(repos: list[dict], issue_key: str, base_dir: Path) -> dict[
         ``insteadOf`` URL rewriting.
     """
     git_env: dict[str, str] = {}
+    gitlab_token = os.getenv("GITLAB_TOKEN")
 
+    seen_packages: dict[str, int] = {}
     for i, repo_info in enumerate(repos):
-        local_path = base_dir / f"{issue_key}-{repo_info['package']}.git"
+        pkg = repo_info["package"]
+        seen_packages[pkg] = seen_packages.get(pkg, 0) + 1
+        suffix = f"-{repo_info['branch']}" if seen_packages[pkg] > 1 else ""
+        local_path = base_dir / f"{issue_key}-{pkg}{suffix}.git"
+        clone_url = repo_info["remote_url"]
+        if gitlab_token and clone_url.startswith("https://gitlab.com/"):
+            clone_url = clone_url.replace("https://", f"https://oauth2:{gitlab_token}@", 1)
         logger.info(
             "Cloning %s (bare) into %s for %s",
             repo_info["remote_url"],
             local_path,
             issue_key,
         )
-        repo = git.Repo.clone_from(repo_info["remote_url"], str(local_path), bare=True)
+        repo = git.Repo.clone_from(clone_url, str(local_path), bare=True)
 
         keep_branch = repo_info["branch"]
         repo.git.update_ref(f"refs/heads/{keep_branch}", repo_info["pre_fix_ref"])

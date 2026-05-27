@@ -930,7 +930,10 @@ async def run_workflow(
         workflow = Workflow(BackportState, name="BackportWorkflow")
 
         async def change_jira_status(state):
-            if not dry_run and not silent_run:
+            if dry_run:
+                logger.info(f"Dry run: would change status of {state.jira_issue} to In Progress")
+                return "fork_and_prepare_dist_git"
+            else:
                 try:
                     await tasks.change_jira_status(
                         jira_issue=state.jira_issue,
@@ -939,8 +942,6 @@ async def run_workflow(
                     )
                 except Exception as status_error:
                     logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
-            else:
-                logger.info(f"Dry run: would change status of {state.jira_issue} to In Progress")
             return "fork_and_prepare_dist_git"
 
         async def fork_and_prepare_dist_git(state):

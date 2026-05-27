@@ -473,7 +473,7 @@ async def test_push_retry_needed_issue(fetcher, mock_redis_context):
 
     # ymir_retry_needed can be set by either a maintainer or an agent retrying a
     # failed run, so user_triggered stays False here — maintainers who want the
-    # user-triggered treatment (ack comment, SILENT_RUN bypass) use ymir_todo.
+    # user-triggered treatment (ack comment, comments on results) use ymir_todo.
     expected_task = Task.from_issue("RETRY-1", user_triggered=False)
     mock_redis.should_receive("lpush").with_args(
         RedisQueues.TRIAGE_QUEUE.value, expected_task.to_json()
@@ -528,6 +528,44 @@ async def test_retry_needed_skip_when_label_flip_fails(fetcher, mock_redis_conte
     result = await fetcher.push_issues_to_queue(issues)
 
     assert result == 0
+
+
+@pytest.mark.parametrize(
+    ("trigger_label", "user_triggered", "issue_key"),
+    [
+        (JiraLabels.TODO.value, True, "TODO-DRY"),
+        (JiraLabels.RETRY_NEEDED.value, False, "RETRY-DRY"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_dry_run_skips_flip_but_still_pushes(
+    monkeypatch, mock_env_vars, mock_redis_context, trigger_label, user_triggered, issue_key
+):
+    """DRY_RUN=true: skip the Jira atomic flip for trigger labels, but still push to Redis.
+
+    The pushed Task preserves user_triggered so the agent (also presumably in
+    DRY_RUN) sees the same dry-mode flow as it would for a real trigger.
+    """
+    monkeypatch.setenv("DRY_RUN", "true")
+    fetcher = JiraIssueFetcher()
+    mock_redis, _ = mock_redis_context
+
+    issues = [{"key": issue_key, "fields": {"labels": [trigger_label]}}]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    # Must NOT touch Jira in dry-run mode.
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+
+    expected_task = Task.from_issue(issue_key, user_triggered=user_triggered)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE.value, expected_task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 1
 
 
 @pytest.mark.asyncio

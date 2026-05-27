@@ -77,6 +77,16 @@ class JiraIssueFetcher:
         # Rate limiting
         self.last_request_time = 0.0
 
+        # DRY_RUN: skip Jira writes (atomic label flips for ymir_todo /
+        # ymir_retry_needed) but still push tasks to Redis. The agent (also
+        # presumably in DRY_RUN) handles the rest of the dry-mode flow.
+        self.dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+        if self.dry_run:
+            logger.info(
+                "DRY_RUN=true — Jira label writes (atomic flips) will be "
+                "skipped; Redis pushes will proceed normally"
+            )
+
     async def _rate_limit(self):
         """Enforce rate limiting of RATE_LIMIT_CALLS_PER_SECOND calls per second"""
         current_time = time.time()
@@ -400,19 +410,26 @@ class JiraIssueFetcher:
                         label_to_consume = JiraLabels.RETRY_NEEDED.value
 
                     if label_to_consume:
-                        try:
-                            self._edit_jira_labels(
-                                issue_key,
-                                add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                                remove=[label_to_consume],
+                        if self.dry_run:
+                            logger.info(
+                                f"DRY_RUN: would flip {label_to_consume} → "
+                                f"{JiraLabels.TRIAGE_IN_PROGRESS.value} on {issue_key}; "
+                                f"skipping Jira write but proceeding with Redis push"
                             )
-                        except Exception as e:
-                            logger.error(
-                                f"Failed to flip {label_to_consume} → "
-                                f"{JiraLabels.TRIAGE_IN_PROGRESS.value} on {issue_key} "
-                                f"after retries; skipping enqueue to avoid duplicate processing: {e}"
-                            )
-                            continue
+                        else:
+                            try:
+                                self._edit_jira_labels(
+                                    issue_key,
+                                    add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                                    remove=[label_to_consume],
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Failed to flip {label_to_consume} → "
+                                    f"{JiraLabels.TRIAGE_IN_PROGRESS.value} on {issue_key} "
+                                    f"after retries; skipping enqueue to avoid duplicate processing: {e}"
+                                )
+                                continue
 
                     # Create task using shared Pydantic model
                     task = Task.from_issue(issue_key, user_triggered=user_triggered)

@@ -29,8 +29,6 @@ spec:
             configMapKeyRef:
               key: GIT_REPO_BASEPATH
               name: agents-env
-        - name: SILENT_RUN
-          value: "true"
         - name: SSE_PORT
           value: "8000"
         - name: FORK_NAMESPACE

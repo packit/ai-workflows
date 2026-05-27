@@ -290,18 +290,19 @@ async def main() -> None:
                 return "comment_in_mr"
 
             async def run_build_agent(state):
-                response = await build_agent.run(
-                    render_prompt(
-                        template=get_build_prompt(),
-                        input=BuildInputSchema(
-                            srpm_path=state.mr_update_result.srpm_path,
-                            dist_git_branch=state.dist_git_branch,
-                            jira_issue=state.jira_issue,
+                with span_processor.agent_type_context("build"):
+                    response = await build_agent.run(
+                        render_prompt(
+                            template=get_build_prompt(),
+                            input=BuildInputSchema(
+                                srpm_path=state.mr_update_result.srpm_path,
+                                dist_git_branch=state.dist_git_branch,
+                                jira_issue=state.jira_issue,
+                            ),
                         ),
-                    ),
-                    expected_output=BuildOutputSchema,
-                    **get_agent_execution_config(),
-                )
+                        expected_output=BuildOutputSchema,
+                        **get_agent_execution_config(),
+                    )
                 build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
                 if build_result.success:
                     return "stage_changes"

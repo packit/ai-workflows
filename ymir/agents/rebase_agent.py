@@ -309,18 +309,19 @@ async def main() -> None:
                 return "comment_in_jira"
 
             async def run_build_agent(state):
-                response = await build_agent.run(
-                    render_prompt(
-                        template=get_build_prompt(),
-                        input=BuildInputSchema(
-                            srpm_path=state.rebase_result.srpm_path,
-                            dist_git_branch=state.dist_git_branch,
-                            jira_issue=state.jira_issue,
+                with span_processor.agent_type_context("build"):
+                    response = await build_agent.run(
+                        render_prompt(
+                            template=get_build_prompt(),
+                            input=BuildInputSchema(
+                                srpm_path=state.rebase_result.srpm_path,
+                                dist_git_branch=state.dist_git_branch,
+                                jira_issue=state.jira_issue,
+                            ),
                         ),
-                    ),
-                    expected_output=BuildOutputSchema,
-                    **get_agent_execution_config(),
-                )
+                        expected_output=BuildOutputSchema,
+                        **get_agent_execution_config(),
+                    )
                 build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
                 if build_result.success:
                     return "update_release"
@@ -372,17 +373,18 @@ async def main() -> None:
                 return "run_log_agent"
 
             async def run_log_agent(state):
-                response = await log_agent.run(
-                    render_prompt(
-                        template=get_log_prompt(),
-                        input=LogInputSchema(
-                            jira_issue=state.jira_issue,
-                            changes_summary=state.rebase_log[-1],
+                with span_processor.agent_type_context("log"):
+                    response = await log_agent.run(
+                        render_prompt(
+                            template=get_log_prompt(),
+                            input=LogInputSchema(
+                                jira_issue=state.jira_issue,
+                                changes_summary=state.rebase_log[-1],
+                            ),
                         ),
-                    ),
-                    expected_output=LogOutputSchema,
-                    **get_agent_execution_config(),
-                )
+                        expected_output=LogOutputSchema,
+                        **get_agent_execution_config(),
+                    )
                 log_output = LogOutputSchema.model_validate_json(response.last_message.text)
 
                 if redis_conn and not dry_run:

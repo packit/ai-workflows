@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -634,7 +635,13 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
 
 
 async def run_workflow(
-    jira_issue, dry_run, triage_agent_factory, auto_chain=False, force_cve_triage=False, silent_run=False
+    jira_issue,
+    dry_run,
+    triage_agent_factory,
+    auto_chain=False,
+    force_cve_triage=False,
+    silent_run=False,
+    span_processor=None,
 ):
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
         triage_agent = triage_agent_factory(gateway_tools)
@@ -1023,11 +1030,17 @@ async def run_workflow(
                     prep_ok=prep_ok,
                 )
 
-                response = await applicability_agent.run(
-                    prompt,
-                    expected_output=ApplicabilityResult,
-                    **get_agent_execution_config(),
+                ctx = (
+                    span_processor.agent_type_context("applicability")
+                    if span_processor
+                    else contextlib.nullcontext()
                 )
+                with ctx:
+                    response = await applicability_agent.run(
+                        prompt,
+                        expected_output=ApplicabilityResult,
+                        **get_agent_execution_config(),
+                    )
                 applicability = ApplicabilityResult.model_validate_json(response.last_message.text)
 
                 if not applicability.is_affected:
@@ -1145,6 +1158,7 @@ async def main() -> None:
                 auto_chain=auto_chain,
                 force_cve_triage=force_cve_triage,
                 silent_run=silent_run,
+                span_processor=span_processor,
             )
             logger.info(f"Direct run completed: {state.triage_result.model_dump_json(indent=4)}")
             if state.cve_eligibility_result:
@@ -1229,6 +1243,7 @@ async def main() -> None:
                         auto_chain=auto_chain,
                         force_cve_triage=input.force_cve_triage,
                         silent_run=silent_run,
+                        span_processor=span_processor,
                     )
                     output = state.triage_result
                     logger.info(

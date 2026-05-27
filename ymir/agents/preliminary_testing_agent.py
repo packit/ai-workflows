@@ -450,7 +450,7 @@ async def _flag_attention(
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
-    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"], agent_type="preliminary_testing")
+    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     ignore_needs_attention = os.getenv("IGNORE_NEEDS_ATTENTION", "false").lower() == "true"

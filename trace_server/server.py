@@ -43,6 +43,7 @@ import gzip
 import io
 import json
 import os
+import re
 import sqlite3
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -101,8 +102,97 @@ def _get_val(value: dict):
     return None
 
 
-def _extract_spans(otlp_data: dict) -> list[tuple]:
-    rows = []
+class SpanRow:
+    __slots__ = (
+        "agent_type",
+        "attributes",
+        "end_time",
+        "jira_issue",
+        "name",
+        "parent_span_id",
+        "span_id",
+        "start_time",
+        "status_code",
+        "trace_id",
+    )
+
+    def __init__(
+        self,
+        *,
+        trace_id,
+        span_id,
+        parent_span_id,
+        name,
+        start_time,
+        end_time,
+        status_code,
+        jira_issue,
+        agent_type,
+        attributes,
+    ):
+        self.trace_id = trace_id
+        self.span_id = span_id
+        self.parent_span_id = parent_span_id
+        self.name = name
+        self.start_time = start_time
+        self.end_time = end_time
+        self.status_code = status_code
+        self.jira_issue = jira_issue
+        self.agent_type = agent_type
+        self.attributes = attributes
+
+    def as_tuple(self):
+        return (
+            self.trace_id,
+            self.span_id,
+            self.parent_span_id,
+            self.name,
+            self.start_time,
+            self.end_time,
+            self.status_code,
+            self.jira_issue,
+            self.agent_type,
+            self.attributes,
+        )
+
+
+_CAMEL_CASE_RE = re.compile(r"(?<=[a-z])(?=[A-Z])")
+
+
+def _agent_type_from_name(name: str) -> str:
+    return _CAMEL_CASE_RE.sub("_", name.removesuffix("Agent").removesuffix("Analyst")).lower()
+
+
+def _propagate_agent_types(spans: list[SpanRow]) -> None:
+    """Set agent_type on descendant spans by walking down from *Agent spans."""
+    agent_types = {s.span_id: s.agent_type for s in spans if s.agent_type and s.span_id}
+    if not agent_types:
+        return
+
+    children: dict[str, list[SpanRow]] = {}
+    for s in spans:
+        if s.parent_span_id:
+            children.setdefault(s.parent_span_id, []).append(s)
+
+    visited: set[str] = set()
+
+    for span_id, at in agent_types.items():
+        if not span_id or span_id in visited:
+            continue
+        stack = [(span_id, at)]
+        while stack:
+            curr_id, curr_at = stack.pop()
+            if not curr_id or curr_id in visited:
+                continue
+            visited.add(curr_id)
+            for child in children.get(curr_id, []):
+                if not child.agent_type:
+                    child.agent_type = curr_at
+                stack.append((child.span_id, child.agent_type))
+
+
+def _extract_spans(otlp_data: dict) -> list[SpanRow]:
+    spans = []
     for rs in otlp_data.get("resourceSpans") or []:
         resource = rs.get("resource") or {}
         resource_attrs = {
@@ -118,34 +208,37 @@ def _extract_spans(otlp_data: dict) -> list[tuple]:
                     if isinstance(a, dict) and "key" in a
                 }
                 all_attrs = {**resource_attrs, **span_attrs}
-                jira_issue = _get_val(all_attrs.get("jira.issue"))
-                agent_type = _get_val(all_attrs.get("agent.type"))
+                name = span.get("name") or ""
                 status = span.get("status") or {}
                 status_code = status.get("code")
                 if status_code is None:
                     status_code = 0
                 elif isinstance(status_code, str):
                     status_code = _STATUS_CODE_NAMES.get(status_code, 0)
-                rows.append(
-                    (
-                        span.get("traceId", ""),
-                        span.get("spanId", ""),
-                        span.get("parentSpanId", ""),
-                        span.get("name", ""),
-                        int(span.get("startTimeUnixNano") or 0),
-                        int(span.get("endTimeUnixNano") or 0) or None,
-                        int(status_code),
-                        jira_issue,
-                        agent_type,
-                        json.dumps(all_attrs),
+                spans.append(
+                    SpanRow(
+                        trace_id=span.get("traceId") or "",
+                        span_id=span.get("spanId") or "",
+                        parent_span_id=span.get("parentSpanId") or "",
+                        name=name,
+                        start_time=int(span.get("startTimeUnixNano") or 0),
+                        end_time=int(span.get("endTimeUnixNano") or 0) or None,
+                        status_code=int(status_code),
+                        jira_issue=_get_val(all_attrs.get("jira.issue")),
+                        agent_type=_agent_type_from_name(name)
+                        if name.endswith(("Agent", "Analyst"))
+                        else None,
+                        attributes=json.dumps(all_attrs),
                     )
                 )
-    return rows
+
+    _propagate_agent_types(spans)
+    return spans
 
 
 def ingest_spans(otlp_data: dict) -> int:
-    rows = _extract_spans(otlp_data)
-    if not rows:
+    spans = _extract_spans(otlp_data)
+    if not spans:
         return 0
     db = get_db()
     db.executemany(
@@ -153,10 +246,10 @@ def ingest_spans(otlp_data: dict) -> int:
            (trace_id, span_id, parent_span_id, name, start_time, end_time,
             status_code, jira_issue, agent_type, attributes)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        rows,
+        [s.as_tuple() for s in spans],
     )
     db.commit()
-    return len(rows)
+    return len(spans)
 
 
 def query_issues() -> list[str]:

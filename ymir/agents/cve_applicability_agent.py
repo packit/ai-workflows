@@ -113,6 +113,15 @@ def build_applicability_prompt(
         {fallback_warning}
         The unpacked package source is at: {sources_rel}
 
+        CRITICAL: Your analysis MUST be based on the package source at
+        {sources_rel} — this is the actual version shipped in RHEL.
+        Do NOT clone or check the latest upstream repository — it may
+        already contain the fix, which is irrelevant to whether the
+        shipped RHEL version is affected. If the fix patch applies
+        cleanly to the package source (e.g. via `git apply --check`
+        or `patch --dry-run`), that is strong evidence the package
+        IS affected (the vulnerable code is present and unfixed).
+
         Steps:
         0. Use get_maintainer_rules with package '{package}' to check for
            maintainer-specific guidelines. If rules are found, treat them
@@ -126,7 +135,8 @@ def build_applicability_prompt(
            search for more information about the CVE online.
         2. If upstream fix patches are available, read them to identify
            the specific files and functions modified by the fix.
-        3. Search for those files/functions in the package source.
+        3. Search for those files/functions in the package source at
+           {sources_rel}. Do NOT look at any other copy of the source.
         4. If the vulnerable code is not present, determine why — older
            version that predates the vulnerability? Patched downstream?
         5. For dependency rebuilds: verify whether the package uses

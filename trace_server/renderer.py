@@ -18,35 +18,74 @@ STATUS_LABELS = {0: "Unset", 1: "Ok", 2: "Error"}
 HTML_HEAD = """\
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{title}</title>
+<script>
+try{{if(localStorage.getItem('theme')==='dark')document.documentElement.classList.add('dark')}}catch(e){{}}
+</script>
 <style>
-  body {{ font-family: system-ui, sans-serif; margin: 2em; background: #fafafa; }}
-  h1 {{ color: #333; }}
-  a {{ color: #0366d6; text-decoration: none; }}
+  :root {{
+    --bg: #fafafa; --fg: #333; --link: #0366d6;
+    --table-border: #ddd; --th-bg: #f0f0f0; --row-even: #f8f8f8;
+    --btn-bg: #f0f0f0; --btn-border: #ccc; --btn-hover: #e0e0e0;
+    --summary-fg: #586069; --pre-bg: #f6f8fa;
+    --reasoning-bg: #fff8e1; --reasoning-border: #f9a825;
+    --tool-bg: #e8f5e9; --tool-border: #43a047;
+    --error-bg: #fdecea; --error-border: #cb2431;
+    --attr-key: #6f42c1;
+    --status-ok: #22863a; --status-error: #cb2431;
+  }}
+  .dark {{
+    --bg: #1e1e1e; --fg: #d4d4d4; --link: #58a6ff;
+    --table-border: #444; --th-bg: #2d2d2d; --row-even: #262626;
+    --btn-bg: #333; --btn-border: #555; --btn-hover: #444;
+    --summary-fg: #999; --pre-bg: #2d2d2d;
+    --reasoning-bg: #3a3000; --reasoning-border: #f9a825;
+    --tool-bg: #1a3a1a; --tool-border: #43a047;
+    --error-bg: #3a1a1a; --error-border: #cb2431;
+    --attr-key: #c9a0ff;
+    --status-ok: #3fb950; --status-error: #f85149;
+  }}
+  body {{ font-family: system-ui, sans-serif; margin: 2em;
+         background: var(--bg); color: var(--fg); }}
+  h1 {{ color: var(--fg); }}
+  a {{ color: var(--link); text-decoration: none; }}
   a:hover {{ text-decoration: underline; }}
   table {{ border-collapse: collapse; width: 100%; margin-top: 1em; }}
-  th, td {{ border: 1px solid #ddd; padding: 6px 10px; text-align: left; font-size: 0.9em; }}
-  th {{ background: #f0f0f0; }}
-  tr:nth-child(even) {{ background: #f8f8f8; }}
-  .status-ok {{ color: #22863a; }}
-  .status-error {{ color: #cb2431; font-weight: bold; }}
-  .attr-key {{ color: #6f42c1; }}
+  th, td {{ border: 1px solid var(--table-border); padding: 6px 10px;
+            text-align: left; font-size: 0.9em; }}
+  th {{ background: var(--th-bg); }}
+  tr:nth-child(even) {{ background: var(--row-even); }}
+  .status-ok {{ color: var(--status-ok); }}
+  .status-error {{ color: var(--status-error); font-weight: bold; }}
+  .attr-key {{ color: var(--attr-key); }}
   details {{ margin-top: 2px; }}
-  details summary {{ cursor: pointer; color: #586069; font-size: 0.85em; }}
+  details summary {{ cursor: pointer; color: var(--summary-fg); font-size: 0.85em; }}
   pre {{ margin: 4px 0; font-size: 0.8em; max-height: 300px; overflow: auto;
-         background: #f6f8fa; padding: 8px; border-radius: 4px; }}
+         background: var(--pre-bg); padding: 8px; border-radius: 4px; }}
   .nav {{ margin-bottom: 1em; font-size: 0.9em; }}
-  .detail-reasoning {{ background: #fff8e1; border-left: 3px solid #f9a825; padding: 4px 8px;
-                       margin: 2px 0; font-size: 0.85em; white-space: pre-wrap; }}
+  .detail-reasoning {{ background: var(--reasoning-bg); border-left: 3px solid var(--reasoning-border);
+                       padding: 4px 8px; margin: 2px 0; font-size: 0.85em; white-space: pre-wrap; }}
   .detail-text {{ padding: 4px 8px; margin: 2px 0; font-size: 0.85em; white-space: pre-wrap; }}
-  .detail-tool-call {{ background: #e8f5e9; border-left: 3px solid #43a047; padding: 4px 8px;
-                       margin: 2px 0; font-size: 0.85em; font-family: monospace; word-break: break-all; }}
+  .detail-tool-call {{ background: var(--tool-bg); border-left: 3px solid var(--tool-border);
+                       padding: 4px 8px; margin: 2px 0; font-size: 0.85em;
+                       font-family: monospace; word-break: break-all; }}
   .detail-tool-name {{ font-weight: bold; font-size: 0.85em; margin-bottom: 2px; }}
-  .detail-error {{ background: #fdecea; border-left: 3px solid #cb2431; padding: 4px 8px;
-                   margin: 2px 0; font-size: 0.85em; white-space: pre-wrap; }}
+  .detail-error {{ background: var(--error-bg); border-left: 3px solid var(--error-border);
+                   padding: 4px 8px; margin: 2px 0; font-size: 0.85em; white-space: pre-wrap; }}
+  .toolbar {{ margin-top: 0.5em; font-size: 0.85em; display: flex; gap: 6px; }}
+  .toolbar button {{ background: var(--btn-bg); border: 1px solid var(--btn-border);
+                     border-radius: 4px; padding: 3px 10px; cursor: pointer;
+                     font-size: 0.85em; color: var(--fg); }}
+  .toolbar button:hover {{ background: var(--btn-hover); }}
+  .collapsible {{ display: none; }}
+  .cols-expanded .collapsible {{ display: table-cell; }}
 </style></head><body>
 """
 
-HTML_FOOT = "</body></html>"
+HTML_FOOT = """\
+<script>
+function toggleTheme(){{document.documentElement.classList.toggle('dark');
+try{{localStorage.setItem('theme',document.documentElement.classList.contains('dark')?'dark':'light')}}catch(e){{}}}}
+</script></body></html>"""
 
 
 def _fmt_time(nanos: int | None) -> str:
@@ -162,6 +201,7 @@ def _render_attrs(attrs: dict) -> str:
 
 def render_issues_html(issues: list[str]) -> str:
     parts = [HTML_HEAD.format(title="Traces")]
+    parts.append('<div class="toolbar"><button onclick="toggleTheme()">Toggle dark mode</button></div>')
     parts.append("<h1>Traced Issues</h1>")
     if not issues:
         parts.append("<p>No traces recorded yet.</p>")
@@ -185,21 +225,30 @@ def render_spans_html(issue: str, spans: list[dict], params: dict) -> str:
     parts.append(f"<p>{len(spans)} span(s)</p>")
 
     if spans:
-        parts.append("<table><tr>")
-        parts.append("<th>Start</th><th>Duration</th><th>Agent</th>")
-        parts.append("<th>Name</th><th>Detail</th><th>Status</th><th>Trace ID</th><th>Attributes</th>")
+        parts.append('<div class="toolbar">')
+        parts.append(
+            "<button onclick=\"document.getElementById('spans').classList.toggle('cols-expanded')\">"
+            "Toggle additional columns</button>"
+        )
+        parts.append('<button onclick="toggleTheme()">Toggle dark mode</button>')
+        parts.append("</div>")
+        parts.append('<table id="spans"><tr>')
+        parts.append("<th>Detail</th><th>Status</th>")
+        parts.append('<th class="collapsible">Start</th><th class="collapsible">Duration</th>')
+        parts.append('<th class="collapsible">Agent</th><th class="collapsible">Name</th>')
+        parts.append("<th>Trace ID</th><th>Attributes</th>")
         parts.append("</tr>")
         for s in spans:
             sc = s.get("status_code", 0)
-            parts.append("<tr>")
-            parts.append(f"<td>{_fmt_time(s['start_time'])}</td>")
-            parts.append(f"<td>{_fmt_duration(s['start_time'], s.get('end_time'))}</td>")
-            parts.append(f"<td>{escape(s.get('agent_type') or '-')}</td>")
-            parts.append(f"<td>{escape(s['name'])}</td>")
             detail = _extract_detail(s.get("attributes", {}), s["name"])
+            tid = s["trace_id"]
+            parts.append("<tr>")
             parts.append(f"<td>{detail or ''}</td>")
             parts.append(f'<td class="{_status_class(sc)}">{STATUS_LABELS.get(sc, sc)}</td>')
-            tid = s["trace_id"]
+            parts.append(f'<td class="collapsible">{_fmt_time(s["start_time"])}</td>')
+            parts.append(f'<td class="collapsible">{_fmt_duration(s["start_time"], s.get("end_time"))}</td>')
+            parts.append(f'<td class="collapsible">{escape(s.get("agent_type") or "-")}</td>')
+            parts.append(f'<td class="collapsible">{escape(s["name"])}</td>')
             parts.append(
                 f'<td><a href="/traces/{escape(issue)}?trace_id={escape(tid)}">'
                 f"{escape(tid[:12])}&hellip;</a></td>"

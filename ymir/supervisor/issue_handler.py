@@ -68,7 +68,8 @@ class IssueHandler(WorkItemHandler):
     async def resolve_start_reproduction(
         self, related_erratum: Erratum, comment: str, failed_test_ids: list[str]
     ) -> WorkflowResult:
-        assert self.issue.errata_link is not None
+        if self.issue.errata_link is None:
+            raise ValueError("errata_link must be set before resolve_start_reproduction")
 
         def resolve_on_error(error_message: str) -> WorkflowResult:
             return self.resolve_flag_attention(
@@ -128,8 +129,8 @@ class IssueHandler(WorkItemHandler):
             dry_run=self.dry_run,
         )
 
-        # Is always set by load_from_issue
-        assert baseline_tests.comment_id is not None
+        if baseline_tests.comment_id is None:
+            raise ValueError("baseline_tests.comment_id must be set by load_from_issue")
 
         update_issue_comment(
             self.issue.key,
@@ -242,7 +243,8 @@ class IssueHandler(WorkItemHandler):
 
     async def run_after_errata_created(self) -> WorkflowResult:
         issue = self.issue
-        assert issue.errata_link is not None
+        if issue.errata_link is None:
+            raise ValueError("errata_link must be set before run_after_errata_created")
         if issue.fixed_in_build is None:
             return self.resolve_flag_attention("Issue has errata_link but no fixed_in_build")
 

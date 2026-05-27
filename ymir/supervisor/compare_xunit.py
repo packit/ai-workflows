@@ -189,7 +189,8 @@ def compare_test_suites(suite_a: XUnitTestSuite, suite_b: XUnitTestSuite, output
         tc_b = case_map_b.get(key)
 
         some_case = tc_a or tc_b
-        assert some_case is not None
+        if some_case is None:
+            continue
 
         result_a = tc_a.result if tc_a else XUnitTestCaseResult.MISSING
         result_b = tc_b.result if tc_b else XUnitTestCaseResult.MISSING

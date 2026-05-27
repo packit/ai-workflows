@@ -28,11 +28,10 @@ ignore = [
     "RUF003",  # Comment contains ambiguous character
     "E701",    # Multiple statements on one line (colon)
     "COM812",  # Can cause conflict with the formatter
-    "S101",    # assert used (pervasive in tests and defensive checks)
 ]
 
 [lint.per-file-ignores]
 # Tests legitimately use subprocess with partial paths, /tmp paths, and dummy creds.
-"**/tests/**" = ["S105", "S106", "S107", "S108", "S603", "S607"]
+"**/tests/**" = ["S101", "S105", "S106", "S107", "S108", "S603", "S607"]
 # Helper scripts shell out to known binaries by name.
 "scripts/**" = ["S603", "S607"]

@@ -92,15 +92,15 @@ apply deployment-rebase-agent-c9s.yml
 apply deployment-rebase-agent-c10s.yml
 apply deployment-rebuild-agent-c9s.yml
 apply deployment-rebuild-agent-c10s.yml
-#
+
+# Jira Issue Fetcher
+apply imagestream-jira-issue-fetcher.yml
+import_image jira-issue-fetcher
+apply configmap-jira-issue-fetcher-env.yml
+apply cronjob-jira-issue-fetcher.yml
+
 # # Supervisor
 # apply imagestream-supervisor.yml
 # import_image supervisor
 # apply deployment-supervisor-processor.yml
 # apply cronjob-supervisor-collector.yml
-#
-# # Jira Issue Fetcher
-# apply imagestream-jira-issue-fetcher.yml
-# import_image jira-issue-fetcher
-# apply configmap-jira-issue-fetcher-env.yml
-# apply cronjob-jira-issue-fetcher.yml

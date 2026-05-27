@@ -69,16 +69,21 @@ class Task(BaseModel):
 
     metadata: dict[str, Any] = Field(description="Task metadata containing issue information")
     attempts: int = Field(default=0, description="Number of processing attempts")
+    user_triggered: bool = Field(
+        default=False,
+        description="True when a maintainer triggered this run via the ymir_todo label — "
+        "causes agents to bypass SILENT_RUN suppression so the requester gets feedback.",
+    )
 
     def to_json(self) -> str:
         """Convert to JSON string for Redis queue storage."""
         return self.model_dump_json()
 
     @classmethod
-    def from_issue(cls, issue: str, attempts: int = 0) -> "Task":
+    def from_issue(cls, issue: str, attempts: int = 0, user_triggered: bool = False) -> "Task":
         """Create a task from a JIRA issue key."""
         metadata = TriageInputSchema(issue=issue)
-        return cls(metadata=metadata.model_dump(), attempts=attempts)
+        return cls(metadata=metadata.model_dump(), attempts=attempts, user_triggered=user_triggered)
 
 
 # ============================================================================

@@ -250,8 +250,9 @@ async def comment_in_jira(
     comment_text: str,
     available_tools: list[Tool],
     is_error: bool = False,
+    user_triggered: bool = False,
 ) -> None:
-    if is_error and os.getenv("SILENT_RUN", "false").lower() == "true":
+    if is_error and os.getenv("SILENT_RUN", "false").lower() == "true" and not user_triggered:
         logger.info(f"Silent run: skipping Jira error comment for {jira_issue}")
         return
 
@@ -312,12 +313,13 @@ async def set_jira_labels(
     labels_to_add: list[str] | None = None,
     labels_to_remove: list[str] | None = None,
     dry_run: bool = False,
+    user_triggered: bool = False,
 ) -> None:
     if dry_run or os.getenv("JIRA_DRY_RUN", "false").lower() == "true":
         logger.info(f"Dry run, not updating labels for {jira_issue}")
         return
 
-    if os.getenv("SILENT_RUN", "false").lower() == "true":
+    if os.getenv("SILENT_RUN", "false").lower() == "true" and not user_triggered:
         original_count = len(labels_to_add or [])
         labels_to_add = [
             label for label in (labels_to_add or []) if not label.endswith(_FAILURE_LABEL_SUFFIXES)

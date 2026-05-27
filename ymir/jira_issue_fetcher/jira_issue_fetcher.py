@@ -110,6 +110,32 @@ class JiraIssueFetcher:
         response.raise_for_status()
         return response.json()
 
+    @backoff.on_exception(
+        backoff.expo,
+        (requests.RequestException, requests.HTTPError),
+        max_tries=4,
+        base=2,
+        logger=logger,
+    )
+    def _edit_jira_labels(self, issue_key: str, add: list[str], remove: list[str]) -> None:
+        """
+        Atomically add/remove labels on a Jira issue via PUT /rest/api/3/issue/{key}.
+
+        Raises on permanent failure after retries. Callers must skip side effects
+        (e.g. Redis enqueue) when this raises — otherwise the next sweep would
+        re-pick-up the same issue without the in-progress marker.
+        """
+        url = urljoin(self.jira_url, f"rest/api/3/issue/{issue_key}")
+        update_ops: list[dict[str, str]] = [{"add": label} for label in add]
+        update_ops.extend({"remove": label} for label in remove)
+        payload = {"update": {"labels": update_ops}}
+
+        response = requests.put(url, json=payload, headers=self.headers, timeout=self.API_TIMEOUT)
+        if response.status_code == 429:
+            logger.warning(f"Rate limited (429) editing labels on {issue_key}, will retry")
+            raise requests.HTTPError("Rate limited", response=response)
+        response.raise_for_status()
+
     async def search_issues(self) -> list[dict[str, Any]]:
         """
         Search for issues using the configured query with cursor-based pagination.
@@ -273,24 +299,40 @@ class JiraIssueFetcher:
             existing_keys = await self._get_existing_issue_keys(redis_conn)
 
             remove_issues_for_retry = set()
-            # Extend existing_keys with issues that have Ymir labels (except ymir_retry_needed)
+            user_triggered_keys = set()
+            # Extend existing_keys with issues that have Ymir labels (except ymir_retry_needed
+            # and ymir_todo, which both signal a re-run is wanted).
             for issue in issues:
                 issue_key = issue.get("key")
-                if issue_key:
-                    fields = issue.get("fields", {})
-                    labels = fields.get("labels", [])
-                    ymir_labels = [label for label in labels if label.startswith("ymir_")]
+                if not issue_key:
+                    continue
 
-                    # If issue has Ymir labels and there is no ymir_retry_needed label, mark as existing
-                    if ymir_labels and JiraLabels.RETRY_NEEDED.value not in ymir_labels:
-                        existing_keys.add(issue_key)
-                        logger.info(f"Issue {issue_key} has Ymir labels {ymir_labels} - marking as existing")
-                    elif JiraLabels.RETRY_NEEDED.value in ymir_labels:
-                        logger.info(f"Issue {issue_key} has ymir_retry_needed label - marking for retry")
-                        remove_issues_for_retry.add(issue_key)
-                    elif not ymir_labels:
-                        logger.info(f"Issue {issue_key} has no Ymir labels - marking for retry")
-                        remove_issues_for_retry.add(issue_key)
+                fields = issue.get("fields", {})
+                labels = fields.get("labels", [])
+                ymir_labels = [label for label in labels if label.startswith("ymir_")]
+                has_in_progress = any(label.endswith("_in_progress") for label in ymir_labels)
+
+                # ymir_todo is the maintainer-facing trigger. A run already in progress
+                # must not be re-enqueued — let it finish and the maintainer can re-add
+                # the label later if needed.
+                if JiraLabels.TODO.value in ymir_labels and not has_in_progress:
+                    logger.info(
+                        f"Issue {issue_key} has {JiraLabels.TODO.value} - marking for user-triggered run"
+                    )
+                    remove_issues_for_retry.add(issue_key)
+                    user_triggered_keys.add(issue_key)
+                    continue
+
+                # If issue has Ymir labels and there is no ymir_retry_needed label, mark as existing
+                if ymir_labels and JiraLabels.RETRY_NEEDED.value not in ymir_labels:
+                    existing_keys.add(issue_key)
+                    logger.info(f"Issue {issue_key} has Ymir labels {ymir_labels} - marking as existing")
+                elif JiraLabels.RETRY_NEEDED.value in ymir_labels:
+                    logger.info(f"Issue {issue_key} has ymir_retry_needed label - marking for retry")
+                    remove_issues_for_retry.add(issue_key)
+                elif not ymir_labels:
+                    logger.info(f"Issue {issue_key} has no Ymir labels - marking for retry")
+                    remove_issues_for_retry.add(issue_key)
 
             pushed_count = 0
             skipped_count = 0
@@ -329,8 +371,32 @@ class JiraIssueFetcher:
                         skipped_count += 1
                         continue
 
+                    user_triggered = issue_key in user_triggered_keys
+
+                    # For user-triggered runs, atomically swap ymir_todo for
+                    # ymir_triage_in_progress before enqueueing. This dedupes against
+                    # the very next sweep (which will see the in-progress marker and
+                    # skip), and consumes the trigger so a stuck run doesn't loop. If
+                    # this write fails after retries, do NOT push to the queue —
+                    # otherwise the issue would be picked up again on the next sweep
+                    # without the in-progress marker.
+                    if user_triggered:
+                        try:
+                            self._edit_jira_labels(
+                                issue_key,
+                                add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                                remove=[JiraLabels.TODO.value],
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to flip {JiraLabels.TODO.value} → "
+                                f"{JiraLabels.TRIAGE_IN_PROGRESS.value} on {issue_key} "
+                                f"after retries; skipping enqueue to avoid duplicate processing: {e}"
+                            )
+                            continue
+
                     # Create task using shared Pydantic model
-                    task = Task.from_issue(issue_key)
+                    task = Task.from_issue(issue_key, user_triggered=user_triggered)
 
                     await fix_await(redis_conn.lpush(RedisQueues.TRIAGE_QUEUE.value, task.to_json()))
                     pushed_count += 1

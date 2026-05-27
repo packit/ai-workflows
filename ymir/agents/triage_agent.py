@@ -79,9 +79,15 @@ logger = logging.getLogger(__name__)
 redis_logger = logging.getLogger("agent.redis")
 
 
-def _should_update_jira(silent_run: bool, resolution: Resolution = None) -> bool:
-    """In silent mode, only update Jira for not-affected and postponed resolutions."""
-    if not silent_run:
+def _should_update_jira(
+    silent_run: bool, resolution: Resolution = None, user_triggered: bool = False
+) -> bool:
+    """In silent mode, only update Jira for not-affected and postponed resolutions.
+
+    User-triggered runs (via ymir_todo) always update Jira so the requester gets
+    feedback, regardless of SILENT_RUN.
+    """
+    if user_triggered or not silent_run:
         return True
     return resolution in (Resolution.NOT_AFFECTED, Resolution.POSTPONED)
 
@@ -643,7 +649,13 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
 
 
 async def run_workflow(
-    jira_issue, dry_run, triage_agent_factory, auto_chain=False, force_cve_triage=False, silent_run=False
+    jira_issue,
+    dry_run,
+    triage_agent_factory,
+    auto_chain=False,
+    force_cve_triage=False,
+    silent_run=False,
+    user_triggered=False,
 ):
     local_tool_options = None
     if mock_env := get_mock_local_tool_env(jira_issue):
@@ -1193,7 +1205,7 @@ async def run_workflow(
             logger.info(f"Result to be put in Jira comment: {comment_text}")
             if dry_run:
                 return Workflow.END
-            if not _should_update_jira(silent_run, state.triage_result.resolution):
+            if not _should_update_jira(silent_run, state.triage_result.resolution, user_triggered):
                 logger.info(
                     f"Silent run: skipping Jira comment for {state.jira_issue} "
                     f"(resolution={state.triage_result.resolution.value})"
@@ -1204,6 +1216,7 @@ async def run_workflow(
                 agent_type="Triage",
                 comment_text=comment_text,
                 available_tools=gateway_tools,
+                user_triggered=user_triggered,
             )
             return Workflow.END
 
@@ -1269,7 +1282,29 @@ async def main() -> None:
 
             task = Task.model_validate_json(payload)
             input = InputSchema.model_validate(task.metadata)
-            logger.info(f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}")
+            user_triggered = task.user_triggered
+            logger.info(
+                f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}"
+                + (" (user-triggered via ymir_todo)" if user_triggered else "")
+            )
+
+            # User-triggered runs always get an immediate ack comment so the
+            # maintainer sees their request was picked up — regardless of SILENT_RUN.
+            if user_triggered and not dry_run:
+                try:
+                    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+                        await tasks.comment_in_jira(
+                            jira_issue=input.issue,
+                            agent_type="Triage",
+                            comment_text=(
+                                "Ymir picked up your request and started processing. "
+                                "Results will be posted here when triage completes."
+                            ),
+                            available_tools=gateway_tools,
+                            user_triggered=True,
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to post user-triggered ack comment for {input.issue}: {e}")
 
             current_labels = await tasks.get_jira_labels(input.issue)
             all_labels = JiraLabels.all_labels()
@@ -1278,14 +1313,18 @@ async def main() -> None:
                 for label in current_labels
                 if label in all_labels and label != JiraLabels.TRIAGE_IN_PROGRESS.value
             ]
-            if terminal_ymir_labels and JiraLabels.RETRY_NEEDED.value not in current_labels:
+            if (
+                terminal_ymir_labels
+                and JiraLabels.RETRY_NEEDED.value not in current_labels
+                and not user_triggered
+            ):
                 logger.info(
                     f"Skipping duplicate triage for {input.issue} — "
                     f"already has labels: {terminal_ymir_labels}"
                 )
                 continue
 
-            async def retry(task, error, input=input):
+            async def retry(task, error, input=input, user_triggered=user_triggered):
                 task.attempts += 1
                 if task.attempts < max_retries:
                     logger.warning(
@@ -1302,11 +1341,12 @@ async def main() -> None:
                         labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
                         labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
                         dry_run=dry_run,
+                        user_triggered=user_triggered,
                     )
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
             try:
-                if _should_update_jira(silent_run):
+                if _should_update_jira(silent_run, user_triggered=user_triggered):
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
@@ -1316,6 +1356,7 @@ async def main() -> None:
                             if label != JiraLabels.TRIAGE_IN_PROGRESS.value
                         ],
                         dry_run=dry_run,
+                        user_triggered=user_triggered,
                     )
                     logger.info(f"Cleaned up existing labels for {input.issue}")
 
@@ -1328,6 +1369,7 @@ async def main() -> None:
                         auto_chain=auto_chain,
                         force_cve_triage=input.force_cve_triage,
                         silent_run=silent_run,
+                        user_triggered=user_triggered,
                     )
                     output = state.triage_result
                     logger.info(
@@ -1347,7 +1389,7 @@ async def main() -> None:
                     ErrorData(details=error, jira_issue=input.issue).model_dump_json(),
                 )
             else:
-                update_jira = _should_update_jira(silent_run, output.resolution)
+                update_jira = _should_update_jira(silent_run, output.resolution, user_triggered)
                 logger.info(f"Triage resolved as {output.resolution.value} for {input.issue}")
 
                 resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
@@ -1357,6 +1399,7 @@ async def main() -> None:
                         labels_to_add=[resolution_label.value],
                         labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
                         dry_run=dry_run,
+                        user_triggered=user_triggered,
                     )
                     if output.resolution == Resolution.REBUILD:
                         for consolidated in output.data.consolidated_issues:
@@ -1369,6 +1412,7 @@ async def main() -> None:
                                         JiraLabels.REBUILT.value,
                                     ],
                                     dry_run=dry_run,
+                                    user_triggered=user_triggered,
                                 )
                             except Exception as e:
                                 logger.warning(

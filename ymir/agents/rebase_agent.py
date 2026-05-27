@@ -218,7 +218,7 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     resolve_chat_model_override("rebase")
 
-    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"], agent_type="rebase")
+    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
@@ -309,19 +309,18 @@ async def main() -> None:
                 return "comment_in_jira"
 
             async def run_build_agent(state):
-                with span_processor.agent_type_context("build"):
-                    response = await build_agent.run(
-                        render_prompt(
-                            template=get_build_prompt(),
-                            input=BuildInputSchema(
-                                srpm_path=state.rebase_result.srpm_path,
-                                dist_git_branch=state.dist_git_branch,
-                                jira_issue=state.jira_issue,
-                            ),
+                response = await build_agent.run(
+                    render_prompt(
+                        template=get_build_prompt(),
+                        input=BuildInputSchema(
+                            srpm_path=state.rebase_result.srpm_path,
+                            dist_git_branch=state.dist_git_branch,
+                            jira_issue=state.jira_issue,
                         ),
-                        expected_output=BuildOutputSchema,
-                        **get_agent_execution_config(),
-                    )
+                    ),
+                    expected_output=BuildOutputSchema,
+                    **get_agent_execution_config(),
+                )
                 build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
                 if build_result.success:
                     return "update_release"
@@ -373,18 +372,17 @@ async def main() -> None:
                 return "run_log_agent"
 
             async def run_log_agent(state):
-                with span_processor.agent_type_context("log"):
-                    response = await log_agent.run(
-                        render_prompt(
-                            template=get_log_prompt(),
-                            input=LogInputSchema(
-                                jira_issue=state.jira_issue,
-                                changes_summary=state.rebase_log[-1],
-                            ),
+                response = await log_agent.run(
+                    render_prompt(
+                        template=get_log_prompt(),
+                        input=LogInputSchema(
+                            jira_issue=state.jira_issue,
+                            changes_summary=state.rebase_log[-1],
                         ),
-                        expected_output=LogOutputSchema,
-                        **get_agent_execution_config(),
-                    )
+                    ),
+                    expected_output=LogOutputSchema,
+                    **get_agent_execution_config(),
+                )
                 log_output = LogOutputSchema.model_validate_json(response.last_message.text)
 
                 if redis_conn and not dry_run:

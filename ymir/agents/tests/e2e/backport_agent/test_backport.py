@@ -96,7 +96,7 @@ test_cases = _load_test_cases(os.getenv("BACKPORT_MOCK_REPOS_DIR", str(DEFAULT_F
 
 @pytest.fixture(scope="session", autouse=True)
 def observability_fixture():
-    return setup_observability(os.environ["COLLECTOR_ENDPOINT"], agent_type="backport")
+    return setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
 
 SHARED_BARE_REPOS_DIR = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / "mock_bare"

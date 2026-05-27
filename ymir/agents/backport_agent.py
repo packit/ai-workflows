@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import itertools
 import logging
 import os
@@ -900,7 +899,6 @@ async def run_workflow(
     backport_agent_factory=None,
     max_build_attempts=10,
     max_incremental_fix_attempts=None,
-    span_processor=None,
 ):
     if max_incremental_fix_attempts is None:
         max_incremental_fix_attempts = max_build_attempts
@@ -1149,20 +1147,18 @@ async def run_workflow(
                 return "comment_in_jira"
 
             fresh_build_agent = create_build_agent(gateway_tools, local_tool_options)
-            ctx = span_processor.agent_type_context("build") if span_processor else contextlib.nullcontext()
-            with ctx:
-                response = await fresh_build_agent.run(
-                    render_prompt(
-                        template=get_build_prompt(),
-                        input=BuildInputSchema(
-                            srpm_path=state.backport_result.srpm_path,
-                            dist_git_branch=state.dist_git_branch,
-                            jira_issue=state.jira_issue,
-                        ),
+            response = await fresh_build_agent.run(
+                render_prompt(
+                    template=get_build_prompt(),
+                    input=BuildInputSchema(
+                        srpm_path=state.backport_result.srpm_path,
+                        dist_git_branch=state.dist_git_branch,
+                        jira_issue=state.jira_issue,
                     ),
-                    expected_output=BuildOutputSchema,
-                    **get_agent_execution_config(),
-                )
+                ),
+                expected_output=BuildOutputSchema,
+                **get_agent_execution_config(),
+            )
             build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
             if build_result.success:
                 state.incremental_fix_attempts = 0
@@ -1238,20 +1234,18 @@ async def run_workflow(
             if source_changelog:
                 logger.info(f"Extracted source changelog for reuse: {source_changelog}")
 
-            ctx = span_processor.agent_type_context("log") if span_processor else contextlib.nullcontext()
-            with ctx:
-                response = await log_agent.run(
-                    render_prompt(
-                        template=get_log_prompt(),
-                        input=LogInputSchema(
-                            jira_issue=state.jira_issue,
-                            changes_summary=state.backport_log[-1],
-                            source_changelog=source_changelog,
-                        ),
+            response = await log_agent.run(
+                render_prompt(
+                    template=get_log_prompt(),
+                    input=LogInputSchema(
+                        jira_issue=state.jira_issue,
+                        changes_summary=state.backport_log[-1],
+                        source_changelog=source_changelog,
                     ),
-                    expected_output=LogOutputSchema,
-                    **get_agent_execution_config(),
-                )
+                ),
+                expected_output=LogOutputSchema,
+                **get_agent_execution_config(),
+            )
             log_output = LogOutputSchema.model_validate_json(response.last_message.text)
 
             if redis_conn and not dry_run:
@@ -1369,7 +1363,7 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     resolve_chat_model_override("backport")
 
-    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"], agent_type="backport")
+    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
@@ -1396,7 +1390,6 @@ async def main() -> None:
                 dry_run=dry_run,
                 max_build_attempts=max_build_attempts,
                 max_incremental_fix_attempts=max_incremental_fix_attempts,
-                span_processor=span_processor,
             )
             logger.info(f"Direct run completed: {state.backport_result.model_dump_json(indent=4)}")
             return
@@ -1471,7 +1464,6 @@ async def main() -> None:
                         dry_run=dry_run,
                         max_build_attempts=max_build_attempts,
                         max_incremental_fix_attempts=max_incremental_fix_attempts,
-                        span_processor=span_processor,
                     )
                     logger.info(
                         f"Backport processing completed for {backport_data.jira_issue}, "

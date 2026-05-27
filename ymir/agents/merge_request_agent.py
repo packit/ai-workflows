@@ -179,7 +179,7 @@ def extract_jira_issue(mr_description: str) -> str:
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
-    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"], agent_type="merge_request")
+    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
@@ -290,19 +290,18 @@ async def main() -> None:
                 return "comment_in_mr"
 
             async def run_build_agent(state):
-                with span_processor.agent_type_context("build"):
-                    response = await build_agent.run(
-                        render_prompt(
-                            template=get_build_prompt(),
-                            input=BuildInputSchema(
-                                srpm_path=state.mr_update_result.srpm_path,
-                                dist_git_branch=state.dist_git_branch,
-                                jira_issue=state.jira_issue,
-                            ),
+                response = await build_agent.run(
+                    render_prompt(
+                        template=get_build_prompt(),
+                        input=BuildInputSchema(
+                            srpm_path=state.mr_update_result.srpm_path,
+                            dist_git_branch=state.dist_git_branch,
+                            jira_issue=state.jira_issue,
                         ),
-                        expected_output=BuildOutputSchema,
-                        **get_agent_execution_config(),
-                    )
+                    ),
+                    expected_output=BuildOutputSchema,
+                    **get_agent_execution_config(),
+                )
                 build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
                 if build_result.success:
                     return "stage_changes"

@@ -42,7 +42,7 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     resolve_chat_model_override("rebuild")
 
-    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"], agent_type="rebuild")
+    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
 
@@ -138,18 +138,17 @@ async def main() -> None:
                 else:
                     summary = f"Rebuild of {state.package} against updated dependencies for {issues_str}."
 
-                with span_processor.agent_type_context("log"):
-                    response = await log_agent.run(
-                        render_prompt(
-                            template=get_log_prompt(),
-                            input=LogInputSchema(
-                                jira_issue=issues_str,
-                                changes_summary=summary,
-                            ),
+                response = await log_agent.run(
+                    render_prompt(
+                        template=get_log_prompt(),
+                        input=LogInputSchema(
+                            jira_issue=issues_str,
+                            changes_summary=summary,
                         ),
-                        expected_output=LogOutputSchema,
-                        **get_agent_execution_config(),
-                    )
+                    ),
+                    expected_output=LogOutputSchema,
+                    **get_agent_execution_config(),
+                )
                 state.log_result = LogOutputSchema.model_validate_json(response.last_message.text)
                 return "stage_changes"
 

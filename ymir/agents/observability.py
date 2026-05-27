@@ -14,10 +14,6 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 class AgentSpanProcessor(SpanProcessor):
     _jira_issue_var: ContextVar[str | None] = ContextVar("jira_issue", default=None)
-    _agent_type_var: ContextVar[str | None] = ContextVar("agent_type", default=None)
-
-    def __init__(self, agent_type: str) -> None:
-        self._default_agent_type = agent_type
 
     def set_jira_issue(self, jira_issue: str | None) -> None:
         self._jira_issue_var.set(jira_issue)
@@ -30,18 +26,8 @@ class AgentSpanProcessor(SpanProcessor):
         finally:
             self._jira_issue_var.reset(token)
 
-    @contextlib.contextmanager
-    def agent_type_context(self, agent_type: str):
-        token = self._agent_type_var.set(agent_type)
-        try:
-            yield
-        finally:
-            self._agent_type_var.reset(token)
-
     def on_start(self, span: Span, parent_context: Context | None = None) -> None:
         if span.is_recording():
-            agent_type = self._agent_type_var.get() or self._default_agent_type
-            span.set_attribute("agent.type", agent_type)
             jira_issue = self._jira_issue_var.get()
             if jira_issue:
                 span.set_attribute("jira.issue", jira_issue)
@@ -56,10 +42,10 @@ class AgentSpanProcessor(SpanProcessor):
         return True
 
 
-def setup_observability(endpoint: str, agent_type: str) -> AgentSpanProcessor:
+def setup_observability(endpoint: str) -> AgentSpanProcessor:
     resource = Resource(attributes={})
     tracer_provider = trace_sdk.TracerProvider(resource=resource)
-    processor = AgentSpanProcessor(agent_type)
+    processor = AgentSpanProcessor()
     tracer_provider.add_span_processor(processor)
     tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint)))
     trace_api.set_tracer_provider(tracer_provider)

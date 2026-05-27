@@ -253,8 +253,11 @@ async def comment_in_jira(
     is_error: bool = False,
     user_triggered: bool = False,
 ) -> None:
-    if is_error and os.getenv("SILENT_RUN", "false").lower() == "true" and not user_triggered:
-        logger.info(f"Silent run: skipping Jira error comment for {jira_issue}")
+    # Default is silent: error comments are only posted on user-triggered runs.
+    # A maintainer who didn't ask for processing should not be spammed with
+    # error notifications; if they want to see them, they add ymir_todo.
+    if is_error and not user_triggered:
+        logger.info(f"Skipping Jira error comment for {jira_issue} (not user-triggered)")
         return
 
     await run_tool(
@@ -306,11 +309,11 @@ async def get_jira_labels(jira_issue: str) -> list[str]:
         return []
 
 
-# Only intermediate "_failed" labels (transient retry-state) are suppressed in
-# SILENT_RUN — they're noise for maintainers and a retry will follow. Terminal
-# "_errored" labels are kept: they are the only dedup anchor left after retries
-# are exhausted, so suppressing them would let the next fetcher sweep re-enqueue
-# the same issue forever.
+# Intermediate "_failed" labels (transient retry-state) are suppressed for
+# non-user-triggered runs — they're noise for maintainers and a retry will
+# follow. Terminal "_errored" labels are kept regardless: they are the only
+# dedup anchor left after retries are exhausted, so suppressing them would let
+# the next fetcher sweep re-enqueue the same issue forever.
 _INTERMEDIATE_LABEL_SUFFIXES = ("_failed",)
 
 
@@ -337,13 +340,13 @@ async def set_jira_labels(
         logger.info(f"Dry run, not updating labels for {jira_issue}")
         return
 
-    if os.getenv("SILENT_RUN", "false").lower() == "true" and not user_triggered:
+    if not user_triggered:
         original_count = len(labels_to_add or [])
         labels_to_add = [
             label for label in (labels_to_add or []) if not label.endswith(_INTERMEDIATE_LABEL_SUFFIXES)
         ]
         if len(labels_to_add) != original_count:
-            logger.info(f"Silent run: skipping intermediate failure labels for {jira_issue}")
+            logger.info(f"Skipping intermediate failure labels for {jira_issue} (not user-triggered)")
         if not labels_to_add and not (labels_to_remove or []):
             return
 

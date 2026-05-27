@@ -256,20 +256,19 @@ async def main() -> None:
             log_agent = create_log_agent(gateway_tools, local_tool_options)
 
             workflow = Workflow(State, name="RebaseWorkflow")
-            silent_run = os.getenv("SILENT_RUN", "false").lower() == "true"
 
             async def change_jira_status(state):
-                if not dry_run and not silent_run:
-                    try:
-                        await tasks.change_jira_status(
-                            jira_issue=state.jira_issue,
-                            status="In Progress",
-                            available_tools=gateway_tools,
-                        )
-                    except Exception as status_error:
-                        logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
-                else:
+                if dry_run:
                     logger.info(f"Dry run: would change status of {state.jira_issue} to In Progress")
+                    return "fork_and_prepare_dist_git"
+                try:
+                    await tasks.change_jira_status(
+                        jira_issue=state.jira_issue,
+                        status="In Progress",
+                        available_tools=gateway_tools,
+                    )
+                except Exception as status_error:
+                    logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
                 return "fork_and_prepare_dist_git"
 
             async def fork_and_prepare_dist_git(state):

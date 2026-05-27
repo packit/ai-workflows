@@ -72,7 +72,8 @@ class Task(BaseModel):
     user_triggered: bool = Field(
         default=False,
         description="True when a maintainer triggered this run via the ymir_todo label — "
-        "causes agents to bypass SILENT_RUN suppression so the requester gets feedback.",
+        "causes agents to post comments and intermediate failure labels that are "
+        "otherwise suppressed (default is silent).",
     )
 
     def to_json(self) -> str:

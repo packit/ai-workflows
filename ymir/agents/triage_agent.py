@@ -79,17 +79,16 @@ logger = logging.getLogger(__name__)
 redis_logger = logging.getLogger("agent.redis")
 
 
-def _should_update_jira(
-    silent_run: bool, resolution: Resolution = None, user_triggered: bool = False
-) -> bool:
-    """Whether to post user-facing Jira updates (comments) for this run.
+def _should_update_jira(resolution: Resolution = None, user_triggered: bool = False) -> bool:
+    """Whether to post a user-facing Jira comment for this run.
 
-    Used only for comments — labels are dedup anchors and must be written
-    unconditionally. In silent mode we still surface not-affected and postponed
-    so the requester knows why nothing happened. User-triggered runs always
-    comment so the requester gets feedback.
+    Used only for comments — labels are dedup anchors and are written
+    unconditionally. Default is silent: comments are suppressed unless the
+    run was explicitly requested by a maintainer (via ymir_todo) or the
+    resolution carries information the requester needs even unbidden
+    (not-affected and postponed — there's no MR to look at otherwise).
     """
-    if user_triggered or not silent_run:
+    if user_triggered:
         return True
     return resolution in (Resolution.NOT_AFFECTED, Resolution.POSTPONED)
 
@@ -656,7 +655,6 @@ async def run_workflow(
     triage_agent_factory,
     auto_chain=False,
     force_cve_triage=False,
-    silent_run=False,
     user_triggered=False,
 ):
     local_tool_options = None
@@ -1207,10 +1205,10 @@ async def run_workflow(
             logger.info(f"Result to be put in Jira comment: {comment_text}")
             if dry_run:
                 return Workflow.END
-            if not _should_update_jira(silent_run, state.triage_result.resolution, user_triggered):
+            if not _should_update_jira(state.triage_result.resolution, user_triggered):
                 logger.info(
-                    f"Silent run: skipping Jira comment for {state.jira_issue} "
-                    f"(resolution={state.triage_result.resolution.value})"
+                    f"Skipping Jira comment for {state.jira_issue} "
+                    f"(resolution={state.triage_result.resolution.value}, not user-triggered)"
                 )
                 return Workflow.END
             await tasks.comment_in_jira(
@@ -1246,7 +1244,6 @@ async def main() -> None:
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     auto_chain = os.getenv("AUTO_CHAIN", "true").lower() == "true"
     force_cve_triage = os.getenv("FORCE_CVE_TRIAGE", "false").lower() == "true"
-    silent_run = os.getenv("SILENT_RUN", "false").lower() == "true"
 
     if jira_issue := os.getenv("JIRA_ISSUE", None):
         logger.info("Running in direct mode with environment variable")
@@ -1258,7 +1255,6 @@ async def main() -> None:
                 agent_factory,
                 auto_chain=auto_chain,
                 force_cve_triage=force_cve_triage,
-                silent_run=silent_run,
             )
             logger.info(f"Direct run completed: {state.triage_result.model_dump_json(indent=4)}")
             if state.cve_eligibility_result:
@@ -1291,7 +1287,8 @@ async def main() -> None:
             )
 
             # User-triggered runs always get an immediate ack comment so the
-            # maintainer sees their request was picked up — regardless of SILENT_RUN.
+            # maintainer sees their request was picked up. (Default is silent;
+            # ymir_todo is the explicit opt-in for feedback.)
             if user_triggered and not dry_run:
                 try:
                     async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
@@ -1385,7 +1382,6 @@ async def main() -> None:
                         create_triage_agent,
                         auto_chain=auto_chain,
                         force_cve_triage=input.force_cve_triage,
-                        silent_run=silent_run,
                         user_triggered=user_triggered,
                     )
                     output = state.triage_result

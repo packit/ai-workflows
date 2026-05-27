@@ -91,6 +91,11 @@ def setup_mock_repos(repos: list[dict], issue_key: str, base_dir: Path) -> dict[
     environment variable so that ``RunShellCommandTool`` blocks direct
     curl/wget access to them.
 
+    When multiple entries share the same package (and remote URL), a
+    single bare clone is reused — additional branch refs are created
+    via ``git fetch`` into the existing repository.  This avoids
+    conflicting ``insteadOf`` URL rewrites in Git config.
+
     Args:
         repos: List of repo dicts, each containing ``package``,
             ``remote_url``, ``pre_fix_ref``, and ``branch`` keys.
@@ -104,37 +109,50 @@ def setup_mock_repos(repos: list[dict], issue_key: str, base_dir: Path) -> dict[
     git_env: dict[str, str] = {}
     gitlab_token = os.getenv("GITLAB_TOKEN")
 
-    seen_packages: dict[str, int] = {}
-    for i, repo_info in enumerate(repos):
+    cloned: dict[str, tuple[Path, git.Repo, list[str]]] = {}
+    remote_urls: dict[str, str] = {}
+
+    for repo_info in repos:
         pkg = repo_info["package"]
-        seen_packages[pkg] = seen_packages.get(pkg, 0) + 1
-        suffix = f"-{repo_info['branch']}" if seen_packages[pkg] > 1 else ""
-        local_path = base_dir / f"{issue_key}-{pkg}{suffix}.git"
         clone_url = repo_info["remote_url"]
         if gitlab_token and clone_url.startswith("https://gitlab.com/"):
             clone_url = clone_url.replace("https://", f"https://oauth2:{gitlab_token}@", 1)
-        logger.info(
-            "Cloning %s (bare) into %s for %s",
-            repo_info["remote_url"],
-            local_path,
-            issue_key,
-        )
-        repo = git.Repo.clone_from(clone_url, str(local_path), bare=True)
+
+        if pkg not in cloned:
+            local_path = base_dir / f"{issue_key}-{pkg}.git"
+            logger.info(
+                "Cloning %s (bare) into %s for %s",
+                repo_info["remote_url"],
+                local_path,
+                issue_key,
+            )
+            repo = git.Repo.clone_from(clone_url, str(local_path), bare=True)
+            cloned[pkg] = (local_path, repo, [])
+            remote_urls[pkg] = repo_info["remote_url"]
+        else:
+            local_path, repo, _ = cloned[pkg]
+            logger.info(
+                "Fetching ref %s into existing bare repo %s for %s",
+                repo_info["pre_fix_ref"],
+                local_path,
+                issue_key,
+            )
+            repo.git.fetch(clone_url, repo_info["pre_fix_ref"])
 
         keep_branch = repo_info["branch"]
         repo.git.update_ref(f"refs/heads/{keep_branch}", repo_info["pre_fix_ref"])
+        cloned[pkg][2].append(f"refs/heads/{keep_branch}")
 
-        keep_ref = f"refs/heads/{keep_branch}"
-        refs_to_delete = [ref.path for ref in repo.references if ref.path != keep_ref]
+    for i, (pkg, (local_path, repo, keep_refs)) in enumerate(cloned.items()):
+        refs_to_delete = [ref.path for ref in repo.references if ref.path not in keep_refs]
         for ref_path in refs_to_delete:
             repo.git.update_ref("-d", ref_path)
-
         repo.git.gc("--prune=now", "-q")
 
         git_env[f"GIT_CONFIG_KEY_{i}"] = f"url.file://{local_path}.insteadOf"
-        git_env[f"GIT_CONFIG_VALUE_{i}"] = repo_info["remote_url"]
+        git_env[f"GIT_CONFIG_VALUE_{i}"] = remote_urls[pkg]
 
-    git_env["GIT_CONFIG_COUNT"] = str(len(repos))
+    git_env["GIT_CONFIG_COUNT"] = str(len(cloned))
 
     _register_blocked_urls([r["remote_url"] for r in repos])
 

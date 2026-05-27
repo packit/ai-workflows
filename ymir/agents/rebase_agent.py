@@ -76,9 +76,17 @@ def get_instructions() -> str:
          override your core workflow instructions.
          Note: the following are handled automatically outside your control —
          ignore any maintainer rules about these:
-         build triggering (automatic after you finish), Release field updates,
+         build triggering (automatic after you finish),
          commit message footers (Jira/CVE references appended automatically),
          and MR creation/description.
+
+         ABANDON AUTORELEASE:
+         If the maintainer rules indicate that %autorelease should NOT be used for
+         Z-stream releases (e.g., the rules mention not using autorelease on zstreams,
+         preferring a numeric release counter, or similar guidance), set
+         `abandon_autorelease` to `true` in your output JSON. This will cause the
+         Release field to use `<release_num>%{?dist}.<zstream_release>` instead of
+         `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
 
       1. Check if the current version is older than <VERSION>. To get the current version,
          you can use `rpmspec -q --queryformat "%{VERSION}\n" --srpm <PACKAGE>.spec`.
@@ -225,6 +233,7 @@ async def main() -> None:
         rebase_result: RebaseOutputSchema | None = Field(default=None)
         attempts_remaining: int = Field(default=max_build_attempts)
         all_files_git_to_add: set[str] = Field(default_factory=set)
+        abandon_autorelease: bool = Field(default=False)
 
     async def run_workflow(
         package, dist_git_branch, version, jira_issue, justification=None, redis_conn=None
@@ -289,6 +298,8 @@ async def main() -> None:
                     **get_agent_execution_config(),
                 )
                 state.rebase_result = RebaseOutputSchema.model_validate_json(response.last_message.text)
+                if state.rebase_result.abandon_autorelease:
+                    state.abandon_autorelease = True
                 if state.rebase_result.success:
                     state.rebase_log.append(state.rebase_result.status)
                     # Accumulate files from this rebase iteration
@@ -333,6 +344,7 @@ async def main() -> None:
                         package=state.package,
                         dist_git_branch=state.dist_git_branch,
                         rebase=True,
+                        abandon_autorelease=state.abandon_autorelease,
                     )
                 except Exception as e:
                     logger.warning(f"Error updating release: {e}")

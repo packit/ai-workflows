@@ -304,6 +304,13 @@ async def test_push_issues_to_queue_skip_labeled_issues(fetcher, mock_redis_cont
         create_async_mock_return_value(existing_keys)
     )
 
+    # RETRY-1 must have its trigger label flipped atomically before enqueue.
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "RETRY-1",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+        remove=[JiraLabels.RETRY_NEEDED.value],
+    ).once()
+
     # Create real tasks and get their JSON representations
     task1 = Task.from_issue("RETRY-1")
     task2 = Task.from_issue("CLEAN-1")
@@ -445,6 +452,82 @@ async def test_push_issues_to_queue_max_issues_excludes_filtered(fetcher, mock_r
     result = await fetcher.push_issues_to_queue(issues)
 
     assert result == 2
+
+
+@pytest.mark.asyncio
+async def test_push_retry_needed_issue(fetcher, mock_redis_context):
+    """ymir_retry_needed: flip the label atomically, enqueue without user_triggered."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [{"key": "RETRY-1", "fields": {"labels": [JiraLabels.RETRY_NEEDED.value]}}]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "RETRY-1",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+        remove=[JiraLabels.RETRY_NEEDED.value],
+    ).once()
+
+    # ymir_retry_needed can be set by either a maintainer or an agent retrying a
+    # failed run, so user_triggered stays False here — maintainers who want the
+    # user-triggered treatment (ack comment, SILENT_RUN bypass) use ymir_todo.
+    expected_task = Task.from_issue("RETRY-1", user_triggered=False)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE.value, expected_task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_skip_retry_needed_when_in_progress(fetcher, mock_redis_context):
+    """ymir_retry_needed + an in-progress label: do not enqueue, do not flip labels."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "RETRY-INPROG-1",
+            "fields": {"labels": [JiraLabels.RETRY_NEEDED.value, JiraLabels.TRIAGE_IN_PROGRESS.value]},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+    mock_redis.should_receive("lpush").never()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_needed_skip_when_label_flip_fails(fetcher, mock_redis_context):
+    """If the retry-needed flip raises, skip the Redis push entirely."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [{"key": "RETRY-FAIL", "fields": {"labels": [JiraLabels.RETRY_NEEDED.value]}}]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    flexmock(fetcher).should_receive("_edit_jira_labels").and_raise(
+        requests.HTTPError("Jira write failed")
+    ).once()
+
+    mock_redis.should_receive("lpush").never()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 0
 
 
 @pytest.mark.asyncio
@@ -596,6 +679,13 @@ async def test_run_full_workflow_with_labeled_issues(fetcher, mock_redis_context
     mock_redis.should_receive("lrange").with_args(
         RedisQueues.COMPLETED_BACKPORT_LIST.value, 0, -1
     ).and_return(create_async_mock_return_value([]))
+
+    # ISSUE-4 has ymir_retry_needed → atomic label flip before enqueue.
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "ISSUE-4",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+        remove=[JiraLabels.RETRY_NEEDED.value],
+    ).once()
 
     # Mock lpush calls for issues that should be pushed despite already existing
     # ISSUE-1, ISSUE-4, and ISSUE-5 should be pushed (no labels or retry_needed)

@@ -128,6 +128,11 @@ class JiraLabels(Enum):
     RETRY_NEEDED = "ymir_retry_needed"
     FUSA = "ymir_fusa"
 
+    # Maintainer-facing trigger: when a Red Hat Employee adds this label to a CVE
+    # issue, the fetcher enqueues it for an e2e run and swaps the label for
+    # TRIAGE_IN_PROGRESS on enqueue.
+    TODO = "ymir_todo"
+
     @classmethod
     def all_labels(cls) -> set[str]:
         """Return all Ymir labels for cleanup operations"""

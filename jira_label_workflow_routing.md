@@ -30,7 +30,7 @@ stateDiagram-v2
 flowchart TD
     FETCH[Jira Issue Fetcher]
 
-    FETCH -->|No Ymir labels<br/>OR ymir_retry_needed| TRIAGE[triage_queue]
+    FETCH -->|No Ymir labels<br/>OR ymir_retry_needed<br/>OR ymir_todo + RH-Employee assignee| TRIAGE[triage_queue]
 
     TRIAGE --> TRIAGE_AGENT[Triage Agent]
 
@@ -93,6 +93,7 @@ flowchart TD
 | `ymir_retry_needed` | Trigger retry | Forces reprocessing |
 | `ymir_triaged` | Triage completed, no automated follow-up | Terminal state |
 | `ymir_fusa` | Functional Safety | Requires maintainer review |
+| `ymir_todo` | Maintainer-facing trigger for an e2e run | Fetcher swaps it for `ymir_triage_in_progress` on enqueue; only honored when the assignee is a member of the `Red Hat Employee` Jira group. The triage run posts an ack comment and bypasses `SILENT_RUN` so the requester gets feedback. |
 
 ## Queue Types Summary
 

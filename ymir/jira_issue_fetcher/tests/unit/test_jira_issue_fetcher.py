@@ -621,3 +621,81 @@ async def test_run_full_workflow_with_labeled_issues(fetcher, mock_redis_context
 
     # Run the workflow
     await fetcher.run()
+
+
+@pytest.mark.asyncio
+async def test_push_user_triggered_issue(fetcher, mock_redis_context):
+    """ymir_todo on an otherwise clean issue: enqueue as user_triggered, flip the label."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [{"key": "TODO-1", "fields": {"labels": [JiraLabels.TODO.value]}}]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    # The critical label flip must be invoked before the Redis push.
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "TODO-1",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+        remove=[JiraLabels.TODO.value],
+    ).once()
+
+    expected_task = Task.from_issue("TODO-1", user_triggered=True)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE.value, expected_task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_skip_user_triggered_when_in_progress(fetcher, mock_redis_context):
+    """ymir_todo on an issue already in-progress: do not enqueue, do not flip labels."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "TODO-INPROG-1",
+            "fields": {"labels": [JiraLabels.TODO.value, JiraLabels.TRIAGE_IN_PROGRESS.value]},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    # _edit_jira_labels must NOT be called for an in-progress issue.
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+    # lpush must NOT be called either.
+    mock_redis.should_receive("lpush").never()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_user_triggered_skip_when_label_flip_fails(fetcher, mock_redis_context):
+    """If the atomic label flip raises after retries, skip the Redis push entirely."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [{"key": "TODO-FAIL", "fields": {"labels": [JiraLabels.TODO.value]}}]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    flexmock(fetcher).should_receive("_edit_jira_labels").and_raise(
+        requests.HTTPError("Jira write failed")
+    ).once()
+
+    # No push must occur — pushing without the in-progress marker would cause
+    # the next sweep to re-enqueue the same issue.
+    mock_redis.should_receive("lpush").never()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 0

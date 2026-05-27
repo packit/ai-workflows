@@ -506,3 +506,126 @@ async def test_update_release(
             minimal_spec,
             "0%{?dist}.1" if rebase_in_current_stream else "5%{?alphatag:.%{alphatag}}%{?dist}.10",
         )
+
+
+@pytest.mark.parametrize(
+    "rebase",
+    [False, True],
+)
+@pytest.mark.parametrize(
+    "rebase_in_higher_stream",
+    [False, True],
+)
+@pytest.mark.asyncio
+async def test_update_release_abandon_autorelease(
+    rebase,
+    rebase_in_higher_stream,
+    autorelease_spec,
+    minimal_spec,
+):
+    """Test that abandon_autorelease replaces %autorelease with a numeric counter on Z-stream."""
+    package = "test"
+    dist_git_branch = "rhel-9.6.0"
+
+    async def _get_latest_candidate_build(package, candidate_tag):
+        if candidate_tag.startswith(dist_git_branch):
+            return EVR(version="0.1", release="5.elX")
+        if rebase_in_higher_stream:
+            return EVR(version="0.2", release="2.elX")
+        return EVR(version="0.1", release="8.elX")
+
+    flexmock(UpdateReleaseTool).should_receive("_get_latest_candidate_build").replace_with(
+        _get_latest_candidate_build
+    )
+
+    tool = UpdateReleaseTool()
+
+    async def run_and_check(spec, expected_release):
+        output = await tool.run(
+            input=UpdateReleaseToolInput(
+                spec=spec,
+                package=package,
+                dist_git_branch=dist_git_branch,
+                rebase=rebase,
+                abandon_autorelease=True,
+            )
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+        result = output.result
+        assert result.startswith("Successfully")
+        release_line = next(line for line in spec.read_text().splitlines() if line.startswith("Release:"))
+        assert release_line == f"Release:        {expected_release}"
+
+    # With %autorelease in the spec, abandon_autorelease should produce numeric release
+    base = "0" if rebase else ("5" if rebase_in_higher_stream else "8")
+    await run_and_check(autorelease_spec, f"{base}%{{?dist}}.1")
+
+    # Without %autorelease, abandon_autorelease has no special effect — normal z-stream logic applies
+    await run_and_check(minimal_spec, "0%{?dist}.1" if rebase else "5%{?dist}.1")
+
+
+@pytest.mark.parametrize(
+    "rebase_in_higher_stream",
+    [False, True],
+)
+@pytest.mark.asyncio
+async def test_update_release_abandon_autorelease_increments_zstream(
+    rebase_in_higher_stream,
+    autorelease_spec,
+):
+    """Test that abandon_autorelease increments Z-stream suffix from existing builds."""
+    package = "test"
+    dist_git_branch = "rhel-9.6.0"
+
+    async def _get_latest_candidate_build(package, candidate_tag):
+        if candidate_tag.startswith(dist_git_branch):
+            return EVR(version="0.1", release="5.elX.3")
+        if rebase_in_higher_stream:
+            return EVR(version="0.2", release="2.elX")
+        return EVR(version="0.1", release="8.elX")
+
+    flexmock(UpdateReleaseTool).should_receive("_get_latest_candidate_build").replace_with(
+        _get_latest_candidate_build
+    )
+
+    tool = UpdateReleaseTool()
+    output = await tool.run(
+        input=UpdateReleaseToolInput(
+            spec=autorelease_spec,
+            package=package,
+            dist_git_branch=dist_git_branch,
+            rebase=False,
+            abandon_autorelease=True,
+        )
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    release_line = next(
+        line for line in autorelease_spec.read_text().splitlines() if line.startswith("Release:")
+    )
+    base = "5" if rebase_in_higher_stream else "8"
+    assert release_line == f"Release:        {base}%{{?dist}}.4"
+
+
+@pytest.mark.asyncio
+async def test_update_release_abandon_autorelease_non_zstream(autorelease_spec):
+    """Test that abandon_autorelease has no effect on non-Z-stream branches."""
+    package = "test"
+    dist_git_branch = "c10s"
+
+    tool = UpdateReleaseTool()
+
+    output = await tool.run(
+        input=UpdateReleaseToolInput(
+            spec=autorelease_spec,
+            package=package,
+            dist_git_branch=dist_git_branch,
+            rebase=False,
+            abandon_autorelease=True,
+        )
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    release_line = next(
+        line for line in autorelease_spec.read_text().splitlines() if line.startswith("Release:")
+    )
+    assert release_line == "Release:        %autorelease"

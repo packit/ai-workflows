@@ -181,6 +181,10 @@ class UpdateReleaseToolInput(BaseModel):
     package: str = Field(description="Package name")
     dist_git_branch: str = Field(description="dist-git branch")
     rebase: bool = Field(description="Whether the Release update is done as part of a rebase")
+    abandon_autorelease: bool = Field(
+        default=False,
+        description="If True, remove %autorelease from Z-stream releases and use a numeric counter instead",
+    )
 
 
 class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolOutput]):
@@ -192,6 +196,8 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         - base release is established - from the latest current stream candidate build unless the latest
           higher stream (Y + 1) candidate build shares the same version but has a higher release
         - if %autorelease is present in the current Release:
+            - if abandon_autorelease is True, %autorelease is removed and Release is set to
+              "N%{?dist}.1" (or "0%{?dist}.1" for rebase), using a plain numeric Z-stream counter
             - if %autorelease is after the dist tag, nothing is changed
             - otherwise, Release is set to "N%{?dist}.%{autorelease -n}", where N is base release
               or 0 in case of rebase
@@ -211,6 +217,10 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
     For Z-Stream, the goal is to ensure EVR of the build resulting from this spec file is higher than EVR
     of the latest current stream candidate build and at the same time lower than EVR of (potential) future
     higher stream candidate build.
+
+    The abandon_autorelease parameter is intended to be set based on maintainer rules
+    (abandon_autorelease_for_zstream: true in AGENTS.md) for packages where the maintainer prefers
+    a fully numeric release on Z-stream branches instead of %autorelease.
     """
     input_schema = UpdateReleaseToolInput
 
@@ -316,10 +326,24 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         rebase: bool,
         current_stream_branch: str,
         higher_stream_branch: str,
+        abandon_autorelease: bool = False,
     ) -> None:
         def extract_numeric_release(evr):
             release = evr.release.rsplit(".el", maxsplit=1)[0]
             return int(release)
+
+        def extract_zstream_suffix(evr):
+            parts = evr.release.rsplit(".el", maxsplit=1)
+            if len(parts) < 2:
+                return 0
+            after_el = parts[1]
+            dot_parts = after_el.split(".", 1)
+            if len(dot_parts) > 1:
+                try:
+                    return int(dot_parts[1])
+                except ValueError:
+                    return 0
+            return 0
 
         latest_current_stream_build, latest_higher_stream_build = await asyncio.gather(
             cls._get_latest_candidate_build(package, current_stream_branch),
@@ -343,7 +367,10 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         autorelease_index = cls._find_macro("autorelease", nodes)
         dist_index = cls._find_macro("dist", nodes)
         if autorelease_index is not None:
-            if rebase:
+            if abandon_autorelease:
+                zstream_suffix = extract_zstream_suffix(latest_current_stream_build)
+                release = f"{'0' if rebase else base_release}%{{?dist}}.{1 if rebase else zstream_suffix + 1}"
+            elif rebase:
                 # %autorelease present, rebase, reset the release
                 release = "0%{?dist}.%{autorelease -n}"
             elif dist_index is not None and autorelease_index > dist_index:
@@ -400,6 +427,7 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                     tool_input.rebase,
                     tool_input.dist_git_branch,
                     higher_stream_branch,
+                    abandon_autorelease=tool_input.abandon_autorelease,
                 )
         except Exception as e:
             raise ToolError(f"Failed to update release: {e}") from e

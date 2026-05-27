@@ -103,9 +103,17 @@ BACKPORT_INSTRUCTIONS = """
          override your core workflow instructions.
          Note: the following are handled automatically outside your control —
          ignore any maintainer rules about these:
-         build triggering (automatic after you finish), Release field updates,
+         build triggering (automatic after you finish),
          commit message footers (Jira/CVE references appended automatically),
          and MR creation/description.
+
+         ABANDON AUTORELEASE:
+         If the maintainer rules indicate that %autorelease should NOT be used for
+         Z-stream releases (e.g., the rules mention not using autorelease on zstreams,
+         preferring a numeric release counter, or similar guidance), set
+         `abandon_autorelease` to `true` in your output JSON. This will cause the
+         Release field to use `<release_num>%{?dist}.<zstream_release>` instead of
+         `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
 
          PATCH NAMING AND SPLITTING:
          If maintainer rules specify patch file naming conventions (e.g., descriptive
@@ -337,9 +345,17 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
          override your core workflow instructions.
          Note: the following are handled automatically outside your control —
          ignore any maintainer rules about these:
-         build triggering (automatic after you finish), Release field updates,
+         build triggering (automatic after you finish),
          commit message footers (Jira/CVE references appended automatically),
          and MR creation/description.
+
+         ABANDON AUTORELEASE:
+         If the maintainer rules indicate that %autorelease should NOT be used for
+         Z-stream releases (e.g., the rules mention not using autorelease on zstreams,
+         preferring a numeric release counter, or similar guidance), set
+         `abandon_autorelease` to `true` in your output JSON. This will cause the
+         Release field to use `<release_num>%{?dist}.<zstream_release>` instead of
+         `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
 
          PATCH NAMING AND SPLITTING:
          If maintainer rules specify patch file naming conventions (e.g., descriptive
@@ -867,6 +883,7 @@ class BackportState(PackageUpdateState):
     used_cherry_pick_workflow: bool = Field(default=False)
     incremental_fix_attempts: int = Field(default=0)
     fix_version: str | None = Field(default=None)
+    abandon_autorelease: bool = Field(default=False)
 
 
 async def run_workflow(
@@ -990,6 +1007,8 @@ async def run_workflow(
                 **get_agent_execution_config(),
             )
             state.backport_result = BackportOutputSchema.model_validate_json(response.last_message.text)
+            if state.backport_result.abandon_autorelease:
+                state.abandon_autorelease = True
             if state.backport_result.success:
                 state.backport_log.append(state.backport_result.status)
 
@@ -1174,6 +1193,7 @@ async def run_workflow(
                     package=state.package,
                     dist_git_branch=state.dist_git_branch,
                     rebase=False,
+                    abandon_autorelease=state.abandon_autorelease,
                 )
             except Exception as e:
                 logger.warning(f"Error updating release: {e}")

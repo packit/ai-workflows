@@ -120,6 +120,7 @@ async def update_release(
     package: str,
     dist_git_branch: str,
     rebase: bool,
+    abandon_autorelease: bool = False,
 ) -> None:
     await run_tool(
         UpdateReleaseTool(options={"working_directory": local_clone}),
@@ -127,6 +128,7 @@ async def update_release(
         package=package,
         dist_git_branch=dist_git_branch,
         rebase=rebase,
+        abandon_autorelease=abandon_autorelease,
     )
 
 

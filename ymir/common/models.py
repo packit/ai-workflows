@@ -111,6 +111,11 @@ class RebaseOutputSchema(BaseModel):
         description="List of files that should be git added and committed"
     )
     error: str | None = Field(description="Specific details about an error")
+    abandon_autorelease: bool = Field(
+        default=False,
+        description="Set to true if maintainer rules indicate that %autorelease should not be used "
+        "for Z-stream releases and a numeric release counter should be used instead",
+    )
 
 
 # ============================================================================
@@ -143,6 +148,11 @@ class BackportOutputSchema(BaseModel):
     )
     srpm_path: Path | None = Field(description="Absolute path to generated SRPM")
     error: str | None = Field(description="Specific details about an error")
+    abandon_autorelease: bool = Field(
+        default=False,
+        description="Set to true if maintainer rules indicate that %autorelease should not be used "
+        "for Z-stream releases and a numeric release counter should be used instead",
+    )
 
 
 class RebuildOutputSchema(BaseModel):

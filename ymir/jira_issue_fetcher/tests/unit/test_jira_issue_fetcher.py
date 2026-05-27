@@ -149,7 +149,7 @@ async def test_search_issues_single_page(fetcher):
         json_data={
             "jql": 'filter = "Jotnar_1000_packages"',
             "maxResults": 500,
-            "fields": ["key", "labels"],
+            "fields": ["key", "labels", "components", "customfield_10669"],
         },
     ).and_return(
         {
@@ -320,6 +320,131 @@ async def test_push_issues_to_queue_skip_labeled_issues(fetcher, mock_redis_cont
     result = await fetcher.push_issues_to_queue(issues)
 
     assert result == 2  # RETRY-1 and CLEAN-1 should be pushed
+
+
+@pytest.mark.asyncio
+async def test_push_issues_to_queue_skip_modular(fetcher, mock_redis_context):
+    """Test that modular issues are skipped."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {"key": "MOD-1", "fields": {"labels": [], "customfield_10669": "perl:5.32/perl-IO-Socket-SSL"}},
+        {"key": "MOD-2", "fields": {"labels": [], "customfield_10669": "nodejs:18/nodejs"}},
+        {"key": "REG-1", "fields": {"labels": [], "customfield_10669": "regular-component"}},
+        {"key": "REG-2", "fields": {"labels": [], "customfield_10669": None}},
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    task1 = Task.from_issue("REG-1")
+    task2 = Task.from_issue("REG-2")
+    mock_redis.should_receive("lpush").with_args(RedisQueues.TRIAGE_QUEUE.value, task1.to_json()).and_return(
+        create_async_mock_return_value(1)
+    ).once()
+    mock_redis.should_receive("lpush").with_args(RedisQueues.TRIAGE_QUEUE.value, task2.to_json()).and_return(
+        create_async_mock_return_value(1)
+    ).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 2
+
+
+@pytest.mark.asyncio
+async def test_push_issues_to_queue_skip_ignored_components(fetcher, mock_redis_context):
+    """Test that issues with ignored components are skipped."""
+    mock_redis, _ = mock_redis_context
+
+    fetcher.ignored_components = {"kernel", "glibc"}
+
+    issues = [
+        {"key": "IGN-1", "fields": {"labels": [], "components": [{"name": "kernel"}]}},
+        {"key": "IGN-2", "fields": {"labels": [], "components": [{"name": "glibc"}]}},
+        {"key": "OK-1", "fields": {"labels": [], "components": [{"name": "bash"}]}},
+        {"key": "OK-2", "fields": {"labels": [], "components": []}},
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    task1 = Task.from_issue("OK-1")
+    task2 = Task.from_issue("OK-2")
+    mock_redis.should_receive("lpush").with_args(RedisQueues.TRIAGE_QUEUE.value, task1.to_json()).and_return(
+        create_async_mock_return_value(1)
+    ).once()
+    mock_redis.should_receive("lpush").with_args(RedisQueues.TRIAGE_QUEUE.value, task2.to_json()).and_return(
+        create_async_mock_return_value(1)
+    ).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 2
+
+
+@pytest.mark.asyncio
+async def test_push_issues_to_queue_max_issues(fetcher, mock_redis_context):
+    """Test that MAX_ISSUES limits the number of enqueued issues."""
+    mock_redis, _ = mock_redis_context
+
+    fetcher.max_issues = 2
+
+    issues = [
+        {"key": "ISS-1", "fields": {"labels": []}},
+        {"key": "ISS-2", "fields": {"labels": []}},
+        {"key": "ISS-3", "fields": {"labels": []}},
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    task1 = Task.from_issue("ISS-1")
+    task2 = Task.from_issue("ISS-2")
+    mock_redis.should_receive("lpush").with_args(RedisQueues.TRIAGE_QUEUE.value, task1.to_json()).and_return(
+        create_async_mock_return_value(1)
+    ).once()
+    mock_redis.should_receive("lpush").with_args(RedisQueues.TRIAGE_QUEUE.value, task2.to_json()).and_return(
+        create_async_mock_return_value(1)
+    ).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 2
+
+
+@pytest.mark.asyncio
+async def test_push_issues_to_queue_max_issues_excludes_filtered(fetcher, mock_redis_context):
+    """Test that filtered issues don't count towards MAX_ISSUES."""
+    mock_redis, _ = mock_redis_context
+
+    fetcher.max_issues = 2
+
+    issues = [
+        {"key": "ISS-1", "fields": {"labels": []}},
+        {"key": "MOD-1", "fields": {"labels": [], "customfield_10669": "perl:5.32/perl-IO"}},
+        {"key": "ISS-2", "fields": {"labels": []}},
+        {"key": "ISS-3", "fields": {"labels": []}},
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    task1 = Task.from_issue("ISS-1")
+    task2 = Task.from_issue("ISS-2")
+    mock_redis.should_receive("lpush").with_args(RedisQueues.TRIAGE_QUEUE.value, task1.to_json()).and_return(
+        create_async_mock_return_value(1)
+    ).once()
+    mock_redis.should_receive("lpush").with_args(RedisQueues.TRIAGE_QUEUE.value, task2.to_json()).and_return(
+        create_async_mock_return_value(1)
+    ).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 2
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import logging
 import os
@@ -313,13 +314,25 @@ async def get_jira_labels(jira_issue: str) -> list[str]:
 _INTERMEDIATE_LABEL_SUFFIXES = ("_failed",)
 
 
+_CRITICAL_WRITE_MAX_ATTEMPTS = 3
+
+
 async def set_jira_labels(
     jira_issue: str,
     labels_to_add: list[str] | None = None,
     labels_to_remove: list[str] | None = None,
     dry_run: bool = False,
     user_triggered: bool = False,
+    critical: bool = False,
 ) -> None:
+    """Edit labels on a Jira issue.
+
+    When ``critical=True``, the write is treated as load-bearing for dedup:
+    failures are retried with exponential backoff and re-raised on permanent
+    failure so the caller can take recovery action (typically: re-queue the
+    task and abort processing). When ``critical=False`` (default), failures
+    are logged and swallowed.
+    """
     if dry_run or os.getenv("JIRA_DRY_RUN", "false").lower() == "true":
         logger.info(f"Dry run, not updating labels for {jira_issue}")
         return
@@ -334,18 +347,35 @@ async def set_jira_labels(
         if not labels_to_add and not (labels_to_remove or []):
             return
 
-    try:
-        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-            await run_tool(
-                "edit_jira_labels",
-                issue_key=jira_issue,
-                labels_to_add=labels_to_add or [],
-                labels_to_remove=labels_to_remove or [],
-                available_tools=gateway_tools,
-            )
+    max_attempts = _CRITICAL_WRITE_MAX_ATTEMPTS if critical else 1
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+                await run_tool(
+                    "edit_jira_labels",
+                    issue_key=jira_issue,
+                    labels_to_add=labels_to_add or [],
+                    labels_to_remove=labels_to_remove or [],
+                    available_tools=gateway_tools,
+                )
+            return
+        except Exception as e:
+            last_exc = e
+            if not critical:
+                logger.warning(f"Failed to update labels for {jira_issue}: {e}")
+                return
+            if attempt < max_attempts:
+                backoff_seconds = 2 ** (attempt - 1)
+                logger.warning(
+                    f"Critical label write failed for {jira_issue} "
+                    f"(attempt {attempt}/{max_attempts}): {e}; "
+                    f"retrying in {backoff_seconds}s"
+                )
+                await asyncio.sleep(backoff_seconds)
 
-    except Exception as e:
-        logger.warning(f"Failed to update labels for {jira_issue}: {e}")
+    logger.error(f"Critical label write for {jira_issue} failed after {max_attempts} attempts: {last_exc}")
+    raise last_exc  # type: ignore[misc]
 
 
 async def cache_mr_metadata(

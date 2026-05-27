@@ -1347,11 +1347,13 @@ async def main() -> None:
                     )
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
+            # ymir_triage_in_progress is the dedup anchor for the next fetcher
+            # sweep. If we cannot write it, we must not proceed — otherwise the
+            # fetcher will re-enqueue this issue and a second triage will run in
+            # parallel. Re-queue the task as-is (task.attempts tracks triage
+            # retries, not Jira-write retries — set_jira_labels already retries
+            # the write internally) and skip processing this iteration.
             try:
-                # ymir_triage_in_progress is the dedup anchor for the next fetcher
-                # sweep — must be written unconditionally (not gated on SILENT_RUN),
-                # otherwise the fetcher will re-enqueue this issue while we're still
-                # processing it.
                 await tasks.set_jira_labels(
                     jira_issue=input.issue,
                     labels_to_add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
@@ -1362,9 +1364,19 @@ async def main() -> None:
                     ],
                     dry_run=dry_run,
                     user_triggered=user_triggered,
+                    critical=True,
                 )
                 logger.info(f"Cleaned up existing labels for {input.issue}")
+            except Exception as e:
+                logger.error(
+                    f"Could not set {JiraLabels.TRIAGE_IN_PROGRESS.value} on "
+                    f"{input.issue} after retries: {e}; re-queuing without "
+                    f"processing to avoid duplicate triage. Jira may be degraded."
+                )
+                await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
+                continue
 
+            try:
                 logger.info(f"Starting triage processing for {input.issue}")
                 with span_processor.jira_issue_context(input.issue):
                     state = await run_workflow(

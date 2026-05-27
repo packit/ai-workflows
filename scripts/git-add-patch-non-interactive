@@ -247,7 +247,7 @@ def compute_stable_hunk_hash(patch_text: str) -> str:
             body_lines.append(line)
     joined_body = "\n".join(body_lines)
     key = f"{selected_path}\0{header_text}\0{joined_body}"
-    return hashlib.sha1(key.encode("utf-8", errors="surrogateescape")).hexdigest()
+    return hashlib.sha1(key.encode("utf-8", errors="surrogateescape")).hexdigest()  # noqa: S324
 
 
 # --------------------------- Parsing 'git diff -U1 --no-color' ---------------------------

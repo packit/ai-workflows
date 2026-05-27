@@ -132,7 +132,7 @@ def build_mcp_config(
         "JIRA_TOKEN": os.environ.get("JIRA_TOKEN", ""),
         "GITLAB_TOKEN": os.environ.get("GITLAB_TOKEN", ""),
         "KRB5CCNAME": os.environ.get("KRB5CCNAME", f"FILE:/tmp/krb5cc_{os.getuid()}"),
-        "GIT_REPO_BASEPATH": os.environ.get("GIT_REPO_BASEPATH", "/tmp/ymir-git-repos"),
+        "GIT_REPO_BASEPATH": os.environ.get("GIT_REPO_BASEPATH", "/tmp/ymir-git-repos"),  # noqa: S108
         "MOCK_BLOCKED_URLS": blocked_urls,
         "MOCK_ZSTREAMS": mock_zstreams,
         "DEBUG_FILE": str(log_dir / "ymir-privileged.log"),

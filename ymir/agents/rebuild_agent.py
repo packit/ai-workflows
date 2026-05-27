@@ -138,17 +138,18 @@ async def main() -> None:
                 else:
                     summary = f"Rebuild of {state.package} against updated dependencies for {issues_str}."
 
-                response = await log_agent.run(
-                    render_prompt(
-                        template=get_log_prompt(),
-                        input=LogInputSchema(
-                            jira_issue=issues_str,
-                            changes_summary=summary,
+                with span_processor.agent_type_context("log"):
+                    response = await log_agent.run(
+                        render_prompt(
+                            template=get_log_prompt(),
+                            input=LogInputSchema(
+                                jira_issue=issues_str,
+                                changes_summary=summary,
+                            ),
                         ),
-                    ),
-                    expected_output=LogOutputSchema,
-                    **get_agent_execution_config(),
-                )
+                        expected_output=LogOutputSchema,
+                        **get_agent_execution_config(),
+                    )
                 state.log_result = LogOutputSchema.model_validate_json(response.last_message.text)
                 return "stage_changes"
 

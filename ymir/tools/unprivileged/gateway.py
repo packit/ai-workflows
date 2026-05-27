@@ -47,7 +47,7 @@ def main():
     config_kwargs = {"name": "Ymir Unprivileged MCP Gateway", "transport": transport}
     if transport == "sse":
         config_kwargs["settings"] = MCPSettings(
-            host="0.0.0.0",
+            host="0.0.0.0",  # noqa: S104
             port=int(os.getenv("SSE_PORT", "8000")),
         )
     config = MCPServerConfig(**config_kwargs)

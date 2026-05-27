@@ -14,7 +14,7 @@ class XUnitComparisonStatus(BaseModel):
 
 
 class XUnitTestCaseResult(StrEnum):
-    PASS = "pass"
+    PASS = "pass"  # noqa: S105
     FAIL = "fail"
     ERROR = "error"
     SKIPPED = "skipped"
@@ -111,7 +111,7 @@ class XUnitParseError(Exception):
 
 def parse_xunit(xml_content: str) -> list[XUnitTestSuite]:
     try:
-        root = ET.fromstring(xml_content)
+        root = ET.fromstring(xml_content)  # noqa: S314
     except ET.ParseError as e:
         raise XUnitParseError("Failed to parse XUnit XML") from e
 

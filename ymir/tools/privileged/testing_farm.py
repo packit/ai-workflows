@@ -32,7 +32,7 @@ def _testing_farm_headers() -> dict[str, str]:
 
 def _testing_farm_api_get(path: str, *, params: dict | None = None) -> Any:
     url = f"{TESTING_FARM_URL}/{path}"
-    response = requests.get(url, headers=_testing_farm_headers(), params=params)
+    response = requests.get(url, headers=_testing_farm_headers(), params=params, timeout=30)
     if not response.ok:
         logger.error(
             "GET %s%s failed.\nerror:\n%s", url, f" (params={params})" if params else "", response.text
@@ -43,7 +43,7 @@ def _testing_farm_api_get(path: str, *, params: dict | None = None) -> Any:
 
 def _testing_farm_api_post(path: str, json: dict[str, Any]) -> Any:
     url = f"{TESTING_FARM_URL}/{path}"
-    response = requests.post(url, headers=_testing_farm_headers(), json=json)
+    response = requests.post(url, headers=_testing_farm_headers(), json=json, timeout=30)
     if not response.ok:
         logger.error(
             "POST to %s failed\nbody:\n%s\nerror:\n%s", url, json_dumps(json, indent=2), response.text

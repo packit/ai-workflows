@@ -56,7 +56,7 @@ class Severity(Enum):
 
 class PreliminaryTesting(Enum):
     NONE = "None"
-    PASS = "Pass"
+    PASS = "Pass"  # noqa: S105
     FAIL = "Fail"
     REQUESTED = "Requested"
 

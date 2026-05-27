@@ -711,7 +711,7 @@ class TestCoverage(StrEnum):
 class PreliminaryTesting(StrEnum):
     REQUESTED = "Requested"
     FAIL = "Fail"
-    PASS = "Pass"
+    PASS = "Pass"  # noqa: S105
     READY = "Ready"
 
 

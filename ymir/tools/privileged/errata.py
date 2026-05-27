@@ -33,6 +33,7 @@ def _et_api_get(path: str, *, params: dict | None = None) -> Any:
         auth=HTTPSPNEGOAuth(opportunistic_auth=True),
         verify=_et_verify(),
         params=params,
+        timeout=30,
     )
     response.raise_for_status()
     return response.json()

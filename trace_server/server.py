@@ -296,10 +296,10 @@ def query_spans(issue: str, params: dict) -> list[dict]:
                 ORDER BY first_start DESC
                 LIMIT ?
             )
-        """
+        """  # noqa: S608
         query_bindings = [*bindings, n]
     else:
-        subquery = f"SELECT DISTINCT trace_id FROM spans WHERE {where}"
+        subquery = f"SELECT DISTINCT trace_id FROM spans WHERE {where}"  # noqa: S608
         query_bindings = bindings
 
     # Fetch ALL spans from matching traces (including ones without jira_issue)
@@ -308,7 +308,7 @@ def query_spans(issue: str, params: dict) -> list[dict]:
                    end_time, status_code, jira_issue, agent_type, attributes
             FROM spans
             WHERE trace_id IN ({subquery})
-            ORDER BY start_time""",
+            ORDER BY start_time""",  # noqa: S608
         query_bindings,
     ).fetchall()
 
@@ -426,7 +426,7 @@ class TraceHandler(BaseHTTPRequestHandler):
 
 def main():
     init_db()
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), TraceHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), TraceHandler)  # noqa: S104
     print(f"Trace server listening on port {PORT}, db: {DB_PATH}", flush=True)
     server.serve_forever()
 

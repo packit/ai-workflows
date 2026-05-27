@@ -97,11 +97,11 @@ def _redact(text: str) -> str:
 def _kerberos_principal() -> str | None:
     """Return the first non-expired principal from the Kerberos ticket cache, or None."""
     try:
-        result = subprocess.run(["klist", "-l"], capture_output=True, text=True, timeout=10)
+        result = subprocess.run(["klist", "-l"], capture_output=True, text=True, timeout=10)  # noqa: S607
         principals = parse_klist_principals(result.stdout)
         return principals[0] if principals else None
     except Exception:
-        pass
+        logger.debug("Failed to get kerberos principal", exc_info=True)
     return None
 
 
@@ -110,7 +110,7 @@ def main():
     config_kwargs = {"name": "Ymir Privileged MCP Gateway", "transport": transport}
     if transport == "sse":
         config_kwargs["settings"] = MCPSettings(
-            host="0.0.0.0",
+            host="0.0.0.0",  # noqa: S104
             port=int(os.getenv("SSE_PORT", "8000")),
         )
     config = MCPServerConfig(**config_kwargs)

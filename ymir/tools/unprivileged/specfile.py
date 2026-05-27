@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 from pathlib import Path
 
@@ -25,6 +26,8 @@ from specfile.value_parser import (
 from ymir.common.utils import get_absolute_path
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import BREWHUB_URL
+
+logger = logging.getLogger(__name__)
 
 
 class GetPackageInfoToolInput(BaseModel):
@@ -72,7 +75,7 @@ def _extract_strip_levels(spec: Specfile, number_to_filename: dict[int, str]) ->
                     if filename is not None:
                         strip_levels[filename] = level
     except Exception:
-        pass
+        logger.debug("Failed to parse spec prep macros", exc_info=True)
 
     for filename in number_to_filename.values():
         strip_levels.setdefault(filename, _DEFAULT_STRIP_LEVEL)

@@ -18,7 +18,7 @@ I_AM_YMIR = "by Ymir, a Red Hat Enterprise Linux software maintenance AI agent."
 
 def mr_description_footer(package: str) -> str:
     return (
-        "---\n"
+        "---\n"  # noqa: S608
         "\n"
         "> **⚠️ AI-Generated MR**: Created by Ymir AI assistant. AI may make mistakes, "
         "select incorrect patches, or miss dependencies. **Carefully review the changes. "

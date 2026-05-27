@@ -114,7 +114,7 @@ class RunShellCommandTool(Tool[RunShellCommandToolInput, ToolRunOptions, RunShel
 
         try:
             exit_code, stdout, stderr = await asyncio.wait_for(
-                run_subprocess(
+                run_subprocess(  # noqa: S604
                     tool_input.command,
                     shell=True,
                     cwd=(self.options or {}).get("working_directory"),

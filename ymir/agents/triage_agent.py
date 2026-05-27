@@ -82,10 +82,12 @@ redis_logger = logging.getLogger("agent.redis")
 def _should_update_jira(
     silent_run: bool, resolution: Resolution = None, user_triggered: bool = False
 ) -> bool:
-    """In silent mode, only update Jira for not-affected and postponed resolutions.
+    """Whether to post user-facing Jira updates (comments) for this run.
 
-    User-triggered runs (via ymir_todo) always update Jira so the requester gets
-    feedback, regardless of SILENT_RUN.
+    Used only for comments — labels are dedup anchors and must be written
+    unconditionally. In silent mode we still surface not-affected and postponed
+    so the requester knows why nothing happened. User-triggered runs always
+    comment so the requester gets feedback.
     """
     if user_triggered or not silent_run:
         return True
@@ -1346,19 +1348,22 @@ async def main() -> None:
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
             try:
-                if _should_update_jira(silent_run, user_triggered=user_triggered):
-                    await tasks.set_jira_labels(
-                        jira_issue=input.issue,
-                        labels_to_add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        labels_to_remove=[
-                            label
-                            for label in JiraLabels.all_labels()
-                            if label != JiraLabels.TRIAGE_IN_PROGRESS.value
-                        ],
-                        dry_run=dry_run,
-                        user_triggered=user_triggered,
-                    )
-                    logger.info(f"Cleaned up existing labels for {input.issue}")
+                # ymir_triage_in_progress is the dedup anchor for the next fetcher
+                # sweep — must be written unconditionally (not gated on SILENT_RUN),
+                # otherwise the fetcher will re-enqueue this issue while we're still
+                # processing it.
+                await tasks.set_jira_labels(
+                    jira_issue=input.issue,
+                    labels_to_add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                    labels_to_remove=[
+                        label
+                        for label in JiraLabels.all_labels()
+                        if label != JiraLabels.TRIAGE_IN_PROGRESS.value
+                    ],
+                    dry_run=dry_run,
+                    user_triggered=user_triggered,
+                )
+                logger.info(f"Cleaned up existing labels for {input.issue}")
 
                 logger.info(f"Starting triage processing for {input.issue}")
                 with span_processor.jira_issue_context(input.issue):
@@ -1389,11 +1394,13 @@ async def main() -> None:
                     ErrorData(details=error, jira_issue=input.issue).model_dump_json(),
                 )
             else:
-                update_jira = _should_update_jira(silent_run, output.resolution, user_triggered)
                 logger.info(f"Triage resolved as {output.resolution.value} for {input.issue}")
 
                 resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
-                if update_jira and resolution_label:
+                if resolution_label:
+                    # Terminal resolution label is the dedup anchor that replaces
+                    # ymir_triage_in_progress — must be written unconditionally so
+                    # the next fetcher sweep skips this issue.
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[resolution_label.value],

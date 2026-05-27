@@ -195,7 +195,7 @@ class SetJiraFieldsTool(Tool[SetJiraFieldsToolInput, ToolRunOptions, StringToolO
 
             if target_end is not None:
                 current_target_end = current_fields.get(TARGET_END_CUSTOM_FIELD)
-                if current_target_end is None or not current_target_end.get("value"):
+                if not current_target_end:
                     fields[TARGET_END_CUSTOM_FIELD] = target_end.strftime("%Y-%m-%d")
 
             if not fields:

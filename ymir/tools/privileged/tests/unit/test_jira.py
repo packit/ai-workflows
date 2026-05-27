@@ -109,8 +109,13 @@ async def test_get_jira_details():
         ),
         (
             {"target_end": datetime.date(2024, 12, 31)},
-            {"fields": {"customfield_10023": {"value": None}}},
+            {"fields": {"customfield_10023": None}},
             {"customfield_10023": "2024-12-31"},
+        ),
+        (
+            {"target_end": datetime.date(2024, 12, 31)},
+            {"fields": {"customfield_10023": "2024-11-01"}},
+            None,
         ),
         (
             {"fix_versions": ["rhel-1.2.3"], "severity": Severity.CRITICAL},
@@ -139,6 +144,7 @@ async def test_set_jira_fields(args, current_fields, expected_fields):
 
     @asynccontextmanager
     async def put(url, json, headers):
+        assert expected_fields is not None, "PUT should not be called when no fields need updating"
         assert url.endswith(f"rest/api/3/issue/{issue_key}")
         assert json.get("fields") == expected_fields
         yield flexmock(ok=True, raise_for_status=lambda: None)
@@ -146,7 +152,10 @@ async def test_set_jira_fields(args, current_fields, expected_fields):
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)
     flexmock(aiohttp.ClientSession).should_receive("put").replace_with(put)
     result = (await SetJiraFieldsTool().run(input={"issue_key": issue_key, **args})).result
-    assert result.startswith("Successfully")
+    if expected_fields is not None:
+        assert result.startswith("Successfully")
+    else:
+        assert result.startswith("No fields needed updating")
 
 
 @pytest.mark.parametrize(

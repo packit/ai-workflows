@@ -300,6 +300,7 @@ class JiraIssueFetcher:
 
             remove_issues_for_retry = set()
             user_triggered_keys = set()
+            retry_needed_keys = set()
             # Extend existing_keys with issues that have Ymir labels (except ymir_retry_needed
             # and ymir_todo, which both signal a re-run is wanted).
             for issue in issues:
@@ -328,8 +329,19 @@ class JiraIssueFetcher:
                     existing_keys.add(issue_key)
                     logger.info(f"Issue {issue_key} has Ymir labels {ymir_labels} - marking as existing")
                 elif JiraLabels.RETRY_NEEDED.value in ymir_labels:
-                    logger.info(f"Issue {issue_key} has ymir_retry_needed label - marking for retry")
-                    remove_issues_for_retry.add(issue_key)
+                    if has_in_progress:
+                        # Don't re-enqueue a retry-needed issue that's already running.
+                        existing_keys.add(issue_key)
+                        logger.info(
+                            f"Issue {issue_key} has {JiraLabels.RETRY_NEEDED.value} "
+                            "but is already in progress - skipping"
+                        )
+                    else:
+                        logger.info(
+                            f"Issue {issue_key} has {JiraLabels.RETRY_NEEDED.value} - marking for retry"
+                        )
+                        remove_issues_for_retry.add(issue_key)
+                        retry_needed_keys.add(issue_key)
                 elif not ymir_labels:
                     logger.info(f"Issue {issue_key} has no Ymir labels - marking for retry")
                     remove_issues_for_retry.add(issue_key)
@@ -372,24 +384,31 @@ class JiraIssueFetcher:
                         continue
 
                     user_triggered = issue_key in user_triggered_keys
+                    retry_needed = issue_key in retry_needed_keys
 
-                    # For user-triggered runs, atomically swap ymir_todo for
-                    # ymir_triage_in_progress before enqueueing. This dedupes against
-                    # the very next sweep (which will see the in-progress marker and
-                    # skip), and consumes the trigger so a stuck run doesn't loop. If
-                    # this write fails after retries, do NOT push to the queue —
-                    # otherwise the issue would be picked up again on the next sweep
-                    # without the in-progress marker.
+                    # For ymir_todo and ymir_retry_needed issues, atomically swap
+                    # the trigger label for ymir_triage_in_progress before enqueueing.
+                    # This dedupes against the very next sweep (which will see the
+                    # in-progress marker and skip), and consumes the trigger so a
+                    # stuck run doesn't loop. If this write fails after retries, do
+                    # NOT push to the queue — otherwise the issue would be picked up
+                    # again on the next sweep without the in-progress marker.
+                    label_to_consume = None
                     if user_triggered:
+                        label_to_consume = JiraLabels.TODO.value
+                    elif retry_needed:
+                        label_to_consume = JiraLabels.RETRY_NEEDED.value
+
+                    if label_to_consume:
                         try:
                             self._edit_jira_labels(
                                 issue_key,
                                 add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                                remove=[JiraLabels.TODO.value],
+                                remove=[label_to_consume],
                             )
                         except Exception as e:
                             logger.error(
-                                f"Failed to flip {JiraLabels.TODO.value} → "
+                                f"Failed to flip {label_to_consume} → "
                                 f"{JiraLabels.TRIAGE_IN_PROGRESS.value} on {issue_key} "
                                 f"after retries; skipping enqueue to avoid duplicate processing: {e}"
                             )

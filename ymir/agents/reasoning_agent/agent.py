@@ -128,7 +128,8 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
             await self.memory.add_many(new_messages)
             await self.memory.add_many(extract_last_tool_call_pair(final_state.memory) or [])
 
-        assert final_state.answer is not None
+        if final_state.answer is None:
+            raise ValueError("reasoning agent finished without producing an answer")
         return ReasoningAgentOutput(
             output=[final_state.answer],
             output_structured=final_state.result,

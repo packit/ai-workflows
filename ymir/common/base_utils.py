@@ -32,7 +32,8 @@ async def fix_await(v: T | Awaitable[T]) -> T:
 
     Usage: `await fixAwait(redis.get("key"))`
     """
-    assert inspect.isawaitable(v)
+    if not inspect.isawaitable(v):
+        raise TypeError(f"expected an awaitable, got {type(v)}")
     return await v
 
 

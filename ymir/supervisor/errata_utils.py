@@ -363,7 +363,8 @@ class RHELVersion(BaseModel):
                 stream=match.group(4),
             )
 
-            assert version_string == str(version)
+            if version_string != str(version):
+                raise ValueError(f"round-trip mismatch: {version_string!r} != {str(version)!r}")
 
             return version
         return None
@@ -413,7 +414,8 @@ def _get_rel_prep_lookup(package_name: str) -> defaultdict[str, list[Erratum]]:
     rel_prep_lookup: defaultdict[str, list[Erratum]] = defaultdict(list)
     package_data = ET_api_get("packages", params={"name": package_name})
     related_errata = package_data["data"]["relationships"]["errata"]
-    assert isinstance(related_errata, list)
+    if not isinstance(related_errata, list):
+        raise TypeError(f"expected list of errata, got {type(related_errata)}")
     for erratum_info in related_errata:
         if erratum_info["status"] != ErrataStatus.REL_PREP:
             continue
@@ -462,7 +464,8 @@ def get_previous_erratum(
         if target_release.shipped:
             return False
 
-        assert target_release.ship_date is not None
+        if target_release.ship_date is None:
+            raise ValueError("target_release.ship_date must be set for unshipped releases")
         return erratum.publish_date is not None and erratum.publish_date <= target_release.ship_date
 
     rel_prep_lookup = _get_rel_prep_lookup(package_name)
@@ -583,9 +586,8 @@ def get_erratum_transition_rules(erratum_id) -> TransitionRuleSet:
 
     rows = tbody.find_all("tr")
     transition_row = rows[0]
-    # These assertions are because BeautifulSoup's typing doesn't represent
-    # the fact that if you find_all() a tag name then you'll only get tags
-    assert isinstance(transition_row, Tag)
+    if not isinstance(transition_row, Tag):
+        raise RuleParseError("Expected a Tag for transition row")
 
     spans = transition_row.find_all("span")
     states = [
@@ -608,16 +610,16 @@ def get_erratum_transition_rules(erratum_id) -> TransitionRuleSet:
     res: list[TransitionRule] = []
 
     for row in rows[1:]:
-        assert isinstance(row, Tag)
+        if not isinstance(row, Tag):
+            continue
 
         tds = row.find_all("td")
         if len(tds) != 3:
             raise RuleParseError("Invalid number of columns")
 
         guard_type, test_type, status = tds
-        assert isinstance(guard_type, Tag)
-        assert isinstance(test_type, Tag)
-        assert isinstance(status, Tag)
+        if not isinstance(guard_type, Tag) or not isinstance(test_type, Tag) or not isinstance(status, Tag):
+            raise RuleParseError("Expected Tag elements for columns")
 
         if guard_type.text != "Block":
             continue

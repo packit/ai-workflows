@@ -620,7 +620,8 @@ async def run_issue_verification(
         async def run_after_errata(state: IssueVerificationWorkflowState):
             """Handle issues with errata link."""
             issue = state.issue
-            assert issue.errata_link is not None
+            if issue.errata_link is None:
+                raise ValueError("errata_link must be set before run_after_errata")
 
             if issue.fixed_in_build is None:
                 state.result = await _flag_attention(
@@ -681,7 +682,8 @@ async def run_issue_verification(
         async def analyze_testing(state: IssueVerificationWorkflowState):
             """Call testing_analyst sub-agent for test result analysis."""
             issue = state.issue
-            assert issue.errata_link is not None
+            if issue.errata_link is None:
+                raise ValueError("errata_link must be set before analyze_testing")
 
             # Get erratum data
             erratum_data = await run_tool(
@@ -850,7 +852,8 @@ async def run_issue_verification(
             await _remove_label(issue.key, "ymir_reproducing_tests", gateway_tools, state.dry_run)
 
             # Update the existing comment
-            assert baseline_tests.comment_id is not None
+            if baseline_tests.comment_id is None:
+                raise ValueError("baseline_tests.comment_id must be set")
             if not state.dry_run:
                 await run_tool(
                     "update_jira_comment",

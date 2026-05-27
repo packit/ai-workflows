@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import time
 from typing import Any
@@ -51,6 +52,7 @@ class JiraIssueFetcher:
     RATE_LIMIT_CALLS_PER_SECOND = 5
     RATE_LIMIT_DELAY = 1.0 / RATE_LIMIT_CALLS_PER_SECOND  # 0.2 seconds between calls
     API_TIMEOUT = 90  # 90 seconds timeout
+    MODULAR_COMPONENT_PATTERN = re.compile(r".+:.+/.+")
 
     def __init__(self):
         self.jira_url = os.environ["JIRA_URL"]
@@ -58,6 +60,14 @@ class JiraIssueFetcher:
 
         # Allow query override from environment
         self.query = os.getenv("QUERY", self.DEFAULT_QUERY)
+
+        # Optional: comma-separated list of components to ignore
+        ignored = os.getenv("IGNORED_COMPONENTS", "")
+        self.ignored_components: set[str] = {c.strip().lower() for c in ignored.split(",") if c.strip()}
+
+        # Optional: maximum number of issues to fetch
+        max_issues_str = os.getenv("MAX_ISSUES", "")
+        self.max_issues: int | None = int(max_issues_str) if max_issues_str else None
 
         # Use constant page size
         self.max_results_per_page = self.MAX_RESULTS_PER_PAGE
@@ -113,6 +123,8 @@ class JiraIssueFetcher:
         fields = [
             "key",  # Issue key (e.g., RHEL-12345)
             "labels",  # Issue labels
+            "components",  # Issue components
+            "customfield_10669",  # Downstream Component Name
         ]
 
         while True:
@@ -282,12 +294,37 @@ class JiraIssueFetcher:
 
             pushed_count = 0
             skipped_count = 0
+            ignored_count = 0
+            modular_count = 0
 
             for issue in issues:
                 try:
-                    issue_key = issue["key"]
+                    if self.max_issues is not None and pushed_count >= self.max_issues:
+                        logger.info(f"Reached MAX_ISSUES limit ({self.max_issues})")
+                        break
 
-                    if issue_key in existing_keys - remove_issues_for_retry:
+                    issue_key = issue["key"]
+                    fields = issue.get("fields") or {}
+
+                    downstream_component = fields.get("customfield_10669") or ""
+                    if self.MODULAR_COMPONENT_PATTERN.match(downstream_component):
+                        logger.info(f"Skipping issue {issue_key} - modular issue: {downstream_component}")
+                        modular_count += 1
+                        continue
+
+                    if self.ignored_components:
+                        components = {
+                            name.lower() for c in (fields.get("components") or []) if (name := c.get("name"))
+                        }
+                        if components & self.ignored_components:
+                            logger.info(
+                                f"Skipping issue {issue_key} - has ignored component(s):"
+                                f" {components & self.ignored_components}"
+                            )
+                            ignored_count += 1
+                            continue
+
+                    if issue_key in existing_keys and issue_key not in remove_issues_for_retry:
                         logger.debug(f"Skipping issue {issue_key} - already exists in triage_queue")
                         skipped_count += 1
                         continue
@@ -310,6 +347,10 @@ class JiraIssueFetcher:
             logger.info(f"Successfully pushed {pushed_count}/{len(issues)} issues to triage_queue")
             if skipped_count > 0:
                 logger.info(f"Skipped {skipped_count} issues that already exist in queue")
+            if ignored_count > 0:
+                logger.info(f"Skipped {ignored_count} issues due to ignored components")
+            if modular_count > 0:
+                logger.info(f"Skipped {modular_count} modular issues")
             return pushed_count
 
     async def run(self) -> None:

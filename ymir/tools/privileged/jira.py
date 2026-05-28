@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from ymir.common import CVEEligibilityResult, TriageEligibility, load_rhel_config
 from ymir.common.base_utils import get_jira_auth_headers
 from ymir.common.constants import JIRA_SEARCH_PATH
-from ymir.common.version_utils import get_fix_version_variants, normalize_fix_version, parse_rhel_version
+from ymir.common.version_utils import get_fix_version_variants, normalize_fix_version
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT
 
@@ -472,15 +472,6 @@ class CheckCveTriageEligibilityTool(
         upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
         current_z_streams = rhel_config.get("current_z_streams", {})
         latest_z_streams = current_z_streams | upcoming_z_streams
-
-        parsed = parse_rhel_version(target_version)
-        is_maintenance = parsed and parsed[0] in _get_maintenance_majors(rhel_config)
-
-        if is_maintenance:
-            logger.info(f"Maintenance Z-stream CVE detected ({target_version})")
-            blocker = await self._check_for_dependency_blocker(issue_key, fields, target_version)
-            if blocker is not None:
-                return blocker
 
         needs_internal_fix = False
         severity = fields.get(SEVERITY_CUSTOM_FIELD, {}).get("value", "")

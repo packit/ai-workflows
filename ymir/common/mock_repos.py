@@ -154,9 +154,53 @@ def setup_mock_repos(repos: list[dict], issue_key: str, base_dir: Path) -> dict[
 
     git_env["GIT_CONFIG_COUNT"] = str(len(cloned))
 
+    _write_global_gitconfig(repos, base_dir, issue_key)
     _register_blocked_urls([r["remote_url"] for r in repos])
 
     return git_env
+
+
+def _write_global_gitconfig(repos: list[dict], base_dir: Path, issue_key: str) -> None:
+    """Write insteadOf rewrites to GIT_CONFIG_GLOBAL so the MCP gateway picks them up.
+
+    The mcp-gateway runs git in a separate container and does not inherit the
+    GIT_CONFIG_COUNT/KEY/VALUE env vars. Writing to GIT_CONFIG_GLOBAL (a shared
+    volume file) makes the rewrites visible to both containers.
+
+    Stale entries pointing to non-existent local paths (from previous test runs
+    with deleted temporary directories) are cleaned up to prevent the file from
+    growing indefinitely.
+    """
+    git_repo_basepath = os.getenv("GIT_REPO_BASEPATH")
+    if not git_repo_basepath:
+        return
+    gitconfig_path = Path(git_repo_basepath) / ".mock_gitconfig"
+
+    git_cmd = git.Git()
+
+    if gitconfig_path.exists():
+        try:
+            with git.GitConfigParser(str(gitconfig_path), read_only=True) as parser:
+                stale_sections = []
+                for section in parser.sections():
+                    if section.startswith('url "file://'):
+                        path_str = section[12:-1]
+                        if not Path(path_str).exists():
+                            stale_sections.append(f"url.file://{path_str}")
+            for section in stale_sections:
+                git_cmd.config("--file", str(gitconfig_path), "--remove-section", section)
+        except Exception as e:
+            logger.warning("Failed to clean up stale gitconfig entries: %s", e)
+
+    for repo_info in repos:
+        local_path = base_dir / f"{issue_key}-{repo_info['package']}.git"
+        git_cmd.config(
+            "--file",
+            str(gitconfig_path),
+            f"url.file://{local_path}.insteadOf",
+            repo_info["remote_url"],
+        )
+    logger.info("Wrote insteadOf rewrites to %s", gitconfig_path)
 
 
 def _register_blocked_urls(urls: list[str]) -> None:

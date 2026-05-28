@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -174,7 +175,13 @@ def mock_centos_stream_repos(tmp_path_factory):
     """
     fixtures_dir = os.getenv("MOCK_REPOS_DIR", str(DEFAULT_FIXTURES_DIR))
     configs = load_all_fixture_configs(fixtures_dir)
-    repo_dir = tmp_path_factory.mktemp("centos_stream_repos")
+    git_repo_basepath = os.getenv("GIT_REPO_BASEPATH")
+    if git_repo_basepath:
+        repo_dir = Path(git_repo_basepath) / "e2e_mock_clones"
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        repo_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        repo_dir = tmp_path_factory.mktemp("centos_stream_repos")
 
     for issue_key, config in configs.items():
         repos = config.get("repos", [])

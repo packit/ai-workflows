@@ -67,6 +67,7 @@ async def with_requests_session():
 
     if session is None:
         with requests.Session() as session:
+            session.headers.update({"User-Agent": YMIR_USER_AGENT})
             token = _requests_session.set(session)
             try:
                 yield session

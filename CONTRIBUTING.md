@@ -26,9 +26,13 @@ only need to clone it once; the tests run entirely offline against the local cop
 ### Running
 
 ```bash
-make run-triage-agent-e2e-tests DRY_RUN=true
+make run-triage-agent-e2e-tests
 make run-backport-agent-e2e-tests
 ```
+
+Both targets hardcode `MOCK_JIRA=true` and `DRY_RUN=true`. The mock Jira files are writable,
+so without `DRY_RUN=true` the agent would write comments back to them and corrupt the fixtures
+on subsequent runs.
 
 ## Merging Policy
 

@@ -788,7 +788,8 @@ async def test_eligibility_zstream():
 
 
 @pytest.mark.asyncio
-async def test_eligibility_maintenance_zstream_clone_shipped():
+async def test_eligibility_maintenance_zstream_no_dependency_check():
+    """Maintenance Z-stream CVEs skip the dependency check entirely."""
     issue = _make_jira_issue(
         labels=["SecurityTracking"],
         fix_versions=[{"name": "rhel-8.10.z"}],
@@ -800,32 +801,8 @@ async def test_eligibility_maintenance_zstream_clone_shipped():
     flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
-    flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345"
-    ).and_return(_create_async_return((True, []))).once()
+    flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").never()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
     assert result["eligibility"] == TriageEligibility.IMMEDIATELY
     assert result["needs_internal_fix"] is True
-
-
-@pytest.mark.asyncio
-async def test_eligibility_maintenance_zstream_clones_pending():
-    issue = _make_jira_issue(
-        labels=["SecurityTracking"],
-        fix_versions=[{"name": "rhel-8.10.z"}],
-        summary="CVE-2025-12345 buffer overflow in curl [rhel-8.10.z]",
-        severity="Important",
-        components=[{"name": "curl"}],
-    )
-    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
-    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
-        _create_async_return(RHEL_CONFIG)
-    ).once()
-    flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345"
-    ).and_return(_create_async_return((False, ["RHEL-555"]))).once()
-
-    result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
-    assert result["eligibility"] == TriageEligibility.PENDING_DEPENDENCIES
-    assert result["pending_zstream_issues"] == ["RHEL-555"]

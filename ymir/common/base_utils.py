@@ -146,42 +146,25 @@ async def init_kerberos_ticket() -> str:
         if not keytab_principal:
             raise KerberosError("Failed to extract principal from keytab file")
 
-    # klist exits with a status of 1 if no cache file exists, so we
-    # need to check for the file first.
+    # klist exits with a status of 1 if no credentials cache is found
+    proc = await asyncio.create_subprocess_exec(
+        "klist",
+        "-l",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
 
-    ccache_file = os.getenv("KRB5CCNAME")
-    if not ccache_file:
-        raise KerberosError("KRB5CCNAME environment variable is not set")
-
-    # Parse KRB5CCNAME which can be in the format TYPE:value (e.g., FILE:/path, KCM:1000)
-    # Only check file existence if TYPE is FILE and the file doesn't exist
-    should_run_klist = True
-    if ":" in ccache_file:
-        cache_type, cache_path = ccache_file.split(":", 1)
-        if cache_type == "FILE" and not os.path.exists(cache_path):
-            should_run_klist = False
-    else:
-        # Legacy format without type prefix - treat as a file path
-        if not os.path.exists(ccache_file):
-            should_run_klist = False
-
-    if should_run_klist:
-        proc = await asyncio.create_subprocess_exec(
-            "klist",
-            "-l",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+    klist_error = None
+    if proc.returncode:
+        klist_error = (
+            f"klist exited with {proc.returncode}:\n"
+            f"stdout: {stdout.decode(errors='replace')}\n"
+            f"stderr: {stderr.decode(errors='replace')}"
         )
-        stdout, stderr = await proc.communicate()
-
-        # klist returns an exit status of 1 if
-        if proc.returncode:
-            logger.error("klist command failed:\nstdout: %s\nstderr: %s", stdout.decode(), stderr.decode())
-            raise KerberosError("Failed to list Kerberos tickets")
-
-        principals = parse_klist_principals(stdout.decode())
-    else:
         principals = []
+    else:
+        principals = parse_klist_principals(stdout.decode())
 
     if keytab_file and keytab_principal:
         if keytab_principal in principals:
@@ -210,7 +193,10 @@ async def init_kerberos_ticket() -> str:
     if principals:
         logger.info("Using existing ticket for %s", principals[0])
         return principals[0]
-    raise KerberosError("No valid Kerberos ticket found and KEYTAB_FILE is not set")
+    msg = "No valid Kerberos ticket found and KEYTAB_FILE is not set"
+    if klist_error:
+        msg += f"\n{klist_error}"
+    raise KerberosError(msg)
 
 
 async def run_subprocess(

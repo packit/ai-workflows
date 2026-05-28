@@ -1,5 +1,4 @@
 import asyncio
-import os
 import subprocess
 
 import httpx
@@ -23,43 +22,19 @@ class TestInitKerberosTicket:
     """Test cases for init_kerberos_ticket() function."""
 
     @pytest.mark.asyncio
-    async def test_missing_krb5ccname_raises_error(self, monkeypatch):
-        """Test that missing KRB5CCNAME environment variable raises KerberosError."""
+    async def test_klist_fails_no_keytab_raises_error(self, monkeypatch):
+        """Test that klist failure with no keytab raises KerberosError with klist details."""
         monkeypatch.delenv("KRB5CCNAME", raising=False)
         monkeypatch.delenv("KEYTAB_FILE", raising=False)
 
-        with pytest.raises(KerberosError, match="KRB5CCNAME environment variable is not set"):
-            await init_kerberos_ticket()
-
-    @pytest.mark.asyncio
-    async def test_ccache_file_not_exists_no_keytab_raises_error(self, monkeypatch):
-        """Test that non-existent ccache file with no keytab raises error."""
-        monkeypatch.delenv("KEYTAB_FILE", raising=False)
-        monkeypatch.setenv("KRB5CCNAME", "/nonexistent/ccache")
-        flexmock(os.path).should_receive("exists").with_args("/nonexistent/ccache").and_return(False)
-        flexmock(asyncio).should_receive("create_subprocess_exec").never()
-
-        # we should avoid calling klist when the ccache file doesn't exist
-        with pytest.raises(
-            KerberosError,
-            match="No valid Kerberos ticket found and KEYTAB_FILE is not set",
-        ):
-            await init_kerberos_ticket()
-
-    @pytest.mark.asyncio
-    async def test_klist_command_failure_raises_error(self, monkeypatch):
-        """Test that klist command failure raises KerberosError."""
         mock_proc = flexmock(returncode=1)
         mock_proc.should_receive("communicate").and_return(_coro((b"error output", b"stderr output")))
 
-        monkeypatch.delenv("KEYTAB_FILE", raising=False)
-        monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
-        flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
         ).and_return(_coro(mock_proc))
 
-        with pytest.raises(KerberosError, match="Failed to list Kerberos tickets"):
+        with pytest.raises(KerberosError, match="klist exited with 1"):
             await init_kerberos_ticket()
 
     @pytest.mark.asyncio
@@ -74,8 +49,6 @@ class TestInitKerberosTicket:
         mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         monkeypatch.delenv("KEYTAB_FILE", raising=False)
-        monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
-        flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
         ).and_return(_coro(mock_proc))
@@ -95,8 +68,6 @@ class TestInitKerberosTicket:
         mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         monkeypatch.delenv("KEYTAB_FILE", raising=False)
-        monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
-        flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
         ).and_return(_coro(mock_proc))
@@ -117,8 +88,6 @@ class TestInitKerberosTicket:
         mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         monkeypatch.delenv("KEYTAB_FILE", raising=False)
-        monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
-        flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
         ).and_return(_coro(mock_proc))
@@ -141,8 +110,6 @@ class TestInitKerberosTicket:
         mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         monkeypatch.setenv("KEYTAB_FILE", "/path/to/keytab")
-        monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
-        flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
         ).and_return(_coro(mock_proc))
@@ -169,8 +136,6 @@ class TestInitKerberosTicket:
         mock_kinit_proc.should_receive("communicate").and_return(_coro((b"error output", b"stderr output")))
 
         monkeypatch.setenv("KEYTAB_FILE", "/path/to/keytab")
-        monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
-        flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
 
         def mock_create_subprocess(*args, **kwargs):
             if args[0] == "klist":
@@ -203,8 +168,6 @@ class TestInitKerberosTicket:
         mock_kinit_proc.should_receive("communicate").and_return(_coro((b"error output", b"stderr output")))
 
         monkeypatch.setenv("KEYTAB_FILE", "/path/to/keytab")
-        monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
-        flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
 
         def mock_create_subprocess(*args, **kwargs):
             if args[0] == "klist":
@@ -228,7 +191,6 @@ class TestInitKerberosTicket:
     async def test_keytab_extract_principal_failure(self, monkeypatch):
         """Test extract_principal failure raises error."""
         monkeypatch.setenv("KEYTAB_FILE", "/path/to/keytab")
-        monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
 
         from ymir.common import base_utils
 
@@ -239,36 +201,20 @@ class TestInitKerberosTicket:
         with pytest.raises(KerberosError, match="Failed to extract principal from keytab file"):
             await init_kerberos_ticket()
 
-    @pytest.mark.parametrize(
-        ("ccache_name", "path_to_check", "expect_exists_call"),
-        [
-            ("KCM:1000", None, False),
-            ("FILE:/path/to/ccache", "/path/to/ccache", True),
-            ("/path/to/ccache", "/path/to/ccache", True),
-        ],
-        ids=["kcm_type", "file_type", "legacy_format"],
-    )
     @pytest.mark.asyncio
-    async def test_krb5ccname_type_handling(
-        self, monkeypatch, ccache_name, path_to_check, expect_exists_call
-    ):
-        """Test that KRB5CCNAME is handled correctly for different types."""
+    async def test_no_krb5ccname_finds_keyring_ticket(self, monkeypatch):
+        """Test that tickets are found via system default cache (e.g. KEYRING)
+        when KRB5CCNAME is not set."""
         klist_output = (
             b"Principal name                 Cache name\n"
             b"--------------                 ----------\n"
-            b"user@EXAMPLE.COM         KCM:1000\n"
+            b"user@EXAMPLE.COM         KEYRING:persistent:1000\n"
         )
         mock_proc = flexmock(returncode=0)
         mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
+        monkeypatch.delenv("KRB5CCNAME", raising=False)
         monkeypatch.delenv("KEYTAB_FILE", raising=False)
-        monkeypatch.setenv("KRB5CCNAME", ccache_name)
-
-        if expect_exists_call:
-            flexmock(os.path).should_receive("exists").with_args(path_to_check).and_return(True)
-        else:
-            flexmock(os.path).should_receive("exists").never()
-
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
         ).and_return(_coro(mock_proc))
@@ -289,8 +235,6 @@ class TestInitKerberosTicket:
         mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         monkeypatch.delenv("KEYTAB_FILE", raising=False)
-        monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
-        flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
         ).and_return(_coro(mock_proc))
@@ -311,8 +255,6 @@ class TestInitKerberosTicket:
         mock_proc.should_receive("communicate").and_return(_coro((klist_output, b"")))
 
         monkeypatch.delenv("KEYTAB_FILE", raising=False)
-        monkeypatch.setenv("KRB5CCNAME", "/path/to/ccache")
-        flexmock(os.path).should_receive("exists").with_args("/path/to/ccache").and_return(True)
         flexmock(asyncio).should_receive("create_subprocess_exec").with_args(
             "klist", "-l", stdout=subprocess.PIPE, stderr=subprocess.PIPE
         ).and_return(_coro(mock_proc))

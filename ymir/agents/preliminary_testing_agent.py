@@ -30,6 +30,7 @@ from ymir.agents.utils import (
     mcp_tools,
     run_tool,
 )
+from ymir.common.logging_setup import configure_logging
 from ymir.tools.unprivileged.greenwave import FetchGreenWaveTool
 
 logger = logging.getLogger(__name__)
@@ -448,7 +449,7 @@ async def _flag_attention(
 
 
 async def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    configure_logging(level=logging.INFO)
 
     span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 

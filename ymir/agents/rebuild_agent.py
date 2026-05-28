@@ -26,6 +26,7 @@ from ymir.agents.utils import (
 )
 from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.logging_setup import configure_logging
 from ymir.common.models import (
     ConsolidatedIssue,
     ErrorData,
@@ -42,7 +43,7 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     init_sentry()
 
-    logging.basicConfig(level=logging.INFO)
+    configure_logging(level=logging.INFO)
     resolve_chat_model_override("rebuild")
 
     span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])

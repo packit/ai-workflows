@@ -8,6 +8,7 @@ from attr import dataclass
 
 from ymir.agents.observability import setup_observability
 from ymir.common.base_utils import init_kerberos_ticket
+from ymir.common.logging_setup import configure_logging
 
 from .collect import collect_and_schedule_work_items
 from .errata_utils import get_erratum
@@ -253,11 +254,11 @@ def main(
     ),
 ):
     if debug:
-        logging.basicConfig(level=logging.DEBUG)
+        configure_logging(level=logging.DEBUG)
         # requests_gssapi is very noisy at DEBUG level
         logging.getLogger("requests_gssapi").setLevel(logging.INFO)
     else:
-        logging.basicConfig(level=logging.INFO)
+        configure_logging(level=logging.INFO)
 
     app_state.dry_run = dry_run
     app_state.ignore_needs_attention = ignore_needs_attention

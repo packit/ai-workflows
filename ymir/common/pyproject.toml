@@ -35,3 +35,4 @@ packages = []
 "version_utils.py" = "ymir/common/version_utils.py"
 "base_utils.py" = "ymir/common/base_utils.py"
 "mock_repos.py" = "ymir/common/mock_repos.py"
+"logging_setup.py" = "ymir/common/logging_setup.py"

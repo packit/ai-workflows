@@ -7,6 +7,8 @@ from typing import Any
 
 from beeai_framework.emitter.emitter import Emitter
 
+from ymir.common.logging_setup import configure_logging
+
 logger = logging.getLogger(__name__)
 
 # Patterns that match common credential formats in log output
@@ -33,10 +35,10 @@ def redact_credentials(text: str) -> str:
 
 def setup_logging():
     """Configure logging and attach Emitter listeners that log tool calls with redacted credentials."""
-    handlers = [logging.StreamHandler()]
+    extra_handlers: list[logging.Handler] = []
     if debug_file := os.environ.get("DEBUG_FILE"):
-        handlers.append(logging.FileHandler(debug_file))
-    logging.basicConfig(level=logging.INFO, handlers=handlers)
+        extra_handlers.append(logging.FileHandler(debug_file))
+    configure_logging(level=logging.INFO, extra_handlers=extra_handlers)
 
     def on_tool_start(data: Any, meta: Any):
         logger.info(f"Tool called: {meta.creator}")

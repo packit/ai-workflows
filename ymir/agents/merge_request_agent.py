@@ -35,6 +35,7 @@ from ymir.agents.utils import (
     render_prompt,
 )
 from ymir.common.base_utils import is_cs_branch
+from ymir.common.logging_setup import configure_logging
 from ymir.common.models import (
     BuildInputSchema,
     BuildOutputSchema,
@@ -177,7 +178,7 @@ def extract_jira_issue(mr_description: str) -> str:
 
 
 async def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    configure_logging(level=logging.INFO)
 
     span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 

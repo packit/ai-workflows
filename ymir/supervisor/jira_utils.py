@@ -805,7 +805,9 @@ if __name__ == "__main__":
 
     @with_requests_session()
     async def main():
-        logging.basicConfig(level=logging.DEBUG)
+        from ymir.common.logging_setup import configure_logging
+
+        configure_logging(level=logging.DEBUG)
         print(get_issue(os.environ["JIRA_ISSUE"], full=True).model_dump_json())
 
     asyncio.run(main())

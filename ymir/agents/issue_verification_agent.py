@@ -25,6 +25,7 @@ from ymir.agents.utils import (
     run_tool,
 )
 from ymir.common.constants import DATETIME_MIN_UTC, GITLAB_GROUPS, JiraLabels
+from ymir.common.logging_setup import configure_logging
 from ymir.common.models import (
     FullErratum,
     FullIssue,
@@ -888,7 +889,7 @@ async def run_issue_verification(
 
 
 async def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    configure_logging(level=logging.INFO)
 
     setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 

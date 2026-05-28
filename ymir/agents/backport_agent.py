@@ -209,7 +209,7 @@ BACKPORT_INSTRUCTIONS = """
             4f. Cherry-pick the fix in upstream:
                 GETTING COMMITS:
                   FOR PULL REQUESTS (if is_pr is True from step 4a):
-                    * Download the PR patch: `curl -L <original_url> -o /tmp/pr.patch`
+                    * Download the PR patch: `curl -L -A "redhat-ymir-agent" <original_url> -o /tmp/pr.patch`
                     * Parse commit hashes from lines starting with "From <hash>"
                     * Fetch PR branch: `git -C <UPSTREAM_REPO> fetch origin pull/<pr_number>/head:pr-branch`
                     * Skip any merge commits — only cherry-pick non-merge commits
@@ -469,7 +469,7 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
             3j. Cherry-pick the fix in upstream:
                 GETTING COMMITS:
                   FOR PULL REQUESTS (if is_pr is True from step 3e):
-                    * Download the PR patch: `curl -L <original_url> -o /tmp/pr.patch`
+                    * Download the PR patch: `curl -L -A "redhat-ymir-agent" <original_url> -o /tmp/pr.patch`
                     * Parse commit hashes from lines starting with "From <hash>"
                     * Fetch PR branch: `git -C <UPSTREAM_REPO> fetch origin pull/<pr_number>/head:pr-branch`
                     * Skip any merge commits — only cherry-pick non-merge commits

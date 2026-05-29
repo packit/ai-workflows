@@ -819,7 +819,8 @@ async def test_skip_user_triggered_when_in_progress(fetcher, mock_redis_context)
 
 @pytest.mark.asyncio
 async def test_skip_user_triggered_when_not_rh_employee(fetcher, mock_redis_context):
-    """ymir_todo added by a non-RH user: skip the issue, do not flip labels or push."""
+    """ymir_todo added by a non-RH user: skip the issue, remove the bogus label,
+    do not push."""
     mock_redis, _ = mock_redis_context
 
     issues = [{"key": "TODO-EXT-1", "fields": {"labels": [JiraLabels.TODO.value]}}]
@@ -830,8 +831,11 @@ async def test_skip_user_triggered_when_not_rh_employee(fetcher, mock_redis_cont
     flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args("TODO-EXT-1").and_return(
         False
     ).once()
-    # No Jira write, no Redis push when the label-add author isn't an RH employee.
-    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+    # Bogus label is removed so the per-sweep verification cost doesn't repeat
+    # forever. No Redis push.
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "TODO-EXT-1", add=[], remove=[JiraLabels.TODO.value]
+    ).once()
     mock_redis.should_receive("lpush").never()
 
     result = await fetcher.push_issues_to_queue(issues)

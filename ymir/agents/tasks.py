@@ -340,6 +340,9 @@ async def set_jira_labels(
         logger.info(f"Dry run, not updating labels for {jira_issue}")
         return
 
+    if not labels_to_add and not labels_to_remove:
+        return
+
     if not user_triggered:
         original_count = len(labels_to_add or [])
         labels_to_add = [

@@ -592,9 +592,15 @@ async def test_run_full_workflow_with_labeled_issues(fetcher, mock_redis_context
     """Test the complete run workflow with issues that have different label states."""
     mock_redis, _ = mock_redis_context
 
-    # Create test issues with different label states
+    # Create test issues with different label states. All of these are
+    # *already known to Redis* (added to lists/queues below), so the
+    # fetcher's dedup must skip them — except for the explicit retry trigger,
+    # which overrides the skip.
     mock_issues = [
-        {"key": "ISSUE-1", "fields": {"labels": []}},  # No labels - should be pushed
+        {
+            "key": "ISSUE-1",
+            "fields": {"labels": []},
+        },  # No labels but already in OPEN_ENDED_ANALYSIS_LIST - should be skipped
         {
             "key": "ISSUE-2",
             "fields": {"labels": ["ymir_rebase_in_progress"]},
@@ -606,8 +612,11 @@ async def test_run_full_workflow_with_labeled_issues(fetcher, mock_redis_context
         {
             "key": "ISSUE-4",
             "fields": {"labels": ["ymir_retry_needed"]},
-        },  # Has retry label - should be pushed
-        {"key": "ISSUE-5", "fields": {"labels": []}},  # No labels - should be pushed
+        },  # Has retry label - should be pushed (retry overrides 'already known')
+        {
+            "key": "ISSUE-5",
+            "fields": {"labels": []},
+        },  # No labels but already in CLARIFICATION_NEEDED_QUEUE - should be skipped
         {
             "key": "ISSUE-6",
             "fields": {"labels": ["ymir_completed"]},
@@ -728,20 +737,14 @@ async def test_run_full_workflow_with_labeled_issues(fetcher, mock_redis_context
         remove=[JiraLabels.RETRY_NEEDED.value],
     ).once()
 
-    # Mock lpush calls for issues that should be pushed despite already existing
-    # ISSUE-1, ISSUE-4, and ISSUE-5 should be pushed (no labels or retry_needed)
-    # ISSUE-2, ISSUE-3, and ISSUE-6 should be skipped (have ymir labels)
-    # The actual code pushes JSON strings, not just issue keys
-    task1 = Task.from_issue("ISSUE-1")
+    # Only ISSUE-4 should be pushed: ymir_retry_needed explicitly overrides
+    # the "already known to Redis" skip. The two no-label issues
+    # (ISSUE-1, ISSUE-5) are already tracked in Redis lists, so the fetcher
+    # leaves them alone instead of double-pushing. The ymir-labelled issues
+    # (ISSUE-2, ISSUE-3, ISSUE-6) are skipped because they have terminal
+    # markers indicating processing is already happening or done.
     task4 = Task.from_issue("ISSUE-4")
-    task5 = Task.from_issue("ISSUE-5")
-    mock_redis.should_receive("lpush").with_args(RedisQueues.TRIAGE_QUEUE.value, task1.to_json()).and_return(
-        create_async_mock_return_value(1)
-    ).once()
     mock_redis.should_receive("lpush").with_args(RedisQueues.TRIAGE_QUEUE.value, task4.to_json()).and_return(
-        create_async_mock_return_value(1)
-    ).once()
-    mock_redis.should_receive("lpush").with_args(RedisQueues.TRIAGE_QUEUE.value, task5.to_json()).and_return(
         create_async_mock_return_value(1)
     ).once()
 

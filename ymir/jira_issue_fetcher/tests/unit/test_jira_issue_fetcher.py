@@ -872,7 +872,7 @@ async def test_user_triggered_skip_when_label_flip_fails(fetcher, mock_redis_con
 
 def _changelog_response(histories, is_last_page=True):
     """Build a fake requests.get response for the paginated /changelog endpoint."""
-    mock = flexmock()
+    mock = flexmock(status_code=200)
     mock.should_receive("raise_for_status")
     mock.should_receive("json").and_return({"values": histories, "isLastPage": is_last_page})
     return mock
@@ -880,7 +880,7 @@ def _changelog_response(histories, is_last_page=True):
 
 def _user_response(groups):
     """Build a fake requests.get response for the user-with-groups endpoint."""
-    mock = flexmock()
+    mock = flexmock(status_code=200)
     mock.should_receive("raise_for_status")
     mock.should_receive("json").and_return({"groups": {"items": [{"name": g} for g in groups]}})
     return mock

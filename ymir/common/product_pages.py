@@ -1,10 +1,12 @@
 """
 Product Pages helpers for RHEL y-stream and z-stream labels.
 
-This module authenticates to the internal Product Pages API (Kerberos via
-``init_kerberos_ticket`` from ``ymir.common.base_utils``, then HTTP SPNEGO via
+This module queries the internal Product Pages API (HTTP SPNEGO via
 ``requests-gssapi``) and derives current y-streams, current z-streams, and
 upcoming z-streams from active releases and GA/ZStream release metadata.
+
+Callers must ensure a valid Kerberos ticket is available before invoking
+``fetch_rhel_streams_snapshot``; this module does not initialize Kerberos.
 
 Public API: ``await fetch_rhel_streams_snapshot()`` (async coroutine). Blocking
 HTTP (``requests``) runs in a thread pool so the event loop is not blocked.
@@ -21,8 +23,6 @@ from functools import cache
 import requests
 import requests_gssapi
 from beeai_framework.tools import ToolError
-
-from ymir.common.base_utils import KerberosError, init_kerberos_ticket
 
 _PLAIN_SHORTNAME_RE = re.compile(r"^rhel-(\d+)\.(\d+)$")
 _GA_ZSTREAM_RE = re.compile(r"\(GA\/ZStream\)")
@@ -270,18 +270,17 @@ async def fetch_rhel_streams_snapshot() -> dict[str, dict[str, str]]:
     Uses GSSAPI session authentication, then loads active releases and
     GA/ZStream-filtered releases to compute stream labels.
 
+    Requires a valid Kerberos ticket in the environment; this module does not
+    initialize Kerberos itself.
+
     Returns:
         Dict with keys ``current_y_streams``, ``current_z_streams``, and
         ``upcoming_z_streams``; each value maps major version strings to
         shortname labels.
 
     Raises:
-        ToolError: On Kerberos initialization failure, non-success HTTP responses,
-            timeouts, transport errors (``requests.RequestException``), invalid
-            JSON, or unexpected response shape (``ValueError``).
+        ToolError: On non-success HTTP responses, timeouts, transport errors
+            (``requests.RequestException``), invalid JSON, or unexpected response
+            shape (``ValueError``).
     """
-    try:
-        await init_kerberos_ticket()
-    except KerberosError as e:
-        raise ToolError(f"Failed to initialize Kerberos ticket: {e}") from e
     return await asyncio.to_thread(_fetch_rhel_streams_snapshot_sync)

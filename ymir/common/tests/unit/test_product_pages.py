@@ -14,15 +14,6 @@ import requests.exceptions
 from beeai_framework.tools import ToolError
 
 import ymir.common.product_pages as pp
-from ymir.common.base_utils import KerberosError
-
-
-async def _fake_init_kerberos_ok() -> str:
-    return "user@EXAMPLE.COM"
-
-
-async def _fake_init_kerberos_fail() -> None:
-    raise KerberosError("ticket unavailable")
 
 
 class _JsonResponse:
@@ -168,18 +159,9 @@ def test_fetch_rhel_streams_snapshot_sync_ssl_error_includes_ca_hint(
 
 
 @pytest.mark.asyncio
-async def test_fetch_rhel_streams_snapshot_kerberos_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pp, "init_kerberos_ticket", _fake_init_kerberos_fail)
-
-    with pytest.raises(ToolError, match="Failed to initialize Kerberos ticket"):
-        await pp.fetch_rhel_streams_snapshot()
-
-
-@pytest.mark.asyncio
 async def test_fetch_rhel_streams_snapshot_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("REDHAT_IT_CA_BUNDLE", raising=False)
     monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
-    monkeypatch.setattr(pp, "init_kerberos_ticket", _fake_init_kerberos_ok)
 
     active = [{"shortname": "rhel-10.0"}]
     z_rows: list[dict] = []

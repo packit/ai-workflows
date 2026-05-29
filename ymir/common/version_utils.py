@@ -118,8 +118,7 @@ async def is_older_zstream(
     Args:
         version_or_branch: Fix version string or dist-git branch name
         current_z_streams: Dict mapping major version to current z-stream
-            (e.g., {"9": "rhel-9.7.z"}). If None, loaded from Product Pages via
-            ``fetch_rhel_streams_snapshot``.
+            (e.g., {"9": "rhel-9.7.z"}). If None, loaded from rhel-config.json.
 
     Returns:
         True if the version targets an older z-stream, False otherwise.
@@ -127,9 +126,9 @@ async def is_older_zstream(
     if current_z_streams is None:
         current_z_streams = current_z_streams_override.get()
     if current_z_streams is None:
-        from ymir.common.product_pages import fetch_rhel_streams_snapshot
+        from ymir.common.config import load_rhel_config
 
-        config = await fetch_rhel_streams_snapshot()
+        config = await load_rhel_config()
         current_z_streams = config.get("current_z_streams", {})
 
     # Try parsing as a z-stream version string first (rhel-9.7.z)

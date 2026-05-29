@@ -35,6 +35,7 @@ from ymir.agents.utils import (
     run_tool,
 )
 from ymir.common.base_utils import fix_await, redis_client
+from ymir.common.config import load_rhel_config
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import (
     ApplicabilityResult,
@@ -54,7 +55,6 @@ from ymir.common.models import (
 from ymir.common.models import (
     TriageOutputSchema as OutputSchema,
 )
-from ymir.common.product_pages import fetch_rhel_streams_snapshot
 from ymir.common.version_utils import is_older_zstream, normalize_fix_version, parse_rhel_version
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 
@@ -135,7 +135,7 @@ async def _map_version_to_branch(
     major_version, minor_version, is_zstream = parsed
 
     # Load rhel-config to check which major versions have Y-stream mappings
-    config = await fetch_rhel_streams_snapshot()
+    config = await load_rhel_config()
     y_streams = config.get("current_y_streams", {})
 
     # Check if this is an older z-stream than the current one
@@ -832,7 +832,7 @@ async def run_workflow(
 
             # Normalize stale Y-stream fixVersion (e.g. rhel-9.8 → rhel-9.8.z after GA)
             if hasattr(state.triage_result.data, "fix_version") and state.triage_result.data.fix_version:
-                rhel_config = await fetch_rhel_streams_snapshot()
+                rhel_config = await load_rhel_config()
                 state.triage_result.data.fix_version = normalize_fix_version(
                     state.triage_result.data.fix_version, rhel_config
                 )

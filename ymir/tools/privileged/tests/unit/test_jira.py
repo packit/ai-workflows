@@ -388,7 +388,7 @@ async def test_check_zstream_clones_all_closed():
     flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
         _create_async_return(JSONToolOutput(result=search_result))
     ).once()
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
 
@@ -421,7 +421,7 @@ async def test_check_zstream_clones_one_shipped_one_open():
     flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
         _create_async_return(JSONToolOutput(result=search_result))
     ).once()
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
 
@@ -445,7 +445,7 @@ async def test_check_zstream_clones_none_shipped():
     flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
         _create_async_return(JSONToolOutput(result=search_result))
     ).once()
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
 
@@ -479,7 +479,7 @@ async def test_check_zstream_clones_eus_filtered_out():
     flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
         _create_async_return(JSONToolOutput(result=search_result))
     ).once()
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
 
@@ -503,7 +503,7 @@ async def test_check_zstream_clones_maintenance_filtered_out():
     flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
         _create_async_return(JSONToolOutput(result=search_result))
     ).once()
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
 
@@ -528,7 +528,7 @@ async def test_check_zstream_clones_closed_wontdo_ignored():
     flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
         _create_async_return(JSONToolOutput(result=search_result))
     ).once()
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
 
@@ -561,7 +561,7 @@ async def test_check_zstream_clones_wontdo_with_pending():
     flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
         _create_async_return(JSONToolOutput(result=search_result))
     ).once()
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
 
@@ -586,7 +586,7 @@ async def test_check_zstream_clones_stale_ystream_fixversion():
     flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
         _create_async_return(JSONToolOutput(result=search_result))
     ).once()
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
 
@@ -660,7 +660,7 @@ async def test_eligibility_ystream_any_clone_shipped():
         components=[{"name": "curl"}],
     )
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
     flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
@@ -682,7 +682,7 @@ async def test_eligibility_ystream_clones_pending():
         components=[{"name": "curl"}],
     )
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
     flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
@@ -705,7 +705,7 @@ async def test_eligibility_ystream_low_moderate_skipped(severity):
         components=[{"name": "curl"}],
     )
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
 
@@ -724,7 +724,7 @@ async def test_eligibility_ystream_no_cve_id():
         components=[{"name": "curl"}],
     )
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
 
@@ -741,7 +741,7 @@ async def test_eligibility_ystream_no_component():
         severity="Critical",
     )
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
 
@@ -757,7 +757,7 @@ async def test_eligibility_embargoed():
         embargo="True",
     )
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
 
@@ -773,7 +773,7 @@ async def test_eligibility_zstream():
         severity="moderate",
     )
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(
             {
                 "current_y_streams": {"9": "rhel-9.8"},
@@ -798,7 +798,7 @@ async def test_eligibility_maintenance_zstream_no_dependency_check():
         components=[{"name": "curl"}],
     )
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
-    flexmock(jira_tools).should_receive("fetch_rhel_streams_snapshot").and_return(
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
     flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").never()

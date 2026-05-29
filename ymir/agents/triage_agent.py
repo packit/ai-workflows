@@ -155,27 +155,30 @@ async def _map_version_to_branch(
         logger.info(f"Mapped {version} -> {branch} (CentOS Stream)")
         return branch
 
-    # For Z-stream bugs, always use internal RHEL branch
-    # Check if branch exists, but use it anyway since it will be created later if needed
-    if is_zstream or older_zstream:
+    # For older Z-Streams, always use internal RHEL branch (it will be created if needed)
+    if older_zstream:
+        expected_branch = _construct_internal_branch_name(major_version, minor_version)
+        logger.info(f"Mapped {version} -> {expected_branch} (older Z-Stream RHEL internal branch)")
+        return expected_branch
+
+    # For latest/upcoming Z-Stream, use internal RHEL branch only if it already exists
+    if is_zstream and package:
         expected_branch = _construct_internal_branch_name(major_version, minor_version)
 
-        if package:
-            try:
-                async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
-                    available_branches = await run_tool(
-                        "get_internal_rhel_branches",
-                        available_tools=gateway_tools,
-                        package=package,
-                    )
+        async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
+            available_branches = await run_tool(
+                "get_internal_rhel_branches",
+                available_tools=gateway_tools,
+                package=package,
+            )
 
-                    if expected_branch not in available_branches:
-                        logger.info(f"Branch {expected_branch} does not exist for package {package}")
-            except Exception as e:
-                logger.warning(f"Failed to check internal branches for package {package}: {e}")
-
-        logger.info(f"Mapped {version} -> {expected_branch} (Z-stream RHEL internal branch)")
-        return expected_branch
+        if expected_branch in available_branches:
+            logger.info(f"Mapped {version} -> {expected_branch} (Z-stream with internal branch)")
+            return expected_branch
+        logger.info(
+            f"Internal branch {expected_branch} not found for package {package}, "
+            "falling back to CentOS Stream"
+        )
 
     # Default to CentOS Stream
     branch = f"c{major_version}s"

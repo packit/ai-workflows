@@ -242,7 +242,13 @@ async def main() -> None:
         abandon_autorelease: bool = Field(default=False)
 
     async def run_workflow(
-        package, dist_git_branch, version, jira_issue, justification=None, redis_conn=None
+        package,
+        dist_git_branch,
+        version,
+        jira_issue,
+        justification=None,
+        redis_conn=None,
+        user_triggered=False,
     ):
         local_tool_options["working_directory"] = None
         if mock_env := get_mock_local_tool_env(jira_issue):
@@ -472,6 +478,7 @@ async def main() -> None:
                     comment_text=comment_text,
                     is_error=is_error,
                     available_tools=gateway_tools,
+                    user_triggered=user_triggered,
                 )
                 return Workflow.END
 
@@ -544,13 +551,15 @@ async def main() -> None:
             triage_state = task.metadata
             rebase_data = RebaseData.model_validate(triage_state["triage_result"]["data"])
             dist_git_branch = triage_state["target_branch"]
+            user_triggered = task.user_triggered
             logger.info(
                 f"Processing rebase for package: {rebase_data.package}, "
                 f"version: {rebase_data.version}, JIRA: {rebase_data.jira_issue}, "
                 f"branch: {dist_git_branch}, attempt: {task.attempts + 1}"
+                + (" (user-triggered via ymir_todo)" if user_triggered else "")
             )
 
-            async def retry(task, error, rebase_data=rebase_data):
+            async def retry(task, error, rebase_data=rebase_data, user_triggered=user_triggered):
                 task.attempts += 1
                 if task.attempts < max_retries:
                     logger.warning(
@@ -568,6 +577,7 @@ async def main() -> None:
                         labels_to_add=[JiraLabels.REBASE_ERRORED.value],
                         labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
                         dry_run=dry_run,
+                        user_triggered=user_triggered,
                     )
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
@@ -581,6 +591,7 @@ async def main() -> None:
                         jira_issue=rebase_data.jira_issue,
                         justification=rebase_data.justification,
                         redis_conn=redis,
+                        user_triggered=user_triggered,
                     )
                     logger.info(
                         f"Rebase processing completed for {rebase_data.jira_issue}, "
@@ -606,6 +617,7 @@ async def main() -> None:
                             JiraLabels.REBASE_FAILED.value,
                         ],
                         dry_run=dry_run,
+                        user_triggered=user_triggered,
                     )
                     await fix_await(
                         redis.lpush(
@@ -620,6 +632,7 @@ async def main() -> None:
                         labels_to_add=[JiraLabels.REBASE_FAILED.value],
                         labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
                         dry_run=dry_run,
+                        user_triggered=user_triggered,
                     )
                     await retry(task, state.rebase_result.error)
 

@@ -903,6 +903,7 @@ async def run_workflow(
     backport_agent_factory=None,
     max_build_attempts=10,
     max_incremental_fix_attempts=None,
+    user_triggered=False,
 ):
     if max_incremental_fix_attempts is None:
         max_incremental_fix_attempts = max_build_attempts
@@ -910,10 +911,6 @@ async def run_workflow(
     local_tool_options: dict[str, Any] = {"working_directory": None}
     if mock_env := get_mock_local_tool_env(jira_issue):
         local_tool_options["env"] = mock_env
-    # In tests SILENT_RUN is typically unset, so Jira status updates are
-    # attempted (and skipped via dry_run).  Set SILENT_RUN=true to suppress
-    # Jira transitions even when dry_run is False.
-    silent_run = os.getenv("SILENT_RUN", "false").lower() == "true"
 
     async with mcp_tools(
         os.environ["MCP_GATEWAY_URL"], call_meta={"jira_issue": jira_issue}
@@ -933,15 +930,14 @@ async def run_workflow(
             if dry_run:
                 logger.info(f"Dry run: would change status of {state.jira_issue} to In Progress")
                 return "fork_and_prepare_dist_git"
-            else:
-                try:
-                    await tasks.change_jira_status(
-                        jira_issue=state.jira_issue,
-                        status="In Progress",
-                        available_tools=gateway_tools,
-                    )
-                except Exception as status_error:
-                    logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
+            try:
+                await tasks.change_jira_status(
+                    jira_issue=state.jira_issue,
+                    status="In Progress",
+                    available_tools=gateway_tools,
+                )
+            except Exception as status_error:
+                logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
             return "fork_and_prepare_dist_git"
 
         async def fork_and_prepare_dist_git(state):
@@ -1338,6 +1334,7 @@ async def run_workflow(
                 comment_text=comment_text,
                 is_error=is_error,
                 available_tools=gateway_tools,
+                user_triggered=user_triggered,
             )
             return Workflow.END
 
@@ -1433,13 +1430,15 @@ async def main() -> None:
             triage_state = task.metadata
             backport_data = BackportData.model_validate(triage_state["triage_result"]["data"])
             dist_git_branch = triage_state["target_branch"]
+            user_triggered = task.user_triggered
             logger.info(
                 f"Processing backport for package: {backport_data.package}, "
                 f"JIRA: {backport_data.jira_issue}, branch: {dist_git_branch}, "
                 f"attempt: {task.attempts + 1}"
+                + (" (user-triggered via ymir_todo)" if user_triggered else "")
             )
 
-            async def retry(task, error, backport_data=backport_data):
+            async def retry(task, error, backport_data=backport_data, user_triggered=user_triggered):
                 task.attempts += 1
                 if task.attempts < max_retries:
                     logger.warning(
@@ -1457,6 +1456,7 @@ async def main() -> None:
                         labels_to_add=[JiraLabels.BACKPORT_ERRORED.value],
                         labels_to_remove=[JiraLabels.TRIAGED_BACKPORT.value],
                         dry_run=dry_run,
+                        user_triggered=user_triggered,
                     )
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
@@ -1475,6 +1475,7 @@ async def main() -> None:
                         dry_run=dry_run,
                         max_build_attempts=max_build_attempts,
                         max_incremental_fix_attempts=max_incremental_fix_attempts,
+                        user_triggered=user_triggered,
                     )
                     logger.info(
                         f"Backport processing completed for {backport_data.jira_issue}, "
@@ -1502,6 +1503,7 @@ async def main() -> None:
                             JiraLabels.BACKPORT_FAILED.value,
                         ],
                         dry_run=dry_run,
+                        user_triggered=user_triggered,
                     )
                     await fix_await(
                         redis.lpush(
@@ -1518,6 +1520,7 @@ async def main() -> None:
                         labels_to_add=[JiraLabels.BACKPORT_FAILED.value],
                         labels_to_remove=[JiraLabels.TRIAGED_BACKPORT.value],
                         dry_run=dry_run,
+                        user_triggered=user_triggered,
                     )
                     await retry(task, state.backport_result.error)
 

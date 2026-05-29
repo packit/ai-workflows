@@ -157,7 +157,7 @@ class ExtractUpstreamRepositoryTool(
                 repo = compare_match.group(2)
                 base_ref = compare_match.group(3)
                 # Group 4 is the separator (.. or ...) - not used, we always use ... for APIs
-                target_ref = compare_match.group(5).rstrip(".patch")  # Remove .patch if present
+                target_ref = compare_match.group(5).removesuffix(".patch")
                 # Construct repository URL
                 repo_url = f"https://{parsed.netloc}/{owner}/{repo}.git"
                 # Fetch compare information to get the list of commits

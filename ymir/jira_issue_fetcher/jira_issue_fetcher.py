@@ -150,6 +150,24 @@ class JiraIssueFetcher:
             raise requests.HTTPError("Rate limited", response=response)
         response.raise_for_status()
 
+    @backoff.on_exception(
+        backoff.expo,
+        (requests.RequestException, requests.HTTPError),
+        max_tries=4,
+        base=2,
+        logger=logger,
+    )
+    def _make_get_request_with_retries(
+        self, url: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Make a GET request with exponential backoff retries."""
+        response = requests.get(url, params=params, headers=self.headers, timeout=self.API_TIMEOUT)
+        if response.status_code == 429:
+            logger.warning("Rate limited (429), will retry with backoff")
+            raise requests.HTTPError("Rate limited", response=response)
+        response.raise_for_status()
+        return response.json()
+
     def _label_added_by_rh_employee(self, issue_key: str) -> bool:
         """Verify that the latest add of ymir_todo was performed by a Red Hat Employee.
 
@@ -175,14 +193,10 @@ class JiraIssueFetcher:
             max_results = 100  # Jira default and max per request
 
             while True:
-                response = requests.get(
+                data = self._make_get_request_with_retries(
                     changelog_url,
                     params={"startAt": start_at, "maxResults": max_results},
-                    headers=self.headers,
-                    timeout=self.API_TIMEOUT,
                 )
-                response.raise_for_status()
-                data = response.json()
                 histories = data.get("values", [])
 
                 if not histories:
@@ -217,14 +231,11 @@ class JiraIssueFetcher:
                 )
                 return False
 
-            user_response = requests.get(
+            user_data = self._make_get_request_with_retries(
                 urljoin(self.jira_url, "rest/api/3/user"),
                 params={"accountId": latest_add_author, "expand": "groups"},
-                headers=self.headers,
-                timeout=self.API_TIMEOUT,
             )
-            user_response.raise_for_status()
-            groups = user_response.json().get("groups") or {}
+            groups = user_data.get("groups") or {}
             items = groups.get("items") or []
             group_names = [g.get("name") for g in items if g]
             return _RH_EMPLOYEE_GROUP in group_names

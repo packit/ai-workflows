@@ -45,6 +45,10 @@ from ymir.common.models import (
 configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Name of the Jira group that membership in identifies a Red Hat Employee.
+# Matches the value used by ymir/tools/privileged/jira.py.
+_RH_EMPLOYEE_GROUP = "Red Hat Employee"
+
 
 class JiraIssueFetcher:
     DEFAULT_QUERY = "project=RHEL and assignee = jotnar-project"
@@ -145,6 +149,64 @@ class JiraIssueFetcher:
             logger.warning(f"Rate limited (429) editing labels on {issue_key}, will retry")
             raise requests.HTTPError("Rate limited", response=response)
         response.raise_for_status()
+
+    def _label_added_by_rh_employee(self, issue_key: str) -> bool:
+        """Verify that the latest add of ymir_todo was performed by a Red Hat Employee.
+
+        The JQL no longer gates ymir_todo on the assignee, so the fetcher must
+        check per-issue that the label was added by a Red Hat Employee rather
+        than (e.g.) an external collaborator. Walks the issue's changelog,
+        picks the most-recent ``ymir_todo`` add event, and looks up that
+        author's Jira group memberships.
+
+        Returns False on any lookup or parsing failure — that path skips the
+        issue with a warning rather than treating an unverifiable label as a
+        legitimate trigger.
+        """
+        try:
+            issue_url = urljoin(self.jira_url, f"rest/api/3/issue/{issue_key}?expand=changelog")
+            response = requests.get(issue_url, headers=self.headers, timeout=self.API_TIMEOUT)
+            response.raise_for_status()
+            histories = response.json().get("changelog", {}).get("histories", [])
+
+            # Find the most-recent entry that adds ymir_todo to labels. Track by
+            # `created` timestamp so the result is order-independent (ISO 8601
+            # strings are lexically comparable).
+            latest_add_author: str | None = None
+            latest_add_time = ""
+            for history in histories:
+                created = history.get("created", "")
+                for item in history.get("items", []):
+                    if item.get("field") != "labels":
+                        continue
+                    from_labels = set((item.get("fromString") or "").split())
+                    to_labels = set((item.get("toString") or "").split())
+                    if JiraLabels.TODO.value in (to_labels - from_labels) and created > latest_add_time:
+                        latest_add_time = created
+                        latest_add_author = history.get("author", {}).get("accountId")
+                    break  # one labels item per history
+
+            if not latest_add_author:
+                logger.warning(
+                    f"No changelog entry adds {JiraLabels.TODO.value} to {issue_key}; "
+                    f"cannot verify author, treating as non-RH-employee"
+                )
+                return False
+
+            user_url = urljoin(
+                self.jira_url,
+                f"rest/api/3/user?accountId={latest_add_author}&expand=groups",
+            )
+            user_response = requests.get(user_url, headers=self.headers, timeout=self.API_TIMEOUT)
+            user_response.raise_for_status()
+            group_names = [g.get("name") for g in user_response.json().get("groups", {}).get("items", [])]
+            return _RH_EMPLOYEE_GROUP in group_names
+        except Exception as e:
+            logger.warning(
+                f"Failed to verify {JiraLabels.TODO.value} author on {issue_key}: {e}; "
+                f"treating as non-RH-employee"
+            )
+            return False
 
     async def search_issues(self) -> list[dict[str, Any]]:
         """
@@ -327,8 +389,20 @@ class JiraIssueFetcher:
                 # must not be re-enqueued — let it finish and the maintainer can re-add
                 # the label later if needed.
                 if JiraLabels.TODO.value in ymir_labels and not has_in_progress:
+                    # The JQL no longer restricts ymir_todo by assignee, so we verify
+                    # per-issue that the label was added by a Red Hat Employee. If
+                    # not (or if the author can't be verified), skip the issue — the
+                    # label may have been added by an external collaborator.
+                    if not self._label_added_by_rh_employee(issue_key):
+                        logger.warning(
+                            f"Issue {issue_key} has {JiraLabels.TODO.value} but the "
+                            f"label was not added by a Red Hat Employee - skipping"
+                        )
+                        existing_keys.add(issue_key)
+                        continue
                     logger.info(
-                        f"Issue {issue_key} has {JiraLabels.TODO.value} - marking for user-triggered run"
+                        f"Issue {issue_key} has {JiraLabels.TODO.value} added by an "
+                        f"RH employee - marking for user-triggered run"
                     )
                     remove_issues_for_retry.add(issue_key)
                     user_triggered_keys.add(issue_key)

@@ -30,7 +30,7 @@ stateDiagram-v2
 flowchart TD
     FETCH[Jira Issue Fetcher]
 
-    FETCH -->|No Ymir labels<br/>OR ymir_retry_needed<br/>OR ymir_todo + RH-Employee assignee| TRIAGE[triage_queue]
+    FETCH -->|No Ymir labels<br/>OR ymir_retry_needed<br/>OR ymir_todo added by RH-Employee| TRIAGE[triage_queue]
 
     TRIAGE --> TRIAGE_AGENT[Triage Agent]
 
@@ -93,7 +93,7 @@ flowchart TD
 | `ymir_retry_needed` | Trigger retry | Forces reprocessing |
 | `ymir_triaged` | Triage completed, no automated follow-up | Terminal state |
 | `ymir_fusa` | Functional Safety | Requires maintainer review |
-| `ymir_todo` | Maintainer-facing trigger for an e2e run | Fetcher swaps it for `ymir_triage_in_progress` on enqueue; only honored when the assignee is a member of the `Red Hat Employee` Jira group. The triage run posts an ack comment and a result comment so the requester gets feedback. Default is silent — without `ymir_todo`, no comments are posted. |
+| `ymir_todo` | Maintainer-facing trigger for an e2e run | Fetcher swaps it for `ymir_triage_in_progress` on enqueue; only honored when the changelog shows the label was added by a member of the `Red Hat Employee` Jira group (verified per-issue, not via JQL). The triage run posts an ack comment and a result comment so the requester gets feedback. Default is silent — without `ymir_todo`, no comments are posted. |
 
 ## Queue Types Summary
 
@@ -120,7 +120,7 @@ flowchart TD
 flowchart TD
     START[Jira Issue Fetcher<br/>Found issue]
     INPROG{Has any<br/>ymir_*_in_progress?}
-    TODO{Has ymir_todo?<br/>assignee in<br/>Red Hat Employee group}
+    TODO{Has ymir_todo?<br/>added by a member of<br/>Red Hat Employee group}
     RETRY{Has<br/>ymir_retry_needed?}
     OTHER{Has any other<br/>ymir_* label?}
 
@@ -161,13 +161,13 @@ What happens for each trigger state:
 | Trigger state at sweep time | Default behaviour | `DRY_RUN=true` |
 |---|---|---|
 | **No `ymir_*` labels** (fresh issue) | Fetcher pushes to `triage_queue`. Agent stamps `ymir_triage_in_progress`, runs triage, writes a terminal `ymir_*` label. Result comment is suppressed unless the resolution is `not-affected` or `postponed`. If the run auto-chains to rebase or backport, the downstream agent moves the Jira workflow status to "In Progress" when it pops the task. | Agent runs triage but `set_jira_labels` / `add_jira_comment` short-circuit on `DRY_RUN`. No labels, no comment, no MR, no workflow status change. Issue untouched in Jira. |
-| **`ymir_todo`** (assignee in `Red Hat Employee`, no `_in_progress`) | Fetcher atomically flips `ymir_todo` → `ymir_triage_in_progress`, pushes with `user_triggered=True`. Agent posts a private ack comment and a result comment on completion. `_failed` labels are written normally. Workflow status change is the same as the fresh-issue path (set by rebase/backport on auto-chain). | Fetcher skips the atomic flip (`ymir_todo` stays on the issue) but still pushes to Redis with `user_triggered=True`. Agent runs in dry mode and writes nothing; workflow status not changed. **Subsequent fetcher sweeps will re-push the same issue** because the trigger label was never consumed. |
+| **`ymir_todo`** (added by a member of `Red Hat Employee`, no `_in_progress`) | Fetcher verifies the latest `ymir_todo` add in the issue's changelog was performed by a Red Hat Employee; if so, atomically flips `ymir_todo` → `ymir_triage_in_progress` and pushes with `user_triggered=True`. Agent posts a private ack comment and a result comment on completion. `_failed` labels are written normally. Workflow status change is the same as the fresh-issue path (set by rebase/backport on auto-chain). | Fetcher still verifies the author and skips the atomic flip (`ymir_todo` stays on the issue), but still pushes to Redis with `user_triggered=True`. Agent runs in dry mode and writes nothing; workflow status not changed. **Subsequent fetcher sweeps will re-push the same issue** because the trigger label was never consumed. |
 | **`ymir_retry_needed`** (no `_in_progress`) | Fetcher atomically flips `ymir_retry_needed` → `ymir_triage_in_progress`, pushes with `user_triggered=False`. Agent runs full triage; behaves exactly like a fresh-issue run (no ack comment, result comment only for `not-affected`/`postponed`). Workflow status change is the same as the fresh-issue path. | Fetcher skips the atomic flip (`ymir_retry_needed` stays on the issue) but still pushes to Redis with `user_triggered=False`. Agent runs in dry mode and writes nothing; workflow status not changed. Subsequent fetcher sweeps will re-push the same issue. |
 | **`ymir_todo`** or **`ymir_retry_needed`** **+** any `ymir_*_in_progress` label | Fetcher skips. Not enqueued. Workflow status not affected. | Fetcher skips. Not enqueued. Workflow status not affected. |
 | **Any other terminal `ymir_*` label** (e.g. `ymir_triaged_rebase`, `ymir_rebased`, `ymir_triage_errored`) | Fetcher skips. Re-run by adding `ymir_todo` (recommended — produces an ack + result comment) or `ymir_retry_needed`. Workflow status not affected. | Fetcher skips. Workflow status not affected. |
 
-The JQL filter for `ymir_todo` is gated on `assignee in membersOf("Red Hat Employee")`, so non-RH-employee assignees adding `ymir_todo` are silently ignored by the fetcher.
+JQL no longer restricts `ymir_todo` by assignee — the fetcher instead verifies per-issue that the user who added the label belongs to the `Red Hat Employee` Jira group by walking the issue's changelog. If the latest `ymir_todo` add was performed by an external collaborator (or the author cannot be verified), the fetcher skips the issue with a warning and does not flip the label.
 
 ---
 
-**Last Updated:** 2026-05-27
+**Last Updated:** 2026-05-29

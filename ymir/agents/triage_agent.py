@@ -1286,24 +1286,9 @@ async def main() -> None:
                 + (" (user-triggered via ymir_todo)" if user_triggered else "")
             )
 
-            # User-triggered runs always get an immediate ack comment so the
-            # maintainer sees their request was picked up. (Default is silent;
-            # ymir_todo is the explicit opt-in for feedback.)
-            if user_triggered and not dry_run:
-                try:
-                    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-                        await tasks.comment_in_jira(
-                            jira_issue=input.issue,
-                            agent_type="Triage",
-                            comment_text=(
-                                "Ymir picked up your request and started processing. "
-                                "Results will be posted here when triage completes."
-                            ),
-                            available_tools=gateway_tools,
-                            user_triggered=True,
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to post user-triggered ack comment for {input.issue}: {e}")
+            # User-triggered runs will receive an acknowledgement comment,
+            # but only after we successfully write the in-progress label to
+            # avoid duplicate comments if the label write later fails.
 
             current_labels = await tasks.get_jira_labels(input.issue)
             all_labels = JiraLabels.all_labels()
@@ -1365,6 +1350,24 @@ async def main() -> None:
                     critical=True,
                 )
                 logger.info(f"Cleaned up existing labels for {input.issue}")
+                # Post acknowledgement comment for user-triggered runs now that
+                # the in-progress label write succeeded. This prevents duplicate
+                # comments if the critical label write were to fail.
+                if user_triggered and not dry_run and task.attempts == 0:
+                    try:
+                        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+                            await tasks.comment_in_jira(
+                                jira_issue=input.issue,
+                                agent_type="Triage",
+                                comment_text=(
+                                    "Ymir picked up your request and started processing. "
+                                    "Results will be posted here when triage completes."
+                                ),
+                                available_tools=gateway_tools,
+                                user_triggered=True,
+                            )
+                    except Exception as e:
+                        logger.warning(f"Failed to post user-triggered ack comment for {input.issue}: {e}")
             except Exception as e:
                 logger.error(
                     f"Could not set {JiraLabels.TRIAGE_IN_PROGRESS.value} on "

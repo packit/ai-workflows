@@ -155,36 +155,60 @@ class JiraIssueFetcher:
 
         The JQL no longer gates ymir_todo on the assignee, so the fetcher must
         check per-issue that the label was added by a Red Hat Employee rather
-        than (e.g.) an external collaborator. Walks the issue's changelog,
-        picks the most-recent ``ymir_todo`` add event, and looks up that
-        author's Jira group memberships.
+        than (e.g.) an external collaborator. Fetches the full changelog via
+        the dedicated /rest/api/3/issue/{issueKey}/changelog endpoint with
+        pagination to handle issues with long histories (which may exceed the
+        100-entry limit when expanded inline). Picks the most-recent
+        ``ymir_todo`` add event and looks up that author's Jira group
+        memberships.
 
         Returns False on any lookup or parsing failure — that path skips the
         issue with a warning rather than treating an unverifiable label as a
         legitimate trigger.
         """
         try:
-            issue_url = urljoin(self.jira_url, f"rest/api/3/issue/{issue_key}?expand=changelog")
-            response = requests.get(issue_url, headers=self.headers, timeout=self.API_TIMEOUT)
-            response.raise_for_status()
-            histories = response.json().get("changelog", {}).get("histories", [])
-
-            # Find the most-recent entry that adds ymir_todo to labels. Track by
-            # `created` timestamp so the result is order-independent (ISO 8601
-            # strings are lexically comparable).
+            # Fetch full changelog with pagination to handle long histories
+            changelog_url = urljoin(self.jira_url, f"rest/api/3/issue/{issue_key}/changelog")
             latest_add_author: str | None = None
             latest_add_time = ""
-            for history in histories:
-                created = history.get("created") or ""
-                for item in history.get("items", []):
-                    if item.get("field") != "labels":
-                        continue
-                    from_labels = set((item.get("fromString") or "").split())
-                    to_labels = set((item.get("toString") or "").split())
-                    if JiraLabels.TODO.value in (to_labels - from_labels) and created > latest_add_time:
-                        latest_add_time = created
-                        latest_add_author = (history.get("author") or {}).get("accountId")
-                    break  # one labels item per history
+            start_at = 0
+            max_results = 100  # Jira default and max per request
+
+            while True:
+                response = requests.get(
+                    changelog_url,
+                    params={"startAt": start_at, "maxResults": max_results},
+                    headers=self.headers,
+                    timeout=self.API_TIMEOUT,
+                )
+                response.raise_for_status()
+                data = response.json()
+                histories = data.get("values", [])
+
+                if not histories:
+                    break
+
+                # Find the most-recent entry that adds ymir_todo to labels. Track by
+                # `created` timestamp so the result is order-independent (ISO 8601
+                # strings are lexically comparable).
+                for history in histories:
+                    created = history.get("created") or ""
+                    for item in history.get("items", []):
+                        if item.get("field") != "labels":
+                            continue
+                        from_labels = set((item.get("fromString") or "").split())
+                        to_labels = set((item.get("toString") or "").split())
+                        if JiraLabels.TODO.value in (to_labels - from_labels) and created > latest_add_time:
+                            latest_add_time = created
+                            latest_add_author = (history.get("author") or {}).get("accountId")
+                        break  # one labels item per history
+
+                # Check if there are more pages
+                is_last_page = data.get("isLastPage", True)
+                if is_last_page:
+                    break
+
+                start_at += max_results
 
             if not latest_add_author:
                 logger.warning(

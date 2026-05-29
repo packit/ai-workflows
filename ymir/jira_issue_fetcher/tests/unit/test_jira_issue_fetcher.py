@@ -870,11 +870,11 @@ async def test_user_triggered_skip_when_label_flip_fails(fetcher, mock_redis_con
     assert result == 0
 
 
-def _changelog_response(histories):
-    """Build a fake requests.get response for the issue-with-changelog endpoint."""
+def _changelog_response(histories, is_last_page=True):
+    """Build a fake requests.get response for the paginated /changelog endpoint."""
     mock = flexmock()
     mock.should_receive("raise_for_status")
-    mock.should_receive("json").and_return({"changelog": {"histories": histories}})
+    mock.should_receive("json").and_return({"values": histories, "isLastPage": is_last_page})
     return mock
 
 
@@ -961,3 +961,28 @@ def test_label_added_by_rh_employee_false_when_no_add_event(fetcher):
     flexmock(requests).should_receive("get").and_return(_changelog_response(histories)).once()
 
     assert fetcher._label_added_by_rh_employee("RHEL-4") is False
+
+
+def test_label_added_by_rh_employee_walks_paginated_changelog(fetcher):
+    """The ymir_todo add appears on the second page; helper must paginate to find it."""
+    page1 = [
+        {
+            "created": "2026-04-01T10:00:00.000+0000",
+            "author": {"accountId": "rh-user-1"},
+            "items": [{"field": "status", "fromString": "To Do", "toString": "In Progress"}],
+        }
+    ]
+    page2 = [
+        {
+            "created": "2026-05-25T13:54:47.861+0000",
+            "author": {"accountId": "rh-user-1"},
+            "items": [{"field": "labels", "fromString": "", "toString": "ymir_todo"}],
+        }
+    ]
+    flexmock(requests).should_receive("get").and_return(
+        _changelog_response(page1, is_last_page=False),
+        _changelog_response(page2, is_last_page=True),
+        _user_response(["Red Hat Employee"]),
+    ).one_by_one()
+
+    assert fetcher._label_added_by_rh_employee("RHEL-LONG") is True

@@ -1,6 +1,6 @@
 apiVersion: v1
 data:
-  QUERY: 'filter = "Ymir early adopters + CVE work to do" OR (labels = "ymir_todo" AND assignee in membersOf("Red Hat Employee"))'
+  QUERY: 'filter = "Ymir early adopters + CVE work to do" OR labels = "ymir_todo"'
   IGNORED_COMPONENTS: "firefox,thunderbird,firefox-flatpak-container,thunderbird-flatpak-container,webkit2gtk3,openjdk,postfix"
   MAX_ISSUES: "20"
   LOGLEVEL: "INFO"

@@ -555,6 +555,9 @@ async def test_dry_run_skips_flip_but_still_pushes(
     flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
         create_async_mock_return_value(set())
     )
+    # For ymir_todo issues the fetcher verifies the label-add author; we don't
+    # exercise that path here so unconditionally pass.
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(True)
     # Must NOT touch Jira in dry-run mode.
     flexmock(fetcher).should_receive("_edit_jira_labels").never()
 
@@ -761,6 +764,10 @@ async def test_push_user_triggered_issue(fetcher, mock_redis_context):
     flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
         create_async_mock_return_value(set())
     )
+    # Author verification passes — label was added by a Red Hat Employee.
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args("TODO-1").and_return(
+        True
+    ).once()
 
     # The critical label flip must be invoked before the Redis push.
     flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
@@ -795,9 +802,33 @@ async def test_skip_user_triggered_when_in_progress(fetcher, mock_redis_context)
         create_async_mock_return_value(set())
     )
 
+    # in_progress short-circuits before author verification runs.
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").never()
     # _edit_jira_labels must NOT be called for an in-progress issue.
     flexmock(fetcher).should_receive("_edit_jira_labels").never()
     # lpush must NOT be called either.
+    mock_redis.should_receive("lpush").never()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_skip_user_triggered_when_not_rh_employee(fetcher, mock_redis_context):
+    """ymir_todo added by a non-RH user: skip the issue, do not flip labels or push."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [{"key": "TODO-EXT-1", "fields": {"labels": [JiraLabels.TODO.value]}}]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args("TODO-EXT-1").and_return(
+        False
+    ).once()
+    # No Jira write, no Redis push when the label-add author isn't an RH employee.
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
     mock_redis.should_receive("lpush").never()
 
     result = await fetcher.push_issues_to_queue(issues)
@@ -815,6 +846,9 @@ async def test_user_triggered_skip_when_label_flip_fails(fetcher, mock_redis_con
     flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
         create_async_mock_return_value(set())
     )
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args("TODO-FAIL").and_return(
+        True
+    ).once()
 
     flexmock(fetcher).should_receive("_edit_jira_labels").and_raise(
         requests.HTTPError("Jira write failed")
@@ -827,3 +861,96 @@ async def test_user_triggered_skip_when_label_flip_fails(fetcher, mock_redis_con
     result = await fetcher.push_issues_to_queue(issues)
 
     assert result == 0
+
+
+def _changelog_response(histories):
+    """Build a fake requests.get response for the issue-with-changelog endpoint."""
+    mock = flexmock()
+    mock.should_receive("raise_for_status")
+    mock.should_receive("json").and_return({"changelog": {"histories": histories}})
+    return mock
+
+
+def _user_response(groups):
+    """Build a fake requests.get response for the user-with-groups endpoint."""
+    mock = flexmock()
+    mock.should_receive("raise_for_status")
+    mock.should_receive("json").and_return({"groups": {"items": [{"name": g} for g in groups]}})
+    return mock
+
+
+def test_label_added_by_rh_employee_true(fetcher):
+    """Latest ymir_todo add was performed by a member of the Red Hat Employee group."""
+    histories = [
+        {
+            "created": "2026-05-25T13:54:47.861+0000",
+            "author": {"accountId": "rh-user-1"},
+            "items": [{"field": "labels", "fromString": "", "toString": "ymir_todo"}],
+        }
+    ]
+    flexmock(requests).should_receive("get").and_return(
+        _changelog_response(histories),
+        _user_response(["Red Hat Employee", "confluence-users"]),
+    ).one_by_one()
+
+    assert fetcher._label_added_by_rh_employee("RHEL-1") is True
+
+
+def test_label_added_by_rh_employee_false_when_author_not_in_group(fetcher):
+    """Latest ymir_todo add was performed by a user outside the Red Hat Employee group."""
+    histories = [
+        {
+            "created": "2026-05-25T13:54:47.861+0000",
+            "author": {"accountId": "external-1"},
+            "items": [{"field": "labels", "fromString": "", "toString": "ymir_todo"}],
+        }
+    ]
+    flexmock(requests).should_receive("get").and_return(
+        _changelog_response(histories),
+        _user_response(["confluence-users"]),
+    ).one_by_one()
+
+    assert fetcher._label_added_by_rh_employee("RHEL-2") is False
+
+
+def test_label_added_by_rh_employee_picks_latest_add(fetcher):
+    """If ymir_todo was added by an RH user then removed and re-added by an external
+    user, the external user (latest add) wins and the helper returns False."""
+    histories = [
+        {
+            "created": "2026-05-20T10:00:00.000+0000",
+            "author": {"accountId": "rh-user-1"},
+            "items": [{"field": "labels", "fromString": "", "toString": "ymir_todo"}],
+        },
+        {
+            "created": "2026-05-21T10:00:00.000+0000",
+            "author": {"accountId": "rh-user-1"},
+            "items": [{"field": "labels", "fromString": "ymir_todo", "toString": ""}],
+        },
+        {
+            "created": "2026-05-22T10:00:00.000+0000",
+            "author": {"accountId": "external-1"},
+            "items": [{"field": "labels", "fromString": "", "toString": "ymir_todo"}],
+        },
+    ]
+    flexmock(requests).should_receive("get").and_return(
+        _changelog_response(histories),
+        _user_response(["confluence-users"]),
+    ).one_by_one()
+
+    assert fetcher._label_added_by_rh_employee("RHEL-3") is False
+
+
+def test_label_added_by_rh_employee_false_when_no_add_event(fetcher):
+    """No changelog entry adds ymir_todo (label predates the changelog or was
+    written via a path Jira does not record): treat as non-RH-employee."""
+    histories = [
+        {
+            "created": "2026-05-25T13:54:47.861+0000",
+            "author": {"accountId": "rh-user-1"},
+            "items": [{"field": "status", "fromString": "To Do", "toString": "In Progress"}],
+        }
+    ]
+    flexmock(requests).should_receive("get").and_return(_changelog_response(histories)).once()
+
+    assert fetcher._label_added_by_rh_employee("RHEL-4") is False

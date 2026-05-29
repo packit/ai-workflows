@@ -175,7 +175,7 @@ class JiraIssueFetcher:
             latest_add_author: str | None = None
             latest_add_time = ""
             for history in histories:
-                created = history.get("created", "")
+                created = history.get("created") or ""
                 for item in history.get("items", []):
                     if item.get("field") != "labels":
                         continue
@@ -183,7 +183,7 @@ class JiraIssueFetcher:
                     to_labels = set((item.get("toString") or "").split())
                     if JiraLabels.TODO.value in (to_labels - from_labels) and created > latest_add_time:
                         latest_add_time = created
-                        latest_add_author = history.get("author", {}).get("accountId")
+                        latest_add_author = (history.get("author") or {}).get("accountId")
                     break  # one labels item per history
 
             if not latest_add_author:
@@ -199,7 +199,9 @@ class JiraIssueFetcher:
             )
             user_response = requests.get(user_url, headers=self.headers, timeout=self.API_TIMEOUT)
             user_response.raise_for_status()
-            group_names = [g.get("name") for g in user_response.json().get("groups", {}).get("items", [])]
+            groups = user_response.json().get("groups") or {}
+            items = groups.get("items") or []
+            group_names = [g.get("name") for g in items if g]
             return _RH_EMPLOYEE_GROUP in group_names
         except Exception as e:
             logger.warning(
@@ -426,9 +428,6 @@ class JiraIssueFetcher:
                         )
                         remove_issues_for_retry.add(issue_key)
                         retry_needed_keys.add(issue_key)
-                elif not ymir_labels:
-                    logger.info(f"Issue {issue_key} has no Ymir labels - marking for retry")
-                    remove_issues_for_retry.add(issue_key)
 
             pushed_count = 0
             skipped_count = 0

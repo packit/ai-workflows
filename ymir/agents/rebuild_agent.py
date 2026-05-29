@@ -72,6 +72,7 @@ async def main() -> None:
         dependency_component=None,
         consolidated_issues=None,
         consolidation_summary=None,
+        user_triggered=False,
     ):
         local_tool_options["working_directory"] = None
         if mock_env := get_mock_local_tool_env(jira_issue):
@@ -274,6 +275,7 @@ async def main() -> None:
                             comment_text=comment_text,
                             is_error=is_error,
                             available_tools=gateway_tools,
+                            user_triggered=user_triggered,
                         )
                     except Exception as e:
                         logger.warning(f"Failed to comment on issue {issue_key}: {e}")
@@ -353,6 +355,7 @@ async def main() -> None:
                 triage_state = task.metadata
                 rebuild_data = RebuildData.model_validate(triage_state["triage_result"]["data"])
                 dist_git_branch = triage_state["target_branch"]
+                user_triggered = task.user_triggered
             except Exception as e:
                 logger.error(f"Failed to parse task payload, skipping: {e}")
                 await fix_await(
@@ -369,9 +372,10 @@ async def main() -> None:
                 f"Processing rebuild for package: {rebuild_data.package}, "
                 f"JIRA: {rebuild_data.jira_issue}, branch: {dist_git_branch}, "
                 f"attempt: {task.attempts + 1}"
+                + (" (user-triggered via ymir_todo)" if user_triggered else "")
             )
 
-            async def retry(task, error, rebuild_data=rebuild_data):
+            async def retry(task, error, rebuild_data=rebuild_data, user_triggered=user_triggered):
                 task.attempts += 1
                 if task.attempts < max_retries:
                     logger.warning(
@@ -391,6 +395,7 @@ async def main() -> None:
                                 labels_to_add=[JiraLabels.REBUILD_ERRORED.value],
                                 labels_to_remove=[JiraLabels.TRIAGED_REBUILD.value],
                                 dry_run=dry_run,
+                                user_triggered=user_triggered,
                             )
                         except Exception as e:
                             logger.warning(f"Failed to set labels on {issue_key}: {e}")
@@ -407,6 +412,7 @@ async def main() -> None:
                         dependency_component=rebuild_data.dependency_component,
                         consolidated_issues=rebuild_data.consolidated_issues,
                         consolidation_summary=rebuild_data.consolidation_summary,
+                        user_triggered=user_triggered,
                     )
                     logger.info(
                         f"Rebuild processing completed for {rebuild_data.jira_issue}, "
@@ -434,6 +440,7 @@ async def main() -> None:
                                     JiraLabels.REBUILD_FAILED.value,
                                 ],
                                 dry_run=dry_run,
+                                user_triggered=user_triggered,
                             )
                         except Exception as e:
                             logger.warning(f"Failed to set labels on {issue_key}: {e}")
@@ -455,6 +462,7 @@ async def main() -> None:
                                 labels_to_add=[JiraLabels.REBUILD_FAILED.value],
                                 labels_to_remove=[JiraLabels.TRIAGED_REBUILD.value],
                                 dry_run=dry_run,
+                                user_triggered=user_triggered,
                             )
                         except Exception as e:
                             logger.warning(f"Failed to set labels on {issue_key}: {e}")

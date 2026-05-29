@@ -1458,7 +1458,7 @@ async def main() -> None:
                             queue = RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value
                             payload = output.data.model_dump_json()
                         else:
-                            task = Task(metadata=state.model_dump())
+                            task = Task(metadata=state.model_dump(), user_triggered=user_triggered)
                             payload = task.model_dump_json()
                             if output.resolution == Resolution.REBASE:
                                 queue = RedisQueues.get_rebase_queue_for_branch(state.target_branch)

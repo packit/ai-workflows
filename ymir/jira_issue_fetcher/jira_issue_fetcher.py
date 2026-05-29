@@ -204,8 +204,13 @@ class JiraIssueFetcher:
             items = groups.get("items") or []
             group_names = [g.get("name") for g in items if g]
             return _RH_EMPLOYEE_GROUP in group_names
-        except Exception as e:
-            logger.warning(
+        except (requests.RequestException, ValueError, KeyError, AttributeError) as e:
+            is_auth = (
+                isinstance(e, requests.HTTPError)
+                and e.response is not None
+                and e.response.status_code in (401, 403)
+            )
+            (logger.error if is_auth else logger.warning)(
                 f"Failed to verify {JiraLabels.TODO.value} author on {issue_key}: {e}; "
                 f"treating as non-RH-employee"
             )

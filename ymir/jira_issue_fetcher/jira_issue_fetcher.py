@@ -404,9 +404,21 @@ class JiraIssueFetcher:
                     if not self._label_added_by_rh_employee(issue_key):
                         logger.warning(
                             f"Issue {issue_key} has {JiraLabels.TODO.value} but the "
-                            f"label was not added by a Red Hat Employee - skipping"
+                            f"label was not added by a Red Hat Employee - skipping "
+                            f"and removing the label"
                         )
                         existing_keys.add(issue_key)
+                        # Remove the bogus label so we don't repeat the verification
+                        # (two HTTP calls) on every subsequent sweep.
+                        if self.dry_run:
+                            logger.info(f"DRY_RUN: would remove {JiraLabels.TODO.value} from {issue_key}")
+                        else:
+                            try:
+                                self._edit_jira_labels(issue_key, add=[], remove=[JiraLabels.TODO.value])
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to remove {JiraLabels.TODO.value} from {issue_key}: {e}"
+                                )
                         continue
                     logger.info(
                         f"Issue {issue_key} has {JiraLabels.TODO.value} added by an "

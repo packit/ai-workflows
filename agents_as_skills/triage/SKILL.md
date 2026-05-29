@@ -13,9 +13,6 @@ arguments:
   - name: force_cve_triage
     description: "If true, force triage of CVE issues that would normally be deferred or rejected (eligibility=PENDING_DEPENDENCIES or NEVER). Default: false"
     required: false
-  - name: silent_run
-    description: "If true, only update JIRA for not-affected and postponed resolutions. Default: false"
-    required: false
 ---
 
 # Triage Skill
@@ -30,7 +27,6 @@ You are a Red Hat Enterprise Linux developer tasked to analyze Jira issues for R
 - `dry_run`: {{dry_run}}
 - `auto_chain`: {{auto_chain}}
 - `force_cve_triage`: {{force_cve_triage}}
-- `silent_run`: {{silent_run}}
 
 ## Tools
 
@@ -701,10 +697,7 @@ Proceed to **Step 7**.
 
 If `dry_run` is true, end the workflow and output the `triage_result`.
 
-Check whether JIRA should be updated based on `silent_run`:
-- If `silent_run` is false: always update JIRA.
-- If `silent_run` is true: only update JIRA if `triage_result.resolution` is `"not-affected"` or `"postponed"`.
-- If JIRA should not be updated, end the workflow and output the `triage_result`.
+Default is silent: only post a JIRA comment when `triage_result.resolution` is `"not-affected"` or `"postponed"` (resolutions that have no MR artifact, so the comment is the only visible explanation). For all other resolutions, end the workflow and output the `triage_result` without commenting.
 
 Format the JIRA comment based on the resolution type:
 

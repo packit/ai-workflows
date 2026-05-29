@@ -89,25 +89,30 @@ class ExtractUpstreamRepositoryTool(
             # Check if this is a pull request URL and extract owner/repo/PR number in one match.
             pr_match = re.search(r"/([\w\-\.]+)/([\w\-\.]+)/pull/(\d+)(?:\.patch)?", parsed.path)
             mr_match = re.search(
-                r"/([\w\-\.]+)/([\w\-\.]+)/-/merge_requests/(\d+)(?:\.patch)?",
+                r"/(.+?)/(?:-/)?merge_requests/(\d+)(?:\.patch)?",
                 parsed.path,
             )
 
             if pr_match or mr_match:
                 # Handle GitHub Pull Request or GitLab Merge Request
-                match = pr_match if pr_match else mr_match
-                owner = match.group(1)
-                repo = match.group(2)
-                pr_number = match.group(3)
+                if pr_match:
+                    owner = pr_match.group(1)
+                    repo = pr_match.group(2)
+                    pr_number = pr_match.group(3)
+                    project_path = f"{owner}/{repo}"
+                else:
+                    project_path = mr_match.group(1).removesuffix(".git")
+                    pr_number = mr_match.group(2)
 
                 # Fetch PR/MR information to get the head commit
                 if pr_match:
                     # GitHub API
-                    api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
+                    api_url = f"https://api.github.com/repos/{project_path}/pulls/{pr_number}"
                 else:
-                    # GitLab API
+                    # GitLab API - URL-encode the full project path
                     api_url = (
-                        f"https://{parsed.netloc}/api/v4/projects/{owner}%2F{repo}/merge_requests/{pr_number}"
+                        f"https://{parsed.netloc}/api/v4/projects/"
+                        f"{quote(project_path, safe='')}/merge_requests/{pr_number}"
                     )
 
                 headers = {
@@ -133,7 +138,7 @@ class ExtractUpstreamRepositoryTool(
                     ) from e
 
                 # Construct repository URL
-                repo_url = f"https://{parsed.netloc}/{owner}/{repo}.git"
+                repo_url = f"https://{parsed.netloc}/{project_path}.git"
 
                 # Return with PR information
                 return ExtractUpstreamRepositoryOutput(

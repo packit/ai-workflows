@@ -153,18 +153,17 @@ class ExtractUpstreamRepositoryTool(
 
             # Try to match compare URL
             compare_match = re.search(
-                r"/([\w\-\.]+)/([\w\-\.]+)/(?:-/)?compare/(.+?)(\.{2,3})([^\s\?#]+)",
+                r"/(.+?)/(?:-/)?compare/(.+?)(\.{2,3})([^\s\?#]+)",
                 parsed.path,
             )
             if compare_match:
                 # Handle GitHub/GitLab Compare URLs
-                owner = compare_match.group(1)
-                repo = compare_match.group(2)
-                base_ref = compare_match.group(3)
-                # Group 4 is the separator (.. or ...) - not used, we always use ... for APIs
-                target_ref = compare_match.group(5).removesuffix(".patch")
+                project_path = compare_match.group(1).removesuffix(".git")
+                base_ref = compare_match.group(2)
+                # Group 3 is the separator (.. or ...) - not used, we always use ... for APIs
+                target_ref = compare_match.group(4).removesuffix(".patch")
                 # Construct repository URL
-                repo_url = f"https://{parsed.netloc}/{owner}/{repo}.git"
+                repo_url = f"https://{parsed.netloc}/{project_path}.git"
                 # Fetch compare information to get the list of commits
                 headers = {
                     "Accept": "application/json",
@@ -174,11 +173,11 @@ class ExtractUpstreamRepositoryTool(
                 commit_hash = target_ref
                 try:
                     async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-                        # Determine if this is GitHub or GitLab based on the URL pattern
-                        if "/-/" not in parsed.path:
+                        # Determine if this is GitHub or GitLab based on the domain
+                        if "github" in parsed.netloc.lower():
                             # GitHub API - URL-encode refs to handle special characters like / in branch names
                             api_url = (
-                                f"https://api.github.com/repos/{owner}/{repo}/compare/"
+                                f"https://api.github.com/repos/{project_path}/compare/"
                                 f"{quote(base_ref, safe='')}...{quote(target_ref, safe='')}"
                             )
                             async with session.get(api_url, headers=headers) as response:
@@ -187,9 +186,10 @@ class ExtractUpstreamRepositoryTool(
                                 # GitHub: commits are in 'commits' array (oldest first)
                                 commits = [commit["sha"] for commit in data.get("commits", [])]
                         else:
-                            # GitLab API - use params dict for automatic URL encoding
+                            # GitLab API - URL-encode the full project path
                             api_url = (
-                                f"https://{parsed.netloc}/api/v4/projects/{owner}%2F{repo}/repository/compare"
+                                f"https://{parsed.netloc}/api/v4/projects/"
+                                f"{quote(project_path, safe='')}/repository/compare"
                             )
                             params = {"from": base_ref, "to": target_ref}
                             async with session.get(api_url, params=params, headers=headers) as response:

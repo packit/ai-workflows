@@ -1371,6 +1371,11 @@ async def main() -> None:
                     f"processing to avoid duplicate triage. Jira may be degraded."
                 )
                 await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
+                # Long sleep on purpose: critical-write retries already burned
+                # ~7s, so we're past transient blips. Typical Jira outages last
+                # minutes; cycling faster just spams the API. Other queued tasks
+                # would hit the same failure, so blocking the loop costs nothing.
+                await asyncio.sleep(60)
                 continue
 
             try:

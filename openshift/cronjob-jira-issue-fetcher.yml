@@ -18,7 +18,7 @@ spec:
         component: job
     spec:
       backoffLimit: 2
-      activeDeadlineSeconds: 600  # 10 minutes max runtime (cron is */5, must not overlap)
+      activeDeadlineSeconds: 240  # 4 minutes max runtime (cron is */5, must not overlap)
       template:
         metadata:
           labels:

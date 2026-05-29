@@ -1315,6 +1315,7 @@ async def main() -> None:
             if (
                 terminal_ymir_labels
                 and JiraLabels.RETRY_NEEDED.value not in current_labels
+                and JiraLabels.TRIAGE_IN_PROGRESS.value not in current_labels
                 and not user_triggered
             ):
                 logger.info(

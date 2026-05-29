@@ -37,6 +37,14 @@ def get_chat_model() -> ChatModel:
     # but should yield more predictable results, similar for top_p (tried 0.5)
     temperature = float(os.getenv("TEMPERATURE", "0.6"))
     reasoning_effort = os.getenv("REASONING_EFFORT")
+
+    settings: dict[str, Any] = {"num_retries": int(os.getenv("LITELLM_NUM_RETRIES", 3))}
+
+    # opus-4-8 deprecates temperature entirely; tell litellm to strip it.
+    if "opus-4-8" in chat_model:
+        settings["drop_params"] = True
+        settings["additional_drop_params"] = ["temperature"]
+
     model = ChatModel.from_name(
         chat_model,
         # this the preferred way to set parameters, don't do options=...
@@ -50,7 +58,7 @@ def get_chat_model() -> ChatModel:
         # beeai hardcodes max_retries=0 in its litellm adapter; num_retries
         # bypasses that and enables litellm's built-in retry with back-off
         # for transient 429 / rate-limit errors from the provider.
-        settings={"num_retries": int(os.getenv("LITELLM_NUM_RETRIES", 3))},
+        settings=settings,
         allow_parallel_tool_calls=bool(reasoning_effort),
     )
     if "gemini" in chat_model:

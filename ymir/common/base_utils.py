@@ -52,7 +52,7 @@ async def redis_client(redis_url: str) -> AsyncGenerator[redis.Redis]:
         async with redis_client("redis://localhost:6379/0") as client:
             await client.ping()
     """
-    client = redis.Redis.from_url(redis_url)
+    client = redis.Redis.from_url(redis_url, socket_timeout=None)
     try:
         await client.ping()
         logger.debug("Connected to Redis")

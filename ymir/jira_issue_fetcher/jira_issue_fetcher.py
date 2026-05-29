@@ -193,11 +193,12 @@ class JiraIssueFetcher:
                 )
                 return False
 
-            user_url = urljoin(
-                self.jira_url,
-                f"rest/api/3/user?accountId={latest_add_author}&expand=groups",
+            user_response = requests.get(
+                urljoin(self.jira_url, "rest/api/3/user"),
+                params={"accountId": latest_add_author, "expand": "groups"},
+                headers=self.headers,
+                timeout=self.API_TIMEOUT,
             )
-            user_response = requests.get(user_url, headers=self.headers, timeout=self.API_TIMEOUT)
             user_response.raise_for_status()
             groups = user_response.json().get("groups") or {}
             items = groups.get("items") or []

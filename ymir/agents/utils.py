@@ -166,8 +166,7 @@ def format_mr_justification(justification: str | None) -> str:
 
 def init_sentry() -> None:
     """Initialize Sentry, if the DSN is set."""
-    dsn = os.getenv("SENTRY_DSN")
-    if not dsn:
+    if not (dsn := os.getenv("SENTRY_DSN")):
         # no DSN, no reporting
         return
 

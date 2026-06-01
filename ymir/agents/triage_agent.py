@@ -39,6 +39,7 @@ from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.config import load_rhel_config
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.logging_setup import configure_logging
+from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     ApplicabilityResult,
     ClarificationNeededData,
@@ -641,8 +642,12 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
 async def run_workflow(
     jira_issue, dry_run, triage_agent_factory, auto_chain=False, force_cve_triage=False, silent_run=False
 ):
-    async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
-        triage_agent = triage_agent_factory(gateway_tools)
+    local_tool_options = None
+    if mock_env := get_mock_local_tool_env(jira_issue):
+        local_tool_options = {"env": mock_env}
+
+    async with mcp_tools(os.getenv("MCP_GATEWAY_URL"), call_meta={"jira_issue": jira_issue}) as gateway_tools:
+        triage_agent = triage_agent_factory(gateway_tools, local_tool_options)
 
         workflow = Workflow(TriageState, name="TriageWorkflow")
 
@@ -1012,8 +1017,10 @@ async def run_workflow(
                     except Exception:
                         logger.warning(f"Could not fetch patch from {url}")
 
-                local_tool_options = {"working_directory": local_clone}
-                applicability_agent = create_applicability_agent(gateway_tools, local_tool_options)
+                applicability_tool_options: dict = {"working_directory": local_clone}
+                if mock_env:
+                    applicability_tool_options["env"] = mock_env
+                applicability_agent = create_applicability_agent(gateway_tools, applicability_tool_options)
                 prompt = build_applicability_prompt(
                     jira_issue=state.jira_issue,
                     package=package,

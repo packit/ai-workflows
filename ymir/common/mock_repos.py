@@ -83,6 +83,136 @@ def load_all_fixture_configs(fixtures_dir: str | Path) -> dict[str, dict]:
     return configs
 
 
+def get_mock_gitconfig_path(issue_key: str | None = None) -> Path:
+    """Return the path to a mock gitconfig file.
+
+    When *issue_key* is ``None`` the shared (combined) file is returned.
+    When an *issue_key* is given the per-issue file is returned instead;
+    this avoids ``insteadOf`` collisions when two issues need the same
+    remote URL at different commits.
+
+    The file lives under ``$GIT_REPO_BASEPATH`` (defaults to
+    ``/git-repos``).  Agent containers include the shared file via
+    ``git config --global include.path``; the MCP gateway uses
+    ``GIT_CONFIG_GLOBAL`` (overridden per-subprocess when per-issue
+    files are available).
+    """
+    base = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos"))
+    if issue_key:
+        return base / f".mock_gitconfig_{issue_key}"
+    return base / ".mock_gitconfig"
+
+
+def get_mock_local_tool_env(issue_key: str) -> dict[str, str] | None:
+    """Return a subprocess env dict that includes the per-issue gitconfig.
+
+    If a per-issue gitconfig file exists for *issue_key*, returns a copy
+    of ``os.environ`` augmented with ``GIT_CONFIG_COUNT``/``KEY``/``VALUE``
+    entries that add an ``include.path`` for the per-issue file.  Git
+    processes these env-based entries with highest priority, so the
+    per-issue ``insteadOf`` rewrites override any conflicting entries in
+    the shared ``.mock_gitconfig`` (included via the global gitconfig).
+
+    Returns ``None`` when no per-issue gitconfig exists (e.g. production).
+    """
+    if not (per_issue := get_mock_gitconfig_path(issue_key)).is_file():
+        return None
+    env = os.environ.copy()
+    env["GIT_CONFIG_COUNT"] = "1"
+    env["GIT_CONFIG_KEY_0"] = "include.path"
+    env["GIT_CONFIG_VALUE_0"] = str(per_issue)
+    return env
+
+
+def write_mock_gitconfig(git_env: dict[str, str], issue_key: str | None = None) -> None:
+    """Append ``insteadOf`` rewrites from *git_env* to gitconfig file(s).
+
+    Entries from *git_env* (``GIT_CONFIG_COUNT``/``KEY``/``VALUE``) are
+    converted to standard gitconfig ``[url "…"] insteadOf = …`` sections
+    and **appended** to the shared file.
+
+    When *issue_key* is provided a **per-issue** gitconfig is written in
+    addition to the shared (combined) file.  The MCP gateway reads the
+    issue key from MCP request ``_meta`` and sets ``GIT_CONFIG_GLOBAL``
+    to the per-issue file on each git subprocess, giving each test case
+    its own ``insteadOf`` scope.
+
+    Stale entries pointing to non-existent local paths are pruned first.
+
+    Args:
+        git_env: Dict with ``GIT_CONFIG_COUNT``, ``GIT_CONFIG_KEY_<n>``,
+            and ``GIT_CONFIG_VALUE_<n>`` entries describing URL rewrites.
+        issue_key: Optional Jira issue key.  When set, a per-issue
+            gitconfig is written alongside the combined one.
+    """
+    gitconfig_path = get_mock_gitconfig_path()
+    gitconfig_path.parent.mkdir(parents=True, exist_ok=True)
+
+    _write_mock_gitconfig_append(git_env, gitconfig_path)
+    if issue_key:
+        per_issue_path = get_mock_gitconfig_path(issue_key)
+        _write_gitconfig_fresh(git_env, per_issue_path)
+
+
+def _write_mock_gitconfig_append(git_env: dict[str, str], gitconfig_path: Path) -> None:
+    """Append *git_env* entries to the shared gitconfig, pruning stale ones first."""
+    # Prune stale entries from previous runs
+    if gitconfig_path.exists():
+        try:
+            with git.GitConfigParser(str(gitconfig_path), read_only=True) as parser:
+                stale_sections = []
+                for section in parser.sections():
+                    if section.startswith('url "file://'):
+                        path_str = section[len('url "file://') : -1]
+                        if not Path(path_str).exists():
+                            stale_sections.append(f"url.file://{path_str}")
+            if stale_sections:
+                git_cmd = git.Git()
+                for section in stale_sections:
+                    git_cmd.config("--file", str(gitconfig_path), "--remove-section", section)
+        except Exception as e:
+            logger.warning("Failed to clean up stale gitconfig entries: %s", e)
+
+    # Append new entries — wrap in try/except because concurrent writers
+    # may race for the git lockfile; the per-issue gitconfig is the
+    # authoritative source, so a failure here is non-fatal.
+    try:
+        git_cmd = git.Git()
+        count = int(git_env.get("GIT_CONFIG_COUNT", "0"))
+        for i in range(count):
+            key = git_env.get(f"GIT_CONFIG_KEY_{i}", "")
+            value = git_env.get(f"GIT_CONFIG_VALUE_{i}", "")
+            if not key or not value:
+                continue
+            git_cmd.config("--file", str(gitconfig_path), "--add", key, value)
+    except Exception as e:
+        logger.warning("Failed to append mock gitconfig entries: %s", e)
+        return
+
+    logger.info("Wrote insteadOf rewrites to %s", gitconfig_path)
+
+
+def _write_gitconfig_fresh(git_env: dict[str, str], gitconfig_path: Path) -> None:
+    """Write *git_env* entries to *gitconfig_path*, replacing any previous content."""
+    gitconfig_path.unlink(missing_ok=True)
+    git_cmd = git.Git()
+    count = int(git_env.get("GIT_CONFIG_COUNT", "0"))
+    for i in range(count):
+        key = git_env.get(f"GIT_CONFIG_KEY_{i}", "")
+        value = git_env.get(f"GIT_CONFIG_VALUE_{i}", "")
+        if not key or not value:
+            continue
+        git_cmd.config("--file", str(gitconfig_path), "--add", key, value)
+    logger.info("Wrote per-issue gitconfig to %s", gitconfig_path)
+
+
+def cleanup_mock_gitconfig() -> None:
+    """Remove the shared and per-issue ``.mock_gitconfig*`` files."""
+    base = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos"))
+    for path in base.glob(".mock_gitconfig*"):
+        path.unlink(missing_ok=True)
+
+
 def setup_mock_repos(repos: list[dict], issue_key: str, base_dir: Path) -> dict[str, str]:
     """Clone repos at pre-fix state and return a ``git_env`` dict.
 
@@ -90,6 +220,11 @@ def setup_mock_repos(repos: list[dict], issue_key: str, base_dir: Path) -> dict[
     The mocked remote URLs are appended to the ``MOCK_BLOCKED_URLS``
     environment variable so that ``RunShellCommandTool`` blocks direct
     curl/wget access to them.
+
+    The ``insteadOf`` rewrites are also written to a shared
+    ``.mock_gitconfig`` file under ``$GIT_REPO_BASEPATH`` so that the
+    MCP gateway (separate container) and agent git commands (via
+    ``include.path``) can transparently redirect to the local clones.
 
     When multiple entries share the same package (and remote URL), a
     single bare clone is reused — additional branch refs are created
@@ -110,7 +245,7 @@ def setup_mock_repos(repos: list[dict], issue_key: str, base_dir: Path) -> dict[
     gitlab_token = os.getenv("GITLAB_TOKEN")
 
     cloned: dict[str, tuple[Path, git.Repo, list[str]]] = {}
-    remote_urls: dict[str, str] = {}
+    remote_urls: dict[str, list[str]] = {}
 
     for repo_info in repos:
         pkg = repo_info["package"]
@@ -128,7 +263,7 @@ def setup_mock_repos(repos: list[dict], issue_key: str, base_dir: Path) -> dict[
             )
             repo = git.Repo.clone_from(clone_url, str(local_path), bare=True)
             cloned[pkg] = (local_path, repo, [])
-            remote_urls[pkg] = repo_info["remote_url"]
+            remote_urls[pkg] = [repo_info["remote_url"]]
         else:
             local_path, repo, _ = cloned[pkg]
             logger.info(
@@ -138,22 +273,28 @@ def setup_mock_repos(repos: list[dict], issue_key: str, base_dir: Path) -> dict[
                 issue_key,
             )
             repo.git.fetch(clone_url, repo_info["pre_fix_ref"])
+            if repo_info["remote_url"] not in remote_urls[pkg]:
+                remote_urls[pkg].append(repo_info["remote_url"])
 
         keep_branch = repo_info["branch"]
         repo.git.update_ref(f"refs/heads/{keep_branch}", repo_info["pre_fix_ref"])
         cloned[pkg][2].append(f"refs/heads/{keep_branch}")
 
-    for i, (pkg, (local_path, repo, keep_refs)) in enumerate(cloned.items()):
+    idx = 0
+    for pkg, (local_path, repo, keep_refs) in cloned.items():
         refs_to_delete = [ref.path for ref in repo.references if ref.path not in keep_refs]
         for ref_path in refs_to_delete:
             repo.git.update_ref("-d", ref_path)
         repo.git.gc("--prune=now", "-q")
 
-        git_env[f"GIT_CONFIG_KEY_{i}"] = f"url.file://{local_path}.insteadOf"
-        git_env[f"GIT_CONFIG_VALUE_{i}"] = remote_urls[pkg]
+        for url in remote_urls[pkg]:
+            git_env[f"GIT_CONFIG_KEY_{idx}"] = f"url.file://{local_path}.insteadOf"
+            git_env[f"GIT_CONFIG_VALUE_{idx}"] = url
+            idx += 1
 
-    git_env["GIT_CONFIG_COUNT"] = str(len(cloned))
+    git_env["GIT_CONFIG_COUNT"] = str(idx)
 
+    write_mock_gitconfig(git_env, issue_key=issue_key)
     _register_blocked_urls([r["remote_url"] for r in repos])
 
     return git_env

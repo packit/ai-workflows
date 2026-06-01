@@ -408,7 +408,7 @@ async def test_mcp_tools_success_on_first_attempt():
     """Connected immediately; sleep is never called."""
     flexmock(_ymir_utils).should_receive("sse_client").once().and_return(make_sse_cm())
     flexmock(_ymir_utils).should_receive("ClientSession").and_return(make_session_cm())
-    flexmock(_ymir_utils.MCPTool).should_receive("from_client").and_return(_coro(FAKE_TOOLS))
+    flexmock(_ymir_utils.MCPTool).should_receive("from_session").and_return(_coro(FAKE_TOOLS))
     flexmock(asyncio).should_receive("sleep").never()
 
     async with mcp_tools(FAKE_URL) as tools:
@@ -423,7 +423,7 @@ async def test_mcp_tools_retries_once_then_succeeds():
         make_sse_cm(exc=conn_err)
     ).and_return(make_sse_cm())
     flexmock(_ymir_utils).should_receive("ClientSession").and_return(make_session_cm())
-    flexmock(_ymir_utils.MCPTool).should_receive("from_client").and_return(_coro(FAKE_TOOLS))
+    flexmock(_ymir_utils.MCPTool).should_receive("from_session").and_return(_coro(FAKE_TOOLS))
     flexmock(asyncio).should_receive("sleep").once().with_args(3.0).replace_with(_noop)
 
     async with mcp_tools(FAKE_URL, retry_delay=3.0) as tools:

@@ -46,6 +46,7 @@ from ymir.agents.utils import (
 from ymir.common.base_utils import fix_await, is_cs_branch, redis_client
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.logging_setup import configure_logging
+from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     BackportData,
     BackportInputSchema,
@@ -905,13 +906,17 @@ async def run_workflow(
     if max_incremental_fix_attempts is None:
         max_incremental_fix_attempts = max_build_attempts
 
-    local_tool_options = {"working_directory": None}
+    local_tool_options: dict[str, Any] = {"working_directory": None}
+    if mock_env := get_mock_local_tool_env(jira_issue):
+        local_tool_options["env"] = mock_env
     # In tests SILENT_RUN is typically unset, so Jira status updates are
     # attempted (and skipped via dry_run).  Set SILENT_RUN=true to suppress
     # Jira transitions even when dry_run is False.
     silent_run = os.getenv("SILENT_RUN", "false").lower() == "true"
 
-    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+    async with mcp_tools(
+        os.environ["MCP_GATEWAY_URL"], call_meta={"jira_issue": jira_issue}
+    ) as gateway_tools:
         if backport_agent_factory:
             result = backport_agent_factory(gateway_tools, local_tool_options)
             backport_agent = await result if asyncio.iscoroutine(result) else result

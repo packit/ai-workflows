@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,8 +22,44 @@ from mcp.types import TextContent
 from specfile.utils import EVR
 
 from ymir.common.constants import BREWHUB_URL
+from mcp.types import CallToolResult, TextContent
 
 logger = logging.getLogger(__name__)
+
+
+class _MetaInjectingSession:
+    """Transparent wrapper around ``ClientSession`` that injects ``meta``
+    into every ``call_tool`` invocation.
+
+    All other attribute accesses are forwarded to the underlying session so
+    that ``MCPTool.from_session`` (which calls ``list_tools``, ``initialize``,
+    etc.) keeps working unchanged.
+    """
+
+    def __init__(self, session: ClientSession, meta: dict[str, Any]) -> None:
+        self._session = session
+        self._meta = meta
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        read_timeout_seconds: timedelta | None = None,
+        progress_callback: Any = None,
+        *,
+        meta: dict[str, Any] | None = None,
+    ) -> CallToolResult:
+        merged = {**self._meta, **(meta or {})}
+        return await self._session.call_tool(
+            name,
+            arguments,
+            read_timeout_seconds=read_timeout_seconds,
+            progress_callback=progress_callback,
+            meta=merged,
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._session, name)
 
 
 def get_absolute_path(path: Path, tool: Tool) -> Path:
@@ -72,13 +109,29 @@ async def mcp_tools(
     filter: Callable[[str], bool] | None = None,
     max_retries: int = 10,
     retry_delay: float = 3.0,
+    call_meta: dict[str, Any] | None = None,
 ) -> AsyncGenerator[list[MCPTool]]:
+    """Connect to an MCP gateway and yield the available tools.
+
+    Args:
+        sse_url: SSE endpoint of the MCP gateway.
+        filter: Optional predicate to keep only matching tool names.
+        max_retries: How many connection attempts before giving up.
+        retry_delay: Seconds between retries.
+        call_meta: Optional dict injected as MCP ``_meta`` on every
+            ``call_tool`` invocation.  Use this to propagate context
+            such as ``{"jira_issue": "RHEL-12345"}`` so that the
+            gateway can scope operations per-caller.
+    """
     connected = False
     for attempt in range(max_retries):
         try:
             async with sse_client(sse_url) as (read, write), ClientSession(read, write) as session:
                 await session.initialize()
-                tools = await MCPTool.from_client(session)
+                effective_session: Any = session
+                if call_meta:
+                    effective_session = _MetaInjectingSession(session, call_meta)
+                tools = await MCPTool.from_session(effective_session)
                 if filter:
                     tools = [t for t in tools if filter(t.name)]
                 connected = True

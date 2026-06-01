@@ -60,27 +60,33 @@ def extract_zstream_override(fixture: dict) -> str:
     return json.dumps(override) if override else ""
 
 
-def setup_mock_repos(fixture: dict, base_dir: Path) -> dict[str, str]:
-    """Clone repos at pre-fix state and return git env vars for URL rewriting.
+def setup_mock_repos(fixture: dict, base_dir: Path) -> Path | None:
+    """Clone repos at pre-fix state and write a shared gitconfig.
 
     Each bare clone has its branch ref rewound to the pre-fix commit so that
     the agent sees the repository state *before* the fix was applied.
+
+    The ``insteadOf`` URL rewrites are written to a ``.mock_gitconfig``
+    file in *base_dir*.  Gateway sub-processes pick this up via
+    ``GIT_CONFIG_GLOBAL``.
 
     Args:
         fixture: The loaded fixture data describing repos to mock.
         base_dir: Directory in which bare clones are created.
 
     Returns:
-        A dict with ``GIT_CONFIG_COUNT``/``KEY``/``VALUE`` entries for
-        ``insteadOf`` URL rewriting.
+        Path to the ``.mock_gitconfig`` file, or ``None`` when no repos
+        are configured.
     """
     repos = fixture.get("repos", [])
     if not repos:
-        return {}
+        return None
 
-    git_env: dict[str, str] = {}
+    git_cmd = git.Git()
+    gitconfig_path = base_dir / ".mock_gitconfig"
+    gitconfig_path.unlink(missing_ok=True)
 
-    for i, repo_info in enumerate(repos):
+    for repo_info in repos:
         package = repo_info["package"]
         local_path = base_dir / f"{package}.git"
 
@@ -99,11 +105,14 @@ def setup_mock_repos(fixture: dict, base_dir: Path) -> dict[str, str]:
                 repo.git.update_ref("-d", ref.path)
         repo.git.gc("--prune=now", "-q")
 
-        git_env[f"GIT_CONFIG_KEY_{i}"] = f"url.file://{local_path}.insteadOf"
-        git_env[f"GIT_CONFIG_VALUE_{i}"] = repo_info["remote_url"]
+        git_cmd.config(
+            "--file",
+            str(gitconfig_path),
+            f"url.file://{local_path}.insteadOf",
+            repo_info["remote_url"],
+        )
 
-    git_env["GIT_CONFIG_COUNT"] = str(len(repos))
-    return git_env
+    return gitconfig_path
 
 
 def ensure_writable(directory: Path) -> None:
@@ -119,9 +128,26 @@ def build_mcp_config(
     upstream_search_url: str,
     blocked_urls: str,
     mock_zstreams: str,
-    git_env: dict[str, str],
+    gitconfig_path: Path | None,
     log_dir: Path,
 ) -> dict:
+    """Build the MCP server configuration for privileged and unprivileged gateways.
+
+    Args:
+        jira_mock_dir: Directory containing mock Jira issue files.
+        mock_data_dir: Directory with per-issue fixture JSON configs.
+        upstream_search_url: URL for the upstream search API.
+        blocked_urls: Comma-separated remote URLs to block from curl/wget.
+        mock_zstreams: JSON string with z-stream overrides (or empty).
+        gitconfig_path: Path to ``.mock_gitconfig`` with ``insteadOf``
+            rewrites, or ``None`` when no repos are mocked.
+        log_dir: Directory for gateway debug log files.
+
+    Returns:
+        A dict suitable for writing as an MCP JSON config file.
+    """
+    gitconfig_env = {"GIT_CONFIG_GLOBAL": str(gitconfig_path)} if gitconfig_path else {}
+
     privileged_env = {
         "MCP_TRANSPORT": "stdio",
         "MOCK_JIRA": "true",
@@ -136,7 +162,7 @@ def build_mcp_config(
         "MOCK_BLOCKED_URLS": blocked_urls,
         "MOCK_ZSTREAMS": mock_zstreams,
         "DEBUG_FILE": str(log_dir / "ymir-privileged.log"),
-        **git_env,
+        **gitconfig_env,
     }
 
     return {
@@ -154,7 +180,7 @@ def build_mcp_config(
                     "MOCK_BLOCKED_URLS": blocked_urls,
                     "MOCK_ZSTREAMS": mock_zstreams,
                     "DEBUG_FILE": str(log_dir / "ymir-unprivileged.log"),
-                    **git_env,
+                    **gitconfig_env,
                 },
             },
         }
@@ -232,7 +258,7 @@ def main() -> None:
     mock_repo_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Setting up mock repos in {mock_repo_dir} ...")
-    git_env = setup_mock_repos(fixture, mock_repo_dir)
+    gitconfig_path = setup_mock_repos(fixture, mock_repo_dir)
 
     # -- Ensure JIRA mock files are writable ----------------------------------
 
@@ -246,7 +272,13 @@ def main() -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
 
     mcp_config = build_mcp_config(
-        jira_mock_dir, mock_data_dir, upstream_search_url, blocked_urls, mock_zstreams, git_env, log_dir
+        jira_mock_dir,
+        mock_data_dir,
+        upstream_search_url,
+        blocked_urls,
+        mock_zstreams,
+        gitconfig_path,
+        log_dir,
     )
 
     tmp_fd, tmp_path = tempfile.mkstemp(prefix="mock-triage-mcp-", suffix=".json")

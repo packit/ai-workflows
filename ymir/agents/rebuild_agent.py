@@ -18,6 +18,7 @@ from ymir.agents.package_update_steps import PackageUpdateState
 from ymir.agents.utils import (
     format_mr_justification,
     get_agent_execution_config,
+    init_sentry,
     mcp_tools,
     render_prompt,
     resolve_chat_model_override,
@@ -39,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
+    init_sentry()
+
     logging.basicConfig(level=logging.INFO)
     resolve_chat_model_override("rebuild")
 

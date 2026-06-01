@@ -32,6 +32,7 @@ from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
+    init_sentry,
     is_reasoning_enabled,
     mcp_tools,
     render_prompt,
@@ -215,6 +216,8 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
 
 
 async def main() -> None:
+    init_sentry()
+
     logging.basicConfig(level=logging.INFO)
     resolve_chat_model_override("rebase")
 

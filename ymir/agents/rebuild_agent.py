@@ -27,6 +27,7 @@ from ymir.agents.utils import (
 from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.logging_setup import configure_logging
+from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     ConsolidatedIssue,
     ErrorData,
@@ -72,8 +73,12 @@ async def main() -> None:
         consolidation_summary=None,
     ):
         local_tool_options["working_directory"] = None
+        if mock_env := get_mock_local_tool_env(jira_issue):
+            local_tool_options["env"] = mock_env
 
-        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+        async with mcp_tools(
+            os.environ["MCP_GATEWAY_URL"], call_meta={"jira_issue": jira_issue}
+        ) as gateway_tools:
             log_agent = create_log_agent(gateway_tools, local_tool_options)
 
             workflow = Workflow(State, name="RebuildWorkflow")

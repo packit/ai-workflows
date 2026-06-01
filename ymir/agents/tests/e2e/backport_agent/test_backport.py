@@ -18,6 +18,7 @@ from ymir.agents.tests.e2e.backport_agent.artifact_capture import (
 from ymir.agents.tests.e2e.backport_agent.evaluation import BackportEvaluator
 from ymir.common.mock_repos import (
     apply_zstream_override,
+    cleanup_mock_gitconfig,
     load_all_fixture_configs,
     setup_mock_repos,
 )
@@ -37,7 +38,6 @@ class BackportAgentTestCase:
         self.finished_state: BackportState | None = None
         self.artifacts: CapturedArtifacts | None = None
         self.error: BaseException | None = None
-        self.git_env: dict | None = None
         self.zstream_override: dict[str, str] | None = None
 
     def __repr__(self) -> str:
@@ -50,8 +50,6 @@ class BackportAgentTestCase:
         metrics_middleware = MetricsMiddleware()
 
         async def testing_factory(gateway_tools, local_tool_options):
-            if self.git_env:
-                local_tool_options["env"] = self.git_env
             agent = await create_backport_agent(
                 gateway_tools,
                 local_tool_options,
@@ -100,7 +98,6 @@ def observability_fixture():
 
 
 SHARED_BARE_REPOS_DIR = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / "mock_bare"
-SHARED_GITCONFIG = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / ".mock_gitconfig"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -108,9 +105,16 @@ def mock_centos_stream_repos():
     """Clone CentOS Stream RPM repos at pre-fix state for each backport test case.
 
     Bare clones are placed in the shared ``/git-repos/`` volume so that both
-    the test container and the MCP gateway can access them.  A
-    ``.mock_gitconfig`` file with ``insteadOf`` entries is written to the same
-    volume; the gateway picks it up via ``GIT_CONFIG_GLOBAL``.
+    the test container and the MCP gateway can access them.
+
+    For each issue, ``setup_mock_repos`` writes a per-issue gitconfig
+    (``.mock_gitconfig_{issue_key}``) as well as a shared
+    ``.mock_gitconfig``.  The MCP gateway scopes ``GIT_CONFIG_GLOBAL``
+    to the per-issue file via ``_meta``, giving each concurrent test
+    case its own ``insteadOf`` scope.
+
+    Yields:
+        Control to the test session after repos are prepared.
     """
     fixtures_dir = os.getenv("BACKPORT_MOCK_REPOS_DIR", str(DEFAULT_FIXTURES_DIR))
     configs = load_all_fixture_configs(fixtures_dir)
@@ -119,52 +123,21 @@ def mock_centos_stream_repos():
         shutil.rmtree(SHARED_BARE_REPOS_DIR)
     SHARED_BARE_REPOS_DIR.mkdir(parents=True, exist_ok=True)
 
-    per_issue_envs: list[dict[str, str]] = []
-
     for issue_key, config in configs.items():
         repos = config.get("repos", [])
         if not repos:
             continue
 
-        git_env = setup_mock_repos(repos, issue_key, SHARED_BARE_REPOS_DIR)
-        per_issue_envs.append(git_env)
+        setup_mock_repos(repos, issue_key, SHARED_BARE_REPOS_DIR)
 
         for tc in test_cases:
             if tc.jira_issue == issue_key:
-                tc.git_env = git_env
                 tc.zstream_override = config.get("zstream_override")
                 break
 
-    _write_mock_gitconfig(per_issue_envs)
-
     yield
 
-    SHARED_GITCONFIG.unlink(missing_ok=True)
-
-
-def _write_mock_gitconfig(envs: list[dict[str, str]]) -> None:
-    """Write a gitconfig file with ``insteadOf`` entries from all test cases.
-
-    The MCP gateway reads this via ``GIT_CONFIG_GLOBAL``.
-    """
-    lines: list[str] = []
-    for git_env in envs:
-        count = int(git_env.get("GIT_CONFIG_COUNT", "0"))
-        for i in range(count):
-            key = git_env.get(f"GIT_CONFIG_KEY_{i}", "")
-            value = git_env.get(f"GIT_CONFIG_VALUE_{i}", "")
-            if not key or not value:
-                continue
-            # key looks like 'url.file:///path/to.git.insteadOf'
-            # gitconfig format: [url "file:///path/to.git"] insteadOf = <value>
-            section_key, _, option = key.rpartition(".")
-            if not section_key:
-                continue
-            section_name, _, section_param = section_key.partition(".")
-            lines.append(f'[{section_name} "{section_param}"]')
-            lines.append(f"\t{option} = {value}")
-    if lines:
-        SHARED_GITCONFIG.write_text("\n".join(lines) + "\n")
+    cleanup_mock_gitconfig()
 
 
 def _files_touched_by_patch(patch_text: str) -> set[str]:

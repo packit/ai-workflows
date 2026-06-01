@@ -16,6 +16,7 @@ from beeai_framework.tools import (
     ToolError,
     ToolRunOptions,
 )
+from mcp.server.lowlevel.server import request_ctx
 from ogr.exceptions import GitlabAPIException, OgrException
 from ogr.factory import get_project
 from ogr.services.gitlab.project import GitlabProject
@@ -64,6 +65,41 @@ def _has_mock_url_rewrites() -> bool:
         pass
     global_cfg = os.getenv("GIT_CONFIG_GLOBAL", "")
     return bool(global_cfg) and Path(global_cfg).is_file()
+
+
+def _get_mock_git_env() -> dict[str, str] | None:
+    """Build a subprocess ``env`` that scopes ``GIT_CONFIG_GLOBAL`` to the
+    per-issue gitconfig when the MCP request carries a ``jira_issue`` in
+    its ``_meta``.
+
+    Falls back to ``None`` (inherit process env) when no per-issue
+    gitconfig exists or when the request has no metadata.
+    """
+    try:
+        ctx = request_ctx.get()
+        meta = ctx.meta
+    except LookupError:
+        return None
+
+    if meta is None:
+        return None
+
+    issue_key = getattr(meta, "jira_issue", None)
+    if not issue_key:
+        extra = getattr(meta, "__pydantic_extra__", None) or {}
+        issue_key = extra.get("jira_issue")
+    if not issue_key:
+        return None
+
+    base = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos"))
+    per_issue = base / f".mock_gitconfig_{issue_key}"
+    if not per_issue.is_file():
+        return None
+
+    env = os.environ.copy()
+    env["GIT_CONFIG_GLOBAL"] = str(per_issue)
+    logger.debug("Using per-issue gitconfig for %s: %s", issue_key, per_issue)
+    return env
 
 
 def _is_private_gitlab(url: str) -> bool:
@@ -431,24 +467,32 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
         # Otherwise embed the auth token in the URL as usual.
         clone_url = repository if _has_mock_url_rewrites() else _get_authenticated_url(repository)
 
+        # Per-issue gitconfig: if the MCP request carries a jira_issue in
+        # _meta, scope GIT_CONFIG_GLOBAL to the per-issue file so that
+        # concurrent test cases with the same remote URL get different
+        # bare clones.
+        git_env = _get_mock_git_env()
+
         clone_path.mkdir(parents=True, exist_ok=True)
 
         if branch:
-            proc = await asyncio.create_subprocess_exec("git", "init", cwd=clone_path)
+            proc = await asyncio.create_subprocess_exec("git", "init", cwd=clone_path, env=git_env)
             if await proc.wait():
                 raise ToolError(f"Failed to initialize git repo at {clone_path}")
 
             command = ["git", "fetch", clone_url, f"{branch}:refs/heads/{branch}"]
-            proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
+            proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path, env=git_env)
             if await proc.wait():
                 raise ToolError(f"Failed to fetch {branch} from {repository}")
 
-            proc = await asyncio.create_subprocess_exec("git", "checkout", branch, cwd=clone_path)
+            proc = await asyncio.create_subprocess_exec(
+                "git", "checkout", branch, cwd=clone_path, env=git_env
+            )
             if await proc.wait():
                 raise ToolError(f"Failed to checkout branch {branch}")
         else:
             command = ["git", "clone", clone_url, str(clone_path)]
-            proc = await asyncio.create_subprocess_exec(command[0], *command[1:])
+            proc = await asyncio.create_subprocess_exec(command[0], *command[1:], env=git_env)
             if await proc.wait():
                 raise ToolError(f"Failed to clone {repository}")
 

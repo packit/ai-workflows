@@ -37,7 +37,9 @@ spec:
             name: endpoints-env
         - secretRef:
             name: sentry-env
-
+        - secretRef:
+            name: log-detective-env
+            optional: true
         image: 'beeai-agent:c10s'
         imagePullPolicy: Always
         name: rebase-agent-c10s

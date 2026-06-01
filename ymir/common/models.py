@@ -628,9 +628,14 @@ class FailedPipelineJob(BaseModel):
     id: str = Field(description="Pipeline job ID as a string")
     name: str = Field(description="Name of the job")
     url: str = Field(description="Full URL to the job in GitLab")
-    status: str = Field(description="Job status")
+    status: str = Field(description="Job status (e.g. failed, canceled)")
     stage: str = Field(description="Pipeline stage the job belongs to")
     artifacts_url: str = Field(description="URL to browse job artifacts, empty string if no artifacts")
+    allow_failure: bool = Field(
+        default=False,
+        description="True if the job is allowed to fail (allow_failure: true in .gitlab-ci.yml). "
+        "A job with allow_failure=true does not block the pipeline even when it fails.",
+    )
 
 
 class CommentReply(BaseModel):

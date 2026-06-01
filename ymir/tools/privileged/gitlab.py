@@ -730,6 +730,7 @@ class GetFailedPipelineJobsFromMergeRequestTool(
                             if hasattr(job, "artifacts_file") and job.artifacts_file
                             else ""
                         ),
+                        allow_failure=getattr(job, "allow_failure", False),
                     )
                     for job in jobs
                     if job.status == "failed"

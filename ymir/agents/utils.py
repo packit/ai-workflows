@@ -9,7 +9,11 @@ from beeai_framework.template import PromptTemplate
 from pydantic import BaseModel
 
 from ymir.common.base_utils import check_subprocess, run_subprocess  # noqa: F401 — re-exported
-from ymir.common.mock_repos import apply_zstream_override_from_env, setup_mock_repos_from_env
+from ymir.common.mock_repos import (
+    apply_zstream_override_from_env,
+    get_mock_gitconfig_path,
+    setup_mock_repos_from_env,
+)
 from ymir.common.utils import get_absolute_path, mcp_tools, run_tool  # noqa: F401 — re-exported
 
 logger = logging.getLogger(__name__)
@@ -119,12 +123,13 @@ def set_litellm_debug() -> None:
 def build_agent_factory_with_mock_repos(
     agent_factory: Callable[[list, dict[str, Any] | None], Any], jira_issue: str
 ) -> Callable[[list, dict[str, Any] | None], Any]:
-    """Wrap an agent factory with mock repo support when configured.
+    """Prepare mock repos and ensure the shared gitconfig is visible.
 
-    If ``MOCK_REPOS_DIR`` is set, prepares mock repos and returns a factory
-    that injects the resulting ``git_env`` into ``local_tool_options``.
-    Also applies ``MOCK_ZSTREAMS`` (standalone env-var) and any per-issue
-    ``zstream_override`` found in the config file.
+    If ``MOCK_REPOS_DIR`` is set, prepares bare clones and writes
+    ``insteadOf`` rewrites to ``.mock_gitconfig``.  Inside containers
+    the agent picks these up via ``include.path`` in its global
+    gitconfig; for non-container runs we fall back to setting
+    ``GIT_CONFIG_GLOBAL`` on the current process.
 
     Args:
         agent_factory: The original agent factory callable
@@ -132,8 +137,8 @@ def build_agent_factory_with_mock_repos(
         jira_issue: The Jira issue key (e.g. ``RHEL-15216``).
 
     Returns:
-        The original factory unchanged when mocking is not configured,
-        or a wrapper that injects mock ``git_env``.
+        The original factory unchanged (mock repos are visible through
+        the shared gitconfig, no per-tool env injection needed).
     """
     apply_zstream_override_from_env()
 
@@ -143,10 +148,11 @@ def build_agent_factory_with_mock_repos(
 
     logger.info("Mock repos configured for %s via MOCK_REPOS_DIR", jira_issue)
 
-    def _factory(gateway_tools, local_tool_options=None):
-        return agent_factory(gateway_tools, {"env": git_env})
+    gitconfig = get_mock_gitconfig_path()
+    if gitconfig.is_file():
+        os.environ.setdefault("GIT_CONFIG_GLOBAL", str(gitconfig))
 
-    return _factory
+    return agent_factory
 
 
 def format_mr_justification(justification: str | None) -> str:

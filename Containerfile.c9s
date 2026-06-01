@@ -112,6 +112,7 @@ RUN git config --global user.email "redhat-ymir-agent@redhat.com" \
     && git config --global user.name "RHEL Packaging Agent" \
     && git config --global core.editor "true" \
     && git config --global --add safe.directory '/git-repos/*' \
-    && git config --global --add safe.directory '/git-repos/applicability/*'
+    && git config --global --add safe.directory '/git-repos/applicability/*' \
+    && git config --global include.path /git-repos/.mock_gitconfig
 
 CMD ["/bin/bash"]

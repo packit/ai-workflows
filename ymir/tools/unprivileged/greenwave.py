@@ -1,5 +1,6 @@
 import logging
-from urllib.parse import quote as urlquote, urlparse
+from urllib.parse import quote as urlquote
+from urllib.parse import urlparse
 
 import aiohttp
 from beeai_framework.context import RunContext

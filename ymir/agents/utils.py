@@ -162,3 +162,30 @@ def format_mr_justification(justification: str | None) -> str:
     if justification:
         return f"Triage Decision Justification:\n{justification}\n\n"
     return ""
+
+
+def init_sentry() -> None:
+    """Initialize Sentry, if the DSN is set."""
+    dsn = os.getenv("SENTRY_DSN")
+    if not dsn:
+        # no DSN, no reporting
+        return
+
+    import sentry_sdk
+    from sentry_sdk.integrations.asyncio import AsyncioIntegration
+    from sentry_sdk.integrations.litellm import LiteLLMIntegration
+
+    sentry_sdk.init(
+        dsn=dsn,
+        # Set traces_sample_rate to 1.0 to capture 100%
+        # of transactions for tracing.
+        traces_sample_rate=1.0,
+        # Add data like inputs and responses;
+        # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
+        stream_gen_ai_spans=True,
+        send_default_pii=True,
+        integrations=[
+            AsyncioIntegration(),
+            LiteLLMIntegration(),
+        ],
+    )

@@ -29,6 +29,7 @@ from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
+    init_sentry,
     is_reasoning_enabled,
     mcp_tools,
     resolve_chat_model_override,
@@ -1127,6 +1128,8 @@ async def run_workflow(
 
 
 async def main() -> None:
+    init_sentry()
+
     logging.basicConfig(level=logging.INFO)
     resolve_chat_model_override("triage")
 

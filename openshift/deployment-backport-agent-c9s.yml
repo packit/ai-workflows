@@ -35,7 +35,7 @@ spec:
             name: chat-env
         - configMapRef:
             name: endpoints-env
-        - configMapRef:
+        - secretRef:
             name: sentry-env
         image: 'beeai-agent:c9s'
         imagePullPolicy: Always

@@ -99,6 +99,10 @@ spec:
     - type: Allow
       to:
         cidrSelector: 209.51.188.0/24
+    # Sentry monitoring
+    - type: Allow
+      to:
+        dnsName: o490301.ingest.us.sentry.io
     # Catch-all deny
     - type: Deny
       to:

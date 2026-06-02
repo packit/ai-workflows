@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 
+BREWHUB_URL = "https://brewhub.engineering.redhat.com/brewhub"
+
 JIRA_SEARCH_PATH = "rest/api/3/search/jql"
 
 # Compares correctly - all our dates are tz-aware

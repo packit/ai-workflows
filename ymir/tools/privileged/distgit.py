@@ -6,15 +6,14 @@ import tempfile
 import time
 
 import git
-import koji
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket
+from ymir.common.utils import get_latest_candidate_build
 from ymir.tools.base import CloneableTool as Tool
-from ymir.tools.constants import BREWHUB_URL
 
 logger = logging.getLogger(__name__)
 
@@ -86,26 +85,12 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                         branch,
                     )
                 else:
-                    session = koji.ClientSession(BREWHUB_URL)
-                    candidate_tag = f"{branch}-candidate"
-                    builds = await asyncio.to_thread(
-                        session.listTagged,
-                        package=package,
-                        tag=candidate_tag,
-                        latest=True,
-                        inherit=True,
-                        strict=True,
-                    )
-                    if not builds:
-                        raise RuntimeError(f"There are no builds of {package} in {candidate_tag}")
-                    [build] = builds
-                    metadata = await asyncio.to_thread(session.getBuild, build["build_id"], strict=True)
                     # ref is a commit SHA from the Koji build source URL (git+https://...#<sha>).
                     # It may point to a commit on an older Z-stream branch (via tag inheritance)
                     # which is expected — we're branching from the last known good build.
                     # The push can fail transiently due to bastion network issues; the beeai
                     # framework will retry the whole tool call in that case.
-                    ref = metadata["source"].split("#")[-1]
+                    _, ref = await get_latest_candidate_build(package, branch)
                     push_infos = await asyncio.to_thread(
                         repo.remotes.origin.push, f"{ref}:refs/heads/{branch}"
                     )

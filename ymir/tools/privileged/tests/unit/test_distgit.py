@@ -1,8 +1,8 @@
 import git
-import koji
 import pytest
 from beeai_framework.tools import ToolError
 from flexmock import flexmock
+from specfile.utils import EVR
 
 from ymir.tools.privileged import distgit as distgit_tools
 from ymir.tools.privileged.distgit import CreateZstreamBranchTool
@@ -41,12 +41,12 @@ async def test_create_zstream_branch(branch_exists, monkeypatch):
         ),
     )
 
-    flexmock(koji.ClientSession).new_instances(
-        flexmock(
-            listTagged=lambda *_, **__: [{"build_id": 12345}],
-            getBuild=lambda *_, **__: {"source": f"some_git_url#{ref}"},
-        ),
-    )
+    async def mock_get_latest_candidate_build(package, dist_git_branch):
+        return EVR(version="1.0", release="1.el10"), ref
+
+    flexmock(distgit_tools).should_receive("get_latest_candidate_build").replace_with(
+        mock_get_latest_candidate_build
+    ).times(0 if branch_exists else 1)
 
     monkeypatch.setenv("GITLAB_TOKEN", "<TOKEN>")
 
@@ -123,12 +123,12 @@ async def test_create_zstream_branch_push_rejected(monkeypatch):
         ),
     )
 
-    flexmock(koji.ClientSession).new_instances(
-        flexmock(
-            listTagged=lambda *_, **__: [{"build_id": 12345}],
-            getBuild=lambda *_, **__: {"source": f"some_git_url#{ref}"},
-        ),
-    )
+    async def mock_get_latest_candidate_build(package, dist_git_branch):
+        return EVR(version="1.0", release="1.el10"), ref
+
+    flexmock(distgit_tools).should_receive("get_latest_candidate_build").replace_with(
+        mock_get_latest_candidate_build
+    ).once()
 
     monkeypatch.setenv("GITLAB_TOKEN", "<TOKEN>")
 

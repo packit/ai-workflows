@@ -2,12 +2,14 @@ import asyncio
 import subprocess
 
 import httpx
+import koji
 import pytest
 from flexmock import flexmock
+from specfile.utils import EVR
 
 import ymir.common.utils as _ymir_utils
 from ymir.common.base_utils import KerberosError, extract_principal, init_kerberos_ticket
-from ymir.common.utils import _is_connection_error, mcp_tools
+from ymir.common.utils import _is_connection_error, get_latest_candidate_build, mcp_tools
 
 
 async def _coro(val):
@@ -451,3 +453,61 @@ async def test_mcp_tools_non_connection_error_raises_immediately():
     with pytest.raises(ValueError):
         async with mcp_tools(FAKE_URL, max_retries=5):
             pass
+
+
+# ============================================================================
+# get_latest_candidate_build
+# ============================================================================
+
+
+def _mock_koji_session(list_tagged_results, get_build_result):
+    flexmock(koji).should_receive("ClientSession").and_return(
+        flexmock(
+            listTagged=lambda **kw: list_tagged_results.get(kw["tag"], []),
+            getBuild=lambda *a, **kw: get_build_result,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_latest_candidate_build_picks_higher_evr():
+    _mock_koji_session(
+        {
+            "rhel-9.6.0-candidate": [
+                {"build_id": 1, "epoch": 0, "version": "1.0", "release": "1.el9"},
+            ],
+            "rhel-9.6.0-z-candidate": [
+                {"build_id": 2, "epoch": 0, "version": "1.0", "release": "2.el9"},
+            ],
+        },
+        {"source": "git+https://pkgs.example.com/rpms/bash#abc123"},
+    )
+    evr, ref = await get_latest_candidate_build("bash", "rhel-9.6.0")
+    assert evr == EVR(epoch=0, version="1.0", release="2.el9")
+    assert ref == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_get_latest_candidate_build_only_candidate():
+    _mock_koji_session(
+        {
+            "rhel-9.6.0-candidate": [
+                {"build_id": 1, "epoch": 0, "version": "1.0", "release": "1.el9"},
+            ],
+            "rhel-9.6.0-z-candidate": [],
+        },
+        {"source": "git+https://pkgs.example.com/rpms/bash#def456"},
+    )
+    evr, ref = await get_latest_candidate_build("bash", "rhel-9.6.0")
+    assert evr == EVR(epoch=0, version="1.0", release="1.el9")
+    assert ref == "def456"
+
+
+@pytest.mark.asyncio
+async def test_get_latest_candidate_build_no_builds():
+    _mock_koji_session(
+        {"rhel-9.6.0-candidate": [], "rhel-9.6.0-z-candidate": []},
+        None,
+    )
+    with pytest.raises(RuntimeError, match="no builds"):
+        await get_latest_candidate_build("bash", "rhel-9.6.0")

@@ -58,8 +58,8 @@ from ymir.common.models import (
 from ymir.common.models import (
     TriageOutputSchema as OutputSchema,
 )
-from ymir.common.version_utils import is_older_zstream, normalize_fix_version, parse_rhel_version
 from ymir.common.utils import get_latest_candidate_build
+from ymir.common.version_utils import is_older_zstream, normalize_fix_version, parse_rhel_version
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 
 ## UpstreamSearchTool is currently unmaintained and disabled.

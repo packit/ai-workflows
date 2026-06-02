@@ -57,6 +57,14 @@ def parse_branch_name(branch: str) -> tuple[str, str] | None:
     return match.group(1), match.group(2)
 
 
+def construct_internal_branch_name(major_version: str, minor_version: str) -> str:
+    """Construct internal RHEL branch name (e.g. rhel-9.8.0 or rhel-10.3)."""
+    branch = f"rhel-{major_version}.{minor_version}"
+    if int(major_version) < 10:
+        branch += ".0"
+    return branch
+
+
 def normalize_fix_version(fix_version: str, rhel_config: dict) -> str:
     """
     Normalize a stale Y-stream fixVersion to its Z-stream equivalent.

@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 
 BREWHUB_URL = "https://brewhub.engineering.redhat.com/brewhub"
+CENTOS_STREAM_KOJIHUB_URL = "https://kojihub.stream.centos.org/kojihub"
 
 JIRA_SEARCH_PATH = "rest/api/3/search/jql"
 

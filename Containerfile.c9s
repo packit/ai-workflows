@@ -73,6 +73,7 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
          koji \
          GitPython>=3.1.0 \
          unidiff \
+         sentry-sdk>=2.13.0 \
     && cd /opt/beeai-venv/lib/python3.11/site-packages \
     && patch -p2 -i /tmp/beeai-reasoning.patch \
     && patch -p5 -i /tmp/openinference-reasoning.patch

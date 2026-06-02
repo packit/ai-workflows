@@ -18,11 +18,10 @@ from beeai_framework.tools.mcp import MCPTool
 from beeai_framework.tools.types import JSONToolOutput, StringToolOutput
 from mcp import ClientSession
 from mcp.client.sse import sse_client
-from mcp.types import TextContent
+from mcp.types import CallToolResult, TextContent
 from specfile.utils import EVR
 
 from ymir.common.constants import BREWHUB_URL
-from mcp.types import CallToolResult, TextContent
 
 logger = logging.getLogger(__name__)
 

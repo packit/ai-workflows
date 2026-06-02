@@ -1279,7 +1279,10 @@ async def main() -> None:
                                 await tasks.set_jira_labels(
                                     jira_issue=consolidated.issue_key,
                                     labels_to_add=[JiraLabels.TRIAGED_REBUILD.value],
-                                    labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                                    labels_to_remove=[
+                                        JiraLabels.TRIAGE_IN_PROGRESS.value,
+                                        JiraLabels.REBUILT.value,
+                                    ],
                                     dry_run=dry_run,
                                 )
                             except Exception as e:

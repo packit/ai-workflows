@@ -58,8 +58,17 @@ from ymir.common.models import (
 from ymir.common.models import (
     TriageOutputSchema as OutputSchema,
 )
-from ymir.common.utils import get_latest_candidate_build
-from ymir.common.version_utils import is_older_zstream, normalize_fix_version, parse_rhel_version
+from ymir.common.utils import (
+    FIXED_IN_BUILD_CUSTOM_FIELD,
+    check_build_in_buildroot,
+    get_latest_candidate_build,
+)
+from ymir.common.version_utils import (
+    construct_internal_branch_name,
+    is_older_zstream,
+    normalize_fix_version,
+    parse_rhel_version,
+)
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 
 ## UpstreamSearchTool is currently unmaintained and disabled.
@@ -108,14 +117,6 @@ async def determine_target_branch(
     return await _map_version_to_branch(triage_data.fix_version, cve_needs_internal_fix, package)
 
 
-def _construct_internal_branch_name(major_version: str, minor_version: str) -> str:
-    """Construct internal RHEL branch name."""
-    branch = f"rhel-{major_version}.{minor_version}"
-    if int(major_version) < 10:
-        branch += ".0"
-    return branch
-
-
 async def _map_version_to_branch(
     version: str, cve_needs_internal_fix: bool, package: str | None = None
 ) -> str | None:
@@ -151,7 +152,7 @@ async def _map_version_to_branch(
     # For older z-streams, we want to check if the branch exists like regular bugs
     if cve_needs_internal_fix and not older_zstream:
         if major_version in y_streams:
-            branch = _construct_internal_branch_name(major_version, minor_version)
+            branch = construct_internal_branch_name(major_version, minor_version)
             logger.info(f"Mapped {version} -> {branch} (CVE internal fix)")
             return branch
         # Default to CentOS Stream for CVEs when no Y-stream
@@ -161,13 +162,13 @@ async def _map_version_to_branch(
 
     # For older Z-Streams, always use internal RHEL branch (it will be created if needed)
     if older_zstream:
-        expected_branch = _construct_internal_branch_name(major_version, minor_version)
+        expected_branch = construct_internal_branch_name(major_version, minor_version)
         logger.info(f"Mapped {version} -> {expected_branch} (older Z-Stream RHEL internal branch)")
         return expected_branch
 
     # For latest/upcoming Z-Stream, use internal RHEL branch only if it already exists
     if is_zstream and package:
-        expected_branch = _construct_internal_branch_name(major_version, minor_version)
+        expected_branch = construct_internal_branch_name(major_version, minor_version)
 
         async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
             available_branches = await run_tool(
@@ -1014,6 +1015,8 @@ async def run_workflow(
             except Exception as e:
                 logger.warning(f"Could not prep sources for applicability check: {e}")
                 state.applicability_check_skipped = True
+                if state.triage_result.resolution == Resolution.REBUILD:
+                    return "verify_rebuild_buildroot"
                 return "comment_in_jira"
 
             if not prep_ok:
@@ -1097,7 +1100,66 @@ async def run_workflow(
                 state.applicability_check_skipped = True
 
             if state.triage_result.resolution == Resolution.REBUILD:
+                return "verify_rebuild_buildroot"
+            return "comment_in_jira"
+
+        async def verify_rebuild_buildroot(state):
+            """Verify the dependency's fixed build is available in the target buildroot."""
+            data = state.triage_result.data
+            dep_issue_key = getattr(data, "dependency_issue", None)
+            dep_component = getattr(data, "dependency_component", None)
+
+            if not dep_issue_key or not dep_component or not state.target_branch:
+                logger.info("Missing dependency info or target branch — skipping buildroot check")
                 return "consolidate_rebuild_siblings"
+
+            dep_details = await run_tool(
+                "get_jira_details",
+                available_tools=gateway_tools,
+                issue_key=dep_issue_key,
+            )
+            fixed_in_build = dep_details.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
+            if not fixed_in_build:
+                logger.warning(f"Dependency {dep_issue_key} has no Fixed in Build — skipping buildroot check")
+                return "consolidate_rebuild_siblings"
+
+            # fix_version is already normalized by run_triage_analysis (e.g. rhel-9.8 → rhel-9.8.z)
+            fix_version = getattr(data, "fix_version", None) or ""
+
+            try:
+                in_buildroot = await check_build_in_buildroot(
+                    state.target_branch,
+                    dep_component,
+                    fixed_in_build,
+                    fix_version=fix_version,
+                )
+            except Exception as e:
+                logger.warning(f"Buildroot check failed for {dep_component} ({fixed_in_build}): {e}")
+                return "consolidate_rebuild_siblings"
+
+            if in_buildroot:
+                return "consolidate_rebuild_siblings"
+
+            logger.info(
+                f"Dependency {dep_component} ({fixed_in_build}) not in "
+                f"{state.target_branch} buildroot — postponing {state.jira_issue}"
+            )
+            state.triage_result = OutputSchema(
+                resolution=Resolution.POSTPONED,
+                data=PostponedData(
+                    summary=(
+                        f"Rebuild of {data.package} waiting for {dep_component} "
+                        f"({fixed_in_build}) to land in {state.target_branch} buildroot"
+                    ),
+                    pending_issues=[dep_issue_key],
+                    jira_issue=state.jira_issue,
+                    package=data.package,
+                    fix_version=data.fix_version,
+                    cve_id=data.cve_id,
+                    dependency_issue=dep_issue_key,
+                    dependency_component=dep_component,
+                ),
+            )
             return "comment_in_jira"
 
         async def consolidate_rebuild_siblings(state):
@@ -1149,6 +1211,7 @@ async def run_workflow(
         workflow.add_step("verify_rebase_author", verify_rebase_author)
         workflow.add_step("determine_target_branch", determine_target_branch_step)
         workflow.add_step("check_cve_applicability", check_cve_applicability)
+        workflow.add_step("verify_rebuild_buildroot", verify_rebuild_buildroot)
         workflow.add_step("consolidate_rebuild_siblings", consolidate_rebuild_siblings)
         workflow.add_step("comment_in_jira", comment_in_jira)
 

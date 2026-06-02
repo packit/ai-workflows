@@ -23,6 +23,7 @@ from ymir.common.models import (
     Resolution,
     TriageEligibility,
 )
+from ymir.common.utils import FIXED_IN_BUILD_CUSTOM_FIELD, check_build_in_buildroot
 from ymir.common.version_utils import get_fix_version_variants
 
 logger = logging.getLogger(__name__)
@@ -190,6 +191,33 @@ async def find_rebuild_siblings(
                         f"* {candidate_key} — excluded ({cve_id} does not affect {rebuild_data.package})"
                     )
                     continue
+
+                if target_branch and analysis.dependency_issue and analysis.dependency_component:
+                    try:
+                        dep_details = await run_tool(
+                            "get_jira_details",
+                            available_tools=available_tools,
+                            issue_key=analysis.dependency_issue,
+                        )
+                        fib = dep_details.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
+                        # fix_version is already normalized by run_triage_analysis
+                        if fib and not await check_build_in_buildroot(
+                            target_branch,
+                            analysis.dependency_component,
+                            fib,
+                            fix_version=rebuild_data.fix_version or "",
+                        ):
+                            logger.info(
+                                f"Sibling {candidate_key}: dependency {analysis.dependency_component} "
+                                f"({fib}) not yet in {target_branch} buildroot"
+                            )
+                            summary_lines.append(
+                                f"* {candidate_key} — excluded "
+                                f"({analysis.dependency_component} not yet in buildroot)"
+                            )
+                            continue
+                    except Exception as e:
+                        logger.warning(f"Buildroot check failed for sibling {candidate_key}: {e}")
 
                 dep_parts = []
                 if analysis.dependency_component:

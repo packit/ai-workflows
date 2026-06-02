@@ -21,9 +21,13 @@ from mcp.client.sse import sse_client
 from mcp.types import CallToolResult, TextContent
 from specfile.utils import EVR
 
-from ymir.common.constants import BREWHUB_URL
+from ymir.common.base_utils import is_cs_branch
+from ymir.common.constants import BREWHUB_URL, CENTOS_STREAM_KOJIHUB_URL
+from ymir.common.version_utils import construct_internal_branch_name, parse_rhel_version
 
 logger = logging.getLogger(__name__)
+
+FIXED_IN_BUILD_CUSTOM_FIELD = "customfield_10578"
 
 
 class _MetaInjectingSession:
@@ -149,37 +153,46 @@ async def mcp_tools(
             raise
 
 
+def _evr_from_build(build: dict) -> EVR:
+    """Extract an EVR from a Koji build dict."""
+    return EVR(
+        epoch=build.get("epoch") or 0,
+        version=build["version"],
+        release=build["release"],
+    )
+
+
+def _get_latest_koji_build(koji_url: str, tag: str, package: str) -> dict | None:
+    """Query a single Koji tag for the latest build of *package*."""
+    builds = koji.ClientSession(koji_url).listTagged(
+        package=package,
+        tag=tag,
+        latest=True,
+        inherit=True,
+        strict=False,
+    )
+    return builds[0] if builds else None
+
+
+def _get_koji_build(koji_url: str, nvr: str) -> dict | None:
+    """Look up a build by NVR on the given Koji instance."""
+    return koji.ClientSession(koji_url).getBuild(nvr)
+
+
 async def get_latest_candidate_build(package: str, dist_git_branch: str) -> tuple[EVR, str]:
     candidate_tags = [
         f"{dist_git_branch}-candidate",
         f"{dist_git_branch}-z-candidate",
     ]
 
-    def get_latest_build(tag):
-        builds = koji.ClientSession(BREWHUB_URL).listTagged(
-            package=package,
-            tag=tag,
-            latest=True,
-            inherit=True,
-            strict=False,
-        )
-        if not builds:
-            return None
-        [build] = builds
-        return build
-
     results = await asyncio.gather(
-        *(asyncio.to_thread(get_latest_build, tag) for tag in candidate_tags),
+        *(asyncio.to_thread(_get_latest_koji_build, BREWHUB_URL, tag, package) for tag in candidate_tags),
     )
     latest = None
     for build in results:
         if build is None:
             continue
-        evr = EVR(
-            epoch=build["epoch"] or 0,
-            version=build["version"],
-            release=build["release"],
-        )
+        evr = _evr_from_build(build)
         if latest is None or latest[0] < evr:
             latest = (evr, build["build_id"])
     if latest is None:
@@ -189,3 +202,76 @@ async def get_latest_candidate_build(package: str, dist_git_branch: str) -> tupl
     metadata = await asyncio.to_thread(session.getBuild, build_id, strict=True)
     source_ref = metadata["source"].split("#")[-1]
     return evr, source_ref
+
+
+def _resolve_buildroot_checks(target_branch: str, fix_version: str) -> list[tuple[str, str]]:
+    """Return a list of (koji_hub_url, build_tag) pairs to verify.
+
+    For CS branches with a Z-stream fix_version, both the CS Koji
+    buildroot and the Brew Z-stream buildroot are checked (CS-first
+    approach produces two builds).  For internal RHEL branches with
+    a Z-stream fix_version, only the Brew Z-stream buildroot is checked.
+    """
+    is_zstream = fix_version.lower().endswith(".z")
+
+    if is_cs_branch(target_branch):
+        checks = [(CENTOS_STREAM_KOJIHUB_URL, f"{target_branch}-build")]
+        if is_zstream and (parsed := parse_rhel_version(fix_version)):
+            major, minor, _ = parsed
+            rhel_branch = construct_internal_branch_name(major, minor)
+            checks.append((BREWHUB_URL, f"{rhel_branch}-z-build"))
+        return checks
+
+    suffix = "-z-build" if is_zstream else "-build"
+    return [(BREWHUB_URL, f"{target_branch}{suffix}")]
+
+
+async def check_build_in_buildroot(
+    target_branch: str,
+    dep_component: str,
+    fixed_in_build_nvr: str,
+    fix_version: str = "",
+) -> bool:
+    """Check if the dependency's fixed build (or newer) is in all relevant buildroots.
+
+    Queries the appropriate Koji instance(s) based on ``target_branch`` and
+    ``fix_version``.  For CS Z-stream fixes, both the CS Koji and Brew
+    Z-stream buildroots are checked.
+    """
+    checks = _resolve_buildroot_checks(target_branch, fix_version)
+
+    # Always resolve the fixed build's epoch from Brew — the NVR in
+    # Jira's "Fixed in Build" is a Brew NVR (e.g. .el9_8) and may
+    # not exist in CS Koji (which uses .el9).
+    fixed_build_future = asyncio.to_thread(_get_koji_build, BREWHUB_URL, fixed_in_build_nvr)
+    tag_futures = [
+        asyncio.to_thread(_get_latest_koji_build, koji_url, build_tag, dep_component)
+        for koji_url, build_tag in checks
+    ]
+    results = await asyncio.gather(fixed_build_future, *tag_futures)
+    fixed_build = results[0]
+    tag_results = list(zip([tag for _, tag in checks], results[1:], strict=True))
+
+    if not fixed_build:
+        logger.warning(f"Build {fixed_in_build_nvr} not found in Koji")
+        return False
+
+    fixed_evr = _evr_from_build(fixed_build)
+
+    for build_tag, latest in tag_results:
+        if not latest:
+            logger.info(f"No builds of {dep_component} found in {build_tag}")
+            return False
+
+        latest_evr = _evr_from_build(latest)
+
+        if latest_evr >= fixed_evr:
+            logger.info(f"{dep_component} in {build_tag}: {latest['nvr']} >= {fixed_in_build_nvr}")
+        else:
+            logger.info(
+                f"{dep_component} in {build_tag}: "
+                f"{latest['nvr']} < {fixed_in_build_nvr} — not yet in buildroot"
+            )
+            return False
+
+    return True

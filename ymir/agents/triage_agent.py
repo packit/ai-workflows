@@ -991,6 +991,8 @@ async def run_workflow(
                                     f"skipping applicability check"
                                 )
                                 state.applicability_check_skipped = True
+                                if state.triage_result.resolution == Resolution.REBUILD:
+                                    return "consolidate_rebuild_siblings"
                                 return "comment_in_jira"
                         else:
                             clone_branch = f"c{major_version}s"

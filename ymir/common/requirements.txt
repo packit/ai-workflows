@@ -1,3 +1,5 @@
 # Dependencies specific to ymir-common
 GitPython>=3.1.0
+koji
 redis>=6.4.0
+specfile>=0.36.0

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import koji
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
 from beeai_framework.tools.mcp import MCPTool
@@ -17,6 +18,9 @@ from beeai_framework.tools.types import JSONToolOutput, StringToolOutput
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.types import TextContent
+from specfile.utils import EVR
+
+from ymir.common.constants import BREWHUB_URL
 
 logger = logging.getLogger(__name__)
 
@@ -91,3 +95,45 @@ async def mcp_tools(
                 await asyncio.sleep(retry_delay)
                 continue
             raise
+
+
+async def get_latest_candidate_build(package: str, dist_git_branch: str) -> tuple[EVR, str]:
+    candidate_tags = [
+        f"{dist_git_branch}-candidate",
+        f"{dist_git_branch}-z-candidate",
+    ]
+
+    def get_latest_build(tag):
+        builds = koji.ClientSession(BREWHUB_URL).listTagged(
+            package=package,
+            tag=tag,
+            latest=True,
+            inherit=True,
+            strict=False,
+        )
+        if not builds:
+            return None
+        [build] = builds
+        return build
+
+    results = await asyncio.gather(
+        *(asyncio.to_thread(get_latest_build, tag) for tag in candidate_tags),
+    )
+    latest = None
+    for build in results:
+        if build is None:
+            continue
+        evr = EVR(
+            epoch=build["epoch"] or 0,
+            version=build["version"],
+            release=build["release"],
+        )
+        if latest is None or latest[0] < evr:
+            latest = (evr, build["build_id"])
+    if latest is None:
+        raise RuntimeError(f"There are no builds of {package} in {' or '.join(candidate_tags)}")
+    evr, build_id = latest
+    session = koji.ClientSession(BREWHUB_URL)
+    metadata = await asyncio.to_thread(session.getBuild, build_id, strict=True)
+    source_ref = metadata["source"].split("#")[-1]
+    return evr, source_ref

@@ -9,6 +9,7 @@ from flexmock import flexmock
 from specfile import specfile
 from specfile.utils import EVR
 
+from ymir.tools.unprivileged import specfile as specfile_tools
 from ymir.tools.unprivileged.specfile import (
     AddChangelogEntryTool,
     AddChangelogEntryToolInput,
@@ -413,15 +414,15 @@ async def test_update_release(
 ):
     package = "test"
 
-    async def _get_latest_candidate_build(package, candidate_tag):
-        if candidate_tag.startswith(dist_git_branch):
-            return EVR(version="0.1", release="5.elX")
+    async def mock_get_latest_candidate_build(package, dist_git_branch_arg):
+        if dist_git_branch_arg.startswith(dist_git_branch):
+            return EVR(version="0.1", release="5.elX"), "dummy_ref"
         if rebase_in_higher_stream:
-            return EVR(version="0.2", release="2.elX")
-        return EVR(version="0.1", release="8.elX")
+            return EVR(version="0.2", release="2.elX"), "dummy_ref"
+        return EVR(version="0.1", release="8.elX"), "dummy_ref"
 
-    flexmock(UpdateReleaseTool).should_receive("_get_latest_candidate_build").replace_with(
-        _get_latest_candidate_build
+    flexmock(specfile_tools).should_receive("get_latest_candidate_build").replace_with(
+        mock_get_latest_candidate_build
     )
 
     tool = UpdateReleaseTool()
@@ -527,15 +528,15 @@ async def test_update_release_abandon_autorelease(
     package = "test"
     dist_git_branch = "rhel-9.6.0"
 
-    async def _get_latest_candidate_build(package, candidate_tag):
-        if candidate_tag.startswith(dist_git_branch):
-            return EVR(version="0.1", release="5.elX")
+    async def mock_get_latest_candidate_build(package, dist_git_branch_arg):
+        if dist_git_branch_arg.startswith(dist_git_branch):
+            return EVR(version="0.1", release="5.elX"), "dummy_ref"
         if rebase_in_higher_stream:
-            return EVR(version="0.2", release="2.elX")
-        return EVR(version="0.1", release="8.elX")
+            return EVR(version="0.2", release="2.elX"), "dummy_ref"
+        return EVR(version="0.1", release="8.elX"), "dummy_ref"
 
-    flexmock(UpdateReleaseTool).should_receive("_get_latest_candidate_build").replace_with(
-        _get_latest_candidate_build
+    flexmock(specfile_tools).should_receive("get_latest_candidate_build").replace_with(
+        mock_get_latest_candidate_build
     )
 
     tool = UpdateReleaseTool()
@@ -576,15 +577,15 @@ async def test_update_release_abandon_autorelease_increments_zstream(
     package = "test"
     dist_git_branch = "rhel-9.6.0"
 
-    async def _get_latest_candidate_build(package, candidate_tag):
-        if candidate_tag.startswith(dist_git_branch):
-            return EVR(version="0.1", release="5.elX.3")
+    async def mock_get_latest_candidate_build(package, dist_git_branch_arg):
+        if dist_git_branch_arg.startswith(dist_git_branch):
+            return EVR(version="0.1", release="5.elX.3"), "dummy_ref"
         if rebase_in_higher_stream:
-            return EVR(version="0.2", release="2.elX")
-        return EVR(version="0.1", release="8.elX")
+            return EVR(version="0.2", release="2.elX"), "dummy_ref"
+        return EVR(version="0.1", release="8.elX"), "dummy_ref"
 
-    flexmock(UpdateReleaseTool).should_receive("_get_latest_candidate_build").replace_with(
-        _get_latest_candidate_build
+    flexmock(specfile_tools).should_receive("get_latest_candidate_build").replace_with(
+        mock_get_latest_candidate_build
     )
 
     tool = UpdateReleaseTool()

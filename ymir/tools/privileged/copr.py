@@ -99,7 +99,8 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
         rhel_config = await load_rhel_config()
         upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
         try:
-            chroot = (await self.branch_to_chroot(dist_git_branch, upcoming_z_streams)) + f"-{build_arch}"
+            chroot_base, majorver = await self.branch_to_chroot(dist_git_branch, upcoming_z_streams)
+            chroot = f"{chroot_base}-{build_arch}"
         except ValueError as e:
             raise ToolError(f"Failed to deduce Copr chroot: {e}") from e
         logger.info(f"Connecting to Copr API at {COPR_CONFIG['copr_url']} for project creation/update")
@@ -125,6 +126,7 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
             # make sure the chroot has access to corresponding buildroot repository
             logger.info(f"Connecting to Copr API to update chroot configuration for {chroot}")
             chroot_proxy = ProjectChrootProxy({"username": copr_user, **COPR_CONFIG})
+            bootstrap_image = f"registry.access.redhat.com/ubi{majorver}/ubi"
             if not (internal_repos_host := rhel_config.get("internal_repos_host")):
                 raise ToolError("Internal repos host not configured")
             buildroot_repo_url = urljoin(
@@ -139,6 +141,10 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                     chrootname=chroot,
                 )
                 kwargs = {}
+                if getattr(chroot_config, "bootstrap", None) != "image":
+                    kwargs["bootstrap"] = "image"
+                if getattr(chroot_config, "bootstrap_image", None) != bootstrap_image:
+                    kwargs["bootstrap_image"] = bootstrap_image
                 if buildroot_repo_url not in chroot_config.additional_repos:
                     kwargs["additional_repos"] = sorted(
                         set(chroot_config.additional_repos) | {buildroot_repo_url}
@@ -251,7 +257,7 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
         return (COPR_ARCHES - exclude_arches) & exclusive_arches
 
     @staticmethod
-    async def branch_to_chroot(dist_git_branch: str, upcoming_z_streams: dict[str, str]) -> str:
+    async def branch_to_chroot(dist_git_branch: str, upcoming_z_streams: dict[str, str]) -> tuple[str, str]:
         if not (m := re.match(r"^(?:c(\d+)s|rhel-(\d+)-main|rhel-(\d+)\.(\d+).*)$", dist_git_branch)):
             raise ValueError(f"Unsupported branch name: {dist_git_branch}")
         majorver, minorver = m.group(1) or m.group(2) or m.group(3), m.group(4)
@@ -265,8 +271,8 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
             suffix = ".dev"
         if not suffix:
             # use fully custom chroot for regular Z-Streams
-            return "custom-1"
-        return f"rhel-{majorver}{suffix}"
+            return "custom-1", majorver
+        return f"rhel-{majorver}{suffix}", majorver
 
 
 class DownloadArtifactsToolInput(BaseModel):

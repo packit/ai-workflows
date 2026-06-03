@@ -81,11 +81,15 @@ async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
         ownername=ownername,
         projectname=jira_issue,
         chrootname=chroot,
-    ).and_return(flexmock(additional_repos=[], additional_packages=[])).times(0 if suffix else 1)
+    ).and_return(
+        flexmock(additional_repos=[], additional_packages=[], bootstrap="default", bootstrap_image=None)
+    ).times(0 if suffix else 1)
     flexmock(ProjectChrootProxy).should_receive("edit").with_args(
         ownername=ownername,
         projectname=jira_issue,
         chrootname=chroot,
+        bootstrap="image",
+        bootstrap_image="registry.access.redhat.com/ubi10/ubi",
         additional_repos=[
             f"{internal_repos_host}/brewroot/repos/{dist_git_branch}-z-build/latest/{build_arch}",
         ],

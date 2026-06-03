@@ -39,6 +39,7 @@ from ymir.common.models import (
 )
 
 logger = logging.getLogger(__name__)
+redis_logger = logging.getLogger("agent.redis")
 
 
 async def main() -> None:
@@ -333,19 +334,19 @@ async def main() -> None:
             if container_version == "c9s"
             else RedisQueues.REBUILD_QUEUE_C10S.value
         )
-        logger.info(
+        redis_logger.info(
             f"Connected to Redis, max retries set to {max_retries}, listening to queue: {rebuild_queue}"
         )
 
         while True:
-            logger.info(f"Waiting for tasks from {rebuild_queue} (timeout: 30s)...")
+            redis_logger.info(f"Waiting for tasks from {rebuild_queue} (timeout: 30s)...")
             element = await fix_await(redis.brpop([rebuild_queue], timeout=30))
             if element is None:
-                logger.info("No tasks received, continuing to wait...")
+                redis_logger.info("No tasks received, continuing to wait...")
                 continue
 
             _, payload = element
-            logger.info("Received task from queue.")
+            redis_logger.info("Received task from queue.")
 
             try:
                 task = Task.model_validate_json(payload)

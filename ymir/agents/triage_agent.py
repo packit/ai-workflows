@@ -76,6 +76,7 @@ from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.version_mapper import VersionMapperTool
 
 logger = logging.getLogger(__name__)
+redis_logger = logging.getLogger("agent.redis")
 
 
 def _should_update_jira(silent_run: bool, resolution: Resolution = None) -> bool:
@@ -1254,17 +1255,17 @@ async def main() -> None:
     logger.info(f"Starting triage agent in queue mode (AUTO_CHAIN={'enabled' if auto_chain else 'disabled'})")
     async with redis_client(os.environ["REDIS_URL"]) as redis:
         max_retries = int(os.getenv("MAX_RETRIES", 3))
-        logger.info(f"Connected to Redis, max retries set to {max_retries}")
+        redis_logger.info(f"Connected to Redis, max retries set to {max_retries}")
 
         while True:
-            logger.info("Waiting for tasks from triage_queue (timeout: 30s)...")
+            redis_logger.info("Waiting for tasks from triage_queue (timeout: 30s)...")
             element = await fix_await(redis.brpop([RedisQueues.TRIAGE_QUEUE.value], timeout=30))
             if element is None:
-                logger.info("No tasks received, continuing to wait...")
+                redis_logger.info("No tasks received, continuing to wait...")
                 continue
 
             _, payload = element
-            logger.info("Received task from queue")
+            redis_logger.info("Received task from queue")
 
             task = Task.model_validate_json(payload)
             input = InputSchema.model_validate(task.metadata)

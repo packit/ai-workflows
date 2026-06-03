@@ -175,6 +175,7 @@ def init_sentry() -> None:
     import sentry_sdk
     from sentry_sdk.integrations.asyncio import AsyncioIntegration
     from sentry_sdk.integrations.litellm import LiteLLMIntegration
+    from sentry_sdk.integrations.logging import ignore_logger
 
     sentry_sdk.init(
         dsn=dsn,
@@ -191,3 +192,4 @@ def init_sentry() -> None:
             LiteLLMIntegration(),
         ],
     )
+    ignore_logger("agent.redis")

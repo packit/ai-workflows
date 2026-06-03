@@ -88,6 +88,7 @@ from ymir.tools.unprivileged.wicked_git import (
 )
 
 logger = logging.getLogger(__name__)
+redis_logger = logging.getLogger("agent.redis")
 
 
 BACKPORT_INSTRUCTIONS = """
@@ -1413,19 +1414,19 @@ async def main() -> None:
             if container_version == "c9s"
             else RedisQueues.BACKPORT_QUEUE_C10S.value
         )
-        logger.info(
+        redis_logger.info(
             f"Connected to Redis, max retries set to {max_retries}, listening to queue: {backport_queue}"
         )
 
         while True:
-            logger.info(f"Waiting for tasks from {backport_queue} (timeout: 30s)...")
+            redis_logger.info(f"Waiting for tasks from {backport_queue} (timeout: 30s)...")
             element = await fix_await(redis.brpop([backport_queue], timeout=30))
             if element is None:
-                logger.info("No tasks received, continuing to wait...")
+                redis_logger.info("No tasks received, continuing to wait...")
                 continue
 
             _, payload = element
-            logger.info("Received task from queue.")
+            redis_logger.info("Received task from queue.")
 
             task = Task.model_validate_json(payload)
             triage_state = task.metadata

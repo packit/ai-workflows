@@ -65,6 +65,7 @@ from ymir.tools.unprivileged.text import (
 )
 
 logger = logging.getLogger(__name__)
+redis_logger = logging.getLogger("agent.redis")
 
 
 def get_instructions() -> str:
@@ -526,19 +527,19 @@ async def main() -> None:
             if container_version == "c9s"
             else RedisQueues.REBASE_QUEUE_C10S.value
         )
-        logger.info(
+        redis_logger.info(
             f"Connected to Redis, max retries set to {max_retries}, listening to queue: {rebase_queue}"
         )
 
         while True:
-            logger.info(f"Waiting for tasks from {rebase_queue} (timeout: 30s)...")
+            redis_logger.info(f"Waiting for tasks from {rebase_queue} (timeout: 30s)...")
             element = await fix_await(redis.brpop([rebase_queue], timeout=30))
             if element is None:
-                logger.info("No tasks received, continuing to wait...")
+                redis_logger.info("No tasks received, continuing to wait...")
                 continue
 
             _, payload = element
-            logger.info("Received task from queue.")
+            redis_logger.info("Received task from queue.")
 
             task = Task.model_validate_json(payload)
             triage_state = task.metadata

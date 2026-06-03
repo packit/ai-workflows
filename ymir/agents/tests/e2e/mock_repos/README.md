@@ -4,12 +4,25 @@ This directory contains mock repo fixture files organized by agent type.
 The fixtures come from `git@gitlab.cee.redhat.com:jotnar-project/testing-jiras.git`
 if you have access.
 
-Clone the repository and symlink its `mock_data/` subdirectories here:
+Clone the repository and either:
 
-```bash
-ln -s /path/to/testing-jiras/mock_data/triage ymir/agents/tests/e2e/mock_repos/triage
-ln -s /path/to/testing-jiras/mock_data/backport ymir/agents/tests/e2e/mock_repos/backport
-```
+- **Run via compose (recommended):** set `TESTING_JIRAS_DIR` in your local `.env` to point
+  at the cloned repository root so compose mounts it into the container:
+  ```
+  TESTING_JIRAS_DIR=/path/to/testing-jiras
+  MOCK_REPOS_DIR=/testing-jiras/mock_data/triage
+  BACKPORT_MOCK_REPOS_DIR=/testing-jiras/mock_data/backport
+  ```
+
+- **Run directly on host:** symlink the `mock_data/` subdirectories here:
+  ```bash
+  ln -s /path/to/testing-jiras/mock_data/triage ymir/agents/tests/e2e/mock_repos/triage
+  ln -s /path/to/testing-jiras/mock_data/backport ymir/agents/tests/e2e/mock_repos/backport
+  ```
+
+> **Note:** Symlinks only work when running tests on the host. Podman bind
+> mounts do not follow symlinks pointing outside the mounted tree, so
+> containerized e2e tests require the compose-based approach.
 
 ## Expected layout
 

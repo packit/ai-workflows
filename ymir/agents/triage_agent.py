@@ -58,6 +58,7 @@ from ymir.common.models import (
 from ymir.common.models import (
     TriageOutputSchema as OutputSchema,
 )
+from ymir.common.utils import get_latest_candidate_build
 from ymir.common.version_utils import is_older_zstream, normalize_fix_version, parse_rhel_version
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 
@@ -961,10 +962,12 @@ async def run_workflow(
 
             patch_urls = getattr(data, "patch_urls", None) or []
 
-            # For z-stream branches, check if the branch actually exists;
-            # fall back to CentOS Stream for source analysis since we only
-            # need to read the source, not push to the branch.
+            # For z-stream branches, check if the branch actually exists.
+            # For older z-streams whose branch doesn't exist yet, resolve
+            # the base commit from Koji so we analyze the right source
+            # (not CentOS Stream, which may already contain the fix).
             clone_branch = state.target_branch
+            base_ref = None
             parsed = parse_rhel_version(state.target_branch)
             if parsed:
                 major_version = parsed[0]
@@ -975,11 +978,28 @@ async def run_workflow(
                         package=package,
                     )
                     if state.target_branch not in available_branches:
-                        clone_branch = f"c{major_version}s"
-                        logger.info(
-                            f"Branch {state.target_branch} not found for {package}, "
-                            f"using {clone_branch} for applicability analysis"
-                        )
+                        if await is_older_zstream(state.target_branch):
+                            try:
+                                _, base_ref = await get_latest_candidate_build(package, state.target_branch)
+                                logger.info(
+                                    f"Branch {state.target_branch} not found for {package}, "
+                                    f"using base ref {base_ref} for applicability analysis"
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Could not resolve base ref for {state.target_branch}: {e} — "
+                                    f"skipping applicability check"
+                                )
+                                state.applicability_check_skipped = True
+                                if state.triage_result.resolution == Resolution.REBUILD:
+                                    return "consolidate_rebuild_siblings"
+                                return "comment_in_jira"
+                        else:
+                            clone_branch = f"c{major_version}s"
+                            logger.info(
+                                f"Branch {state.target_branch} not found for {package}, "
+                                f"using {clone_branch} for applicability analysis"
+                            )
                 except Exception as e:
                     logger.warning(f"Failed to check branches for {package}: {e}")
 
@@ -989,6 +1009,7 @@ async def run_workflow(
                     dist_git_branch=clone_branch,
                     available_tools=gateway_tools,
                     jira_issue=state.jira_issue,
+                    ref=base_ref,
                 )
             except Exception as e:
                 logger.warning(f"Could not prep sources for applicability check: {e}")

@@ -457,6 +457,7 @@ async def clone_and_prep_sources(
     dist_git_branch: str,
     available_tools: list[Tool],
     jira_issue: str,
+    ref: str | None = None,
 ) -> tuple[Path, Path, bool]:
     """
     Clone dist-git repo and run centpkg/rhpkg sources + prep.
@@ -466,6 +467,10 @@ async def clone_and_prep_sources(
     Falls back to manual archive extraction if prep fails (e.g. missing
     language-specific RPM macros). When using the fallback, downstream
     patches are NOT applied — the source is pristine upstream.
+
+    When *ref* is provided (a commit SHA), the repo is cloned with all
+    refs and that specific commit is checked out.  This is used when the
+    target branch does not exist yet but we know the base commit from Koji.
     """
     working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "applicability" / jira_issue
     working_dir.mkdir(parents=True, exist_ok=True)
@@ -475,13 +480,24 @@ async def clone_and_prep_sources(
 
     namespace = "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
     repository = f"https://gitlab.com/redhat/{namespace}/rpms/{package}"
-    await run_tool(
-        "clone_repository",
-        repository=repository,
-        branch=dist_git_branch,
-        clone_path=str(local_clone),
-        available_tools=available_tools,
-    )
+    if ref:
+        await run_tool(
+            "clone_repository",
+            repository=repository,
+            clone_path=str(local_clone),
+            available_tools=available_tools,
+        )
+        exit_code, _, stderr = await run_subprocess(["git", "checkout", ref], cwd=local_clone)
+        if exit_code != 0:
+            raise RuntimeError(f"Failed to checkout ref {ref}: {stderr}")
+    else:
+        await run_tool(
+            "clone_repository",
+            repository=repository,
+            branch=dist_git_branch,
+            clone_path=str(local_clone),
+            available_tools=available_tools,
+        )
 
     await run_tool(
         "download_sources",

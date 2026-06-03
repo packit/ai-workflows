@@ -85,12 +85,9 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                         branch,
                     )
                 else:
-                    # ref is a commit SHA from the Koji build source URL (git+https://...#<sha>).
-                    # It may point to a commit on an older Z-stream branch (via tag inheritance)
-                    # which is expected — we're branching from the last known good build.
+                    _, ref = await get_latest_candidate_build(package, branch)
                     # The push can fail transiently due to bastion network issues; the beeai
                     # framework will retry the whole tool call in that case.
-                    _, ref = await get_latest_candidate_build(package, branch)
                     push_infos = await asyncio.to_thread(
                         repo.remotes.origin.push, f"{ref}:refs/heads/{branch}"
                     )

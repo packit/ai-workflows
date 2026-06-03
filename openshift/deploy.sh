@@ -97,7 +97,10 @@ apply deployment-rebuild-agent-c10s.yml
 apply imagestream-jira-issue-fetcher.yml
 import_image jira-issue-fetcher
 apply configmap-jira-issue-fetcher-env.yml
+apply configmap-jira-issue-fetcher-filter-env.yml
+apply configmap-jira-issue-fetcher-todo-env.yml
 apply cronjob-jira-issue-fetcher.yml
+apply cronjob-jira-issue-fetcher-todo.yml
 
 # # Supervisor
 # apply imagestream-supervisor.yml

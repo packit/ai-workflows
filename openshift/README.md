@@ -102,10 +102,20 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
 
 ## Jira Issue Fetcher Deployment
 
-Manually run jira issue fetcher:
+Two CronJobs run the fetcher with different JQL queries:
+
+| CronJob | Schedule | QUERY | ConfigMap |
+|---|---|---|---|
+| `jira-issue-fetcher` | `*/30 * * * *` | A generic filter for processing a batch of issues (e.g. early adopters) — currently `filter = "Ymir early adopters CVEs"` | `jira-issue-fetcher-filter-env` |
+| `jira-issue-fetcher-todo` | `*/5 * * * *` | `labels = "ymir_todo"` | `jira-issue-fetcher-todo-env` |
+
+Both share the common knobs (`IGNORED_COMPONENTS`, `MAX_ISSUES`, `LOGLEVEL`) from `jira-issue-fetcher-env`. Each pod mounts the shared configmap plus its per-cron QUERY configmap. To target a different batch, edit `configmap-jira-issue-fetcher-filter-env.yml` and re-apply.
+
+Manually run either fetcher:
 
 ```bash
-make run-jira-issue-fetcher
+make run-jira-issue-fetcher       # generic batch filter
+make run-jira-issue-fetcher-todo  # ymir_todo sweep
 ```
 
 ## Triggering the Pipeline Manually

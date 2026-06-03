@@ -1,12 +1,12 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: jira-issue-fetcher
+  name: jira-issue-fetcher-todo
   labels:
-    app: jira-issue-fetcher
+    app: jira-issue-fetcher-todo
     component: scheduler
 spec:
-  schedule: "*/30 * * * *"  # Every 30 minutes — runs the early-adopters filter
+  schedule: "*/5 * * * *"  # Every 5 minutes — picks up ymir_todo maintainer requests promptly
   concurrencyPolicy: Forbid  # Prevent overlapping runs
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
@@ -14,22 +14,22 @@ spec:
   jobTemplate:
     metadata:
       labels:
-        app: jira-issue-fetcher
+        app: jira-issue-fetcher-todo
         component: job
     spec:
       backoffLimit: 2
-      activeDeadlineSeconds: 600  # 10 minutes max runtime (cron is */30, must not overlap)
+      activeDeadlineSeconds: 240  # 4 minutes max runtime (cron is */5, must not overlap)
       template:
         metadata:
           labels:
-            app: jira-issue-fetcher
+            app: jira-issue-fetcher-todo
             component: pod
         spec:
           restartPolicy: Never
           containers:
           - name: jira-issue-fetcher-env
             image: 'jira-issue-fetcher:prod'
-            imagePullPolicy: IfNotPresent
+            imagePullPolicy: Always
             envFrom:
             - configMapRef:
                 name: endpoints-env
@@ -40,7 +40,7 @@ spec:
             - configMapRef:
                 name: jira-issue-fetcher-env
             - configMapRef:
-                name: jira-issue-fetcher-filter-env
+                name: jira-issue-fetcher-todo-env
             resources:
               limits:
                 cpu: "200m"

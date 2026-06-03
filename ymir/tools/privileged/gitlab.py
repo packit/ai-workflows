@@ -93,7 +93,7 @@ def _is_private_gitlab(url: str) -> bool:
         return False
     if parsed.path.startswith(_REDHAT_WEB_PREFIX) or parsed.path.startswith(_REDHAT_API_PREFIX):
         return True
-    fork_namespace = os.getenv("FORK_NAMESPACE")
+    fork_namespace = os.getenv("FORK_NAMESPACE", "").strip("/")
     return bool(fork_namespace and parsed.path.startswith(f"/{fork_namespace}/"))
 
 

@@ -22,6 +22,7 @@ from ymir.tools.privileged.gitlab import (
     OpenMergeRequestTool,
     PushToRemoteRepositoryTool,
     RetryPipelineJobTool,
+    _get_git_auth_args,
 )
 
 
@@ -80,6 +81,49 @@ async def test_fork_repository(repository, fork_exists, fork_namespace):
         )
     )
     assert (await ForkRepositoryTool().run(input={"repository": repository})).result == clone_url
+
+
+@pytest.mark.parametrize(
+    "url, fork_namespace, token, expect_auth",
+    [
+        # Red Hat group on gitlab.com — always needs auth when token present
+        ("https://gitlab.com/redhat/centos-stream/rpms/vim", None, "tok", True),
+        # gitlab.cee.redhat.com — always needs auth when token present
+        ("https://gitlab.cee.redhat.com/foo/bar", None, "tok", True),
+        # Fork URL under bot namespace, FORK_NAMESPACE configured — needs auth
+        (
+            "https://gitlab.com/redhat-ymir-agent/centos_rpms_vim.git",
+            "redhat-ymir-agent",
+            "tok",
+            True,
+        ),
+        # Same fork URL but FORK_NAMESPACE not set — must NOT inject auth
+        # (would leak token to unrelated gitlab.com namespace)
+        ("https://gitlab.com/redhat-ymir-agent/centos_rpms_vim.git", None, "tok", False),
+        # Unrelated gitlab.com namespace with FORK_NAMESPACE set — still no auth
+        ("https://gitlab.com/some-other-user/repo.git", "redhat-ymir-agent", "tok", False),
+        # Public github.com — never auth
+        ("https://github.com/vim/vim", None, "tok", False),
+        # No token configured — no auth even for Red Hat URLs
+        ("https://gitlab.com/redhat/centos-stream/rpms/vim", None, None, False),
+    ],
+)
+def test_get_git_auth_args_handles_fork_namespace(monkeypatch, url, fork_namespace, token, expect_auth):
+    """Forks under FORK_NAMESPACE on gitlab.com must get the GITLAB_TOKEN injected for git push."""
+    monkeypatch.delenv("FORK_NAMESPACE", raising=False)
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    if fork_namespace:
+        monkeypatch.setenv("FORK_NAMESPACE", fork_namespace)
+    if token:
+        monkeypatch.setenv("GITLAB_TOKEN", token)
+
+    args = _get_git_auth_args(url)
+    if expect_auth:
+        assert len(args) == 2
+        assert args[0] == "-c"
+        assert args[1].startswith("http.extraheader=Authorization: Basic ")
+    else:
+        assert args == []
 
 
 @pytest.mark.asyncio

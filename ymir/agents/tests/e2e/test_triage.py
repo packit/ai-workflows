@@ -199,7 +199,7 @@ def mock_centos_stream_repos(tmp_path_factory):
     Yields:
         Control to the test session after repos are prepared.
     """
-    fixtures_dir = os.getenv("MOCK_REPOS_DIR", str(DEFAULT_FIXTURES_DIR))
+    fixtures_dir = os.getenv("MOCK_REPOS_DIR") or str(DEFAULT_FIXTURES_DIR)
     configs = load_all_fixture_configs(fixtures_dir)
 
     if git_repo_basepath := os.getenv("GIT_REPO_BASEPATH"):

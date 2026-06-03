@@ -91,7 +91,7 @@ def _load_test_cases(fixtures_dir: str | Path) -> list[BackportAgentTestCase]:
     return cases
 
 
-test_cases = _load_test_cases(os.getenv("BACKPORT_MOCK_REPOS_DIR", str(DEFAULT_FIXTURES_DIR)))
+test_cases = _load_test_cases(os.getenv("BACKPORT_MOCK_REPOS_DIR") or str(DEFAULT_FIXTURES_DIR))
 
 
 _span_processor = None
@@ -131,7 +131,7 @@ def mock_centos_stream_repos():
     Yields:
         Control to the test session after repos are prepared.
     """
-    fixtures_dir = os.getenv("BACKPORT_MOCK_REPOS_DIR", str(DEFAULT_FIXTURES_DIR))
+    fixtures_dir = os.getenv("BACKPORT_MOCK_REPOS_DIR") or str(DEFAULT_FIXTURES_DIR)
     configs = load_all_fixture_configs(fixtures_dir)
 
     if SHARED_BARE_REPOS_DIR.exists():
@@ -166,7 +166,7 @@ def _load_reference_patch(test_case: "BackportAgentTestCase") -> str | None:
     ref_patch_rel = test_case.expected.get("reference_patch")
     if not ref_patch_rel:
         return None
-    fixtures_dir = Path(os.getenv("BACKPORT_MOCK_REPOS_DIR", str(DEFAULT_FIXTURES_DIR)))
+    fixtures_dir = Path(os.getenv("BACKPORT_MOCK_REPOS_DIR") or str(DEFAULT_FIXTURES_DIR))
     ref_patch_path = fixtures_dir / ref_patch_rel
     if ref_patch_path.is_file():
         return ref_patch_path.read_text()

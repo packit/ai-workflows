@@ -10,6 +10,18 @@ Clone the repository and set `MOCK_REPOS_HOST` in your `.env`:
 MOCK_REPOS_HOST=/path/to/testing-jiras/mock_data
 ```
 
+It is recommended to run the E2E tests via compose.
+
+You can also symlink the `mock_data/` subdirectories here for running tests on the host:
+```bash
+ln -s /path/to/testing-jiras/mock_data/triage ymir/agents/tests/e2e/mock_repos/triage
+ln -s /path/to/testing-jiras/mock_data/backport ymir/agents/tests/e2e/mock_repos/backport
+```
+
+> **Note:** Symlinks only work when running tests on the host. Podman bind
+> mounts do not follow symlinks pointing outside the mounted tree, so
+> containerized e2e tests require the compose-based approach.
+
 This mounts the fixture data into E2E test containers at `/home/beeai/mock_repos/`.
 The compose services set `MOCK_REPOS_DIR` and `BACKPORT_MOCK_REPOS_DIR` to point
 at the `triage/` and `backport/` subdirectories respectively.

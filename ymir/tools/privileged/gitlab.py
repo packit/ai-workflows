@@ -91,7 +91,10 @@ def _is_private_gitlab(url: str) -> bool:
         return True
     if hostname != "gitlab.com":
         return False
-    return parsed.path.startswith(_REDHAT_WEB_PREFIX) or parsed.path.startswith(_REDHAT_API_PREFIX)
+    if parsed.path.startswith(_REDHAT_WEB_PREFIX) or parsed.path.startswith(_REDHAT_API_PREFIX):
+        return True
+    fork_namespace = os.getenv("FORK_NAMESPACE")
+    return bool(fork_namespace and parsed.path.startswith(f"/{fork_namespace}/"))
 
 
 def _get_api_diff_url(url: str) -> str:

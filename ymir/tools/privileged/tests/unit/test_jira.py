@@ -678,7 +678,7 @@ async def test_eligibility_ystream_any_clone_shipped():
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
     assert result["eligibility"] == TriageEligibility.IMMEDIATELY
-    assert result["needs_internal_fix"] is True
+    assert result["needs_internal_fix"] is False
 
 
 @pytest.mark.asyncio

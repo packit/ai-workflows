@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from ymir.agents.observability import setup_observability
 from ymir.agents.triage_agent import TriageState, create_triage_agent, run_workflow
 from ymir.common.mock_repos import (
     apply_zstream_override,
+    cleanup_mock_gitconfig,
     load_all_fixture_configs,
     setup_mock_repos,
 )
@@ -28,7 +30,6 @@ class TriageAgentTestCase:
         self.metrics: dict = None
         self.finished_state: TriageState | None = None
         self.error: BaseException | None = None
-        self.git_env: dict | None = None
         self.zstream_override: dict[str, str] | None = None
 
     async def run(self) -> None:
@@ -37,8 +38,7 @@ class TriageAgentTestCase:
 
         metrics_middleware = MetricsMiddleware()
 
-        def testing_factory(gateway_tools):
-            local_tool_options = {"env": self.git_env} if self.git_env else None
+        def testing_factory(gateway_tools, local_tool_options=None):
             triage_agent = create_triage_agent(gateway_tools, local_tool_options)
             triage_agent.middlewares.append(metrics_middleware)
             return triage_agent
@@ -162,34 +162,44 @@ def observability_fixture():
 def mock_centos_stream_repos(tmp_path_factory):
     """Clone CentOS Stream RPM repos at pre-fix state for each test case.
 
-    Fixture configs are loaded from ``MOCK_REPOS_DIR`` (env var) or the
-    ``mock_repos/`` directory next to this test file. Each bare clone has its
-    branch ref rewound to the pre-fix commit. A per-test-case env dict is
-    built with ``GIT_CONFIG_COUNT`` / ``GIT_CONFIG_KEY_*`` /
-    ``GIT_CONFIG_VALUE_*`` so that git's ``insteadOf`` URL rewriting
-    transparently redirects the agent's git commands to the local clone.
+    Bare clones are placed on the shared ``/git-repos/`` volume so that
+    both the test container and the MCP gateway can access them.
+
+    For each issue, ``setup_mock_repos`` writes a per-issue gitconfig
+    (``.mock_gitconfig_{issue_key}``) as well as a shared
+    ``.mock_gitconfig``.  The MCP gateway scopes ``GIT_CONFIG_GLOBAL``
+    to the per-issue file via ``_meta`` on each ``call_tool`` request,
+    so concurrent test cases using the same remote URL at different
+    commits get the correct bare clone.
 
     Yields:
         Control to the test session after repos are prepared.
     """
     fixtures_dir = os.getenv("MOCK_REPOS_DIR", str(DEFAULT_FIXTURES_DIR))
     configs = load_all_fixture_configs(fixtures_dir)
-    repo_dir = tmp_path_factory.mktemp("centos_stream_repos")
+
+    if git_repo_basepath := os.getenv("GIT_REPO_BASEPATH"):
+        repo_dir = Path(git_repo_basepath) / "e2e_mock_clones"
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        repo_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        repo_dir = tmp_path_factory.mktemp("centos_stream_repos")
 
     for issue_key, config in configs.items():
         repos = config.get("repos", [])
         if not repos:
             continue
 
-        git_env = setup_mock_repos(repos, issue_key, repo_dir)
+        setup_mock_repos(repos, issue_key, repo_dir)
 
         for tc in test_cases:
             if tc.input == issue_key:
-                tc.git_env = git_env
                 tc.zstream_override = config.get("zstream_override")
                 break
 
     yield
+
+    cleanup_mock_gitconfig()
 
 
 @pytest.fixture(scope="session", autouse=True)

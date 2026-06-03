@@ -26,6 +26,7 @@ location.
 | Triage | `agents_as_skills/triage/` | Triage CVE/bug JIRA issues for RHEL packages |
 | Rebuild | `agents_as_skills/rebuild/` | Rebuild a package in the build system |
 | Preliminary Testing | `agents_as_skills/preliminary_testing/` | Run preliminary tests on a package |
+| Issue Verification | `agents_as_skills/issue_verification/` | Issue verification agent (post-fix lifecycle management) |
 
 ### Claude Code
 
@@ -63,7 +64,7 @@ applies:
 REPO_URL="https://raw.githubusercontent.com/packit/ai-workflows/main/agents_as_skills"
 
 # Install all skills at once
-for skill in backport rebase triage rebuild preliminary_testing; do
+for skill in backport rebase triage rebuild preliminary_testing issue_verification; do
   mkdir -p ~/.cursor/skills-cursor/"$skill"
   curl -fsSL "$REPO_URL/$skill/SKILL.md" -o ~/.cursor/skills-cursor/"$skill"/SKILL.md
 done
@@ -169,6 +170,7 @@ to the directory that contains this file.
 | `UPSTREAM_SEARCH_API_URL` | **Yes** | Base URL of the upstream search service (provides `/find_repository` and `/find_commit` endpoints). |
 | `MCP_GATEWAY_URL` | No | SSE URL of a running privileged gateway. See the note on cross-gateway calls below. |
 | `DEBUG_FILE` | No | Path to a log file. When set, gateway logs are written to this file in addition to stderr. Useful for debugging local installations. |
+| `REQUESTS_CA_BUNDLE` | No | Path to a Certificate Authority (CA) bundle, if additional or custom ones are required for workflow services. |
 
 ## 4. Configure Claude Code
 
@@ -192,6 +194,7 @@ claude mcp add ymir-privileged \
 claude mcp add ymir-unprivileged \
   --env MCP_TRANSPORT=stdio \
   --env UPSTREAM_SEARCH_API_URL=http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1 \
+  --env REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt \
   -- "$VENV/bin/ymir-unprivileged-gateway"
 ```
 
@@ -222,7 +225,8 @@ Replace `<your-home>` with the absolute path to your home directory
       "command": "<your-home>/.local/share/ymir-venv/bin/ymir-unprivileged-gateway",
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "UPSTREAM_SEARCH_API_URL": "http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1"
+        "UPSTREAM_SEARCH_API_URL": "http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1",
+        "REQUESTS_CA_BUNDLE": "/etc/pki/tls/certs/ca-bundle.crt"
       }
     }
   }
@@ -230,9 +234,10 @@ Replace `<your-home>` with the absolute path to your home directory
 ```
 
 For project-scoped configuration, place the same `mcpServers` block in
-`.claude/settings.json` inside your project directory instead.
+`.claude/settings.json` inside your project directory instead. If that
+does not work for you, use the `.mcp.json` at the root of your project.
 
-### Optional: Kerberos keytab
+### Note: Kerberos keytab
 
 If you use a keytab for automated Kerberos authentication, add `KEYTAB_FILE`
 to the privileged server's `env`:
@@ -243,6 +248,9 @@ to the privileged server's `env`:
 
 Without a keytab, you must run `kinit` manually before launching Claude Code
 so that a valid ticket exists in the cache pointed to by `KRB5CCNAME`.
+
+If you are using `KEYRING` credential cache (used by Kerberos by default),
+you do not need to set `KRB5CCNAME`. All you need is a successful `kinit`.
 
 ## 5. Verify the setup
 

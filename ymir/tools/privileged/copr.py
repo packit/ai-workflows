@@ -23,7 +23,7 @@ from ymir.common import load_rhel_config
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket
 from ymir.common.validators import AbsolutePath
 from ymir.tools.base import CloneableTool as Tool
-from ymir.tools.constants import AIOHTTP_TIMEOUT
+from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 
 COPR_CONFIG = {
     "copr_url": "https://copr.devel.redhat.com",
@@ -298,7 +298,9 @@ class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, Str
     ) -> StringToolOutput:
         artifacts_urls = tool_input.artifacts_urls
         target_path = tool_input.target_path
-        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+        async with aiohttp.ClientSession(
+            timeout=AIOHTTP_TIMEOUT, headers={"User-Agent": YMIR_USER_AGENT}
+        ) as session:
             for url in artifacts_urls:
                 logger.info(f"Downloading build artifact from: {url}")
                 try:

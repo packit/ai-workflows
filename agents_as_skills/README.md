@@ -11,33 +11,32 @@ This directory contains Ymir workflows packaged as **AI coding assistant skills*
 | **Rebase** | [`rebase/`](rebase/) | Rebase a package to a new upstream version |
 | **Rebuild** | [`rebuild/`](rebuild/) | Rebuild a package in the build system |
 | **Preliminary Testing** | [`preliminary_testing/`](preliminary_testing/) | Analyze gating and OSCI results to determine preliminary testing status |
+| **Issue Verification** | [`issue_verification/`](issue_verification/) | Issue verification agent (post-fix lifecycle management) |
 
 ## Installation
 
 For installation instructions (skill setup and MCP tool configuration), see the [Skills Installation Guide](https://github.com/packit/ai-workflows/blob/main/skills_installation.md).
 
-## Available skills
+## How to use
 
-- `backport/` — Backport fix agent
-- `preliminary_testing/` — Preliminary testing agent
-- `rebase/` — Rebase fix agent
-- `rebuild/` — Rebuild agent
-- `triage/` — Triage agent
-- `issue_verification/` — Issue verification agent (post-fix lifecycle management)
+Triage JIRA issue:
 
-## Available skills
+```
+Use the triage skill with jira_issue=RHEL-12345
+```
 
-- `backport/` — Backport fix agent
-- `preliminary_testing/` — Preliminary testing agent
-- `rebase/` — Rebase fix agent
-- `rebuild/` — Rebuild agent
-- `triage/` — Triage agent
-- `issue_verification/` — Issue verification agent (post-fix lifecycle management)
+Backport JIRA issue:
+
+```
+Use the backport skill with jira_issue=RHEL-12345
+```
+
+Set the `DRY_RUN` environment variable or add `dry_run=true` to your prompt to avoid any updates (e.g., updating JIRA, GitLab, etc.) when executing the workflow.
 
 ## How to build
 
 ```bash
-claude --model claude-opus-4-6 --effort high "Please take a look at the BeeAI workflows implemented in agents directory. Please convert Workflow in {workflow_file} to Claude skill and save that skill to agents_as_skills directory.
+claude --model claude-opus-4-6 --effort high "Take a look at the BeeAI workflows implemented in agents directory. Convert Workflow in {workflow_file} to Claude skill and save that skill to agents_as_skills directory.
 Restrictions:
  - Pay attention to tools used by the workflow and do not omit them
  - Do not restrict tools that the skill can use

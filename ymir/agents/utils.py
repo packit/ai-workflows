@@ -9,7 +9,10 @@ from beeai_framework.template import PromptTemplate
 from pydantic import BaseModel
 
 from ymir.common.base_utils import check_subprocess, run_subprocess  # noqa: F401 — re-exported
-from ymir.common.mock_repos import apply_zstream_override_from_env, setup_mock_repos_from_env
+from ymir.common.mock_repos import (
+    apply_zstream_override_from_env,
+    setup_mock_repos_from_env,
+)
 from ymir.common.utils import get_absolute_path, mcp_tools, run_tool  # noqa: F401 — re-exported
 
 logger = logging.getLogger(__name__)
@@ -119,12 +122,14 @@ def set_litellm_debug() -> None:
 def build_agent_factory_with_mock_repos(
     agent_factory: Callable[[list, dict[str, Any] | None], Any], jira_issue: str
 ) -> Callable[[list, dict[str, Any] | None], Any]:
-    """Wrap an agent factory with mock repo support when configured.
+    """Prepare mock repos for the standalone agent path.
 
-    If ``MOCK_REPOS_DIR`` is set, prepares mock repos and returns a factory
-    that injects the resulting ``git_env`` into ``local_tool_options``.
-    Also applies ``MOCK_ZSTREAMS`` (standalone env-var) and any per-issue
-    ``zstream_override`` found in the config file.
+    If ``MOCK_REPOS_DIR`` is set, prepares bare clones and writes
+    ``insteadOf`` rewrites to both the shared ``.mock_gitconfig`` and a
+    per-issue file.  The agent container picks up the shared file via
+    ``include.path`` in its global gitconfig; the MCP gateway uses the
+    per-issue file scoped through ``_meta`` (see ``_get_mock_git_env``
+    in ``ymir/tools/privileged/gitlab.py``).
 
     Args:
         agent_factory: The original agent factory callable
@@ -132,8 +137,8 @@ def build_agent_factory_with_mock_repos(
         jira_issue: The Jira issue key (e.g. ``RHEL-15216``).
 
     Returns:
-        The original factory unchanged when mocking is not configured,
-        or a wrapper that injects mock ``git_env``.
+        The original factory unchanged (mock repos are visible through
+        gitconfig files, no per-tool env injection needed).
     """
     apply_zstream_override_from_env()
 
@@ -143,10 +148,7 @@ def build_agent_factory_with_mock_repos(
 
     logger.info("Mock repos configured for %s via MOCK_REPOS_DIR", jira_issue)
 
-    def _factory(gateway_tools, local_tool_options=None):
-        return agent_factory(gateway_tools, {"env": git_env})
-
-    return _factory
+    return agent_factory
 
 
 def format_mr_justification(justification: str | None) -> str:
@@ -162,3 +164,30 @@ def format_mr_justification(justification: str | None) -> str:
     if justification:
         return f"Triage Decision Justification:\n{justification}\n\n"
     return ""
+
+
+def init_sentry() -> None:
+    """Initialize Sentry, if the DSN is set."""
+    if not (dsn := os.getenv("SENTRY_DSN")):
+        # no DSN, no reporting
+        return
+
+    import sentry_sdk
+    from sentry_sdk.integrations.asyncio import AsyncioIntegration
+    from sentry_sdk.integrations.litellm import LiteLLMIntegration
+
+    sentry_sdk.init(
+        dsn=dsn,
+        enable_logs=True,
+        # Set traces_sample_rate to 1.0 to capture 100%
+        # of transactions for tracing.
+        traces_sample_rate=1.0,
+        # Add data like inputs and responses;
+        # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
+        stream_gen_ai_spans=True,
+        send_default_pii=True,
+        integrations=[
+            AsyncioIntegration(),
+            LiteLLMIntegration(),
+        ],
+    )

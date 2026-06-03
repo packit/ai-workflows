@@ -3,7 +3,6 @@ import logging
 import re
 from pathlib import Path
 
-import koji
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import (
@@ -23,9 +22,8 @@ from specfile.value_parser import (
     ValueParser,
 )
 
-from ymir.common.utils import get_absolute_path
+from ymir.common.utils import get_absolute_path, get_latest_candidate_build
 from ymir.tools.base import CloneableTool as Tool
-from ymir.tools.constants import BREWHUB_URL
 
 logger = logging.getLogger(__name__)
 
@@ -248,38 +246,6 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         return m.group("prefix") + str(min(y + 1, 10)) + suffix
 
     @staticmethod
-    async def _get_latest_candidate_build(package: str, branch: str) -> EVR:
-        candidate_tags = {branch + "-candidate", branch + "-z-candidate"}
-
-        def get_latest_build(tag):
-            builds = koji.ClientSession(BREWHUB_URL).listTagged(
-                package=package,
-                tag=tag,
-                latest=True,
-                inherit=True,
-                strict=False,
-            )
-            if not builds:
-                return None
-            [build] = builds
-            return EVR(
-                epoch=build["epoch"] or 0,
-                version=build["version"],
-                release=build["release"],
-            )
-
-        results = await asyncio.gather(
-            *(asyncio.to_thread(get_latest_build, tag) for tag in candidate_tags),
-        )
-        latest: EVR | None = None
-        for result in results:
-            if result is not None and (latest is None or latest < result):
-                latest = result
-        if latest is None:
-            raise RuntimeError(f"There are no builds of {package} corresponding to {branch}")
-        return latest
-
-    @staticmethod
     def _find_macro(name: str, nodes: list[Node]) -> int | None:
         for index, node in reversed(list(enumerate(nodes))):
             if isinstance(node, (MacroSubstitution, EnclosedMacroSubstitution)) and node.name == name:
@@ -348,9 +314,9 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                     return 0
             return 0
 
-        latest_current_stream_build, latest_higher_stream_build = await asyncio.gather(
-            cls._get_latest_candidate_build(package, current_stream_branch),
-            cls._get_latest_candidate_build(package, higher_stream_branch),
+        (latest_current_stream_build, _), (latest_higher_stream_build, _) = await asyncio.gather(
+            get_latest_candidate_build(package, current_stream_branch),
+            get_latest_candidate_build(package, higher_stream_branch),
         )
         base_build = (
             latest_current_stream_build

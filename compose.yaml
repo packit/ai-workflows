@@ -108,7 +108,7 @@ services:
       - .secrets/mcp-gateway.env
     volumes:
       - ./ymir/tools:/home/mcp/ymir/tools:ro,z
-      - ./ymir/tools/privileged/tests/data:/home/mcp/ymir/tools/privileged/tests/data:rw,z
+      - ${JIRA_MOCK_FILES_HOST:-./ymir/tools/privileged/tests/data}:/home/mcp/ymir/tools/privileged/tests/data:rw,z
       - ./ymir/common:/home/mcp/ymir/common:ro,z
       - .secrets/keytab:/home/mcp/keytab:ro,z,U
       - git-repos:/git-repos

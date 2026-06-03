@@ -32,6 +32,7 @@ from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
+    init_sentry,
     is_reasoning_enabled,
     mcp_tools,
     render_prompt,
@@ -39,6 +40,8 @@ from ymir.agents.utils import (
 )
 from ymir.common.base_utils import fix_await, is_cs_branch, redis_client
 from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.logging_setup import configure_logging
+from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     BuildInputSchema,
     BuildOutputSchema,
@@ -215,7 +218,9 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
 
 
 async def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    init_sentry()
+
+    configure_logging(level=logging.INFO)
     resolve_chat_model_override("rebase")
 
     span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
@@ -223,7 +228,7 @@ async def main() -> None:
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
 
-    local_tool_options = {"working_directory": None}
+    local_tool_options: dict[str, Any] = {"working_directory": None}
 
     class State(PackageUpdateState):
         version: str
@@ -239,8 +244,12 @@ async def main() -> None:
         package, dist_git_branch, version, jira_issue, justification=None, redis_conn=None
     ):
         local_tool_options["working_directory"] = None
+        if mock_env := get_mock_local_tool_env(jira_issue):
+            local_tool_options["env"] = mock_env
 
-        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+        async with mcp_tools(
+            os.environ["MCP_GATEWAY_URL"], call_meta={"jira_issue": jira_issue}
+        ) as gateway_tools:
             rebase_agent = create_rebase_agent(gateway_tools, local_tool_options)
             build_agent = create_build_agent(gateway_tools, local_tool_options)
             log_agent = create_log_agent(gateway_tools, local_tool_options)

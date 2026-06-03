@@ -9,7 +9,7 @@ from beeai_framework.tools import StringToolOutput, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.tools.base import CloneableTool as Tool
-from ymir.tools.constants import AIOHTTP_TIMEOUT
+from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 
 TESTING_FARM_ARTIFACTS_URL = "https://artifacts.osci.redhat.com/testing-farm"
 
@@ -54,7 +54,9 @@ class FetchGreenWaveTool(Tool[FetchGreenWaveInput, ToolRunOptions, StringToolOut
 
         try:
             async with (
-                aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
+                aiohttp.ClientSession(
+                    timeout=AIOHTTP_TIMEOUT, headers={"User-Agent": YMIR_USER_AGENT}
+                ) as session,
                 session.get(url) as response,
             ):
                 if response.status == 200:

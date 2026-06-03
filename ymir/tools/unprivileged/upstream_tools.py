@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from ymir.common.base_utils import run_subprocess
 from ymir.common.validators import AbsolutePath
 from ymir.tools.base import CloneableTool as Tool
-from ymir.tools.constants import AIOHTTP_TIMEOUT
+from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 
 
 class ExtractUpstreamRepositoryInput(BaseModel):
@@ -112,7 +112,7 @@ class ExtractUpstreamRepositoryTool(
 
                 headers = {
                     "Accept": "application/json",
-                    "User-Agent": "RHEL-Backport-Agent",
+                    "User-Agent": YMIR_USER_AGENT,
                 }
 
                 try:
@@ -163,7 +163,7 @@ class ExtractUpstreamRepositoryTool(
                 # Fetch compare information to get the list of commits
                 headers = {
                     "Accept": "application/json",
-                    "User-Agent": "RHEL-Backport-Agent",
+                    "User-Agent": YMIR_USER_AGENT,
                 }
                 commits = []
                 commit_hash = target_ref

@@ -30,6 +30,27 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   TESTING_FARM_API_TOKEN
   ```
 
+  `sentry-env`:
+  ```
+  SENTRY_DSN
+  ```
+
+  `log-detective-env`:
+  ```
+  LOG_DETECTIVE_TOKEN
+  LOG_DETECTIVE_URL
+  ```
+  Values from Bitwarden - jotnar group - Log Detective Production Credentials (token = password field, URL = notes field).
+  ```bash
+  # Add to .secrets/beeai-agent.env (values from Bitwarden, see above):
+  #   LOG_DETECTIVE_TOKEN=<password field>
+  #   LOG_DETECTIVE_URL=<notes field>
+  source .secrets/beeai-agent.env
+  oc create secret generic log-detective-env \
+    --from-literal=LOG_DETECTIVE_TOKEN=$LOG_DETECTIVE_TOKEN \
+    --from-literal=LOG_DETECTIVE_URL=$LOG_DETECTIVE_URL
+  ```
+
   Values of these secrets are documented in [README](https://github.com/packit/jotnar?tab=readme-ov-file#service-accounts--authentication).
 
 - Create RHEL configuration ConfigMap manually:

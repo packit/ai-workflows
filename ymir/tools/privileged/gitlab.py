@@ -16,6 +16,7 @@ from beeai_framework.tools import (
     ToolError,
     ToolRunOptions,
 )
+from mcp.server.lowlevel.server import request_ctx
 from ogr.exceptions import GitlabAPIException, OgrException
 from ogr.factory import get_project
 from ogr.services.gitlab.project import GitlabProject
@@ -31,7 +32,7 @@ from ymir.common.models import (
 )
 from ymir.common.validators import AbsolutePath
 from ymir.tools.base import CloneableTool as Tool
-from ymir.tools.constants import AIOHTTP_TIMEOUT
+from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.tools.privileged.utils import clean_stale_repositories
 
 logger = logging.getLogger(__name__)
@@ -46,24 +47,39 @@ _REDHAT_WEB_PREFIX = "/redhat/"
 _REDHAT_API_PREFIX = "/api/v4/projects/redhat%2F"
 
 
-def _has_mock_url_rewrites() -> bool:
-    """Check whether git is configured with ``insteadOf`` URL rewrites.
+def _get_mock_git_env() -> dict[str, str] | None:
+    """Build a subprocess ``env`` that scopes ``GIT_CONFIG_GLOBAL`` to the
+    per-issue gitconfig when the MCP request carries a ``jira_issue`` in
+    its ``_meta``.
 
-    Rewrites can be provided via ``GIT_CONFIG_COUNT``/``GIT_CONFIG_KEY_*``
-    env vars (used by local tools) or via ``GIT_CONFIG_GLOBAL`` pointing
-    to a gitconfig file (used when the MCP gateway shares a volume with the
-    test runner).
-
-    Returns:
-        True when either mechanism is active.
+    Falls back to ``None`` (inherit process env) when no per-issue
+    gitconfig exists or when the request has no metadata.
     """
     try:
-        if int(os.getenv("GIT_CONFIG_COUNT", "0")) > 0:
-            return True
-    except ValueError:
-        pass
-    global_cfg = os.getenv("GIT_CONFIG_GLOBAL", "")
-    return bool(global_cfg) and Path(global_cfg).is_file()
+        ctx = request_ctx.get()
+        meta = ctx.meta
+    except LookupError:
+        return None
+
+    if meta is None:
+        return None
+
+    issue_key = getattr(meta, "jira_issue", None)
+    if not issue_key:
+        extra = getattr(meta, "__pydantic_extra__", None) or {}
+        issue_key = extra.get("jira_issue")
+    if not issue_key:
+        return None
+
+    base = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos"))
+    per_issue = base / f".mock_gitconfig_{issue_key}"
+    if not per_issue.is_file():
+        return None
+
+    env = os.environ.copy()
+    env["GIT_CONFIG_GLOBAL"] = str(per_issue)
+    logger.debug("Using per-issue gitconfig for %s: %s", issue_key, per_issue)
+    return env
 
 
 def _is_private_gitlab(url: str) -> bool:
@@ -99,22 +115,33 @@ def _get_api_diff_url(url: str) -> str:
 
 
 def _get_auth_headers(url: str) -> dict[str, str]:
-    """Return PRIVATE-TOKEN header if *url* points to a private Red Hat GitLab project."""
+    """Return headers for requests; always includes User-Agent, adds PRIVATE-TOKEN for private GitLab."""
+    headers: dict[str, str] = {"User-Agent": YMIR_USER_AGENT}
     if _is_private_gitlab(url):
         token = os.getenv("GITLAB_TOKEN")
         if token:
-            return {"PRIVATE-TOKEN": token}
-    return {}
+            headers["PRIVATE-TOKEN"] = token
+    return headers
 
 
-def _get_authenticated_url(repository_url: str) -> str:
+def _get_git_auth_args(repository_url: str) -> list[str]:
+    """Return ``git -c`` args that authenticate via ``PRIVATE-TOKEN`` header.
+
+    Uses the same ``_is_private_gitlab`` guard as ``_get_auth_headers``
+    so the token is never sent to unrelated hosts.  Passing auth via
+    ``http.extraheader`` keeps the URL clean, which lets ``insteadOf``
+    rewrites (mock repos) work without special-casing.
+
+    Args:
+        repository_url: The git remote URL to authenticate against.
+
+    Returns:
+        A list of ``-c http.extraheader=…`` args for private Red Hat
+        GitLab repos, or an empty list otherwise.
     """
-    Helper function to add GitLab token authentication to repository URLs.
-    """
-    if token := os.getenv("GITLAB_TOKEN"):
-        url = urlparse(repository_url)
-        return url._replace(netloc=f"oauth2:{token}@{url.hostname}").geturl()
-    return repository_url
+    if _is_private_gitlab(repository_url) and (token := os.getenv("GITLAB_TOKEN")):
+        return ["-c", f"http.extraheader=PRIVATE-TOKEN: {token}"]
+    return []
 
 
 async def _get_merge_request_from_url(merge_request_url: str) -> GitlabPullRequest:
@@ -425,29 +452,29 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
         clone_path = tool_input.clone_path
         await clean_stale_repositories()
 
-        # When GIT_CONFIG_* env vars define insteadOf rewrites (mock repos),
-        # pass the original URL so git applies the rewrite itself.
-        # Otherwise embed the auth token in the URL as usual.
-        clone_url = repository if _has_mock_url_rewrites() else _get_authenticated_url(repository)
+        auth_args = _get_git_auth_args(repository)
+        git_env = _get_mock_git_env()
 
         clone_path.mkdir(parents=True, exist_ok=True)
 
         if branch:
-            proc = await asyncio.create_subprocess_exec("git", "init", cwd=clone_path)
+            proc = await asyncio.create_subprocess_exec("git", "init", cwd=clone_path, env=git_env)
             if await proc.wait():
                 raise ToolError(f"Failed to initialize git repo at {clone_path}")
 
-            command = ["git", "fetch", clone_url, f"{branch}:refs/heads/{branch}"]
-            proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
+            command = ["git", *auth_args, "fetch", repository, f"{branch}:refs/heads/{branch}"]
+            proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path, env=git_env)
             if await proc.wait():
                 raise ToolError(f"Failed to fetch {branch} from {repository}")
 
-            proc = await asyncio.create_subprocess_exec("git", "checkout", branch, cwd=clone_path)
+            proc = await asyncio.create_subprocess_exec(
+                "git", "checkout", branch, cwd=clone_path, env=git_env
+            )
             if await proc.wait():
                 raise ToolError(f"Failed to checkout branch {branch}")
         else:
-            command = ["git", "clone", clone_url, str(clone_path)]
-            proc = await asyncio.create_subprocess_exec(command[0], *command[1:])
+            command = ["git", *auth_args, "clone", repository, str(clone_path)]
+            proc = await asyncio.create_subprocess_exec(command[0], *command[1:], env=git_env)
             if await proc.wait():
                 raise ToolError(f"Failed to clone {repository}")
 
@@ -484,8 +511,8 @@ class PushToRemoteRepositoryTool(Tool[PushToRemoteRepositoryToolInput, ToolRunOp
         clone_path = tool_input.clone_path
         branch = tool_input.branch
         force = tool_input.force
-        remote = _get_authenticated_url(repository)
-        command = ["git", "push", remote, branch]
+        auth_args = _get_git_auth_args(repository)
+        command = ["git", *auth_args, "push", repository, branch]
         if force:
             command.append("--force")
         proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)

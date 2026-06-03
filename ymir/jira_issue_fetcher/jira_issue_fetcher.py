@@ -32,6 +32,7 @@ import requests
 
 from ymir.common.base_utils import fix_await, get_jira_auth_headers, redis_client
 from ymir.common.constants import JIRA_SEARCH_PATH, JiraLabels, RedisQueues
+from ymir.common.logging_setup import configure_logging
 from ymir.common.models import (
     BackportOutputSchema,
     ErrorData,
@@ -41,8 +42,7 @@ from ymir.common.models import (
     TriageInputSchema,
 )
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

@@ -557,7 +557,7 @@ class CheckCveTriageEligibilityTool(
                 is_cve=True,
                 eligibility=TriageEligibility.PENDING_DEPENDENCIES,
                 reason=f"CVE {cve_id} ({target_version}): waiting for at least one clone to ship",
-                needs_internal_fix=True,
+                needs_internal_fix=False,
                 pending_zstream_issues=pending_keys,
             ).model_dump()
         )
@@ -597,7 +597,7 @@ class CheckCveTriageEligibilityTool(
                 is_cve=True,
                 eligibility=TriageEligibility.IMMEDIATELY,
                 reason="Y-stream CVE: at least one Z-stream clone shipped, eligible for triage",
-                needs_internal_fix=True,
+                needs_internal_fix=False,
             ).model_dump()
         )
 

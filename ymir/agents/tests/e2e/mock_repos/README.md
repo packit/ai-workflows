@@ -4,8 +4,12 @@ This directory contains mock repo fixture files organized by agent type.
 The fixtures come from `git@gitlab.cee.redhat.com:jotnar-project/testing-jiras.git`
 if you have access.
 
-Clone the repository and copy (or symlink) the contents of its `mock_data/`
-directory here, preserving the subdirectory structure.
+Clone the repository and symlink its `mock_data/` subdirectories here:
+
+```bash
+ln -s /path/to/testing-jiras/mock_data/triage ymir/agents/tests/e2e/mock_repos/triage
+ln -s /path/to/testing-jiras/mock_data/backport ymir/agents/tests/e2e/mock_repos/backport
+```
 
 ## Expected layout
 

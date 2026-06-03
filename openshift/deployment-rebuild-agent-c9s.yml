@@ -35,6 +35,11 @@ spec:
             name: chat-env
         - configMapRef:
             name: endpoints-env
+        - secretRef:
+            name: sentry-env
+        - secretRef:
+            name: log-detective-env
+            optional: true
         image: 'beeai-agent:c9s'
         imagePullPolicy: Always
         name: rebuild-agent-c9s

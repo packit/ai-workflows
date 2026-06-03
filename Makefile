@@ -51,7 +51,7 @@ run-triage-agent-standalone:
 run-triage-agent-e2e-tests:
 	$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
-		-e DRY_RUN=$(DRY_RUN) \
+		-e DRY_RUN="true" \
 		triage-agent-e2e-tests
 
 .PHONY: run-backport-agent-e2e-tests

@@ -1414,7 +1414,7 @@ async def main() -> None:
                 logger.info(f"Triage resolved as {output.resolution.value} for {input.issue}")
 
                 resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
-                if resolution_label:
+                if resolution_label and output.resolution != Resolution.ERROR:
                     # Terminal resolution label is the dedup anchor that replaces
                     # ymir_triage_in_progress — must be written unconditionally so
                     # the next fetcher sweep skips this issue.

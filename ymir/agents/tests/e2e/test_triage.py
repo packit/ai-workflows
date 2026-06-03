@@ -218,6 +218,22 @@ test_cases = [
             ),
         ),
     ),
+    TriageAgentTestCase(
+        input="RHEL-152532",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.BACKPORT,
+            data=BackportData(
+                package="rsync",
+                patch_urls=[
+                    "https://github.com/RsyncProject/rsync/commit/797e17fc4a6f15e3b1756538a9f812b63942686f.patch",
+                ],
+                justification="not-implemented",
+                jira_issue="RHEL-152532",
+                cve_id="CVE-2025-10158",
+                fix_version="rhel-10.1.z",
+            ),
+        ),
+    ),
 ]
 
 

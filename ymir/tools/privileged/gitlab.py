@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -125,7 +126,7 @@ def _get_auth_headers(url: str) -> dict[str, str]:
 
 
 def _get_git_auth_args(repository_url: str) -> list[str]:
-    """Return ``git -c`` args that authenticate via ``PRIVATE-TOKEN`` header.
+    """Return ``git -c`` args that authenticate via HTTP Basic auth.
 
     Uses the same ``_is_private_gitlab`` guard as ``_get_auth_headers``
     so the token is never sent to unrelated hosts.  Passing auth via
@@ -140,7 +141,8 @@ def _get_git_auth_args(repository_url: str) -> list[str]:
         GitLab repos, or an empty list otherwise.
     """
     if _is_private_gitlab(repository_url) and (token := os.getenv("GITLAB_TOKEN")):
-        return ["-c", f"http.extraheader=PRIVATE-TOKEN: {token}"]
+        credentials = base64.b64encode(f"oauth2:{token}".encode()).decode()
+        return ["-c", f"http.extraheader=Authorization: Basic {credentials}"]
     return []
 
 

@@ -31,7 +31,7 @@ from ymir.agents.utils import (
     run_tool,
 )
 from ymir.common.logging_setup import configure_logging
-from ymir.tools.unprivileged.greenwave import FetchGreenWaveTool
+from ymir.tools.unprivileged.greenwave import FetchGreenWaveTool, FetchTestingFarmResultsTool
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,32 @@ available sources, and make your decision based on whichever results you can obt
    "url" field contains the full MR URL. The "repositoryUrl" contains the project URL
    from which you can derive the project path (remove the leading https://gitlab.com/).
 
+   **If any OSCI job (especially tier0 or tier1) is reported as failed in the MR comments,**
+   use the get_failed_pipeline_jobs_from_merge_request tool with the MR URL to retrieve
+   the list of failed pipeline jobs and their details (job name, URL, artifacts URL).
+   Include this information in your comment so the failed jobs can be investigated directly.
+   For tier0 or tier1 specifically, note each failed job individually with its job URL
+   and a small summary of the failure.
+
+3. **Individual test failures within tier* jobs**: Whenever a tier* test job (e.g.
+   osci.brew-build./plans/tier0.functional, osci.brew-build./plans/tier1-public.functional,
+   osci.brew-build./plans/tier1-internal.functional, etc.) has an artifact URL available,
+   use the fetch_testing_farm_results tool to retrieve the results-junit.xml and list the
+   individual tests that failed. This applies to FAILED, NEEDS_INSPECTION, and WAIVED
+   tier* results — for waived jobs, listing the underlying test failures explains why a
+   waiver was needed.
+   Do NOT fetch artifacts or list failures for non-tier* jobs such as
+   osci.brew-build.rpminspect.static-analysis, osci.brew-build.rpmdeplint.functional,
+   osci.brew-build.installability.functional, or leapp.* — these are not tier tests.
+   When presenting results from results-junit.xml, list each failing testcase as:
+   * {{<classname>/<testname>}} — FAILED/ERROR: <failure message (first line only)>
+
+   Additionally, if the GreenWave page contains a waiver comment/reason for the waived job,
+   compare it against the actual failures found in the results-junit.xml:
+   - If the waiver reason matches the actual failure, note that it is consistent.
+   - If the actual failure differs from the waiver reason, flag this as a discrepancy —
+     it may mean the test is now failing for a new reason not covered by the existing waiver.
+
 If a tool call fails or returns an error, note it in your comment but continue
 analyzing with the results you were able to obtain. Only return tests-error if
 you could not obtain results from ANY source.
@@ -107,6 +133,14 @@ Call the final_answer tool passing in the state and a comment as follows.
 The comment should use JIRA comment syntax (headings, bullet points, links).
 Do NOT wrap your comment in a {{panel}} macro — that will be added automatically.
 
+When listing individual test outcomes in your comment, use these icons consistently:
+- ✅ PASSED
+- ☑️ WAIVED
+- ❌ FAILED
+- ⏳ RUNNING / PENDING
+- ⚠️ NOT_RUNNING
+- 🔴 ERROR
+
 If all available gating tests have passed (and MR OSCI results passed, if available):
     state: tests-passed
     comment: [Brief summary of what passed, with links to the GreenWave page and MR
@@ -114,8 +148,19 @@ If all available gating tests have passed (and MR OSCI results passed, if availa
 
 If any required/gating tests have failed:
     state: tests-failed
-    comment: [List the failed tests with URLs, explain which are from GreenWave and
-              which from MR comments]
+    comment: [List the failed tests with URLs. For any tier* test failures (e.g.
+              osci.tier0, osci.tier1, osci.brew-build./plans/tier*), list each
+              failed job individually with its job URL and artifacts URL if available.
+              Also list any waived tier* tests with ☑️ so it is clear which ones
+              were exempted rather than genuinely passing.
+              Explain which failures are from GreenWave and which from MR comments.]
+
+If all available gating tests have passed or were waived:
+    state: tests-passed
+    comment: [Brief summary. If any tier* tests were waived, list them with ☑️ WAIVED
+              and their underlying failing test cases (from results-junit.xml).
+              Do NOT list non-tier* waivers (rpminspect, rpmdeplint, installability, leapp)
+              in the waived section — only mention them in the non-gating/informational table.]
 
 If tests are still running (pipeline status is running, or GreenWave shows tests in progress):
     state: tests-running
@@ -152,6 +197,7 @@ def create_preliminary_testing_agent(gateway_tools: list) -> ReasoningAgent:
         tools=[
             ThinkTool(),
             FetchGreenWaveTool(),
+            FetchTestingFarmResultsTool(),
         ]
         + [
             t
@@ -160,6 +206,7 @@ def create_preliminary_testing_agent(gateway_tools: list) -> ReasoningAgent:
             in [
                 "fetch_gitlab_mr_notes",
                 "get_jira_details",
+                "get_failed_pipeline_jobs_from_merge_request",
             ]
         ],
         memory=UnconstrainedMemory(),
@@ -468,9 +515,23 @@ async def main() -> None:
             dry_run=dry_run,
             ignore_needs_attention=ignore_needs_attention,
         )
-        logger.info("Completed: state=%s", result.state)
+        state_icon = {
+            TestingState.PASSED: "✅",
+            TestingState.WAIVED: "☑️",
+            TestingState.FAILED: "❌",
+            TestingState.RUNNING: "⏳",
+            TestingState.PENDING: "⏳",
+            TestingState.NOT_RUNNING: "⚠️",
+            TestingState.ERROR: "🔴",
+        }.get(result.state, "❓")
+
+        separator = "=" * 60
+        print(f"\n{separator}")
+        print(f"  RESULT: {state_icon}  {result.state.upper()}")
+        print(separator)
         if result.comment:
-            logger.info("Comment: %s", result.comment)
+            print(result.comment)
+        print(f"{separator}\n")
 
 
 if __name__ == "__main__":

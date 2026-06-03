@@ -1,0 +1,7 @@
+apiVersion: v1
+data:
+  QUERY: 'filter = "Ymir early adopters CVEs"'
+immutable: false
+kind: ConfigMap
+metadata:
+  name: jira-issue-fetcher-filter-env

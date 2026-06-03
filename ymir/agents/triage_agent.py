@@ -1369,16 +1369,21 @@ async def main() -> None:
                     except Exception as e:
                         logger.warning(f"Failed to post user-triggered ack comment for {input.issue}: {e}")
             except Exception as e:
+                # Route through retry() so a permanently failing issue (deleted
+                # ticket, per-issue permission error) is bounded by max_retries
+                # instead of looping forever and blocking the queue. On
+                # exhaustion the task lands in ERROR_LIST; the best-effort
+                # ymir_triage_errored label write may also fail if Jira itself
+                # is down — that's accepted (ERROR_LIST is the durable record).
                 logger.error(
                     f"Could not set {JiraLabels.TRIAGE_IN_PROGRESS.value} on "
-                    f"{input.issue} after retries: {e}; re-queuing without "
-                    f"processing to avoid duplicate triage. Jira may be degraded."
+                    f"{input.issue} after retries: {e}; re-queuing to avoid duplicate triage."
                 )
-                await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
+                error_msg = f"Failed to set in-progress label: {e}"
+                await retry(task, ErrorData(details=error_msg, jira_issue=input.issue).model_dump_json())
                 # Long sleep on purpose: critical-write retries already burned
                 # ~7s, so we're past transient blips. Typical Jira outages last
-                # minutes; cycling faster just spams the API. Other queued tasks
-                # would hit the same failure, so blocking the loop costs nothing.
+                # minutes; cycling faster just spams the API.
                 await asyncio.sleep(60)
                 continue
 

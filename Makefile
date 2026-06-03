@@ -5,7 +5,6 @@ MOCK_JIRA ?= false
 JIRA_DRY_RUN ?= false
 AUTO_CHAIN ?= true
 FORCE_CVE_TRIAGE ?= false
-SILENT_RUN ?= false
 RUN_LLM_JUDGE ?= true
 
 COMPOSE ?= $(shell if podman compose ls >/dev/null 2>&1; then echo "podman compose"; elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose"; else echo "docker-compose"; fi)
@@ -44,7 +43,6 @@ run-triage-agent-standalone:
 		-e MOCK_JIRA=$(MOCK_JIRA) \
 		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
 		-e FORCE_CVE_TRIAGE=$(FORCE_CVE_TRIAGE) \
-		-e SILENT_RUN=$(SILENT_RUN) \
 		triage-agent
 
 .PHONY: run-triage-agent-e2e-tests
@@ -202,11 +200,11 @@ build-jira-issue-fetcher:
 
 .PHONY: start
 start:
-	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) AUTO_CHAIN=$(AUTO_CHAIN) SILENT_RUN=$(SILENT_RUN) $(COMPOSE_AGENTS) up
+	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) AUTO_CHAIN=$(AUTO_CHAIN) $(COMPOSE_AGENTS) up
 
 .PHONY: start-detached
 start-detached:
-	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) AUTO_CHAIN=$(AUTO_CHAIN) SILENT_RUN=$(SILENT_RUN) $(COMPOSE_AGENTS) up -d
+	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) AUTO_CHAIN=$(AUTO_CHAIN) $(COMPOSE_AGENTS) up -d
 
 .PHONY: stop
 stop:

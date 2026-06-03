@@ -239,14 +239,17 @@ class JiraIssueFetcher:
             items = groups.get("items") or []
             group_names = [g.get("name") for g in items if g]
             return _RH_EMPLOYEE_GROUP in group_names
-        except (requests.RequestException, ValueError, KeyError, AttributeError) as e:
-            is_auth = (
-                isinstance(e, requests.HTTPError)
-                and e.response is not None
-                and e.response.status_code in (401, 403)
-            )
-            (logger.error if is_auth else logger.warning)(
-                f"Failed to verify {JiraLabels.TODO.value} author on {issue_key}: {e}; "
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code in (400, 401, 403, 404):
+                logger.warning(
+                    f"Permanent API error verifying {JiraLabels.TODO.value} author on {issue_key}: {e}; "
+                    f"treating as non-RH-employee to avoid infinite retries"
+                )
+                return False
+            raise
+        except (ValueError, KeyError, AttributeError) as e:
+            logger.warning(
+                f"Failed to parse {JiraLabels.TODO.value} author on {issue_key}: {e}; "
                 f"treating as non-RH-employee"
             )
             return False
@@ -436,7 +439,17 @@ class JiraIssueFetcher:
                     # per-issue that the label was added by a Red Hat Employee. If
                     # not (or if the author can't be verified), skip the issue — the
                     # label may have been added by an external collaborator.
-                    if not self._label_added_by_rh_employee(issue_key):
+                    try:
+                        is_rh_employee = self._label_added_by_rh_employee(issue_key)
+                    except requests.RequestException as e:
+                        logger.warning(
+                            f"Transient error verifying {JiraLabels.TODO.value} author on {issue_key}: {e}; "
+                            f"skipping this issue for this sweep"
+                        )
+                        existing_keys.add(issue_key)
+                        continue
+
+                    if not is_rh_employee:
                         logger.warning(
                             f"Issue {issue_key} has {JiraLabels.TODO.value} but the "
                             f"label was not added by a Red Hat Employee - skipping "

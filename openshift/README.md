@@ -122,7 +122,7 @@ make run-jira-issue-fetcher-todo  # ymir_todo sweep
 
 | Key | Default | Effect |
 |---|---|---|
-| `JIRA_ALLOW_STATUS_CHANGES` | `"false"` | When `"false"`, agents do NOT change Jira issue statuses (no "New" → "In Progress" on rebase/backport start, no "Release Pending" / "Closed" on verification finish). Flip to `"true"` to allow status transitions. The "Changing status from X => Y" comment produced by issue-verification is suppressed alongside the transition. `DRY_RUN=true` further short-circuits transitions independently. |
+| `JIRA_ALLOW_STATUS_CHANGES` | `"false"` | When `"false"`, agents do NOT change Jira issue statuses (no "New" → "In Progress" on rebase/backport start, no "Release Pending" / "Closed" on verification finish) and the preliminary-testing agent does NOT set `Preliminary Testing = Pass` (that field admits the build into a compose, triggers erratum creation, and moves the issue to Integration). Flip to `"true"` to allow all of the above. `DRY_RUN=true` further short-circuits these writes independently. |
 
 To enable production status transitions:
 

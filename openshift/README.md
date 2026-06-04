@@ -118,6 +118,19 @@ make run-jira-issue-fetcher       # generic batch filter
 make run-jira-issue-fetcher-todo  # ymir_todo sweep
 ```
 
+## Agent runtime knobs (`agents-env` ConfigMap)
+
+| Key | Default | Effect |
+|---|---|---|
+| `JIRA_ALLOW_STATUS_CHANGES` | `"false"` | When `"false"`, agents do NOT change Jira issue statuses (no "New" → "In Progress" on rebase/backport start, no "Release Pending" / "Closed" on verification finish). Flip to `"true"` to allow status transitions. The "Changing status from X => Y" comment produced by issue-verification is suppressed alongside the transition. `DRY_RUN=true` further short-circuits transitions independently. |
+
+To enable production status transitions:
+
+```bash
+oc patch configmap agents-env --type merge -p '{"data":{"JIRA_ALLOW_STATUS_CHANGES":"true"}}'
+oc rollout restart deployment -l app=triage-agent  # plus any other agent deployments
+```
+
 ## Triggering the Pipeline Manually
 
 To push a Jira issue into the triage queue (e.g. to force CVE triage):

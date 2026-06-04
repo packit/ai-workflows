@@ -321,6 +321,11 @@ async def change_jira_status(
     status: str,
     available_tools: list[Tool],
 ) -> None:
+    if os.getenv("JIRA_ALLOW_STATUS_CHANGES", "false").lower() != "true":
+        logger.info(
+            f"JIRA_ALLOW_STATUS_CHANGES is not set; skipping status change of {jira_issue} to {status!r}"
+        )
+        return
     await run_tool(
         "change_jira_status",
         issue_key=jira_issue,

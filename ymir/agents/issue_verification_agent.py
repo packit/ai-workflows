@@ -442,9 +442,16 @@ async def _change_status(
     dry_run: bool,
 ) -> WorkflowResult:
     comment = f"*Changing status from {current_status} => {new_status}*\n\n{why}"
+    status_changes_allowed = os.getenv("JIRA_ALLOW_STATUS_CHANGES", "false").lower() == "true"
 
-    if dry_run:
-        logger.info("Dry run: would change issue %s status to %s", issue_key, new_status)
+    if dry_run or not status_changes_allowed:
+        reason = "dry run" if dry_run else "JIRA_ALLOW_STATUS_CHANGES is not set"
+        logger.info(
+            "Skipping Jira status change of %s to %s and the accompanying status-change comment (%s)",
+            issue_key,
+            new_status,
+            reason,
+        )
     else:
         await run_tool(
             "change_jira_status",

@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ymir.agents.tasks import fork_and_prepare_dist_git, post_user_ack_once
+from ymir.agents.tasks import change_jira_status, fork_and_prepare_dist_git, post_user_ack_once
 from ymir.common.models import Task
 
 
@@ -138,6 +138,35 @@ async def test_post_user_ack_once_skips_on_dry_run():
 
     mock_comment.assert_not_awaited()
     assert "ack_posted" not in task.metadata
+
+
+@pytest.mark.asyncio
+async def test_change_jira_status_skips_when_flag_unset(monkeypatch):
+    """Default behavior: JIRA_ALLOW_STATUS_CHANGES unset → no MCP call."""
+    monkeypatch.delenv("JIRA_ALLOW_STATUS_CHANGES", raising=False)
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool:
+        await change_jira_status("RHEL-1", "In Progress", available_tools=[])
+    mock_run_tool.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_change_jira_status_skips_when_flag_false(monkeypatch):
+    monkeypatch.setenv("JIRA_ALLOW_STATUS_CHANGES", "false")
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool:
+        await change_jira_status("RHEL-1", "In Progress", available_tools=[])
+    mock_run_tool.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_change_jira_status_runs_when_flag_true(monkeypatch):
+    monkeypatch.setenv("JIRA_ALLOW_STATUS_CHANGES", "true")
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool:
+        await change_jira_status("RHEL-1", "In Progress", available_tools=[])
+    mock_run_tool.assert_awaited_once()
+    # The MCP tool is called with the expected arguments
+    _, kwargs = mock_run_tool.call_args
+    assert kwargs["issue_key"] == "RHEL-1"
+    assert kwargs["status"] == "In Progress"
 
 
 @pytest.mark.asyncio

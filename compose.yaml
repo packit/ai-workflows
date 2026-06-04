@@ -9,6 +9,7 @@ x-beeai-env: &beeai-env
   MAX_RETRIES: 3
   DRY_RUN: ${DRY_RUN:-false}
   JIRA_DRY_RUN: ${JIRA_DRY_RUN:-false}
+  JIRA_ALLOW_STATUS_CHANGES: ${JIRA_ALLOW_STATUS_CHANGES:-false}
   AUTO_CHAIN: ${AUTO_CHAIN:-true}
   REQUESTS_CA_BUNDLE: /etc/pki/tls/certs/ca-bundle.crt
 

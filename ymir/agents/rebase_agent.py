@@ -265,8 +265,10 @@ async def main() -> None:
 
             async def change_jira_status(state):
                 if dry_run:
-                    logger.info(f"Dry run: would change status of {state.jira_issue} to In Progress")
+                    logger.info(f"Dry run: skipping Jira status change of {state.jira_issue} to In Progress")
                     return "fork_and_prepare_dist_git"
+                # tasks.change_jira_status further gates the write on
+                # JIRA_ALLOW_STATUS_CHANGES; nothing else to check here.
                 try:
                     await tasks.change_jira_status(
                         jira_issue=state.jira_issue,

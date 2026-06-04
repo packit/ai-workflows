@@ -22,6 +22,24 @@ Three agents process tasks through Redis queues:
 
 **Always** use `DRY_RUN=true` if you are developing locally or just wanna give the agents a try.
 
+## Jira status changes (opt-in)
+
+By default, agents do NOT change the Jira workflow status of issues
+(e.g. "New" → "In Progress" when the backport agent picks up a task,
+or "Release Pending" / "Closed" when the issue-verification agent
+finishes). To enable status transitions, set:
+
+```bash
+JIRA_ALLOW_STATUS_CHANGES=true
+```
+
+When unset or `false`, status-change calls are short-circuited and a
+log line records what *would* have happened. The status-change comment
+produced by the verification agent ("Changing status from X => Y") is
+suppressed alongside the transition so the comment stream doesn't
+claim a state change that didn't occur. `DRY_RUN=true` also suppresses
+status changes independently of this flag.
+
 ## Jira mocking
 
 If you clone testing Jira files from

@@ -10,6 +10,12 @@ data:
   # This was increased from 140 to handle complex rebases and backports.
   BEEAI_MAX_ITERATIONS: "255"
   REASONING_EFFORT: high
+  # When "false" (default), agents do NOT change Jira issue statuses
+  # (e.g. New -> In Progress on rebase/backport start, Release Pending on
+  # verification close). Set to "true" to allow status transitions. The
+  # status-change comment produced by issue-verification is suppressed
+  # alongside the transition.
+  JIRA_ALLOW_STATUS_CHANGES: "false"
 immutable: false
 kind: ConfigMap
 metadata:

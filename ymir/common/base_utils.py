@@ -24,17 +24,16 @@ async def fix_await(v: T | Awaitable[T]) -> T:
 
     Typing for the asyncio redis client is messed up, and functions
     return `T | Awaitable[T]` instead of `T`. This function
-    fixes the type error by asserting that the value is awaitable
-    before awaiting it.
+    fixes the type error by either awaiting, if the value is awaitable
+    or returning it immediately.
 
     For a proper fix, see: https://github.com/redis/redis-py/pull/3619
 
-
-    Usage: `await fixAwait(redis.get("key"))`
+    Usage: `await fix_await(redis.get("key"))`
     """
-    if not inspect.isawaitable(v):
-        raise TypeError(f"expected an awaitable, got {type(v)}")
-    return await v
+    if inspect.isawaitable(v):
+        return await v
+    return v
 
 
 @asynccontextmanager

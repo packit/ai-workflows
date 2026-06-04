@@ -1289,6 +1289,9 @@ async def main() -> None:
             # User-triggered runs will receive an acknowledgement comment,
             # but only after we successfully write the in-progress label to
             # avoid duplicate comments if the label write later fails.
+            # post_user_ack_once persists ack_posted in task.metadata so that
+            # retries do not re-post the ack after it has already been
+            # delivered.
 
             current_labels = await tasks.get_jira_labels(input.issue)
             all_labels = JiraLabels.all_labels()
@@ -1321,13 +1324,16 @@ async def main() -> None:
                     logger.error(
                         f"Task failed after {max_retries} attempts, moving to error list: {input.issue}"
                     )
-                    await tasks.set_jira_labels(
-                        jira_issue=input.issue,
-                        labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
-                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        dry_run=dry_run,
-                        user_triggered=user_triggered,
-                    )
+                    try:
+                        await tasks.set_jira_labels(
+                            jira_issue=input.issue,
+                            labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
+                            labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                            dry_run=dry_run,
+                            user_triggered=user_triggered,
+                        )
+                    except Exception as label_error:
+                        logger.warning(f"Failed to set error labels on {input.issue}: {label_error}")
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
             # ymir_triage_in_progress is the dedup anchor for the next fetcher
@@ -1353,21 +1359,17 @@ async def main() -> None:
                 # Post acknowledgement comment for user-triggered runs now that
                 # the in-progress label write succeeded. This prevents duplicate
                 # comments if the critical label write were to fail.
-                if user_triggered and not dry_run and task.attempts == 0:
-                    try:
-                        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-                            await tasks.comment_in_jira(
-                                jira_issue=input.issue,
-                                agent_type="Triage",
-                                comment_text=(
-                                    "Ymir picked up your request and started processing. "
-                                    "Results will be posted here when triage completes."
-                                ),
-                                available_tools=gateway_tools,
-                                user_triggered=True,
-                            )
-                    except Exception as e:
-                        logger.warning(f"Failed to post user-triggered ack comment for {input.issue}: {e}")
+                await tasks.post_user_ack_once(
+                    task=task,
+                    jira_issue=input.issue,
+                    agent_type="Triage",
+                    comment_text=(
+                        "Ymir picked up your request and started processing. "
+                        "Results will be posted here when triage completes."
+                    ),
+                    user_triggered=user_triggered,
+                    dry_run=dry_run,
+                )
             except Exception as e:
                 # Route through retry() so a permanently failing issue (deleted
                 # ticket, per-issue permission error) is bounded by max_retries

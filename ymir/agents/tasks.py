@@ -17,6 +17,7 @@ from ymir.common.models import (
     LogOutputSchema,
     MergeRequestDetails,
     OpenMergeRequestResult,
+    Task,
 )
 from ymir.tools.unprivileged.specfile import UpdateReleaseTool
 
@@ -267,6 +268,39 @@ async def comment_in_jira(
         private=True,
         available_tools=available_tools,
     )
+
+
+async def post_user_ack_once(
+    task: Task,
+    jira_issue: str,
+    agent_type: str,
+    comment_text: str,
+    user_triggered: bool,
+    dry_run: bool,
+) -> None:
+    """Post a user-triggered acknowledgement comment to Jira exactly once per task.
+
+    Tracks delivery via ``task.metadata['ack_posted']`` so a re-queued retry
+    of the same task sees it as already delivered and skips the post. The
+    flag is only set after ``comment_in_jira`` returns successfully, so a
+    failed post still leaves the next retry free to try again.
+    """
+    if not user_triggered or dry_run:
+        return
+    if task.metadata.get("ack_posted"):
+        return
+    try:
+        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+            await comment_in_jira(
+                jira_issue=jira_issue,
+                agent_type=agent_type,
+                comment_text=comment_text,
+                available_tools=gateway_tools,
+                user_triggered=True,
+            )
+        task.metadata["ack_posted"] = True
+    except Exception as e:
+        logger.warning(f"Failed to post user-triggered ack comment for {jira_issue}: {e}")
 
 
 async def comment_in_mr(

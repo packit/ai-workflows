@@ -414,6 +414,16 @@ async def run_preliminary_testing(
                             details_comment=state.result.comment,
                             gateway_tools=gateway_tools,
                         )
+                    elif os.getenv("JIRA_ALLOW_STATUS_CHANGES", "false").lower() != "true":
+                        # Setting Preliminary Testing = Pass admits the build into
+                        # the next compose, triggers erratum creation, and moves
+                        # the issue to Integration — same blast radius as a status
+                        # transition, so it shares the same opt-in flag.
+                        logger.info(
+                            "JIRA_ALLOW_STATUS_CHANGES is not set; "
+                            "skipping Preliminary Testing = Pass for %s",
+                            state.jira_issue,
+                        )
                     else:
                         comment = state.result.comment or "Preliminary testing has passed."
                         await run_tool(

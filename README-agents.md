@@ -27,18 +27,21 @@ Three agents process tasks through Redis queues:
 By default, agents do NOT change the Jira workflow status of issues
 (e.g. "New" → "In Progress" when the backport agent picks up a task,
 or "Release Pending" / "Closed" when the issue-verification agent
-finishes). To enable status transitions, set:
+finishes), and the preliminary-testing agent does NOT set the
+`Preliminary Testing` field to `Pass`. The Pass field is gated by the
+same flag because setting it admits the build into the next compose,
+triggers erratum creation, and moves the issue to Integration — its
+downstream effect is equivalent to a status transition. To enable all
+of the above, set:
 
 ```bash
 JIRA_ALLOW_STATUS_CHANGES=true
 ```
 
-When unset or `false`, status-change calls are short-circuited and a
-log line records what *would* have happened. The status-change comment
-produced by the verification agent ("Changing status from X => Y") is
-suppressed alongside the transition so the comment stream doesn't
-claim a state change that didn't occur. `DRY_RUN=true` also suppresses
-status changes independently of this flag.
+When unset or `false`, status-change calls and the prelim-testing Pass
+write are short-circuited and a log line records what *would* have
+happened.
+`DRY_RUN=true` also suppresses these writes independently of this flag.
 
 ## Jira mocking
 

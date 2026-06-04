@@ -85,12 +85,19 @@ def _should_update_jira(resolution: Resolution = None, user_triggered: bool = Fa
     Used only for comments — labels are dedup anchors and are written
     unconditionally. Default is silent: comments are suppressed unless the
     run was explicitly requested by a maintainer (via ymir_todo) or the
-    resolution carries information the requester needs even unbidden
-    (not-affected and postponed — there's no MR to look at otherwise).
+    resolution carries information the requester needs even unbidden.
+    The unbidden cases are the resolutions that do NOT produce an MR —
+    without a comment the result would be invisible to the requester:
+    not-affected, postponed, open-ended-analysis, clarification-needed.
     """
     if user_triggered:
         return True
-    return resolution in (Resolution.NOT_AFFECTED, Resolution.POSTPONED)
+    return resolution in (
+        Resolution.NOT_AFFECTED,
+        Resolution.POSTPONED,
+        Resolution.OPEN_ENDED_ANALYSIS,
+        Resolution.CLARIFICATION_NEEDED,
+    )
 
 
 _RESOLUTION_TO_LABEL: dict[Resolution, JiraLabels] = {

@@ -755,10 +755,6 @@ class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, S
             if exit_code != 0:
                 raise ToolError(f"Failed to check git status: {stderr}")
 
-            # Validate stdout is not None
-            if stdout is None:
-                raise ToolError("Git status command returned no output")
-
             # Check if we're actually in a cherry-pick state by looking for .git/CHERRY_PICK_HEAD
             if not (tool_input.repo_path / ".git" / "CHERRY_PICK_HEAD").exists():
                 raise ToolError("Not in a cherry-pick state. Cannot continue cherry-pick.")

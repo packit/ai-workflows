@@ -31,7 +31,7 @@ spec:
       containers:
       - name: otel-collector
         image: docker.io/otel/opentelemetry-collector-contrib
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 4318
           protocol: TCP
@@ -61,7 +61,7 @@ spec:
           name: otel-config
       - name: trace-server
         image: trace-server:prod
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         env:
         - name: TRACE_DB_PATH
           value: /data/traces.db

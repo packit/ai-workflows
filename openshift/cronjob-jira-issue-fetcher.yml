@@ -29,7 +29,7 @@ spec:
           containers:
           - name: jira-issue-fetcher-env
             image: 'jira-issue-fetcher:prod'
-            imagePullPolicy: Always
+            imagePullPolicy: IfNotPresent
             envFrom:
             - configMapRef:
                 name: endpoints-env

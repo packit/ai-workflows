@@ -20,7 +20,7 @@ spec:
       containers:
       - name: supervisor-processor
         image: 'supervisor:prod'
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command:
         - /usr/bin/python
         args:

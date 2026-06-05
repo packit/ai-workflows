@@ -37,7 +37,7 @@ spec:
             name: sentry-env
 
         image: 'beeai-agent:c10s'
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         name: triage-agent
         ports:
         - containerPort: 8080

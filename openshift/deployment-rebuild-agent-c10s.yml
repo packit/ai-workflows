@@ -38,7 +38,7 @@ spec:
         - secretRef:
             name: sentry-env
         image: 'beeai-agent:c10s'
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         name: rebuild-agent-c10s
         ports:
         - containerPort: 8080

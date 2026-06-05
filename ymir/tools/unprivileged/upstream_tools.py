@@ -239,6 +239,11 @@ class ExtractUpstreamRepositoryTool(
                     repo_query_match = re.search(r"(?:^|[?&])p=([^;&]+)", parsed.query)
                     if repo_query_match:
                         repo_path = repo_query_match.group(1)
+                    else:
+                        # cgit-style: repo path in URL path (e.g. /pub/scm/.../linux.git/commit/)
+                        path_repo_match = re.search(r"^/?(.+?\.git)(?:/|$)", parsed.path)
+                        if path_repo_match:
+                            repo_path = path_repo_match.group(1)
             if commit_hash:
                 if not repo_path:
                     raise ToolError(

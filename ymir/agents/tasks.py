@@ -473,10 +473,10 @@ async def clone_and_prep_sources(
     target branch does not exist yet but we know the base commit from Koji.
     """
     working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "applicability" / jira_issue
+    if working_dir.is_dir():
+        shutil.rmtree(working_dir)
     working_dir.mkdir(parents=True, exist_ok=True)
     local_clone = working_dir / package
-    if local_clone.is_dir():
-        shutil.rmtree(local_clone)
 
     namespace = "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
     repository = f"https://gitlab.com/redhat/{namespace}/rpms/{package}"

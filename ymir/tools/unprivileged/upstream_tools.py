@@ -236,7 +236,7 @@ class ExtractUpstreamRepositoryTool(
                 query_match = re.search(r"(?:id|h)=([a-f0-9]{7,40})", parsed.query)
                 if query_match:
                     commit_hash = query_match.group(1)
-                    repo_query_match = re.search(r"[?&]p=([^;&]+)", parsed.query)
+                    repo_query_match = re.search(r"(?:^|[?&])p=([^;&]+)", parsed.query)
                     if repo_query_match:
                         repo_path = repo_query_match.group(1)
             if commit_hash:

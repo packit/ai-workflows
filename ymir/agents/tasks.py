@@ -472,6 +472,8 @@ async def clone_and_prep_sources(
     refs and that specific commit is checked out.  This is used when the
     target branch does not exist yet but we know the base commit from Koji.
     """
+    if not jira_issue or Path(jira_issue).is_absolute() or ".." in jira_issue:
+        raise ValueError(f"Invalid jira_issue: {jira_issue}")
     working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "applicability" / jira_issue
     if working_dir.is_dir():
         shutil.rmtree(working_dir)

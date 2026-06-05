@@ -29,7 +29,7 @@ spec:
           containers:
           - name: supervisor-collector
             image: 'supervisor:prod'
-            imagePullPolicy: Always
+            imagePullPolicy: IfNotPresent
             command:
             - /usr/bin/python
             args:

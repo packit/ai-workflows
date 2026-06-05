@@ -31,7 +31,7 @@ spec:
       initContainers:
       - name: copy-config
         image: redis-commander:prod
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         command: ["sh", "-c", "cp -r /usr/local/lib/node_modules/redis-commander/config/. /config/"]
         volumeMounts:
         - name: config
@@ -43,7 +43,7 @@ spec:
         - name: REDIS_PORT
           value: "6379"
         image: redis-commander:prod
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         name: redis-commander
         ports:
         - containerPort: 8081

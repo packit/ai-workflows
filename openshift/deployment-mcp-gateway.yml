@@ -50,7 +50,7 @@ spec:
         - configMapRef:
             name: kerberos-env
         image: mcp-server:prod
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         name: mcp-gateway
         ports:
         - containerPort: 8000

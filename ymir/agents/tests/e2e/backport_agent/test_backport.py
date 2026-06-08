@@ -160,17 +160,23 @@ def _load_reference_patch(test_case: "BackportAgentTestCase") -> str | None:
 
 @pytest.fixture(scope="session", autouse=True)
 def run_test_cases_concurrently(request, mock_centos_stream_repos):
-    """Execute all backport test cases concurrently via asyncio.gather, then collect metrics."""
+    """Execute selected backport test cases concurrently via asyncio.gather, then collect metrics."""
+    selected = {
+        item.callspec.params["test_case"]
+        for item in request.session.items
+        if hasattr(item, "callspec") and "test_case" in item.callspec.params
+    }
+    cases_to_run = [tc for tc in test_cases if tc in selected]
 
     async def _run_all():
-        await asyncio.gather(*(tc.run() for tc in test_cases))
+        await asyncio.gather(*(tc.run() for tc in cases_to_run))
 
     asyncio.run(_run_all())
 
     yield
 
     collected_metrics = []
-    for test_case in test_cases:
+    for test_case in cases_to_run:
         if test_case.metrics is None:
             continue
         collected_metrics.append([test_case.jira_issue, *test_case.metrics.values()])

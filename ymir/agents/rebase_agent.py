@@ -63,6 +63,7 @@ from ymir.tools.unprivileged.text import (
     StrReplaceTool,
     ViewTool,
 )
+from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
 
 logger = logging.getLogger(__name__)
 redis_logger = logging.getLogger("agent.redis")
@@ -109,14 +110,12 @@ def get_instructions() -> str:
       4. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
       5. Download upstream sources using `spectool -g -S <PACKAGE>.spec`.
-         Run `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
-         to see if everything is in order. It is possible that some *.patch files will fail to apply now
+         Use the `run_package_prep` tool to see if everything is in order.
+         It is possible that some *.patch files will fail to apply now
          that the spec file has been updated. Don't jump to conclusions -
          if one patch fails to apply, it doesn't mean all other patches fail
          to apply as well. Go through the errors one by one, fix them and
-         verify the changes by running
-         `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
-         again.
+         use `run_package_prep` again to verify.
          Repeat as necessary. Do not remove any patches unless all their hunks have been already applied
          to the upstream sources.
          Note: <PKG_TOOL> is `centpkg` for CentOS Stream branches (c9s, c10s) and `rhpkg` for RHEL branches.
@@ -200,6 +199,7 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
             SearchTextTool(options=local_tool_options),
             GetCWDTool(options=local_tool_options),
             RemoveTool(options=local_tool_options),
+            RunPackagePrepTool(options=local_tool_options),
         ]
         + [t for t in mcp_tools if t.name in ["upload_sources", "get_maintainer_rules"]],
         memory=UnconstrainedMemory(),

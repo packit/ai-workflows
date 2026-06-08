@@ -72,6 +72,7 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `get_cwd` — Get the current working directory
 - `remove` — Delete files
 - `run_shell_command` — Execute shell commands (use as last resort; prefer native tools)
+- `run_package_prep` — Run the %prep section of a spec file, with automatic build directory cleanup on failure
 - `add_changelog_entry` — Add a changelog entry to an RPM spec file
 - `update_release` — Bump the Release field in a spec file
 
@@ -321,14 +322,12 @@ To rebase package <PACKAGE> to version <VERSION> in dist-git branch <DIST_GIT_BR
 4. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
 5. Download upstream sources using `spectool -g -S <PACKAGE>.spec`.
-   Run `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
-   to see if everything is in order. It is possible that some *.patch files will fail to apply now
+   Use the `run_package_prep` tool to see if everything is in order.
+   It is possible that some *.patch files will fail to apply now
    that the spec file has been updated. Don't jump to conclusions -
    if one patch fails to apply, it doesn't mean all other patches fail
    to apply as well. Go through the errors one by one, fix them and
-   verify the changes by running
-   `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
-   again.
+   use `run_package_prep` again to verify.
    Repeat as necessary. Do not remove any patches unless all their hunks have been already applied
    to the upstream sources.
    Note: <PKG_TOOL> is `centpkg` for CentOS Stream branches (c9s, c10s) and `rhpkg` for RHEL branches.

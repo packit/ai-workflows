@@ -85,6 +85,7 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `apply_downstream_patches` — Apply existing dist-git patches to an upstream clone
 - `cherry_pick_commit` — Cherry-pick a single commit in a git repository
 - `cherry_pick_continue` — Continue a cherry-pick after conflict resolution
+- `run_package_prep` — Run the %prep section of a spec file, with automatic build directory cleanup on failure
 
 **Other:**
 - Web search via DuckDuckGo or equivalent
@@ -383,7 +384,7 @@ and must remain unchanged.
       - Only apply relevant changes that address the logic of the patch,
         do not modify the Release field or changelog section.
       - If successful, the spec file is now updated, skip to step 6
-        to verify with `<PKG_TOOL> prep` and step 7 to generate SRPM
+        to verify with `run_package_prep` and step 7 to generate SRPM
       - Do NOT add Patch tags (step 5) since this was a spec-only change, not a source code patch
       - If not successful, end with `success=False` and `status="Failed to apply spec changes"`
 
@@ -481,10 +482,10 @@ and must remain unchanged.
             existing patches in the dist-git repository
 
       4h. The cherry-pick workflow is complete! Continue with steps 5-7 below to add
-          the patch(es) to the spec file, verify with `<PKG_TOOL> prep`, and build the SRPM.
+          the patch(es) to the spec file, verify with `run_package_prep`, and build the SRPM.
 
           Note: You do NOT need to apply patches to <UNPACKED_SOURCES>. The patch files
-          will be automatically applied during the RPM build process when you run `<PKG_TOOL> prep`.
+          will be automatically applied during the RPM build process when you run `run_package_prep`.
 
    B. GIT AM WORKFLOW (Fallback approach):
 
@@ -520,12 +521,11 @@ and must remain unchanged.
    the `Patch:` tag(s) - these URLs reference the related upstream commits or pull/merge requests.
    IMPORTANT: Only ADD new patches. Do NOT modify existing Patch tags or their order.
 
-6. Run
-   `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
-   to see if the new patch applies cleanly. When `prep` command
-   finishes with "exit 0", it's a success. Ignore errors from
-   libtoolize that warn about newer files: "use '--force' to overwrite".
-   Note: <PKG_TOOL> is the package tool command provided in the prompt.
+6. Use the `run_package_prep` tool to verify that the new patch applies cleanly.
+   When prep succeeds, it's safe to proceed. If it fails, the build directory
+   is automatically cleaned up — do NOT inspect the source tree after a prep
+   failure, fix the patch instead. Ignore errors from libtoolize that warn
+   about newer files: "use '--force' to overwrite".
 
 7. Generate a SRPM using
    `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
@@ -742,10 +742,10 @@ and must remain unchanged.
             existing patches in the dist-git repository
 
       3l. The cherry-pick workflow is complete! Continue with steps 4-6 below to add
-          the patch(es) to the spec file, verify with `<PKG_TOOL> prep`, and build the SRPM.
+          the patch(es) to the spec file, verify with `run_package_prep`, and build the SRPM.
 
           Note: You do NOT need to apply patches to <UNPACKED_SOURCES>. The patch files
-          will be automatically applied during the RPM build process when you run `<PKG_TOOL> prep`.
+          will be automatically applied during the RPM build process when you run `run_package_prep`.
 
    C. GIT AM WORKFLOW (Fallback approach):
 
@@ -785,12 +785,11 @@ and must remain unchanged.
    IMPORTANT: Only ADD new patches. Do NOT modify existing Patch tags or their order. Do NOT
    add or change any changelog entries. Do NOT change the Release field.
 
-5. Run
-   `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
-   to see if the new patch applies cleanly. When `prep` command
-   finishes with "exit 0", it's a success. Ignore errors from
-   libtoolize that warn about newer files: "use '--force' to overwrite".
-   Note: <PKG_TOOL> is the package tool command provided in the prompt.
+5. Use the `run_package_prep` tool to verify that the new patch applies cleanly.
+   When prep succeeds, it's safe to proceed. If it fails, the build directory
+   is automatically cleaned up — do NOT inspect the source tree after a prep
+   failure, fix the patch instead. Ignore errors from libtoolize that warn
+   about newer files: "use '--force' to overwrite".
 
 6. Generate a SRPM using
    `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
@@ -882,7 +881,7 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
    - patch_file_path: the path to each patch file in <LOCAL_CLONE>/
 
 5. Test the build:
-   - `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
+   - Use the `run_package_prep` tool to verify patches apply cleanly
    - `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`
    - Call `build_package` with the SRPM path, dist_git_branch, and jira_issue
    - If build fails: use `download_artifacts` to get logs and identify the new error

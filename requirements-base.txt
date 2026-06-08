@@ -1,0 +1,8 @@
+# Shared pip dependencies for all containers (except MCP)
+# Prevent installation of compromised litellm package versions
+litellm!=1.82.7,!=1.82.8
+beeai-framework[vertexai,mcp,duckduckgo]==0.1.80
+openinference-instrumentation-beeai
+arize-phoenix-otel
+redis>=6.4.0
+specfile>=0.36.0

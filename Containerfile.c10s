@@ -60,19 +60,11 @@ RUN dnf -y install --allowerasing \
 COPY beeai-reasoning.patch /tmp
 COPY openinference-reasoning.patch /tmp
 
+# Copy dependency files
+COPY requirements-base.txt requirements-agent.txt /tmp/
+
 RUN pip3 install --no-cache-dir \
-      "litellm!=1.82.7,!=1.82.8" \
-      beeai-framework[vertexai,mcp,duckduckgo]==0.1.80 \
-      google-cloud-aiplatform \
-      openinference-instrumentation-beeai \
-      arize-phoenix-otel \
-      redis \
-      specfile \
-      pytest \
-      pytest-asyncio \
-      GitPython>=3.1.0 \
-      unidiff \
-      sentry-sdk>=2.13.0 \
+      -r /tmp/requirements-agent.txt \
     && cd /usr/local/lib/python3.12/site-packages \
     && patch -p2 -i /tmp/beeai-reasoning.patch \
     && patch -p5 -i /tmp/openinference-reasoning.patch

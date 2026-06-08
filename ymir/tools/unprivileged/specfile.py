@@ -22,7 +22,7 @@ from specfile.value_parser import (
     ValueParser,
 )
 
-from ymir.common.utils import get_absolute_path, get_latest_candidate_build
+from ymir.common.utils import get_absolute_path, get_all_patches, get_latest_candidate_build
 from ymir.tools.base import CloneableTool as Tool
 
 logger = logging.getLogger(__name__)
@@ -114,10 +114,9 @@ class GetPackageInfoTool(Tool[GetPackageInfoToolInput, ToolRunOptions, GetPackag
         try:
             with Specfile(spec_path) as spec:
                 version = spec.version
-                with spec.patches() as patches:
-                    valid_patches = [p for p in patches if p.valid and p.expanded_location]
-                    patch_files = [p.expanded_location for p in valid_patches]
-                    number_to_filename = {p.number: p.expanded_location for p in valid_patches}
+                valid_patches = [p for p in get_all_patches(spec) if p.valid and p.expanded_location]
+                patch_files = [p.expanded_location for p in valid_patches]
+                number_to_filename = {p.number: p.expanded_location for p in valid_patches}
 
                 strip_levels = _extract_strip_levels(spec, number_to_filename)
 

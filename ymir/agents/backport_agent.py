@@ -58,6 +58,7 @@ from ymir.common.models import (
     LogOutputSchema,
     Task,
 )
+from ymir.common.utils import get_all_patches
 from ymir.common.version_utils import is_older_zstream
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.distgit_detector import DistgitDetectorTool
@@ -1212,8 +1213,8 @@ async def run_workflow(
         async def stage_changes(state):
             try:
                 spec_path = state.local_clone / f"{state.package}.spec"
-                with Specfile(spec_path) as spec, spec.patches() as patches:
-                    patch_files = [p.expanded_location for p in patches if p.expanded_location]
+                with Specfile(spec_path) as spec:
+                    patch_files = [p.expanded_location for p in get_all_patches(spec) if p.expanded_location]
 
                 if not patch_files:
                     raise RuntimeError(f"Backport completed but no Patch tags found in {spec_path}")

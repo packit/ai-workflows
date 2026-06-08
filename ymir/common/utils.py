@@ -19,6 +19,9 @@ from beeai_framework.tools.types import JSONToolOutput, StringToolOutput
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.types import CallToolResult, TextContent
+from specfile import Specfile
+from specfile.sourcelist import Sourcelist
+from specfile.sources import Patches, Sources
 from specfile.utils import EVR
 
 from ymir.common.base_utils import is_cs_branch
@@ -160,6 +163,18 @@ def _evr_from_build(build: dict) -> EVR:
         version=build["version"],
         release=build["release"],
     )
+
+
+def get_all_sources(spec: Specfile) -> Sources:
+    parsed_sections = spec.parsed_sections
+    sourcelists = [Sourcelist.parse(s, context=spec) for s in parsed_sections if s.id == "sourcelist"]
+    return Sources(spec.tags(parsed_sections.package).content, sourcelists, context=spec)
+
+
+def get_all_patches(spec: Specfile) -> Patches:
+    parsed_sections = spec.parsed_sections
+    patchlists = [Sourcelist.parse(s, context=spec) for s in parsed_sections if s.id == "patchlist"]
+    return Patches(spec.tags(parsed_sections.package).content, patchlists, context=spec)
 
 
 def _get_latest_koji_build(koji_url: str, tag: str, package: str) -> dict | None:

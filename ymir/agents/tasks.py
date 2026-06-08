@@ -19,6 +19,7 @@ from ymir.common.models import (
     OpenMergeRequestResult,
     Task,
 )
+from ymir.common.utils import get_all_sources
 from ymir.tools.unprivileged.specfile import UpdateReleaseTool
 
 logger = logging.getLogger(__name__)
@@ -508,8 +509,8 @@ async def _fallback_extract_sources(local_clone: Path, package: str) -> Path:
     archive using Source0 from the spec file.
     """
     try:
-        with Specfile(local_clone / f"{package}.spec") as spec, spec.sources() as sources:
-            if not sources:
+        with Specfile(local_clone / f"{package}.spec") as spec:
+            if not (sources := get_all_sources(spec)):
                 raise ValueError(f"No sources defined in {package}.spec")
             archive = local_clone / sources[0].expanded_filename
             if not archive.is_file():

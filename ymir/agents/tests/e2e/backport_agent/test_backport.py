@@ -179,8 +179,20 @@ def run_test_cases_concurrently(request, mock_centos_stream_repos):
     for test_case in cases_to_run:
         if test_case.metrics is None:
             continue
-        collected_metrics.append([test_case.jira_issue, *test_case.metrics.values()])
-    request.config.stash["metrics"] = tabulate(collected_metrics, ["Issue", "Time"])
+        m = test_case.metrics
+        collected_metrics.append(
+            [
+                test_case.jira_issue,
+                m.get("agent_name", ""),
+                f"{m.get('duration', 0):.0f}s",
+                m.get("tool_calls", 0),
+                m.get("prompt_tokens", 0),
+                m.get("completion_tokens", 0),
+            ]
+        )
+    request.config.stash["metrics"] = tabulate(
+        collected_metrics, ["Issue", "Agent", "Duration", "Tool Calls", "Prompt Tokens", "Completion Tokens"]
+    )
 
 
 # ---------------------------------------------------------------------------

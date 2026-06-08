@@ -233,15 +233,27 @@ def run_test_cases_concurrently(request, mock_centos_stream_repos):
     for test_case in cases_to_run:
         if test_case.metrics is None:
             continue
-        collected_metrics.append([test_case.input, *test_case.metrics.values()])
-    request.config.stash["metrics"] = tabulate(collected_metrics, ["Issue", "Time"])
+        m = test_case.metrics
+        collected_metrics.append(
+            [
+                test_case.input,
+                m.get("agent_name", ""),
+                f"{m.get('duration', 0):.0f}s",
+                m.get("tool_calls", 0),
+                m.get("prompt_tokens", 0),
+                m.get("completion_tokens", 0),
+            ]
+        )
+    request.config.stash["metrics"] = tabulate(
+        collected_metrics, ["Issue", "Agent", "Duration", "Tool Calls", "Prompt Tokens", "Completion Tokens"]
+    )
 
 
 @pytest.mark.parametrize(
     "test_case",
     test_cases,
 )
-def test_triage_agent(test_case: TriageAgentTestCase):
+def test_triage_agent(test_case: TriageAgentTestCase, observability_fixture):
     if test_case.error is not None:
         raise test_case.error
 

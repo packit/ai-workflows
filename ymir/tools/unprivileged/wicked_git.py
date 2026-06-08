@@ -1,3 +1,5 @@
+import shutil
+
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
@@ -81,6 +83,71 @@ class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOption
             raise
         except Exception as e:
             raise ToolError(f"ERROR: {e}") from e
+
+
+class RunPackagePrepInput(BaseModel):
+    dist_git_path: AbsolutePath = Field(
+        description="Absolute path to the cloned dist-git repository",
+    )
+    package: str = Field(description="Package name")
+    namespace: str = Field(default="rpms", description="Package namespace")
+    dist_git_branch: str = Field(description="Dist-git branch")
+    pkg_tool: str = Field(
+        description="Package tool command (e.g. 'centpkg' or 'rhpkg --offline --released')",
+    )
+
+
+class RunPackagePrepTool(Tool[RunPackagePrepInput, ToolRunOptions, StringToolOutput]):
+    name = "run_package_prep"
+    description = """
+    Runs the package prep step (source extraction + patch application) to verify
+    that all patches apply cleanly. If prep fails, the build subdirectory is
+    removed to prevent inspection of a partially-patched source tree.
+    """
+    input_schema = RunPackagePrepInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "package", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: RunPackagePrepInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        dist_git = tool_input.dist_git_path
+        if not dist_git.exists():
+            raise ToolError(f"Dist-git path does not exist: {dist_git}")
+
+        pkg_tool_parts = tool_input.pkg_tool.split()
+
+        cmd = [
+            *pkg_tool_parts,
+            f"--name={tool_input.package}",
+            f"--namespace={tool_input.namespace}",
+            f"--release={tool_input.dist_git_branch}",
+            "prep",
+        ]
+
+        exit_code, stdout, stderr = await run_subprocess(cmd, cwd=dist_git)
+
+        if exit_code == 0:
+            return StringToolOutput(result=f"Prep succeeded.\n{stdout}")
+
+        # Prep failed — remove build subdirectories to prevent stale state.
+        # rpmbuild creates directories like <package>-<version>/ under the dist-git root.
+        for child in dist_git.iterdir():
+            if child.is_dir() and child.name.startswith(tool_input.package + "-"):
+                shutil.rmtree(child, ignore_errors=True)
+
+        return StringToolOutput(
+            result=f"Prep FAILED (exit code {exit_code}). "
+            "Build directory has been cleaned up to prevent stale state.\n"
+            f"stdout: {stdout}\nstderr: {stderr}"
+        )
 
 
 def ensure_git_repository(repository_path: AbsolutePath) -> None:

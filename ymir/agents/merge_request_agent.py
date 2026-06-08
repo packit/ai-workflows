@@ -52,6 +52,7 @@ from ymir.tools.unprivileged.text import (
     StrReplaceTool,
     ViewTool,
 )
+from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +70,7 @@ def get_instructions() -> str:
       2. If you updated the spec file, use `rpmlint <PACKAGE>.spec` to validate
          your changes and fix any new issues.
 
-      3. Verify any changes to patches by running
-         `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`.
+      3. Verify any changes to patches by using the `run_package_prep` tool.
          Repeat as necessary. Do not remove any patches unless all their hunks have been already applied
          to the upstream sources.
          Note: <PKG_TOOL> is `centpkg` for CentOS Stream branches (c9s, c10s) and `rhpkg` for RHEL branches.
@@ -153,6 +153,7 @@ def create_merge_request_agent(mcp_tools: list[Tool], local_tool_options: dict[s
             SearchTextTool(options=local_tool_options),
             GetCWDTool(options=local_tool_options),
             RemoveTool(options=local_tool_options),
+            RunPackagePrepTool(options=local_tool_options),
         ]
         + [t for t in mcp_tools if t.name == "upload_sources"],
         memory=UnconstrainedMemory(),

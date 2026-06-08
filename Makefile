@@ -48,7 +48,7 @@ run-triage-agent-standalone:
 
 .PHONY: run-triage-agent-e2e-tests
 run-triage-agent-e2e-tests:
-	$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		triage-agent-e2e-tests

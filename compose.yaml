@@ -24,12 +24,11 @@ x-beeai-agent: &beeai-agent
   env_file:
     - .secrets/beeai-agent.env
   volumes:
-    - ./ymir/agents:/home/beeai/ymir/agents:ro,z
-    - ./ymir/tools:/home/beeai/ymir/tools:ro,z
-    - ./ymir/common:/home/beeai/ymir/common:ro,z
+    - ./ymir:/home/beeai/ymir:ro,z
     - git-repos:/git-repos:rw,U
     - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
     - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z,U
+    - ./scripts:/home/beeai/scripts:ro,z
   restart: unless-stopped
 
 # C9S agent template

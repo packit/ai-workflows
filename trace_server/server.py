@@ -37,11 +37,13 @@ Environment variables
 ---------------------
 TRACE_DB_PATH       Path to the SQLite database file (default: /data/traces.db).
 TRACE_SERVER_PORT   Port to listen on (default: 8080).
+TRACE_LOG_LEVEL     Log level: DEBUG, INFO, WARNING, ERROR (default: INFO).
 """
 
 import gzip
 import io
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -51,8 +53,11 @@ from urllib.parse import parse_qs, urlparse
 
 from renderer import render_issues_html, render_spans_html
 
+logger = logging.getLogger(__name__)
+
 DB_PATH = os.environ.get("TRACE_DB_PATH", "/data/traces.db")
 PORT = int(os.environ.get("TRACE_SERVER_PORT", "8080"))
+LOG_LEVEL = os.environ.get("TRACE_LOG_LEVEL", "INFO").upper()
 MAX_PAYLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_LAST_TRACES = 900
 _STATUS_CODE_NAMES = {"STATUS_CODE_UNSET": 0, "STATUS_CODE_OK": 1, "STATUS_CODE_ERROR": 2}
@@ -68,8 +73,18 @@ def get_db() -> sqlite3.Connection:
     return _local.db
 
 
+def configure_logging() -> None:
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL, logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,
+    )
+
+
 def init_db() -> None:
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+    logger.debug("Initializing database at %s", DB_PATH)
     db = sqlite3.connect(DB_PATH)
     db.execute("""
         CREATE TABLE IF NOT EXISTS spans (
@@ -239,6 +254,7 @@ def _extract_spans(otlp_data: dict) -> list[SpanRow]:
 def ingest_spans(otlp_data: dict) -> int:
     spans = _extract_spans(otlp_data)
     if not spans:
+        logger.debug("No spans found in OTLP payload")
         return 0
     db = get_db()
     db.executemany(
@@ -249,6 +265,11 @@ def ingest_spans(otlp_data: dict) -> int:
         [s.as_tuple() for s in spans],
     )
     db.commit()
+    logger.debug(
+        "Ingested %d spans (%d issues)",
+        len(spans),
+        len({s.jira_issue for s in spans if s.jira_issue}),
+    )
     return len(spans)
 
 
@@ -312,6 +333,12 @@ def query_spans(issue: str, params: dict) -> list[dict]:
         query_bindings,
     ).fetchall()
 
+    logger.debug(
+        "query_spans(%r, %r) returned %d spans",
+        issue,
+        params,
+        len(rows),
+    )
     return [
         {
             "trace_id": r["trace_id"],
@@ -344,37 +371,51 @@ class TraceHandler(BaseHTTPRequestHandler):
             try:
                 length = int(self.headers.get("Content-Length", 0))
             except ValueError:
+                logger.warning("POST /v1/traces rejected: invalid content length")
                 self._send_json(400, {"error": "invalid content length"})
                 return
             if length <= 0:
+                logger.warning("POST /v1/traces rejected: missing content length")
                 self._send_json(400, {"error": "missing content length"})
                 return
             if length > MAX_PAYLOAD_SIZE:
+                logger.warning("POST /v1/traces rejected: payload too large (%d bytes)", length)
                 self._send_json(413, {"error": "payload too large"})
                 return
+            logger.debug("POST /v1/traces content-length=%d", length)
             body = self.rfile.read(length)
             if self.headers.get("Content-Encoding", "").lower() == "gzip":
                 try:
                     with gzip.GzipFile(fileobj=io.BytesIO(body)) as f:
                         body = f.read(MAX_PAYLOAD_SIZE + 1)
                 except (gzip.BadGzipFile, OSError, EOFError):
+                    logger.warning("POST /v1/traces rejected: invalid gzip payload")
                     self._send_json(400, {"error": "invalid gzip payload"})
                     return
                 if len(body) > MAX_PAYLOAD_SIZE:
+                    logger.warning(
+                        "POST /v1/traces rejected: decompressed payload too large (%d bytes)",
+                        len(body),
+                    )
                     self._send_json(413, {"error": "decompressed payload too large"})
                     return
+                logger.debug("Decompressed gzip payload to %d bytes", len(body))
             try:
                 data = json.loads(body)
             except ValueError:
+                logger.warning("POST /v1/traces rejected: invalid JSON")
                 self._send_json(400, {"error": "invalid JSON"})
                 return
             try:
                 count = ingest_spans(data)
             except Exception as e:
+                logger.exception("Failed to ingest spans")
                 self._send_json(500, {"error": f"failed to ingest spans: {e}"})
                 return
+            logger.info("Accepted %d spans", count)
             self._send_json(200, {"accepted": count})
         else:
+            logger.debug("POST %s not found", self.path)
             self._send_json(404, {"error": "not found"})
 
     def _wants_html(self) -> bool:
@@ -386,10 +427,13 @@ class TraceHandler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/")
         params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
 
+        logger.debug("GET %s params=%r", self.path, params)
+
         if path == "/health":
             self._send_json(200, {"status": "ok"})
         elif path == "/traces" or path == "":
             issues = query_issues()
+            logger.debug("Listed %d issues", len(issues))
             if self._wants_html():
                 self._send_html(200, render_issues_html(issues))
             else:
@@ -402,6 +446,7 @@ class TraceHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json(200, {"spans": spans, "count": len(spans)})
         else:
+            logger.debug("GET %s not found", self.path)
             self._send_json(404, {"error": "not found"})
 
     def _send_json(self, code: int, data: dict):
@@ -420,14 +465,15 @@ class TraceHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_request(self, code="-", size="-"):
-        pass
+    def log_message(self, format, *args):
+        logger.info("%s - %s", self.address_string(), format % args)
 
 
 def main():
+    configure_logging()
     init_db()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), TraceHandler)  # noqa: S104
-    print(f"Trace server listening on port {PORT}, db: {DB_PATH}", flush=True)
+    logger.info("Trace server listening on port %d, db: %s", PORT, DB_PATH)
     server.serve_forever()
 
 

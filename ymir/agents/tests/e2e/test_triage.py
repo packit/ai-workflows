@@ -44,7 +44,8 @@ class TriageAgentTestCase:
             return triage_agent
 
         try:
-            self.finished_state = await run_workflow(self.input, False, testing_factory)
+            with _span_processor.jira_issue_context(self.input):
+                self.finished_state = await run_workflow(self.input, False, testing_factory)
         except BaseException as e:
             self.error = e
         finally:
@@ -163,9 +164,22 @@ test_cases = [
 ]
 
 
+_span_processor = None
+
+
 @pytest.fixture(scope="session", autouse=True)
 def observability_fixture():
-    return setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+    """Set up OpenTelemetry tracing for the test session.
+
+    The returned ``AgentSpanProcessor`` is stored in the module-level
+    ``_span_processor`` so that each test case can wrap its ``run_workflow``
+    call with ``_span_processor.jira_issue_context(issue)`` — without this,
+    spans lack the ``jira.issue`` attribute and the trace-server cannot
+    index them by issue key.
+    """
+    global _span_processor
+    _span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+    yield _span_processor
 
 
 @pytest.fixture(scope="session", autouse=True)

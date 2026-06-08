@@ -59,16 +59,17 @@ class BackportAgentTestCase:
             return agent
 
         try:
-            self.finished_state = await run_workflow(
-                package=self.input["package"],
-                dist_git_branch=self.input["dist_git_branch"],
-                upstream_patches=self.input["upstream_patches"],
-                jira_issue=self.jira_issue,
-                cve_id=self.input.get("cve_id"),
-                fix_version=self.input.get("fix_version"),
-                dry_run=True,
-                backport_agent_factory=testing_factory,
-            )
+            with _span_processor.jira_issue_context(self.jira_issue):
+                self.finished_state = await run_workflow(
+                    package=self.input["package"],
+                    dist_git_branch=self.input["dist_git_branch"],
+                    upstream_patches=self.input["upstream_patches"],
+                    jira_issue=self.jira_issue,
+                    cve_id=self.input.get("cve_id"),
+                    fix_version=self.input.get("fix_version"),
+                    dry_run=True,
+                    backport_agent_factory=testing_factory,
+                )
             if self.finished_state:
                 artifacts_dir = os.getenv("BACKPORT_ARTIFACTS_DIR", str(DEFAULT_ARTIFACTS_DIR))
                 self.artifacts = capture_backport_artifacts(self.finished_state, Path(artifacts_dir))
@@ -92,9 +93,22 @@ def _load_test_cases(fixtures_dir: str | Path) -> list[BackportAgentTestCase]:
 test_cases = _load_test_cases(os.getenv("BACKPORT_MOCK_REPOS_DIR", str(DEFAULT_FIXTURES_DIR)))
 
 
+_span_processor = None
+
+
 @pytest.fixture(scope="session", autouse=True)
 def observability_fixture():
-    return setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+    """Set up OpenTelemetry tracing for the test session.
+
+    The returned ``AgentSpanProcessor`` is stored in the module-level
+    ``_span_processor`` so that each test case can wrap its ``run_workflow``
+    call with ``_span_processor.jira_issue_context(issue)`` — without this,
+    spans lack the ``jira.issue`` attribute and the trace-server cannot
+    index them by issue key.
+    """
+    global _span_processor
+    _span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+    yield _span_processor
 
 
 SHARED_BARE_REPOS_DIR = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / "mock_bare"

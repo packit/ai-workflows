@@ -12,6 +12,6 @@ spec:
   - ReadWriteMany
   resources:
     requests:
-      storage: 6Gi
+      storage: 150Gi
   storageClassName: netapp-nfs
   volumeMode: Filesystem

@@ -64,6 +64,11 @@ def get_chat_model() -> ChatModel:
         settings=settings,
         allow_parallel_tool_calls=bool(reasoning_effort),
     )
+    # beeai uses "vertexai" as the litellm provider ID, but litellm only
+    # recognizes "vertex_ai" for adaptive thinking detection (Claude 4.6+).
+    # Without this, litellm sends thinking.type=enabled which opus-4-8 rejects.
+    if hasattr(model, "_litellm_provider_id") and model._litellm_provider_id == "vertexai":
+        model._litellm_provider_id = "vertex_ai"
     if "gemini" in chat_model:
         # disable `required` for Gemini models
         model.tool_choice_support = {"single", "none", "auto"}

@@ -38,7 +38,7 @@ from ymir.common.models import (
     Task,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")
 
 

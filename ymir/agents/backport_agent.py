@@ -89,7 +89,7 @@ from ymir.tools.unprivileged.wicked_git import (
     RunPackagePrepTool,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")
 
 

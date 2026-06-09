@@ -75,7 +75,7 @@ from ymir.tools.unprivileged.commands import RunShellCommandTool
 # from ymir.tools.unprivileged.upstream_search import UpstreamSearchTool
 from ymir.tools.unprivileged.version_mapper import VersionMapperTool
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")
 
 

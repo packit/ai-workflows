@@ -16,7 +16,7 @@ from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState
 from ymir.agents.utils import (
-    format_mr_justification,
+    format_mr_triage_details,
     get_agent_execution_config,
     init_sentry,
     mcp_tools,
@@ -58,6 +58,7 @@ async def main() -> None:
         rebuild_success: bool = Field(default=False)
         rebuild_error: str | None = Field(default=None)
         justification: str | None = Field(default=None)
+        triage_summary: str | None = Field(default=None)
         dependency_issue: str | None = Field(default=None)
         dependency_component: str | None = Field(default=None)
         consolidated_issues: list[ConsolidatedIssue] = Field(default_factory=list)
@@ -68,6 +69,7 @@ async def main() -> None:
         dist_git_branch,
         jira_issue,
         justification=None,
+        triage_summary=None,
         dependency_issue=None,
         dependency_component=None,
         consolidated_issues=None,
@@ -210,7 +212,7 @@ async def main() -> None:
                             f"\nSibling consolidation analysis:\n{state.consolidation_summary}\n"
                         )
 
-                    justification_text = format_mr_justification(state.justification)
+                    triage_details_text = format_mr_triage_details(state.justification, state.triage_summary)
 
                     (
                         state.merge_request_url,
@@ -231,7 +233,7 @@ async def main() -> None:
                         mr_title=state.log_result.title,
                         mr_description=(
                             f"{state.log_result.description}\n\n"
-                            f"{justification_text}"
+                            f"{triage_details_text}"
                             f"{dep_text}"
                             f"{dep_issues_text}"
                             f"{resolves_text}\n"
@@ -294,6 +296,7 @@ async def main() -> None:
                     dist_git_branch=dist_git_branch,
                     jira_issue=jira_issue,
                     justification=justification,
+                    triage_summary=triage_summary,
                     dependency_issue=dependency_issue,
                     dependency_component=dependency_component,
                     consolidated_issues=consolidated_issues or [],
@@ -319,6 +322,7 @@ async def main() -> None:
                 dist_git_branch=branch,
                 jira_issue=jira_issue,
                 justification=os.getenv("JUSTIFICATION", None),
+                triage_summary=os.getenv("TRIAGE_SUMMARY", None),
                 dependency_issue=dependency_issue,
                 dependency_component=dependency_component,
                 consolidated_issues=consolidated_issues,
@@ -408,6 +412,7 @@ async def main() -> None:
                         dist_git_branch=dist_git_branch,
                         jira_issue=rebuild_data.jira_issue,
                         justification=rebuild_data.justification,
+                        triage_summary=rebuild_data.triage_summary,
                         dependency_issue=rebuild_data.dependency_issue,
                         dependency_component=rebuild_data.dependency_component,
                         consolidated_issues=rebuild_data.consolidated_issues,

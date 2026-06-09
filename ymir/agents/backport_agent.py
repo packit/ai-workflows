@@ -32,7 +32,7 @@ from ymir.agents.package_update_steps import PackageUpdateState, PackageUpdateSt
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import (
     check_subprocess,
-    format_mr_justification,
+    format_mr_triage_details,
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
@@ -42,6 +42,7 @@ from ymir.agents.utils import (
     render_prompt,
     resolve_chat_model_override,
     run_tool,
+    wrap_details,
 )
 from ymir.common.base_utils import fix_await, is_cs_branch, redis_client
 from ymir.common.constants import JiraLabels, RedisQueues
@@ -668,6 +669,13 @@ def get_prompt() -> str:
       Your working directory is {{local_clone}}, a clone of dist-git repository of package {{package}}.
       {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
       {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
+      {{#triage_summary}}
+      Triage context (from the triage agent that selected these patches):
+      {{.}}
+      Apply all provided patches as-is unless the triage context above explicitly
+      states that only specific parts of the patches are relevant. Only then should
+      you selectively apply the indicated changes.
+      {{/triage_summary}}
       {{^build_error}}
       Backport upstream patches:
       {{#upstream_patches}}
@@ -691,6 +699,13 @@ BACKPORT_FIX_BUILD_ERROR_PROMPT = """
       Your working directory is {{local_clone}}, a clone of dist-git repository of package {{package}}.
       {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
       {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
+      {{#triage_summary}}
+      Triage context (from the triage agent that selected these patches):
+      {{.}}
+      Apply all provided patches as-is unless the triage context above explicitly
+      states that only specific parts of the patches are relevant. Only then should
+      you selectively apply the indicated changes.
+      {{/triage_summary}}
 
       Upstream patches that were backported:
       {{#upstream_patches}}
@@ -935,6 +950,7 @@ class BackportState(PackageUpdateState):
     upstream_patches: list[str]
     cve_id: str | None
     justification: str | None = Field(default=None)
+    triage_summary: str | None = Field(default=None)
     unpacked_sources: Path | None = Field(default=None)
     backport_log: list[str] = Field(default_factory=list)
     backport_result: BackportOutputSchema | None = Field(default=None)
@@ -952,6 +968,7 @@ async def run_workflow(
     jira_issue,
     cve_id,
     justification=None,
+    triage_summary=None,
     fix_version=None,
     redis_conn=None,
     dry_run=False,
@@ -1063,6 +1080,7 @@ async def run_workflow(
                         upstream_patches=state.upstream_patches,
                         build_error=state.build_error,
                         pkg_tool=pkg_tool,
+                        triage_summary=state.triage_summary,
                     ),
                 ),
                 expected_output=BackportOutputSchema,
@@ -1154,6 +1172,7 @@ async def run_workflow(
                             upstream_patches=state.upstream_patches,
                             build_error=state.build_error,
                             pkg_tool=pkg_tool,
+                            triage_summary=state.triage_summary,
                         ),
                     ),
                     expected_output=BackportOutputSchema,
@@ -1325,7 +1344,7 @@ async def run_workflow(
         async def commit_push_and_open_mr(state):
             try:
                 formatted_patches = "\n".join(f" - {p}" for p in state.upstream_patches)
-                justification_text = format_mr_justification(state.justification)
+                triage_details_text = format_mr_triage_details(state.justification, state.triage_summary)
                 (
                     state.merge_request_url,
                     state.merge_request_newly_created,
@@ -1349,9 +1368,9 @@ async def run_workflow(
                     mr_description=(
                         f"{state.log_result.description}\n\n"
                         f"Upstream patches:\n{formatted_patches}\n\n"
-                        f"{justification_text}"
+                        f"{triage_details_text}"
                         f"Resolves: {state.jira_issue}\n\n"
-                        f"Backporting steps:\n\n{state.backport_log[-1]}"
+                        f"{wrap_details('Backporting steps', state.backport_log[-1])}"
                         f"\n\n{mr_description_footer(state.package)}"
                     ),
                     available_tools=gateway_tools,
@@ -1415,6 +1434,7 @@ async def run_workflow(
                 jira_issue=jira_issue,
                 cve_id=cve_id,
                 justification=justification,
+                triage_summary=triage_summary,
                 fix_version=fix_version,
                 attempts_remaining=max_build_attempts,
             ),
@@ -1450,6 +1470,7 @@ async def main() -> None:
                 jira_issue=jira_issue,
                 cve_id=os.getenv("CVE_ID", None),
                 justification=os.getenv("JUSTIFICATION", None),
+                triage_summary=os.getenv("TRIAGE_SUMMARY", None),
                 fix_version=branch,
                 redis_conn=None,
                 dry_run=dry_run,
@@ -1527,6 +1548,7 @@ async def main() -> None:
                         jira_issue=backport_data.jira_issue,
                         cve_id=backport_data.cve_id,
                         justification=backport_data.justification,
+                        triage_summary=backport_data.triage_summary,
                         fix_version=backport_data.fix_version,
                         redis_conn=redis,
                         dry_run=dry_run,

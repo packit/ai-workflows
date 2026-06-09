@@ -156,18 +156,27 @@ def build_agent_factory_with_mock_repos(
     return agent_factory
 
 
-def format_mr_justification(justification: str | None) -> str:
-    """Format justification text for MR descriptions.
+def wrap_details(summary: str, body: str) -> str:
+    """Wrap content in a collapsible HTML <details> block for GitLab MR descriptions."""
+    return f"<details>\n<summary>{summary}</summary>\n\n{body}\n\n</details>"
 
-    Args:
-        justification: Optional justification text from triage agent
 
-    Returns:
-        Formatted string with "Justification:" header and trailing newlines,
-        or empty string if justification is None
+def format_mr_triage_details(
+    justification: str | None,
+    triage_summary: str | None = None,
+) -> str:
+    """Format justification and triage summary for MR descriptions.
+
+    Wraps content in a collapsible <details> block.
     """
-    if justification:
-        return f"Triage Decision Justification:\n{justification}\n\n"
+    parts = []
+    if triage_summary and triage_summary.strip():
+        parts.append(f"**Reasoning:**\n{triage_summary.strip()}")
+    if justification and justification.strip():
+        parts.append(f"**Justification:**\n{justification.strip()}")
+    if parts:
+        body = "\n\n".join(parts)
+        return wrap_details("Triage Details", body) + "\n\n"
     return ""
 
 

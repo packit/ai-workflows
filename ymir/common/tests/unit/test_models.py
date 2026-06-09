@@ -384,3 +384,65 @@ def test_rebuild_data_without_justification():
     comment = result.format_for_comment()
     assert "*Justification*" not in comment
     assert "*Package*: git-lfs" in comment
+
+
+# --- triage_summary in format_for_comment ---
+
+
+def test_backport_formatting_with_triage_summary():
+    data = BackportData(
+        package="readline",
+        patch_urls=["https://example.com/patch.patch"],
+        justification="Fixes the bug in bind.c",
+        triage_summary="Investigated CVE-2024-1234. Found fix in upstream commit abc123.",
+        jira_issue="RHEL-12345",
+        cve_id="CVE-2024-1234",
+        fix_version="rhel-10.0",
+    )
+    result = TriageOutputSchema(resolution=Resolution.BACKPORT, data=data)
+    comment = result.format_for_comment()
+    assert "*Triage Reasoning*: Investigated CVE-2024-1234" in comment
+    assert "*Justification*: Fixes the bug in bind.c" in comment
+
+
+def test_rebase_formatting_with_triage_summary():
+    data = RebaseData(
+        package="httpd",
+        version="2.4.55",
+        jira_issue="RHEL-67890",
+        fix_version="rhel-9.5",
+        justification="Update to upstream version 2.4.55 to fix the issue",
+        triage_summary="Checked upstream release notes. Bug fixed in 2.4.55.",
+    )
+    result = TriageOutputSchema(resolution=Resolution.REBASE, data=data)
+    comment = result.format_for_comment()
+    assert "*Triage Reasoning*: Checked upstream release notes" in comment
+    assert "*Justification*: Update to upstream version 2.4.55" in comment
+
+
+def test_rebuild_formatting_with_triage_summary():
+    data = RebuildData(
+        package="git-lfs",
+        jira_issue="RHEL-100",
+        fix_version="rhel-9.8",
+        justification="Rebuild needed against updated dependency",
+        triage_summary="CVE is in golang standard library. Package vendors Go deps.",
+    )
+    result = TriageOutputSchema(resolution=Resolution.REBUILD, data=data)
+    comment = result.format_for_comment()
+    assert "*Triage Reasoning*: CVE is in golang standard library" in comment
+    assert "*Justification*: Rebuild needed against updated dependency" in comment
+
+
+def test_backport_formatting_without_triage_summary():
+    """Backward compat: triage_summary absent should not affect output."""
+    data = BackportData(
+        package="readline",
+        patch_urls=["https://example.com/patch.patch"],
+        justification="Fixes the bug in bind.c",
+        jira_issue="RHEL-12345",
+    )
+    result = TriageOutputSchema(resolution=Resolution.BACKPORT, data=data)
+    comment = result.format_for_comment()
+    assert "*Triage Reasoning*" not in comment
+    assert "*Justification*: Fixes the bug in bind.c" in comment

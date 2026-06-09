@@ -28,7 +28,7 @@ from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState, PackageUpdateStep
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import (
-    format_mr_justification,
+    format_mr_triage_details,
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
@@ -37,6 +37,7 @@ from ymir.agents.utils import (
     mcp_tools,
     render_prompt,
     resolve_chat_model_override,
+    wrap_details,
 )
 from ymir.common.base_utils import fix_await, is_cs_branch, redis_client
 from ymir.common.constants import JiraLabels, RedisQueues
@@ -167,6 +168,10 @@ def get_prompt() -> str:
       to do so.
       {{/fedora_clone}}
 
+      {{#triage_summary}}
+      Triage context (from the triage agent that selected this rebase):
+      {{.}}
+      {{/triage_summary}}
       {{^build_error}}
       Rebase the package to version {{version}}.
       {{/build_error}}
@@ -234,6 +239,7 @@ async def main() -> None:
     class State(PackageUpdateState):
         version: str
         justification: str | None = Field(default=None)
+        triage_summary: str | None = Field(default=None)
         fedora_clone: Path | None = Field(default=None)
         rebase_log: list[str] = Field(default_factory=list)
         rebase_result: RebaseOutputSchema | None = Field(default=None)
@@ -247,6 +253,7 @@ async def main() -> None:
         version,
         jira_issue,
         justification=None,
+        triage_summary=None,
         redis_conn=None,
         user_triggered=False,
     ):
@@ -309,6 +316,7 @@ async def main() -> None:
                             jira_issue=state.jira_issue,
                             build_error=state.build_error,
                             pkg_tool=pkg_tool,
+                            triage_summary=state.triage_summary,
                         ),
                     ),
                     expected_output=RebaseOutputSchema,
@@ -420,7 +428,7 @@ async def main() -> None:
 
             async def commit_push_and_open_mr(state):
                 try:
-                    justification_text = format_mr_justification(state.justification)
+                    triage_details_text = format_mr_triage_details(state.justification, state.triage_summary)
                     (
                         state.merge_request_url,
                         state.merge_request_newly_created,
@@ -439,9 +447,9 @@ async def main() -> None:
                         mr_title=state.log_result.title,
                         mr_description=(
                             f"{state.log_result.description}\n\n"
-                            f"{justification_text}"
+                            f"{triage_details_text}"
                             f"Resolves: {state.jira_issue}\n\n"
-                            f"Status of the rebase:\n\n{state.rebase_log[-1]}"
+                            f"{wrap_details('Rebase status', state.rebase_log[-1])}"
                             f"\n\n{mr_description_footer(state.package)}"
                         ),
                         available_tools=gateway_tools,
@@ -502,6 +510,7 @@ async def main() -> None:
                     version=version,
                     jira_issue=jira_issue,
                     justification=justification,
+                    triage_summary=triage_summary,
                 ),
             )
             return response.state
@@ -520,6 +529,7 @@ async def main() -> None:
                 version=version,
                 jira_issue=jira_issue,
                 justification=os.getenv("JUSTIFICATION", None),
+                triage_summary=os.getenv("TRIAGE_SUMMARY", None),
                 redis_conn=None,
             )
             logger.info(f"Direct run completed: {state.rebase_result.model_dump_json(indent=4)}")
@@ -592,6 +602,7 @@ async def main() -> None:
                         version=rebase_data.version,
                         jira_issue=rebase_data.jira_issue,
                         justification=rebase_data.justification,
+                        triage_summary=rebase_data.triage_summary,
                         redis_conn=redis,
                         user_triggered=user_triggered,
                     )

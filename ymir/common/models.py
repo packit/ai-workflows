@@ -105,6 +105,10 @@ class RebaseInputSchema(BaseModel):
     version: str = Field(description="Version to update to")
     jira_issue: str = Field(description="Jira issue to reference as resolved")
     build_error: str | None = Field(description="Error encountered during package build")
+    triage_summary: str | None = Field(
+        default=None,
+        description="Triage context: what was investigated and guidance on how the rebase should be done",
+    )
 
 
 class RebaseOutputSchema(BaseModel):
@@ -143,6 +147,10 @@ class BackportInputSchema(BaseModel):
     )
     build_error: str | None = Field(description="Error encountered during package build")
     pkg_tool: str = Field(default="centpkg", description="Package tool command with arguments")
+    triage_summary: str | None = Field(
+        default=None,
+        description="Triage context: what was investigated and guidance on how the backport should be done",
+    )
 
 
 class BackportOutputSchema(BaseModel):
@@ -193,7 +201,15 @@ class RebaseData(BaseModel):
     package: str = Field(description="Package name")
     version: str = Field(description="Target upstream package version to rebase to (e.g., '2.4.1')")
     justification: str | None = Field(
-        default=None, description="Clear explanation of why this version fixes the issue"
+        default=None,
+        description="Reviewer-facing rationale: why this version fixes the issue. "
+        "Do NOT include investigation narrative here.",
+    )
+    triage_summary: str | None = Field(
+        default=None,
+        description="Investigation log and downstream-agent handoff: what was searched, "
+        "what was ruled out, caveats, and operational guidance. "
+        "Do NOT repeat the justification rationale here.",
     )
     jira_issue: str = Field(description="Jira issue identifier")
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
@@ -212,10 +228,18 @@ class BackportData(BaseModel):
     )
     justification: str = Field(
         description=(
-            "Clear explanation of why this patch fixes the issue, linking it to the root cause. "
+            "Reviewer-facing rationale: why this patch fixes the issue, linking it to the root cause. "
             "For CVE issues: explicitly state whether the patch mentions the CVE ID, and if not, "
-            "explain how you verified the patch addresses the specific vulnerability described in the CVE."
+            "explain how the patch addresses the specific vulnerability. "
+            "Do NOT include investigation narrative here."
         )
+    )
+    triage_summary: str | None = Field(
+        default=None,
+        description="Investigation log and downstream-agent handoff: what was searched, "
+        "what was ruled out, caveats, and operational guidance "
+        "(e.g. which part of a broad patch is the actual fix). "
+        "Do NOT repeat the justification rationale here.",
     )
     jira_issue: str = Field(description="Jira issue identifier")
     cve_id: str | None = Field(description="CVE identifier", default=None)
@@ -244,7 +268,14 @@ class RebuildData(BaseModel):
     cve_id: str | None = Field(description="CVE identifier", default=None)
     justification: str | None = Field(
         default=None,
-        description="Clear explanation of why a rebuild is needed and how it addresses the issue",
+        description="Reviewer-facing rationale: why a rebuild is needed and how it addresses the issue. "
+        "Do NOT include investigation narrative here.",
+    )
+    triage_summary: str | None = Field(
+        default=None,
+        description="Investigation log and downstream-agent handoff: what was searched, "
+        "what was ruled out, caveats, and operational guidance. "
+        "Do NOT repeat the justification rationale here.",
     )
     dependency_issue: str | None = Field(
         description="Key of the dependency Jira issue that triggered the rebuild",
@@ -413,10 +444,16 @@ class TriageOutputSchema(BaseModel):
                 patch_urls_text = "\n".join(
                     [f"*Patch URL {i + 1}*: {url}" for i, url in enumerate(self.data.patch_urls)]
                 )
+                triage_summary_text = (
+                    f"\n*Triage Reasoning*: {self.data.triage_summary.strip()}"
+                    if self.data.triage_summary and self.data.triage_summary.strip()
+                    else ""
+                )
                 return (
                     f"{resolution}"
                     f"{patch_urls_text}\n"
                     f"*Justification*: {self.data.justification}"
+                    f"{triage_summary_text}"
                     f"{fix_version_text}"
                     f"{follow_up_note}"
                     f"{TRIAGE_DISCLAIMER}"
@@ -429,12 +466,17 @@ class TriageOutputSchema(BaseModel):
                 justification_text = (
                     f"\n*Justification*: {self.data.justification}" if self.data.justification else ""
                 )
+                triage_summary_text = (
+                    f"\n*Triage Reasoning*: {self.data.triage_summary.strip()}"
+                    if self.data.triage_summary and self.data.triage_summary.strip()
+                    else ""
+                )
 
                 return (
                     f"{resolution}"
                     f"*Package*: {self.data.package}\n"
                     f"*Version*: {self.data.version}"
-                    f"{justification_text}{fix_version_text}"
+                    f"{justification_text}{triage_summary_text}{fix_version_text}"
                     f"{follow_up_note}"
                     f"{TRIAGE_DISCLAIMER}"
                 )
@@ -445,6 +487,11 @@ class TriageOutputSchema(BaseModel):
                 )
                 justification_text = (
                     f"\n*Justification*: {self.data.justification}" if self.data.justification else ""
+                )
+                triage_summary_text = (
+                    f"\n*Triage Reasoning*: {self.data.triage_summary.strip()}"
+                    if self.data.triage_summary and self.data.triage_summary.strip()
+                    else ""
                 )
                 dep_text = (
                     f"\n*Dependency Issue*: {self.data.dependency_issue}"
@@ -467,6 +514,7 @@ class TriageOutputSchema(BaseModel):
                     f"{resolution}"
                     f"*Package*: {self.data.package}"
                     f"{justification_text}"
+                    f"{triage_summary_text}"
                     f"{dep_comp_text}"
                     f"{dep_text}"
                     f"{fix_version_text}"

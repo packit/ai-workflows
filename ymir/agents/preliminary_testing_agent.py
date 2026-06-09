@@ -519,7 +519,7 @@ async def main() -> None:
         sys.exit(1)
 
     logger.info("Running preliminary testing analysis for %s (dry_run=%s)", jira_issue, dry_run)
-    with span_processor.jira_issue_context(jira_issue):
+    with span_processor.start_transaction(jira_issue, workflow="preliminary_testing"):
         result = await run_preliminary_testing(
             jira_issue,
             dry_run=dry_run,

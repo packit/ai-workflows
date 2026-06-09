@@ -1254,7 +1254,7 @@ async def main() -> None:
 
     if jira_issue := os.getenv("JIRA_ISSUE", None):
         logger.info("Running in direct mode with environment variable")
-        with span_processor.jira_issue_context(jira_issue):
+        with span_processor.start_transaction(jira_issue, workflow="triage"):
             agent_factory = build_agent_factory_with_mock_repos(create_triage_agent, jira_issue)
             state = await run_workflow(
                 jira_issue,
@@ -1398,7 +1398,7 @@ async def main() -> None:
 
             try:
                 logger.info(f"Starting triage processing for {input.issue}")
-                with span_processor.jira_issue_context(input.issue):
+                with span_processor.start_transaction(input.issue, workflow="triage"):
                     state = await run_workflow(
                         input.issue,
                         dry_run,

@@ -313,7 +313,7 @@ async def main() -> None:
         consolidated_raw = os.getenv("CONSOLIDATED_ISSUES", None)
         consolidated_issues = json.loads(consolidated_raw) if consolidated_raw else None
         logger.info("Running in direct mode with environment variables")
-        with span_processor.jira_issue_context(jira_issue):
+        with span_processor.start_transaction(jira_issue, workflow="rebuild"):
             state = await run_workflow(
                 package=package,
                 dist_git_branch=branch,
@@ -402,7 +402,7 @@ async def main() -> None:
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
             try:
-                with span_processor.jira_issue_context(rebuild_data.jira_issue):
+                with span_processor.start_transaction(rebuild_data.jira_issue, workflow="rebuild"):
                     state = await run_workflow(
                         package=rebuild_data.package,
                         dist_git_branch=dist_git_branch,

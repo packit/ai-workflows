@@ -33,7 +33,7 @@ from ymir.agents.utils import (
 from ymir.common.logging_setup import configure_logging
 from ymir.tools.unprivileged.greenwave import FetchGreenWaveTool, FetchTestingFarmResultsTool
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__file__)
 
 FIXED_IN_BUILD_CUSTOM_FIELD = "customfield_10578"
 TEST_COVERAGE_CUSTOM_FIELD = "customfield_10638"

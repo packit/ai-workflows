@@ -2,8 +2,11 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import tempfile
 import time
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 import git
 from beeai_framework.context import RunContext
@@ -18,11 +21,56 @@ from ymir.tools.base import CloneableTool as Tool
 logger = logging.getLogger(__name__)
 
 SYNC_TIMEOUT = 1 * 60 * 60  # seconds
+_TRANSIENT_MAX_RETRIES = 3
+_TRANSIENT_BASE_DELAY = 5  # seconds
+
+_TRANSIENT_STDERR_PATTERNS = (
+    "connection closed",
+    "connection reset",
+    "connection timed out",
+    "connection refused",
+    "network is unreachable",
+    "no route to host",
+    "broken pipe",
+    "ssh_exchange_identification",
+    "failed to push some refs",
+)
+
+_T = TypeVar("_T")
 
 
 def _sanitize_url(text: str) -> str:
     """Remove oauth2:{token}@ credentials from URLs in error messages."""
     return re.sub(r"oauth2:[^@\s]+@", "oauth2:***@", text)
+
+
+def _is_transient_git_error(exc: Exception) -> bool:
+    if not isinstance(exc, git.exc.GitCommandError):
+        return False
+    stderr = str(exc.stderr or "").lower()
+    return any(p in stderr for p in _TRANSIENT_STDERR_PATTERNS)
+
+
+async def _retry_transient(
+    fn: Callable[[], Awaitable[_T]],
+    label: str,
+    max_retries: int = _TRANSIENT_MAX_RETRIES,
+    base_delay: int = _TRANSIENT_BASE_DELAY,
+) -> _T:
+    for attempt in range(max_retries):
+        try:
+            return await fn()
+        except Exception as e:
+            if attempt < max_retries - 1 and _is_transient_git_error(e):
+                backoff = base_delay * 2**attempt
+                logger.warning(
+                    f"{label} failed (attempt {attempt + 1}/{max_retries}): "
+                    f"{_sanitize_url(str(e))}; retrying in {backoff}s"
+                )
+                await asyncio.sleep(backoff)
+            else:
+                raise
+    raise AssertionError("unreachable")
 
 
 class CreateZstreamBranchToolInput(BaseModel):
@@ -59,7 +107,10 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
         token = os.environ["GITLAB_TOKEN"]
         gitlab_repo_url = f"https://oauth2:{token}@gitlab.com/redhat/rhel/rpms/{package}"
         try:
-            if await asyncio.to_thread(git.cmd.Git().ls_remote, gitlab_repo_url, branch, branches=True):
+            if await _retry_transient(
+                lambda: asyncio.to_thread(git.cmd.Git().ls_remote, gitlab_repo_url, branch, branches=True),
+                f"ls_remote GitLab {package}/{branch}",
+            ):
                 return StringToolOutput(
                     result=f"Z-Stream branch {branch} already exists, no need to create it"
                 )
@@ -69,41 +120,47 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
             with tempfile.TemporaryDirectory() as path:
                 # Username is taken from the Kerberos principal and embedded in
                 # the URL explicitly — do not rely on the SSH config User setting.
-                repo = await asyncio.to_thread(
-                    git.Repo.clone_from,
-                    f"ssh://{username}@pkgs.devel.redhat.com/rpms/{package}",
-                    path,
-                )
+                clone_url = f"ssh://{username}@pkgs.devel.redhat.com/rpms/{package}"
+                clone_dest = os.path.join(path, package)
+
+                async def _clone():
+                    if os.path.exists(clone_dest):
+                        shutil.rmtree(clone_dest)
+                    return await asyncio.to_thread(git.Repo.clone_from, clone_url, clone_dest)
+
+                repo = await _retry_transient(_clone, f"clone {package} from dist-git")
                 if branch in [ref.name.split("/")[-1] for ref in repo.remotes.origin.refs]:
                     # Branch already exists in dist-git but not yet mirrored to GitLab.
                     # This happens when a previous push succeeded server-side but the SSH
                     # connection dropped before the client received the ACK. Skip the push
                     # and fall through to poll GitLab for the sync.
                     logger.warning(
-                        "Branch %s already exists in dist-git but not yet on GitLab; "
-                        "skipping push and waiting for mirror sync",
-                        branch,
+                        f"Branch {branch} already exists in dist-git but not yet on GitLab; "
+                        "skipping push and waiting for mirror sync"
                     )
                 else:
                     _, ref = await get_latest_candidate_build(package, branch)
-                    # The push can fail transiently due to bastion network issues; the beeai
-                    # framework will retry the whole tool call in that case.
-                    push_infos = await asyncio.to_thread(
-                        repo.remotes.origin.push, f"{ref}:refs/heads/{branch}"
+                    push_infos = await _retry_transient(
+                        lambda: asyncio.to_thread(repo.remotes.origin.push, f"{ref}:refs/heads/{branch}"),
+                        f"push {branch} to dist-git",
                     )
                     for info in push_infos:
                         if info.flags & git.remote.PushInfo.ERROR:
                             raise RuntimeError(f"Push rejected: {info.summary.strip()}")
                 start_time = time.monotonic()
                 while time.monotonic() - start_time < SYNC_TIMEOUT:
-                    if await asyncio.to_thread(repo.git.ls_remote, gitlab_repo_url, branch, branches=True):
-                        return StringToolOutput(result=f"Successfully created Z-Stream branch {branch}")
+                    try:
+                        if await asyncio.to_thread(
+                            repo.git.ls_remote, gitlab_repo_url, branch, branches=True
+                        ):
+                            return StringToolOutput(result=f"Successfully created Z-Stream branch {branch}")
+                    except git.exc.GitCommandError as e:
+                        if not _is_transient_git_error(e):
+                            raise
+                        logger.warning(f"Transient error polling GitLab mirror sync: {_sanitize_url(str(e))}")
                     elapsed = int(time.monotonic() - start_time)
                     logger.info(
-                        "Waiting for GitLab mirror sync of %s branch %s (%ds elapsed)",
-                        package,
-                        branch,
-                        elapsed,
+                        f"Waiting for GitLab mirror sync of {package} branch {branch} ({elapsed}s elapsed)"
                     )
                     await asyncio.sleep(30)
                 raise RuntimeError(

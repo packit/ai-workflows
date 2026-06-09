@@ -5,7 +5,11 @@ from flexmock import flexmock
 from specfile.utils import EVR
 
 from ymir.tools.privileged import distgit as distgit_tools
-from ymir.tools.privileged.distgit import CreateZstreamBranchTool
+from ymir.tools.privileged.distgit import (
+    CreateZstreamBranchTool,
+    _is_transient_git_error,
+    _retry_transient,
+)
 
 
 @pytest.mark.parametrize(
@@ -134,3 +138,54 @@ async def test_create_zstream_branch_push_rejected(monkeypatch):
 
     with pytest.raises(ToolError, match="Push rejected"):
         await CreateZstreamBranchTool().run(input={"package": package, "branch": branch})
+
+
+@pytest.mark.parametrize(
+    "stderr, expected_transient",
+    [
+        ("Connection closed by 10.2.32.39 port 22\nfatal: Could not read from remote repository.", True),
+        ("Connection reset by peer", True),
+        ("ssh_exchange_identification: Connection closed by remote host", True),
+        ("error: failed to push some refs to 'ssh://pkgs.devel.redhat.com/rpms/ruby'", True),
+        ("Permission denied (publickey)", False),
+        ("fatal: Authentication failed for 'https://example.com/'", False),
+        ("fatal: Could not read from remote repository.", False),
+    ],
+)
+def test_is_transient_git_error(stderr, expected_transient):
+    exc = git.exc.GitCommandError(["git", "clone"], status=128, stderr=stderr)
+    assert _is_transient_git_error(exc) == expected_transient
+
+
+@pytest.mark.asyncio
+async def test_retry_transient_clone_recovers():
+    """Clone fails transiently twice then succeeds on third attempt."""
+    call_count = 0
+
+    async def flaky_clone():
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            raise git.exc.GitCommandError(
+                ["git", "clone"], status=128, stderr="Connection closed by 10.2.32.39 port 22"
+            )
+        return "cloned"
+
+    result = await _retry_transient(flaky_clone, "test-clone", max_retries=3, base_delay=0)
+    assert result == "cloned"
+    assert call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_retry_transient_permanent_error_no_retry():
+    """Permanent errors are raised immediately without retrying."""
+    call_count = 0
+
+    async def permanent_fail():
+        nonlocal call_count
+        call_count += 1
+        raise git.exc.GitCommandError(["git", "clone"], status=128, stderr="Permission denied (publickey)")
+
+    with pytest.raises(git.exc.GitCommandError, match="Permission denied"):
+        await _retry_transient(permanent_fail, "test-clone", max_retries=3, base_delay=0)
+    assert call_count == 1

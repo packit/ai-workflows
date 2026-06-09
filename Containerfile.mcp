@@ -30,8 +30,11 @@ RUN dnf -y install \
       ${EXTRA_PACKAGES} \
     && dnf clean all
 
+# Copy dependency files
+COPY requirements-mcp.txt /tmp/
+
 # Install beeai mcp server
-RUN pip3 install --no-cache-dir "litellm!=1.82.7,!=1.82.8" beeai-framework[mcp]==0.1.80 "specfile>=0.36.0"
+RUN pip3 install --no-cache-dir -r /tmp/requirements-mcp.txt
 
 # Create user
 RUN useradd -m -G wheel mcp

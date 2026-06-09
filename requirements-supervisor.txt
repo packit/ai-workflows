@@ -1,0 +1,3 @@
+# Supervisor container dependencies
+-r requirements-base.txt
+google-cloud-aiplatform

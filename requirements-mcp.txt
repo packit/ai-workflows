@@ -1,0 +1,4 @@
+# Dependencies for the MCP gateway container (beeai[mcp] only, no vertexai/duckduckgo)
+litellm!=1.82.7,!=1.82.8
+beeai-framework[mcp]==0.1.80
+specfile>=0.36.0

@@ -59,21 +59,14 @@ RUN dnf -y install --allowerasing \
 COPY beeai-reasoning.patch /tmp
 COPY openinference-reasoning.patch /tmp
 
+# Copy dependency files
+COPY requirements-base.txt requirements-agent.txt /tmp/
+
 # Create Python 3.11 virtual environment and install Python packages
 RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
     && /opt/beeai-venv/bin/pip install --upgrade pip \
     && /opt/beeai-venv/bin/pip install --no-cache-dir \
-         "litellm!=1.82.7,!=1.82.8" \
-         beeai-framework[vertexai,mcp,duckduckgo]==0.1.80 \
-         google-cloud-aiplatform \
-         openinference-instrumentation-beeai \
-         arize-phoenix-otel \
-         redis \
-         specfile \
-         koji \
-         GitPython>=3.1.0 \
-         unidiff \
-         sentry-sdk>=2.13.0 \
+        -r /tmp/requirements-agent.txt \
     && cd /opt/beeai-venv/lib/python3.11/site-packages \
     && patch -p2 -i /tmp/beeai-reasoning.patch \
     && patch -p5 -i /tmp/openinference-reasoning.patch

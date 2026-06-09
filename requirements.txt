@@ -1,11 +1,12 @@
 # Dependencies specific to the root ymir package
-ymir-common
-ymir-tools
+# Note: ymir-common and ymir-tools are workspace packages (not on PyPI).
+# They are resolved by uv via [tool.uv.sources] in pyproject.toml.
+# For development setup, use: uv sync
 litellm!=1.82.7,!=1.82.8
 aiohttp>=3.12.15
 arize-phoenix-otel>=0.13.0
 beautifulsoup4>=4.13.4
-beeai-framework[duckduckgo]
+beeai-framework[duckduckgo]==0.1.80
 copr>=1.129
 fastmcp>=2.11.3
 ogr>=0.55.0

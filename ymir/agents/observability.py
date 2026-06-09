@@ -2,6 +2,7 @@ import atexit
 import contextlib
 from contextvars import ContextVar
 
+import sentry_sdk
 from openinference.instrumentation.beeai import BeeAIInstrumentor
 from opentelemetry import trace as trace_api
 from opentelemetry.context import Context
@@ -19,12 +20,22 @@ class AgentSpanProcessor(SpanProcessor):
         self._jira_issue_var.set(jira_issue)
 
     @contextlib.contextmanager
-    def jira_issue_context(self, jira_issue: str | None):
-        token = self._jira_issue_var.set(jira_issue)
-        try:
-            yield
-        finally:
-            self._jira_issue_var.reset(token)
+    def start_transaction(
+        self,
+        jira_issue: str | None,
+        workflow: str | None,
+    ):
+        with sentry_sdk.start_transaction(
+            op=f"agent.{workflow}", name=f"{workflow} for {jira_issue}"
+        ) as transaction:
+            transaction.set_data("workflow", workflow)
+            transaction.set_data("jira_issue", jira_issue)
+
+            token = self._jira_issue_var.set(jira_issue)
+            try:
+                yield
+            finally:
+                self._jira_issue_var.reset(token)
 
     def on_start(self, span: Span, parent_context: Context | None = None) -> None:
         if span.is_recording():

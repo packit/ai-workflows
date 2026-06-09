@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import random
 import re
 import shutil
 import tempfile
@@ -62,10 +63,10 @@ async def _retry_transient(
             return await fn()
         except Exception as e:
             if attempt < max_retries - 1 and _is_transient_git_error(e):
-                backoff = base_delay * 2**attempt
+                backoff = random.uniform(0, base_delay * 2**attempt)  # noqa: S311
                 logger.warning(
                     f"{label} failed (attempt {attempt + 1}/{max_retries}): "
-                    f"{_sanitize_url(str(e))}; retrying in {backoff}s"
+                    f"{_sanitize_url(str(e))}; retrying in {backoff:.1f}s"
                 )
                 await asyncio.sleep(backoff)
             else:

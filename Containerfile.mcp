@@ -1,4 +1,4 @@
-FROM fedora:42
+FROM fedora:43
 
 # Install RH IT Root CAs for access to internal services
 COPY files/Current-IT-Root-CAs.pem /etc/pki/ca-trust/source/anchors/

@@ -122,11 +122,40 @@ BACKPORT_INSTRUCTIONS = """
          `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
 
          PATCH NAMING AND SPLITTING:
+         Determine the patch file naming convention and the comment style above
+         `Patch` tags using the following priority (highest first):
+
+         Priority 1 — Maintainer rules:
          If maintainer rules specify patch file naming conventions (e.g., descriptive
          names like `<PACKAGE>-<description>.patch`, or splitting into one patch per
-         upstream commit), follow those conventions for all new patch files and spec
-         `Patch` tags. Otherwise use the default: a single squashed patch named
-         `<JIRA_ISSUE>.patch`.
+         upstream commit) and/or comment conventions, follow those conventions for
+         all new patch files, spec `Patch` tags, and comments above them.
+
+         Priority 2 — Existing patches in the spec file:
+         If no maintainer naming rules exist, examine the existing `Patch` tags and
+         their surrounding comments in the spec file using `get_package_info` and by
+         reading the spec directly. To determine the naming convention, look at only
+         the LAST CVE-related patch and the LAST non-CVE (issue/bugfix) patch in
+         the spec — these represent the most current naming style the maintainer
+         uses. If the current backport is for a CVE, derive the convention from the
+         last CVE patch; otherwise derive it from the last non-CVE patch. For
+         example, if the last CVE patch is `curl-8.6.0-CVE-2024-1234.patch`, use
+         that pattern with the current CVE ID. Apply the same approach to comments:
+         look at the comments above those last patches and replicate that style for
+         the new patch.
+
+         Priority 3 — Default convention:
+         If neither maintainer rules nor existing patches provide guidance, name the
+         patch file and add comments as follows:
+           For a non-CVE issue:
+             # <link to JIRA issue the patch is fixing>
+             # <link to upstream commit or pull request the patch is backporting>
+             PatchN: <PACKAGE>-<VERSION>-<JIRA_ISSUE>.patch
+           For a CVE issue:
+             # <link to JIRA issue the patch is fixing>
+             # <link to upstream commit or pull request the patch is backporting>
+             PatchN: <PACKAGE>-<VERSION>-<CVE_ID>.patch
+         where <VERSION> is the upstream version from the spec file's Version field.
 
       1. Knowing Jira issue <JIRA_ISSUE>, CVE ID <CVE_ID> or both, use the `git_log_search` tool to check
          in the dist-git repository whether the issue/CVE has already been resolved. If it has,
@@ -363,11 +392,36 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
          `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
 
          PATCH NAMING AND SPLITTING:
+         Determine the patch file naming convention using the following priority
+         (highest first):
+
+         Priority 1 — Maintainer rules:
          If maintainer rules specify patch file naming conventions (e.g., descriptive
          names like `<PACKAGE>-<description>.patch`, or splitting into one patch per
-         upstream commit), follow those conventions for all new patch files and spec
-         `Patch` tags. Otherwise use the default: a single squashed patch named
-         `<JIRA_ISSUE>.patch`.
+         upstream commit) and/or comment conventions, follow those conventions for
+         all new patch files, spec `Patch` tags, and comments above them.
+
+         Priority 2 — Existing patches in the spec file:
+         If no maintainer naming rules exist, examine the existing `Patch` tags and
+         their surrounding comments in the spec file using `get_package_info` and by
+         reading the spec directly. To determine the naming convention, look at only
+         the LAST CVE-related patch and the LAST non-CVE (issue/bugfix) patch in
+         the spec — these represent the most current naming style the maintainer
+         uses. If the current backport is for a CVE, derive the convention from the
+         last CVE patch; otherwise derive it from the last non-CVE patch. For
+         example, if the last CVE patch is `curl-8.6.0-CVE-2024-1234.patch`, use
+         that pattern with the current CVE ID. Apply the same approach to comments:
+         look at the comments above those last patches and replicate that style for
+         the new patch.
+
+         Priority 3 — Default convention:
+         If neither maintainer rules nor existing patches provide guidance, name the
+         patch file as follows:
+           - Non-CVE: `<PACKAGE>-<VERSION>-<JIRA_ISSUE>.patch`
+           - CVE:     `<PACKAGE>-<VERSION>-<CVE_ID>.patch`
+         where <VERSION> is the upstream version from the spec file's Version field.
+         Do NOT add comments above the Patch tag for z-stream branches unless
+         existing patches in the spec already use comments (see Priority 2).
 
       1. Knowing Jira issue <JIRA_ISSUE>, CVE ID <CVE_ID> or both, use the `git_log_search` tool to check
          in the dist-git repository whether the issue/CVE has already been resolved. If it has,

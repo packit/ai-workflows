@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -261,7 +262,8 @@ def test_backport_agent_artifacts(test_case: BackportAgentTestCase):
 
     patch_pattern = test_case.expected.get("patch_file_pattern")
     if patch_pattern:
-        matching = [name for name in artifacts.patch_files if patch_pattern in name]
+        patch_regex = re.compile(patch_pattern)
+        matching = [name for name in artifacts.patch_files if patch_regex.search(name)]
         assert matching, (
             f"{test_case.jira_issue}: expected patch matching '{patch_pattern}', "
             f"found: {list(artifacts.patch_files.keys())}"
@@ -295,10 +297,12 @@ def test_backport_agent_patch_scope(test_case: BackportAgentTestCase):
     assert reference_files, "Reference patch does not touch any files — fixture error"
 
     patch_pattern = test_case.expected.get("patch_file_pattern", "")
+    patch_regex = re.compile(patch_pattern) if patch_pattern else None
+
     agent_patches = {
         name: content
         for name, content in artifacts.patch_files.items()
-        if patch_pattern and patch_pattern in name
+        if patch_regex and patch_regex.search(name)
     }
     if not agent_patches:
         pytest.skip("No matching agent patch found to compare")

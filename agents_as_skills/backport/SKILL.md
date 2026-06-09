@@ -2,13 +2,13 @@
 description: Backport upstream patches to packages in the RHEL ecosystem — cherry-pick or git-am workflow, build verification, changelog, and merge request creation.
 arguments:
   - name: package
-    description: "Name of the package to backport to (e.g., 'openssl')"
+    description: "Name of the package to backport to (e.g., 'curl')"
     required: true
   - name: dist_git_branch
     description: "Dist-git branch to update (e.g., 'c10s', 'rhel-9.6.0')"
     required: true
   - name: upstream_patches
-    description: "Comma-separated list of URLs to upstream patches/commits/PRs to backport"
+    description: "Comma-separated list of upstream patch URLs to backport (commit URLs, PR/MR URLs, or .patch URLs)"
     required: true
   - name: jira_issue
     description: "JIRA issue key (e.g., RHEL-12345)"
@@ -17,7 +17,10 @@ arguments:
     description: "CVE identifier if the JIRA issue is a CVE (e.g., CVE-2025-12345). Default: null"
     required: false
   - name: justification
-    description: "Justification text from triage explaining why this patch fixes the issue. Default: null"
+    description: "Justification text from triage explaining why this backport fixes the issue. Default: null"
+    required: false
+  - name: fix_version
+    description: "Fix version string for z-stream detection (e.g., 'rhel-9.6.0.z'). Default: null"
     required: false
   - name: dry_run
     description: "If true, skip JIRA status changes, MR creation, and label updates. Default: false"
@@ -38,8 +41,9 @@ You are a Red Hat Enterprise Linux developer performing an end-to-end backport o
 - `upstream_patches`: {{upstream_patches}}
 - `jira_issue`: {{jira_issue}}
 - `cve_id`: {{cve_id}}
-- `dry_run`: {{dry_run}}
 - `justification`: {{justification}}
+- `fix_version`: {{fix_version}}
+- `dry_run`: {{dry_run}}
 - `max_build_attempts`: {{max_build_attempts}}
 
 ## Tools
@@ -49,19 +53,21 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 **MCP Tools (called via MCP gateway):**
 - `change_jira_issue_status` — Change the status of a JIRA issue
 - `fork_dist_git_repo` — Fork a dist-git repository and prepare a working branch
-- `download_sources` — Download sources for a dist-git package
-- `get_patch_from_url` — Download a patch from a URL
-- `build_package` — Build an SRPM and return results
-- `download_artifacts` — Download build log artifacts (*.log.gz)
+- `clone_repository` — Clone a dist-git repository (with authentication, used for z-stream dist-git workflow)
+- `create_zstream_branch` — Create a z-stream branch for a package (non-CentOS Stream branches only)
+- `push_to_remote_repository` — Push a branch to a remote repository
 - `open_merge_request` — Open a merge request against dist-git
 - `add_merge_request_labels` — Add labels to a merge request
 - `set_jira_labels` — Set labels on a JIRA issue
 - `edit_jira_labels` — Edit labels on a JIRA issue (add/remove)
 - `add_jira_comment` — Post a comment to a JIRA issue
 - `get_maintainer_rules` — Get maintainer-specific rules and guidelines for a package
-- `clone_repository` — Clone a dist-git repository (with authentication, used for z-stream dist-git workflow)
+- `build_package` — Build an SRPM and return results
+- `download_artifacts` — Download build log artifacts (*.log.gz)
+- `download_sources` — Download sources for a dist-git package
+- `get_patch_from_url` — Download patch content from a URL
 
-**Local Tools (text, filesystem, git, specfile, upstream):**
+**Local Tools (text, filesystem, git, specfile):**
 - `create` — Create new files
 - `view` — View file or directory contents
 - `str_replace` — String replacement in files
@@ -71,25 +77,26 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `get_cwd` — Get the current working directory
 - `remove` — Delete files
 - `run_shell_command` — Execute shell commands (use as last resort; prefer native tools)
-- `add_changelog_entry` — Add a changelog entry to an RPM spec file
-- `git_patch_create` — Generate a patch file from git commits
-- `git_patch_apply` — Apply a patch file using git am
-- `git_apply_finish` — Finish an in-progress git am patch application
-- `git_log_search` — Search git log for Jira issue or CVE references
-- `git_prepare_package_sources` — Unpack and prepare package sources for patching
-- `detect_distgit_source` — Detect whether a patch URL is from a dist-git source
-- `get_package_info` — Get package version, patch list, and strip levels from a spec file
-- `extract_upstream_repository` — Extract repository URL and commit hash from an upstream URL
-- `clone_upstream_repository` — Clone an upstream repository to a local directory
-- `find_base_commit` — Find the base commit/tag for a package version in upstream
-- `apply_downstream_patches` — Apply existing dist-git patches to an upstream clone
-- `cherry_pick_commit` — Cherry-pick a single commit in a git repository
-- `cherry_pick_continue` — Continue a cherry-pick after conflict resolution
 - `run_package_prep` — Run the %prep section of a spec file, with automatic build directory cleanup on failure
+- `git_patch_create` — Generate a unified diff patch file from a git repository
+- `git_patch_apply` — Apply a patch file using `git am --reject`
+- `git_apply_finish` — Complete a git-am session after conflict resolution
+- `git_log_search` — Search git log for a CVE ID or issue key
+- `git_prepare_package_sources` — Initialize git repo in unpacked sources and create initial commit
+- `detect_distgit_source` — Detect whether a URL points to a dist-git source
+- `get_package_info` — Get package version, existing patches, and strip levels from spec file
+- `extract_upstream_repository` — Extract repository URL and commit hash from an upstream fix URL
+- `clone_upstream_repository` — Clone an upstream repository to a local directory
+- `find_base_commit` — Find git tag matching package version in upstream repository
+- `apply_downstream_patches` — Apply existing downstream patches to upstream repository
+- `cherry_pick_commit` — Cherry-pick a single commit with conflict resolution guidance
+- `cherry_pick_continue` — Complete a cherry-pick after conflict resolution
+- `add_changelog_entry` — Add a changelog entry to an RPM spec file
+- `update_release` — Bump the Release field in a spec file
 
 **Other:**
 - Web search via DuckDuckGo or equivalent
-- Bash tool for shell commands (e.g., `git`, `centpkg`, `rhpkg`, `curl`)
+- Bash tool for shell commands (e.g., `git`, `centpkg`, `rhpkg`, `spectool`, `rpmlint`, `rpmspec`, `curl`, `wc`)
 
 ## Workflow
 
@@ -97,11 +104,11 @@ Execute the following steps in order. Track state across steps (paths, flags, re
 
 Determine `pkg_tool` from the branch: if `dist_git_branch` starts with `c` and ends with `s` (e.g., `c10s`, `c9s`), use `centpkg`; otherwise use `rhpkg --offline --released`.
 
-Determine whether this is a z-stream branch: if `dist_git_branch` does NOT match the CentOS Stream pattern (e.g., `c9s`, `c10s`) and instead looks like `rhel-X.Y.Z`, it is a z-stream branch. This affects which backport instructions to use (see Section A vs Section B).
+Parse `upstream_patches` into a list by splitting on commas.
 
-Initialize `attempts_remaining` to `max_build_attempts` (default 10). Initialize `build_error` as null. Initialize `abandon_autorelease` as false. Initialize `used_cherry_pick_workflow` as false. Initialize `incremental_fix_attempts` to 0.
+Initialize `attempts_remaining` to `max_build_attempts` (default 10). Initialize `build_error` as null. Initialize `abandon_autorelease` as false. Initialize `used_cherry_pick_workflow` as false. Initialize `incremental_fix_attempts` to 0. Initialize `max_incremental_fix_attempts` to `max_build_attempts`.
 
-Parse `upstream_patches` by splitting the comma-separated string into a list of URLs.
+Determine if this is an **older z-stream** branch: if `fix_version` is set and represents an older z-stream release, use z-stream-specific instructions (noted as **[Z-STREAM]** below where behavior differs).
 
 ### Step 1: Change JIRA Status
 
@@ -113,21 +120,24 @@ If `dry_run` is true, skip this step.
 
 ### Step 2: Fork and Prepare Dist-Git
 
-1. Call `fork_dist_git_repo` to fork the dist-git repository for `{{package}}` on branch `{{dist_git_branch}}`, creating a working branch for `{{jira_issue}}`. Save the returned `local_clone` path, `update_branch` name, and `fork_url`.
-2. Set the working directory to `local_clone`.
-3. Call `download_sources` with the dist-git path, package name, and branch to download package sources.
-4. Run the package tool prep command to unpack sources:
-   - For CentOS Stream branches: `centpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> prep`
-   - For RHEL branches: `rhpkg --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> --offline --released prep`
-5. Determine the `unpacked_sources` path — this is the directory created by prep containing the extracted upstream sources.
-6. For each URL in the upstream patches list, download the patch using `get_patch_from_url` and save it as `<JIRA_ISSUE>-<N>.patch` (where N is the 0-based index) in the `local_clone` directory.
-7. Reset `used_cherry_pick_workflow` to false and `incremental_fix_attempts` to 0.
+1. Determine the namespace from the branch:
+   - If `dist_git_branch` starts with `c` and ends with `s` (e.g., `c10s`, `c9s`): namespace is `centos-stream`.
+   - Otherwise: namespace is `rhel`.
+2. Fork the repository by calling `fork_dist_git_repo` (or `fork_repository`) with `repository` = `https://gitlab.com/redhat/<namespace>/rpms/{{package}}`. Save the returned `fork_url`.
+3. If the namespace is `rhel` (not CentOS Stream), call `create_zstream_branch` with `package` = `{{package}}` and `branch` = `{{dist_git_branch}}` to ensure the branch exists.
+4. Clone the repository by calling `clone_repository` with the repository URL, `branch` = `{{dist_git_branch}}`, and a local clone path. Save `local_clone`.
+5. Create a working branch: `git checkout -B automated-package-update-{{jira_issue}}` in `local_clone`. Save `update_branch` = `automated-package-update-{{jira_issue}}`.
+6. Download sources using `download_sources` with the dist-git path, package name, and branch.
+7. Run `<pkg_tool> --name={{package}} --namespace=rpms --release={{dist_git_branch}} prep` in the local clone to unpack sources.
+8. Identify the unpacked sources directory (typically a subdirectory of `local_clone` named after the package). Save as `unpacked_sources`.
+9. Download each upstream patch URL into the local clone:
+   - For each patch URL at index N, download content using `get_patch_from_url` and save as `{{jira_issue}}-<N>.patch` in `local_clone`.
+10. Set the working directory to `local_clone`.
+11. Reset `used_cherry_pick_workflow` to false and `incremental_fix_attempts` to 0.
 
 ### Step 3: Run Backport Agent
 
-Follow the appropriate **Backport Instructions** based on the branch type:
-- For CentOS Stream branches (c9s, c10s): use **Section A: Backport Instructions (CentOS Stream)**
-- For z-stream branches (rhel-X.Y.Z): use **Section B: Backport Instructions (Z-Stream)**
+Follow the **Backport Instructions** below (use z-stream variant if this is an older z-stream branch).
 
 Provide the following context to the instructions:
 - `local_clone`: path from Step 2
@@ -136,13 +146,13 @@ Provide the following context to the instructions:
 - `dist_git_branch`: `{{dist_git_branch}}`
 - `jira_issue`: `{{jira_issue}}`
 - `cve_id`: `{{cve_id}}`
-- `upstream_patches`: list of patch URLs
+- `upstream_patches`: list from input
 - `pkg_tool`: determined above
 - `build_error`: current build error context (null on first attempt, set on retry)
 
 The backport must produce:
 - `success`: boolean
-- `status`: detailed description of steps taken and how conflicts were resolved
+- `status`: detailed description of steps taken
 - `srpm_path`: absolute path to generated SRPM (if successful)
 - `error`: error message (if failed)
 - `abandon_autorelease`: boolean (true if maintainer rules say not to use %autorelease for z-streams)
@@ -151,7 +161,7 @@ If the backport result has `abandon_autorelease` set to true, update the workflo
 
 If the backport succeeds:
 - Save the status to `backport_log`.
-- Detect whether the cherry-pick workflow was used: check if the upstream repo directory (`<local_clone>-upstream`) exists and has more than 1 commit. If so, set `used_cherry_pick_workflow` to true.
+- Detect whether the cherry-pick workflow was used: check if an upstream repository clone exists at `<local_clone>-upstream`. If it exists, count its commits with `git -C <local_clone>-upstream rev-list --count HEAD`. If the count is > 1, set `used_cherry_pick_workflow` to true.
 - Proceed to Step 4.
 
 If the backport fails (success=false), skip to **Step 10: Comment in JIRA** with the error.
@@ -159,15 +169,16 @@ If the backport fails (success=false), skip to **Step 10: Comment in JIRA** with
 ### Step 4: Run Build
 
 1. Call `build_package` with the SRPM path from Step 3, `dist_git_branch`, and `jira_issue`.
-2. If the build **succeeds** → proceed to Step 5.
-3. If the build **timed out** (`is_timeout` = true) → proceed to Step 5 (treat as success).
+2. If the build **succeeds** -> proceed to Step 5.
+3. If the build **timed out** (`is_timeout` = true) -> proceed to Step 5 (treat as success).
 4. If the build **fails**:
    a. Decrement `attempts_remaining`.
-   b. If `attempts_remaining <= 0` → set `success=false`, `error="Unable to successfully build the package in N attempts"`, skip to Step 10.
+   b. If `attempts_remaining <= 0` -> set `success=false`, `error="Unable to successfully build the package in N attempts"`, skip to Step 10.
    c. Set `build_error` to the build failure details.
-   d. If `used_cherry_pick_workflow` is true and the upstream repo still exists:
-      - Proceed to **Step 4a: Incremental Build Fix** to try fixing without full reset.
-   e. Otherwise, go back to **Step 2** to reset and retry the entire backport with the build error as context.
+   d. If `used_cherry_pick_workflow` is true and the upstream repo exists at `<local_clone>-upstream`:
+      - Move any `*.log` and `*.log.gz` files from `local_clone` to `<local_clone>-upstream/build-logs/attempt-0/`.
+      - Proceed to **Step 4a: Fix Build Error** (incremental fix).
+   e. Otherwise (git-am workflow was used): go back to **Step 2** to reset and retry with `build_error` as context.
 
 When analyzing build failures:
 1. Download all `*.log.gz` files returned in `artifacts_urls` (if any) using `download_artifacts`.
@@ -176,30 +187,31 @@ When analyzing build failures:
 4. Summarize the failure as the `build_error` for the retry.
 5. Remove the downloaded `*.log.gz` files after analysis.
 
-### Step 4a: Incremental Build Fix (Cherry-Pick Workflow Only)
+### Step 4a: Fix Build Error (Incremental — Cherry-Pick Workflow Only)
 
-This step is only used when the cherry-pick workflow was used and the upstream repo exists.
+This step is ONLY used when `used_cherry_pick_workflow` is true and the upstream repository exists.
 
 1. Increment `incremental_fix_attempts`.
-2. Create a `build-logs` directory in the upstream repo if it doesn't exist.
-3. Move build log files (*.log, *.log.gz) from `local_clone` to `<upstream_repo>/build-logs/attempt-<N>/`.
-4. Create or append to `<upstream_repo>/build-logs/fix-attempts.md` documenting the current build error.
-5. Follow the **Section C: Build Error Fix Instructions** to attempt fixing the build.
-6. If the fix succeeds (build passes) → proceed to Step 5.
-7. If the fix fails:
-   a. If `incremental_fix_attempts < max_build_attempts` → repeat this step.
-   b. If all incremental fix attempts exhausted → set `success=false`, `error="Unable to fix build errors after N incremental fix attempts. Last error: ..."`, skip to Step 10.
+2. If `incremental_fix_attempts > 1`, move build logs from `local_clone` to `<local_clone>-upstream/build-logs/attempt-<N>/`.
+3. Create or update `<local_clone>-upstream/build-logs/fix-attempts.md` with the current attempt number and build error.
+4. Follow the **Build Error Fix Instructions** below with build tools enabled (`build_package` and `download_artifacts`).
+5. If the fix succeeds (build passes): reset `incremental_fix_attempts` to 0, proceed to **Step 5**.
+6. If the fix fails:
+   a. If `incremental_fix_attempts < max_incremental_fix_attempts`: repeat **Step 4a**.
+   b. Otherwise: set `success=false`, `error="Unable to fix build errors after N incremental fix attempts. Last error: <error>"`, skip to **Step 10**.
 
 ### Step 5: Update Release
 
-Bump the Release field in the spec file for `{{package}}` on branch `{{dist_git_branch}}`. This is NOT a rebase, so increment the release appropriately. If `abandon_autorelease` is true, use `<release_num>%{?dist}.<zstream_release>` instead of `<release_num>%{?dist}.%{autorelease -n}`.
+Bump the Release field in the spec file for `{{package}}` on branch `{{dist_git_branch}}`. This is NOT a rebase. If `abandon_autorelease` is true, use `<release_num>%{?dist}.<zstream_release>` instead of `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
 
 If this fails, set `success=false` with the error and skip to Step 10.
 
 ### Step 6: Stage Changes
 
-1. Read the spec file and determine which patch files are referenced in `Patch` tags.
-2. Stage the spec file and all patch files: `git add --all <package>.spec <patch_files...>`.
+1. Read the spec file and collect all patch filenames from Patch tags.
+2. If no patch files found, report an error.
+3. Build the files list: `["{{package}}.spec", <all_patch_files>]`.
+4. Stage all files: `git add --all <file>` for each file in the list.
 
 If the changelog/log step has already been completed (from a previous iteration), skip to Step 8.
 
@@ -207,14 +219,17 @@ If this fails, set `success=false` with the error and skip to Step 10.
 
 ### Step 7: Generate Changelog and Commit Message
 
-1. Check if a source changelog can be extracted from dist-git source commits. For each upstream patch URL, try to extract the commit hash, read the spec file from that commit in the upstream clone, and extract the newest changelog entry. Combine the lines, deduplicating across commits. If a source changelog is found, use it as the basis.
-2. Run `git diff --cached --stat` to see which files have been changed.
-3. Examine changes in each file individually: `git diff --cached -- <filename>` (do NOT run `git diff --cached` without a path — patch files can be very large).
-4. Add a new changelog entry to the spec file using `add_changelog_entry`. Examine the previous changelog entries and try to use the same style. If a source changelog message is available, use those lines as the exact content, replacing original Jira references with `{{jira_issue}}`. Otherwise write a new entry with:
-   - A short summary of the user-facing changes
+1. Run `git diff --cached --stat` to see which files have been changed.
+2. Examine changes in each file individually: `git diff --cached -- <filename>` (do NOT run `git diff --cached` without a path — patch files can be very large).
+3. Check if changelog content can be extracted from source dist-git commits:
+   - If an upstream clone exists at `<local_clone>-upstream`, for each upstream patch URL, try to extract the newest changelog entry from the commit's spec file.
+   - Deduplicate extracted changelog lines across commits.
+   - If source changelog content was found, pass it to the changelog generation step for reuse (adjusting JIRA references as needed).
+4. Add a new changelog entry to the spec file using `add_changelog_entry`. Examine the previous changelog entries and try to use the same style. The entry should contain:
+   - A short summary of the user-facing changes (or reuse source changelog content if available)
    - A line referencing the JIRA issue: `- Resolves: {{jira_issue}}`
 5. Generate a title for the commit message and merge request. It should be descriptive but no longer than 80 characters.
-6. Generate a description as a short paragraph for the commit message and merge request. Line length should not exceed 80 characters. There is no need to reference the JIRA issue — it will be appended later.
+6. Generate a description as a short paragraph for the commit message and merge request. Line length should not exceed 80 characters. Do NOT include `Resolves:` lines — JIRA references are appended separately.
 
 Save the `title` and `description` for Step 8.
 
@@ -228,18 +243,17 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
 
    <description>
 
+   CVE: <cve_id> (only if cve_id is set)
    Upstream patches:
     - <patch_url_1>
     - <patch_url_2>
-
+    - ...
    Resolves: {{jira_issue}}
 
    This commit was backported by Ymir, a Red Hat Enterprise Linux software maintenance AI agent.
 
    Assisted-by: Ymir
    ```
-
-   If `cve_id` is set, add a `CVE: <cve_id>` line before the "Upstream patches:" section.
 
 2. If `dry_run` is true, stop after the commit (do not push or create MR).
 
@@ -293,7 +307,7 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
 
 Save `merge_request_url` and whether it was newly created.
 
-If this fails, set `success=false` with the error but continue to Step 9.
+If this fails, set `success=false` with the error but continue to Step 9 (then Step 10).
 
 ### Step 9: Add FuSa Label
 
@@ -322,7 +336,7 @@ Please carefully review the contributions made by AI agents.
 
 ---
 
-## Section A: Backport Instructions (CentOS Stream)
+## Backport Instructions (Y-Stream / Default)
 
 You are an expert on backporting upstream patches to packages in RHEL ecosystem.
 
@@ -352,11 +366,40 @@ and must remain unchanged.
    `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
 
    PATCH NAMING AND SPLITTING:
+   Determine the patch file naming convention and the comment style above
+   `Patch` tags using the following priority (highest first):
+
+   Priority 1 — Maintainer rules:
    If maintainer rules specify patch file naming conventions (e.g., descriptive
    names like `<PACKAGE>-<description>.patch`, or splitting into one patch per
-   upstream commit), follow those conventions for all new patch files and spec
-   `Patch` tags. Otherwise use the default: a single squashed patch named
-   `<JIRA_ISSUE>.patch`.
+   upstream commit) and/or comment conventions, follow those conventions for
+   all new patch files, spec `Patch` tags, and comments above them.
+
+   Priority 2 — Existing patches in the spec file:
+   If no maintainer naming rules exist, examine the existing `Patch` tags and
+   their surrounding comments in the spec file using `get_package_info` and by
+   reading the spec directly. To determine the naming convention, look at only
+   the LAST CVE-related patch and the LAST non-CVE (issue/bugfix) patch in
+   the spec — these represent the most current naming style the maintainer
+   uses. If the current backport is for a CVE, derive the convention from the
+   last CVE patch; otherwise derive it from the last non-CVE patch. For
+   example, if the last CVE patch is `curl-8.6.0-CVE-2024-1234.patch`, use
+   that pattern with the current CVE ID. Apply the same approach to comments:
+   look at the comments above those last patches and replicate that style for
+   the new patch.
+
+   Priority 3 — Default convention:
+   If neither maintainer rules nor existing patches provide guidance, name the
+   patch file and add comments as follows:
+     For a non-CVE issue:
+       # <link to JIRA issue the patch is fixing>
+       # <link to upstream commit or pull request the patch is backporting>
+       PatchN: <PACKAGE>-<VERSION>-<JIRA_ISSUE>.patch
+     For a CVE issue:
+       # <link to JIRA issue the patch is fixing>
+       # <link to upstream commit or pull request the patch is backporting>
+       PatchN: <PACKAGE>-<VERSION>-<CVE_ID>.patch
+   where <VERSION> is the upstream version from the spec file's Version field.
 
 1. Knowing Jira issue <JIRA_ISSUE>, CVE ID <CVE_ID> or both, use the `git_log_search` tool to check
    in the dist-git repository whether the issue/CVE has already been resolved. If it has,
@@ -443,7 +486,7 @@ and must remain unchanged.
       4f. Cherry-pick the fix in upstream:
           GETTING COMMITS:
             FOR PULL REQUESTS (if is_pr is True from step 4a):
-              * Download the PR patch: `curl -L <original_url> -o /tmp/pr.patch`
+              * Download the PR patch: `curl -L -A "redhat-ymir-agent" <original_url> -o /tmp/pr.patch`
               * Parse commit hashes from lines starting with "From <hash>"
               * Fetch PR branch: `git -C <UPSTREAM_REPO> fetch origin pull/<pr_number>/head:pr-branch`
               * Skip any merge commits — only cherry-pick non-merge commits
@@ -531,7 +574,7 @@ and must remain unchanged.
    `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
 
 
-### General Instructions (Section A)
+General instructions:
 
 - Fall back to approach B ONLY when the cherry-pick workflow cannot be set up:
   URL extraction fails (step 4a), clone fails (step 4c), or downstream patches
@@ -564,7 +607,9 @@ and must remain unchanged.
 
 ---
 
-## Section B: Backport Instructions (Z-Stream)
+## Backport Instructions (Z-Stream)
+
+**Use these instructions instead of the Y-Stream instructions when the branch is an older z-stream.**
 
 You are an expert on backporting upstream patches to packages in RHEL ecosystem.
 
@@ -594,11 +639,36 @@ and must remain unchanged.
    `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
 
    PATCH NAMING AND SPLITTING:
+   Determine the patch file naming convention using the following priority
+   (highest first):
+
+   Priority 1 — Maintainer rules:
    If maintainer rules specify patch file naming conventions (e.g., descriptive
    names like `<PACKAGE>-<description>.patch`, or splitting into one patch per
-   upstream commit), follow those conventions for all new patch files and spec
-   `Patch` tags. Otherwise use the default: a single squashed patch named
-   `<JIRA_ISSUE>.patch`.
+   upstream commit) and/or comment conventions, follow those conventions for
+   all new patch files, spec `Patch` tags, and comments above them.
+
+   Priority 2 — Existing patches in the spec file:
+   If no maintainer naming rules exist, examine the existing `Patch` tags and
+   their surrounding comments in the spec file using `get_package_info` and by
+   reading the spec directly. To determine the naming convention, look at only
+   the LAST CVE-related patch and the LAST non-CVE (issue/bugfix) patch in
+   the spec — these represent the most current naming style the maintainer
+   uses. If the current backport is for a CVE, derive the convention from the
+   last CVE patch; otherwise derive it from the last non-CVE patch. For
+   example, if the last CVE patch is `curl-8.6.0-CVE-2024-1234.patch`, use
+   that pattern with the current CVE ID. Apply the same approach to comments:
+   look at the comments above those last patches and replicate that style for
+   the new patch.
+
+   Priority 3 — Default convention:
+   If neither maintainer rules nor existing patches provide guidance, name the
+   patch file as follows:
+     - Non-CVE: `<PACKAGE>-<VERSION>-<JIRA_ISSUE>.patch`
+     - CVE:     `<PACKAGE>-<VERSION>-<CVE_ID>.patch`
+   where <VERSION> is the upstream version from the spec file's Version field.
+   Do NOT add comments above the Patch tag for z-stream branches unless
+   existing patches in the spec already use comments (see Priority 2).
 
 1. Knowing Jira issue <JIRA_ISSUE>, CVE ID <CVE_ID> or both, use the `git_log_search` tool to check
    in the dist-git repository whether the issue/CVE has already been resolved. If it has,
@@ -703,7 +773,7 @@ and must remain unchanged.
       3j. Cherry-pick the fix in upstream:
           GETTING COMMITS:
             FOR PULL REQUESTS (if is_pr is True from step 3e):
-              * Download the PR patch: `curl -L <original_url> -o /tmp/pr.patch`
+              * Download the PR patch: `curl -L -A "redhat-ymir-agent" <original_url> -o /tmp/pr.patch`
               * Parse commit hashes from lines starting with "From <hash>"
               * Fetch PR branch: `git -C <UPSTREAM_REPO> fetch origin pull/<pr_number>/head:pr-branch`
               * Skip any merge commits — only cherry-pick non-merge commits
@@ -795,7 +865,7 @@ and must remain unchanged.
    `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
 
 
-### General Instructions (Section B)
+General instructions:
 
 - Always use `detect_distgit_source` to determine URL type — do NOT skip
   approach A or B based on your own URL pattern recognition.
@@ -833,18 +903,23 @@ and must remain unchanged.
 
 ---
 
-## Section C: Build Error Fix Instructions
+## Build Error Fix Instructions
 
-This section is used when the cherry-pick workflow succeeded but the build failed,
-and you need to fix the build error without resetting the entire workflow.
+Used by Step 4a when the cherry-pick workflow succeeded but the build failed.
 
 Your working directory is <LOCAL_CLONE>, a clone of dist-git repository of package <PACKAGE>.
 <DIST_GIT_BRANCH> dist-git branch has been checked out. You are working on Jira issue <JIRA_ISSUE>.
 
-The upstream repository at <LOCAL_CLONE>-upstream has all your previous work intact.
+Upstream patches that were backported:
+- <list of upstream patch URLs>
+
+The cherry-pick workflow succeeded but the build failed:
+
+<build_error>
 
 CRITICAL CONSTRAINTS:
-- DO NOT clone the upstream repository again. DO NOT reset to base commit.
+- The upstream repository at <LOCAL_CLONE>-upstream has all your previous work intact.
+  DO NOT clone it again. DO NOT reset to base commit.
 - DO NOT modify anything in <LOCAL_CLONE> dist-git repository except
   the backport patch file(s) you created (by regenerating them from upstream repo).
   Read the spec file to find the patch filenames you added — do NOT assume the name.
@@ -903,7 +978,7 @@ The final output must be a JSON object:
 ```json
 {
     "success": true,
-    "status": "Detailed description of backport steps taken and conflict resolutions",
+    "status": "Detailed description of backport steps taken",
     "srpm_path": "/absolute/path/to/generated.srpm",
     "merge_request_url": "https://gitlab.com/...",
     "abandon_autorelease": false,

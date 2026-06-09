@@ -545,6 +545,30 @@ TRIAGE_PROMPT = """
          * The package mentioned in the issue cannot be found or identified
          * The issue cannot be accessed
 
+      **Triage Summary vs Justification**
+
+      For rebase, backport, and rebuild decisions, you MUST include both a
+      `justification` and a `triage_summary` field. These serve different
+      audiences and MUST NOT overlap:
+
+      `justification` — reviewer-facing rationale. Explain *why this fix is
+      correct*: what vulnerability/bug it addresses, why the downstream version
+      is affected, and why the chosen patch/version resolves it. Do NOT include
+      investigation narrative ("I searched…", "I found…") here.
+
+      `triage_summary` — investigation log and downstream-agent handoff.
+      Explain *how you arrived at this conclusion and what the downstream agent
+      needs to know*. Cover:
+      - What you searched (upstream repos, advisories, Fedora, git history)
+      - What you ruled out and why
+      - Any caveats, uncertainties, or limitations in your analysis
+      - For backports: the downstream agent applies all provided patches
+        in full by default. Only mention patch handling when something
+        non-standard is needed (e.g. only part of a patch is relevant,
+        or the downstream code structure differs from upstream so the
+        agent must adapt the patch manually). Do NOT add redundant
+        instructions like "apply the full patch".
+
       **Final Step: Set JIRA Fields
       (for Rebase, Backport, and Rebuild decisions only)**
 
@@ -795,7 +819,8 @@ async def run_workflow(
                         "data": {{
                         "package": "some-package",
                         "patch_urls": ["https://github.com/example-org/example-repo/commit/abc123def456.patch"],
-                        "justification": "This patch fixes the bug by doing X, Y, and Z.",
+                        "justification": "Patch adds input validation to parse_input().",
+                        "triage_summary": "Searched upstream git for CVE ID; no match. Found via Fedora.",
                         "jira_issue": "RHEL-12345",
                         "cve_id": "CVE-1234-98765",
                         "fix_version": "rhel-X.Y.Z"
@@ -810,7 +835,8 @@ async def run_workflow(
                         "data": {{
                         "package": "some-package",
                         "version": "2.4.1",
-                        "justification": "The issue is fixed in upstream version 2.4.1 available in Fedora.",
+                        "justification": "Version 2.4.1 includes the fix for the crash in parse_uri().",
+                        "triage_summary": "Fedora already rebased to 2.4.1 for this bug. Verified changelog.",
                         "jira_issue": "RHEL-12345",
                         "fix_version": "rhel-X.Y.Z"
                         }}
@@ -825,7 +851,8 @@ async def run_workflow(
                         "package": "some-package",
                         "jira_issue": "RHEL-12345",
                         "cve_id": "CVE-1234-98765",
-                        "justification": "Rebuild needed, links against golang which received security fix.",
+                        "justification": "Package links against golang which got a CVE-1234-98765 fix.",
+                        "triage_summary": "Confirmed package vendors Go deps via spec BuildRequires.",
                         "dependency_issue": "RHEL-67890",
                         "dependency_component": "golang",
                         "fix_version": "rhel-X.Y.Z"

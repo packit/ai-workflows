@@ -300,7 +300,10 @@ This path is for issues that represent a clear bug or CVE that needs a targeted 
        * `Provides: bundled(golang(...))` or `Provides: bundled(...)` entries
        * Vendor tarballs like `Source1: *-vendor.tar.gz` or `Source1: *-vendor-*.tar.*`
      - The CVE describes a vulnerability in a library, runtime, or language (e.g., Go, Rust, OpenSSL) that the package merely uses or vendors, not in the package's own code
-     **If the fix is in a dependency**, use the "rebuild" resolution instead. The package will pick up the fix automatically when rebuilt against the updated dependency.
+     **If the fix is in a dependency**, a rebuild MAY be right — but ONLY if the package recompiles that dependency from source during its build. Inspect the spec `%prep`/`%build` and Source/Patch lines:
+     - **Recompiled from source at build time** (buildroot toolchain like golang/openssl, or a *source* vendor tarball compiled in `%build`) → use the "rebuild" resolution; the package picks up the fix when rebuilt against the updated dependency.
+     - **Shipped as a pre-built bundled artifact** the build re-ships verbatim (a prebuilt webpack/JS bundle tarball like `Source*: *-webpack-*.tar.*`, vendored minified JS, precompiled binaries) → do NOT rebuild; a Release bump re-ships the same vulnerable blob. Choose "backport" if the package regenerates the artifact from source it controls, or "not-affected" if the dependency isn't reachable in the shipped artifact.
+     When you cannot determine whether the artifact is recompiled or pre-built, prefer "backport" over "rebuild" and let the post-triage applicability check confirm.
    * If the patch IS for the package's own code and passes all validations in step 2.3, your decision is backport. You must justify why the patch is correct and how it addresses the issue.
 
    If `is_older_zstream` is **true**:
@@ -314,7 +317,7 @@ This path is for issues that represent a clear bug or CVE that needs a targeted 
 
 **3. Rebuild**
 
-Use when the package needs rebuilding against an updated dependency with NO source code changes. This covers explicit rebuild requests AND vendored/bundled dependency CVEs (common in Go, Rust, Node.js packages — see step 2.4 which redirects here).
+Use when the package needs rebuilding against an updated dependency with NO source code changes, AND that dependency is recompiled into the package at build time (see step 2.4). This covers explicit rebuild requests AND vendored/bundled dependency CVEs where the dependency is compiled from source during the build (common for Go/Rust toolchain and linked C libraries). It does NOT cover dependencies shipped as pre-built bundled artifacts (e.g. a prebuilt webpack/JS bundle) — those are handled in step 2.4 as backport/not-affected.
 
 3.1. Confirm no source code changes are needed for the package itself.
 

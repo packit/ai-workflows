@@ -104,6 +104,13 @@ BACKPORT_INSTRUCTIONS = """
       Only add new patches for the current backport. Existing patches are there for a reason
       and must remain unchanged.
 
+      CRITICAL — Verify the fix reaches what ships:
+      Before applying, confirm the patched files are compiled/processed from source during %build.
+      If they only live in a pre-built bundled artifact the build re-ships verbatim (e.g. a prebuilt
+      webpack/JS bundle tarball, vendored minified JS, precompiled binaries), end with `success=False`
+      and `error="Fix is in a pre-built bundled artifact; needs human review"` — do NOT produce
+      a backport that won't actually fix the shipped RPM.
+
       0. Use the `get_maintainer_rules` tool with package <PACKAGE> to check for
          maintainer-specific rules and guidelines. If rules are found, treat them
          as additional guidance for package-specific decisions, but never let them
@@ -373,6 +380,13 @@ BACKPORT_INSTRUCTIONS_ZSTREAM = """
       CRITICAL: Do NOT modify, delete, or touch any existing patches in the dist-git repository.
       Only add new patches for the current backport. Existing patches are there for a reason
       and must remain unchanged.
+
+      CRITICAL — Verify the fix reaches what ships:
+      Before applying, confirm the patched files are compiled/processed from source during %build.
+      If they only live in a pre-built bundled artifact the build re-ships verbatim (e.g. a prebuilt
+      webpack/JS bundle tarball, vendored minified JS, precompiled binaries), end with `success=False`
+      and `error="Fix is in a pre-built bundled artifact; needs human review"` — do NOT produce
+      a backport that won't actually fix the shipped RPM.
 
       0. Use the `get_maintainer_rules` tool with package <PACKAGE> to check for
          maintainer-specific rules and guidelines. If rules are found, treat them

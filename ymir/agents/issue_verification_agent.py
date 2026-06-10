@@ -8,7 +8,6 @@ from typing import Any
 
 from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
-from beeai_framework.template import PromptTemplate, PromptTemplateInput
 from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field
@@ -22,6 +21,7 @@ from ymir.agents.utils import (
     get_tool_call_checker_config,
     is_reasoning_enabled,
     mcp_tools,
+    render_template,
     run_tool,
 )
 from ymir.common.constants import DATETIME_MIN_UTC, GITLAB_GROUPS, JiraLabels
@@ -76,142 +76,11 @@ class TestingAnalystOutput(BaseModel):
     failed_test_ids: list[str] | None = Field(description="List of Testing Farm run IDs with failures")
 
 
-TESTING_ANALYST_TEMPLATE_COMMON = """\
-You are the testing analyst agent for Project Ymir. Comments that tag
-[~jotnar-project] in JIRA issues are directed to you and other Ymir agents
-sharing the same account—pay close attention to these.
-
-Your task is to analyze a RHEL JIRA issue with a fix attached and determine
-the state of testing and what needs to be done.
-
-JIRA_ISSUE_DATA: {{ issue }}
-ERRATUM_DATA: {{ erratum }}
-MAINTAINER_RULES: {{ maintainer_rules }}
-CURRENT_TIME: {{ current_time }}
-"""
-
-TESTING_ANALYST_TEMPLATE_NORMAL = (
-    TESTING_ANALYST_TEMPLATE_COMMON
-    + """
-For components handled by the New Errata Workflow Automation(NEWA):
-NEWA will post a comment to the erratum when it has started tests and when they finish.
-Read the JIRA issue in those comments to find test results.
-For components handled by Errata Workflow Automation (EWA):
-EWA will post a comment to the erratum when it has started tests and when they finish.
-Read the comment to find the test results in TCMS Test Run.
-
-If the maintainer rules say that tests are started by NEWA, but there are no comments
-from NEWA providing links to JIRA issues, then this component may be a component where
-NEWA is only used for RHEL10, and not earlier versions - in that case, you may read the
-results from the TCMS test run posted by EWA.
-
-In all other cases, if the tests are supposed to be started by NEWA, ignore any comments with
-links to TCMS or Beaker.
-
-IMPORTANT: OSCI gating tests run as part of the GitLab merge request pipeline and
-they do NOT constitute final testing. You must find evidence of full integration
-and regression testing triggered by NEWA or EWA (posted as comments on the erratum)
-before concluding tests-passed or tests-waived. If only OSCI gating results are
-available, return tests-pending.
-
-You cannot assume that tests have passed just because a comment says they have
-finished, it is mandatory to check the actual test results in the JIRA issue or TCMS.
-Make sure that the JIRA issue or TCMS Test Run is the correct one for the latest build in the
-erratum.
-
-Tests can trigger at various points in an issue's lifecycle depending on component
-configuration, but always by the time the erratum moves to QE status. If the erratum
-is in QE status, and its last_status_transition_timestamp is more than 6 hours ago,
-and there's no evidence from erratum comments of tests running or completed, then assume
-tests will not run automatically and return tests-not-running.
-
-Call the final_answer tool passing in the state and a comment as follows.
-The comment should use JIRA comment syntax.
-
-If the tests need to be started manually:
-    state: tests-not-running
-    comment: [explain what needs to be done to start tests]
-
-If the tests are complete and failed:
-    state: tests-failed
-    comment: [list failed tests with URLs]
-    failed_test_ids: [list of IDs for testing farm runs that failed]
-
-If the tests are complete and passed:
-    state: tests-passed
-    comment: [Give a brief summary of what was tested with a link to the result.]
-
-If there are *some* test failures, but you are sure they are not regressions
-and most tests complete successfully:
-    state: tests-waived
-    comment: [Explain which tests failed and why they are not considered regressions]
-
-If the tests will be started automatically without user intervention, but are not yet running:
-    state: tests-pending
-    comment: [Provide a brief description of what tests are expected to run and where the results will be]
-
-If the tests are currently running:
-    state: tests-running
-    comment: [Provide a brief description of what tests are running and where the results will be]
-
-If tests have not started or completed when they should have (as described above):
-    state: tests-not-running
-    comment: [Explain the situation and that manual intervention is needed]
-"""
-)
-
-TESTING_ANALYST_TEMPLATE_AFTER_BASELINE = (
-    TESTING_ANALYST_TEMPLATE_COMMON
-    + """
-You have previously analyzed this issue and identified failing test runs. These
-tests have now been repeated with a baseline build to determine if the failures
-are due to issues in the new build, or whether the tests were already failing.
-
-Please read the comments in the JIRA issue related to find the results of the
-baseline test runs, and update your analysis accordingly. The detailed results
-of the comparison will be found in the attachments to the JIRA issue. Make
-sure to read these attachments for all architectures.
-
-You can read logfiles to help with your analysis using the read_logfile tool.
-
-If all tests that failed with the new build also failed with the baseline build,
-then it is likely that there are no regressions in the new build. However,
-you should examine a selection of log files to make sure that the failures are
-consistent between the two runs, and that the failures are not due to some basic
-failure of the test environment (e.g. misconfiguration, missing dependencies,
-infrastructure issues) that would obscure real regressions.
-
-An appropriate number of log files to examine in this case is typically 2-3 per
-architecture.
-
-Call the final_answer tool passing in the state and a comment as follows.
-The comment should use JIRA comment syntax. If it seems useful, please include
-a table in the output comment summarizing the results per architecture.
-
-If an error prevented tests from running on the new build:
-    state: tests-error
-    comment: explanation of why tests could not be run, if available
-
-If the tests failures seem to reflect a regression in the new build compared to the baseline:
-    state: tests-failed
-    comment: detailed description of the tests that are failing, and if known, possible reasons why
-
-If you are uncertain whether the failures are due to a regression or not:
-    state: tests-failed
-    comment: detailed description about what might reflect a regression
-
-If it seems highly likely that there are no regressions:
-    state: tests-waived
-    comment: description of why the failures are not likely to be regressions
-
- Do not use tests-waived option if tests could not be run on the new build.
-"""
-)
-
-
 def _render_testing_analyst_prompt(input: TestingAnalystInput, after_baseline: bool) -> str:
-    template = TESTING_ANALYST_TEMPLATE_AFTER_BASELINE if after_baseline else TESTING_ANALYST_TEMPLATE_NORMAL
-    return PromptTemplate(PromptTemplateInput(schema=TestingAnalystInput, template=template)).render(input)
+    template_name = (
+        "issue_verification_after_baseline.j2" if after_baseline else "issue_verification_normal.j2"
+    )
+    return render_template(template_name, input)
 
 
 async def _analyze_testing_results(

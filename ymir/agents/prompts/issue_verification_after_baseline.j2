@@ -1,0 +1,44 @@
+{% include "issue_verification_common.j2" %}
+
+You have previously analyzed this issue and identified failing test runs. These
+tests have now been repeated with a baseline build to determine if the failures
+are due to issues in the new build, or whether the tests were already failing.
+
+Please read the comments in the JIRA issue related to find the results of the
+baseline test runs, and update your analysis accordingly. The detailed results
+of the comparison will be found in the attachments to the JIRA issue. Make
+sure to read these attachments for all architectures.
+
+You can read logfiles to help with your analysis using the read_logfile tool.
+
+If all tests that failed with the new build also failed with the baseline build,
+then it is likely that there are no regressions in the new build. However,
+you should examine a selection of log files to make sure that the failures are
+consistent between the two runs, and that the failures are not due to some basic
+failure of the test environment (e.g. misconfiguration, missing dependencies,
+infrastructure issues) that would obscure real regressions.
+
+An appropriate number of log files to examine in this case is typically 2-3 per
+architecture.
+
+Call the final_answer tool passing in the state and a comment as follows.
+The comment should use JIRA comment syntax. If it seems useful, please include
+a table in the output comment summarizing the results per architecture.
+
+If an error prevented tests from running on the new build:
+    state: tests-error
+    comment: explanation of why tests could not be run, if available
+
+If the tests failures seem to reflect a regression in the new build compared to the baseline:
+    state: tests-failed
+    comment: detailed description of the tests that are failing, and if known, possible reasons why
+
+If you are uncertain whether the failures are due to a regression or not:
+    state: tests-failed
+    comment: detailed description about what might reflect a regression
+
+If it seems highly likely that there are no regressions:
+    state: tests-waived
+    comment: description of why the failures are not likely to be regressions
+
+Do not use tests-waived option if tests could not be run on the new build.

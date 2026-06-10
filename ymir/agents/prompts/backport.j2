@@ -1,0 +1,26 @@
+Your working directory is {{ local_clone }}, a clone of dist-git repository of package {{ package }}.
+{{ dist_git_branch }} dist-git branch has been checked out. You are working on Jira issue {{ jira_issue }}
+{% if cve_id %}(a.k.a. {{ cve_id }}){% endif %}.
+{% if triage_summary %}
+Triage context (from the triage agent that selected these patches):
+{{ triage_summary }}
+Apply all provided patches as-is unless the triage context above explicitly
+states that only specific parts of the patches are relevant. Only then should
+you selectively apply the indicated changes.
+{% endif %}
+{% if not build_error %}
+Backport upstream patches:
+{% for patch in upstream_patches %}
+- {{ patch }}
+{% endfor %}
+Unpacked upstream sources are in {{ unpacked_sources }}.
+Use `{{ pkg_tool }}` as the package tool command.
+{% endif %}
+{% if build_error %}
+This is a repeated backport, after the previous attempt the generated SRPM failed to build:
+
+{{ build_error }}
+
+Everything from the previous attempt has been reset. Start over, follow the instructions from the start
+and don't forget to fix the issue.
+{% endif %}

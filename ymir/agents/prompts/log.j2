@@ -1,0 +1,10 @@
+Document a packaging change done as part of {{ jira_issue }} Jira issue(s), summarized as:
+
+{{ changes_summary }}
+
+{% if source_changelog %}
+The following changelog message was used in the source commit. Use it as the
+exact changelog message content:
+
+{{ source_changelog }}
+{% endif %}

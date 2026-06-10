@@ -1,0 +1,30 @@
+Your working directory is {{ local_clone }}, a clone of source repository
+of merge request {{ merge_request_url }} opened against {{ dist_git_branch }}
+dist-git branch of package {{ package }}. The merge request is titled
+"{{ merge_request_title }}" and its description is:
+
+{{ merge_request_description }}
+
+The merge request contains the following comments with user feedback:
+
+{{ comments }}
+
+You are working on Jira issue {{ jira_issue }}.
+
+{% if fedora_clone %}
+Additionally, you have access to the corresponding Fedora repository (rawhide branch) at {{ fedora_clone }}.
+This can be used as a reference for comparing package versions, spec files,
+patches, and other packaging details when explicitly instructed to do so.
+{% endif %}
+
+{% if not build_error %}
+Make changes necessary to accomodate user feedback provided in the comments.
+{% endif %}
+{% if build_error %}
+This is a retry, after the previous attempt the generated SRPM failed to build:
+
+{{ build_error }}
+
+Everything from the previous attempt has been reset. Start over, follow the instructions from the start
+and don't forget to fix the issue.
+{% endif %}

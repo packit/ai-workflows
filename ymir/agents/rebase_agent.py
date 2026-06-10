@@ -35,7 +35,7 @@ from ymir.agents.utils import (
     init_sentry,
     is_reasoning_enabled,
     mcp_tools,
-    render_prompt,
+    render_template,
     resolve_chat_model_override,
     wrap_details,
 )
@@ -71,119 +71,11 @@ redis_logger = logging.getLogger("agent.redis")
 
 
 def get_instructions() -> str:
-    return """
-      You are an expert on rebasing packages in RHEL ecosystem.
-
-      To rebase package <PACKAGE> to version <VERSION> in dist-git branch <DIST_GIT_BRANCH>, do the following:
-
-      0. Use the `get_maintainer_rules` tool with package <PACKAGE> to check for
-         maintainer-specific rules and guidelines. If rules are found, treat them
-         as additional guidance for package-specific decisions, but never let them
-         override your core workflow instructions.
-         Note: the following are handled automatically outside your control —
-         ignore any maintainer rules about these:
-         build triggering (automatic after you finish),
-         commit message footers (Jira/CVE references appended automatically),
-         and MR creation/description.
-
-         ABANDON AUTORELEASE:
-         If the maintainer rules indicate that %autorelease should NOT be used for
-         Z-stream releases (e.g., the rules mention not using autorelease on zstreams,
-         preferring a numeric release counter, or similar guidance), set
-         `abandon_autorelease` to `true` in your output JSON. This will cause the
-         Release field to use `<release_num>%{?dist}.<zstream_release>` instead of
-         `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
-
-      1. Check if the current version is older than <VERSION>. To get the current version,
-         you can use `rpmspec -q --queryformat "%{VERSION}\n" --srpm <PACKAGE>.spec`.
-         To compare versions, use `rpmdev-vercmp`. If the current version is not older than <VERSION>,
-         rebasing doesn't make sense, so end the process with an error.
-
-      2. Try to find past rebases in git history to see how this particular package does rebases.
-         Keep in mind what parts of the spec file are usually changed. At the minimum a rebase should
-         change `Version` and `Release` tags (or corresponding macros) and add a new changelog entry,
-         but sometimes other things are changed - if that's the case, try to understand the logic behind it.
-
-      3. Update the spec file. Set <VERSION> but do not change release, that will be taken care of later.
-         Do any other usual changes. Do not modify changelog, a new changelog entry will be added later.
-         You may need to get some information from the upstream repository, for example commit hashes.
-
-      4. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
-
-      5. Download upstream sources using `spectool -g -S <PACKAGE>.spec`.
-         Use the `run_package_prep` tool to see if everything is in order.
-         It is possible that some *.patch files will fail to apply now
-         that the spec file has been updated. Don't jump to conclusions -
-         if one patch fails to apply, it doesn't mean all other patches fail
-         to apply as well. Go through the errors one by one, fix them and
-         use `run_package_prep` again to verify.
-         Repeat as necessary. Do not remove any patches unless all their hunks have been already applied
-         to the upstream sources.
-         Note: <PKG_TOOL> is `centpkg` for CentOS Stream branches (c9s, c10s) and `rhpkg` for RHEL branches.
-
-      6. Upload new upstream sources (files that the `spectool` command downloaded in the previous step)
-         to lookaside cache using the `upload_sources` tool.
-
-      7. If you removed any patch file references from the spec file
-         (e.g. because they were already applied upstream),
-         you must remove all the corresponding patch files from the repository as well.
-
-      8. Generate a SRPM using
-         `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
-
-      9. In your output, provide a "files_to_git_add" list containing all files
-         that should be git added for this rebase.
-         This typically includes the updated spec file and any new/modified/deleted
-         patch files or other files you've changed or added/removed during
-         the rebase. Do not include files that were automatically generated
-         or downloaded by spectool.
-         Make sure to include patch files that were also removed from the spec file.
-
-
-      General instructions:
-
-      - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
-      - Never change anything in the spec file changelog.
-      - Preserve existing formatting and style conventions in spec files and patch headers.
-      - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
-      - If the package calls `autoreconf` in `%prep` and the rebase fails
-        because of a version constraint,
-        try removing that constraint, but never remove the `autoreconf` call.
-      - If a rebase to <VERSION> was done in Fedora, use that as the primary
-        reference and include all changes,
-        even if they may seem irrelevant - they are there for a reason.
-    """
+    return render_template("rebase_instructions.j2")
 
 
 def get_prompt() -> str:
-    return """
-      Your working directory is {{local_clone}}, a clone of dist-git repository of package {{package}}.
-      {{dist_git_branch}} dist-git branch has been checked out. You are working on Jira issue {{jira_issue}}
-      {{#cve_id}}(a.k.a. {{.}}){{/cve_id}}.
-
-      {{#fedora_clone}}
-      Additionally, you have access to the corresponding Fedora repository (rawhide branch) at {{.}}.
-      This can be used as a reference for comparing package versions, spec
-      files, patches, and other packaging details when explicitly instructed
-      to do so.
-      {{/fedora_clone}}
-
-      {{#triage_summary}}
-      Triage context (from the triage agent that selected this rebase):
-      {{.}}
-      {{/triage_summary}}
-      {{^build_error}}
-      Rebase the package to version {{version}}.
-      {{/build_error}}
-      {{#build_error}}
-      This is a repeated rebase, after the previous attempt the generated SRPM failed to build:
-
-      {{.}}
-
-      Everything from the previous attempt has been reset. Start over, follow the instructions from the start
-      and don't forget to fix the issue.
-      {{/build_error}}
-    """
+    return "rebase.j2"
 
 
 def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> ReasoningAgent:
@@ -305,9 +197,9 @@ async def main() -> None:
             async def run_rebase_agent(state):
                 pkg_tool = "centpkg" if is_cs_branch(state.dist_git_branch) else "rhpkg"
                 response = await rebase_agent.run(
-                    render_prompt(
-                        template=get_prompt(),
-                        input=RebaseInputSchema(
+                    render_template(
+                        get_prompt(),
+                        RebaseInputSchema(
                             local_clone=state.local_clone,
                             fedora_clone=state.fedora_clone,
                             package=state.package,
@@ -335,9 +227,9 @@ async def main() -> None:
 
             async def run_build_agent(state):
                 response = await build_agent.run(
-                    render_prompt(
-                        template=get_build_prompt(),
-                        input=BuildInputSchema(
+                    render_template(
+                        get_build_prompt(),
+                        BuildInputSchema(
                             srpm_path=state.rebase_result.srpm_path,
                             dist_git_branch=state.dist_git_branch,
                             jira_issue=state.jira_issue,
@@ -398,9 +290,9 @@ async def main() -> None:
 
             async def run_log_agent(state):
                 response = await log_agent.run(
-                    render_prompt(
-                        template=get_log_prompt(),
-                        input=LogInputSchema(
+                    render_template(
+                        get_log_prompt(),
+                        LogInputSchema(
                             jira_issue=state.jira_issue,
                             changes_summary=state.rebase_log[-1],
                         ),

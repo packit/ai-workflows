@@ -1,0 +1,73 @@
+Your working directory is {{ local_clone }}, a clone of dist-git repository of package {{ package }}.
+{{ dist_git_branch }} dist-git branch has been checked out. You are working on Jira issue {{ jira_issue }}
+{% if cve_id %}(a.k.a. {{ cve_id }}){% endif %}.
+{% if triage_summary %}
+Triage context (from the triage agent that selected these patches):
+{{ triage_summary }}
+Apply all provided patches as-is unless the triage context above explicitly
+states that only specific parts of the patches are relevant. Only then should
+you selectively apply the indicated changes.
+{% endif %}
+
+Upstream patches that were backported:
+{% for patch in upstream_patches %}
+- {{ patch }}
+{% endfor %}
+
+The cherry-pick workflow succeeded but the build failed:
+
+{{ build_error }}
+
+CRITICAL CONSTRAINTS:
+- The upstream repository at {{ local_clone }}-upstream has all your previous work intact.
+  DO NOT clone it again. DO NOT reset to base commit.
+- DO NOT modify anything in {{ local_clone }} dist-git repository except
+  the backport patch file(s) you created (by regenerating them from upstream repo).
+  Read the spec file to find the patch filenames you added — do NOT assume the name.
+- NEVER modify the spec file — the build worked before your patches; fix the patches instead.
+- Fix BOTH compilation errors AND test failures. NEVER skip or disable tests.
+- Make ONE attempt — you will be called again if the build still fails.
+
+Before you start: Read {{ local_clone }}-upstream/build-logs/fix-attempts.md for a log of
+previous fix attempts. Do NOT repeat strategies that already failed.
+
+WORKFLOW:
+
+1. Analyze the build error and identify what's missing (functions, types, headers, etc.)
+
+2. Explore {{ local_clone }}-upstream to find solutions — use git log, git show, grep,
+   and view files. The full upstream history is available.
+
+3. Fix the issue using one or both approaches:
+   A. Cherry-pick prerequisite commits using `cherry_pick_commit` tool
+      (one at a time, chronological order). Resolve conflicts with `str_replace`,
+      then use `cherry_pick_continue`.
+   B. Manually edit files in {{ local_clone }}-upstream and commit.
+
+SPECIAL CONSIDERATIONS FOR TEST FAILURES:
+- Tests validate the fix — they MUST pass
+- If tests use missing functions/helpers: backport ONLY the minimal necessary test helpers
+  (search upstream history for test utility commits and cherry-pick or manually add them)
+- If tests fail due to API changes: adapt test code to work with older APIs
+- NEVER skip or disable tests — fix them instead
+
+4. Regenerate the patch file(s) you created. Read the spec file to find the
+   patch filenames you added, then regenerate them using `git_patch_create` tool with:
+   - repository_path: {{ local_clone }}-upstream
+   - patch_file_path: the path to each patch file in {{ local_clone }}/
+
+5. Test the build:
+   - Use the `run_package_prep` tool to verify patches apply cleanly
+   - `{{ pkg_tool }} --name={{ package }} --namespace=rpms --release={{ dist_git_branch }} srpm`
+   - Call `build_package` with the SRPM path, dist_git_branch, and jira_issue
+   - If build fails: use `download_artifacts` to get logs and identify the new error
+
+6. Append a summary to {{ local_clone }}-upstream/build-logs/fix-attempts.md documenting:
+   - What you identified as the root cause
+   - Which commits you cherry-picked or what manual edits you made
+   - The build result (pass/fail and error if applicable)
+
+Report success=true with SRPM path if build passes.
+Report success=false with the extracted error if build fails or you can't find a fix.
+
+Unpacked upstream sources are in {{ unpacked_sources }}.

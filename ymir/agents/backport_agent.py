@@ -818,13 +818,18 @@ async def main() -> None:
             if container_version == "c9s"
             else RedisQueues.BACKPORT_QUEUE_C10S.value
         )
+        # Priority twin: ymir_todo-triggered tasks are served before normal ones.
+        backport_queue_todo = RedisQueues.priority_twin(backport_queue)
         redis_logger.info(
-            f"Connected to Redis, max retries set to {max_retries}, listening to queue: {backport_queue}"
+            f"Connected to Redis, max retries set to {max_retries}, "
+            f"listening to queues: [{backport_queue_todo}, {backport_queue}]"
         )
 
         while True:
-            redis_logger.info(f"Waiting for tasks from {backport_queue} (timeout: 30s)...")
-            element = await fix_await(redis.brpop([backport_queue], timeout=30))
+            redis_logger.info(
+                f"Waiting for tasks from [{backport_queue_todo}, {backport_queue}] (timeout: 30s)..."
+            )
+            element = await fix_await(redis.brpop([backport_queue_todo, backport_queue], timeout=30))
             if element is None:
                 redis_logger.info("No tasks received, continuing to wait...")
                 continue
@@ -851,7 +856,8 @@ async def main() -> None:
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {backport_data.jira_issue}"
                     )
-                    await fix_await(redis.lpush(backport_queue, task.model_dump_json()))
+                    retry_queue = backport_queue_todo if task.user_triggered else backport_queue
+                    await fix_await(redis.lpush(retry_queue, task.model_dump_json()))
                 else:
                     logger.error(
                         f"Task failed after {max_retries} attempts, "

@@ -31,6 +31,7 @@ from ymir.common.models import (
     TransitionRuleOutcome,
     TransitionRuleSet,
 )
+
 logger = logging.getLogger(__name__)
 
 ET_URL = "https://errata.engineering.redhat.com"
@@ -278,10 +279,7 @@ def _get_erratum_build_map(erratum_id: int | str) -> ErratumBuildMap:
         package_file_map = {
             _variant_to_base_variant(variant): {
                 arch: {
-                    _nvr_to_package_name(
-                        rpm["filename"] if not isinstance(rpm, str) else rpm
-                    )
-                    for rpm in rpms
+                    _nvr_to_package_name(rpm["filename"] if not isinstance(rpm, str) else rpm) for rpm in rpms
                 }
                 for arch, rpms in arches.items()
             }
@@ -385,9 +383,7 @@ def _get_previous_erratum(
 
         release = _get_RHEL_release(str(cur_version))
         if release.shipped:
-            released_build = _et_api_get(
-                f"product_versions/{release.version}/released_builds/{package_name}"
-            )
+            released_build = _et_api_get(f"product_versions/{release.version}/released_builds/{package_name}")
 
             erratum_id_from_released_build: int | None = released_build["errata_id"]
             nvr: str | None = released_build["build"]
@@ -592,13 +588,9 @@ class GetPreviousErratumTool(
         package_name = tool_input.package_name
         logger.info("Getting previous erratum for %s in erratum %s", package_name, erratum_id)
         try:
-            prev_id, prev_nvr = await asyncio.to_thread(
-                _get_previous_erratum, erratum_id, package_name
-            )
+            prev_id, prev_nvr = await asyncio.to_thread(_get_previous_erratum, erratum_id, package_name)
         except Exception as e:
-            raise ToolError(
-                f"Failed to get previous erratum for {package_name} in {erratum_id}: {e}"
-            ) from e
+            raise ToolError(f"Failed to get previous erratum for {package_name} in {erratum_id}: {e}") from e
         return JSONToolOutput(result={"id": prev_id, "nvr": prev_nvr})
 
 
@@ -629,9 +621,7 @@ class GetErratumStagePushDetailsTool(
         try:
             details = await asyncio.to_thread(_get_erratum_stage_push_details, erratum_id)
         except Exception as e:
-            raise ToolError(
-                f"Failed to get stage push details for erratum {erratum_id}: {e}"
-            ) from e
+            raise ToolError(f"Failed to get stage push details for erratum {erratum_id}: {e}") from e
         return JSONToolOutput(result=details.model_dump(mode="json"))
 
 
@@ -639,9 +629,7 @@ class ErratumPushToStageToolInput(BaseModel):
     erratum_id: str = Field(description="Erratum ID")
 
 
-class ErratumPushToStageTool(
-    Tool[ErratumPushToStageToolInput, ToolRunOptions, StringToolOutput]
-):
+class ErratumPushToStageTool(Tool[ErratumPushToStageToolInput, ToolRunOptions, StringToolOutput]):
     name = "erratum_push_to_stage"
     description = """
     Push an erratum to the CDN stage environment. Respects DRY_RUN.
@@ -660,14 +648,11 @@ class ErratumPushToStageTool(
         erratum_id = tool_input.erratum_id
         if _skip_writes():
             return StringToolOutput(
-                result=f"Dry run, not pushing erratum {erratum_id} to stage "
-                f"(this is expected, not an error)"
+                result=f"Dry run, not pushing erratum {erratum_id} to stage (this is expected, not an error)"
             )
         logger.info("Pushing erratum %s to stage", erratum_id)
         try:
-            await asyncio.to_thread(
-                _et_api_post, f"erratum/{erratum_id}/push", {"defaults": "stage"}
-            )
+            await asyncio.to_thread(_et_api_post, f"erratum/{erratum_id}/push", {"defaults": "stage"})
         except Exception as e:
             raise ToolError(f"Failed to push erratum {erratum_id} to stage: {e}") from e
         return StringToolOutput(result=f"Successfully pushed erratum {erratum_id} to stage")
@@ -678,9 +663,7 @@ class ErratumChangeStateToolInput(BaseModel):
     new_state: str = Field(description="New state (e.g. 'QE', 'REL_PREP')")
 
 
-class ErratumChangeStateTool(
-    Tool[ErratumChangeStateToolInput, ToolRunOptions, StringToolOutput]
-):
+class ErratumChangeStateTool(Tool[ErratumChangeStateToolInput, ToolRunOptions, StringToolOutput]):
     name = "erratum_change_state"
     description = """
     Change the state of an erratum. Respects DRY_RUN.
@@ -711,12 +694,8 @@ class ErratumChangeStateTool(
                 {"new_state": new_state},
             )
         except Exception as e:
-            raise ToolError(
-                f"Failed to change state of erratum {erratum_id} to {new_state}: {e}"
-            ) from e
-        return StringToolOutput(
-            result=f"Successfully changed state of erratum {erratum_id} to {new_state}"
-        )
+            raise ToolError(f"Failed to change state of erratum {erratum_id} to {new_state}: {e}") from e
+        return StringToolOutput(result=f"Successfully changed state of erratum {erratum_id} to {new_state}")
 
 
 class ErratumChangeOwnershipToolInput(BaseModel):
@@ -724,9 +703,7 @@ class ErratumChangeOwnershipToolInput(BaseModel):
     new_owner_email: str = Field(description="New owner email address")
 
 
-class ErratumChangeOwnershipTool(
-    Tool[ErratumChangeOwnershipToolInput, ToolRunOptions, StringToolOutput]
-):
+class ErratumChangeOwnershipTool(Tool[ErratumChangeOwnershipToolInput, ToolRunOptions, StringToolOutput]):
     name = "erratum_change_ownership"
     description = """
     Change the ownership (assigned_to and package_owner) of an erratum. Respects DRY_RUN.
@@ -760,9 +737,7 @@ class ErratumChangeOwnershipTool(
                 },
             )
         except Exception as e:
-            raise ToolError(
-                f"Failed to change ownership of erratum {erratum_id}: {e}"
-            ) from e
+            raise ToolError(f"Failed to change ownership of erratum {erratum_id}: {e}") from e
         return StringToolOutput(
             result=f"Successfully changed ownership of erratum {erratum_id} to {new_owner_email}"
         )
@@ -773,9 +748,7 @@ class ErratumAddCommentToolInput(BaseModel):
     comment: str = Field(description="Comment text")
 
 
-class ErratumAddCommentTool(
-    Tool[ErratumAddCommentToolInput, ToolRunOptions, StringToolOutput]
-):
+class ErratumAddCommentTool(Tool[ErratumAddCommentToolInput, ToolRunOptions, StringToolOutput]):
     name = "erratum_add_comment"
     description = """
     Add a comment to an erratum. Respects DRY_RUN.
@@ -795,8 +768,7 @@ class ErratumAddCommentTool(
         comment = tool_input.comment
         if _skip_writes():
             return StringToolOutput(
-                result=f"Dry run, not adding comment to erratum {erratum_id} "
-                f"(this is expected, not an error)"
+                result=f"Dry run, not adding comment to erratum {erratum_id} (this is expected, not an error)"
             )
         logger.info("Adding comment to erratum %s", erratum_id)
         try:
@@ -807,9 +779,7 @@ class ErratumAddCommentTool(
             )
         except Exception as e:
             raise ToolError(f"Failed to add comment to erratum {erratum_id}: {e}") from e
-        return StringToolOutput(
-            result=f"Successfully added comment to erratum {erratum_id}"
-        )
+        return StringToolOutput(result=f"Successfully added comment to erratum {erratum_id}")
 
 
 class ErratumRefreshSecurityAlertsToolInput(BaseModel):
@@ -848,9 +818,5 @@ class ErratumRefreshSecurityAlertsTool(
                 {},
             )
         except Exception as e:
-            raise ToolError(
-                f"Failed to refresh security alerts for erratum {erratum_id}: {e}"
-            ) from e
-        return StringToolOutput(
-            result=f"Successfully refreshed security alerts for erratum {erratum_id}"
-        )
+            raise ToolError(f"Failed to refresh security alerts for erratum {erratum_id}: {e}") from e
+        return StringToolOutput(result=f"Successfully refreshed security alerts for erratum {erratum_id}")

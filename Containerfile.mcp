@@ -14,7 +14,7 @@ ARG EXTRA_PACKAGES=""
 RUN dnf -y install \
       python3.13 \
       python3.13-devel \
-      python3-rpm \
+      rpm-devel \
       krb5-libs \
       krb5-workstation \
       krb5-devel \
@@ -34,10 +34,8 @@ RUN useradd -m -G wheel mcp
 # Copy required directories
 # Individual directories are mounted as volumes in development
 COPY requirements-global.txt /home/mcp/
-COPY ymir/common/*.py ymir/common/pyproject.toml ymir/common/requirements.txt /home/mcp/ymir/common/
-COPY ymir/tools/*.py ymir/tools/pyproject.toml ymir/tools/requirements.txt /home/mcp/ymir/tools/
-COPY ymir/tools/privileged/*.py /home/mcp/ymir/tools/privileged/
-COPY ymir/tools/unprivileged/*.py /home/mcp/ymir/tools/unprivileged/
+COPY ymir/common/ /home/mcp/ymir/common/
+COPY ymir/tools/ /home/mcp/ymir/tools/
 
 # Install dependencies via pyproject.toml; litellm pinned separately to exclude compromised versions
 RUN pip install --no-cache-dir "litellm!=1.82.7,!=1.82.8" /home/mcp/ymir/common/ /home/mcp/ymir/tools/

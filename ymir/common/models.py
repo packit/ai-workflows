@@ -5,7 +5,8 @@ This module contains common data models used across different agents
 and components to ensure consistency and type safety.
 """
 
-from datetime import datetime
+import re
+from datetime import UTC, datetime
 from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any, Literal
@@ -947,6 +948,153 @@ class TestingState(StrEnum):
     FAILED = "tests-failed"
     PASSED = "tests-passed"
     WAIVED = "tests-waived"
+
+
+# ============================================================================
+# Errata Workflow Models
+# ============================================================================
+
+
+class ErratumPackageFileList(RootModel):
+    """Map variant and architecture to a set of subpackage names shipped for that architecture.
+
+    Example::
+
+        {
+            "AppStream": {
+                "SRPMS": {"libtiff"},
+                "aarch64": {"libtiff", "libtiff-devel", ...}
+            }
+        }
+    """
+
+    root: dict[str, dict[str, set[str]]]
+
+
+class ErratumBuild(BaseModel):
+    """A single erratum build: NVR + package file list."""
+
+    nvr: str
+    package_file_list: ErratumPackageFileList
+
+
+class ErratumBuildMap(RootModel):
+    """Map package name to ErratumBuild."""
+
+    root: dict[str, ErratumBuild]
+
+
+class TransitionRuleOutcome(StrEnum):
+    BLOCK = "BLOCK"
+    OK = "OK"
+    UNKNOWN = "UNKNOWN"
+
+
+class TransitionRule(BaseModel):
+    name: str
+    outcome: TransitionRuleOutcome
+    details: str
+
+
+class TransitionRuleSet(BaseModel):
+    from_status: ErrataStatus
+    to_status: ErrataStatus
+    rules: list[TransitionRule]
+
+    @property
+    def all_ok(self) -> bool:
+        return all(rule.outcome == TransitionRuleOutcome.OK for rule in self.rules)
+
+
+class ErratumPushStatus(StrEnum):
+    QUEUED = "QUEUED"
+    READY = "READY"
+    RUNNING = "RUNNING"
+    WAITING_ON_PUB = "WAITING_ON_PUB"
+    POST_PUSH_PROCESSING = "POST_PUSH_PROCESSING"
+    COMPLETE = "COMPLETE"
+    FAILED = "FAILED"
+
+
+class ErratumPushDetails(BaseModel):
+    status: ErratumPushStatus | None
+    updated_at: datetime | None
+
+
+class RHELVersion(BaseModel):
+    major: int
+    minor: int
+    micro: int | None
+    stream: str
+
+    def __str__(self):
+        if self.micro is not None:
+            return f"RHEL-{self.major}.{self.minor}.{self.micro}.{self.stream}"
+        return f"RHEL-{self.major}.{self.minor}.{self.stream}"
+
+    @property
+    def parent(self) -> "RHELVersion | None":
+        """The release that the release inherits builds from."""
+        if self.stream != "GA":
+            return RHELVersion(
+                major=self.major,
+                minor=self.minor,
+                micro=self.micro,
+                stream="GA",
+            )
+
+        if self.minor > 0:
+            one_minor_version_up = self.minor - 1
+            match self.major:
+                case 10:
+                    return RHELVersion(
+                        major=self.major,
+                        minor=one_minor_version_up,
+                        micro=self.micro,
+                        stream="Z",
+                    )
+                case 9 | 8:
+                    if one_minor_version_up % 2 == 1:
+                        return RHELVersion(
+                            major=self.major,
+                            minor=one_minor_version_up,
+                            micro=self.micro,
+                            stream="Z.MAIN",
+                        )
+                    return RHELVersion(
+                        major=self.major,
+                        minor=one_minor_version_up,
+                        micro=self.micro,
+                        stream="Z.MAIN+EUS",
+                    )
+
+        return None
+
+    @staticmethod
+    def from_str(version_string: str) -> "RHELVersion | None":
+        version_string = version_string.strip().upper()
+        pattern = r"RHEL-(\d+)\.(\d+)(?:\.(\d+))?\.([^\d].*)$"
+        match = re.match(pattern, version_string)
+        if match is not None:
+            version = RHELVersion(
+                major=int(match.group(1)),
+                minor=int(match.group(2)),
+                micro=int(match.group(3)) if match.group(3) else None,
+                stream=match.group(4),
+            )
+            if version_string != str(version):
+                raise ValueError(f"round-trip mismatch: {version_string!r} != {str(version)!r}")
+            return version
+        return None
+
+
+class RHELRelease(BaseModel):
+    version: str
+    ship_date: datetime | None  # None means already shipped
+
+    @property
+    def shipped(self):
+        return self.ship_date is None or self.ship_date < datetime.now(tz=UTC)
 
 
 class WorkflowResult(BaseModel):

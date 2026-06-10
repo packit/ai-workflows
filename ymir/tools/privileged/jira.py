@@ -1385,9 +1385,7 @@ class CreateJiraIssueToolInput(BaseModel):
     labels: list[str] | None = Field(default=None, description="List of labels")
 
 
-class CreateJiraIssueTool(
-    Tool[CreateJiraIssueToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
-):
+class CreateJiraIssueTool(Tool[CreateJiraIssueToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]):
     name = "create_jira_issue"
     description = """
     Creates a new Jira issue. Respects DRY_RUN and JIRA_DRY_RUN.
@@ -1428,15 +1426,11 @@ class CreateJiraIssueTool(
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             if tool_input.assignee_email:
-                account_id = await _get_user_account_id(
-                    session, headers, tool_input.assignee_email
-                )
+                account_id = await _get_user_account_id(session, headers, tool_input.assignee_email)
                 fields["assignee"] = {"accountId": account_id}
 
             if tool_input.reporter_email:
-                account_id = await _get_user_account_id(
-                    session, headers, tool_input.reporter_email
-                )
+                account_id = await _get_user_account_id(session, headers, tool_input.reporter_email)
                 fields["reporter"] = {"accountId": account_id}
 
             if tool_input.components:

@@ -11,7 +11,6 @@ import os
 import sys
 import traceback
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from beeai_framework.errors import FrameworkError
 from beeai_framework.workflows import Workflow
@@ -22,10 +21,10 @@ from ymir.agents.utils import mcp_tools, run_tool
 from ymir.common.constants import JiraLabels
 from ymir.common.logging_setup import configure_logging
 from ymir.common.models import (
+    ErrataStatus,
     ErratumBuild,
     ErratumBuildMap,
     ErratumPushStatus,
-    ErrataStatus,
     TransitionRuleOutcome,
     TransitionRuleSet,
     WorkflowResult,
@@ -109,12 +108,8 @@ async def run_errata_workflow(
             tag = _needs_attention_tag(erratum["id"])
 
             # Search for existing issue with this tag
-            description_filter = " OR ".join(
-                f'description ~ "\\"{t}\\""' for t in tag.all_formats()
-            )
-            jql = (
-                f'project = RHELMISC AND status NOT IN (Done, Closed) AND ({description_filter})'
-            )
+            description_filter = " OR ".join(f'description ~ "\\"{t}\\""' for t in tag.all_formats())
+            jql = f"project = RHELMISC AND status NOT IN (Done, Closed) AND ({description_filter})"
 
             search_result = await run_tool(
                 "search_jira_issues",
@@ -152,9 +147,7 @@ async def run_errata_workflow(
 
             return WorkflowResult(status=why, reschedule_in=-1)
 
-        async def _erratum_has_magic_string_in_comments(
-            erratum_id: str | int, magic_string: str
-        ) -> bool:
+        async def _erratum_has_magic_string_in_comments(erratum_id: str | int, magic_string: str) -> bool:
             """Fetch full erratum and search comments client-side."""
             full_erratum = await run_tool(
                 "get_erratum",
@@ -191,9 +184,7 @@ async def run_errata_workflow(
             erratum_id = state.erratum["id"]
             tag = _needs_attention_tag(erratum_id)
 
-            description_filter = " OR ".join(
-                f'description ~ "\\"{t}\\""' for t in tag.all_formats()
-            )
+            description_filter = " OR ".join(f'description ~ "\\"{t}\\""' for t in tag.all_formats())
             jql = (
                 f"project = RHELMISC AND status NOT IN (Done, Closed) "
                 f"AND ({description_filter}) "
@@ -242,16 +233,12 @@ async def run_errata_workflow(
             assigned_to = erratum.get("assigned_to_email", "")
             package_owner = erratum.get("package_owner_email", "")
 
-            if (
-                assigned_to == ERRATA_JOTNAR_BOT_EMAIL
-                and package_owner == ERRATA_JOTNAR_BOT_EMAIL
-            ):
+            if assigned_to == ERRATA_JOTNAR_BOT_EMAIL and package_owner == ERRATA_JOTNAR_BOT_EMAIL:
                 return "route_by_status"
 
             # Check if Ymir owns all related issues
             all_owned = all(
-                _get_assigned_team(issue) == JIRA_JOTNAR_TEAM
-                for issue in (state.related_issues or [])
+                _get_assigned_team(issue) == JIRA_JOTNAR_TEAM for issue in (state.related_issues or [])
             )
 
             if all_owned:
@@ -331,9 +318,7 @@ async def run_errata_workflow(
                     erratum_id=erratum_id,
                     new_state=new_status,
                 )
-                reschedule_delay = (
-                    0 if new_status in (ErrataStatus.NEW_FILES, ErrataStatus.QE) else -1
-                )
+                reschedule_delay = 0 if new_status in (ErrataStatus.NEW_FILES, ErrataStatus.QE) else -1
                 state.result = WorkflowResult(
                     status=f"Moving to {new_status}, since all rules are OK",
                     reschedule_in=reschedule_delay,
@@ -341,9 +326,7 @@ async def run_errata_workflow(
                 return Workflow.END
 
             # Handle blocking rules
-            blocking_outcomes = [
-                r.name for r in rule_set.rules if r.outcome != TransitionRuleOutcome.OK
-            ]
+            blocking_outcomes = [r.name for r in rule_set.rules if r.outcome != TransitionRuleOutcome.OK]
 
             if "Stagepush" in blocking_outcomes:
                 push_details = await run_tool(
@@ -400,9 +383,7 @@ async def run_errata_workflow(
 
             # Unknown blocking rules
             blocking_rules_details = "\n".join(
-                f"{r.name}: {r.details}"
-                for r in rule_set.rules
-                if r.outcome == TransitionRuleOutcome.BLOCK
+                f"{r.name}: {r.details}" for r in rule_set.rules if r.outcome == TransitionRuleOutcome.BLOCK
             )
             state.result = await _flag_attention(
                 state,
@@ -410,9 +391,7 @@ async def run_errata_workflow(
             )
             return Workflow.END
 
-        async def _handle_cat_tests(
-            state: ErrataWorkflowState, new_status: str
-        ) -> WorkflowResult:
+        async def _handle_cat_tests(state: ErrataWorkflowState, new_status: str) -> WorkflowResult:
             """Handle CAT test blocking rule with timeout."""
             erratum_id = str(state.erratum["id"])
             push_details = await run_tool(
@@ -503,9 +482,7 @@ async def run_errata_workflow(
                     other_build_map = ErratumBuildMap.model_validate(other_build_map_data)
                     prev_build = other_build_map.root[package]
 
-                    is_matched, comment = compare_file_lists(
-                        cur_build, prev_build, prev_erratum_id
-                    )
+                    is_matched, comment = compare_file_lists(cur_build, prev_build, prev_erratum_id)
 
                     if not is_matched:
                         mismatch_packages.append(package)

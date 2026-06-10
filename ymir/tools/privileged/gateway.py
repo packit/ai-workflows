@@ -14,7 +14,19 @@ from ymir.common.mock_repos import apply_zstream_override_from_env
 from ymir.tools.gateway_utils import setup_logging
 from ymir.tools.privileged.copr import BuildPackageTool, DownloadArtifactsTool
 from ymir.tools.privileged.distgit import CreateZstreamBranchTool
-from ymir.tools.privileged.errata import GetErratumBuildNvrTool, GetErratumTool
+from ymir.tools.privileged.errata import (
+    ErratumAddCommentTool,
+    ErratumChangeOwnershipTool,
+    ErratumChangeStateTool,
+    ErratumPushToStageTool,
+    ErratumRefreshSecurityAlertsTool,
+    GetErratumBuildMapTool,
+    GetErratumBuildNvrTool,
+    GetErratumStagePushDetailsTool,
+    GetErratumTool,
+    GetErratumTransitionRulesTool,
+    GetPreviousErratumTool,
+)
 from ymir.tools.privileged.gitlab import (
     AddBlockingMergeRequestCommentTool,
     AddMergeRequestCommentTool,
@@ -37,6 +49,7 @@ from ymir.tools.privileged.jira import (
     AddJiraCommentTool,
     ChangeJiraStatusTool,
     CheckCveTriageEligibilityTool,
+    CreateJiraIssueTool,
     EditJiraLabelsTool,
     GetJiraAttachmentTool,
     GetJiraDetailsTool,
@@ -140,6 +153,15 @@ def main():
             SearchGitlabProjectMrsTool(options=tool_options),
             GetErratumTool(options=tool_options),
             GetErratumBuildNvrTool(options=tool_options),
+            GetErratumTransitionRulesTool(options=tool_options),
+            GetErratumBuildMapTool(options=tool_options),
+            GetPreviousErratumTool(options=tool_options),
+            GetErratumStagePushDetailsTool(options=tool_options),
+            ErratumPushToStageTool(options=tool_options),
+            ErratumChangeStateTool(options=tool_options),
+            ErratumChangeOwnershipTool(options=tool_options),
+            ErratumAddCommentTool(options=tool_options),
+            ErratumRefreshSecurityAlertsTool(options=tool_options),
             GetTestingFarmRequestTool(options=tool_options),
             ReproduceTestingFarmRequestTool(options=tool_options),
             AddJiraAttachmentsTool(options=tool_options),
@@ -156,6 +178,7 @@ def main():
             SetPreliminaryTestingTool(options=tool_options),
             UpdateJiraCommentTool(options=tool_options),
             VerifyIssueAuthorTool(options=tool_options),
+            CreateJiraIssueTool(options=tool_options),
             DownloadSourcesTool(options=tool_options),
             PrepSourcesTool(options=tool_options),
             UploadSourcesTool(options=tool_options),

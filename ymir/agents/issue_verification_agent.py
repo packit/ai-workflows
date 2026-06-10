@@ -78,7 +78,7 @@ class TestingAnalystOutput(BaseModel):
 
 def _render_testing_analyst_prompt(input: TestingAnalystInput, after_baseline: bool) -> str:
     template_name = (
-        "issue_verification_after_baseline.j2" if after_baseline else "issue_verification_normal.j2"
+        "issue_verification/after_baseline.j2" if after_baseline else "issue_verification/normal.j2"
     )
     return render_template(template_name, input)
 

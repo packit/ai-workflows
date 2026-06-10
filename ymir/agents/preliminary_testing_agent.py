@@ -66,7 +66,7 @@ class PreliminaryTestingResult(BaseModel):
 
 
 def render_prompt(input: InputSchema) -> str:
-    return render_template("preliminary_testing.j2", input)
+    return render_template("preliminary_testing/prompt.j2", input)
 
 
 def create_preliminary_testing_agent(gateway_tools: list) -> ReasoningAgent:

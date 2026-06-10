@@ -97,7 +97,7 @@ except ImportError:
 
 class TestBuildInstructions:
     def test_loads(self):
-        result = render_template("build_instructions.j2")
+        result = render_template("build/instructions.j2")
         assert "expert on building packages" in result
         assert "build_package" in result
         assert "builder-live.log" in result
@@ -105,7 +105,7 @@ class TestBuildInstructions:
 
 class TestLogInstructions:
     def test_loads(self):
-        result = render_template("log_instructions.j2")
+        result = render_template("log/instructions.j2")
         assert "summarizing packaging changes" in result
         assert "add_changelog_entry" in result
         assert "git diff --cached" in result
@@ -113,7 +113,7 @@ class TestLogInstructions:
 
 class TestRebaseInstructions:
     def test_loads(self):
-        result = render_template("rebase_instructions.j2")
+        result = render_template("rebase/instructions.j2")
         assert "rebasing packages" in result
         assert "rpmdev-vercmp" in result
         assert "spectool" in result
@@ -122,7 +122,7 @@ class TestRebaseInstructions:
 
 class TestMergeRequestInstructions:
     def test_loads(self):
-        result = render_template("merge_request_instructions.j2")
+        result = render_template("merge_request/instructions.j2")
         assert "maintaining packages" in result
         assert "accomodate user feedback" in result
         assert "run_package_prep" in result
@@ -130,25 +130,25 @@ class TestMergeRequestInstructions:
 
 class TestBackportInstructions:
     def test_normal_loads(self):
-        result = render_template("backport_instructions.j2")
+        result = render_template("backport/instructions.j2")
         assert "backporting upstream patches" in result
         assert "CHERRY-PICK WORKFLOW" in result
         assert "GIT AM WORKFLOW" in result
         assert "get_maintainer_rules" in result
 
     def test_zstream_loads(self):
-        result = render_template("backport_instructions_zstream.j2")
+        result = render_template("backport/instructions_zstream.j2")
         assert "backporting upstream patches" in result
         assert "DIST-GIT WORKFLOW" in result
         assert "UPSTREAM CHERRY-PICK WORKFLOW" in result
         assert "detect_distgit_source" in result
 
     def test_normal_has_spec_only_check(self):
-        result = render_template("backport_instructions.j2")
+        result = render_template("backport/instructions.j2")
         assert "spec file application" in result.lower() or "spec-only" in result.lower()
 
     def test_zstream_has_distgit_workflow(self):
-        result = render_template("backport_instructions_zstream.j2")
+        result = render_template("backport/instructions_zstream.j2")
         assert "clone_repository" in result
         assert "DISTGIT_SOURCE" in result
 
@@ -161,7 +161,7 @@ class TestBackportInstructions:
 class TestBuildTemplate:
     def test_renders_variables(self):
         result = render_template(
-            "build.j2",
+            "build/prompt.j2",
             BuildInputSchema(
                 srpm_path=Path("/tmp/pkg-1.0-1.el9.src.rpm"),
                 dist_git_branch="c9s",
@@ -176,7 +176,7 @@ class TestBuildTemplate:
 class TestLogTemplate:
     def test_renders_without_source_changelog(self):
         result = render_template(
-            "log.j2",
+            "log/prompt.j2",
             LogInputSchema(
                 jira_issue="RHEL-12345",
                 changes_summary="Rebased to version 2.0",
@@ -188,7 +188,7 @@ class TestLogTemplate:
 
     def test_renders_with_source_changelog(self):
         result = render_template(
-            "log.j2",
+            "log/prompt.j2",
             LogInputSchema(
                 jira_issue="RHEL-12345",
                 changes_summary="Backported fix",
@@ -202,7 +202,7 @@ class TestLogTemplate:
 class TestBackportTemplate:
     def test_renders_without_build_error(self):
         result = render_template(
-            "backport.j2",
+            "backport/prompt.j2",
             BackportInputSchema(
                 local_clone=Path("/tmp/clone"),
                 unpacked_sources=Path("/tmp/sources"),
@@ -228,7 +228,7 @@ class TestBackportTemplate:
 
     def test_renders_with_build_error(self):
         result = render_template(
-            "backport.j2",
+            "backport/prompt.j2",
             BackportInputSchema(
                 local_clone=Path("/tmp/clone"),
                 unpacked_sources=Path("/tmp/sources"),
@@ -246,7 +246,7 @@ class TestBackportTemplate:
 
     def test_renders_with_cve_id(self):
         result = render_template(
-            "backport.j2",
+            "backport/prompt.j2",
             BackportInputSchema(
                 local_clone=Path("/tmp/clone"),
                 unpacked_sources=Path("/tmp/sources"),
@@ -263,7 +263,7 @@ class TestBackportTemplate:
 
     def test_renders_without_cve_id(self):
         result = render_template(
-            "backport.j2",
+            "backport/prompt.j2",
             BackportInputSchema(
                 local_clone=Path("/tmp/clone"),
                 unpacked_sources=Path("/tmp/sources"),
@@ -281,7 +281,7 @@ class TestBackportTemplate:
 class TestBackportFixBuildErrorTemplate:
     def test_renders(self):
         result = render_template(
-            "backport_fix_build_error.j2",
+            "backport/fix_build_error_prompt.j2",
             BackportInputSchema(
                 local_clone=Path("/tmp/clone"),
                 unpacked_sources=Path("/tmp/sources"),
@@ -301,7 +301,7 @@ class TestBackportFixBuildErrorTemplate:
 class TestRebaseTemplate:
     def test_renders_basic_rebase(self):
         result = render_template(
-            "rebase.j2",
+            "rebase/prompt.j2",
             RebaseInputSchema(
                 local_clone=Path("/tmp/clone"),
                 fedora_clone=None,
@@ -320,7 +320,7 @@ class TestRebaseTemplate:
 
     def test_renders_with_fedora_clone(self):
         result = render_template(
-            "rebase.j2",
+            "rebase/prompt.j2",
             RebaseInputSchema(
                 local_clone=Path("/tmp/clone"),
                 fedora_clone=Path("/tmp/fedora"),
@@ -336,7 +336,7 @@ class TestRebaseTemplate:
 
     def test_renders_with_build_error(self):
         result = render_template(
-            "rebase.j2",
+            "rebase/prompt.j2",
             RebaseInputSchema(
                 local_clone=Path("/tmp/clone"),
                 fedora_clone=None,
@@ -355,7 +355,7 @@ class TestRebaseTemplate:
 class TestMergeRequestTemplate:
     def test_renders_without_build_error(self):
         result = render_template(
-            "merge_request.j2",
+            "merge_request/prompt.j2",
             MergeRequestInputSchema(
                 local_clone=Path("/tmp/clone"),
                 package="libfoo",
@@ -375,7 +375,7 @@ class TestMergeRequestTemplate:
 
     def test_renders_with_build_error(self):
         result = render_template(
-            "merge_request.j2",
+            "merge_request/prompt.j2",
             MergeRequestInputSchema(
                 local_clone=Path("/tmp/clone"),
                 package="libfoo",
@@ -396,7 +396,7 @@ class TestMergeRequestTemplate:
 class TestTriageTemplate:
     def test_renders_basic(self):
         result = render_template(
-            "triage.j2",
+            "triage/prompt.j2",
             TriageInputSchema(issue="RHEL-12345", is_older_zstream=False),
         )
         assert "RHEL-12345" in result
@@ -405,7 +405,7 @@ class TestTriageTemplate:
 
     def test_renders_older_zstream(self):
         result = render_template(
-            "triage.j2",
+            "triage/prompt.j2",
             TriageInputSchema(issue="RHEL-12345", is_older_zstream=True),
         )
         assert "RHEL-12345" in result
@@ -427,7 +427,7 @@ class _PreliminaryTestingInput(BaseModel):
 class TestPreliminaryTestingTemplate:
     def test_renders(self):
         result = render_template(
-            "preliminary_testing.j2",
+            "preliminary_testing/prompt.j2",
             _PreliminaryTestingInput(
                 issue_key="RHEL-12345",
                 issue_data="test issue data",
@@ -443,7 +443,7 @@ class TestPreliminaryTestingTemplate:
     def test_mustache_bug_fixes(self):
         """Verify that former Mustache variable lookups are now literal text."""
         result = render_template(
-            "preliminary_testing.j2",
+            "preliminary_testing/prompt.j2",
             _PreliminaryTestingInput(
                 issue_key="RHEL-1",
                 issue_data="x",
@@ -473,19 +473,19 @@ class TestIssueVerificationTemplates:
         )
 
     def test_normal_template(self):
-        result = render_template("issue_verification_normal.j2", self._make_input())
+        result = render_template("issue_verification/normal.j2", self._make_input())
         assert "testing analyst agent" in result
         assert "NEWA" in result
         assert "tests-passed" in result
 
     def test_after_baseline_template(self):
-        result = render_template("issue_verification_after_baseline.j2", self._make_input())
+        result = render_template("issue_verification/after_baseline.j2", self._make_input())
         assert "testing analyst agent" in result
         assert "baseline" in result
         assert "regressions" in result
 
     def test_common_included(self):
-        result = render_template("issue_verification_normal.j2", self._make_input())
+        result = render_template("issue_verification/normal.j2", self._make_input())
         assert "JIRA_ISSUE_DATA:" in result
         assert "ERRATUM_DATA:" in result
         assert "MAINTAINER_RULES:" in result
@@ -500,13 +500,13 @@ class TestIssueVerificationTemplates:
 class TestRenderTemplate:
     def test_no_input(self):
         """Static templates work without an input model."""
-        result = render_template("build_instructions.j2")
+        result = render_template("build/instructions.j2")
         assert len(result) > 100
 
     def test_with_input(self):
         """Templates with variables are rendered correctly."""
         result = render_template(
-            "build.j2",
+            "build/prompt.j2",
             BuildInputSchema(
                 srpm_path=Path("/tmp/test.src.rpm"),
                 dist_git_branch="c10s",
@@ -519,7 +519,7 @@ class TestRenderTemplate:
     def test_path_serialization(self):
         """Path objects are serialized as strings, not PosixPath repr."""
         result = render_template(
-            "build.j2",
+            "build/prompt.j2",
             BuildInputSchema(
                 srpm_path=Path("/tmp/test.src.rpm"),
                 dist_git_branch="c10s",

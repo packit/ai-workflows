@@ -58,11 +58,11 @@ logger = logging.getLogger(__name__)
 
 
 def get_instructions() -> str:
-    return render_template("merge_request_instructions.j2")
+    return render_template("merge_request/instructions.j2")
 
 
 def get_prompt() -> str:
-    return "merge_request.j2"
+    return "merge_request/prompt.j2"
 
 
 def create_merge_request_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> ReasoningAgent:

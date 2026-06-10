@@ -105,10 +105,11 @@ _jinja2_envs: dict[str, Environment] = {}
 
 
 def _get_jinja2_env(template_dir: Path) -> Environment:
-    key = str(template_dir)
+    resolved_dir = template_dir.resolve()
+    key = str(resolved_dir)
     if key not in _jinja2_envs:
         _jinja2_envs[key] = Environment(
-            loader=FileSystemLoader(template_dir),
+            loader=FileSystemLoader(resolved_dir),
             autoescape=False,  # noqa: S701 — LLM prompts, not HTML
             keep_trailing_newline=True,
             trim_blocks=True,

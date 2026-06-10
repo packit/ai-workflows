@@ -3,75 +3,43 @@
 This guide covers two things:
 
 1. **Installing skills** from the `agents_as_skills/` directory so your AI
-   coding assistant (Claude Code or Cursor) can use them.
+   agent can use them.
 2. **Installing the MCP tools** (`ymir-common` and `ymir-tools`) that the
-   skills depend on, and configuring Claude Code to start both the
+   skills depend on, and configuring your agent to start both the
    **privileged** and **unprivileged** MCP gateways automatically.
+
+The skills follow the [Agent Skills standard](https://agentskills.io/home) and
+work with any [compatible client](https://agentskills.io/clients), including
+[Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview),
+[opencode](https://opencode.ai), and
+[Cursor](https://www.cursor.com/).
 
 ---
 
 ## Installing skills
 
-The `agents_as_skills/` directory in this repository contains ready-to-use
-skills. Each sub-directory (e.g. `backport/`, `rebase/`, `triage/`) holds a
-`SKILL.md` file that your editor picks up once it is placed in the correct
-location.
+The skills in `agents_as_skills/` follow the [Agent Skills standard](https://agentskills.io/specification)
+and work with any compatible client. Consult your client's documentation for
+where to place skill directories:
 
-### Available skills
+- **Claude Code** — [Skills documentation](https://docs.anthropic.com/en/docs/claude-code/skills)
+- **opencode** — [Skills documentation](https://opencode.ai/docs/skills/)
+- **Other clients** — see the [Agent Skills client list](https://agentskills.io/clients)
 
-| Skill | Directory | Description |
-|-------|-----------|-------------|
-| Backport | `agents_as_skills/backport/` | Cherry-pick or git-am upstream patches, verify builds, and create merge requests |
-| Rebase | `agents_as_skills/rebase/` | Rebase a package to a new upstream version |
-| Triage | `agents_as_skills/triage/` | Triage CVE/bug JIRA issues for RHEL packages |
-| Rebuild | `agents_as_skills/rebuild/` | Rebuild a package in the build system |
-| Preliminary Testing | `agents_as_skills/preliminary_testing/` | Run preliminary tests on a package |
-| Issue Verification | `agents_as_skills/issue_verification/` | Issue verification agent (post-fix lifecycle management) |
-
-### Claude Code
-
-Claude Code discovers skills from `~/.claude/skills/`. Each skill is a
-directory containing a single `SKILL.md` file. You can download them straight
-from GitHub -- no need to clone the repository:
+The skills live in `agents_as_skills/` in this repository. You can either clone
+the repo and point your client at that directory, or download individual
+`SKILL.md` files directly:
 
 ```bash
 REPO_URL="https://raw.githubusercontent.com/packit/ai-workflows/main/agents_as_skills"
+SKILLS_DIR=~/.claude/skills  # adjust to your client's skills directory
 
-# Install all skills at once
-for skill in backport rebase triage rebuild preliminary_testing; do
-  mkdir -p ~/.claude/skills/"$skill"
-  curl -fsSL "$REPO_URL/$skill/SKILL.md" -o ~/.claude/skills/"$skill"/SKILL.md
+for skill in backport rebase triage rebuild preliminary-testing issue-verification; do
+  mkdir -p "$SKILLS_DIR/$skill"
+  curl -fsSL "$REPO_URL/$skill/SKILL.md" -o "$SKILLS_DIR/$skill/SKILL.md"
 done
 ```
 
-Or install a single skill:
-
-```bash
-REPO_URL="https://raw.githubusercontent.com/packit/ai-workflows/main/agents_as_skills"
-mkdir -p ~/.claude/skills/backport
-curl -fsSL "$REPO_URL/backport/SKILL.md" -o ~/.claude/skills/backport/SKILL.md
-```
-
-After downloading, restart Claude Code (or start a new session) so that the
-skills are picked up.
-
-### Cursor
-
-Cursor discovers skills from `~/.cursor/skills-cursor/`. The same approach
-applies:
-
-```bash
-REPO_URL="https://raw.githubusercontent.com/packit/ai-workflows/main/agents_as_skills"
-
-# Install all skills at once
-for skill in backport rebase triage rebuild preliminary_testing issue_verification; do
-  mkdir -p ~/.cursor/skills-cursor/"$skill"
-  curl -fsSL "$REPO_URL/$skill/SKILL.md" -o ~/.cursor/skills-cursor/"$skill"/SKILL.md
-done
-```
-
-After downloading, restart Cursor so that the new skills appear in the skill
-list.
 
 ---
 
@@ -87,9 +55,8 @@ running. The rest of this guide covers that setup.
 | **Privileged** | `ymir.tools.privileged.gateway` | GitLab, Jira, Copr, Koji/Kerberos, lookaside cache, dist-git branching |
 | **Unprivileged** | `ymir.tools.unprivileged.gateway` | Filesystem, shell, specfile, git operations, patches, upstream search, z-stream search |
 
-Claude Code starts both servers in `stdio` mode and communicates with them
-directly. Both run as child processes managed by Claude Code and are available
-simultaneously throughout the session.
+Both gateways run as child processes (via `stdio` MCP transport) managed by
+your agent client and are available simultaneously throughout the session.
 
 ## Prerequisites
 
@@ -139,8 +106,8 @@ cp templates/rhel-config.json ./rhel-config.json
 # Edit ./rhel-config.json with actual RHEL stream data
 ```
 
-Set the working directory in the Claude Code server configuration (see below)
-to the directory that contains this file.
+Set the working directory in the MCP server configuration (see below) to the
+directory that contains this file.
 
 ## 3. Environment variables
 
@@ -148,7 +115,7 @@ to the directory that contains this file.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `MCP_TRANSPORT` | **Yes** | Set to `stdio` so Claude Code can communicate with the process. |
+| `MCP_TRANSPORT` | **Yes** | Set to `stdio` so the agent can communicate with the process. |
 | `GITLAB_TOKEN` | **Yes** | GitLab API personal access token. |
 | `JIRA_URL` | **Yes** | Base URL of the Jira instance (e.g. `https://issues.redhat.com/`). |
 | `JIRA_EMAIL` | **Yes** | Email address for Jira Basic Auth. |
@@ -166,18 +133,17 @@ to the directory that contains this file.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `MCP_TRANSPORT` | **Yes** | Set to `stdio` so Claude Code can communicate with the process. |
+| `MCP_TRANSPORT` | **Yes** | Set to `stdio` so the agent can communicate with the process. |
 | `UPSTREAM_SEARCH_API_URL` | **Yes** | Base URL of the upstream search service (provides `/find_repository` and `/find_commit` endpoints). |
 | `MCP_GATEWAY_URL` | No | SSE URL of a running privileged gateway. See the note on cross-gateway calls below. |
 | `DEBUG_FILE` | No | Path to a log file. When set, gateway logs are written to this file in addition to stderr. Useful for debugging local installations. |
 | `REQUESTS_CA_BUNDLE` | No | Path to a Certificate Authority (CA) bundle, if additional or custom ones are required for workflow services. |
 
-## 4. Configure Claude Code
+## 4. Configure your agent client
 
-Add both servers to your Claude Code MCP configuration. You can do this
-with the CLI or by editing the settings file directly.
+### Claude Code
 
-### Option A -- Using `claude mcp add`
+Add both servers using `claude mcp add`:
 
 ```bash
 VENV="$HOME/.local/share/ymir-venv"
@@ -198,12 +164,8 @@ claude mcp add ymir-unprivileged \
   -- "$VENV/bin/ymir-unprivileged-gateway"
 ```
 
-### Option B -- Editing `~/.claude.json`
-
-Add the following to the top-level `mcpServers` object:
-
-Replace `<your-home>` with the absolute path to your home directory
-(e.g. `/home/you`). The `~` shorthand is **not** expanded inside JSON values.
+Or edit `~/.claude.json` directly, adding to the top-level `mcpServers` object
+(replace `<your-home>` with the absolute path — `~` is not expanded in JSON):
 
 ```json
 {
@@ -216,9 +178,7 @@ Replace `<your-home>` with the absolute path to your home directory
         "JIRA_URL": "https://redhat.atlassian.net",
         "JIRA_EMAIL": "you@redhat.com",
         "JIRA_TOKEN": "your-jira-api-token",
-        "KRB5CCNAME": "FILE:/tmp/krb5cc_1000",
-        "LOG_DETECTIVE_URL": "https://logdetective-placeholder-server.com/",
-        "LOG_DETECTIVE_TOKEN": "your-log-detective-api-token"
+        "KRB5CCNAME": "FILE:/tmp/krb5cc_1000"
       }
     },
     "ymir-unprivileged": {
@@ -237,6 +197,40 @@ For project-scoped configuration, place the same `mcpServers` block in
 `.claude/settings.json` inside your project directory instead. If that
 does not work for you, use the `.mcp.json` at the root of your project.
 
+### opencode
+
+Add both servers to `~/.config/opencode/opencode.json` under the `mcp` key
+(replace `<your-home>` with the absolute path):
+
+```json
+{
+  "mcp": {
+    "ymir-privileged": {
+      "type": "local",
+      "command": ["<your-home>/.local/share/ymir-venv/bin/ymir-privileged-gateway"],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "GITLAB_TOKEN": "<your-gitlab-token>",
+        "JIRA_URL": "https://redhat.atlassian.net",
+        "JIRA_EMAIL": "you@redhat.com",
+        "JIRA_TOKEN": "your-jira-api-token",
+        "KRB5CCNAME": "FILE:/tmp/krb5cc_1000"
+      }
+    },
+    "ymir-unprivileged": {
+      "type": "local",
+      "command": ["<your-home>/.local/share/ymir-venv/bin/ymir-unprivileged-gateway"],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "UPSTREAM_SEARCH_API_URL": "http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1"
+      }
+    }
+  }
+}
+```
+
+Restart opencode after editing the config.
+
 ### Note: Kerberos keytab
 
 If you use a keytab for automated Kerberos authentication, add `KEYTAB_FILE`
@@ -246,7 +240,7 @@ to the privileged server's `env`:
 "KEYTAB_FILE": "/path/to/your.keytab"
 ```
 
-Without a keytab, you must run `kinit` manually before launching Claude Code
+Without a keytab, you must run `kinit` manually before launching your agent
 so that a valid ticket exists in the cache pointed to by `KRB5CCNAME`.
 
 If you are using `KEYRING` credential cache (used by Kerberos by default),
@@ -254,19 +248,14 @@ you do not need to set `KRB5CCNAME`. All you need is a successful `kinit`.
 
 ## 5. Verify the setup
 
-Launch Claude Code and confirm both servers are running:
-
-```
-/mcp
-```
-
-This lists all connected MCP servers and their available tools. You should see
-tools from both `ymir-privileged` and `ymir-unprivileged` servers.
+After starting your agent, confirm both MCP servers are connected. In Claude
+Code run `/mcp`; in opencode the server list appears at startup. You should
+see tools from both `ymir-privileged` and `ymir-unprivileged`.
 
 ## Network topology
 
 ```
-Claude Code
+Agent client
   |
   |-- stdio --> ymir-privileged (child process)
   |               |-- GitLab API        (GITLAB_TOKEN)

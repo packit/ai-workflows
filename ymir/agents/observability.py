@@ -20,6 +20,15 @@ class AgentSpanProcessor(SpanProcessor):
         self._jira_issue_var.set(jira_issue)
 
     @contextlib.contextmanager
+    def jira_issue_context(self, jira_issue: str | None):
+        """Set the jira issue attribute on all spans created within the context."""
+        token = self._jira_issue_var.set(jira_issue)
+        try:
+            yield
+        finally:
+            self._jira_issue_var.reset(token)
+
+    @contextlib.contextmanager
     def start_transaction(
         self,
         jira_issue: str | None,

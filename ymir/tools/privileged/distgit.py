@@ -14,9 +14,11 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
+from specfile import Specfile
 
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket
 from ymir.common.utils import get_latest_candidate_build
+from ymir.common.version_utils import parse_branch_name
 from ymir.tools.base import CloneableTool as Tool
 
 logger = logging.getLogger(__name__)
@@ -92,6 +94,90 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
             creator=self,
         )
 
+    @staticmethod
+    def _find_source_branch(repo: git.Repo, branch: str) -> str | None:
+        if not (parsed := parse_branch_name(branch)):
+            return None
+        major, minor_str = parsed
+        minor = int(minor_str)
+        remote_branches = {ref.name.split("/")[-1] for ref in repo.remotes.origin.refs}
+        higher_branch = sorted(
+            (m, ref_name)
+            for ref_name in remote_branches
+            if (p := parse_branch_name(ref_name)) and p[0] == major and (m := int(p[1])) > minor
+        )
+        if higher_branch:
+            return higher_branch[0][1]
+        if (main_branch := f"rhel-{major}-main") in remote_branches:
+            return main_branch
+        return None
+
+    @staticmethod
+    async def _find_latest_same_nvr_ref(
+        repo: git.Repo,
+        package: str,
+        build_ref: str,
+        source_branch: str,
+    ) -> str:
+        """
+        Iterates through commits of source_branch, starting from build_ref, and returns
+        the latest commit that shares the same NVR, to include various fixups etc.
+        In most cases head of source_branch will be equal to build_ref and this method
+        does nothing.
+
+        Args:
+            repo: Repo object representing dist-git
+            package: Package name
+            build_ref: Git ref that the latest candidate build corresponding to the target branch
+              originated from
+            source_branch: Branch that should be used as a source - higher Z-Stream or rhel-X-main
+
+        Returns:
+            Ref to base the new Z-Stream branch on.
+        """
+
+        spec_filename = f"{package}.spec"
+        main_ref = f"origin/{source_branch}"
+
+        try:
+            is_ancestor = await asyncio.to_thread(repo.is_ancestor, build_ref, main_ref)
+        except git.exc.GitCommandError as e:
+            logger.debug(f"Failed to check ancestry between {build_ref} and {main_ref}: {e}")
+            return build_ref
+
+        if not is_ancestor:
+            logger.debug(f"{build_ref} is not an ancestor of {main_ref}, skipping NVR walk")
+            return build_ref
+
+        def walk_nvr():
+            def evr_at(rev):
+                try:
+                    commit = repo.commit(rev) if isinstance(rev, str) else rev
+                    content = (
+                        (commit.tree / spec_filename).data_stream.read().decode("utf-8", errors="replace")
+                    )
+                    # sourcedir is required when passing content, but its value doesn't matter in this case
+                    with Specfile(content=content, sourcedir="/") as spec:
+                        return spec.expanded_epoch, spec.expanded_version, spec.expanded_release
+                except Exception:
+                    return None
+
+            if (build_evr := evr_at(build_ref)) is None:
+                return build_ref
+
+            latest_same_nvr = build_ref
+            for commit in repo.iter_commits(f"{build_ref}..{main_ref}", ancestry_path=True, reverse=True):
+                if evr_at(commit) == build_evr:
+                    latest_same_nvr = commit.hexsha
+                else:
+                    break
+            return latest_same_nvr
+
+        latest_same_nvr = await asyncio.to_thread(walk_nvr)
+        if latest_same_nvr != build_ref:
+            logger.info(f"Advanced ref from {build_ref[:12]} to {latest_same_nvr[:12]} (same NVR)")
+        return latest_same_nvr
+
     async def _run(
         self,
         tool_input: CreateZstreamBranchToolInput,
@@ -141,6 +227,13 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                     )
                 else:
                     _, ref = await get_latest_candidate_build(package, branch)
+                    if source_branch := self._find_source_branch(repo, branch):
+                        ref = await self._find_latest_same_nvr_ref(
+                            repo,
+                            package,
+                            ref,
+                            source_branch,
+                        )
                     push_infos = await _retry_transient(
                         lambda: asyncio.to_thread(repo.remotes.origin.push, f"{ref}:refs/heads/{branch}"),
                         f"push {branch} to dist-git",

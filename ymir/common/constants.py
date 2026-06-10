@@ -19,6 +19,10 @@ class RedisQueues(Enum):
     """Constants for Redis queue names used by Ymir agents"""
 
     TRIAGE_QUEUE = "triage_queue"
+    # Priority twin of TRIAGE_QUEUE for ymir_todo-triggered tasks. The triage
+    # agent BRPOPs from [TRIAGE_QUEUE_TODO, TRIAGE_QUEUE] so Redis serves the
+    # priority queue first whenever it has anything.
+    TRIAGE_QUEUE_TODO = "triage_queue_todo"
     REBASE_QUEUE_C9S = "rebase_queue_c9s"
     REBASE_QUEUE_C10S = "rebase_queue_c10s"
     BACKPORT_QUEUE_C9S = "backport_queue_c9s"
@@ -45,6 +49,7 @@ class RedisQueues(Enum):
         """Return input queue names that contain Task objects with metadata"""
         return {
             cls.TRIAGE_QUEUE.value,
+            cls.TRIAGE_QUEUE_TODO.value,
             cls.REBASE_QUEUE_C9S.value,
             cls.REBASE_QUEUE_C10S.value,
             cls.BACKPORT_QUEUE_C9S.value,

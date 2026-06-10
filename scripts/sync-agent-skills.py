@@ -2,9 +2,9 @@
 """Pre-push hook: ensure agents_as_skills/ stays in sync with ymir/agents/.
 
 Compares the net diff of the current branch against its remote tracking branch.
-Fails the push when a *_agent.py file was changed but its corresponding
-SKILL.md under agents_as_skills/ was not.  Prints the exact claude command
-the developer should run to regenerate the skill.
+Fails the push when a *_agent.py file or its prompt templates were changed but
+the corresponding SKILL.md under agents_as_skills/ was not.  Prints the exact
+claude command the developer should run to regenerate the skill.
 
 Set SKIP_SKILL_SYNC=1 to bypass this check.
 """
@@ -16,6 +16,7 @@ from pathlib import Path
 from git import Repo
 
 AGENTS_DIR = Path("ymir/agents")
+PROMPTS_DIR = Path("ymir/agents/prompts")
 SKILLS_DIR = Path("agents_as_skills")
 
 CLAUDE_CMD_TEMPLATE = (
@@ -35,6 +36,20 @@ def skill_name_for(agent_path: Path) -> str | None:
     if agent_path.suffix != ".py" or not agent_path.stem.endswith("_agent"):
         return None
     return agent_path.stem.removesuffix("_agent")
+
+
+def skill_name_for_prompt(prompt_path: Path) -> str | None:
+    """Derive the skill directory name from a prompt template path.
+
+    Prompt templates live under ymir/agents/prompts/<agent>/*.j2.
+    The subdirectory name matches the skill name.
+    """
+    if not prompt_path.is_relative_to(PROMPTS_DIR) or prompt_path.suffix != ".j2":
+        return None
+    relative = prompt_path.relative_to(PROMPTS_DIR)
+    if len(relative.parts) < 2:
+        return None
+    return relative.parts[0]
 
 
 def get_repo() -> Repo:
@@ -80,26 +95,34 @@ def main() -> int:
     upstream = get_upstream(repo)
     changed_files = get_branch_diff(repo, upstream)
 
-    missing = [
-        (f, sp)
-        for f in changed_files
-        if f.is_relative_to(AGENTS_DIR)
-        and f.stem.endswith("_agent")
-        and (n := skill_name_for(f)) is not None
-        and (sp := SKILLS_DIR / n / "SKILL.md").exists()
-        and sp not in changed_files
-    ]
+    affected_skills: dict[str, list[Path]] = {}
 
-    if not missing:
+    for f in changed_files:
+        name = None
+        if f.is_relative_to(AGENTS_DIR) and f.stem.endswith("_agent"):
+            name = skill_name_for(f)
+        elif f.is_relative_to(PROMPTS_DIR) and f.suffix == ".j2":
+            name = skill_name_for_prompt(f)
+
+        if name is None:
+            continue
+        sp = SKILLS_DIR / name / "SKILL.md"
+        if sp.exists() and sp not in changed_files:
+            affected_skills.setdefault(name, []).append(f)
+
+    if not affected_skills:
         return 0
 
     print("The following agent workflows were modified without updating their skills:\n")
-    for agent_file, skill_file in missing:
-        print(f"  {agent_file} -> {skill_file}")
+    for name, sources in sorted(affected_skills.items()):
+        skill_file = SKILLS_DIR / name / "SKILL.md"
+        for src in sources:
+            print(f"  {src} -> {skill_file}")
 
     print("\nPlease regenerate the skill(s) before pushing:\n")
-    for agent_file, _ in missing:
-        print(f"  {CLAUDE_CMD_TEMPLATE.format(workflow_file=agent_file)}\n")
+    for name in sorted(affected_skills):
+        workflow_file = AGENTS_DIR / f"{name}_agent.py"
+        print(f"  {CLAUDE_CMD_TEMPLATE.format(workflow_file=workflow_file)}\n")
 
     print(
         "If the change does not affect the skill (e.g. comments only), bypass with:\n"

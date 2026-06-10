@@ -30,6 +30,7 @@ RUN pip install --no-cache-dir \
       redis \
       backoff \
       requests \
+      requests-gssapi \
       GitPython \
       copr \
       flexmock \

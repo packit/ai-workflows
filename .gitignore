@@ -16,6 +16,7 @@ eggs/
 *.egg-info/
 *.eggs
 build
+!ymir/agents/prompts/build/
 sdist/
 .installed.cfg
 

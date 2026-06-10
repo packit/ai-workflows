@@ -351,6 +351,14 @@ class JiraIssueFetcher:
                                             | RedisQueues.REBASE_QUEUE_C10S.value
                                             | RedisQueues.BACKPORT_QUEUE_C9S.value
                                             | RedisQueues.BACKPORT_QUEUE_C10S.value
+                                            | RedisQueues.REBUILD_QUEUE_C9S.value
+                                            | RedisQueues.REBUILD_QUEUE_C10S.value
+                                            | RedisQueues.REBASE_QUEUE_C9S_TODO.value
+                                            | RedisQueues.REBASE_QUEUE_C10S_TODO.value
+                                            | RedisQueues.BACKPORT_QUEUE_C9S_TODO.value
+                                            | RedisQueues.BACKPORT_QUEUE_C10S_TODO.value
+                                            | RedisQueues.REBUILD_QUEUE_C9S_TODO.value
+                                            | RedisQueues.REBUILD_QUEUE_C10S_TODO.value
                                             | RedisQueues.CLARIFICATION_NEEDED_QUEUE.value
                                             | RedisQueues.BACKPORT_QUEUE.value
                                             | RedisQueues.REBASE_QUEUE.value

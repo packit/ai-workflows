@@ -27,6 +27,13 @@ class RedisQueues(Enum):
     REBASE_QUEUE_C10S = "rebase_queue_c10s"
     BACKPORT_QUEUE_C9S = "backport_queue_c9s"
     BACKPORT_QUEUE_C10S = "backport_queue_c10s"
+    # Priority twins of the downstream queues for ymir_todo-triggered tasks. Each
+    # downstream agent BRPOPs from [<queue>_todo, <queue>] so Redis serves the
+    # priority queue first whenever it has anything.
+    REBASE_QUEUE_C9S_TODO = "rebase_queue_c9s_todo"
+    REBASE_QUEUE_C10S_TODO = "rebase_queue_c10s_todo"
+    BACKPORT_QUEUE_C9S_TODO = "backport_queue_c9s_todo"
+    BACKPORT_QUEUE_C10S_TODO = "backport_queue_c10s_todo"
     CLARIFICATION_NEEDED_QUEUE = "clarification_needed_queue"
     ERROR_LIST = "error_list"
     OPEN_ENDED_ANALYSIS_LIST = "open_ended_analysis_list"
@@ -34,6 +41,8 @@ class RedisQueues(Enum):
     COMPLETED_BACKPORT_LIST = "completed_backport_list"
     REBUILD_QUEUE_C9S = "rebuild_queue_c9s"
     REBUILD_QUEUE_C10S = "rebuild_queue_c10s"
+    REBUILD_QUEUE_C9S_TODO = "rebuild_queue_c9s_todo"
+    REBUILD_QUEUE_C10S_TODO = "rebuild_queue_c10s_todo"
     COMPLETED_REBUILD_LIST = "completed_rebuild_list"
     REBASE_QUEUE = "rebase_queue"
     BACKPORT_QUEUE = "backport_queue"
@@ -56,6 +65,12 @@ class RedisQueues(Enum):
             cls.BACKPORT_QUEUE_C10S.value,
             cls.REBUILD_QUEUE_C9S.value,
             cls.REBUILD_QUEUE_C10S.value,
+            cls.REBASE_QUEUE_C9S_TODO.value,
+            cls.REBASE_QUEUE_C10S_TODO.value,
+            cls.BACKPORT_QUEUE_C9S_TODO.value,
+            cls.BACKPORT_QUEUE_C10S_TODO.value,
+            cls.REBUILD_QUEUE_C9S_TODO.value,
+            cls.REBUILD_QUEUE_C10S_TODO.value,
             cls.CLARIFICATION_NEEDED_QUEUE.value,
             cls.REBASE_QUEUE.value,
             cls.BACKPORT_QUEUE.value,
@@ -74,25 +89,39 @@ class RedisQueues(Enum):
         }
 
     @classmethod
-    def get_rebase_queue_for_branch(cls, target_branch: str | None) -> str:
-        """Return appropriate rebase queue based on target branch"""
-        if target_branch and cls._use_c9s_branch(target_branch):
-            return cls.REBASE_QUEUE_C9S.value
-        return cls.REBASE_QUEUE_C10S.value
+    def priority_twin(cls, queue: str) -> str:
+        """Return the priority (_todo) twin for an input queue (ymir_todo tasks)."""
+        return f"{queue}_todo"
 
     @classmethod
-    def get_backport_queue_for_branch(cls, target_branch: str | None) -> str:
-        """Return appropriate backport queue based on target branch"""
-        if target_branch and cls._use_c9s_branch(target_branch):
-            return cls.BACKPORT_QUEUE_C9S.value
-        return cls.BACKPORT_QUEUE_C10S.value
+    def get_rebase_queue_for_branch(cls, target_branch: str | None, user_triggered: bool = False) -> str:
+        """Return rebase queue for the branch; the priority twin if user-triggered."""
+        base = (
+            cls.REBASE_QUEUE_C9S.value
+            if target_branch and cls._use_c9s_branch(target_branch)
+            else cls.REBASE_QUEUE_C10S.value
+        )
+        return cls.priority_twin(base) if user_triggered else base
 
     @classmethod
-    def get_rebuild_queue_for_branch(cls, target_branch: str | None) -> str:
-        """Return appropriate rebuild queue based on target branch"""
-        if target_branch and cls._use_c9s_branch(target_branch):
-            return cls.REBUILD_QUEUE_C9S.value
-        return cls.REBUILD_QUEUE_C10S.value
+    def get_backport_queue_for_branch(cls, target_branch: str | None, user_triggered: bool = False) -> str:
+        """Return backport queue for the branch; the priority twin if user-triggered."""
+        base = (
+            cls.BACKPORT_QUEUE_C9S.value
+            if target_branch and cls._use_c9s_branch(target_branch)
+            else cls.BACKPORT_QUEUE_C10S.value
+        )
+        return cls.priority_twin(base) if user_triggered else base
+
+    @classmethod
+    def get_rebuild_queue_for_branch(cls, target_branch: str | None, user_triggered: bool = False) -> str:
+        """Return rebuild queue for the branch; the priority twin if user-triggered."""
+        base = (
+            cls.REBUILD_QUEUE_C9S.value
+            if target_branch and cls._use_c9s_branch(target_branch)
+            else cls.REBUILD_QUEUE_C10S.value
+        )
+        return cls.priority_twin(base) if user_triggered else base
 
     @classmethod
     def _use_c9s_branch(cls, branch: str) -> bool:

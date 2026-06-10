@@ -1141,11 +1141,17 @@ async def main() -> None:
                             task = Task(metadata=state.model_dump(), user_triggered=user_triggered)
                             payload = task.model_dump_json()
                             if output.resolution == Resolution.REBASE:
-                                queue = RedisQueues.get_rebase_queue_for_branch(state.target_branch)
+                                queue = RedisQueues.get_rebase_queue_for_branch(
+                                    state.target_branch, user_triggered
+                                )
                             elif output.resolution == Resolution.BACKPORT:
-                                queue = RedisQueues.get_backport_queue_for_branch(state.target_branch)
+                                queue = RedisQueues.get_backport_queue_for_branch(
+                                    state.target_branch, user_triggered
+                                )
                             elif output.resolution == Resolution.REBUILD:
-                                queue = RedisQueues.get_rebuild_queue_for_branch(state.target_branch)
+                                queue = RedisQueues.get_rebuild_queue_for_branch(
+                                    state.target_branch, user_triggered
+                                )
                             else:
                                 queue = RedisQueues.CLARIFICATION_NEEDED_QUEUE.value
                         await fix_await(redis.lpush(queue, payload))

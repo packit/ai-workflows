@@ -340,13 +340,18 @@ async def main() -> None:
             if container_version == "c9s"
             else RedisQueues.REBUILD_QUEUE_C10S.value
         )
+        # Priority twin: ymir_todo-triggered tasks are served before normal ones.
+        rebuild_queue_todo = RedisQueues.priority_twin(rebuild_queue)
         redis_logger.info(
-            f"Connected to Redis, max retries set to {max_retries}, listening to queue: {rebuild_queue}"
+            f"Connected to Redis, max retries set to {max_retries}, "
+            f"listening to queues: [{rebuild_queue_todo}, {rebuild_queue}]"
         )
 
         while True:
-            redis_logger.info(f"Waiting for tasks from {rebuild_queue} (timeout: 30s)...")
-            element = await fix_await(redis.brpop([rebuild_queue], timeout=30))
+            redis_logger.info(
+                f"Waiting for tasks from [{rebuild_queue_todo}, {rebuild_queue}] (timeout: 30s)..."
+            )
+            element = await fix_await(redis.brpop([rebuild_queue_todo, rebuild_queue], timeout=30))
             if element is None:
                 redis_logger.info("No tasks received, continuing to wait...")
                 continue
@@ -386,7 +391,8 @@ async def main() -> None:
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {rebuild_data.jira_issue}"
                     )
-                    await fix_await(redis.lpush(rebuild_queue, task.model_dump_json()))
+                    retry_queue = rebuild_queue_todo if task.user_triggered else rebuild_queue
+                    await fix_await(redis.lpush(retry_queue, task.model_dump_json()))
                 else:
                     logger.error(
                         f"Task failed after {max_retries} attempts, "

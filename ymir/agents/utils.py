@@ -1,11 +1,12 @@
 import logging
 import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from beeai_framework.agents.tool_calling.utils import ToolCallCheckerConfig
 from beeai_framework.backend import ChatModel, ChatModelParameters
-from beeai_framework.template import PromptTemplate
+from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel
 
 from ymir.common.base_utils import check_subprocess, run_subprocess  # noqa: F401 — re-exported
@@ -98,9 +99,40 @@ def get_tool_call_checker_config() -> ToolCallCheckerConfig:
     )
 
 
-def render_prompt(template: str, input: BaseModel) -> str:
-    """Renders a prompt template with the specified input, according to its schema."""
-    return PromptTemplate(template=template, schema=type(input)).render(input)
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
+
+_jinja2_envs: dict[str, Environment] = {}
+
+
+def _get_jinja2_env(template_dir: Path) -> Environment:
+    key = str(template_dir)
+    if key not in _jinja2_envs:
+        _jinja2_envs[key] = Environment(
+            loader=FileSystemLoader(template_dir),
+            autoescape=False,  # noqa: S701 — LLM prompts, not HTML
+            keep_trailing_newline=True,
+            trim_blocks=True,
+            lstrip_blocks=True,
+        )
+    return _jinja2_envs[key]
+
+
+def render_template(
+    template_name: str,
+    input: BaseModel | None = None,
+    *,
+    template_dir: Path | None = None,
+) -> str:
+    """Render a Jinja2 prompt template, optionally substituting variables from *input*.
+
+    When *input* is ``None`` the template is loaded as-is (useful for static
+    instruction prompts that contain no Jinja2 variables).
+    """
+    if template_dir is None:
+        template_dir = _PROMPTS_DIR
+    env = _get_jinja2_env(template_dir)
+    template = env.get_template(template_name)
+    return template.render(input.model_dump(mode="json") if input else {})
 
 
 def set_litellm_debug() -> None:

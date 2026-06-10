@@ -1,15 +1,6 @@
 ---
+name: preliminary-testing
 description: Analyze GreenWave gating and MR OSCI results for a RHEL JIRA issue to determine preliminary testing status, then update JIRA fields or flag attention accordingly.
-arguments:
-  - name: jira_issue
-    description: "JIRA issue key (e.g., RHEL-12345)"
-    required: true
-  - name: dry_run
-    description: "If true, skip JIRA updates (label changes, comments, field changes). Default: false"
-    required: false
-  - name: ignore_needs_attention
-    description: "If true, process the issue even if it has the ymir_needs_attention label. Default: false"
-    required: false
 ---
 
 # Preliminary Testing Skill

@@ -24,6 +24,7 @@ from ymir.common.base_utils import KerberosError, init_kerberos_ticket
 from ymir.common.validators import AbsolutePath
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
+from ymir.tools.http import aiohttp_get_with_retries
 
 COPR_CONFIG = {
     "copr_url": "https://copr.devel.redhat.com",
@@ -310,7 +311,7 @@ class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, Str
             for url in artifacts_urls:
                 logger.info(f"Downloading build artifact from: {url}")
                 try:
-                    async with session.get(url) as response:
+                    async with aiohttp_get_with_retries(session, url) as response:
                         if response.status < 400:
                             target = Path(Path(urlparse(url).path).name)
                             content = await response.read()
@@ -323,6 +324,8 @@ class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, Str
                             (target_path / target).write_bytes(content)
                         else:
                             raise ToolError(f"Failed to download {url}: {response.status} {response.reason}")
+                except aiohttp.ClientError as e:
+                    raise ToolError(f"Failed to download {url}: {e}") from e
                 except TimeoutError as e:
                     raise ToolError(f"Failed to download {url}: timed out") from e
         return StringToolOutput(result="Successfully downloaded the specified build artifacts")

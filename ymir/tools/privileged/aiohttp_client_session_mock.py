@@ -81,25 +81,27 @@ class aiohttpClientSessionMock:
     async def get(self, *args, **kwargs):
         if match_data := self.issue_get_regex.fullmatch(args[0]):
             yield flexmock(
+                status=200,
                 raise_for_status=lambda: None,
                 json=partial(_read_jira_mock, issue_key=match_data.group(1), remote_link=False),
             )
         elif match_data := self.remote_link_get_regex.fullmatch(args[0]):
             yield flexmock(
+                status=200,
                 raise_for_status=lambda: None,
                 json=partial(_read_jira_mock, issue_key=match_data.group(1)),
                 remote_link=True,
             )
         elif match_data := self.transitions_get_regex.fullmatch(args[0]):
-            yield flexmock(raise_for_status=lambda: None, json=_get_transitions)
+            yield flexmock(status=200, raise_for_status=lambda: None, json=_get_transitions)
         elif match_data := self.user_get_regex.fullmatch(args[0]):
             if (
                 kwargs["params"].get("key") == "verified_user"
                 or kwargs["params"].get("accountId") == "verified_user"
             ):
-                yield flexmock(raise_for_status=lambda: None, json=_get_verified_user)
+                yield flexmock(status=200, raise_for_status=lambda: None, json=_get_verified_user)
             else:
-                yield flexmock(raise_for_status=lambda: None, json=_get_unverified_user)
+                yield flexmock(status=200, raise_for_status=lambda: None, json=_get_unverified_user)
         else:
             raise NotImplementedError()
 

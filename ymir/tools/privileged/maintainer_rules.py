@@ -9,6 +9,7 @@ from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOpti
 from pydantic import BaseModel, Field
 
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
+from ymir.tools.http import aiohttp_get_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ class MaintainerRulesTool(Tool[MaintainerRulesInput, ToolRunOptions, StringToolO
         try:
             async with (
                 aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
-                session.get(url, headers=headers) as response,
+                aiohttp_get_with_retries(session, url, headers=headers) as response,
             ):
                 if response.status == 200:
                     return StringToolOutput(result=await response.text())

@@ -7,6 +7,7 @@ from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.tools.constants import YMIR_USER_AGENT
+from ymir.tools.http import aiohttp_get_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +46,13 @@ class ReadReadmeTool(Tool[ReadReadmeInput, ToolRunOptions, StringToolOutput]):
             for prefix, suffix in README_PATTERNS:
                 if input.repo_url.startswith(prefix):
                     url = input.repo_url.removesuffix("/") + suffix
-                    async with session.get(url) as response:
-                        if response.status == 200:
-                            return StringToolOutput(
-                                result=await response.text(),
-                            )
+                    try:
+                        async with aiohttp_get_with_retries(session, url) as response:
+                            if response.status == 200:
+                                return StringToolOutput(
+                                    result=await response.text(),
+                                )
+                    except aiohttp.ClientError:
+                        pass
 
         return StringToolOutput(result=f"Failed to find README.md for {input.repo_url}")

@@ -18,6 +18,7 @@ from ymir.common.base_utils import run_subprocess
 from ymir.common.validators import AbsolutePath
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
+from ymir.tools.http import aiohttp_get_with_retries
 
 
 class ExtractUpstreamRepositoryInput(BaseModel):
@@ -123,7 +124,7 @@ class ExtractUpstreamRepositoryTool(
                 try:
                     async with (
                         aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
-                        session.get(api_url, headers=headers) as response,
+                        aiohttp_get_with_retries(session, api_url, headers=headers) as response,
                     ):
                         response.raise_for_status()
                         data = await response.json()
@@ -180,7 +181,9 @@ class ExtractUpstreamRepositoryTool(
                                 f"https://api.github.com/repos/{project_path}/compare/"
                                 f"{quote(base_ref, safe='')}...{quote(target_ref, safe='')}"
                             )
-                            async with session.get(api_url, headers=headers) as response:
+                            async with aiohttp_get_with_retries(
+                                session, api_url, headers=headers
+                            ) as response:
                                 response.raise_for_status()
                                 data = await response.json()
                                 # GitHub: commits are in 'commits' array (oldest first)
@@ -192,7 +195,9 @@ class ExtractUpstreamRepositoryTool(
                                 f"{quote(project_path, safe='')}/repository/compare"
                             )
                             params = {"from": base_ref, "to": target_ref}
-                            async with session.get(api_url, params=params, headers=headers) as response:
+                            async with aiohttp_get_with_retries(
+                                session, api_url, params=params, headers=headers
+                            ) as response:
                                 response.raise_for_status()
                                 data = await response.json()
                                 # GitLab: commits are in 'commits' array (newest first)

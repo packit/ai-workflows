@@ -99,10 +99,10 @@ def main() -> int:
 
     for f in changed_files:
         name = None
-        if f.is_relative_to(AGENTS_DIR) and f.stem.endswith("_agent"):
-            name = skill_name_for(f)
-        elif f.is_relative_to(PROMPTS_DIR) and f.suffix == ".j2":
+        if f.is_relative_to(PROMPTS_DIR) and f.suffix == ".j2":
             name = skill_name_for_prompt(f)
+        elif f.is_relative_to(AGENTS_DIR) and f.stem.endswith("_agent"):
+            name = skill_name_for(f)
 
         if name is None:
             continue

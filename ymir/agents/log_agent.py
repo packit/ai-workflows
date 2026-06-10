@@ -30,11 +30,11 @@ from ymir.tools.unprivileged.text import (
 
 
 def get_instructions() -> str:
-    return render_template("log_instructions.j2")
+    return render_template("log/instructions.j2")
 
 
 def get_prompt() -> str:
-    return "log.j2"
+    return "log/prompt.j2"
 
 
 def create_log_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> ReasoningAgent:

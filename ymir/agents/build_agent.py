@@ -29,11 +29,11 @@ from ymir.tools.unprivileged.text import (
 
 
 def get_instructions() -> str:
-    return render_template("build_instructions.j2")
+    return render_template("build/instructions.j2")
 
 
 def get_prompt() -> str:
-    return "build.j2"
+    return "build/prompt.j2"
 
 
 def create_build_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> ReasoningAgent:

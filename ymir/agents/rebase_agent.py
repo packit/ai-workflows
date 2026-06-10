@@ -71,11 +71,11 @@ redis_logger = logging.getLogger("agent.redis")
 
 
 def get_instructions() -> str:
-    return render_template("rebase_instructions.j2")
+    return render_template("rebase/instructions.j2")
 
 
 def get_prompt() -> str:
-    return "rebase.j2"
+    return "rebase/prompt.j2"
 
 
 def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> ReasoningAgent:

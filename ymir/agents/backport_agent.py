@@ -96,16 +96,16 @@ redis_logger = logging.getLogger("agent.redis")
 
 async def get_instructions(fix_version: str | None = None) -> str:
     if fix_version and await is_older_zstream(fix_version):
-        return render_template("backport_instructions_zstream.j2")
-    return render_template("backport_instructions.j2")
+        return render_template("backport/instructions_zstream.j2")
+    return render_template("backport/instructions.j2")
 
 
 def get_prompt() -> str:
-    return "backport.j2"
+    return "backport/prompt.j2"
 
 
 async def get_fix_build_error_prompt(fix_version: str | None = None) -> str:
-    return "backport_fix_build_error.j2"
+    return "backport/fix_build_error_prompt.j2"
 
 
 async def create_backport_agent(

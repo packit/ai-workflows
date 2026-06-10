@@ -212,7 +212,7 @@ async def _map_version_to_branch(
 async def render_prompt(input: InputSchema, fix_version: str | None = None) -> str:
     older_zstream = bool(fix_version and await is_older_zstream(fix_version))
     input_with_flag = input.model_copy(update={"is_older_zstream": older_zstream})
-    return render_template("triage.j2", input_with_flag)
+    return render_template("triage/prompt.j2", input_with_flag)
 
 
 class TriageState(BaseModel):

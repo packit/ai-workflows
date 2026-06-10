@@ -26,15 +26,42 @@ test = [
 
 [tool.hatch.build]
 dev-mode-dirs = ["../.."]
-
 [tool.hatch.build.targets.wheel]
 packages = []
 
 [tool.hatch.build.targets.wheel.force-include]
 "__init__.py" = "ymir/tools/__init__.py"
 "gateway_utils.py" = "ymir/tools/gateway_utils.py"
-"privileged" = "ymir/tools/privileged"
-"unprivileged" = "ymir/tools/unprivileged"
 "constants.py" = "ymir/tools/constants.py"
 "http.py" = "ymir/tools/http.py"
 "base.py" = "ymir/tools/base.py"
+"privileged/__init__.py" = "ymir/tools/privileged/__init__.py"
+"privileged/aiohttp_client_session_mock.py" = "ymir/tools/privileged/aiohttp_client_session_mock.py"
+"privileged/copr.py" = "ymir/tools/privileged/copr.py"
+"privileged/distgit.py" = "ymir/tools/privileged/distgit.py"
+"privileged/errata.py" = "ymir/tools/privileged/errata.py"
+"privileged/gateway.py" = "ymir/tools/privileged/gateway.py"
+"privileged/gitlab.py" = "ymir/tools/privileged/gitlab.py"
+"privileged/jira.py" = "ymir/tools/privileged/jira.py"
+"privileged/logdetective.py" = "ymir/tools/privileged/logdetective.py"
+"privileged/lookaside.py" = "ymir/tools/privileged/lookaside.py"
+"privileged/maintainer_rules.py" = "ymir/tools/privileged/maintainer_rules.py"
+"privileged/testing_farm.py" = "ymir/tools/privileged/testing_farm.py"
+"privileged/utils.py" = "ymir/tools/privileged/utils.py"
+"privileged/zstream_search.py" = "ymir/tools/privileged/zstream_search.py"
+"unprivileged/__init__.py" = "ymir/tools/unprivileged/__init__.py"
+"unprivileged/analyze_ewa_testrun.py" = "ymir/tools/unprivileged/analyze_ewa_testrun.py"
+"unprivileged/commands.py" = "ymir/tools/unprivileged/commands.py"
+"unprivileged/distgit_detector.py" = "ymir/tools/unprivileged/distgit_detector.py"
+"unprivileged/filesystem.py" = "ymir/tools/unprivileged/filesystem.py"
+"unprivileged/gateway.py" = "ymir/tools/unprivileged/gateway.py"
+"unprivileged/greenwave.py" = "ymir/tools/unprivileged/greenwave.py"
+"unprivileged/read_logfile.py" = "ymir/tools/unprivileged/read_logfile.py"
+"unprivileged/read_readme.py" = "ymir/tools/unprivileged/read_readme.py"
+"unprivileged/search_resultsdb.py" = "ymir/tools/unprivileged/search_resultsdb.py"
+"unprivileged/specfile.py" = "ymir/tools/unprivileged/specfile.py"
+"unprivileged/text.py" = "ymir/tools/unprivileged/text.py"
+"unprivileged/upstream_search.py" = "ymir/tools/unprivileged/upstream_search.py"
+"unprivileged/upstream_tools.py" = "ymir/tools/unprivileged/upstream_tools.py"
+"unprivileged/version_mapper.py" = "ymir/tools/unprivileged/version_mapper.py"
+"unprivileged/wicked_git.py" = "ymir/tools/unprivileged/wicked_git.py"

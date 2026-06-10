@@ -22,6 +22,7 @@ RUN dnf -y install --allowerasing \
       git \
       krb5-devel \
       python3-rpm \
+      python3-devel \
       rpm-build \
       rpmdevtools \
       rpmautospec-rpm-macros \

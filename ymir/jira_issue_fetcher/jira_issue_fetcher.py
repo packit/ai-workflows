@@ -340,7 +340,10 @@ class JiraIssueFetcher:
                                 task = Task.model_validate_json(item)
                                 if task.metadata:
                                     match queue_name:
-                                        case RedisQueues.TRIAGE_QUEUE.value:
+                                        case (
+                                            RedisQueues.TRIAGE_QUEUE.value
+                                            | RedisQueues.TRIAGE_QUEUE_TODO.value
+                                        ):
                                             schema = TriageInputSchema.model_validate(task.metadata)
                                             issue_key = schema.issue.upper()
                                         case (
@@ -573,13 +576,20 @@ class JiraIssueFetcher:
                     # Create task using shared Pydantic model
                     task = Task.from_issue(issue_key, user_triggered=user_triggered)
 
-                    await fix_await(redis_conn.lpush(RedisQueues.TRIAGE_QUEUE.value, task.to_json()))
+                    # ymir_todo-triggered tasks go to the priority queue so the
+                    # triage agent pops them before normal-flow tasks.
+                    target_queue = (
+                        RedisQueues.TRIAGE_QUEUE_TODO.value
+                        if user_triggered
+                        else RedisQueues.TRIAGE_QUEUE.value
+                    )
+                    await fix_await(redis_conn.lpush(target_queue, task.to_json()))
                     pushed_count += 1
 
                     # Add to existing_keys to avoid duplicates within this batch
                     existing_keys.add(issue_key)
 
-                    logger.debug(f"Pushed issue {issue_key} to triage_queue")
+                    logger.debug(f"Pushed issue {issue_key} to {target_queue}")
 
                 except Exception as e:
                     logger.error(f"Error pushing issue {issue.get('key', 'unknown')} to queue: {e}")

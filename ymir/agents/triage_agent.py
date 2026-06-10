@@ -913,8 +913,18 @@ async def main() -> None:
         redis_logger.info(f"Connected to Redis, max retries set to {max_retries}")
 
         while True:
-            redis_logger.info("Waiting for tasks from triage_queue (timeout: 30s)...")
-            element = await fix_await(redis.brpop([RedisQueues.TRIAGE_QUEUE.value], timeout=30))
+            redis_logger.info(
+                "Waiting for tasks from triage_queue_todo (priority) and triage_queue (timeout: 30s)..."
+            )
+            # Multi-key BRPOP serves the first non-empty list in order, so
+            # ymir_todo-triggered tasks (TRIAGE_QUEUE_TODO) jump ahead of
+            # normal-flow tasks (TRIAGE_QUEUE).
+            element = await fix_await(
+                redis.brpop(
+                    [RedisQueues.TRIAGE_QUEUE_TODO.value, RedisQueues.TRIAGE_QUEUE.value],
+                    timeout=30,
+                )
+            )
             if element is None:
                 redis_logger.info("No tasks received, continuing to wait...")
                 continue
@@ -963,7 +973,17 @@ async def main() -> None:
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {input.issue}"
                     )
-                    await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
+                    # Preserve priority on retries: ymir_todo tasks go back to
+                    # the priority queue, normal tasks to the standard one.
+                    # Read from `task.user_triggered` (not the closure-captured
+                    # variable) so we're robust to anything that might rebind
+                    # the local in a future refactor.
+                    retry_queue = (
+                        RedisQueues.TRIAGE_QUEUE_TODO.value
+                        if task.user_triggered
+                        else RedisQueues.TRIAGE_QUEUE.value
+                    )
+                    await fix_await(redis.lpush(retry_queue, task.model_dump_json()))
                 else:
                     logger.error(
                         f"Task failed after {max_retries} attempts, moving to error list: {input.issue}"

@@ -99,7 +99,8 @@ flowchart TD
 
 | Queue | Type | Triggers | Labels Added | Status |
 |-------|------|----------|--------------|--------|
-| `triage_queue` | Input | No labels OR `ymir_retry_needed` OR `ymir_todo` | `ymir_triage_in_progress` (set by fetcher atomic flip for retry/todo, or by agent at triage start for fresh issues) | Active |
+| `triage_queue` | Input | No labels OR `ymir_retry_needed` | `ymir_triage_in_progress` (set by fetcher atomic flip for retry/todo, or by agent at triage start for fresh issues) | Active |
+| `triage_queue_todo` | Input (priority) | `ymir_todo` | Same as `triage_queue`. The triage agent BRPOPs `[triage_queue_todo, triage_queue]`, so ymir_todo tasks jump ahead of fresh/retry tasks. | Active |
 | `rebase_queue_c9s` | Input | Resolution=REBASE, RHEL 8/9 | `ymir_triaged_rebase` | Active (AUTO_CHAIN only) |
 | `rebase_queue_c10s` | Input | Resolution=REBASE, RHEL 10+ | `ymir_triaged_rebase` | Active (AUTO_CHAIN only) |
 | `backport_queue_c9s` | Input | Resolution=BACKPORT, RHEL 8/9 | `ymir_triaged_backport` | Active (AUTO_CHAIN only) |
@@ -170,4 +171,4 @@ JQL no longer restricts `ymir_todo` by assignee — the fetcher instead verifies
 
 ---
 
-**Last Updated:** 2026-06-04
+**Last Updated:** 2026-06-10

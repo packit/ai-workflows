@@ -204,15 +204,24 @@ async def test_search_issues_multiple_pages(fetcher):
 
 @pytest.mark.asyncio
 async def test_get_existing_issue_keys(fetcher, mock_redis_context):
-    """Test getting existing issue keys from Redis queues."""
-    # Mock the Task and schema imports
+    """Test getting existing issue keys from Redis queues.
+
+    Both triage_queue and triage_queue_todo must contribute to the
+    dedup set — otherwise priority-queue items would be invisible and
+    the fetcher would re-push them on every sweep.
+    """
     # Create actual Task and TriageInputSchema instances
-    task_data = {"metadata": {"issue": "EXISTING-1"}, "attempts": 0}
-    task_json = json.dumps(task_data)
+    triage_task_json = json.dumps({"metadata": {"issue": "EXISTING-1"}, "attempts": 0})
+    todo_task_json = json.dumps(
+        {"metadata": {"issue": "EXISTING-TODO-1"}, "attempts": 0, "user_triggered": True}
+    )
 
     mock_redis, _ = mock_redis_context
     mock_redis.should_receive("lrange").with_args(RedisQueues.TRIAGE_QUEUE.value, 0, -1).and_return(
-        create_async_mock_return_value([task_json])
+        create_async_mock_return_value([triage_task_json])
+    )
+    mock_redis.should_receive("lrange").with_args(RedisQueues.TRIAGE_QUEUE_TODO.value, 0, -1).and_return(
+        create_async_mock_return_value([todo_task_json])
     )
 
     # Mock other queues as empty
@@ -234,6 +243,7 @@ async def test_get_existing_issue_keys(fetcher, mock_redis_context):
     result = await fetcher._get_existing_issue_keys(mock_redis)
 
     assert "EXISTING-1" in result
+    assert "EXISTING-TODO-1" in result
 
 
 @pytest.mark.asyncio
@@ -531,20 +541,28 @@ async def test_retry_needed_skip_when_label_flip_fails(fetcher, mock_redis_conte
 
 
 @pytest.mark.parametrize(
-    ("trigger_label", "user_triggered", "issue_key"),
+    ("trigger_label", "user_triggered", "issue_key", "expected_queue"),
     [
-        (JiraLabels.TODO.value, True, "TODO-DRY"),
-        (JiraLabels.RETRY_NEEDED.value, False, "RETRY-DRY"),
+        (JiraLabels.TODO.value, True, "TODO-DRY", RedisQueues.TRIAGE_QUEUE_TODO.value),
+        (JiraLabels.RETRY_NEEDED.value, False, "RETRY-DRY", RedisQueues.TRIAGE_QUEUE.value),
     ],
 )
 @pytest.mark.asyncio
 async def test_dry_run_skips_flip_but_still_pushes(
-    monkeypatch, mock_env_vars, mock_redis_context, trigger_label, user_triggered, issue_key
+    monkeypatch,
+    mock_env_vars,
+    mock_redis_context,
+    trigger_label,
+    user_triggered,
+    issue_key,
+    expected_queue,
 ):
     """DRY_RUN=true: skip the Jira atomic flip for trigger labels, but still push to Redis.
 
     The pushed Task preserves user_triggered so the agent (also presumably in
-    DRY_RUN) sees the same dry-mode flow as it would for a real trigger.
+    DRY_RUN) sees the same dry-mode flow as it would for a real trigger. The
+    queue selection still respects priority: ymir_todo tasks go to
+    triage_queue_todo, retry/normal tasks to triage_queue.
     """
     monkeypatch.setenv("DRY_RUN", "true")
     fetcher = JiraIssueFetcher()
@@ -562,9 +580,9 @@ async def test_dry_run_skips_flip_but_still_pushes(
     flexmock(fetcher).should_receive("_edit_jira_labels").never()
 
     expected_task = Task.from_issue(issue_key, user_triggered=user_triggered)
-    mock_redis.should_receive("lpush").with_args(
-        RedisQueues.TRIAGE_QUEUE.value, expected_task.to_json()
-    ).and_return(create_async_mock_return_value(1)).once()
+    mock_redis.should_receive("lpush").with_args(expected_queue, expected_task.to_json()).and_return(
+        create_async_mock_return_value(1)
+    ).once()
 
     result = await fetcher.push_issues_to_queue(issues)
 
@@ -757,6 +775,55 @@ async def test_run_full_workflow_with_labeled_issues(fetcher, mock_redis_context
     await fetcher.run()
 
 
+@pytest.mark.parametrize(
+    ("labels", "user_triggered", "expected_queue", "label_to_remove"),
+    [
+        # Fresh issue with no labels → normal queue
+        ([], False, RedisQueues.TRIAGE_QUEUE.value, None),
+        # ymir_todo trigger → priority queue
+        ([JiraLabels.TODO.value], True, RedisQueues.TRIAGE_QUEUE_TODO.value, JiraLabels.TODO.value),
+        # ymir_retry_needed trigger → normal queue (not priority)
+        (
+            [JiraLabels.RETRY_NEEDED.value],
+            False,
+            RedisQueues.TRIAGE_QUEUE.value,
+            JiraLabels.RETRY_NEEDED.value,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_push_routes_to_priority_queue_for_user_triggered(
+    fetcher, mock_redis_context, labels, user_triggered, expected_queue, label_to_remove
+):
+    """Queue routing: ymir_todo → triage_queue_todo (priority); others → triage_queue."""
+    mock_redis, _ = mock_redis_context
+    issue_key = "ROUTE-1"
+
+    issues = [{"key": issue_key, "fields": {"labels": labels}}]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(True)
+    if label_to_remove:
+        flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+            issue_key,
+            add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+            remove=[label_to_remove],
+        ).once()
+    else:
+        flexmock(fetcher).should_receive("_edit_jira_labels").never()
+
+    expected_task = Task.from_issue(issue_key, user_triggered=user_triggered)
+    mock_redis.should_receive("lpush").with_args(expected_queue, expected_task.to_json()).and_return(
+        create_async_mock_return_value(1)
+    ).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 1
+
+
 @pytest.mark.asyncio
 async def test_push_user_triggered_issue(fetcher, mock_redis_context):
     """ymir_todo on an otherwise clean issue: enqueue as user_triggered, flip the label."""
@@ -780,8 +847,10 @@ async def test_push_user_triggered_issue(fetcher, mock_redis_context):
     ).once()
 
     expected_task = Task.from_issue("TODO-1", user_triggered=True)
+    # ymir_todo-triggered tasks go to the priority queue so they jump ahead of
+    # normal-flow tasks in the triage agent's BRPOP order.
     mock_redis.should_receive("lpush").with_args(
-        RedisQueues.TRIAGE_QUEUE.value, expected_task.to_json()
+        RedisQueues.TRIAGE_QUEUE_TODO.value, expected_task.to_json()
     ).and_return(create_async_mock_return_value(1)).once()
 
     result = await fetcher.push_issues_to_queue(issues)

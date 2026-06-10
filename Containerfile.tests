@@ -4,23 +4,17 @@ FROM fedora:43
 RUN dnf -y install \
       gcc \
       gcc-c++ \
+      git-core \
       make \
       krb5-devel \
-      python3 \
-      python3-devel \
-      python3-copr \
-      python3-flexmock \
-      python3-koji \
-      python3-ogr \
-      python3-pip \
-      python3-pytest \
-      python3-pytest-asyncio \
-      python3-specfile \
-      python3-redis \
-      python3-requests \
-      python3-backoff \
-      python3-GitPython \
+      python3.13 \
+      python3.13-devel \
+      python3-rpm \
     && dnf clean all
+
+RUN python3.13 -m venv --system-site-packages /opt/beeai-venv
+ENV PATH=/opt/beeai-venv/bin:$PATH
+RUN pip install --upgrade pip
 
 RUN git config --global user.email "ymir-tests@example.com" \
       && git config --global user.name "Ymir Tests"
@@ -29,10 +23,21 @@ RUN git config --global user.email "ymir-tests@example.com" \
 ENV PYTHONPATH=/src:$PYTHONPATH
 
 # Install BeeAI Framework and FastMCP
-RUN pip3 install --no-cache-dir \
+RUN pip install --no-cache-dir \
       "litellm!=1.82.7,!=1.82.8" \
       beeai-framework[vertexai,mcp,duckduckgo]==0.1.79 \
-      fastmcp redis backoff
+      fastmcp \
+      redis \
+      backoff \
+      requests \
+      GitPython \
+      copr \
+      flexmock \
+      koji \
+      ogr \
+      pytest \
+      pytest-asyncio \
+      specfile
 
 # Verify no malicious litellm_init.pth was introduced by compromised litellm packages (e.g. 1.82.7, 1.82.8)
 RUN MALICIOUS=$(find /usr /opt -name "litellm_init.pth" 2>/dev/null); \

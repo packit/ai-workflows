@@ -20,7 +20,7 @@ from ymir.agents.utils import (
     get_agent_execution_config,
     init_sentry,
     mcp_tools,
-    render_prompt,
+    render_template,
     resolve_chat_model_override,
     run_subprocess,
 )
@@ -152,9 +152,9 @@ async def main() -> None:
                     summary = f"Rebuild of {state.package} against updated dependencies for {issues_str}."
 
                 response = await log_agent.run(
-                    render_prompt(
-                        template=get_log_prompt(),
-                        input=LogInputSchema(
+                    render_template(
+                        get_log_prompt(),
+                        LogInputSchema(
                             jira_issue=issues_str,
                             changes_summary=summary,
                         ),

@@ -32,7 +32,7 @@ from ymir.agents.utils import (
     get_tool_call_checker_config,
     is_reasoning_enabled,
     mcp_tools,
-    render_prompt,
+    render_template,
 )
 from ymir.common.base_utils import is_cs_branch
 from ymir.common.logging_setup import configure_logging
@@ -58,81 +58,11 @@ logger = logging.getLogger(__name__)
 
 
 def get_instructions() -> str:
-    return """
-      You are an expert on maintaining packages in RHEL ecosystem.
-      Your job is to tweak existing merge requests and accomodate user feedback.
-
-      To process and accomodate feedback given on a merge request, knowing the target package <PACKAGE>
-      and dist-git branch <DIST_GIT_BRANCH>, do the following:
-
-      1. Go through the comments, including replies if relevant, and follow the provided feedback.
-
-      2. If you updated the spec file, use `rpmlint <PACKAGE>.spec` to validate
-         your changes and fix any new issues.
-
-      3. Verify any changes to patches by using the `run_package_prep` tool.
-         Repeat as necessary. Do not remove any patches unless all their hunks have been already applied
-         to the upstream sources.
-         Note: <PKG_TOOL> is `centpkg` for CentOS Stream branches (c9s, c10s) and `rhpkg` for RHEL branches.
-
-      4. If you removed any patch file references from the spec file
-         (e.g. because they were already applied upstream),
-         you must remove all the corresponding patch files from the repository as well.
-
-      5. Generate a SRPM using
-         `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
-
-      6. In your output, provide a "files_to_git_add" list containing all files
-         that have been modified, added or removed.
-         This typically includes the updated spec file and any new/modified/deleted
-         patch files or other files you've changed or added/removed during
-         processing the feedback. Make sure to include patch files that were also removed
-         from the spec file.
-
-
-      General instructions:
-
-      - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
-      - Never change anything in the spec file changelog.
-      - Preserve existing formatting and style conventions in spec files and patch headers.
-      - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
-      - If there are package-specific instructions, incorporate them into your work.
-    """
+    return render_template("merge_request_instructions.j2")
 
 
 def get_prompt() -> str:
-    return """
-      Your working directory is {{local_clone}}, a clone of source repository
-      of merge request {{merge_request_url}} opened against {{dist_git_branch}}
-      dist-git branch of package {{package}}. The merge request is titled
-      "{{merge_request_title}}" and its description is:
-
-      {{merge_request_description}}
-
-      The merge request contains the following comments with user feedback:
-
-      {{comments}}
-
-      You are working on Jira issue {{jira_issue}}.
-
-      {{#fedora_clone}}
-      Additionally, you have access to the corresponding Fedora repository (rawhide branch) at {{.}}.
-      This can be used as a reference for comparing package versions, spec files,
-      patches, and other packaging details when explicitly instructed to do so.
-      {{/fedora_clone}}
-
-      {{^build_error}}
-      Make changes necessary to accomodate user feedback provided in the comments.
-      {{/build_error}}
-      {{#build_error}}
-      This is a retry, after the previous attempt the generated SRPM failed to build:
-
-      {{.}}
-
-      Everything from the previous attempt has been reset. Start over, follow the instructions from the start
-      and don't forget to fix the issue.
-      {{/build_error}}
-    """
+    return "merge_request.j2"
 
 
 def create_merge_request_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> ReasoningAgent:
@@ -261,9 +191,9 @@ async def main() -> None:
             async def run_merge_request_agent(state):
                 pkg_tool = "centpkg" if is_cs_branch(state.dist_git_branch) else "rhpkg"
                 response = await merge_request_agent.run(
-                    render_prompt(
-                        template=get_prompt(),
-                        input=MergeRequestInputSchema(
+                    render_template(
+                        get_prompt(),
+                        MergeRequestInputSchema(
                             local_clone=state.local_clone,
                             package=state.package,
                             dist_git_branch=state.dist_git_branch,
@@ -293,9 +223,9 @@ async def main() -> None:
 
             async def run_build_agent(state):
                 response = await build_agent.run(
-                    render_prompt(
-                        template=get_build_prompt(),
-                        input=BuildInputSchema(
+                    render_template(
+                        get_build_prompt(),
+                        BuildInputSchema(
                             srpm_path=state.mr_update_result.srpm_path,
                             dist_git_branch=state.dist_git_branch,
                             jira_issue=state.jira_issue,

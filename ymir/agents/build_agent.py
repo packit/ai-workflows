@@ -10,7 +10,12 @@ from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 
 from ymir.agents.reasoning_agent import ReasoningAgent
-from ymir.agents.utils import get_chat_model, get_tool_call_checker_config, is_reasoning_enabled
+from ymir.agents.utils import (
+    get_chat_model,
+    get_tool_call_checker_config,
+    is_reasoning_enabled,
+    render_template,
+)
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool
 from ymir.tools.unprivileged.text import (
@@ -24,29 +29,11 @@ from ymir.tools.unprivileged.text import (
 
 
 def get_instructions() -> str:
-    return """
-      You are an expert on building packages in RHEL ecosystem and analyzing build failures.
-
-      Build a package using the `build_package` tool. If the build succeeded, your work is done.
-      If the build failed, download all *.log.gz files returned in `artifacts_urls`, if any,
-      using the `download_artifacts` tool to the current directory. If there are no log files,
-      just return the error message. Otherwise, start with `builder-live.log` and try to identify
-      the build failure. If not found, try the same with `root.log`. Summarize the findings
-      and return them as `error`. If the build failed due to a build timeout, set `is_timeout` to `true`
-      in your output.
-
-      General instructions:
-
-      - Always perform the build, even if you have already built a SRPM with the same name.
-      - Your job is to build a package and analyze build failures if necessary, nothing else.
-        Do not run any commands except for those needed to examine the downloaded log files.
-    """
+    return render_template("build_instructions.j2")
 
 
 def get_prompt() -> str:
-    return """
-      Build the SRPM {{srpm_path}}, use {{dist_git_branch}} dist-git branch and {{jira_issue}} Jira issue.
-    """
+    return "build.j2"
 
 
 def create_build_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> ReasoningAgent:

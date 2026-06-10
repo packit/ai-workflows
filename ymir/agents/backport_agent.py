@@ -193,7 +193,7 @@ BACKPORT_INSTRUCTIONS = """
             - If successful, the spec file is now updated, skip to step 6
               to verify with `run_package_prep` and step 7 to generate SRPM
             - Do NOT add Patch tags (step 5) since this was a spec-only change, not a source code patch
-            - If not successful, end with `success=False` and `status="Failed to apply spec changes"`
+            - If not successful, end with `success=False` and `error="Failed to apply spec changes"`
 
          e. If the patch modifies ANY other files than the .spec file,
             use the normal workflow (step 4) instead

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ymir-tools"
-version = "0.5.1"
+version = "0.5.2"
 description = "Ymir MCP tools for AI workflows"
 requires-python = ">=3.13"
 dynamic = ["dependencies"]
@@ -36,4 +36,5 @@ packages = []
 "privileged" = "ymir/tools/privileged"
 "unprivileged" = "ymir/tools/unprivileged"
 "constants.py" = "ymir/tools/constants.py"
+"http.py" = "ymir/tools/http.py"
 "base.py" = "ymir/tools/base.py"

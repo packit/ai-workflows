@@ -10,6 +10,7 @@ from beeai_framework.tools import Tool, ToolError, ToolOutput, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.tools.constants import YMIR_USER_AGENT
+from ymir.tools.http import aiohttp_get_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ async def search_resultsdb(package_nvr: str, name_pattern: str) -> list[ResultsD
     logger.info("Fetching resultsdb data from %s", url)
     async with (
         aiohttp.ClientSession(headers={"User-Agent": YMIR_USER_AGENT}) as session,
-        session.get(url) as response,
+        aiohttp_get_with_retries(session, url) as response,
     ):
         if response.status == 200:
             response_json = await response.json()

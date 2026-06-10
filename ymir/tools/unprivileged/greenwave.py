@@ -5,11 +5,12 @@ from urllib.parse import urlparse
 import aiohttp
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import StringToolOutput, ToolRunOptions
+from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
+from ymir.tools.http import aiohttp_get_with_retries
 
 TESTING_FARM_ARTIFACTS_URL = "https://artifacts.osci.redhat.com/testing-farm"
 
@@ -57,7 +58,7 @@ class FetchGreenWaveTool(Tool[FetchGreenWaveInput, ToolRunOptions, StringToolOut
                 aiohttp.ClientSession(
                     timeout=AIOHTTP_TIMEOUT, headers={"User-Agent": YMIR_USER_AGENT}
                 ) as session,
-                session.get(url) as response,
+                aiohttp_get_with_retries(session, url) as response,
             ):
                 if response.status == 200:
                     html = await response.text()
@@ -71,6 +72,10 @@ class FetchGreenWaveTool(Tool[FetchGreenWaveInput, ToolRunOptions, StringToolOut
                 return StringToolOutput(
                     result=f"Failed to fetch GreenWave gating status (HTTP {response.status}): {text}"
                 )
+        except aiohttp.ClientError as e:
+            # Here we handle ClientError as ToolError, because it signals
+            # networking issues. Error statuses are handled above by StringToolOutput
+            raise ToolError(f"Failed to fetch GreenWave gating status: {e}") from e
         except Exception as e:
             logger.error("Error fetching GreenWave gating status: %s", e)
             return StringToolOutput(result=f"Error fetching GreenWave gating status: {e}")
@@ -136,7 +141,7 @@ class FetchTestingFarmResultsTool(Tool[FetchTestingFarmResultsInput, ToolRunOpti
             for url in urls_to_try:
                 logger.info("Fetching Testing Farm results from %s", url)
                 try:
-                    async with session.get(url) as response:
+                    async with aiohttp_get_with_retries(session, url) as response:
                         if response.status == 200:
                             # Limit reading to 10MB to prevent OOM on large files
                             content_bytes = await response.content.read(10 * 1024 * 1024)

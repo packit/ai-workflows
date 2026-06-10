@@ -23,6 +23,7 @@ from ymir.common.constants import JIRA_SEARCH_PATH
 from ymir.common.version_utils import get_fix_version_variants, normalize_fix_version
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT
+from ymir.tools.http import aiohttp_get_with_retries
 
 if os.getenv("MOCK_JIRA", "False").lower() == "true":
     from ymir.tools.privileged.aiohttp_client_session_mock import (
@@ -92,7 +93,8 @@ class GetJiraDetailsTool(Tool[GetJiraDetailsToolInput, ToolRunOptions, JSONToolO
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             try:
-                async with session.get(
+                async with aiohttp_get_with_retries(
+                    session,
                     jira_url,
                     params={"expand": "comments"},
                     headers=headers,
@@ -103,7 +105,8 @@ class GetJiraDetailsTool(Tool[GetJiraDetailsToolInput, ToolRunOptions, JSONToolO
                 raise ToolError(f"Failed to get details about the specified issue: {e}") from e
 
             try:
-                async with session.get(
+                async with aiohttp_get_with_retries(
+                    session,
                     urljoin(
                         os.getenv("JIRA_URL"),
                         f"rest/api/3/issue/{issue_key}/remotelink",
@@ -171,7 +174,8 @@ class SetJiraFieldsTool(Tool[SetJiraFieldsToolInput, ToolRunOptions, StringToolO
             jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}")
             logger.info(f"Connecting to JIRA API to set fields for issue: {jira_url}")
             try:
-                async with session.get(
+                async with aiohttp_get_with_retries(
+                    session,
                     jira_url,
                     headers=get_jira_auth_headers(),
                 ) as response:
@@ -419,7 +423,8 @@ class CheckCveTriageEligibilityTool(
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             try:
-                async with session.get(
+                async with aiohttp_get_with_retries(
+                    session,
                     jira_url,
                     headers=headers,
                 ) as response:
@@ -647,7 +652,8 @@ class ChangeJiraStatusTool(Tool[ChangeJiraStatusToolInput, ToolRunOptions, Strin
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             try:
-                async with session.get(
+                async with aiohttp_get_with_retries(
+                    session,
                     urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}"),
                     params={"fields": "status"},
                     headers=headers,
@@ -666,7 +672,7 @@ class ChangeJiraStatusTool(Tool[ChangeJiraStatusToolInput, ToolRunOptions, Strin
                 pass
 
             try:
-                async with session.get(jira_url, headers=headers) as resp:
+                async with aiohttp_get_with_retries(session, jira_url, headers=headers) as resp:
                     resp.raise_for_status()
                     transitions = (await resp.json()).get("transitions", [])
             except aiohttp.ClientError as e:
@@ -794,7 +800,8 @@ class VerifyIssueAuthorTool(Tool[VerifyIssueAuthorToolInput, ToolRunOptions, JSO
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             try:
-                async with session.get(
+                async with aiohttp_get_with_retries(
+                    session,
                     jira_url,
                     headers=headers,
                 ) as response:
@@ -818,7 +825,8 @@ class VerifyIssueAuthorTool(Tool[VerifyIssueAuthorToolInput, ToolRunOptions, JSO
                 params["key"] = author_key
 
             try:
-                async with session.get(
+                async with aiohttp_get_with_retries(
+                    session,
                     urljoin(os.getenv("JIRA_URL"), "rest/api/3/user"),
                     params=params,
                     headers=headers,
@@ -926,7 +934,9 @@ async def _fetch_dev_status_details(
     *summary_category* (e.g. ``"repository"`` or ``"pullrequest"``)."""
     issue_url = urljoin(jira_base, f"rest/api/3/issue/{issue_key}")
     try:
-        async with session.get(issue_url, params={"fields": ""}, headers=headers) as response:
+        async with aiohttp_get_with_retries(
+            session, issue_url, params={"fields": ""}, headers=headers
+        ) as response:
             response.raise_for_status()
             issue_data = await response.json()
             issue_id = issue_data["id"]
@@ -935,7 +945,7 @@ async def _fetch_dev_status_details(
 
     summary_url = urljoin(jira_base, f"rest/dev-status/1.0/issue/summary?issueId={issue_id}")
     try:
-        async with session.get(summary_url, headers=headers) as response:
+        async with aiohttp_get_with_retries(session, summary_url, headers=headers) as response:
             response.raise_for_status()
             summary_data = await response.json()
     except aiohttp.ClientError as e:
@@ -953,7 +963,7 @@ async def _fetch_dev_status_details(
             f"&applicationType={app_type}&dataType={data_type}",
         )
         try:
-            async with session.get(detail_url, headers=headers) as response:
+            async with aiohttp_get_with_retries(session, detail_url, headers=headers) as response:
                 response.raise_for_status()
                 dev_data = await response.json()
         except aiohttp.ClientError as e:
@@ -1102,7 +1112,7 @@ class SetPreliminaryTestingTool(Tool[SetPreliminaryTestingToolInput, ToolRunOpti
     async def _resolve_field_id(self, session: Any, headers: dict) -> str:
         jira_base = os.getenv("JIRA_URL")
         url = urljoin(jira_base, "rest/api/3/field")
-        async with session.get(url, headers=headers) as response:
+        async with aiohttp_get_with_retries(session, url, headers=headers) as response:
             response.raise_for_status()
             fields = await response.json()
         for field in fields:
@@ -1321,7 +1331,7 @@ class GetJiraAttachmentTool(Tool[GetJiraAttachmentToolInput, ToolRunOptions, Str
             # Get issue attachments
             issue_url = urljoin(jira_base, f"rest/api/2/issue/{issue_key}?fields=attachment")
             try:
-                async with session.get(issue_url, headers=headers) as response:
+                async with aiohttp_get_with_retries(session, issue_url, headers=headers) as response:
                     response.raise_for_status()
                     issue_data = await response.json()
             except aiohttp.ClientError as e:
@@ -1337,7 +1347,7 @@ class GetJiraAttachmentTool(Tool[GetJiraAttachmentToolInput, ToolRunOptions, Str
 
             content_url = matching[0]["content"]
             try:
-                async with session.get(content_url, headers=headers) as response:
+                async with aiohttp_get_with_retries(session, content_url, headers=headers) as response:
                     response.raise_for_status()
                     content = await response.read()
             except aiohttp.ClientError as e:

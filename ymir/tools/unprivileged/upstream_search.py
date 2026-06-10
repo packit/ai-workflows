@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT
+from ymir.tools.http import aiohttp_get_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,8 @@ class UpstreamSearchTool(Tool[UpstreamSearchToolInput, ToolRunOptions, UpstreamS
             repos = []
             commits = []
             async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-                async with session.get(
+                async with aiohttp_get_with_retries(
+                    session,
                     f"{os.environ['UPSTREAM_SEARCH_API_URL']}/find_repository",
                     params={"name": tool_input.project},
                 ) as response:

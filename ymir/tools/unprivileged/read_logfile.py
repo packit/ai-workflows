@@ -3,8 +3,10 @@ import logging
 import aiohttp
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
+from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
+
+from ymir.tools.http import aiohttp_get_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +33,16 @@ class ReadLogfileTool(Tool[ReadLogfileInput, ToolRunOptions, StringToolOutput]):
         context: RunContext,
     ) -> StringToolOutput:
         logger.info("Reading logfile from URL: %s", input.logfile_url)
-        async with aiohttp.ClientSession() as session, session.get(input.logfile_url) as response:
-            if response.status == 200:
-                return StringToolOutput(
-                    result=await response.text(),
-                )
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                aiohttp_get_with_retries(session, input.logfile_url) as response,
+            ):
+                if response.status == 200:
+                    return StringToolOutput(
+                        result=await response.text(),
+                    )
+        except aiohttp.ClientError as e:
+            raise ToolError(f"Failed to read logfile from {input.logfile_url}: {e}") from e
 
         return StringToolOutput(result=f"Failed to read logfile from {input.logfile_url}")

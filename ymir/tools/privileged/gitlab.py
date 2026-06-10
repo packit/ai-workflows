@@ -34,6 +34,7 @@ from ymir.common.models import (
 from ymir.common.validators import AbsolutePath
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
+from ymir.tools.http import aiohttp_get_with_retries
 from ymir.tools.privileged.utils import clean_stale_repositories
 
 logger = logging.getLogger(__name__)
@@ -973,10 +974,15 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
         try:
             async with (
                 aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
-                session.get(request_url, headers=headers) as response,
+                aiohttp_get_with_retries(session, request_url, headers=headers) as response,
             ):
                 if response.status >= 400:
-                    raise ToolError(f"Failed to fetch patch from {patch_url}: HTTP {response.status}")
+                    # We return Error string instead of ToolError, because status >= 400
+                    # on for example badly formatted URL is not a tool error and
+                    # should not be flagged
+                    return StringToolOutput(
+                        result=f"Error: Failed to fetch patch from {patch_url}: HTTP {response.status}"
+                    )
                 text = await response.text()
         except aiohttp.ClientError as e:
             raise ToolError(f"Failed to fetch patch from {patch_url}: {e}") from e
@@ -1030,7 +1036,8 @@ class FetchGitlabMrNotesTool(Tool[FetchGitlabMrNotesInput, ToolRunOptions, Strin
         try:
             async with (
                 aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
-                session.get(
+                aiohttp_get_with_retries(
+                    session,
                     url,
                     headers=headers,
                     params={
@@ -1066,6 +1073,10 @@ class FetchGitlabMrNotesTool(Tool[FetchGitlabMrNotesInput, ToolRunOptions, Strin
 
             return StringToolOutput(result=json.dumps(result, indent=2))
 
+        except aiohttp.ClientError as e:
+            # Here we handle ClientError as ToolError, because client error
+            # signals networking issues which should be flagged (DNS resolution failure, timeouts etc)
+            raise ToolError(f"Failed to fetch MR notes for !{input.mr_iid} in {input.project}: {e}") from e
         except Exception as e:
             logger.error("Error fetching GitLab MR notes: %s", e)
             return StringToolOutput(result=f"Error fetching GitLab MR notes: {e}")
@@ -1124,7 +1135,7 @@ class SearchGitlabProjectMrsTool(
         try:
             async with (
                 aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
-                session.get(url, headers=headers, params=params) as response,
+                aiohttp_get_with_retries(session, url, headers=headers, params=params) as response,
             ):
                 response.raise_for_status()
                 data = await response.json()

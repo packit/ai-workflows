@@ -75,13 +75,13 @@ async def test_get_jira_details():
             async def json():
                 return issue_data
 
-            yield flexmock(json=json, raise_for_status=lambda: None)
+            yield flexmock(status=200, json=json, raise_for_status=lambda: None)
         elif url.endswith(f"rest/api/3/issue/{issue_key}/remotelink"):
 
             async def json():
                 return remote_links_data
 
-            yield flexmock(json=json, raise_for_status=lambda: None)
+            yield flexmock(status=200, json=json, raise_for_status=lambda: None)
         else:
             raise AssertionError(f"Unexpected URL: {url}")
 
@@ -138,7 +138,7 @@ async def test_set_jira_fields(args, current_fields, expected_fields):
             async def json():
                 return current_fields
 
-            yield flexmock(json=json, raise_for_status=lambda: None)
+            yield flexmock(status=200, json=json, raise_for_status=lambda: None)
         else:
             raise AssertionError(f"Unexpected URL: {url}")
 
@@ -220,13 +220,13 @@ async def test_change_jira_status(transitions, status, expected_transition_id):
             async def json():
                 return current_status_data
 
-            yield flexmock(json=json, raise_for_status=lambda: None)
+            yield flexmock(status=200, json=json, raise_for_status=lambda: None)
         elif url.endswith(f"rest/api/3/issue/{issue_key}/transitions"):
 
             async def json():
                 return {"transitions": transitions}
 
-            yield flexmock(json=json, raise_for_status=lambda: None)
+            yield flexmock(status=200, json=json, raise_for_status=lambda: None)
         else:
             raise AssertionError(f"Unexpected URL: {url}")
 
@@ -338,7 +338,7 @@ async def test_verify_issue_author(user_groups, expected_result, use_account_id)
             async def json():
                 return issue_data
 
-            yield flexmock(json=json, raise_for_status=lambda: None)
+            yield flexmock(status=200, json=json, raise_for_status=lambda: None)
         elif url.endswith("rest/api/3/user"):
             assert params.get(expected_param_key) == expected_param_value
             assert params.get("expand") == "groups"
@@ -346,7 +346,7 @@ async def test_verify_issue_author(user_groups, expected_result, use_account_id)
             async def json():
                 return user_data
 
-            yield flexmock(json=json, raise_for_status=lambda: None)
+            yield flexmock(status=200, json=json, raise_for_status=lambda: None)
         else:
             raise AssertionError(f"Unexpected URL: {url}")
 
@@ -634,7 +634,7 @@ def _mock_jira_get(issue_data):
         async def json():
             return issue_data
 
-        yield flexmock(json=json, raise_for_status=lambda: None)
+        yield flexmock(status=200, json=json, raise_for_status=lambda: None)
 
     return get
 

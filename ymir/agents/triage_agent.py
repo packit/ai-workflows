@@ -471,8 +471,27 @@ TRIAGE_PROMPT = """
              * Vendor tarballs like `Source1: *-vendor.tar.gz` or `Source1: *-vendor-*.tar.*`
            - The CVE describes a vulnerability in a library, runtime, or language (e.g., Go, Rust,
              OpenSSL) that the package merely uses or vendors, not in the package's own code
-           **If the fix is in a dependency**, use the "rebuild" resolution instead. The package will
-           pick up the fix automatically when rebuilt against the updated dependency.
+           **If the fix is in a dependency**, a rebuild MAY be the right resolution — but ONLY if the
+           package actually recompiles that dependency from source during its own build. Before
+           choosing "rebuild", verify HOW the dependency is delivered and consumed (inspect the spec
+           %prep/%build sections and the Source/Patch lines):
+           - **Recompiled from source at build time → "rebuild" is valid.** This is the case when the
+             dependency is a buildroot toolchain/library the package compiles or links against
+             (e.g., golang, rust, openssl) or a *source* vendor tarball that is compiled during %build.
+             Bumping the Release and rebuilding against the updated dependency picks up the fix.
+           - **Shipped as a pre-built/pre-compiled bundled artifact → do NOT use "rebuild".** This is
+             the case when the vulnerable dependency is delivered as an already-built blob that %build
+             merely unpacks and installs without recompiling it from the patched source — e.g. a
+             prebuilt webpack/JS bundle tarball (`Source*: *-webpack-*.tar.*`), vendored minified JS,
+             or precompiled binaries. A Release bump rebuilds the package but re-ships the SAME
+             vulnerable artifact, so the rebuild fixes nothing. Instead:
+             * If the package builds that artifact from source it controls (so the bundled dependency
+               can be updated/patched and the artifact regenerated as part of the build), choose
+               "backport".
+             * If the vulnerable dependency is not reachable in the shipped artifact (e.g. a
+               dev/test-only dependency excluded from the production bundle), choose "not-affected".
+           When you cannot determine whether the artifact is recompiled or pre-built, prefer "backport"
+           over "rebuild" and let the post-triage applicability check confirm.
          * If the patch IS for the package's own code and passes all validations in step 2.3, your
            decision is backport. You must justify why the patch is correct and how it addresses the issue.
          {{/is_older_zstream}}
@@ -489,10 +508,18 @@ TRIAGE_PROMPT = """
 
       3. **Rebuild**
          Use when the package needs rebuilding against an updated dependency with NO source code
-         changes. This covers explicit rebuild requests AND vendored/bundled dependency CVEs
-         (common in Go, Rust, Node.js packages — see step 2.4 which redirects here).
+         changes, AND that dependency is recompiled into the package at build time (see step 2.4).
+         This covers explicit rebuild requests AND vendored/bundled dependency CVEs where the
+         dependency is compiled from source during the build (common for Go/Rust toolchain and
+         linked C libraries). It does NOT cover dependencies shipped as pre-built bundled artifacts
+         (e.g. a prebuilt webpack/JS bundle) — those are handled in step 2.4 as backport/not-affected.
 
-         3.1. Confirm no source code changes are needed for the package itself.
+         3.1. Confirm no source code changes are needed for the package itself, AND confirm the
+              updated dependency is actually recompiled into the package at build time rather than
+              shipped as a pre-built bundled artifact (see step 2.4). If the vulnerable dependency
+              is a pre-built blob the build merely re-ships (e.g. a prebuilt webpack/JS bundle
+              tarball, vendored minified JS, precompiled binaries), a Release-bump rebuild will NOT
+              pick up the fix — do NOT use "rebuild"; choose "backport" or "not-affected" instead.
          3.2. Check dependency readiness — search thoroughly:
          * Look for linked Jira issues in fields.issuelinks representing the dependency update
          * If no linked issue found, use search_jira_issues to find it. Try JQL queries like:

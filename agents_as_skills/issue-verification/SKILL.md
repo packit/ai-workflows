@@ -1,17 +1,8 @@
 ---
+name: issue-verification
 description: >
   Runs the Issue Verification workflow for a JIRA issue, managing the lifecycle
   from merged MR through errata creation, testing analysis, and status transitions.
-arguments:
-  - name: jira_issue
-    description: "JIRA issue key (e.g. RHEL-12345)"
-    required: true
-  - name: dry_run
-    description: "If true, skip all JIRA modifications (label changes, comments, status transitions). Default: false"
-    required: false
-  - name: ignore_needs_attention
-    description: "If true, process the issue even if it has the ymir_needs_attention label. Default: false"
-    required: false
 ---
 
 # Issue Verification Skill

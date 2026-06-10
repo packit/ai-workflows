@@ -2,9 +2,9 @@
 """Pre-push hook: ensure agents_as_skills/ stays in sync with ymir/agents/.
 
 Compares the net diff of the current branch against its remote tracking branch.
-Fails the push when a *_agent.py file or its prompt templates were changed but
-the corresponding SKILL.md under agents_as_skills/ was not.  Prints the exact
-claude command the developer should run to regenerate the skill.
+Fails the push when a *_agent.py file or its prompt templates were
+changed but their corresponding SKILL.md under agents_as_skills/ was not.
+Prints the exact command the developer should run to regenerate the skill.
 
 Set SKIP_SKILL_SYNC=1 to bypass this check.
 """
@@ -19,23 +19,29 @@ AGENTS_DIR = Path("ymir/agents")
 PROMPTS_DIR = Path("ymir/agents/prompts")
 SKILLS_DIR = Path("agents_as_skills")
 
-CLAUDE_CMD_TEMPLATE = (
+REGEN_CMD_TEMPLATE = (
     "claude --model claude-opus-4-6 --effort high"
+    "  # any AI agent works; adjust command for your tool"
     ' "Please take a look at the BeeAI workflows implemented in agents'
-    " directory. Please convert Workflow in {workflow_file} to Claude skill and"
-    f" save that skill to {SKILLS_DIR} directory.\n"
+    " directory. Please convert Workflow in {workflow_file} to an Agent Skill"
+    f" (https://agentskills.io/specification) and save it to {SKILLS_DIR}/.\n"
     "Restrictions:\n"
     " - Pay attention to tools used by the workflow and do not omit them\n"
     " - Do not restrict tools that the skill can use\n"
-    ' - Specify arguments the skill uses as an input"'
+    ' - The skill name must match the directory name (lowercase, hyphens only)"'
 )
 
 
 def skill_name_for(agent_path: Path) -> str | None:
-    """Derive the skill directory name from an agent filename."""
+    """Derive the skill directory name from an agent filename.
+
+    Agent filenames use underscores (e.g. preliminary_testing_agent.py) but
+    skill directories use hyphens per the agentskills.io spec, so underscores
+    are replaced with hyphens.
+    """
     if agent_path.suffix != ".py" or not agent_path.stem.endswith("_agent"):
         return None
-    return agent_path.stem.removesuffix("_agent")
+    return agent_path.stem.removesuffix("_agent").replace("_", "-")
 
 
 def skill_name_for_prompt(prompt_path: Path) -> str | None:
@@ -122,7 +128,7 @@ def main() -> int:
     print("\nPlease regenerate the skill(s) before pushing:\n")
     for name in sorted(affected_skills):
         workflow_file = AGENTS_DIR / f"{name}_agent.py"
-        print(f"  {CLAUDE_CMD_TEMPLATE.format(workflow_file=workflow_file)}\n")
+        print(f"  {REGEN_CMD_TEMPLATE.format(workflow_file=workflow_file)}\n")
 
     print(
         "If the change does not affect the skill (e.g. comments only), bypass with:\n"

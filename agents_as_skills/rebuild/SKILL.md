@@ -1,30 +1,6 @@
 ---
+name: rebuild
 description: Rebuild packages against updated dependencies in the RHEL ecosystem — release bump, changelog, and merge request creation with no source code changes. Supports consolidating multiple sibling Jira issues into a single rebuild MR.
-arguments:
-  - name: package
-    description: "Name of the package to rebuild (e.g., 'openssl')"
-    required: true
-  - name: dist_git_branch
-    description: "Dist-git branch to update (e.g., 'c10s', 'rhel-9.6.0')"
-    required: true
-  - name: jira_issue
-    description: "Primary JIRA issue key (e.g., RHEL-12345)"
-    required: true
-  - name: dependency_issue
-    description: "JIRA issue key of the dependency that was updated (e.g., RHEL-67890). Default: null"
-    required: false
-  - name: dependency_component
-    description: "Name of the dependency component that was updated (e.g., 'golang'). Default: null"
-    required: false
-  - name: consolidated_issues
-    description: "JSON list of sibling issues consolidated into this rebuild. Each item has 'issue_key' and optional 'dependency_component'. Example: [{\"issue_key\": \"RHEL-67890\", \"dependency_component\": \"golang\"}]. Default: []"
-    required: false
-  - name: consolidation_summary
-    description: "Summary text of the sibling consolidation analysis from triage. Default: null"
-    required: false
-  - name: dry_run
-    description: "If true, skip JIRA status changes and MR creation (commit only). Default: false"
-    required: false
 ---
 
 # Rebuild Skill

@@ -10,6 +10,7 @@ RUN dnf -y install \
       python3.13 \
       python3.13-devel \
       python3-rpm \
+      rpm-devel \
     && dnf clean all
 
 RUN python3.13 -m venv --system-site-packages /opt/beeai-venv
@@ -38,6 +39,7 @@ RUN pip install --no-cache-dir \
       ogr \
       pytest \
       pytest-asyncio \
+      rpm \
       specfile
 
 # Verify no malicious litellm_init.pth was introduced by compromised litellm packages (e.g. 1.82.7, 1.82.8)

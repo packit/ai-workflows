@@ -12,6 +12,7 @@ x-beeai-env: &beeai-env
   DRY_RUN: ${DRY_RUN:-false}
   JIRA_DRY_RUN: ${JIRA_DRY_RUN:-false}
   JIRA_ALLOW_STATUS_CHANGES: ${JIRA_ALLOW_STATUS_CHANGES:-false}
+  ERRATA_ALLOW_STATUS_CHANGES: ${ERRATA_ALLOW_STATUS_CHANGES:-false}
   AUTO_CHAIN: ${AUTO_CHAIN:-true}
   REQUESTS_CA_BUNDLE: /etc/pki/tls/certs/ca-bundle.crt
   SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
@@ -204,6 +205,13 @@ services:
     environment:
       <<: *beeai-env
     command: ["python", "-m", "ymir.agents.issue_verification_agent"]
+    profiles: ["agents"]
+
+  errata-workflow-agent:
+    <<: *beeai-agent-c10s
+    environment:
+      <<: *beeai-env
+    command: ["python", "-m", "ymir.agents.errata_workflow_agent"]
     profiles: ["agents"]
 
   triage-agent-e2e-tests:

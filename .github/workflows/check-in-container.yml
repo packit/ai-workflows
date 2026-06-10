@@ -11,6 +11,18 @@ permissions:
   contents: read
 
 jobs:
+  validate-skills:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+    - name: Validate agent skills
+      run: |
+        pip install skills-ref==0.1.1
+        for skill_dir in agents_as_skills/*/; do
+          agentskills validate "$skill_dir"
+        done
+
   check-in-container:
     runs-on: ubuntu-latest
     strategy:

@@ -1,33 +1,6 @@
 ---
+name: backport
 description: Backport upstream patches to packages in the RHEL ecosystem — cherry-pick or git-am workflow, build verification, changelog, and merge request creation.
-arguments:
-  - name: package
-    description: "Name of the package to backport to (e.g., 'curl')"
-    required: true
-  - name: dist_git_branch
-    description: "Dist-git branch to update (e.g., 'c10s', 'rhel-9.6.0')"
-    required: true
-  - name: upstream_patches
-    description: "Comma-separated list of upstream patch URLs to backport (commit URLs, PR/MR URLs, or .patch URLs)"
-    required: true
-  - name: jira_issue
-    description: "JIRA issue key (e.g., RHEL-12345)"
-    required: true
-  - name: cve_id
-    description: "CVE identifier if the JIRA issue is a CVE (e.g., CVE-2025-12345). Default: null"
-    required: false
-  - name: justification
-    description: "Justification text from triage explaining why this backport fixes the issue. Default: null"
-    required: false
-  - name: fix_version
-    description: "Fix version string for z-stream detection (e.g., 'rhel-9.6.0.z'). Default: null"
-    required: false
-  - name: dry_run
-    description: "If true, skip JIRA status changes, MR creation, and label updates. Default: false"
-    required: false
-  - name: max_build_attempts
-    description: "Maximum number of build retry attempts. Default: 10"
-    required: false
 ---
 
 # Backport Skill

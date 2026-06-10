@@ -1,6 +1,8 @@
 # Agents as Skills
 
-This directory contains Ymir workflows packaged as **AI coding assistant skills** for [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) and [Cursor](https://www.cursor.com/). The goal is to give individual contributors an easy way to run Ymir workflows directly in their own development environment — helping them with day-to-day package maintenance tasks and potentially surfacing areas for improvement in the workflows themselves.
+This directory contains Ymir workflows packaged as **AI agent skills** compatible with any client that implements the [Agent Skills standard](https://agentskills.io/home). The goal is to give individual contributors an easy way to run Ymir workflows directly in their own development environment — helping them with day-to-day package maintenance tasks and potentially surfacing areas for improvement in the workflows themselves.
+
+Supported clients include [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview), [opencode](https://opencode.ai), [Cursor](https://www.cursor.com/), and any other [skills-compatible agent](https://agentskills.io/clients).
 
 ## Available skills
 
@@ -10,12 +12,14 @@ This directory contains Ymir workflows packaged as **AI coding assistant skills*
 | **Backport** | [`backport/`](backport/) | Cherry-pick or git-am upstream patches, verify builds, and create merge requests |
 | **Rebase** | [`rebase/`](rebase/) | Rebase a package to a new upstream version |
 | **Rebuild** | [`rebuild/`](rebuild/) | Rebuild a package in the build system |
-| **Preliminary Testing** | [`preliminary_testing/`](preliminary_testing/) | Analyze gating and OSCI results to determine preliminary testing status |
-| **Issue Verification** | [`issue_verification/`](issue_verification/) | Issue verification agent (post-fix lifecycle management) |
+| **Preliminary Testing** | [`preliminary-testing/`](preliminary-testing/) | Analyze gating and OSCI results to determine preliminary testing status |
+| **Issue Verification** | [`issue-verification/`](issue-verification/) | Post-fix lifecycle management through errata creation and testing |
+
+Each skill is a directory containing a `SKILL.md` file that follows the [Agent Skills specification](https://agentskills.io/specification).
 
 ## Installation
 
-For installation instructions (skill setup and MCP tool configuration), see the [Skills Installation Guide](https://github.com/packit/ai-workflows/blob/main/skills_installation.md).
+For per-client installation instructions (skill placement paths, MCP tool configuration), see the [Skills Installation Guide](../skills_installation.md).
 
 ## How to use
 
@@ -35,10 +39,11 @@ Set the `DRY_RUN` environment variable or add `dry_run=true` to your prompt to a
 
 ## How to build
 
+To convert a Ymir BeeAI workflow into a new skill:
+
 ```bash
-claude --model claude-opus-4-6 --effort high "Take a look at the BeeAI workflows implemented in agents directory. Convert Workflow in {workflow_file} to Claude skill and save that skill to agents_as_skills directory.
-Restrictions:
+opencode "Please take a look at the BeeAI workflows implemented in the agents directory. Please convert the workflow in {workflow_file} to an Agent Skill (https://agentskills.io/specification) and save it to agents_as_skills/. Restrictions:
  - Pay attention to tools used by the workflow and do not omit them
  - Do not restrict tools that the skill can use
- - Specify arguments the skill uses as an input"
+ - Include a name: field in the frontmatter that matches the directory name"
 ```

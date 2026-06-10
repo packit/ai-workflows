@@ -1,18 +1,6 @@
 ---
+name: triage
 description: Triage Jira issues for RHEL packages — analyze bugs and CVEs to determine whether to rebase, backport a patch, rebuild, or request clarification, check CVE applicability against package source, consolidate rebuild siblings, and post the result as a Jira comment.
-arguments:
-  - name: jira_issue
-    description: "JIRA issue key to triage (e.g., RHEL-12345)"
-    required: true
-  - name: dry_run
-    description: "If true, skip JIRA comment posting and label updates. Default: false"
-    required: false
-  - name: auto_chain
-    description: "If true, omit the follow-up note in JIRA comments (indicates automated downstream processing is enabled). Default: true"
-    required: false
-  - name: force_cve_triage
-    description: "If true, force triage of CVE issues that would normally be deferred or rejected (eligibility=PENDING_DEPENDENCIES or NEVER). Default: false"
-    required: false
 ---
 
 # Triage Skill

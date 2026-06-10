@@ -1,30 +1,6 @@
 ---
+name: rebase
 description: Rebase packages to newer upstream versions in the RHEL ecosystem — version update, spec file modification, patch fixing, build verification, changelog, and merge request creation.
-arguments:
-  - name: package
-    description: "Name of the package to rebase (e.g., 'openssl')"
-    required: true
-  - name: dist_git_branch
-    description: "Dist-git branch to update (e.g., 'c10s', 'rhel-9.6.0')"
-    required: true
-  - name: version
-    description: "Target upstream version to rebase to (e.g., '2.4.1')"
-    required: true
-  - name: jira_issue
-    description: "JIRA issue key (e.g., RHEL-12345)"
-    required: true
-  - name: cve_id
-    description: "CVE identifier if the JIRA issue is a CVE (e.g., CVE-2025-12345). Default: null"
-    required: false
-  - name: justification
-    description: "Justification text from triage explaining why this rebase fixes the issue. Default: null"
-    required: false
-  - name: dry_run
-    description: "If true, skip JIRA status changes, MR creation, and label updates. Default: false"
-    required: false
-  - name: max_build_attempts
-    description: "Maximum number of build retry attempts. Default: 10"
-    required: false
 ---
 
 # Rebase Skill

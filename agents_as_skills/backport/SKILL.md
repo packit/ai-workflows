@@ -593,6 +593,12 @@ General instructions:
   and all binaries, manpages, and user-facing documentation.
 - For more information how the package is being built, inspect the
   RPM spec file and read sections `%prep` and `%build`.
+- CRITICAL — verify the fix reaches what ships: confirm the patched files are
+  compiled/processed from source during `%build`. If they only live in a pre-built
+  bundled artifact the build re-ships verbatim (a prebuilt webpack/JS bundle tarball,
+  vendored minified JS, precompiled binaries), end with `success=False` and
+  `error="Fix is in a pre-built bundled artifact; needs human review"` — do NOT produce
+  a backport that won't actually fix the shipped RPM.
 - If there is a complex conflict, you are required to properly resolve
   it by applying the core functionality of the proposed patch.
 - When using the cherry-pick workflow, you have access to
@@ -889,6 +895,12 @@ General instructions:
   and all binaries, manpages, and user-facing documentation.
 - For more information how the package is being built, inspect the
   RPM spec file and read sections `%prep` and `%build`.
+- CRITICAL — verify the fix reaches what ships: confirm the patched files are
+  compiled/processed from source during `%build`. If they only live in a pre-built
+  bundled artifact the build re-ships verbatim (a prebuilt webpack/JS bundle tarball,
+  vendored minified JS, precompiled binaries), end with `success=False` and
+  `error="Fix is in a pre-built bundled artifact; needs human review"` — do NOT produce
+  a backport that won't actually fix the shipped RPM.
 - If there is a complex conflict, you are required to properly resolve
   it by applying the core functionality of the proposed patch.
 - When using approach B (upstream cherry-pick workflow), you have access to

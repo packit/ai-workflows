@@ -1,18 +1,6 @@
 ---
+name: triage
 description: Triage Jira issues for RHEL packages — analyze bugs and CVEs to determine whether to rebase, backport a patch, rebuild, or request clarification, check CVE applicability against package source, consolidate rebuild siblings, and post the result as a Jira comment.
-arguments:
-  - name: jira_issue
-    description: "JIRA issue key to triage (e.g., RHEL-12345)"
-    required: true
-  - name: dry_run
-    description: "If true, skip JIRA comment posting and label updates. Default: false"
-    required: false
-  - name: auto_chain
-    description: "If true, omit the follow-up note in JIRA comments (indicates automated downstream processing is enabled). Default: true"
-    required: false
-  - name: force_cve_triage
-    description: "If true, force triage of CVE issues that would normally be deferred or rejected (eligibility=PENDING_DEPENDENCIES or NEVER). Default: false"
-    required: false
 ---
 
 # Triage Skill
@@ -27,6 +15,7 @@ You are a Red Hat Enterprise Linux developer tasked to analyze Jira issues for R
 - `dry_run`: {{dry_run}}
 - `auto_chain`: {{auto_chain}}
 - `force_cve_triage`: {{force_cve_triage}}
+- `silent_run`: {{silent_run}}
 
 ## Tools
 
@@ -300,10 +289,7 @@ This path is for issues that represent a clear bug or CVE that needs a targeted 
        * `Provides: bundled(golang(...))` or `Provides: bundled(...)` entries
        * Vendor tarballs like `Source1: *-vendor.tar.gz` or `Source1: *-vendor-*.tar.*`
      - The CVE describes a vulnerability in a library, runtime, or language (e.g., Go, Rust, OpenSSL) that the package merely uses or vendors, not in the package's own code
-     **If the fix is in a dependency**, a rebuild MAY be right — but ONLY if the package recompiles that dependency from source during its build. Inspect the spec `%prep`/`%build` and Source/Patch lines:
-     - **Recompiled from source at build time** (buildroot toolchain like golang/openssl, or a *source* vendor tarball compiled in `%build`) → use the "rebuild" resolution; the package picks up the fix when rebuilt against the updated dependency.
-     - **Shipped as a pre-built bundled artifact** the build re-ships verbatim (a prebuilt webpack/JS bundle tarball like `Source*: *-webpack-*.tar.*`, vendored minified JS, precompiled binaries) → do NOT rebuild; a Release bump re-ships the same vulnerable blob. Choose "backport" if the package regenerates the artifact from source it controls, or "not-affected" if the dependency isn't reachable in the shipped artifact.
-     When you cannot determine whether the artifact is recompiled or pre-built, prefer "backport" over "rebuild" and let the post-triage applicability check confirm.
+     **If the fix is in a dependency**, use the "rebuild" resolution instead. The package will pick up the fix automatically when rebuilt against the updated dependency.
    * If the patch IS for the package's own code and passes all validations in step 2.3, your decision is backport. You must justify why the patch is correct and how it addresses the issue.
 
    If `is_older_zstream` is **true**:
@@ -317,7 +303,7 @@ This path is for issues that represent a clear bug or CVE that needs a targeted 
 
 **3. Rebuild**
 
-Use when the package needs rebuilding against an updated dependency with NO source code changes, AND that dependency is recompiled into the package at build time (see step 2.4). This covers explicit rebuild requests AND vendored/bundled dependency CVEs where the dependency is compiled from source during the build (common for Go/Rust toolchain and linked C libraries). It does NOT cover dependencies shipped as pre-built bundled artifacts (e.g. a prebuilt webpack/JS bundle) — those are handled in step 2.4 as backport/not-affected.
+Use when the package needs rebuilding against an updated dependency with NO source code changes. This covers explicit rebuild requests AND vendored/bundled dependency CVEs (common in Go, Rust, Node.js packages — see step 2.4 which redirects here).
 
 3.1. Confirm no source code changes are needed for the package itself.
 
@@ -700,7 +686,10 @@ Proceed to **Step 7**.
 
 If `dry_run` is true, end the workflow and output the `triage_result`.
 
-Default is silent: only post a JIRA comment when `triage_result.resolution` is `"not-affected"` or `"postponed"` (resolutions that have no MR artifact, so the comment is the only visible explanation). For all other resolutions, end the workflow and output the `triage_result` without commenting.
+Check whether JIRA should be updated based on `silent_run`:
+- If `silent_run` is false: always update JIRA.
+- If `silent_run` is true: only update JIRA if `triage_result.resolution` is `"not-affected"` or `"postponed"`.
+- If JIRA should not be updated, end the workflow and output the `triage_result`.
 
 Format the JIRA comment based on the resolution type:
 

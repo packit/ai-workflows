@@ -327,9 +327,12 @@ def _get_rel_prep_lookup(package_name: str) -> defaultdict[str, list[Erratum]]:
     package_data = _et_api_get("packages", params={"name": package_name})
     related_errata = package_data["data"]["relationships"]["errata"]
     if not isinstance(related_errata, list):
+    if not package_data.get("data") or not isinstance(package_data["data"], list):
+        return rel_prep_lookup
+    package_resource = package_data["data"][0]
+    related_errata = package_resource.get("relationships", {}).get("errata", [])
+    if not isinstance(related_errata, list):
         raise TypeError(f"expected list of errata, got {type(related_errata)}")
-    for erratum_info in related_errata:
-        if erratum_info["status"] != ErrataStatus.REL_PREP:
             continue
 
         id = erratum_info["id"]

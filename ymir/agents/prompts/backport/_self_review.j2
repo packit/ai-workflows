@@ -1,0 +1,49 @@
+{{ self_review_step }}. Self-Review: Before reporting a result, verify your work meets all criteria
+   below. Run `git diff HEAD -- *.spec` in the dist-git repository root (not in
+   {{ repo_context }}) to inspect what you changed in the spec file.
+{% if spec_only_note %}
+
+{{ spec_only_note }}
+{% endif %}
+
+   Criterion 1 — Patch correctness:
+   If you generated any patch files, read each one. Verify it is non-empty and
+   contains code changes that address the issue in <JIRA_ISSUE> or <CVE_ID>. A
+   patch that only modifies whitespace, comments, or files entirely unrelated to
+   the fix does not pass. Test files that accompany the fix are acceptable.
+   If no patch files were generated (e.g. a spec-only change), skip this
+   criterion.
+
+   Criterion 2 — Spec file correctness:
+   Read the spec file and verify all of the following:
+   a. A new `Patch:` tag exists for every patch file you generated.
+      (Skip if no patch files were generated.)
+   b. Unless the spec uses `%autosetup` or `%autopatch` (which apply patches
+      automatically), the `%prep` section has a corresponding `%patch` directive
+      for each new tag, with the correct `-p` strip level.
+      (Skip if no patch files were generated.)
+   c. All pre-existing `Patch:` tags and their `%patch` directives remain
+      present with the same tag numbers and `-p` arguments as before.
+
+   Criterion 3 — No unrelated changes:
+{{ criterion_3_body }}
+
+   Criterion 4 — Completeness:
+   Verify the SRPM generated in step {{ srpm_step }} exists on disk. Use the path that the
+   SRPM generation command printed, and run:
+   `test -f "<path-to-srpm>" && echo exists || echo missing`
+
+   Criterion 5 — Patch naming:
+   If you generated any patch files, verify each filename follows the naming
+   convention determined in step 0. If no patch files were generated, skip
+   this criterion.
+
+   If ALL criteria pass, report success as normal.
+
+   If ANY criterion fails, set `success=False` and populate `error` with:
+
+     Self-review failed. The following criteria were not met:
+
+     - <Criterion name>: <specific reason — what was found vs. what was expected>
+
+   List only the failing criteria. Do not mention passing ones.

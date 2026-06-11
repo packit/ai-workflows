@@ -239,6 +239,22 @@ a backport that won't actually fix the shipped RPM.
 
 7. Generate a SRPM using the `build_srpm` tool.
 
+{% set self_review_step = 8 %}
+{% set repo_context = '`<UPSTREAM_REPO>`' %}
+{% set spec_only_note %}
+   Note: If this was a spec-only change (step 3d path), no patch files are
+   generated — criteria 1, 2a, 2b, and 5 will not apply. Criterion 2c still
+   applies: verify that pre-existing Patch tags were not accidentally modified.
+{%- endset %}
+{% set criterion_3_body %}
+   From the git diff output, verify the `%changelog` section was not modified.
+   (Changing the Release field is acceptable in y-stream, unless this was a
+   spec-only change via step 3d — in that case the Release field must not be
+   modified either.)
+{%- endset %}
+{% set srpm_step = 7 %}
+{% include "backport/_self_review.j2" %}
+
 
 General instructions:
 

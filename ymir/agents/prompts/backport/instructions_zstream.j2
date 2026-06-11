@@ -257,6 +257,17 @@ a backport that won't actually fix the shipped RPM.
 
 6. Generate a SRPM using the `build_srpm` tool.
 
+{% set self_review_step = 7 %}
+{% set repo_context = 'any cloned source repository' %}
+{% set spec_only_note = '' %}
+{% set criterion_3_body %}
+   From the git diff output, verify all of the following:
+   a. The `%changelog` section was not modified.
+   b. Your changes (visible in the diff) did not modify the `Release:` field.
+{%- endset %}
+{% set srpm_step = 6 %}
+{% include "backport/_self_review.j2" %}
+
 
 General instructions:
 

@@ -33,12 +33,23 @@ async def _try_init_kerberos():
 
 
 async def _run_capturing(argv: list[str], cwd: str | os.PathLike[str], fail_msg: str) -> str:
-    """Run argv in cwd, capturing stdout+stderr.
+    """Run argv in cwd, capturing stdout and stderr together.
 
-    On non-zero exit, raise ToolError including the command and a tail of its
-    output so the real reason (e.g. a lookaside 404, Kerberos failure, or
-    network error from rhpkg/centpkg) propagates back to the agent and Phoenix
-    instead of an opaque "Failed to ..." message.
+    Args:
+        argv: Command and its arguments to execute.
+        cwd: Working directory to run the command in.
+        fail_msg: Prefix for the error message raised on failure.
+
+    Returns:
+        The captured combined output, stripped of surrounding whitespace.
+
+    Raises:
+        ToolError: If argv is empty, the command cannot be executed (e.g. cwd
+            does not exist), or it exits non-zero. The error includes the
+            command and a tail of its output so the real reason (e.g. a
+            lookaside 404, Kerberos failure, or network error from
+            rhpkg/centpkg) propagates back to the agent and Phoenix instead of
+            an opaque "Failed to ..." message.
     """
     if not argv:
         raise ToolError(f"{fail_msg}: No command specified")

@@ -26,6 +26,10 @@ test = [
 
 [tool.hatch.build]
 dev-mode-dirs = ["../.."]
+exclude = [
+    "privileged/tests",
+    "unprivileged/tests",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = []

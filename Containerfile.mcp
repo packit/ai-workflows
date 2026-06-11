@@ -1,4 +1,4 @@
-FROM fedora:42
+FROM fedora:43
 
 # Install RH IT Root CAs for access to internal services
 COPY files/Current-IT-Root-CAs.pem /etc/pki/ca-trust/source/anchors/
@@ -12,34 +12,42 @@ RUN if [ -n "$INTERNAL_REPO_URL" ]; then \
 ARG EXTRA_PACKAGES=""
 # Install system dependencies
 RUN dnf -y install \
-      python3 \
-      python3-aiofiles \
-      python3-aiohttp \
-      python3-copr \
-      python3-ogr \
-      python3-pip \
-      python3-redis \
-      python3-requests \
-      python3-GitPython \
-      python3-flexmock \
-      python3-koji \
+      python3.13 \
+      python3.13-devel \
+      python3-rpm \
+      rpm-devel \
       krb5-libs \
       krb5-workstation \
+      krb5-devel \
       centpkg \
       git \
+      gcc \
       ${EXTRA_PACKAGES} \
     && dnf clean all
 
-# Install beeai mcp server
-RUN pip3 install --no-cache-dir "litellm!=1.82.7,!=1.82.8" beeai-framework[mcp]==0.1.80 "specfile>=0.36.0"
+RUN python3.13 -m venv --system-site-packages /opt/beeai-venv
+ENV PATH=/opt/beeai-venv/bin:$PATH
+RUN pip install --upgrade pip
 
 # Create user
 RUN useradd -m -G wheel mcp
 
 # Copy required directories
 # Individual directories are mounted as volumes in development
-COPY ymir/tools/ /home/mcp/ymir/tools/
+COPY requirements-global.txt /home/mcp/
 COPY ymir/common/ /home/mcp/ymir/common/
+COPY ymir/tools/ /home/mcp/ymir/tools/
+
+# Install dependencies via pyproject.toml; litellm pinned separately to exclude compromised versions
+RUN pip install --no-cache-dir "litellm!=1.82.7,!=1.82.8" /home/mcp/ymir/common/ /home/mcp/ymir/tools/
+
+# Verify no malicious litellm_init.pth was introduced by compromised litellm packages (e.g. 1.82.7, 1.82.8)
+RUN MALICIOUS=$(find /usr /opt -name "litellm_init.pth" 2>/dev/null); \
+    if [ -n "$MALICIOUS" ]; then \
+      echo "SECURITY ALERT: malicious litellm_init.pth detected: $MALICIOUS"; \
+      exit 1; \
+    fi
+
 COPY files/ipa_redhat_com /etc/krb5.conf.d/ipa_redhat_com
 RUN chgrp -R root /home/mcp && chmod -R g+rwX /home/mcp
 

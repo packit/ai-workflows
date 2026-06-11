@@ -117,3 +117,39 @@ async def test_upload_sources(branch):
         )
     ).result
     assert result.startswith("Successfully")
+
+
+@pytest.mark.asyncio
+async def test_run_capturing_surfaces_output_on_failure():
+    async def create_subprocess_exec(cmd, *args, **kwargs):
+        async def communicate():
+            return (b"Could not download Source0: 404 Not Found from lookaside", None)
+
+        return flexmock(communicate=communicate, returncode=1)
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+    with pytest.raises(lookaside_tools.ToolError) as exc:
+        await lookaside_tools._run_capturing(["rhpkg", "sources"], os.getcwd(), "Failed to download sources")
+    msg = str(exc.value)
+    assert "Failed to download sources" in msg
+    assert "rhpkg sources" in msg  # shlex.join'd command
+    assert "exited 1" in msg
+    assert "404 Not Found from lookaside" in msg  # captured output tail
+
+
+@pytest.mark.asyncio
+async def test_run_capturing_rejects_empty_argv():
+    with pytest.raises(lookaside_tools.ToolError, match="No command specified"):
+        await lookaside_tools._run_capturing([], os.getcwd(), "Failed to download sources")
+
+
+@pytest.mark.asyncio
+async def test_run_capturing_reports_missing_cwd():
+    async def create_subprocess_exec(cmd, *args, **kwargs):
+        raise FileNotFoundError
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+    with pytest.raises(lookaside_tools.ToolError, match="does not exist"):
+        await lookaside_tools._run_capturing(
+            ["rhpkg", "sources"], "/nonexistent/dir/does-not-exist", "Failed to download sources"
+        )

@@ -32,7 +32,7 @@ async def _try_init_kerberos():
         logger.warning("Kerberos initialization failed, continuing without it: %s", e)
 
 
-async def _run_capturing(argv: list[str], cwd: str, fail_msg: str) -> str:
+async def _run_capturing(argv: list[str], cwd: str | os.PathLike[str], fail_msg: str) -> str:
     """Run argv in cwd, capturing stdout+stderr.
 
     On non-zero exit, raise ToolError including the command and a tail of its
@@ -40,6 +40,8 @@ async def _run_capturing(argv: list[str], cwd: str, fail_msg: str) -> str:
     network error from rhpkg/centpkg) propagates back to the agent and Phoenix
     instead of an opaque "Failed to ..." message.
     """
+    if not argv:
+        raise ToolError(f"{fail_msg}: No command specified")
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,
@@ -47,9 +49,10 @@ async def _run_capturing(argv: list[str], cwd: str, fail_msg: str) -> str:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-    except FileNotFoundError as e:
-        cmd_name = argv[0] if argv else "command"
-        raise ToolError(f"{fail_msg}: {cmd_name} is not installed") from e
+    except OSError as e:
+        if not os.path.isdir(cwd):
+            raise ToolError(f"{fail_msg}: Directory '{cwd}' does not exist") from e
+        raise ToolError(f"{fail_msg}: Failed to execute {argv[0]}: {e}") from e
     out, _ = await proc.communicate()
     output = out.decode(errors="replace").strip()
     if proc.returncode:

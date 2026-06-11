@@ -14,6 +14,7 @@ ARG EXTRA_PACKAGES=""
 RUN dnf -y install \
       python3.13 \
       python3.13-devel \
+      python3-rpm \
       rpm-devel \
       krb5-libs \
       krb5-workstation \

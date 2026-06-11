@@ -417,8 +417,10 @@ def _get_erratum_transition_rules(erratum_id: int | str) -> TransitionRuleSet:
     transition_row = rows[0]
     if not isinstance(transition_row, Tag):
         raise RuleParseError("Expected a Tag for transition row")
-
-    spans = transition_row.find_all("span")
+    rows = tbody.find_all("tr")
+    if not rows:
+        raise RuleParseError("No rows found in tbody")
+    transition_row = rows[0]
     states = [
         span.text
         for span in spans

@@ -460,11 +460,11 @@ def _get_erratum_transition_rules(erratum_id: int | str) -> TransitionRuleSet:
         if "step-status-block" in className:
             outcome = TransitionRuleOutcome.BLOCK
         elif "step-status-ok" in className:
+        classes = span.get("class", [])
+        if "step-status-block" in classes:
+            outcome = TransitionRuleOutcome.BLOCK
+        elif "step-status-ok" in classes:
             outcome = TransitionRuleOutcome.OK
-        else:
-            outcome = TransitionRuleOutcome.UNKNOWN
-
-        res.append(TransitionRule(name=name, outcome=outcome, details=status.text.strip()))
 
     return TransitionRuleSet(
         from_status=from_status,

@@ -312,12 +312,24 @@ async def run_errata_workflow(
                     return "verify_product_listings"
 
                 # Change state
-                await run_tool(
-                    "erratum_change_state",
-                    available_tools=gateway_tools,
-                    erratum_id=erratum_id,
-                    new_state=new_status,
-                )
+                status_changes_allowed = os.getenv(
+                    "ERRATA_ALLOW_STATUS_CHANGES", "false"
+                ).lower() == "true"
+                if state.dry_run or not status_changes_allowed:
+                    reason = "dry run" if state.dry_run else "ERRATA_ALLOW_STATUS_CHANGES is not set"
+                    logger.info(
+                        "Skipping erratum state change of %s to %s (%s)",
+                        erratum_id,
+                        new_status,
+                        reason,
+                    )
+                else:
+                    await run_tool(
+                        "erratum_change_state",
+                        available_tools=gateway_tools,
+                        erratum_id=erratum_id,
+                        new_state=new_status,
+                    )
                 reschedule_delay = 0 if new_status in (ErrataStatus.NEW_FILES, ErrataStatus.QE) else -1
                 state.result = WorkflowResult(
                     status=f"Moving to {new_status}, since all rules are OK",
@@ -515,12 +527,24 @@ async def run_errata_workflow(
                 return Workflow.END
 
             # All clear, advance to REL_PREP
-            await run_tool(
-                "erratum_change_state",
-                available_tools=gateway_tools,
-                erratum_id=erratum_id,
-                new_state=new_status,
-            )
+            status_changes_allowed = os.getenv(
+                "ERRATA_ALLOW_STATUS_CHANGES", "false"
+            ).lower() == "true"
+            if state.dry_run or not status_changes_allowed:
+                reason = "dry run" if state.dry_run else "ERRATA_ALLOW_STATUS_CHANGES is not set"
+                logger.info(
+                    "Skipping erratum state change of %s to %s (%s)",
+                    erratum_id,
+                    new_status,
+                    reason,
+                )
+            else:
+                await run_tool(
+                    "erratum_change_state",
+                    available_tools=gateway_tools,
+                    erratum_id=erratum_id,
+                    new_state=new_status,
+                )
             state.result = WorkflowResult(
                 status=f"Moving to {new_status}, since all rules are OK",
                 reschedule_in=-1,

@@ -301,7 +301,9 @@ def _get_RHEL_release(param: int | str) -> RHELRelease:
     )
     release_data = response["data"][0]
 
-    ship_date_string = release_data["attributes"]["ship_date"]
+    if not response.get("data"):
+        raise ValueError(f"Release not found for parameter: {param}")
+    release_data = response["data"][0]
     ship_date = _get_utc_timestamp_from_str(ship_date_string) if ship_date_string is not None else None
 
     return RHELRelease(

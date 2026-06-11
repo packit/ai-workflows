@@ -423,11 +423,11 @@ def _get_erratum_transition_rules(erratum_id: int | str) -> TransitionRuleSet:
         span.text
         for span in spans
         if isinstance(span, Tag) and "state_indicator" in span.attrs.get("class", "")
+    states = [
+        span.text
+        for span in spans
+        if isinstance(span, Tag) and "state_indicator" in span.get("class", [])
     ]
-    if len(states) != 2:
-        raise RuleParseError("Couldn't find from and to states")
-
-    def text_to_status(text: str) -> ErrataStatus:
         text = text.strip().upper().replace(" ", "_")
         if text == "SHIPPED":
             return ErrataStatus.SHIPPED_LIVE

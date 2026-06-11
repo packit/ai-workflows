@@ -1428,15 +1428,11 @@ class CreateJiraIssueTool(Tool[CreateJiraIssueToolInput, ToolRunOptions, JSONToo
             if tool_input.assignee_email:
                 account_id = await _get_user_account_id(session, headers, tool_input.assignee_email)
             if tool_input.assignee_email:
-                id_type, id_val = await _get_user_identifier(
-                    session, headers, tool_input.assignee_email
-                )
+                id_type, id_val = await _get_user_identifier(session, headers, tool_input.assignee_email)
                 fields["assignee"] = {id_type: id_val}
 
             if tool_input.reporter_email:
-                id_type, id_val = await _get_user_identifier(
-                    session, headers, tool_input.reporter_email
-                )
+                id_type, id_val = await _get_user_identifier(session, headers, tool_input.reporter_email)
                 fields["reporter"] = {id_type: id_val}
             url = urljoin(jira_base, "rest/api/2/issue")
             logger.info("Creating Jira issue in project %s", tool_input.project)

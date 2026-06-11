@@ -122,15 +122,13 @@ def render_template(
     template_name: str,
     input: BaseModel | None = None,
     *,
-    template_dir: Path | None = None,
+    template_dir: Path = _PROMPTS_DIR,
 ) -> str:
     """Render a Jinja2 prompt template, optionally substituting variables from *input*.
 
     When *input* is ``None`` the template is loaded as-is (useful for static
     instruction prompts that contain no Jinja2 variables).
     """
-    if template_dir is None:
-        template_dir = _PROMPTS_DIR
     env = _get_jinja2_env(template_dir)
     template = env.get_template(template_name)
     return template.render(input.model_dump(mode="json") if input else {})

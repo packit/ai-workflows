@@ -6,6 +6,7 @@ x-beeai-env: &beeai-env
   REDIS_URL: redis://valkey:6379/0
   COLLECTOR_ENDPOINT: http://otel-collector:4318/v1/traces
   GIT_REPO_BASEPATH: /git-repos
+  MOCK_REPOS_DIR: ${MOCK_REPOS_DIR:-}
   MAX_RETRIES: 3
   DRY_RUN: ${DRY_RUN:-false}
   JIRA_DRY_RUN: ${JIRA_DRY_RUN:-false}
@@ -26,6 +27,7 @@ x-beeai-agent: &beeai-agent
   volumes:
     - ./ymir:/home/beeai/ymir:ro,z
     - git-repos:/git-repos:rw,U
+    - ${TESTING_JIRAS_DIR:-./ymir/agents/tests/e2e/mock_repos}:/testing-jiras:ro,z
     - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
     - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z,U
     - ./scripts:/home/beeai/scripts:ro,z
@@ -212,6 +214,7 @@ services:
     <<: *beeai-agent-c10s
     environment:
       <<: *beeai-env
+      BACKPORT_MOCK_REPOS_DIR: ${BACKPORT_MOCK_REPOS_DIR:-}
     command: ["pytest", "ymir/agents/tests/e2e/backport_agent/test_backport.py", "-o", "asyncio_default_test_loop_scope=session"]
     restart: "no"
     profiles: ["e2e-test"]

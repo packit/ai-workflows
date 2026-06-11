@@ -4,9 +4,10 @@ This directory is meant to contain Jira mock files from
 
 Clone the repository and either:
 
-- **Run via compose (recommended):** set `JIRA_MOCK_FILES_HOST` in your local `.env` to point
-  at the cloned `jiras/` directory so compose mounts it directly into the container:
+- **Run via compose (recommended):** set `TESTING_JIRAS_DIR` and `JIRA_MOCK_FILES_HOST` in
+  your local `.env` to point at the cloned repository:
   ```
+  TESTING_JIRAS_DIR=/path/to/testing-jiras
   JIRA_MOCK_FILES_HOST=/path/to/testing-jiras/jiras
   ```
 

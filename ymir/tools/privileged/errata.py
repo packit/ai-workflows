@@ -386,11 +386,22 @@ def _get_previous_erratum(
         release = _get_RHEL_release(str(cur_version))
         if release.shipped:
             released_build = _et_api_get(f"product_versions/{release.version}/released_builds/{package_name}")
+        try:
+            release = _get_RHEL_release(str(cur_version))
+        except Exception as e:
+            logger.warning(f"Release {cur_version} not found or failed to fetch: {e}")
+            cur_version = cur_version.parent
+            continue
 
-            erratum_id_from_released_build: int | None = released_build["errata_id"]
-            nvr: str | None = released_build["build"]
-
-            if nvr is None:
+        if release.shipped:
+            try:
+                released_build = _et_api_get(
+                    f"product_versions/{release.version}/released_builds/{package_name}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to get released build for {package_name} in {release.version}: {e}")
+                cur_version = cur_version.parent
+                continue
                 return (None, None)
             if erratum_id_from_released_build is None:
                 return (None, nvr)

@@ -1523,18 +1523,17 @@ class CreateJiraIssueTool(Tool[CreateJiraIssueToolInput, ToolRunOptions, JSONToo
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             if tool_input.assignee_email:
                 account_id = await _get_user_account_id(session, headers, tool_input.assignee_email)
-                fields["assignee"] = {"accountId": account_id}
+            if tool_input.assignee_email:
+                id_type, id_val = await _get_user_identifier(
+                    session, headers, tool_input.assignee_email
+                )
+                fields["assignee"] = {id_type: id_val}
 
             if tool_input.reporter_email:
-                account_id = await _get_user_account_id(session, headers, tool_input.reporter_email)
-                fields["reporter"] = {"accountId": account_id}
-
-            if tool_input.components:
-                fields["components"] = [{"name": c} for c in tool_input.components]
-
-            if tool_input.labels:
-                fields["labels"] = tool_input.labels
-
+                id_type, id_val = await _get_user_identifier(
+                    session, headers, tool_input.reporter_email
+                )
+                fields["reporter"] = {id_type: id_val}
             url = urljoin(jira_base, "rest/api/2/issue")
             logger.info("Creating Jira issue in project %s", tool_input.project)
             try:

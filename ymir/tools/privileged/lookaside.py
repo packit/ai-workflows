@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import shlex
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
@@ -31,6 +32,34 @@ async def _try_init_kerberos():
         logger.warning("Kerberos initialization failed, continuing without it: %s", e)
 
 
+async def _run_capturing(argv: list[str], cwd: str, fail_msg: str) -> str:
+    """Run argv in cwd, capturing stdout+stderr.
+
+    On non-zero exit, raise ToolError including the command and a tail of its
+    output so the real reason (e.g. a lookaside 404, Kerberos failure, or
+    network error from rhpkg/centpkg) propagates back to the agent and Phoenix
+    instead of an opaque "Failed to ..." message.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except FileNotFoundError as e:
+        cmd_name = argv[0] if argv else "command"
+        raise ToolError(f"{fail_msg}: {cmd_name} is not installed") from e
+    out, _ = await proc.communicate()
+    output = out.decode(errors="replace").strip()
+    if proc.returncode:
+        tail = ("..." + output[-1500:]) if len(output) > 1500 else output
+        raise ToolError(
+            f"{fail_msg} (`{shlex.join(argv)}` exited {proc.returncode}): {tail or '<no output>'}"
+        )
+    return output
+
+
 class DownloadSourcesToolInput(BaseModel):
     dist_git_path: AbsolutePath = Field(description="Absolute path to cloned dist-git repository")
     package: str = Field(description="Package name")
@@ -58,16 +87,7 @@ class DownloadSourcesTool(Tool[DownloadSourcesToolInput, ToolRunOptions, StringT
     ) -> StringToolOutput:
         await _try_init_kerberos()
         cmd = _pkg_cmd(tool_input.package, tool_input.dist_git_branch)
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                "sources",
-                cwd=tool_input.dist_git_path,
-            )
-        except FileNotFoundError as e:
-            raise ToolError(f"Failed to download sources: {cmd[0]} is not installed") from e
-        if await proc.wait():
-            raise ToolError("Failed to download sources")
+        await _run_capturing([*cmd, "sources"], tool_input.dist_git_path, "Failed to download sources")
         return StringToolOutput(result="Successfully downloaded sources from lookaside cache")
 
 
@@ -100,16 +120,7 @@ class PrepSourcesTool(Tool[PrepSourcesToolInput, ToolRunOptions, StringToolOutpu
         cmd = _pkg_cmd(tool_input.package, tool_input.dist_git_branch)
         if not is_cs_branch(tool_input.dist_git_branch):
             cmd.extend(["--offline", "--released"])
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                "prep",
-                cwd=tool_input.dist_git_path,
-            )
-        except FileNotFoundError as e:
-            raise ToolError(f"Failed to prep sources: {cmd[0]} is not installed") from e
-        if await proc.wait():
-            raise ToolError("Failed to prep sources")
+        await _run_capturing([*cmd, "prep"], tool_input.dist_git_path, "Failed to prep sources")
         return StringToolOutput(result="Successfully prepped sources")
 
 
@@ -147,15 +158,13 @@ class UploadSourcesTool(Tool[UploadSourcesToolInput, ToolRunOptions, StringToolO
             await init_kerberos_ticket()
         except KerberosError as e:
             raise ToolError(f"Failed to initialize Kerberos ticket: {e}") from e
-        proc = await asyncio.create_subprocess_exec(
+        argv = [
             tool,
             f"--name={tool_input.package}",
             "--namespace=rpms",
             f"--release={tool_input.dist_git_branch}",
             "new-sources",
             *tool_input.new_sources,
-            cwd=tool_input.dist_git_path,
-        )
-        if await proc.wait():
-            raise ToolError("Failed to upload sources")
+        ]
+        await _run_capturing(argv, tool_input.dist_git_path, "Failed to upload sources")
         return StringToolOutput(result="Successfully uploaded the specified new sources to lookaside cache")

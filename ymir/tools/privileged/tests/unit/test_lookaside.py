@@ -32,10 +32,10 @@ async def test_download_sources(branch):
         assert cmd == "rhpkg" if branch.startswith("rhel") else "centpkg"
         assert args[3] == "sources"
 
-        async def wait():
-            return 0
+        async def communicate():
+            return (b"", None)
 
-        return flexmock(wait=wait)
+        return flexmock(communicate=communicate, returncode=0)
 
     _mock_kerberos()
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
@@ -64,10 +64,10 @@ async def test_prep_sources(branch):
         # prep can be on various places due to --offline and --released flags
         assert "prep" in args
 
-        async def wait():
-            return 0
+        async def communicate():
+            return (b"", None)
 
-        return flexmock(wait=wait)
+        return flexmock(communicate=communicate, returncode=0)
 
     _mock_kerberos()
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
@@ -99,10 +99,10 @@ async def test_upload_sources(branch):
         assert cmd == "rhpkg" if branch.startswith("rhel") else "centpkg"
         assert args[3:] == ("new-sources", *new_sources)
 
-        async def wait():
-            return 0
+        async def communicate():
+            return (b"", None)
 
-        return flexmock(wait=wait)
+        return flexmock(communicate=communicate, returncode=0)
 
     flexmock(lookaside_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)

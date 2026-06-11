@@ -217,28 +217,22 @@ async def test_get_existing_issue_keys(fetcher, mock_redis_context):
     )
 
     mock_redis, _ = mock_redis_context
-    mock_redis.should_receive("lrange").with_args(RedisQueues.TRIAGE_QUEUE.value, 0, -1).and_return(
-        create_async_mock_return_value([triage_task_json])
-    )
-    mock_redis.should_receive("lrange").with_args(RedisQueues.TRIAGE_QUEUE_TODO.value, 0, -1).and_return(
-        create_async_mock_return_value([todo_task_json])
-    )
-
-    # Mock other queues as empty
-    for queue in [
-        RedisQueues.REBASE_QUEUE_C9S.value,
-        RedisQueues.REBASE_QUEUE_C10S.value,
-        RedisQueues.BACKPORT_QUEUE_C9S.value,
-        RedisQueues.BACKPORT_QUEUE_C10S.value,
-        RedisQueues.CLARIFICATION_NEEDED_QUEUE.value,
-        RedisQueues.ERROR_LIST.value,
-        RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value,
-        RedisQueues.COMPLETED_REBASE_LIST.value,
-        RedisQueues.COMPLETED_BACKPORT_LIST.value,
-    ]:
-        mock_redis.should_receive("lrange").with_args(queue, 0, -1).and_return(
-            create_async_mock_return_value([])
-        )
+    # Dynamically mock every queue so the test stays robust against future
+    # additions to RedisQueues. The two triage queues return seeded tasks;
+    # everything else is empty.
+    for queue in RedisQueues.all_queues():
+        if queue == RedisQueues.TRIAGE_QUEUE.value:
+            mock_redis.should_receive("lrange").with_args(queue, 0, -1).and_return(
+                create_async_mock_return_value([triage_task_json])
+            )
+        elif queue == RedisQueues.TRIAGE_QUEUE_TODO.value:
+            mock_redis.should_receive("lrange").with_args(queue, 0, -1).and_return(
+                create_async_mock_return_value([todo_task_json])
+            )
+        else:
+            mock_redis.should_receive("lrange").with_args(queue, 0, -1).and_return(
+                create_async_mock_return_value([])
+            )
 
     result = await fetcher._get_existing_issue_keys(mock_redis)
 
@@ -717,16 +711,8 @@ async def test_run_full_workflow_with_labeled_issues(fetcher, mock_redis_context
         create_async_mock_return_value([existing_issues["ISSUE-2"]])
     )
 
-    mock_redis.should_receive("lrange").with_args(RedisQueues.REBASE_QUEUE_C10S.value, 0, -1).and_return(
-        create_async_mock_return_value([])
-    )
-
     mock_redis.should_receive("lrange").with_args(RedisQueues.BACKPORT_QUEUE_C9S.value, 0, -1).and_return(
         create_async_mock_return_value([existing_issues["ISSUE-3"]])
-    )
-
-    mock_redis.should_receive("lrange").with_args(RedisQueues.BACKPORT_QUEUE_C10S.value, 0, -1).and_return(
-        create_async_mock_return_value([])
     )
 
     mock_redis.should_receive("lrange").with_args(
@@ -737,16 +723,20 @@ async def test_run_full_workflow_with_labeled_issues(fetcher, mock_redis_context
         create_async_mock_return_value([existing_issues["ISSUE-6"]])
     )
 
-    # Mock other queues as empty to avoid flexmock errors
-    mock_redis.should_receive("lrange").with_args(RedisQueues.TRIAGE_QUEUE.value, 0, -1).and_return(
-        create_async_mock_return_value([])
-    )
-    mock_redis.should_receive("lrange").with_args(RedisQueues.COMPLETED_REBASE_LIST.value, 0, -1).and_return(
-        create_async_mock_return_value([])
-    )
-    mock_redis.should_receive("lrange").with_args(
-        RedisQueues.COMPLETED_BACKPORT_LIST.value, 0, -1
-    ).and_return(create_async_mock_return_value([]))
+    # Mock every other queue as empty so the test stays robust against
+    # future additions to RedisQueues (e.g. the _todo and rebuild queues).
+    seeded_queues = {
+        RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value,
+        RedisQueues.REBASE_QUEUE_C9S.value,
+        RedisQueues.BACKPORT_QUEUE_C9S.value,
+        RedisQueues.CLARIFICATION_NEEDED_QUEUE.value,
+        RedisQueues.ERROR_LIST.value,
+    }
+    for queue in RedisQueues.all_queues():
+        if queue not in seeded_queues:
+            mock_redis.should_receive("lrange").with_args(queue, 0, -1).and_return(
+                create_async_mock_return_value([])
+            )
 
     # ISSUE-4 has ymir_retry_needed → atomic label flip before enqueue.
     flexmock(fetcher).should_receive("_edit_jira_labels").with_args(

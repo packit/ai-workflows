@@ -281,7 +281,7 @@ class TestBackportTemplate:
 class TestBackportFixBuildErrorTemplate:
     def test_renders(self):
         result = render_template(
-            "backport/fix_build_error_prompt.j2",
+            "backport/prompt_fix_build_error.j2",
             BackportInputSchema(
                 local_clone=Path("/tmp/clone"),
                 unpacked_sources=Path("/tmp/sources"),

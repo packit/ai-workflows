@@ -105,7 +105,7 @@ def get_prompt() -> str:
 
 
 async def get_fix_build_error_prompt(fix_version: str | None = None) -> str:
-    return "backport/fix_build_error_prompt.j2"
+    return "backport/prompt_fix_build_error.j2"
 
 
 async def create_backport_agent(

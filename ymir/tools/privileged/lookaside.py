@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import shlex
+from pathlib import Path
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
@@ -61,7 +62,7 @@ async def _run_capturing(argv: list[str], cwd: str | os.PathLike[str], fail_msg:
             stderr=asyncio.subprocess.STDOUT,
         )
     except OSError as e:
-        if not os.path.isdir(cwd):
+        if not Path(cwd).is_dir():
             raise ToolError(f"{fail_msg}: Directory '{cwd}' does not exist") from e
         raise ToolError(f"{fail_msg}: Failed to execute {argv[0]}: {e}") from e
     out, _ = await proc.communicate()

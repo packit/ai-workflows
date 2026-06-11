@@ -49,9 +49,16 @@ class LLMJudgeEvaluator:
         model_name = os.environ.get("LLM_JUDGE_MODEL", os.environ.get("CHAT_MODEL", ""))
         if not model_name:
             raise RuntimeError("LLM_JUDGE_MODEL or CHAT_MODEL must be set to use the LLM judge")
+
+        settings = {}
+        if "opus-4-8" in model_name:
+            settings["drop_params"] = True
+            settings["additional_drop_params"] = ["temperature"]
+
         self._model = ChatModel.from_name(
             model_name,
             ChatModelParameters(temperature=0.2),
+            settings=settings,
         )
 
     def build_prompt(self, artifacts: CapturedArtifacts, context: dict) -> str:

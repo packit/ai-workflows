@@ -1,12 +1,15 @@
+import re
 import shutil
+from pathlib import Path
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
-from ymir.common.base_utils import run_subprocess
+from ymir.common.base_utils import is_cs_branch, run_subprocess
 from ymir.common.validators import AbsolutePath
+from ymir.common.version_utils import parse_branch_name
 from ymir.tools.base import CloneableTool as Tool
 
 
@@ -85,16 +88,63 @@ class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOption
             raise ToolError(f"ERROR: {e}") from e
 
 
+def build_rpmdefines(dist_git_path: Path, branch: str, spec_path: Path) -> list[str]:
+    if not (parsed := parse_branch_name(branch)):
+        raise ToolError(f"Cannot parse branch name: {branch}")
+    major, minor = parsed
+
+    disttag = f"el{major}" if minor is None else f"el{major}_{minor}"
+    root = str(dist_git_path)
+
+    defines: list[str] = [
+        "--define",
+        f"_sourcedir {root}",
+        "--define",
+        f"_specdir {root}",
+        "--define",
+        f"_builddir {root}",
+        "--define",
+        f"_srcrpmdir {root}",
+        "--define",
+        f"_rpmdir {root}",
+        "--define",
+        f"dist .{disttag}",
+        "--define",
+        f"rhel {major}",
+        "--eval",
+        "%undefine fedora",
+    ]
+
+    if is_cs_branch(branch):
+        defines.extend(
+            [
+                "--define",
+                f"centos {major}",
+            ]
+        )
+
+    if int(major) <= 10:
+        try:
+            content = spec_path.read_text(encoding="utf-8", errors="replace")
+            for match in sorted({int(m) for m in re.findall(r"%{?patch(\d+)\b", content)}):
+                defines.extend(
+                    [
+                        "--define",
+                        f"patch{match}(-) %patch -P {match} %{{?**}}",
+                    ]
+                )
+        except (OSError, UnicodeDecodeError):
+            pass
+
+    return defines
+
+
 class RunPackagePrepInput(BaseModel):
     dist_git_path: AbsolutePath = Field(
         description="Absolute path to the cloned dist-git repository",
     )
     package: str = Field(description="Package name")
-    namespace: str = Field(default="rpms", description="Package namespace")
     dist_git_branch: str = Field(description="Dist-git branch")
-    pkg_tool: str = Field(
-        description="Package tool command (e.g. 'centpkg' or 'rhpkg --offline --released')",
-    )
 
 
 class RunPackagePrepTool(Tool[RunPackagePrepInput, ToolRunOptions, StringToolOutput]):
@@ -122,15 +172,9 @@ class RunPackagePrepTool(Tool[RunPackagePrepInput, ToolRunOptions, StringToolOut
         if not dist_git.exists():
             raise ToolError(f"Dist-git path does not exist: {dist_git}")
 
-        pkg_tool_parts = tool_input.pkg_tool.split()
-
-        cmd = [
-            *pkg_tool_parts,
-            f"--name={tool_input.package}",
-            f"--namespace={tool_input.namespace}",
-            f"--release={tool_input.dist_git_branch}",
-            "prep",
-        ]
+        spec_path = dist_git / f"{tool_input.package}.spec"
+        defines = build_rpmdefines(dist_git, tool_input.dist_git_branch, spec_path)
+        cmd = ["rpmbuild", *defines, "--nodeps", "-bp", str(spec_path)]
 
         exit_code, stdout, stderr = await run_subprocess(cmd, cwd=dist_git)
 

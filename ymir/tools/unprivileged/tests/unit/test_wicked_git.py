@@ -3,7 +3,9 @@ import subprocess
 import pytest
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import ToolError
+from flexmock import flexmock
 
+from ymir.tools.unprivileged import wicked_git as wicked_git_mod
 from ymir.tools.unprivileged.wicked_git import (
     GitLogSearchTool,
     GitLogSearchToolInput,
@@ -260,29 +262,26 @@ async def test_find_rej_files(git_repo):
 
 @pytest.fixture
 def dist_git_dir(tmp_path):
-    """Simulate a dist-git directory with a fake package tool script."""
+    """Simulate a dist-git directory with a spec file."""
     dist_git = tmp_path / "dist-git"
     dist_git.mkdir()
+    (dist_git / "ruby.spec").write_text("Name: ruby\nVersion: 3.3.10\n")
     return dist_git
 
 
 @pytest.mark.asyncio
-async def test_run_package_prep_success(dist_git_dir, tmp_path):
-    # Create a fake pkg_tool script that succeeds with known output
-    fake_tool = tmp_path / "fake-centpkg"
-    fake_tool.write_text(
-        "#!/bin/bash\necho 'Executing(%prep): /bin/sh'\necho 'prep done successfully'\nexit 0\n"
-    )
-    fake_tool.chmod(0o755)
+async def test_run_package_prep_success(dist_git_dir):
+    async def mock_run_subprocess(cmd, **kwargs):
+        return (0, "prep done successfully", "")
+
+    flexmock(wicked_git_mod).should_receive("run_subprocess").replace_with(mock_run_subprocess).once()
 
     tool = RunPackagePrepTool()
     output = await tool.run(
         input=RunPackagePrepInput(
             dist_git_path=str(dist_git_dir),
             package="ruby",
-            namespace="rpms",
-            dist_git_branch="rhel-10.2.z",
-            pkg_tool=str(fake_tool),
+            dist_git_branch="c10s",
         ),
     )
     assert "Prep succeeded" in output.result
@@ -290,25 +289,23 @@ async def test_run_package_prep_success(dist_git_dir, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_run_package_prep_failure_cleans_build_dir(dist_git_dir, tmp_path):
-    # Create a fake pkg_tool script that fails
-    fake_tool = tmp_path / "fake-centpkg"
-    fake_tool.write_text("#!/bin/bash\necho 'patch failed to apply' >&2\nexit 1\n")
-    fake_tool.chmod(0o755)
-
+async def test_run_package_prep_failure_cleans_build_dir(dist_git_dir):
     # Simulate a partially-patched build subdirectory left behind by rpmbuild
     build_dir = dist_git_dir / "ruby-3.3.10"
     build_dir.mkdir()
     (build_dir / "patched_file.rb").write_text("partially applied content")
+
+    async def mock_run_subprocess(cmd, **kwargs):
+        return (1, "", "patch failed to apply")
+
+    flexmock(wicked_git_mod).should_receive("run_subprocess").replace_with(mock_run_subprocess).once()
 
     tool = RunPackagePrepTool()
     output = await tool.run(
         input=RunPackagePrepInput(
             dist_git_path=str(dist_git_dir),
             package="ruby",
-            namespace="rpms",
-            dist_git_branch="rhel-10.2.z",
-            pkg_tool=str(fake_tool),
+            dist_git_branch="c10s",
         ),
     )
     assert "Prep FAILED" in output.result
@@ -317,26 +314,24 @@ async def test_run_package_prep_failure_cleans_build_dir(dist_git_dir, tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_run_package_prep_failure_preserves_non_matching_dirs(dist_git_dir, tmp_path):
-    # Create a fake pkg_tool script that fails
-    fake_tool = tmp_path / "fake-centpkg"
-    fake_tool.write_text("#!/bin/bash\nexit 1\n")
-    fake_tool.chmod(0o755)
-
+async def test_run_package_prep_failure_preserves_non_matching_dirs(dist_git_dir):
     # Create directories: one matching the package name, one not
     build_dir = dist_git_dir / "ruby-3.3.10"
     build_dir.mkdir()
     other_dir = dist_git_dir / "some-other-dir"
     other_dir.mkdir()
 
+    async def mock_run_subprocess(cmd, **kwargs):
+        return (1, "", "")
+
+    flexmock(wicked_git_mod).should_receive("run_subprocess").replace_with(mock_run_subprocess).once()
+
     tool = RunPackagePrepTool()
     await tool.run(
         input=RunPackagePrepInput(
             dist_git_path=str(dist_git_dir),
             package="ruby",
-            namespace="rpms",
-            dist_git_branch="rhel-10.2.z",
-            pkg_tool=str(fake_tool),
+            dist_git_branch="c10s",
         ),
     )
     assert not build_dir.exists(), "Build directory should have been removed"
@@ -351,9 +346,7 @@ async def test_run_package_prep_nonexistent_path(tmp_path):
             input=RunPackagePrepInput(
                 dist_git_path=str(tmp_path / "nonexistent"),
                 package="ruby",
-                namespace="rpms",
-                dist_git_branch="rhel-10.2.z",
-                pkg_tool="centpkg",
+                dist_git_branch="c10s",
             ),
         )
     assert "does not exist" in e.value.message

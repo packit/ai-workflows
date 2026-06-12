@@ -31,6 +31,18 @@ run-jira-issue-fetcher-todo:
 	oc delete job jira-issue-fetcher-todo-manual || true
 	oc create job jira-issue-fetcher-todo-manual --from=cronjob/jira-issue-fetcher-todo
 
+suspend-jira-issue-fetcher:
+	oc patch cronjob jira-issue-fetcher --type merge -p '{"spec":{"suspend":true}}'
+
+unsuspend-jira-issue-fetcher:
+	oc patch cronjob jira-issue-fetcher --type merge -p '{"spec":{"suspend":false}}'
+
+suspend-jira-issue-fetcher-todo:
+	oc patch cronjob jira-issue-fetcher-todo --type merge -p '{"spec":{"suspend":true}}'
+
+unsuspend-jira-issue-fetcher-todo:
+	oc patch cronjob jira-issue-fetcher-todo --type merge -p '{"spec":{"suspend":false}}'
+
 show-triage-queue:
 	$(call show_queue,triage_queue)
 
@@ -98,6 +110,8 @@ logs-otel-collector:
 	oc logs -f deployment/otel-collector
 
 .PHONY: deploy run-jira-issue-fetcher run-jira-issue-fetcher-todo \
+	suspend-jira-issue-fetcher unsuspend-jira-issue-fetcher \
+	suspend-jira-issue-fetcher-todo unsuspend-jira-issue-fetcher-todo \
 	show-triage-queue show-rebase-queue-c9s show-rebase-queue-c10s \
 	show-backport-queue-c9s show-backport-queue-c10s \
 	show-rebuild-queue-c9s show-rebuild-queue-c10s \

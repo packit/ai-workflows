@@ -118,6 +118,17 @@ make run-jira-issue-fetcher       # generic batch filter
 make run-jira-issue-fetcher-todo  # ymir_todo sweep
 ```
 
+`jira-issue-fetcher-todo` ships with `suspend: false` (it runs on its schedule out of the box); `jira-issue-fetcher` ships with `suspend: true` and must be resumed before it fires. Enable or pause each one's schedule:
+
+```bash
+make unsuspend-jira-issue-fetcher        # resume the generic batch fetcher
+make unsuspend-jira-issue-fetcher-todo   # resume the ymir_todo sweep
+make suspend-jira-issue-fetcher          # pause it again
+make suspend-jira-issue-fetcher-todo     # pause it again
+```
+
+These patch the live CronJob (`oc patch ... suspend`). Re-applying the manifests (`./deploy.sh`) resets each CronJob to whatever `suspend` value its `cronjob-jira-issue-fetcher*.yml` declares (`jira-issue-fetcher-todo` → running, `jira-issue-fetcher` → suspended), so to change a fetcher's default permanently edit `suspend` in its manifest.
+
 ## Agent runtime knobs (`agents-env` ConfigMap)
 
 | Key | Default | Effect |
@@ -140,6 +151,46 @@ oc rsh deployment/valkey redis-cli LPUSH triage_queue '{"metadata": {"issue": "R
 ```
 
 Set `force_cve_triage` to `false` for a normal triage run. This mirrors the `make trigger-pipeline` target used locally.
+
+## Inspecting queues and following logs
+
+Run these from the `openshift/` directory (they shell into the `valkey` pod via `oc exec`, so an active `oc login` to the project is required).
+
+### Queue contents
+
+Each `show-*-queue` target lists the Jira issue keys currently waiting in a queue, oldest-first (next to be popped). Every input queue has a priority twin (`<queue>_todo`) that the agents drain first for `ymir_todo`-triggered tasks, so those targets print the `_todo` queue before the normal one.
+
+```bash
+make show-triage-queue          # triage_queue_todo + triage_queue
+make show-rebase-queue-c9s      # rebase_queue_c9s_todo + rebase_queue_c9s
+make show-rebase-queue-c10s     # rebase_queue_c10s_todo + rebase_queue_c10s
+make show-backport-queue-c9s    # backport_queue_c9s_todo + backport_queue_c9s
+make show-backport-queue-c10s   # backport_queue_c10s_todo + backport_queue_c10s
+make show-rebuild-queue-c9s     # rebuild_queue_c9s_todo + rebuild_queue_c9s
+make show-rebuild-queue-c10s    # rebuild_queue_c10s_todo + rebuild_queue_c10s
+make show-clarification-queue   # clarification_needed_queue (no priority twin)
+make show-error-list            # per-issue / per-tool-error breakdown via scripts/error_list.py
+```
+
+### Following pod logs
+
+Each `logs-*` target follows (`oc logs -f`) the corresponding deployment's pod:
+
+```bash
+make logs-triage           # triage-agent
+make logs-backport-c9s     # backport-agent-c9s
+make logs-backport-c10s    # backport-agent-c10s
+make logs-rebase-c9s       # rebase-agent-c9s
+make logs-rebase-c10s      # rebase-agent-c10s
+make logs-rebuild-c9s      # rebuild-agent-c9s
+make logs-rebuild-c10s     # rebuild-agent-c10s
+make logs-mcp              # mcp-gateway
+make logs-supervisor       # supervisor-processor
+make logs-valkey           # valkey
+make logs-phoenix          # phoenix
+make logs-redis-commander  # redis-commander
+make logs-otel-collector   # otel-collector
+```
 
 ## Image rebuilds of MCP Gateway and agent images
 

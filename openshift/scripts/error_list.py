@@ -61,18 +61,23 @@ def fetch_via_oc(queue: str, deployment: str) -> str:
     ]
     print(f"Running: {' '.join(cmd)}", file=sys.stderr)
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)  # noqa: S603
-    except FileNotFoundError:
-        sys.exit("error: `oc` not found on PATH. Pipe a dump in via `--file -` instead.")
+        # Capture bytes and decode as UTF-8 explicitly: text=True would use the
+        # locale encoding (US-ASCII under a C/POSIX locale, common in containers)
+        # and crash on non-ASCII output. Matches how the --file paths decode.
+        proc = subprocess.run(cmd, capture_output=True, timeout=60)  # noqa: S603
+    except OSError as e:
+        sys.exit(f"error: failed to run `oc` ({e}). Pipe a dump in via `--file -` instead.")
     except subprocess.TimeoutExpired:
         sys.exit("error: `oc exec` timed out. Check cluster connectivity / VPN.")
+    stdout = proc.stdout.decode("utf-8", errors="replace")
     if proc.returncode != 0:
+        stderr = proc.stderr.decode("utf-8", errors="replace")
         sys.exit(
             f"error: oc exec failed (exit {proc.returncode}). "
             f"Are you logged in (`oc whoami`) and is the `{deployment}` deployment present?\n"
-            f"{proc.stderr.strip()[:300]}"
+            f"{stderr.strip()[:300]}"
         )
-    return proc.stdout
+    return stdout
 
 
 def _unescape_rediscli(s: str) -> str:
@@ -84,7 +89,18 @@ def _unescape_rediscli(s: str) -> str:
     than turning each byte into a separate code point.
     """
     out, i, n = bytearray(), 0, len(s)
-    simple = {"n": b"\n", "t": b"\t", "r": b"\r", "a": b"\a", "b": b"\b", '"': b'"', "\\": b"\\"}
+    # Mirror redis-cli's sdscatrepr escapes: \n \r \t \a \b \v \f plus " and \.
+    simple = {
+        "n": b"\n",
+        "t": b"\t",
+        "r": b"\r",
+        "a": b"\a",
+        "b": b"\b",
+        "v": b"\v",
+        "f": b"\f",
+        '"': b'"',
+        "\\": b"\\",
+    }
     while i < n:
         c = s[i]
         if c == "\\" and i + 1 < n:
@@ -115,7 +131,11 @@ def to_elements(blob: str) -> list[str]:
     itself spans multiple lines cannot be reassembled here — prefer `--no-raw`.
     """
     lines = blob.splitlines()
-    if any(RC_LINE.match(line) for line in lines):
+    # --no-raw always prefixes the first element with `1) "..."`, so detect the
+    # framing from the first non-empty line only. Probing every line with any()
+    # would misfire on a raw traceback line that happens to look like `N) "..."`.
+    first_line = next((ln for ln in lines if ln.strip()), None)
+    if first_line and RC_LINE.match(first_line):
         return [_unescape_rediscli(m.group(1)) for line in lines if (m := RC_LINE.match(line))]
     elems, dec, i, n = [], json.JSONDecoder(), 0, len(blob)
     while i < n:
@@ -154,14 +174,21 @@ def _try_json(s: str):
     return None
 
 
+def _issue_str(val) -> str:
+    """Coerce an issue value to a string key (Jira sometimes nests it as {"key": ...})."""
+    if isinstance(val, dict) and "key" in val:
+        return str(val["key"])
+    return str(val)
+
+
 def issue_of(obj, raw: str) -> str:
     if isinstance(obj, dict):
         meta = obj.get("metadata")
         if isinstance(meta, dict) and meta.get("issue"):
-            return meta["issue"]
+            return _issue_str(meta["issue"])
         for key in ("jira_issue", "issue", "issue_key"):
             if obj.get(key):
-                return obj[key]
+                return _issue_str(obj[key])
     m = RHEL_RE.search(raw)
     return m.group(0) if m else "?"
 
@@ -177,7 +204,8 @@ def reason_of(obj, raw: str) -> str:
         for f in REASON_FIELDS:
             v = obj.get(f)
             if v:
-                first = str(v).splitlines()[0] if isinstance(v, str) else str(v)
+                lines = str(v).splitlines()
+                first = lines[0] if lines else ""
                 if first.strip():
                     return first[:100]
         if "attempts" in obj or "metadata" in obj:
@@ -214,8 +242,11 @@ def main() -> None:
         # and the default stdin encoding is the C locale (ASCII) in cron/CI pods.
         blob = sys.stdin.buffer.read().decode("utf-8", errors="replace")
     elif args.file:
-        with open(args.file, encoding="utf-8", errors="replace") as fh:
-            blob = fh.read()
+        try:
+            with open(args.file, encoding="utf-8", errors="replace") as fh:
+                blob = fh.read()
+        except OSError as e:
+            sys.exit(f"error: failed to read file '{args.file}': {e}")
     else:
         blob = fetch_via_oc(args.queue, args.deployment)
 

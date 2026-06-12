@@ -36,14 +36,13 @@ def parse_rhel_version(version: str) -> tuple[str, str, bool] | None:
     return match.group(1), match.group(2), match.group(3) is not None
 
 
-def parse_branch_name(branch: str) -> tuple[str, str] | None:
+def parse_zstream_branch_name(branch: str) -> tuple[str, str] | None:
     """
-    Parse a dist-git branch name into (major, minor).
+    Parse a Z-stream dist-git branch name into (major, minor).
 
     Handles formats:
       - rhel-9.7.0     -> ("9", "7")
       - rhel-10.1      -> ("10", "1")
-      - c9s, c10s      -> None (CentOS Stream, not versioned)
 
     Args:
         branch: Branch name like 'rhel-9.7.0' or 'rhel-10.1'
@@ -55,6 +54,33 @@ def parse_branch_name(branch: str) -> tuple[str, str] | None:
     if not match:
         return None
     return match.group(1), match.group(2)
+
+
+def parse_branch_name(branch: str) -> tuple[str, str | None] | None:
+    """
+    Parse any dist-git branch name into (major, minor).
+
+    Handles formats:
+      - rhel-9.7.0     -> ("9", "7")
+      - rhel-10.1      -> ("10", "1")
+      - rhel-10-main   -> ("10", None)
+      - c9s, c10s      -> ("9", None), ("10", None)
+
+    Args:
+        branch: Branch name like 'rhel-9.7.0', 'c9s', or 'rhel-10-main'
+
+    Returns:
+        Tuple of (major_version, minor_version) or None if parsing fails.
+        minor_version is None for CentOS Stream and RHEL main branches.
+    """
+    zstream = parse_zstream_branch_name(branch)
+    if zstream:
+        return zstream
+    m = re.match(r"^(?:c(\d+)s|rhel-(\d+)-main)$", branch.lower())
+    if not m:
+        return None
+    major = m.group(1) or m.group(2)
+    return major, None
 
 
 def construct_internal_branch_name(major_version: str, minor_version: str) -> str:
@@ -147,14 +173,14 @@ async def is_older_zstream(
             # Could be a y-stream version (rhel-9.8) or a branch name
             # that also matches the version regex (rhel-9.6.0).
             # Try branch name parsing as fallback.
-            branch_parsed = parse_branch_name(version_or_branch)
+            branch_parsed = parse_zstream_branch_name(version_or_branch)
             if not branch_parsed:
                 # Genuine y-stream version, not an older z-stream
                 return False
             major, minor_str = branch_parsed
     else:
         # Try parsing as a branch name (rhel-9.7.0)
-        branch_parsed = parse_branch_name(version_or_branch)
+        branch_parsed = parse_zstream_branch_name(version_or_branch)
         if not branch_parsed:
             return False
         major, minor_str = branch_parsed

@@ -2,7 +2,7 @@
 
 from .config import load_rhel_config
 from .models import CVEEligibilityResult, TriageEligibility
-from .version_utils import is_older_zstream, parse_branch_name, parse_rhel_version
+from .version_utils import is_older_zstream, parse_branch_name, parse_rhel_version, parse_zstream_branch_name
 
 __all__ = [
     "CVEEligibilityResult",
@@ -11,4 +11,5 @@ __all__ = [
     "load_rhel_config",
     "parse_branch_name",
     "parse_rhel_version",
+    "parse_zstream_branch_name",
 ]

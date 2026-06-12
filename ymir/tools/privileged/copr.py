@@ -1,7 +1,6 @@
 import asyncio
 import gzip
 import logging
-import re
 import time
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -22,6 +21,7 @@ from pydantic import BaseModel, Field
 from ymir.common import load_rhel_config
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket
 from ymir.common.validators import AbsolutePath
+from ymir.common.version_utils import parse_branch_name
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.tools.http import aiohttp_get_with_retries
@@ -259,9 +259,9 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
 
     @staticmethod
     async def branch_to_chroot(dist_git_branch: str, upcoming_z_streams: dict[str, str]) -> tuple[str, str]:
-        if not (m := re.match(r"^(?:c(\d+)s|rhel-(\d+)-main|rhel-(\d+)\.(\d+).*)$", dist_git_branch)):
+        if not (parsed := parse_branch_name(dist_git_branch)):
             raise ValueError(f"Unsupported branch name: {dist_git_branch}")
-        majorver, minorver = m.group(1) or m.group(2) or m.group(3), m.group(4)
+        majorver, minorver = parsed
         # build Y-Streams and 0-day Z-Streams against the dev chroot
         if minorver is not None:
             if (ver := upcoming_z_streams.get(majorver)) and ver.startswith(f"rhel-{majorver}.{minorver}"):

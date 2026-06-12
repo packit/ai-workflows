@@ -118,7 +118,7 @@ make run-jira-issue-fetcher       # generic batch filter
 make run-jira-issue-fetcher-todo  # ymir_todo sweep
 ```
 
-Both CronJobs ship with `suspend: true`, so they never fire on their schedule until resumed. Enable or pause each one's schedule:
+`jira-issue-fetcher-todo` ships with `suspend: false` (it runs on its schedule out of the box); `jira-issue-fetcher` ships with `suspend: true` and must be resumed before it fires. Enable or pause each one's schedule:
 
 ```bash
 make unsuspend-jira-issue-fetcher        # resume the generic batch fetcher
@@ -127,7 +127,7 @@ make suspend-jira-issue-fetcher          # pause it again
 make suspend-jira-issue-fetcher-todo     # pause it again
 ```
 
-These patch the live CronJob (`oc patch ... suspend`). Re-applying the manifests (`./deploy.sh`) resets both back to suspended, so to enable a fetcher permanently set `suspend: false` in its `cronjob-jira-issue-fetcher*.yml` as well.
+These patch the live CronJob (`oc patch ... suspend`). Re-applying the manifests (`./deploy.sh`) resets each CronJob to whatever `suspend` value its `cronjob-jira-issue-fetcher*.yml` declares (`jira-issue-fetcher-todo` → running, `jira-issue-fetcher` → suspended), so to change a fetcher's default permanently edit `suspend` in its manifest.
 
 ## Agent runtime knobs (`agents-env` ConfigMap)
 

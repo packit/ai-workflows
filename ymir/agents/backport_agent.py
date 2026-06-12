@@ -365,23 +365,12 @@ async def run_workflow(
                 dist_git_branch=state.dist_git_branch,
                 available_tools=gateway_tools,
             )
-            if is_cs_branch(state.dist_git_branch):
-                pkg_cmd = [
-                    "centpkg",
-                    f"--name={state.package}",
-                    "--namespace=rpms",
-                    f"--release={state.dist_git_branch}",
-                ]
-            else:
-                pkg_cmd = [
-                    "rhpkg",
-                    f"--name={state.package}",
-                    "--namespace=rpms",
-                    f"--release={state.dist_git_branch}",
-                    "--offline",
-                    "--released",
-                ]
-            await check_subprocess([*pkg_cmd, "prep"], cwd=state.local_clone)
+            await run_tool(
+                RunPackagePrepTool(options=local_tool_options),
+                dist_git_path=str(state.local_clone),
+                package=state.package,
+                dist_git_branch=state.dist_git_branch,
+            )
             state.unpacked_sources = tasks.get_unpacked_sources(state.local_clone, state.package)
             for idx, upstream_patch in enumerate(state.upstream_patches):
                 patch_name = f"{state.jira_issue}-{idx}.patch"

@@ -4,6 +4,7 @@ from ymir.common.version_utils import (
     is_older_zstream,
     parse_branch_name,
     parse_rhel_version,
+    parse_zstream_branch_name,
 )
 
 
@@ -51,9 +52,38 @@ def test_parse_rhel_version(version, expected):
         ("rhel-10.0", ("10", "0")),
         # Case insensitive
         ("RHEL-9.7.0", ("9", "7")),
-        # Not branch names
+        # Not Z-stream branch names
         ("c9s", None),
         ("c10s", None),
+        ("rhel-10-main", None),
+        ("rhel-9.7.z", None),  # version string, not branch
+        ("invalid", None),
+        ("", None),
+    ],
+)
+def test_parse_zstream_branch_name(branch, expected):
+    result = parse_zstream_branch_name(branch)
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "branch, expected",
+    [
+        # RHEL 8/9 branch format (with .0 suffix)
+        ("rhel-9.7.0", ("9", "7")),
+        ("rhel-8.10.0", ("8", "10")),
+        ("rhel-9.0.0", ("9", "0")),
+        # RHEL 10+ branch format (without .0 suffix)
+        ("rhel-10.1", ("10", "1")),
+        ("rhel-10.0", ("10", "0")),
+        # Case insensitive
+        ("RHEL-9.7.0", ("9", "7")),
+        # CentOS Stream branches
+        ("c9s", ("9", None)),
+        ("c10s", ("10", None)),
+        # RHEL main branches
+        ("rhel-10-main", ("10", None)),
+        # Not branch names
         ("rhel-9.7.z", None),  # version string, not branch
         ("invalid", None),
         ("", None),

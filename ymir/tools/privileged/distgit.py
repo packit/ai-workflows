@@ -18,7 +18,7 @@ from specfile import Specfile
 
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket
 from ymir.common.utils import get_latest_candidate_build
-from ymir.common.version_utils import parse_branch_name
+from ymir.common.version_utils import parse_zstream_branch_name
 from ymir.tools.base import CloneableTool as Tool
 
 logger = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
 
     @staticmethod
     def _find_source_branch(repo: git.Repo, branch: str) -> str | None:
-        if not (parsed := parse_branch_name(branch)):
+        if not (parsed := parse_zstream_branch_name(branch)):
             return None
         major, minor_str = parsed
         minor = int(minor_str)
@@ -104,7 +104,7 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
         higher_branch = sorted(
             (m, ref_name)
             for ref_name in remote_branches
-            if (p := parse_branch_name(ref_name)) and p[0] == major and (m := int(p[1])) > minor
+            if (p := parse_zstream_branch_name(ref_name)) and p[0] == major and (m := int(p[1])) > minor
         )
         if higher_branch:
             return higher_branch[0][1]

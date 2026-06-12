@@ -14,7 +14,19 @@ from ymir.common.mock_repos import apply_zstream_override_from_env
 from ymir.tools.gateway_utils import setup_logging
 from ymir.tools.privileged.copr import BuildPackageTool, DownloadArtifactsTool
 from ymir.tools.privileged.distgit import CreateZstreamBranchTool
-from ymir.tools.privileged.errata import GetErratumBuildNvrTool, GetErratumTool
+from ymir.tools.privileged.errata import (
+    ErratumAddCommentTool,
+    ErratumChangeOwnershipTool,
+    ErratumChangeStateTool,
+    ErratumPushToStageTool,
+    ErratumRefreshSecurityAlertsTool,
+    GetErratumBuildMapTool,
+    GetErratumBuildNvrTool,
+    GetErratumStagePushDetailsTool,
+    GetErratumTool,
+    GetErratumTransitionRulesTool,
+    GetPreviousErratumTool,
+)
 from ymir.tools.privileged.gitlab import (
     AddBlockingMergeRequestCommentTool,
     AddMergeRequestCommentTool,
@@ -37,6 +49,7 @@ from ymir.tools.privileged.jira import (
     AddJiraCommentTool,
     ChangeJiraStatusTool,
     CheckCveTriageEligibilityTool,
+    CreateJiraIssueTool,
     EditJiraLabelsTool,
     GetJiraAttachmentTool,
     GetJiraDetailsTool,
@@ -140,6 +153,15 @@ def main():
             SearchGitlabProjectMrsTool(),
             GetErratumTool(),
             GetErratumBuildNvrTool(),
+            GetErratumTransitionRulesTool(),
+            GetErratumBuildMapTool(),
+            GetPreviousErratumTool(),
+            GetErratumStagePushDetailsTool(),
+            ErratumPushToStageTool(),
+            ErratumChangeStateTool(),
+            ErratumChangeOwnershipTool(),
+            ErratumAddCommentTool(),
+            ErratumRefreshSecurityAlertsTool(),
             GetTestingFarmRequestTool(),
             ReproduceTestingFarmRequestTool(),
             AddJiraAttachmentsTool(),
@@ -156,6 +178,7 @@ def main():
             SetPreliminaryTestingTool(),
             UpdateJiraCommentTool(),
             VerifyIssueAuthorTool(),
+            CreateJiraIssueTool(),
             DownloadSourcesTool(),
             PrepSourcesTool(),
             UploadSourcesTool(),

@@ -299,6 +299,14 @@ run-issue-verification-agent-standalone:
 		-e IGNORE_NEEDS_ATTENTION=$(IGNORE_NEEDS_ATTENTION) \
 		issue-verification-agent
 
+.PHONY: run-errata-workflow-agent-standalone
+run-errata-workflow-agent-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e ERRATUM_ID=$(ERRATUM_ID) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e IGNORE_NEEDS_ATTENTION=$(IGNORE_NEEDS_ATTENTION) \
+		errata-workflow-agent
+
 .PHONY: run-preliminary-testing-agent-standalone
 run-preliminary-testing-agent-standalone:
 	$(COMPOSE_AGENTS) run --rm \

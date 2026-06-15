@@ -399,9 +399,7 @@ def _get_previous_erratum(
                     f"product_versions/{release.version}/released_builds/{package_name}"
                 )
             except Exception as e:
-                logger.warning(
-                    f"Failed to get released build for {package_name} in {release.version}: {e}"
-                )
+                logger.warning(f"Failed to get released build for {package_name} in {release.version}: {e}")
                 cur_version = cur_version.parent
                 continue
 
@@ -440,9 +438,7 @@ def _get_erratum_transition_rules(erratum_id: int | str) -> TransitionRuleSet:
 
     spans = transition_row.find_all("span")
     states = [
-        span.text
-        for span in spans
-        if isinstance(span, Tag) and "state_indicator" in span.get("class", [])
+        span.text for span in spans if isinstance(span, Tag) and "state_indicator" in span.get("class", [])
     ]
     if len(states) != 2:
         raise RuleParseError("Couldn't find from and to states")
@@ -467,11 +463,7 @@ def _get_erratum_transition_rules(erratum_id: int | str) -> TransitionRuleSet:
             raise RuleParseError("Invalid number of columns")
 
         guard_type, test_type, status = tds
-        if (
-            not isinstance(guard_type, Tag)
-            or not isinstance(test_type, Tag)
-            or not isinstance(status, Tag)
-        ):
+        if not isinstance(guard_type, Tag) or not isinstance(test_type, Tag) or not isinstance(status, Tag):
             raise RuleParseError("Expected Tag elements for columns")
 
         if guard_type.text != "Block":

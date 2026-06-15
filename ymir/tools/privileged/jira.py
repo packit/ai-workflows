@@ -400,7 +400,7 @@ async def _check_zstream_clones_shipped(
     output = await tool.run(
         input={"jql": jql, "fields": ["fixVersions", "status", "resolution"], "max_results": 50}
     )
-    issues = output.result.get("issues", [])
+    issues = output.result
 
     if not issues:
         logger.info(f"No clones found for {cve_id} in component {component}, proceeding with triage")

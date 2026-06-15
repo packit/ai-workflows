@@ -1450,8 +1450,11 @@ class GetJiraAttachmentTool(Tool[GetJiraAttachmentToolInput, ToolRunOptions, Str
 # -- Helpers for CreateJiraIssueTool --
 
 
-async def _get_user_account_id(session: Any, headers: dict, email: str) -> str:
-    """Resolve a user email to a Jira account ID / name."""
+async def _get_user_identifier(session: Any, headers: dict, email: str) -> tuple[str, str]:
+    """Resolve a user email to a Jira (field_key, value) tuple.
+
+    Returns ("name", username) for Jira Server or ("accountId", id) for Cloud.
+    """
     jira_base = os.getenv("JIRA_URL")
     url = urljoin(jira_base, "rest/api/3/user/search")
     try:
@@ -1468,7 +1471,11 @@ async def _get_user_account_id(session: Any, headers: dict, email: str) -> str:
         raise ToolError(f"Multiple JIRA users with email {email}")
 
     user = matches[0]
-    return user.get("name") or user["accountId"] or user.get("displayName")
+    if user.get("name"):
+        return ("name", user["name"])
+    if user.get("accountId"):
+        return ("accountId", user["accountId"])
+    raise ToolError(f"User {email} has neither name nor accountId")
 
 
 class CreateJiraIssueToolInput(BaseModel):
@@ -1521,8 +1528,6 @@ class CreateJiraIssueTool(Tool[CreateJiraIssueToolInput, ToolRunOptions, JSONToo
         }
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-            if tool_input.assignee_email:
-                account_id = await _get_user_account_id(session, headers, tool_input.assignee_email)
             if tool_input.assignee_email:
                 id_type, id_val = await _get_user_identifier(session, headers, tool_input.assignee_email)
                 fields["assignee"] = {id_type: id_val}

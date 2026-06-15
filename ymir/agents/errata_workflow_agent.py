@@ -388,7 +388,10 @@ async def run_errata_workflow(
                     erratum_id=erratum_id,
                 )
                 state.result = WorkflowResult(
-                    status=f"Refreshing security alerts for erratum {erratum_id} before moving to {new_status}",
+                    status=(
+                        f"Refreshing security alerts for erratum {erratum_id}"
+                        f" before moving to {new_status}"
+                    ),
                     reschedule_in=WAIT_DELAY,
                 )
                 return Workflow.END
@@ -596,7 +599,7 @@ def _all_issues_release_pending(related_issues: list[dict]) -> bool:
 async def main() -> None:
     configure_logging(level=logging.INFO)
 
-    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
+    setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     ignore_needs_attention = os.getenv("IGNORE_NEEDS_ATTENTION", "false").lower() == "true"

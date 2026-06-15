@@ -299,11 +299,11 @@ def _get_RHEL_release(param: int | str) -> RHELRelease:
         if isinstance(param, int)
         else _et_api_get("releases", params={"filter[name]": param})
     )
-    release_data = response["data"][0]
-
     if not response.get("data"):
         raise ValueError(f"Release not found for parameter: {param}")
     release_data = response["data"][0]
+
+    ship_date_string = release_data["attributes"]["ship_date"]
     ship_date = _get_utc_timestamp_from_str(ship_date_string) if ship_date_string is not None else None
 
     return RHELRelease(
@@ -325,14 +325,14 @@ def _get_erratum_build_nvr(erratum_id: str | int, package_name: str) -> str | No
 def _get_rel_prep_lookup(package_name: str) -> defaultdict[str, list[Erratum]]:
     rel_prep_lookup: defaultdict[str, list[Erratum]] = defaultdict(list)
     package_data = _et_api_get("packages", params={"name": package_name})
-    related_errata = package_data["data"]["relationships"]["errata"]
-    if not isinstance(related_errata, list):
     if not package_data.get("data") or not isinstance(package_data["data"], list):
         return rel_prep_lookup
     package_resource = package_data["data"][0]
     related_errata = package_resource.get("relationships", {}).get("errata", [])
     if not isinstance(related_errata, list):
         raise TypeError(f"expected list of errata, got {type(related_errata)}")
+    for erratum_info in related_errata:
+        if erratum_info["status"] != ErrataStatus.REL_PREP:
             continue
 
         id = erratum_info["id"]
@@ -386,9 +386,6 @@ def _get_previous_erratum(
 
             return (latest_erratum.id, nvr)
 
-        release = _get_RHEL_release(str(cur_version))
-        if release.shipped:
-            released_build = _et_api_get(f"product_versions/{release.version}/released_builds/{package_name}")
         try:
             release = _get_RHEL_release(str(cur_version))
         except Exception as e:
@@ -402,9 +399,16 @@ def _get_previous_erratum(
                     f"product_versions/{release.version}/released_builds/{package_name}"
                 )
             except Exception as e:
-                logger.warning(f"Failed to get released build for {package_name} in {release.version}: {e}")
+                logger.warning(
+                    f"Failed to get released build for {package_name} in {release.version}: {e}"
+                )
                 cur_version = cur_version.parent
                 continue
+
+            erratum_id_from_released_build: int | None = released_build["errata_id"]
+            nvr: str | None = released_build["build"]
+
+            if nvr is None:
                 return (None, None)
             if erratum_id_from_released_build is None:
                 return (None, nvr)
@@ -428,22 +432,22 @@ def _get_erratum_transition_rules(erratum_id: int | str) -> TransitionRuleSet:
         raise RuleParseError("No tbody found")
 
     rows = tbody.find_all("tr")
-    transition_row = rows[0]
-    if not isinstance(transition_row, Tag):
-        raise RuleParseError("Expected a Tag for transition row")
-    rows = tbody.find_all("tr")
     if not rows:
         raise RuleParseError("No rows found in tbody")
     transition_row = rows[0]
-    states = [
-        span.text
-        for span in spans
-        if isinstance(span, Tag) and "state_indicator" in span.attrs.get("class", "")
+    if not isinstance(transition_row, Tag):
+        raise RuleParseError("Expected a Tag for transition row")
+
+    spans = transition_row.find_all("span")
     states = [
         span.text
         for span in spans
         if isinstance(span, Tag) and "state_indicator" in span.get("class", [])
     ]
+    if len(states) != 2:
+        raise RuleParseError("Couldn't find from and to states")
+
+    def text_to_status(text: str) -> ErrataStatus:
         text = text.strip().upper().replace(" ", "_")
         if text == "SHIPPED":
             return ErrataStatus.SHIPPED_LIVE
@@ -463,7 +467,11 @@ def _get_erratum_transition_rules(erratum_id: int | str) -> TransitionRuleSet:
             raise RuleParseError("Invalid number of columns")
 
         guard_type, test_type, status = tds
-        if not isinstance(guard_type, Tag) or not isinstance(test_type, Tag) or not isinstance(status, Tag):
+        if (
+            not isinstance(guard_type, Tag)
+            or not isinstance(test_type, Tag)
+            or not isinstance(status, Tag)
+        ):
             raise RuleParseError("Expected Tag elements for columns")
 
         if guard_type.text != "Block":
@@ -472,15 +480,15 @@ def _get_erratum_transition_rules(erratum_id: int | str) -> TransitionRuleSet:
         span = status.span
         if span is None:
             raise RuleParseError("No <span/> found in rule status element")
-        className = span.attrs.get("class", "")
-        if "step-status-block" in className:
-            outcome = TransitionRuleOutcome.BLOCK
-        elif "step-status-ok" in className:
         classes = span.get("class", [])
         if "step-status-block" in classes:
             outcome = TransitionRuleOutcome.BLOCK
         elif "step-status-ok" in classes:
             outcome = TransitionRuleOutcome.OK
+        else:
+            outcome = TransitionRuleOutcome.UNKNOWN
+
+        res.append(TransitionRule(name=name, outcome=outcome, details=status.text.strip()))
 
     return TransitionRuleSet(
         from_status=from_status,

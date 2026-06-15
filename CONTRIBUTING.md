@@ -10,18 +10,20 @@ only need to clone it once; the tests run entirely offline against the local cop
 
 1. Clone the testing-jiras repository somewhere on your machine.
 
-2. Add `JIRA_MOCK_FILES_HOST` to your local `.env` pointing at its `jiras/` directory:
+2. Add these variables to your local `.env` pointing at the testing-jiras checkout:
    ```
    JIRA_MOCK_FILES_HOST=/path/to/testing-jiras/jiras
+   MOCK_REPOS_HOST=/path/to/testing-jiras/mock_data
    ```
-   This makes compose mount that directory into the `mcp-gateway` container at the path
-   where mock Jira files are expected.
+   `JIRA_MOCK_FILES_HOST` mounts mock Jira issue data into the `mcp-gateway` container.
+   `MOCK_REPOS_HOST` mounts mock git repo fixtures into the E2E test containers.
 
-3. Symlink the mock repo fixtures for git operations:
-   ```bash
-   ln -s /path/to/testing-jiras/mock_data/triage ymir/agents/tests/e2e/mock_repos/triage
-   ln -s /path/to/testing-jiras/mock_data/backport ymir/agents/tests/e2e/mock_repos/backport
-   ```
+3. Add `GITLAB_TOKEN` to both `.env` and `.secrets/beeai-agent.env` with a GitLab
+   personal access token that has read access to `gitlab.com/redhat`. It must be in
+   `.env` so the compose `${GITLAB_TOKEN:-}` substitution resolves correctly (otherwise
+   the empty `environment:` value overrides `env_file`). The mock repo setup clones
+   from GitLab to create pre-fix-state bare repos; without it you'll be prompted for
+   credentials.
 
 ### Running
 

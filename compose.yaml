@@ -202,6 +202,13 @@ services:
     <<: *beeai-agent-c10s
     environment:
       <<: *beeai-env
+      MOCK_REPOS_DIR: /home/beeai/mock_repos/triage
+    volumes:  # YAML doesn't support list concatenation
+      - ./ymir:/home/beeai/ymir:ro,z
+      - git-repos:/git-repos:rw,U
+      - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
+      - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z,U
+      - ${MOCK_REPOS_HOST:-./ymir/agents/tests/e2e/mock_repos}:/home/beeai/mock_repos:ro,z
     # the option about default loop is here because of litellm issue
     # https://github.com/BerriAI/litellm/issues/14521
     command: ["pytest", "ymir/agents/tests/e2e/test_triage.py", "-o", "asyncio_default_test_loop_scope=session"]
@@ -212,6 +219,13 @@ services:
     <<: *beeai-agent-c10s
     environment:
       <<: *beeai-env
+      BACKPORT_MOCK_REPOS_DIR: /home/beeai/mock_repos/backport
+    volumes:
+      - ./ymir:/home/beeai/ymir:ro,z
+      - git-repos:/git-repos:rw,U
+      - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
+      - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z,U
+      - ${MOCK_REPOS_HOST:-./ymir/agents/tests/e2e/mock_repos}:/home/beeai/mock_repos:ro,z
     command: ["pytest", "ymir/agents/tests/e2e/backport_agent/test_backport.py", "-o", "asyncio_default_test_loop_scope=session"]
     restart: "no"
     profiles: ["e2e-test"]

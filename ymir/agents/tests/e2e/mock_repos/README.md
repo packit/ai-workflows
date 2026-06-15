@@ -4,12 +4,15 @@ This directory contains mock repo fixture files organized by agent type.
 The fixtures come from `git@gitlab.cee.redhat.com:jotnar-project/testing-jiras.git`
 if you have access.
 
-Clone the repository and symlink its `mock_data/` subdirectories here:
+Clone the repository and set `MOCK_REPOS_HOST` in your `.env`:
 
-```bash
-ln -s /path/to/testing-jiras/mock_data/triage ymir/agents/tests/e2e/mock_repos/triage
-ln -s /path/to/testing-jiras/mock_data/backport ymir/agents/tests/e2e/mock_repos/backport
 ```
+MOCK_REPOS_HOST=/path/to/testing-jiras/mock_data
+```
+
+This mounts the fixture data into E2E test containers at `/home/beeai/mock_repos/`.
+The compose services set `MOCK_REPOS_DIR` and `BACKPORT_MOCK_REPOS_DIR` to point
+at the `triage/` and `backport/` subdirectories respectively.
 
 ## Expected layout
 

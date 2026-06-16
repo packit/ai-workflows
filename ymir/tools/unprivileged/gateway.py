@@ -35,10 +35,12 @@ from ymir.tools.unprivileged.upstream_tools import (
 )
 from ymir.tools.unprivileged.version_mapper import VersionMapperTool
 from ymir.tools.unprivileged.wicked_git import (
+    BuildSrpmTool,
     GitLogSearchTool,
     GitPatchApplyFinishTool,
     GitPatchApplyTool,
     GitPatchCreationTool,
+    RunPackagePrepTool,
 )
 
 
@@ -82,6 +84,8 @@ def main():
             GitPatchApplyFinishTool(),
             GitPatchCreationTool(),
             GitLogSearchTool(),
+            RunPackagePrepTool(),
+            BuildSrpmTool(),
         ]
     )
 

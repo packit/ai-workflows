@@ -15,6 +15,7 @@ You are a Red Hat Enterprise Linux developer performing an end-to-end backport o
 - `jira_issue`: {{jira_issue}}
 - `cve_id`: {{cve_id}}
 - `justification`: {{justification}}
+- `triage_summary`: {{triage_summary}}
 - `fix_version`: {{fix_version}}
 - `dry_run`: {{dry_run}}
 - `max_build_attempts`: {{max_build_attempts}}
@@ -51,6 +52,7 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `remove` — Delete files
 - `run_shell_command` — Execute shell commands (use as last resort; prefer native tools)
 - `run_package_prep` — Run the %prep section of a spec file, with automatic build directory cleanup on failure
+- `build_srpm` — Build a source RPM from a dist-git repository
 - `git_patch_create` — Generate a unified diff patch file from a git repository
 - `git_patch_apply` — Apply a patch file using `git am --reject`
 - `git_apply_finish` — Complete a git-am session after conflict resolution
@@ -101,7 +103,7 @@ If `dry_run` is true, skip this step.
 4. Clone the repository by calling `clone_repository` with the repository URL, `branch` = `{{dist_git_branch}}`, and a local clone path. Save `local_clone`.
 5. Create a working branch: `git checkout -B automated-package-update-{{jira_issue}}` in `local_clone`. Save `update_branch` = `automated-package-update-{{jira_issue}}`.
 6. Download sources using `download_sources` with the dist-git path, package name, and branch.
-7. Run `<pkg_tool> --name={{package}} --namespace=rpms --release={{dist_git_branch}} prep` in the local clone to unpack sources.
+7. Use the `run_package_prep` tool with `dist_git_path` = `local_clone`, `package` = `{{package}}`, and `dist_git_branch` = `{{dist_git_branch}}` to unpack sources.
 8. Identify the unpacked sources directory (typically a subdirectory of `local_clone` named after the package). Save as `unpacked_sources`.
 9. Download each upstream patch URL into the local clone:
    - For each patch URL at index N, download content using `get_patch_from_url` and save as `{{jira_issue}}-<N>.patch` in `local_clone`.
@@ -122,6 +124,7 @@ Provide the following context to the instructions:
 - `upstream_patches`: list from input
 - `pkg_tool`: determined above
 - `build_error`: current build error context (null on first attempt, set on retry)
+- `triage_summary`: `{{triage_summary}}` (if set, provides guidance on how patches should be applied)
 
 The backport must produce:
 - `success`: boolean
@@ -319,6 +322,13 @@ in dist-git branch <DIST_GIT_BRANCH>, do the following:
 CRITICAL: Do NOT modify, delete, or touch any existing patches in the dist-git repository.
 Only add new patches for the current backport. Existing patches are there for a reason
 and must remain unchanged.
+
+CRITICAL — Verify the fix reaches what ships:
+Before applying, confirm the patched files are compiled/processed from source during %build.
+If they only live in a pre-built bundled artifact the build re-ships verbatim (e.g. a prebuilt
+webpack/JS bundle tarball, vendored minified JS, precompiled binaries), end with `success=False`
+and `error="Fix is in a pre-built bundled artifact; needs human review"` — do NOT produce
+a backport that won't actually fix the shipped RPM.
 
 0. Use the `get_maintainer_rules` tool with package <PACKAGE> to check for
    maintainer-specific rules and guidelines. If rules are found, treat them
@@ -543,8 +553,7 @@ and must remain unchanged.
    failure, fix the patch instead. Ignore errors from libtoolize that warn
    about newer files: "use '--force' to overwrite".
 
-7. Generate a SRPM using
-   `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+7. Generate a SRPM using the `build_srpm` tool.
 
 
 General instructions:
@@ -566,12 +575,6 @@ General instructions:
   and all binaries, manpages, and user-facing documentation.
 - For more information how the package is being built, inspect the
   RPM spec file and read sections `%prep` and `%build`.
-- CRITICAL — verify the fix reaches what ships: confirm the patched files are
-  compiled/processed from source during `%build`. If they only live in a pre-built
-  bundled artifact the build re-ships verbatim (a prebuilt webpack/JS bundle tarball,
-  vendored minified JS, precompiled binaries), end with `success=False` and
-  `error="Fix is in a pre-built bundled artifact; needs human review"` — do NOT produce
-  a backport that won't actually fix the shipped RPM.
 - If there is a complex conflict, you are required to properly resolve
   it by applying the core functionality of the proposed patch.
 - When using the cherry-pick workflow, you have access to
@@ -598,6 +601,13 @@ in dist-git branch <DIST_GIT_BRANCH>, do the following:
 CRITICAL: Do NOT modify, delete, or touch any existing patches in the dist-git repository.
 Only add new patches for the current backport. Existing patches are there for a reason
 and must remain unchanged.
+
+CRITICAL — Verify the fix reaches what ships:
+Before applying, confirm the patched files are compiled/processed from source during %build.
+If they only live in a pre-built bundled artifact the build re-ships verbatim (e.g. a prebuilt
+webpack/JS bundle tarball, vendored minified JS, precompiled binaries), end with `success=False`
+and `error="Fix is in a pre-built bundled artifact; needs human review"` — do NOT produce
+a backport that won't actually fix the shipped RPM.
 
 0. Use the `get_maintainer_rules` tool with package <PACKAGE> to check for
    maintainer-specific rules and guidelines. If rules are found, treat them
@@ -840,8 +850,7 @@ and must remain unchanged.
    failure, fix the patch instead. Ignore errors from libtoolize that warn
    about newer files: "use '--force' to overwrite".
 
-6. Generate a SRPM using
-   `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+6. Generate a SRPM using the `build_srpm` tool.
 
 
 General instructions:
@@ -868,12 +877,6 @@ General instructions:
   and all binaries, manpages, and user-facing documentation.
 - For more information how the package is being built, inspect the
   RPM spec file and read sections `%prep` and `%build`.
-- CRITICAL — verify the fix reaches what ships: confirm the patched files are
-  compiled/processed from source during `%build`. If they only live in a pre-built
-  bundled artifact the build re-ships verbatim (a prebuilt webpack/JS bundle tarball,
-  vendored minified JS, precompiled binaries), end with `success=False` and
-  `error="Fix is in a pre-built bundled artifact; needs human review"` — do NOT produce
-  a backport that won't actually fix the shipped RPM.
 - If there is a complex conflict, you are required to properly resolve
   it by applying the core functionality of the proposed patch.
 - When using approach B (upstream cherry-pick workflow), you have access to
@@ -942,7 +945,7 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
 
 5. Test the build:
    - Use the `run_package_prep` tool to verify patches apply cleanly
-   - `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`
+   - Use the `build_srpm` tool to generate a SRPM
    - Call `build_package` with the SRPM path, dist_git_branch, and jira_issue
    - If build fails: use `download_artifacts` to get logs and identify the new error
 

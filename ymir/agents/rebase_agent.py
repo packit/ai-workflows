@@ -64,7 +64,7 @@ from ymir.tools.unprivileged.text import (
     StrReplaceTool,
     ViewTool,
 )
-from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
+from ymir.tools.unprivileged.wicked_git import BuildSrpmTool, RunPackagePrepTool
 
 logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")
@@ -97,6 +97,7 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
             GetCWDTool(options=local_tool_options),
             RemoveTool(options=local_tool_options),
             RunPackagePrepTool(options=local_tool_options),
+            BuildSrpmTool(options=local_tool_options),
         ]
         + [t for t in mcp_tools if t.name in ["upload_sources", "get_maintainer_rules"]],
         memory=UnconstrainedMemory(),

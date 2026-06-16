@@ -18,8 +18,7 @@ and dist-git branch <DIST_GIT_BRANCH>, do the following:
    (e.g. because they were already applied upstream),
    you must remove all the corresponding patch files from the repository as well.
 
-5. Generate a SRPM using
-   `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+5. Generate a SRPM using the `build_srpm` tool.
 
 6. In your output, provide a "files_to_git_add" list containing all files
    that have been modified, added or removed.

@@ -52,7 +52,7 @@ from ymir.tools.unprivileged.text import (
     StrReplaceTool,
     ViewTool,
 )
-from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
+from ymir.tools.unprivileged.wicked_git import BuildSrpmTool, RunPackagePrepTool
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,7 @@ def create_merge_request_agent(mcp_tools: list[Tool], local_tool_options: dict[s
             GetCWDTool(options=local_tool_options),
             RemoveTool(options=local_tool_options),
             RunPackagePrepTool(options=local_tool_options),
+            BuildSrpmTool(options=local_tool_options),
         ]
         + [t for t in mcp_tools if t.name == "upload_sources"],
         memory=UnconstrainedMemory(),

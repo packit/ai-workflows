@@ -54,8 +54,7 @@ To rebase package <PACKAGE> to version <VERSION> in dist-git branch <DIST_GIT_BR
    (e.g. because they were already applied upstream),
    you must remove all the corresponding patch files from the repository as well.
 
-8. Generate a SRPM using
-   `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+8. Generate a SRPM using the `build_srpm` tool.
 
 9. In your output, provide a "files_to_git_add" list containing all files
    that should be git added for this rebase.

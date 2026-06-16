@@ -31,3 +31,10 @@ repos:
         stages: [pre-push]
         always_run: true
         pass_filenames: false
+      - id: check-unprivileged-gateway
+        name: Check unprivileged MCP gateway tool registration
+        entry: python scripts/check-unprivileged-gateway.py
+        language: python
+        stages: [pre-push]
+        always_run: true
+        pass_filenames: false

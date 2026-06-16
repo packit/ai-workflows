@@ -54,15 +54,44 @@ async def test_get_jira_details():
     issue_data = {
         "key": issue_key,
         "id": "12345",
-        "fields": {"summary": "Test issue"},
-        "comment": {"comments": [{"body": "Test comment"}], "total": 1},
+        "fields": {
+            "summary": "Test issue",
+            "description": None,
+            "customfield_10578": "curl-8.0-1.el9",
+            "assignee": {
+                "displayName": "Dev One",
+                "emailAddress": "dev@redhat.com",
+                "avatarUrls": {"48x48": "https://jira/avatar/48"},
+            },
+            "comment": {
+                "comments": [
+                    {
+                        "id": "100",
+                        "body": "Test comment",
+                        "author": {
+                            "displayName": "Author",
+                            "avatarUrls": {"48x48": "https://jira/avatar/48"},
+                        },
+                        "created": "2024-01-01T00:00:00.000+0000",
+                    }
+                ],
+                "total": 1,
+            },
+        },
     }
     remote_links_data = [
         {
             "id": 10000,
+            "self": "https://jira/rest/api/2/issueLink/10000",
+            "globalId": "system=http://bugzilla",
+            "application": {"type": "com.atlassian.jira"},
+            "relationship": "relates to",
             "object": {
                 "url": "https://github.com/example/repo/pull/123",
                 "title": "Fix issue RHEL-12345",
+                "summary": "A pull request",
+                "icon": {"url16x16": "https://github.com/favicon.ico"},
+                "status": {"resolved": True},
             },
         }
     ]
@@ -71,6 +100,7 @@ async def test_get_jira_details():
     async def get(url, params=None, headers=None):
         if url.endswith(f"rest/api/3/issue/{issue_key}"):
             assert params.get("expand") == "comments"
+            assert "fields" in params, "fields parameter must be sent to the Jira API"
 
             async def json():
                 return issue_data
@@ -88,10 +118,126 @@ async def test_get_jira_details():
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)
 
     result = (await GetJiraDetailsTool().run(input={"issue_key": issue_key})).result
-    expected_result = issue_data.copy()
-    expected_result["remote_links"] = remote_links_data
 
-    assert result == expected_result
+    assert result["key"] == issue_key
+    assert result["id"] == "12345"
+    assert "expand" not in result
+    assert "self" not in result
+
+    # Null requested fields are preserved (agents check for None)
+    assert result["fields"]["description"] is None
+    assert result["fields"]["summary"] == "Test issue"
+    assert result["fields"]["customfield_10578"] == "curl-8.0-1.el9"
+
+    # avatarUrls stripped everywhere
+    assert "avatarUrls" not in result["fields"]["assignee"]
+    comment_author = result["fields"]["comment"]["comments"][0]["author"]
+    assert "avatarUrls" not in comment_author
+
+    # remote_links cleaned
+    rl = result["remote_links"][0]
+    assert rl["object"]["url"] == "https://github.com/example/repo/pull/123"
+    assert rl["object"]["title"] == "Fix issue RHEL-12345"
+    assert "icon" not in rl["object"]
+    assert "status" not in rl["object"]
+    assert "globalId" not in rl
+    assert "application" not in rl
+    assert "self" not in rl
+
+
+def test_postprocess_preserves_null_fields():
+    data = {
+        "key": "RHEL-1",
+        "id": "1",
+        "fields": {
+            "summary": "Bug",
+            "description": None,
+            "resolution": None,
+            "customfield_10578": "build-1.0",
+            "customfield_10879": None,
+        },
+        "remote_links": [],
+    }
+    result = GetJiraDetailsTool._postprocess_issue_data(data)
+    assert result["fields"]["summary"] == "Bug"
+    assert result["fields"]["description"] is None
+    assert result["fields"]["resolution"] is None
+    assert result["fields"]["customfield_10578"] == "build-1.0"
+    assert result["fields"]["customfield_10879"] is None
+
+
+def test_postprocess_avatar_urls_deeply_nested():
+    data = {
+        "key": "RHEL-1",
+        "id": "1",
+        "fields": {
+            "summary": "Bug",
+            "comment": {
+                "comments": [
+                    {
+                        "id": "1",
+                        "body": "text",
+                        "author": {
+                            "displayName": "Dev",
+                            "avatarUrls": {"48x48": "https://jira/av"},
+                        },
+                    }
+                ],
+            },
+            "reporter": {
+                "displayName": "Reporter",
+                "avatarUrls": {"48x48": "https://jira/av"},
+            },
+        },
+        "remote_links": [],
+    }
+    result = GetJiraDetailsTool._postprocess_issue_data(data)
+    assert "avatarUrls" not in result["fields"]["reporter"]
+    assert "avatarUrls" not in result["fields"]["comment"]["comments"][0]["author"]
+
+
+def test_postprocess_remote_links_cleaned():
+    data = {
+        "key": "RHEL-1",
+        "id": "1",
+        "fields": {"summary": "Bug"},
+        "remote_links": [
+            {
+                "id": 1,
+                "self": "https://jira/link/1",
+                "globalId": "system=http://bz",
+                "application": {"type": "com.atlassian.jira"},
+                "relationship": "relates to",
+                "object": {
+                    "url": "https://bugzilla/123",
+                    "title": "BZ#123",
+                    "summary": "Bug summary",
+                    "icon": {"url16x16": "https://bz/icon"},
+                    "status": {"resolved": True, "icon": {"url16x16": "https://bz/ok"}},
+                },
+            },
+            {
+                "id": 2,
+                "object": {"url": "https://github.com/pr/1"},
+            },
+        ],
+    }
+    result = GetJiraDetailsTool._postprocess_issue_data(data)
+    rl = result["remote_links"]
+    assert len(rl) == 2
+
+    assert rl[0]["id"] == 1
+    assert rl[0]["relationship"] == "relates to"
+    assert rl[0]["object"] == {
+        "url": "https://bugzilla/123",
+        "title": "BZ#123",
+        "summary": "Bug summary",
+    }
+    assert "self" not in rl[0]
+    assert "globalId" not in rl[0]
+    assert "application" not in rl[0]
+
+    assert rl[1]["object"] == {"url": "https://github.com/pr/1"}
 
 
 @pytest.mark.parametrize(

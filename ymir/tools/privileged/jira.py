@@ -36,6 +36,46 @@ else:
 SEVERITY_CUSTOM_FIELD = "customfield_10840"
 TARGET_END_CUSTOM_FIELD = "customfield_10023"
 EMBARGO_CUSTOM_FIELD = "customfield_10860"
+FIXED_IN_BUILD_CUSTOM_FIELD = "customfield_10578"
+TEST_COVERAGE_CUSTOM_FIELD = "customfield_10638"
+PRELIMINARY_TESTING_CUSTOM_FIELD = "customfield_10879"
+ASSIGNED_TEAM_CUSTOM_FIELD = "customfield_10371"
+ERRATA_LINK_CUSTOM_FIELD = "customfield_10418"
+ERRATA_LINK_FALLBACK_CUSTOM_FIELD = "customfield_10626"
+
+# Fields requested from the Jira API by GetJiraDetailsTool.
+# Passed as the ``fields`` query parameter so the server only returns what
+# agents actually consume (see Jira API best-practices for field filtering).
+_REQUESTED_FIELDS = [
+    "summary",
+    "description",
+    "status",
+    "labels",
+    "components",
+    "fixVersions",
+    "comment",
+    "issuelinks",
+    "versions",
+    "attachment",
+    "resolution",
+    "issuetype",
+    "priority",
+    "reporter",
+    "assignee",
+    "creator",
+    "created",
+    "updated",
+    "security",
+    FIXED_IN_BUILD_CUSTOM_FIELD,
+    TEST_COVERAGE_CUSTOM_FIELD,
+    PRELIMINARY_TESTING_CUSTOM_FIELD,
+    ASSIGNED_TEAM_CUSTOM_FIELD,
+    ERRATA_LINK_CUSTOM_FIELD,
+    ERRATA_LINK_FALLBACK_CUSTOM_FIELD,
+    SEVERITY_CUSTOM_FIELD,
+    TARGET_END_CUSTOM_FIELD,
+    EMBARGO_CUSTOM_FIELD,
+]
 
 RH_EMPLOYEE_GROUP = "Red Hat Employee"
 
@@ -80,6 +120,52 @@ class GetJiraDetailsTool(Tool[GetJiraDetailsToolInput, ToolRunOptions, JSONToolO
             creator=self,
         )
 
+    @staticmethod
+    def _remove_avatar_urls(obj: Any) -> Any:
+        """Recursively strip ``avatarUrls`` keys from dicts and lists."""
+        if isinstance(obj, dict):
+            return {k: GetJiraDetailsTool._remove_avatar_urls(v) for k, v in obj.items() if k != "avatarUrls"}
+        if isinstance(obj, list):
+            return [GetJiraDetailsTool._remove_avatar_urls(item) for item in obj]
+        return obj
+
+    @staticmethod
+    def _filter_remote_links(remote_links: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Trim remote link objects to only the data agents use."""
+        cleaned = []
+        for link in remote_links:
+            obj = link.get("object", {})
+            entry: dict[str, Any] = {"id": link.get("id")}
+            if link.get("relationship"):
+                entry["relationship"] = link["relationship"]
+            if obj:
+                entry["object"] = {k: v for k, v in obj.items() if k in ("url", "title", "summary")}
+            cleaned.append(entry)
+        return cleaned
+
+    @staticmethod
+    def _postprocess_issue_data(issue_data: dict[str, Any]) -> dict[str, Any]:
+        """Clean up a Jira API response before returning it to agents.
+
+        Field selection is handled at the API level via the ``fields`` query
+        parameter (``_REQUESTED_FIELDS``).  This function handles the
+        remaining cleanup that the Jira API cannot do: stripping
+        ``avatarUrls`` and trimming remote-link objects.
+        """
+        result: dict[str, Any] = {
+            "key": issue_data.get("key"),
+            "id": issue_data.get("id"),
+            "fields": issue_data.get("fields", {}),
+        }
+
+        remote_links = issue_data.get("remote_links")
+        if isinstance(remote_links, list):
+            result["remote_links"] = GetJiraDetailsTool._filter_remote_links(remote_links)
+        else:
+            result["remote_links"] = remote_links
+
+        return GetJiraDetailsTool._remove_avatar_urls(result)
+
     async def _run(
         self,
         tool_input: GetJiraDetailsToolInput,
@@ -96,7 +182,7 @@ class GetJiraDetailsTool(Tool[GetJiraDetailsToolInput, ToolRunOptions, JSONToolO
                 async with aiohttp_get_with_retries(
                     session,
                     jira_url,
-                    params={"expand": "comments"},
+                    params={"fields": ",".join(_REQUESTED_FIELDS), "expand": "comments"},
                     headers=headers,
                 ) as response:
                     response.raise_for_status()
@@ -119,7 +205,7 @@ class GetJiraDetailsTool(Tool[GetJiraDetailsToolInput, ToolRunOptions, JSONToolO
             except aiohttp.ClientError:
                 issue_data["remote_links"] = []
 
-        return JSONToolOutput(result=issue_data)
+        return JSONToolOutput(result=self._postprocess_issue_data(issue_data))
 
 
 class SetJiraFieldsToolInput(BaseModel):

@@ -22,6 +22,7 @@ RUN dnf -y install \
       centpkg \
       git \
       gcc \
+      libpq-devel \
       ${EXTRA_PACKAGES} \
     && dnf clean all
 

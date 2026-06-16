@@ -28,12 +28,17 @@ async def _get_unverified_user():
     return {"groups": {"items": []}}
 
 
-async def _read_jira_mock(issue_key: str, remote_link=False) -> dict:
+async def _read_jira_mock(
+    issue_key: str, remote_link: bool = False, requested_fields: set[str] | None = None
+) -> dict | list:
     try:
         async with aiofiles.open(f"{os.environ['JIRA_MOCK_FILES']}/{issue_key}") as jira_file:
+            data = json.loads(await jira_file.read())
             if remote_link:
-                return json.loads(await jira_file.read())["remote_links"]
-            return json.loads(await jira_file.read())
+                return data.get("remote_links", [])
+            if requested_fields is not None and "fields" in data:
+                data["fields"] = {k: v for k, v in data["fields"].items() if k in requested_fields}
+            return data
     except (OSError, FileNotFoundError, json.JSONDecodeError) as e:
         raise ToolError(f"Error while reading mock up Jira issue {e}") from e
 
@@ -77,20 +82,33 @@ class aiohttpClientSessionMock:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
 
+    @staticmethod
+    def _parse_requested_fields(kwargs: dict) -> set[str] | None:
+        """Extract the ``fields`` query parameter into a set, or None if absent."""
+        raw = kwargs.get("params", {}).get("fields") if kwargs.get("params") else None
+        if raw is None:
+            return None
+        return set(raw.split(","))
+
     @asynccontextmanager
     async def get(self, *args, **kwargs):
         if match_data := self.issue_get_regex.fullmatch(args[0]):
+            requested_fields = self._parse_requested_fields(kwargs)
             yield flexmock(
                 status=200,
                 raise_for_status=lambda: None,
-                json=partial(_read_jira_mock, issue_key=match_data.group(1), remote_link=False),
+                json=partial(
+                    _read_jira_mock,
+                    issue_key=match_data.group(1),
+                    remote_link=False,
+                    requested_fields=requested_fields,
+                ),
             )
         elif match_data := self.remote_link_get_regex.fullmatch(args[0]):
             yield flexmock(
                 status=200,
                 raise_for_status=lambda: None,
-                json=partial(_read_jira_mock, issue_key=match_data.group(1)),
-                remote_link=True,
+                json=partial(_read_jira_mock, issue_key=match_data.group(1), remote_link=True),
             )
         elif match_data := self.transitions_get_regex.fullmatch(args[0]):
             yield flexmock(status=200, raise_for_status=lambda: None, json=_get_transitions)

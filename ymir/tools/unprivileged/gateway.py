@@ -8,9 +8,14 @@ from beeai_framework.adapters.mcp.serve.server import (
 
 from ymir.common.mock_repos import apply_zstream_override_from_env
 from ymir.tools.gateway_utils import setup_logging
+from ymir.tools.unprivileged.analyze_ewa_testrun import AnalyzeEwaTestRunTool
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.distgit_detector import DistgitDetectorTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
+from ymir.tools.unprivileged.greenwave import FetchGreenWaveTool, FetchTestingFarmResultsTool
+from ymir.tools.unprivileged.read_logfile import ReadLogfileTool
+from ymir.tools.unprivileged.read_readme import ReadReadmeTool
+from ymir.tools.unprivileged.search_resultsdb import SearchResultsdbTool
 from ymir.tools.unprivileged.specfile import (
     AddChangelogEntryTool,
     GetPackageInfoTool,
@@ -40,6 +45,7 @@ from ymir.tools.unprivileged.wicked_git import (
     GitPatchApplyFinishTool,
     GitPatchApplyTool,
     GitPatchCreationTool,
+    GitPreparePackageSources,
     RunPackagePrepTool,
 )
 
@@ -84,8 +90,15 @@ def main():
             GitPatchApplyFinishTool(),
             GitPatchCreationTool(),
             GitLogSearchTool(),
+            GitPreparePackageSources(),
             RunPackagePrepTool(),
             BuildSrpmTool(),
+            AnalyzeEwaTestRunTool(),
+            FetchGreenWaveTool(),
+            FetchTestingFarmResultsTool(),
+            ReadLogfileTool(),
+            ReadReadmeTool(),
+            SearchResultsdbTool(),
         ]
     )
 

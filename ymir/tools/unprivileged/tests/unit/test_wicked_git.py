@@ -7,6 +7,8 @@ from flexmock import flexmock
 
 from ymir.tools.unprivileged import wicked_git as wicked_git_mod
 from ymir.tools.unprivileged.wicked_git import (
+    BuildSrpmInput,
+    BuildSrpmTool,
     GitLogSearchTool,
     GitLogSearchToolInput,
     GitPatchApplyFinishTool,
@@ -344,6 +346,59 @@ async def test_run_package_prep_nonexistent_path(tmp_path):
     with pytest.raises(ToolError) as e:
         await tool.run(
             input=RunPackagePrepInput(
+                dist_git_path=str(tmp_path / "nonexistent"),
+                package="ruby",
+                dist_git_branch="c10s",
+            ),
+        )
+    assert "does not exist" in e.value.message
+
+
+@pytest.mark.asyncio
+async def test_build_srpm_success(dist_git_dir):
+    srpm_path = "/tmp/dist-git/ruby-3.3.10-1.el10.src.rpm"
+
+    async def mock_run_subprocess(cmd, **kwargs):
+        return (0, f"Wrote: {srpm_path}\n", "")
+
+    flexmock(wicked_git_mod).should_receive("run_subprocess").replace_with(mock_run_subprocess).once()
+
+    tool = BuildSrpmTool()
+    output = await tool.run(
+        input=BuildSrpmInput(
+            dist_git_path=str(dist_git_dir),
+            package="ruby",
+            dist_git_branch="c10s",
+        ),
+    )
+    assert output.result == srpm_path
+
+
+@pytest.mark.asyncio
+async def test_build_srpm_failure(dist_git_dir):
+    async def mock_run_subprocess(cmd, **kwargs):
+        return (1, "", "error: Bad source")
+
+    flexmock(wicked_git_mod).should_receive("run_subprocess").replace_with(mock_run_subprocess).once()
+
+    tool = BuildSrpmTool()
+    output = await tool.run(
+        input=BuildSrpmInput(
+            dist_git_path=str(dist_git_dir),
+            package="ruby",
+            dist_git_branch="c10s",
+        ),
+    )
+    assert "SRPM build FAILED" in output.result
+    assert "Bad source" in output.result
+
+
+@pytest.mark.asyncio
+async def test_build_srpm_nonexistent_path(tmp_path):
+    tool = BuildSrpmTool()
+    with pytest.raises(ToolError) as e:
+        await tool.run(
+            input=BuildSrpmInput(
                 dist_git_path=str(tmp_path / "nonexistent"),
                 package="ruby",
                 dist_git_branch="c10s",

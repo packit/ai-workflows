@@ -82,6 +82,7 @@ from ymir.tools.unprivileged.upstream_tools import (
     FindBaseCommitTool,
 )
 from ymir.tools.unprivileged.wicked_git import (
+    BuildSrpmTool,
     GitLogSearchTool,
     GitPatchApplyFinishTool,
     GitPatchApplyTool,
@@ -151,6 +152,7 @@ async def create_backport_agent(
         CherryPickCommitTool(options=local_tool_options),
         CherryPickContinueTool(options=local_tool_options),
         RunPackagePrepTool(options=local_tool_options),
+        BuildSrpmTool(options=local_tool_options),
     ]
 
     base_tools.extend([t for t in mcp_tools if t.name == "get_maintainer_rules"])

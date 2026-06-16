@@ -58,7 +58,7 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
 
 5. Test the build:
    - Use the `run_package_prep` tool to verify patches apply cleanly
-   - `{{ pkg_tool }} --name={{ package }} --namespace=rpms --release={{ dist_git_branch }} srpm`
+   - Use the `build_srpm` tool to generate a SRPM
    - Call `build_package` with the SRPM path, dist_git_branch, and jira_issue
    - If build fails: use `download_artifacts` to get logs and identify the new error
 

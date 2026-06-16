@@ -194,6 +194,60 @@ class RunPackagePrepTool(Tool[RunPackagePrepInput, ToolRunOptions, StringToolOut
         )
 
 
+class BuildSrpmInput(BaseModel):
+    dist_git_path: AbsolutePath = Field(
+        description="Absolute path to the cloned dist-git repository",
+    )
+    package: str = Field(description="Package name")
+    dist_git_branch: str = Field(description="Dist-git branch")
+
+
+class BuildSrpmTool(Tool[BuildSrpmInput, ToolRunOptions, StringToolOutput]):
+    name = "build_srpm"
+    description = """
+    Builds a source RPM (SRPM) from the dist-git repository.
+    Returns the absolute path to the generated SRPM file.
+    """
+    input_schema = BuildSrpmInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "package", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: BuildSrpmInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        dist_git = tool_input.dist_git_path
+        if not dist_git.exists():
+            raise ToolError(f"Dist-git path does not exist: {dist_git}")
+
+        spec_path = dist_git / f"{tool_input.package}.spec"
+        defines = build_rpmdefines(dist_git, tool_input.dist_git_branch, spec_path)
+        cmd = ["rpmbuild", *defines, "--nodeps", "-bs", str(spec_path)]
+
+        exit_code, stdout, stderr = await run_subprocess(cmd, cwd=dist_git)
+
+        if exit_code != 0:
+            return StringToolOutput(
+                result=f"SRPM build FAILED (exit code {exit_code}).\nstdout: {stdout}\nstderr: {stderr}"
+            )
+
+        for line in stdout.splitlines():
+            if line.startswith("Wrote:") and line.endswith(".src.rpm"):
+                srpm_path = line.removeprefix("Wrote:").strip()
+                return StringToolOutput(result=srpm_path)
+
+        return StringToolOutput(
+            result=f"SRPM build succeeded but could not find SRPM path in output.\n"
+            f"stdout: {stdout}\nstderr: {stderr}"
+        )
+
+
 def ensure_git_repository(repository_path: AbsolutePath) -> None:
     if not repository_path.exists():
         raise ToolError(f"Repository path does not exist: {repository_path}")

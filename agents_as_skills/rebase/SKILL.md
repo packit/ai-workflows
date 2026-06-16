@@ -16,6 +16,7 @@ You are a Red Hat Enterprise Linux developer performing an end-to-end rebase of 
 - `cve_id`: {{cve_id}}
 - `dry_run`: {{dry_run}}
 - `justification`: {{justification}}
+- `triage_summary`: {{triage_summary}}
 - `max_build_attempts`: {{max_build_attempts}}
 
 ## Tools
@@ -49,6 +50,7 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `remove` — Delete files
 - `run_shell_command` — Execute shell commands (use as last resort; prefer native tools)
 - `run_package_prep` — Run the %prep section of a spec file, with automatic build directory cleanup on failure
+- `build_srpm` — Build a source RPM from a dist-git repository
 - `add_changelog_entry` — Add a changelog entry to an RPM spec file
 - `update_release` — Bump the Release field in a spec file
 
@@ -100,6 +102,7 @@ Provide the following context to the instructions:
 - `cve_id`: `{{cve_id}}`
 - `pkg_tool`: determined above
 - `build_error`: current build error context (null on first attempt, set on retry)
+- `triage_summary`: `{{triage_summary}}` (if set, provides guidance on how the rebase should be done)
 
 The rebase must produce:
 - `success`: boolean
@@ -191,13 +194,14 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
      ```
      <description>
 
-     <justification_text (if justification is set): "Triage Decision Justification:\n<justification>">
+     <triage_details (if justification or triage_summary is set):
+       wrapped in a collapsible <details> block titled "Triage Details":
+       - "Reasoning:" section with triage_summary (if set)
+       - "Justification:" section with justification (if set)>
 
      Resolves: {{jira_issue}}
 
-     Status of the rebase:
-
-     <rebase_status from Step 3>
+     <rebase_status from Step 3, wrapped in a collapsible <details> block titled "Rebase status">
 
      ---
 
@@ -244,6 +248,7 @@ If `dry_run` is true, end the workflow.
 Otherwise, post a comment to `{{jira_issue}}` using `add_jira_comment`:
 - If the rebase **succeeded**: post the `merge_request_url` (or the rebase status if no MR was created).
 - If the rebase **failed**: post `"Agent failed to perform a rebase: <error>"`.
+- Error comments are only posted for user-triggered runs.
 
 Format the comment as:
 ```
@@ -315,8 +320,7 @@ To rebase package <PACKAGE> to version <VERSION> in dist-git branch <DIST_GIT_BR
    (e.g. because they were already applied upstream),
    you must remove all the corresponding patch files from the repository as well.
 
-8. Generate a SRPM using
-   `<PKG_TOOL> --name=<PACKAGE> --namespace=rpms --release=<DIST_GIT_BRANCH> srpm`.
+8. Generate a SRPM using the `build_srpm` tool.
 
 9. In your output, provide a "files_to_git_add" list containing all files
    that should be git added for this rebase.
@@ -335,10 +339,15 @@ and don't forget to fix the issue.
 Your working directory is <LOCAL_CLONE>, a clone of dist-git repository of package <PACKAGE>.
 <DIST_GIT_BRANCH> dist-git branch has been checked out. You are working on Jira issue <JIRA_ISSUE>.
 
+If <CVE_ID> is set, it is also known as <CVE_ID>.
+
 If a Fedora clone is available at <FEDORA_CLONE>, you can use it as a reference for comparing
 package versions, spec files, patches, and other packaging details. If a rebase to <VERSION>
 was done in Fedora, use that as the primary reference and include all changes, even if they
 may seem irrelevant - they are there for a reason.
+
+If <TRIAGE_SUMMARY> is set, it provides triage context from the triage agent that selected
+this rebase.
 
 ### General Instructions
 

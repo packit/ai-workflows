@@ -1,14 +1,15 @@
-import asyncio
-import os
-
+import git
+import pyrpkg.errors
+import pyrpkg.lookaside
 import pytest
 from flexmock import flexmock
 
-from ymir.tools.privileged import lookaside as lookaside_tools
+from ymir.tools.privileged import lookaside as lookaside_module
 from ymir.tools.privileged.lookaside import (
     DownloadSourcesTool,
-    PrepSourcesTool,
     UploadSourcesTool,
+    _get_config,
+    _update_gitignore,
 )
 
 
@@ -17,33 +18,42 @@ async def _noop():
 
 
 def _mock_kerberos():
-    flexmock(lookaside_tools).should_receive("_try_init_kerberos").replace_with(_noop)
+    flexmock(lookaside_module).should_receive("_try_init_kerberos").replace_with(_noop)
 
 
-@pytest.mark.parametrize(
-    "branch",
-    ["c9s", "rhel-9-main"],
-)
+def test_get_config_centos_stream():
+    config = _get_config("c9s")
+    assert config.download_url == "https://sources.stream.centos.org/sources"
+    assert config.upload_url == "https://sources.stream.rdu2.redhat.com/lookaside/upload.cgi"
+    assert config.hashtype == "sha512"
+    assert config.namespaced is True
+
+
+def test_get_config_rhel():
+    config = _get_config("rhel-9-main")
+    assert config.download_url == "https://pkgs.devel.redhat.com/repo/"
+    assert config.upload_url == "https://pkgs.devel.redhat.com/lookaside/upload.cgi"
+    assert config.hashtype == "sha512"
+    assert config.namespaced is True
+
+
+@pytest.mark.parametrize("branch", ["c9s", "rhel-9-main"])
 @pytest.mark.asyncio
-async def test_download_sources(branch):
-    package = "package"
+async def test_download_sources(branch, tmp_path):
+    sources_file = tmp_path / "sources"
+    sources_file.write_text("SHA512 (foo-1.0.tar.gz) = abc123\n")
 
-    async def create_subprocess_exec(cmd, *args, **kwargs):
-        assert cmd == "rhpkg" if branch.startswith("rhel") else "centpkg"
-        assert args[3] == "sources"
-
-        async def communicate():
-            return (b"", None)
-
-        return flexmock(communicate=communicate, returncode=0)
+    mock_cache = flexmock()
+    mock_cache.should_receive("download").once()
 
     _mock_kerberos()
-    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+    flexmock(pyrpkg.lookaside).should_receive("CGILookasideCache").and_return(mock_cache)
+
     result = (
         await DownloadSourcesTool().run(
             input={
-                "dist_git_path": os.getcwd(),
-                "package": package,
+                "dist_git_path": str(tmp_path),
+                "package": "foo",
                 "dist_git_branch": branch,
             }
         )
@@ -51,105 +61,156 @@ async def test_download_sources(branch):
     assert result.startswith("Successfully")
 
 
-@pytest.mark.parametrize(
-    "branch",
-    ["c9s", "rhel-9-main"],
-)
 @pytest.mark.asyncio
-async def test_prep_sources(branch):
-    package = "package"
+async def test_download_sources_handles_download_error(tmp_path):
+    sources_file = tmp_path / "sources"
+    sources_file.write_text("SHA512 (foo-1.0.tar.gz) = abc123\n")
 
-    async def create_subprocess_exec(cmd, *args, **kwargs):
-        assert cmd == "rhpkg" if branch.startswith("rhel") else "centpkg"
-        # prep can be on various places due to --offline and --released flags
-        assert "prep" in args
-
-        async def communicate():
-            return (b"", None)
-
-        return flexmock(communicate=communicate, returncode=0)
+    mock_cache = flexmock()
+    mock_cache.should_receive("download").and_raise(pyrpkg.errors.DownloadError("404 Not Found"))
 
     _mock_kerberos()
-    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
-    result = (
-        await PrepSourcesTool().run(
+    flexmock(pyrpkg.lookaside).should_receive("CGILookasideCache").and_return(mock_cache)
+
+    with pytest.raises(lookaside_module.ToolError, match="Failed to download"):
+        await DownloadSourcesTool().run(
             input={
-                "dist_git_path": os.getcwd(),
-                "package": package,
-                "dist_git_branch": branch,
+                "dist_git_path": str(tmp_path),
+                "package": "foo",
+                "dist_git_branch": "rhel-9-main",
             }
         )
-    ).result
-    assert result.startswith("Successfully")
 
 
-@pytest.mark.parametrize(
-    "branch",
-    ["c10s", "rhel-10-main"],
-)
+@pytest.mark.parametrize("branch", ["c10s", "rhel-10-main"])
 @pytest.mark.asyncio
-async def test_upload_sources(branch):
-    package = "package"
-    new_sources = ["package-1.2-3.tar.gz"]
+async def test_upload_sources(branch, tmp_path):
+    source = tmp_path / "foo-2.0.tar.gz"
+    source.write_text("fake tarball")
+    sources_file = tmp_path / "sources"
+    sources_file.write_text("SHA512 (foo-1.0.tar.gz) = oldhash\n")
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text("/foo-1.0.tar.gz\n")
+
+    mock_cache = flexmock(hashtype="sha512")
+    mock_cache.should_receive("hash_file").and_return("newhash").once()
+    mock_cache.should_receive("upload").once()
+
+    mock_index = flexmock()
+    mock_index.should_receive("add").with_args(["sources", ".gitignore"]).once()
+    mock_repo = flexmock(index=mock_index)
+    flexmock(git).should_receive("Repo").with_args(tmp_path).and_return(mock_repo).once()
 
     async def init_kerberos_ticket():
         return True
 
-    async def create_subprocess_exec(cmd, *args, **kwargs):
-        assert cmd == "rhpkg" if branch.startswith("rhel") else "centpkg"
-        assert args[3:] == ("new-sources", *new_sources)
+    flexmock(lookaside_module).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket)
+    flexmock(pyrpkg.lookaside).should_receive("CGILookasideCache").and_return(mock_cache)
 
-        async def communicate():
-            return (b"", None)
-
-        return flexmock(communicate=communicate, returncode=0)
-
-    flexmock(lookaside_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
-    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
     result = (
         await UploadSourcesTool().run(
             input={
-                "dist_git_path": os.getcwd(),
-                "package": package,
+                "dist_git_path": str(tmp_path),
+                "package": "foo",
                 "dist_git_branch": branch,
-                "new_sources": new_sources,
+                "new_sources": ["foo-2.0.tar.gz"],
             }
         )
     ).result
     assert result.startswith("Successfully")
 
+    sources_content = sources_file.read_text()
+    assert "foo-2.0.tar.gz" in sources_content
+    assert "foo-1.0.tar.gz" not in sources_content
 
-@pytest.mark.asyncio
-async def test_run_capturing_surfaces_output_on_failure():
-    async def create_subprocess_exec(cmd, *args, **kwargs):
-        async def communicate():
-            return (b"Could not download Source0: 404 Not Found from lookaside", None)
-
-        return flexmock(communicate=communicate, returncode=1)
-
-    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
-    with pytest.raises(lookaside_tools.ToolError) as exc:
-        await lookaside_tools._run_capturing(["rhpkg", "sources"], os.getcwd(), "Failed to download sources")
-    msg = str(exc.value)
-    assert "Failed to download sources" in msg
-    assert "rhpkg sources" in msg  # shlex.join'd command
-    assert "exited 1" in msg
-    assert "404 Not Found from lookaside" in msg  # captured output tail
+    gitignore_content = gitignore.read_text()
+    assert "/foo-1.0.tar.gz" in gitignore_content
+    assert "/foo-2.0.tar.gz" in gitignore_content
 
 
 @pytest.mark.asyncio
-async def test_run_capturing_rejects_empty_argv():
-    with pytest.raises(lookaside_tools.ToolError, match="No command specified"):
-        await lookaside_tools._run_capturing([], os.getcwd(), "Failed to download sources")
-
-
-@pytest.mark.asyncio
-async def test_run_capturing_reports_missing_cwd():
-    async def create_subprocess_exec(cmd, *args, **kwargs):
-        raise FileNotFoundError
-
-    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
-    with pytest.raises(lookaside_tools.ToolError, match="does not exist"):
-        await lookaside_tools._run_capturing(
-            ["rhpkg", "sources"], "/nonexistent/dir/does-not-exist", "Failed to download sources"
+async def test_upload_sources_dry_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("DRY_RUN", "true")
+    result = (
+        await UploadSourcesTool().run(
+            input={
+                "dist_git_path": str(tmp_path),
+                "package": "foo",
+                "dist_git_branch": "rhel-10-main",
+                "new_sources": ["foo-1.0.tar.gz"],
+            }
         )
+    ).result
+    assert "Dry run" in result
+
+
+@pytest.mark.asyncio
+async def test_download_sources_rejects_path_traversal(tmp_path):
+    sources_file = tmp_path / "sources"
+    sources_file.write_text("SHA512 (../../../etc/shadow) = abc123\n")
+
+    mock_cache = flexmock()
+    mock_cache.should_receive("download").never()
+
+    _mock_kerberos()
+    flexmock(pyrpkg.lookaside).should_receive("CGILookasideCache").and_return(mock_cache)
+
+    with pytest.raises(lookaside_module.ToolError, match="Invalid source filename"):
+        await DownloadSourcesTool().run(
+            input={
+                "dist_git_path": str(tmp_path),
+                "package": "foo",
+                "dist_git_branch": "rhel-9-main",
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_upload_sources_rejects_path_traversal(tmp_path):
+    sources_file = tmp_path / "sources"
+    sources_file.write_text("")
+
+    async def init_kerberos_ticket():
+        return True
+
+    flexmock(lookaside_module).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket)
+
+    with pytest.raises(lookaside_module.ToolError, match="Invalid source file path"):
+        await UploadSourcesTool().run(
+            input={
+                "dist_git_path": str(tmp_path),
+                "package": "foo",
+                "dist_git_branch": "rhel-10-main",
+                "new_sources": ["../../../etc/shadow"],
+            }
+        )
+
+
+def test_update_gitignore_adds_new_entries(tmp_path):
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text("*.pyc\n/old-source.tar.gz\n")
+
+    _update_gitignore(tmp_path, {"new-source.tar.gz"})
+
+    content = gitignore.read_text()
+    assert "/new-source.tar.gz" in content
+    assert "*.pyc" in content
+    assert "/old-source.tar.gz" in content
+
+
+def test_update_gitignore_skips_already_matched(tmp_path):
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text("*.tar.gz\n")
+
+    _update_gitignore(tmp_path, {"foo-1.0.tar.gz"})
+
+    lines = gitignore.read_text().splitlines()
+    assert len(lines) == 1
+    assert lines[0] == "*.tar.gz"
+
+
+def test_update_gitignore_creates_file(tmp_path):
+    _update_gitignore(tmp_path, {"foo-1.0.tar.gz"})
+
+    content = (tmp_path / ".gitignore").read_text()
+    assert "/foo-1.0.tar.gz" in content

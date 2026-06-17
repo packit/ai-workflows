@@ -37,6 +37,7 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
        pytest-asyncio \
        flexmock \
        koji \
+       rpkg \
        GitPython \
        nitrate \
        tomli-w

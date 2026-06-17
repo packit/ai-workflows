@@ -244,6 +244,17 @@ async def test_git_log_search_tool_found(git_repo, cve_id, jira_issue, expected)
             "+Line 3\n",
             2,
         ),
+        (
+            "diff --git a/t/new-test.t b/t/new-test.t\n"
+            "new file mode 100644\n"
+            "index 0000000..cb75215\n"
+            "--- /dev/null\n"
+            "+++ b/t/new-test.t\n"
+            "@@ -0,0 +1,2 @@\n"
+            "+use Test::More;\n"
+            "+ok(1);\n",
+            1,
+        ),
     ],
 )
 async def test_discover_patch_p(git_repo, tmp_path, patch_content, expected_n):

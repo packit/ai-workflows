@@ -41,6 +41,7 @@ RUN pip install --no-cache-dir \
       pytest \
       pytest-asyncio \
       rpm \
+      rpkg \
       specfile
 
 # Verify no malicious litellm_init.pth was introduced by compromised litellm packages (e.g. 1.82.7, 1.82.8)

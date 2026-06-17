@@ -297,6 +297,16 @@ async def discover_patch_p(patch_file_path: AbsolutePath, repository_path: Absol
                 # I know this is naive, but we certainly cannot check all files
                 # because some may be missing in the checkout
                 return n
+
+    # Fallback: the file-existence heuristic fails when all files in the patch
+    # are new (e.g. a patch that only adds test files). In that case, ask git
+    # directly whether the patch can be applied at a given strip level.
+    for n in range(1, 6):
+        cmd = ["git", "apply", "--check", f"-p{n}", str(patch_file_path)]
+        exit_code, _, _ = await run_subprocess(cmd, cwd=repository_path)
+        if exit_code == 0:
+            return n
+
     raise ToolError(f"Failed to discover the value for `-p` for patch file: {patch_file_path}")
 
 

@@ -36,10 +36,11 @@ COPR_TIMEOUT_GRACE_PERIOD = 60  # seconds
 COPR_POLLING_INTERVAL = 30  # seconds
 COPR_ARCHES = {
     "aarch64",
-    "ppc64le",  # emulated
+    "ppc64le",
     "s390x",
     "x86_64",
 }
+COPR_ARCH_PREFERENCE = ("x86_64", "aarch64", "s390x", "ppc64le")
 
 
 logger = logging.getLogger(__name__)
@@ -94,9 +95,12 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
             exclusive_arches = await self.get_exclusive_arches(srpm_path)
         except Exception as e:
             raise ToolError(f"Failed to read SRPM header: {e}") from e
-        # build for x86_64 unless the package is exclusive to other arch(es),
-        # in such case build for either of them
-        build_arch = exclusive_arches.pop() if exclusive_arches else "x86_64"
+        # build for the fastest supported arch (see COPR_ARCH_PREFERENCE);
+        # default to x86_64 when the package has no ExclusiveArch
+        build_arch = next(
+            (arch for arch in COPR_ARCH_PREFERENCE if arch in exclusive_arches),
+            "x86_64",
+        )
         rhel_config = await load_rhel_config()
         upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
         try:

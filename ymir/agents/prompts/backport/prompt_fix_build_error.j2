@@ -67,6 +67,60 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
    - Which commits you cherry-picked or what manual edits you made
    - The build result (pass/fail and error if applicable)
 
+7. Self-Review: Before reporting a result, verify your work meets all criteria
+   below. Run `git diff HEAD -- *.spec` in {{ local_clone }} to inspect what
+   changed in the spec file.
+
+   Criterion 1 — Patch correctness:
+   Read each regenerated patch file. Verify it is non-empty and contains code
+   changes that address the build failure. A patch that only modifies whitespace
+   or comments does not pass.
+
+   Criterion 2 — Spec file not modified:
+   From the git diff output, verify the spec file was NOT modified. The spec
+   already has the correct `Patch:` tags from the original backport — your job
+   is to fix the patches, not the spec. If the diff shows any spec changes,
+   this criterion fails.
+
+   Criterion 3 — No unrelated changes:
+   From the git diff output, verify your changes are limited to the patch
+   file(s) listed in step 4. No other files in {{ local_clone }} should be
+   modified. Also verify that no tests were silently disabled, commented out,
+   or skipped in the regenerated patches unless the build error explicitly
+   required it.
+
+   Criterion 4 — Completeness:
+   Verify the SRPM generated in step 5 exists on disk. Use the path returned
+   by the `build_srpm` tool, and run:
+   `test -f "<path-to-srpm>" && echo exists || echo missing`
+
+   Criterion 5 — Patch naming:
+   Verify each patch filename matches the original name from the spec file.
+   Do not rename patch files.
+
+   If ALL criteria pass, report success as normal.
+
+   If ANY criterion fails, attempt to fix the problem before reporting failure:
+   - Criterion 1 or 3 (bad patch content or disabled tests): return to step 3
+     and re-fix the issue, then regenerate patches (step 4) and rebuild (step 5).
+   - Criterion 2 (spec modified): revert the spec with
+     `git checkout HEAD -- *.spec` in {{ local_clone }}, verify the revert with
+     `git diff HEAD -- *.spec`, then rebuild (step 5).
+   - Criterion 4 (SRPM missing): re-run `build_srpm` (step 5).
+   - Criterion 5 (wrong patch name): rename the file to match the spec, then
+     rebuild (step 5).
+
+   After fixing, re-run this self-review before reporting.
+
+   Only if the fix attempt itself fails, set `success=False` and populate
+   `error` with:
+
+     Self-review failed. The following criteria were not met:
+
+     - <Criterion name>: <specific reason — what was found vs. what was expected>
+
+   List only the failing criteria. Do not mention passing ones.
+
 Report success=true with SRPM path if build passes.
 Report success=false with the extracted error if build fails or you can't find a fix.
 

@@ -510,3 +510,186 @@ class CancelTestingFarmRequestTool(
         return JSONToolOutput(result={"cancelled": True, "request_id": request_id})
 
 
+class RunRemoteCommandToolInput(BaseModel):
+    ssh_host: str = Field(description="SSH target in user@ip format", pattern=r"^[a-zA-Z0-9_]+@[\w.\-]+$")
+    command: str = Field(description="Command to run on the remote machine")
+    timeout: int = Field(default=300, description="Timeout in seconds for the command to finish")
+
+
+class RunRemoteCommandTool(
+    Tool[RunRemoteCommandToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
+):
+    name = "run_remote_command"
+    description = """
+    Run a command on a remote machine via SSH.
+    """
+    input_schema = RunRemoteCommandToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "testing_farm", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: RunRemoteCommandToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[dict[str, Any]]:
+        ssh_host = tool_input.ssh_host
+        command = tool_input.command
+        timeout = tool_input.timeout
+        logger.info("Running remote command on %s: %s", ssh_host, command)
+
+        if os.getenv("DRY_RUN", "False").lower() == "true":
+            return JSONToolOutput(
+                result={
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 0,
+                    "message": f"Dry run: would run '{command}' on {ssh_host}",
+                }
+            )
+
+        try:
+            _ensure_gateway_ssh_key()
+            proc = await asyncio.create_subprocess_exec(
+                "ssh",
+                "-i", str(_SSH_KEY_PATH),
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                ssh_host,
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except TimeoutError as e:
+            proc.kill()
+            await proc.wait()
+            raise ToolError(
+                f"Command timed out after {timeout}s on {ssh_host}: {command}"
+            ) from e
+        except Exception as e:
+            raise ToolError(
+                f"Failed to run command on {ssh_host}: {e}"
+            ) from e
+
+        return JSONToolOutput(
+            result={
+                "stdout": stdout.decode() if stdout else "",
+                "stderr": stderr.decode() if stderr else "",
+                "exit_code": proc.returncode,
+            }
+        )
+
+
+_ALLOWED_COPY_BASES = (Path("/git-repos"), Path("/tmp"))  # noqa: S108
+
+
+class CopyFilesToRemoteToolInput(BaseModel):
+    ssh_host: str = Field(description="SSH host in user@ip format", pattern=r"^[a-zA-Z0-9_]+@[\w.\-]+$")
+    local_paths: list[str] = Field(description="Local file paths to copy")
+    remote_dir: str = Field(
+        default="/tmp/reproducer",  # noqa: S108
+        description="Remote directory to copy files to",
+        pattern=r"^[a-zA-Z0-9/_.\-]+$",
+    )
+    timeout: int = Field(default=120, description="Timeout in seconds for the copy operation")
+
+    @field_validator("local_paths")
+    @classmethod
+    def validate_local_paths(cls, v: list[str]) -> list[str]:
+        for p in v:
+            resolved = Path(p).resolve()
+            if not any(resolved.is_relative_to(base) for base in _ALLOWED_COPY_BASES):
+                raise ValueError(
+                    f"Path {p} is not under an allowed directory"
+                    f" ({', '.join(str(b) for b in _ALLOWED_COPY_BASES)})"
+                )
+        return v
+
+
+class CopyFilesToRemoteTool(
+    Tool[CopyFilesToRemoteToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
+):
+    name = "copy_files_to_remote"
+    description = """
+    Copy files to a remote machine via SCP.
+    """
+    input_schema = CopyFilesToRemoteToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "testing_farm", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: CopyFilesToRemoteToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[dict[str, Any]]:
+        ssh_host = tool_input.ssh_host
+        local_paths = tool_input.local_paths
+        remote_dir = tool_input.remote_dir
+        timeout = tool_input.timeout
+        logger.info("Copying %s to %s:%s", local_paths, ssh_host, remote_dir)
+
+        if os.getenv("DRY_RUN", "False").lower() == "true":
+            return JSONToolOutput(
+                result={
+                    "copied": True,
+                    "remote_dir": remote_dir,
+                    "files": local_paths,
+                    "message": f"Dry run: would copy {local_paths} to {ssh_host}:{remote_dir}",
+                }
+            )
+
+        _ensure_gateway_ssh_key()
+        ssh_opts = [
+            "-i", str(_SSH_KEY_PATH),
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+        ]
+
+        active_proc = None
+        try:
+            # Create the remote directory
+            active_proc = await asyncio.create_subprocess_exec(
+                "ssh", *ssh_opts, ssh_host, "mkdir", "-p", remote_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(active_proc.communicate(), timeout=timeout)
+            if active_proc.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to create remote directory {remote_dir}: {stderr.decode().strip()}"
+                )
+
+            # Copy files via scp
+            active_proc = await asyncio.create_subprocess_exec(
+                "scp", *ssh_opts, "-r", *local_paths, f"{ssh_host}:{remote_dir}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(active_proc.communicate(), timeout=timeout)
+            if active_proc.returncode != 0:
+                raise RuntimeError(
+                    f"SCP failed: {stderr.decode().strip()}"
+                )
+        except TimeoutError as e:
+            if active_proc:
+                active_proc.kill()
+                await active_proc.wait()
+            raise ToolError(
+                f"Copy operation timed out after {timeout}s to {ssh_host}:{remote_dir}"
+            ) from e
+        except Exception as e:
+            raise ToolError(
+                f"Failed to copy files to {ssh_host}:{remote_dir}: {e}"
+            ) from e
+
+        return JSONToolOutput(result={"copied": True, "remote_dir": remote_dir, "files": local_paths})

@@ -4,7 +4,11 @@ import json
 import logging
 import os
 import re
+<<<<<<< HEAD
 import time
+=======
+import shutil
+>>>>>>> 468d64a (Fix clone_repository failing on non-empty target directory)
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -566,11 +570,10 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
         auth_args = _get_git_auth_args(repository)
         git_env = _get_mock_git_env()
 
-        clone_path.mkdir(parents=True, exist_ok=True)
-
         safe_url = sanitize_url(repository)
 
         if branch:
+            clone_path.mkdir(parents=True, exist_ok=True)
             await _run_git_cmd(
                 ["git", "init"],
                 label=f"git init {clone_path}",
@@ -594,6 +597,18 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
                 timeout=None,
             )
         else:
+            if clone_path.exists():
+                allowed_parents = {
+                    Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")),
+                    Path("/tmp"),  # noqa: S108
+                }
+                if not any(clone_path.resolve().is_relative_to(p) for p in allowed_parents):
+                    raise ToolError(
+                        f"Refusing to remove {clone_path}: not under an allowed base directory"
+                    )
+                await asyncio.to_thread(shutil.rmtree, clone_path)
+            clone_path.parent.mkdir(parents=True, exist_ok=True)
+            
             await _run_git_cmd(
                 ["git", *auth_args, "clone", repository, str(clone_path)],
                 label=f"git clone {safe_url}",

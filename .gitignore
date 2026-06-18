@@ -54,8 +54,10 @@ ymir/agents/tests/e2e/mock_repos/*
 !ymir/agents/tests/e2e/mock_repos/README.md
 !ymir/agents/tests/e2e/mock_repos/triage/
 !ymir/agents/tests/e2e/mock_repos/backport/
+!ymir/agents/tests/e2e/mock_repos/reproducer/
 ymir/agents/tests/e2e/mock_repos/triage/*
 ymir/agents/tests/e2e/mock_repos/backport/*
+ymir/agents/tests/e2e/mock_repos/reproducer/*
 
 # E2E test output artifacts
 ymir/agents/tests/e2e/test_output/

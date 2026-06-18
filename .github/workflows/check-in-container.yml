@@ -50,3 +50,26 @@ jobs:
         TEST_IMAGE: beeai-tests
         TEST_IMAGE_C9S: beeai-tests-c9s
       run: make ${{ matrix.target }}
+
+  smoke-test-mcp-containerfile:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+    - name: Set up Podman
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y podman
+        podman --version
+    - name: Build MCP gateway container
+      run: |
+        podman build --no-cache -f Containerfile.mcp -t mcp-gateway-test:pr .
+    - name: Test beeai_framework import
+      run: |
+        podman run --rm mcp-gateway-test:pr python3.13 -c "from beeai_framework.adapters.mcp.serve.server import MCPServer; print('✓ beeai_framework import successful')"
+    - name: Test privileged gateway module
+      run: |
+        podman run --rm mcp-gateway-test:pr python3.13 -c "from ymir.tools.privileged.gateway import main; print('✓ privileged gateway import successful')"
+    - name: Test unprivileged gateway module
+      run: |
+        podman run --rm mcp-gateway-test:pr python3.13 -c "from ymir.tools.unprivileged.gateway import main; print('✓ unprivileged gateway import successful')"

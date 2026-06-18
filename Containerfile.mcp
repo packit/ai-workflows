@@ -39,8 +39,18 @@ COPY requirements-global.txt /home/mcp/
 COPY ymir/common/ /home/mcp/ymir/common/
 COPY ymir/tools/ /home/mcp/ymir/tools/
 
-# Install dependencies via pyproject.toml; litellm pinned separately to exclude compromised versions
-RUN pip install --no-cache-dir "litellm!=1.82.7,!=1.82.8" /home/mcp/ymir/common/ /home/mcp/ymir/tools/
+# Install build-system dependencies to allow building local packages without isolation
+RUN pip install --no-cache-dir hatchling hatch-requirements-txt
+
+# Build wheels for local packages without isolation (so hatch-requirements-txt can
+# resolve ../../requirements-global.txt) but without dependencies (--no-deps prevents
+# applying --no-build-isolation to third-party packages, which could break if they
+# need to build from source with their own build tools)
+RUN pip wheel --no-build-isolation --no-deps --wheel-dir /tmp/wheels /home/mcp/ymir/common/ /home/mcp/ymir/tools/
+
+# Install the built wheels and all dependencies with standard pip (build isolation
+# enabled for third-party packages); litellm pinned separately to exclude compromised versions
+RUN pip install --no-cache-dir "litellm!=1.82.7,!=1.82.8" /tmp/wheels/*.whl && rm -rf /tmp/wheels
 
 # Verify no malicious litellm_init.pth was introduced by compromised litellm packages (e.g. 1.82.7, 1.82.8)
 RUN MALICIOUS=$(find /usr /opt -name "litellm_init.pth" 2>/dev/null); \

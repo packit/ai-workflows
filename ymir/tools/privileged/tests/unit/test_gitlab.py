@@ -241,11 +241,13 @@ async def test_push_to_remote_repository():
         assert args[1].endswith(repository.removeprefix("https://"))
         assert args[2] == branch
         assert kwargs.get("cwd") == clone_path
+        assert kwargs.get("stdout") == asyncio.subprocess.DEVNULL
+        assert kwargs.get("stderr") == asyncio.subprocess.PIPE
 
-        async def wait():
-            return 0
+        async def communicate():
+            return (None, b"")
 
-        return flexmock(wait=wait)
+        return flexmock(communicate=communicate, returncode=0)
 
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
     result = (

@@ -129,6 +129,20 @@ def _get_auth_headers(url: str) -> dict[str, str]:
     return headers
 
 
+_SENSITIVE_STDERR_RE = re.compile(
+    r"authorization|basic\s+[A-Za-z0-9+/=]|token|password|credential",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_git_stderr(text: str) -> str:
+    """Filter out lines from git stderr that may contain auth credentials."""
+    return "\n".join(
+        line for line in text.splitlines()
+        if not _SENSITIVE_STDERR_RE.search(line)
+    )
+
+
 def _get_git_auth_args(repository_url: str) -> list[str]:
     """Return ``git -c`` args that authenticate via HTTP Basic auth.
 
@@ -514,17 +528,36 @@ class PushToRemoteRepositoryTool(Tool[PushToRemoteRepositoryToolInput, ToolRunOp
         context: RunContext,
     ) -> StringToolOutput:
         repository = tool_input.repository
-        clone_path = tool_input.clone_path
         branch = tool_input.branch
-        force = tool_input.force
-        auth_args = _get_git_auth_args(repository)
-        command = ["git", *auth_args, "push", repository, branch]
-        if force:
-            command.append("--force")
-        proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
-        if await proc.wait():
-            raise ToolError("Failed to push to the specified repository")
-        return StringToolOutput(result=f"Successfully pushed the specified branch to {repository}")
+
+        try:
+            clone_path = tool_input.clone_path
+            force = tool_input.force
+            auth_args = _get_git_auth_args(repository)
+            command = ["git", *auth_args, "push", repository, branch]
+            if force:
+                command.append("--force")
+            env = _get_mock_git_env()
+            proc = await asyncio.create_subprocess_exec(
+                command[0], *command[1:],
+                cwd=clone_path,
+                env=env,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode:
+                stderr_text = stderr.decode(errors="replace").strip() if stderr else ""
+                safe_stderr = _sanitize_git_stderr(stderr_text)
+                detail = safe_stderr or f"exit code {proc.returncode} (stderr redacted)"
+                logger.error("git push failed (exit %d): %s", proc.returncode, detail)
+                raise ToolError(f"Failed to push to {repository}: {detail}")
+            return StringToolOutput(result=f"Successfully pushed the specified branch to {repository}")
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to push to repository {repository}: {e}")
+            raise ToolError(f"Failed to push to repository {repository}: {e}") from e
 
 
 class AddMergeRequestLabelsToolInput(BaseModel):

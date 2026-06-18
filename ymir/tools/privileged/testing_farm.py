@@ -1,15 +1,21 @@
+import asyncio
+import base64
 import logging
 import os
+import re
+import subprocess
+import threading
 from datetime import datetime
 from functools import cache
 from json import dumps as json_dumps
+from pathlib import Path
 from typing import Any
 
 import requests
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, Tool, ToolError, ToolRunOptions
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ymir.common.models import (
     TestingFarmRequest,
@@ -18,7 +24,21 @@ from ymir.common.models import (
 
 logger = logging.getLogger(__name__)
 
-TESTING_FARM_URL = "https://api.testing-farm.io/v0.1"
+_REDACTED_KEYS = frozenset({"secrets", "api_key", "token", "password"})
+
+
+def _redact_secrets(obj: Any) -> Any:
+    """Recursively redact sensitive keys from a nested dict/list structure."""
+    if isinstance(obj, dict):
+        return {k: ("***" if k in _REDACTED_KEYS else _redact_secrets(v)) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_redact_secrets(item) for item in obj]
+    return obj
+
+
+@cache
+def _testing_farm_url() -> str:
+    return os.environ.get("TESTING_FARM_API_URL", "https://api.testing-farm.io/v0.1")
 
 
 @cache
@@ -30,8 +50,28 @@ def _testing_farm_headers() -> dict[str, str]:
     }
 
 
+_SSH_KEY_PATH = Path.home() / ".ssh" / "id_ed25519"
+_ssh_key_lock = threading.Lock()
+
+
+def _ensure_gateway_ssh_key() -> str:
+    """Ensure the gateway has an SSH key pair and return the public key content."""
+    pub_path = _SSH_KEY_PATH.with_suffix(".pub")
+    with _ssh_key_lock:
+        if not _SSH_KEY_PATH.exists() or not pub_path.exists():
+            _SSH_KEY_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            _SSH_KEY_PATH.unlink(missing_ok=True)
+            pub_path.unlink(missing_ok=True)
+            subprocess.run(
+                ["ssh-keygen", "-t", "ed25519", "-f", str(_SSH_KEY_PATH), "-N", "", "-q"],
+                check=True,
+            )
+            logger.info("Generated gateway SSH key pair at %s", _SSH_KEY_PATH)
+    return pub_path.read_text().strip()
+
+
 def _testing_farm_api_get(path: str, *, params: dict | None = None) -> Any:
-    url = f"{TESTING_FARM_URL}/{path}"
+    url = f"{_testing_farm_url()}/{path}"
     response = requests.get(url, headers=_testing_farm_headers(), params=params, timeout=30)
     if not response.ok:
         logger.error(
@@ -42,14 +82,23 @@ def _testing_farm_api_get(path: str, *, params: dict | None = None) -> Any:
 
 
 def _testing_farm_api_post(path: str, json: dict[str, Any]) -> Any:
-    url = f"{TESTING_FARM_URL}/{path}"
+    url = f"{_testing_farm_url()}/{path}"
     response = requests.post(url, headers=_testing_farm_headers(), json=json, timeout=30)
     if not response.ok:
         logger.error(
-            "POST to %s failed\nbody:\n%s\nerror:\n%s", url, json_dumps(json, indent=2), response.text
+            "POST to %s failed\nbody:\n%s\nerror:\n%s",
+            url, json_dumps(_redact_secrets(json), indent=2), response.text
         )
     response.raise_for_status()
     return response.json()
+
+
+def _testing_farm_api_delete(path: str) -> None:
+    url = f"{_testing_farm_url()}/{path}"
+    response = requests.delete(url, headers=_testing_farm_headers(), timeout=30)
+    if not response.ok:
+        logger.error("DELETE %s failed.\nerror:\n%s", url, response.text)
+    response.raise_for_status()
 
 
 def _parse_tf_request(response: dict[str, Any]) -> TestingFarmRequest:
@@ -59,7 +108,7 @@ def _parse_tf_request(response: dict[str, Any]) -> TestingFarmRequest:
 
     return TestingFarmRequest(
         id=response["id"],
-        url=f"{TESTING_FARM_URL}/requests/{response['id']}",
+        url=f"{_testing_farm_url()}/requests/{response['id']}",
         state=response["state"],
         result=result,
         error_reason=error_reason,
@@ -101,7 +150,7 @@ class GetTestingFarmRequestTool(
     ) -> JSONToolOutput[dict[str, Any]]:
         logger.info("Getting Testing Farm request %s", tool_input.request_id)
         try:
-            response = _testing_farm_api_get(f"requests/{tool_input.request_id}")
+            response = await asyncio.to_thread(_testing_farm_api_get, f"requests/{tool_input.request_id}")
             tf_request = _parse_tf_request(response)
         except Exception as e:
             raise ToolError(f"Failed to get Testing Farm request {tool_input.request_id}: {e}") from e
@@ -149,7 +198,7 @@ class ReproduceTestingFarmRequestTool(
 
         try:
             # Fetch the original request
-            original_response = _testing_farm_api_get(f"requests/{request_id}")
+            original_response = await asyncio.to_thread(_testing_farm_api_get, f"requests/{request_id}")
             original = _parse_tf_request(original_response)
 
             # Build new environments with the replacement build
@@ -186,7 +235,7 @@ class ReproduceTestingFarmRequestTool(
                 "environments": [create_new_environment(env) for env in original.environments_data],
             }
 
-            response = _testing_farm_api_post("requests", json=body)
+            response = await asyncio.to_thread(_testing_farm_api_post, "requests", json=body)
             new_request = _parse_tf_request(response)
 
         except Exception as e:

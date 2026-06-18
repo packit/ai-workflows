@@ -751,6 +751,8 @@ class AddMergeRequestLabelsTool(Tool[AddMergeRequestLabelsToolInput, ToolRunOpti
             return StringToolOutput(
                 result=f"Successfully added labels {labels} to merge request {merge_request_url}"
             )
+        except ToolError:
+            raise
         except Exception as e:
             raise ToolError(f"Failed to add labels to merge request: {e}") from e
 
@@ -859,6 +861,8 @@ class AddMergeRequestCommentTool(Tool[AddMergeRequestCommentToolInput, ToolRunOp
             mr = await _get_merge_request_from_url(merge_request_url)
             await asyncio.to_thread(mr._raw_pr.notes.create, {"body": comment})
             return StringToolOutput(result=f"Successfully added comment to merge request {merge_request_url}")
+        except ToolError:
+            raise
         except Exception as e:
             raise ToolError(f"Failed to add comment to merge request: {e}") from e
 
@@ -1135,6 +1139,8 @@ class GetAuthorizedCommentsFromMergeRequestTool(
         try:
             comments = await _fetch_authorized_comments_from_merge_request_url(merge_request_url)
             return JSONToolOutput(result=comments)
+        except ToolError:
+            raise
         except Exception as e:
             raise ToolError(f"Failed to get authorized comments from merge request: {e}") from e
 
@@ -1186,6 +1192,8 @@ class GetMergeRequestDetailsTool(
                     comments=[c for c in comments if f"@{username}" in c.message],
                 )
             )
+        except ToolError:
+            raise
         except Exception as e:
             raise ToolError(f"Failed to get merge request details: {e}") from e
 
@@ -1429,9 +1437,9 @@ class SearchGitlabProjectMrsTool(
             logger.info("Found %d MR(s) for %s in %s", len(results), search, project)
             return JSONToolOutput(result=results)
 
+        except ToolError:
+            raise
         except Exception as e:
-            from beeai_framework.tools import ToolError
-
             raise ToolError(f"Failed to search MRs in {project}: {e}") from e
 
 

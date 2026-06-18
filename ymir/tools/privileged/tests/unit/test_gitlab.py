@@ -365,9 +365,11 @@ async def test_push_to_remote_repository():
         assert args[1].endswith(repository.removeprefix("https://"))
         assert args[2] == branch
         assert kwargs.get("cwd") == clone_path
+        assert kwargs.get("stdout") == asyncio.subprocess.DEVNULL
+        assert kwargs.get("stderr") == asyncio.subprocess.PIPE
 
         async def communicate():
-            return (b"", b"")
+            return (None, b"")
 
         return flexmock(communicate=communicate, returncode=0)
 

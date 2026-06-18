@@ -183,6 +183,20 @@ def _get_auth_headers(url: str) -> dict[str, str]:
     return headers
 
 
+_SENSITIVE_STDERR_RE = re.compile(
+    r"authorization|basic\s+[A-Za-z0-9+/=]|token|password|credential",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_git_stderr(text: str) -> str:
+    """Filter out lines from git stderr that may contain auth credentials."""
+    return "\n".join(
+        line for line in text.splitlines()
+        if not _SENSITIVE_STDERR_RE.search(line)
+    )
+
+
 def _get_git_auth_args(repository_url: str) -> list[str]:
     """Return ``git -c`` args that authenticate via HTTP Basic auth.
 
@@ -616,20 +630,25 @@ class PushToRemoteRepositoryTool(Tool[PushToRemoteRepositoryToolInput, ToolRunOp
         context: RunContext,
     ) -> StringToolOutput:
         repository = tool_input.repository
-        clone_path = tool_input.clone_path
         branch = tool_input.branch
+        clone_path = tool_input.clone_path
         force = tool_input.force
         safe_url = sanitize_url(repository)
         auth_args = _get_git_auth_args(repository)
+        git_env = _get_mock_git_env()
+        
         command = ["git", *auth_args, "push", repository, branch]
         if force:
             command.append("--force")
+        
         await _run_git_cmd(
             command,
             label=f"git push {safe_url} branch={branch} force={force}",
             cwd=clone_path,
+            env=git_env,
             timeout=None,
         )
+        
         return StringToolOutput(result=f"Successfully pushed the specified branch to {safe_url}")
 
 
@@ -665,6 +684,7 @@ class FetchBranchTool(Tool[FetchBranchToolInput, ToolRunOptions, StringToolOutpu
         safe_url = sanitize_url(repository)
         auth_args = _get_git_auth_args(repository)
         git_env = _get_mock_git_env()
+        
         await _run_git_cmd(
             ["git", *auth_args, "fetch", repository, f"{branch}:refs/heads/{branch}"],
             label=f"git fetch {safe_url} branch={branch}",
@@ -672,6 +692,7 @@ class FetchBranchTool(Tool[FetchBranchToolInput, ToolRunOptions, StringToolOutpu
             env=git_env,
             timeout=None,
         )
+        
         return StringToolOutput(result=f"Successfully fetched branch {branch} from {safe_url}")
 
 

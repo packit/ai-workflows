@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -475,9 +476,8 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
         auth_args = _get_git_auth_args(repository)
         git_env = _get_mock_git_env()
 
-        clone_path.mkdir(parents=True, exist_ok=True)
-
         if branch:
+            clone_path.mkdir(parents=True, exist_ok=True)
             proc = await asyncio.create_subprocess_exec("git", "init", cwd=clone_path, env=git_env)
             if await proc.wait():
                 raise ToolError(f"Failed to initialize git repo at {clone_path}")
@@ -493,6 +493,17 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
             if await proc.wait():
                 raise ToolError(f"Failed to checkout branch {branch}")
         else:
+            if clone_path.exists():
+                allowed_parents = {
+                    Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")),
+                    Path("/tmp"),  # noqa: S108
+                }
+                if not any(clone_path.resolve().is_relative_to(p) for p in allowed_parents):
+                    raise ToolError(
+                        f"Refusing to remove {clone_path}: not under an allowed base directory"
+                    )
+                await asyncio.to_thread(shutil.rmtree, clone_path)
+            clone_path.parent.mkdir(parents=True, exist_ok=True)
             command = ["git", *auth_args, "clone", repository, str(clone_path)]
             proc = await asyncio.create_subprocess_exec(command[0], *command[1:], env=git_env)
             if await proc.wait():

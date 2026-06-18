@@ -47,6 +47,9 @@ class RedisQueues(Enum):
     REBASE_QUEUE = "rebase_queue"
     BACKPORT_QUEUE = "backport_queue"
     POSTPONED_LIST = "postponed_list"
+    REPRODUCER_QUEUE = "reproducer_queue"
+    REPRODUCER_QUEUE_TODO = "reproducer_queue_todo"
+    COMPLETED_REPRODUCER_LIST = "completed_reproducer_list"
 
     @classmethod
     def all_queues(cls) -> set[str]:
@@ -74,6 +77,8 @@ class RedisQueues(Enum):
             cls.CLARIFICATION_NEEDED_QUEUE.value,
             cls.REBASE_QUEUE.value,
             cls.BACKPORT_QUEUE.value,
+            cls.REPRODUCER_QUEUE.value,
+            cls.REPRODUCER_QUEUE_TODO.value,
         }
 
     @classmethod
@@ -85,6 +90,7 @@ class RedisQueues(Enum):
             cls.COMPLETED_REBASE_LIST.value,
             cls.COMPLETED_BACKPORT_LIST.value,
             cls.COMPLETED_REBUILD_LIST.value,
+            cls.COMPLETED_REPRODUCER_LIST.value,
             cls.POSTPONED_LIST.value,
         }
 
@@ -155,6 +161,11 @@ class JiraLabels(Enum):
     REBASE_FAILED = "ymir_rebase_failed"
     BACKPORT_FAILED = "ymir_backport_failed"
     REBUILD_FAILED = "ymir_rebuild_failed"
+    REPRODUCER_IN_PROGRESS = "ymir_reproducer_in_progress"
+    REPRODUCER_CREATED = "ymir_reproducer_created"
+    REPRODUCER_FAILED = "ymir_reproducer_failed"
+    REPRODUCER_ERRORED = "ymir_reproducer_errored"
+    REPRODUCER_NOT_REPRODUCIBLE = "ymir_reproducer_not_reproducible"
 
     TRIAGED_POSTPONED = "ymir_triaged_postponed"
     TRIAGED_NOT_AFFECTED = "ymir_triaged_not_affected"

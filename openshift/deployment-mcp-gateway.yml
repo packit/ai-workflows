@@ -22,7 +22,7 @@ spec:
         - -m
         - ymir.tools.privileged.gateway
         command:
-        - /usr/bin/python
+        - /opt/beeai-venv/bin/python
         env:
         - name: GIT_REPO_BASEPATH
           valueFrom:

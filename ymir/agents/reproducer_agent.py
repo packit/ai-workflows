@@ -276,9 +276,7 @@ async def run_workflow(
             comment_parts.append(f"\n*Summary*:\n{result.summary}")
 
             if result.not_reproducible_reason:
-                comment_parts.append(
-                    f"\n*Not Reproducible Reason*:\n{result.not_reproducible_reason}"
-                )
+                comment_parts.append(f"\n*Not Reproducible Reason*:\n{result.not_reproducible_reason}")
 
             comment_text = "\n".join(comment_parts)
 
@@ -357,19 +355,14 @@ async def main() -> None:
             user_triggered = task.user_triggered
             logger.info(
                 f"Processing reproducer for JIRA issue: {input_data.jira_issue}, "
-                f"attempt: {task.attempts + 1}"
-                + (" (user-triggered)" if user_triggered else "")
+                f"attempt: {task.attempts + 1}" + (" (user-triggered)" if user_triggered else "")
             )
 
             # Duplicate-processing guard: skip if the issue already has a
             # reproducer-terminal label and is not currently in-progress or
             # user-triggered (which always gets a fresh run).
             current_labels = await tasks.get_jira_labels(input_data.jira_issue)
-            terminal_ymir_labels = [
-                label
-                for label in current_labels
-                if label in _REPRODUCER_TERMINAL_LABELS
-            ]
+            terminal_ymir_labels = [label for label in current_labels if label in _REPRODUCER_TERMINAL_LABELS]
             if (
                 terminal_ymir_labels
                 and JiraLabels.REPRODUCER_IN_PROGRESS.value not in current_labels
@@ -461,9 +454,7 @@ async def main() -> None:
 
             try:
                 logger.info(f"Starting reproducer processing for {input_data.jira_issue}")
-                with span_processor.start_transaction(
-                    input_data.jira_issue, workflow="reproducer"
-                ):
+                with span_processor.start_transaction(input_data.jira_issue, workflow="reproducer"):
                     state = await run_workflow(
                         input_data.jira_issue,
                         dry_run,
@@ -479,21 +470,13 @@ async def main() -> None:
 
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
-                logger.error(
-                    f"Exception during reproducer processing for "
-                    f"{input_data.jira_issue}: {error}"
-                )
+                logger.error(f"Exception during reproducer processing for {input_data.jira_issue}: {error}")
                 await retry(
                     task,
-                    ErrorData(
-                        details=error, jira_issue=input_data.jira_issue
-                    ).model_dump_json(),
+                    ErrorData(details=error, jira_issue=input_data.jira_issue).model_dump_json(),
                 )
             else:
-                logger.info(
-                    f"Reproducer resolved as success={output.success} "
-                    f"for {input_data.jira_issue}"
-                )
+                logger.info(f"Reproducer resolved as success={output.success} for {input_data.jira_issue}")
 
                 # Push the completed result to the completed list
                 await fix_await(
@@ -503,8 +486,7 @@ async def main() -> None:
                     )
                 )
                 logger.info(
-                    f"Pushed {input_data.jira_issue} to "
-                    f"{RedisQueues.COMPLETED_REPRODUCER_LIST.value}"
+                    f"Pushed {input_data.jira_issue} to {RedisQueues.COMPLETED_REPRODUCER_LIST.value}"
                 )
 
 

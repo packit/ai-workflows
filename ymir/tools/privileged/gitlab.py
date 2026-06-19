@@ -138,10 +138,7 @@ _SENSITIVE_STDERR_RE = re.compile(
 
 def _sanitize_git_stderr(text: str) -> str:
     """Filter out lines from git stderr that may contain auth credentials."""
-    return "\n".join(
-        line for line in text.splitlines()
-        if not _SENSITIVE_STDERR_RE.search(line)
-    )
+    return "\n".join(line for line in text.splitlines() if not _SENSITIVE_STDERR_RE.search(line))
 
 
 def _get_git_auth_args(repository_url: str) -> list[str]:
@@ -499,9 +496,7 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
                     Path("/tmp"),  # noqa: S108
                 }
                 if not any(clone_path.resolve().is_relative_to(p) for p in allowed_parents):
-                    raise ToolError(
-                        f"Refusing to remove {clone_path}: not under an allowed base directory"
-                    )
+                    raise ToolError(f"Refusing to remove {clone_path}: not under an allowed base directory")
                 await asyncio.to_thread(shutil.rmtree, clone_path)
             clone_path.parent.mkdir(parents=True, exist_ok=True)
             command = ["git", *auth_args, "clone", repository, str(clone_path)]
@@ -550,7 +545,8 @@ class PushToRemoteRepositoryTool(Tool[PushToRemoteRepositoryToolInput, ToolRunOp
                 command.append("--force")
             env = _get_mock_git_env()
             proc = await asyncio.create_subprocess_exec(
-                command[0], *command[1:],
+                command[0],
+                *command[1:],
                 cwd=clone_path,
                 env=env,
                 stdout=asyncio.subprocess.DEVNULL,

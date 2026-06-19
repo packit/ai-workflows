@@ -959,7 +959,13 @@ async def main() -> None:
                     # already posted the failure feedback for this graceful path.
                     # Only the crash path (which never reaches that step) passes
                     # comment_text, so we never double-comment.
-                    await retry(task, state.backport_result.error)
+                    await retry(
+                        task,
+                        ErrorData(
+                            details=getattr(state.backport_result, "error", None) or "Unknown backport error",
+                            jira_issue=backport_data.jira_issue,
+                        ).model_dump_json(),
+                    )
 
 
 if __name__ == "__main__":

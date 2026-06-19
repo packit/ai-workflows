@@ -1283,6 +1283,9 @@ class ReproducerOutputSchema(BaseModel):
     jira_issue: str = Field(description="Jira issue identifier")
     success: bool = Field(description="Whether the reproducer was successfully completed")
     reproducer_type: Literal["cve", "bug"] = Field(description="Type of reproducer: 'cve' or 'bug'")
+    package: str = Field(description="Resolved package name")
+    compose: str | None = Field(default=None, description="RHEL compose used for TF verification")
+    arch: str | None = Field(default=None, description="Architecture used for TF verification")
     test_mr_url: str | None = Field(default=None, description="URL of the test merge request")
     testing_farm_request_id: str | None = Field(
         default=None, description="Testing Farm request ID for the submitted test run"

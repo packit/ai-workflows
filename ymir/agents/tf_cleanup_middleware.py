@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 
@@ -45,7 +46,7 @@ class TFReservationCleanupMiddleware(RunMiddlewareProtocol):
         for request_id in leaked:
             logger.warning("Cleaning up leaked TF reservation %s", request_id)
             try:
-                _testing_farm_api_delete(f"requests/{request_id}")
+                await asyncio.to_thread(_testing_farm_api_delete, f"requests/{request_id}")
                 logger.info("Successfully cancelled leaked TF reservation %s", request_id)
             except Exception:
                 logger.exception("Failed to cancel leaked TF reservation %s", request_id)

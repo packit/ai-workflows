@@ -1,0 +1,44 @@
+**Output Format**
+
+Your final answer MUST be a JSON object with the following keys:
+`jira_issue`, `success`, `reproducer_type`, `package`, `compose`, `arch`,
+`testing_farm_request_id`, `pass_fail_criteria`, `summary`,
+`not_reproducible_reason`.
+
+All string fields must be actual strings, not nested objects.
+The `test_mr_url` field is NOT part of your output — the merge request is
+created automatically by the workflow after you return.
+
+Examples:
+
+Successful reproducer:
+```json
+{
+    "jira_issue": "RHEL-12345",
+    "success": true,
+    "reproducer_type": "cve",
+    "package": "libfoo",
+    "compose": "RHEL-9.8.0-Nightly",
+    "arch": "x86_64",
+    "testing_farm_request_id": "tf-request-abc123",
+    "pass_fail_criteria": "PASS: program exits 0 (fix applied, no crash). FAIL: program exits with SIGSEGV (bug present, buffer overflow triggered).",
+    "summary": "Created reproducer for CVE-2025-12345 in libfoo. The vulnerability is a heap buffer overflow in parse_header() triggered by a malformed PNG with chunk length > 0x7fffffff. Test sends crafted input and checks for crash via exit code.",
+    "not_reproducible_reason": null
+}
+```
+
+Non-reproducible result:
+```json
+{
+    "jira_issue": "RHEL-12345",
+    "success": false,
+    "reproducer_type": "bug",
+    "package": "libbar",
+    "compose": "RHEL-10.1.0-Nightly",
+    "arch": "x86_64",
+    "testing_farm_request_id": "tf-request-xyz789",
+    "pass_fail_criteria": "PASS: command completes within 10s. FAIL: command hangs (timeout after 10s).",
+    "summary": "Attempted to reproduce RHEL-12345 (infinite loop in parser). The bug requires a specific interleaving of concurrent requests that could not be reliably reproduced in 5 attempts on a single-core TF machine.",
+    "not_reproducible_reason": "Race condition requires multi-threaded workload with specific timing. Attempted with stress-ng and taskset but could not trigger the hang reliably."
+}
+```

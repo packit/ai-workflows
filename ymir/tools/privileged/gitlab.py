@@ -4,11 +4,8 @@ import json
 import logging
 import os
 import re
-<<<<<<< HEAD
-import time
-=======
 import shutil
->>>>>>> 468d64a (Fix clone_repository failing on non-empty target directory)
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -195,10 +192,7 @@ _SENSITIVE_STDERR_RE = re.compile(
 
 def _sanitize_git_stderr(text: str) -> str:
     """Filter out lines from git stderr that may contain auth credentials."""
-    return "\n".join(
-        line for line in text.splitlines()
-        if not _SENSITIVE_STDERR_RE.search(line)
-    )
+    return "\n".join(line for line in text.splitlines() if not _SENSITIVE_STDERR_RE.search(line))
 
 
 def _get_git_auth_args(repository_url: str) -> list[str]:
@@ -607,9 +601,7 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
                     Path("/tmp"),  # noqa: S108
                 }
                 if not any(clone_path.resolve().is_relative_to(p) for p in allowed_parents):
-                    raise ToolError(
-                        f"Refusing to remove {clone_path}: not under an allowed base directory"
-                    )
+                    raise ToolError(f"Refusing to remove {clone_path}: not under an allowed base directory")
                 await asyncio.to_thread(shutil.rmtree, clone_path)
             clone_path.parent.mkdir(parents=True, exist_ok=True)
             

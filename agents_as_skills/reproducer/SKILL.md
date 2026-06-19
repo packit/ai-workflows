@@ -150,8 +150,8 @@ This step provisions a real RHEL machine via Testing Farm for verifying the repr
 3. Call `reserve_testing_farm_machine` with:
    - `compose`: the compose string from above (e.g., `RHEL-9.8.0-Nightly`)
    - `arch`: the target architecture (default: `x86_64`)
-   - `duration_minutes`: `60` (default; increase to 120 for complex tests)
    - `ssh_public_key`: omit this parameter — the gateway uses its own SSH key automatically.
+   - The reservation duration is fixed at 30 minutes and cannot be changed.
    - Save the returned `id` field as `tf_request_id`.
 
 4. Wait for the machine to become available:

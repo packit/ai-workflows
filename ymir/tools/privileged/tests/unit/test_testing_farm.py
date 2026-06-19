@@ -59,6 +59,7 @@ async def test_reserve_machine_request_body(monkeypatch):
     monkeypatch.setenv("TESTING_FARM_API_TOKEN", "fake-token")
     # Clear the cached headers so the monkeypatched env var is picked up
     tf_module._testing_farm_headers.cache_clear()
+    tf_module._testing_farm_url.cache_clear()
 
     captured = {}
 
@@ -73,7 +74,6 @@ async def test_reserve_machine_request_body(monkeypatch):
         input={
             "compose": "RHEL-9.8.0-Nightly",
             "arch": "aarch64",
-            "duration_minutes": 120,
             "ssh_public_key": SAMPLE_SSH_KEY,
         }
     )
@@ -95,8 +95,8 @@ async def test_reserve_machine_request_body(monkeypatch):
     assert env["arch"] == "aarch64"
     assert env["os"] == {"compose": "RHEL-9.8.0-Nightly"}
 
-    # Duration must be passed as a string
-    assert env["variables"]["TF_RESERVATION_DURATION"] == "120"
+    # Duration is hardcoded to _RESERVATION_DURATION_MINUTES (30)
+    assert env["variables"]["TF_RESERVATION_DURATION"] == "30"
 
     # SSH key must be the gateway's own key, base64-encoded
     expected_b64 = base64.b64encode(GATEWAY_SSH_KEY.encode()).decode()
@@ -122,10 +122,9 @@ async def test_reserve_machine_returns_request_id(monkeypatch):
     """The tool returns the request ID from the API response."""
     monkeypatch.setenv("TESTING_FARM_API_TOKEN", "fake-token")
     tf_module._testing_farm_headers.cache_clear()
+    tf_module._testing_farm_url.cache_clear()
 
-    flexmock(tf_module).should_receive("_testing_farm_api_post").and_return(
-        {"id": "abc-123"}
-    ).once()
+    flexmock(tf_module).should_receive("_testing_farm_api_post").and_return({"id": "abc-123"}).once()
 
     out = await ReserveTestingFarmMachineTool().run(
         input={
@@ -141,6 +140,7 @@ async def test_reserve_machine_default_arch(monkeypatch):
     """Default arch is x86_64 when not specified."""
     monkeypatch.setenv("TESTING_FARM_API_TOKEN", "fake-token")
     tf_module._testing_farm_headers.cache_clear()
+    tf_module._testing_farm_url.cache_clear()
 
     captured = {}
 
@@ -166,6 +166,7 @@ async def test_reserve_machine_ssh_key_encoding(monkeypatch):
     """The gateway's SSH key is properly base64-encoded (agent-provided key is ignored)."""
     monkeypatch.setenv("TESTING_FARM_API_TOKEN", "fake-token")
     tf_module._testing_farm_headers.cache_clear()
+    tf_module._testing_farm_url.cache_clear()
 
     captured = {}
 
@@ -184,9 +185,7 @@ async def test_reserve_machine_ssh_key_encoding(monkeypatch):
         }
     )
 
-    stored_b64 = captured["body"]["environments"][0]["secrets"][
-        "TF_RESERVATION_AUTHORIZED_KEYS_BASE64"
-    ]
+    stored_b64 = captured["body"]["environments"][0]["secrets"]["TF_RESERVATION_AUTHORIZED_KEYS_BASE64"]
 
     # Gateway key is used, not the agent-provided key
     decoded = base64.b64decode(stored_b64).decode()
@@ -202,9 +201,7 @@ async def test_reservation_details_dry_run(monkeypatch):
     """DRY_RUN=true returns complete state with dry-run-host."""
     monkeypatch.setenv("DRY_RUN", "true")
 
-    out = await GetTestingFarmReservationDetailsTool().run(
-        input={"request_id": "req-dry-001"}
-    )
+    out = await GetTestingFarmReservationDetailsTool().run(input={"request_id": "req-dry-001"})
     assert out.result == {"state": "complete", "ssh_connection": "root@dry-run-host"}
 
 
@@ -213,31 +210,25 @@ async def test_reservation_details_running_with_guest(monkeypatch):
     """When pipeline.log has guest IP and task #1 started, ssh_connection is extracted."""
     monkeypatch.setenv("TESTING_FARM_API_TOKEN", "fake-token")
     tf_module._testing_farm_headers.cache_clear()
+    tf_module._testing_farm_url.cache_clear()
 
     api_response = {
         "state": "running",
         "run": {"artifacts": "https://artifacts.testing-farm.io/abc123"},
     }
 
-    pipeline_log = (
-        "some log output\n"
-        "Guest is ready at root@10.0.0.1\n"
-        "more output\n"
-        "execute task #1\n"
-    )
+    pipeline_log = "some log output\nGuest is ready at root@10.0.0.1\nmore output\nexecute task #1\n"
 
-    flexmock(tf_module).should_receive("_testing_farm_api_get").with_args(
-        "requests/req-100"
-    ).and_return(api_response).once()
+    flexmock(tf_module).should_receive("_testing_farm_api_get").with_args("requests/req-100").and_return(
+        api_response
+    ).once()
 
     mock_resp = flexmock(ok=True, text=pipeline_log)
     flexmock(requests).should_receive("get").with_args(
         "https://artifacts.testing-farm.io/abc123/pipeline.log", timeout=30
     ).and_return(mock_resp).once()
 
-    out = await GetTestingFarmReservationDetailsTool().run(
-        input={"request_id": "req-100"}
-    )
+    out = await GetTestingFarmReservationDetailsTool().run(input={"request_id": "req-100"})
     assert out.result == {"state": "running", "ssh_connection": "root@10.0.0.1"}
 
 
@@ -246,16 +237,15 @@ async def test_reservation_details_pending_then_canceled(monkeypatch):
     """When state is pending then transitions to canceled, returns canceled."""
     monkeypatch.setenv("TESTING_FARM_API_TOKEN", "fake-token")
     tf_module._testing_farm_headers.cache_clear()
+    tf_module._testing_farm_url.cache_clear()
 
-    flexmock(tf_module).should_receive("_testing_farm_api_get").with_args(
-        "requests/req-200"
-    ).and_return({"state": "pending"}).and_return({"state": "canceled"})
+    flexmock(tf_module).should_receive("_testing_farm_api_get").with_args("requests/req-200").and_return(
+        {"state": "pending"}
+    ).and_return({"state": "canceled"})
 
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
-    out = await GetTestingFarmReservationDetailsTool().run(
-        input={"request_id": "req-200"}
-    )
+    out = await GetTestingFarmReservationDetailsTool().run(input={"request_id": "req-200"})
     assert out.result == {"state": "canceled", "ssh_connection": "not-yet-available"}
 
 
@@ -264,6 +254,7 @@ async def test_reservation_details_running_no_task_then_ready(monkeypatch):
     """When task #1 hasn't started on first poll, polls again until ready."""
     monkeypatch.setenv("TESTING_FARM_API_TOKEN", "fake-token")
     tf_module._testing_farm_headers.cache_clear()
+    tf_module._testing_farm_url.cache_clear()
 
     api_response = {
         "state": "running",
@@ -273,21 +264,17 @@ async def test_reservation_details_running_no_task_then_ready(monkeypatch):
     log_not_ready = "Guest is ready at root@10.0.0.1\nprovisioning still in progress\n"
     log_ready = "Guest is ready at root@10.0.0.1\nexecute task #1\n"
 
-    flexmock(tf_module).should_receive("_testing_farm_api_get").with_args(
-        "requests/req-300"
-    ).and_return(api_response)
+    flexmock(tf_module).should_receive("_testing_farm_api_get").with_args("requests/req-300").and_return(
+        api_response
+    )
 
     flexmock(requests).should_receive("get").with_args(
         "https://artifacts.testing-farm.io/abc123/pipeline.log", timeout=30
-    ).and_return(flexmock(ok=True, text=log_not_ready)).and_return(
-        flexmock(ok=True, text=log_ready)
-    )
+    ).and_return(flexmock(ok=True, text=log_not_ready)).and_return(flexmock(ok=True, text=log_ready))
 
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
-    out = await GetTestingFarmReservationDetailsTool().run(
-        input={"request_id": "req-300"}
-    )
+    out = await GetTestingFarmReservationDetailsTool().run(input={"request_id": "req-300"})
     assert out.result == {"state": "running", "ssh_connection": "root@10.0.0.1"}
 
 
@@ -296,29 +283,25 @@ async def test_reservation_details_multihost_pattern(monkeypatch):
     """Multihost pattern with 'primary address:' is also matched."""
     monkeypatch.setenv("TESTING_FARM_API_TOKEN", "fake-token")
     tf_module._testing_farm_headers.cache_clear()
+    tf_module._testing_farm_url.cache_clear()
 
     api_response = {
         "state": "running",
         "run": {"artifacts": "https://artifacts.testing-farm.io/def456"},
     }
 
-    pipeline_log = (
-        "[guest1]   primary address: 10.0.0.99\n"
-        "execute task #1\n"
-    )
+    pipeline_log = "[guest1]   primary address: 10.0.0.99\nexecute task #1\n"
 
-    flexmock(tf_module).should_receive("_testing_farm_api_get").with_args(
-        "requests/req-400"
-    ).and_return(api_response).once()
+    flexmock(tf_module).should_receive("_testing_farm_api_get").with_args("requests/req-400").and_return(
+        api_response
+    ).once()
 
     mock_resp = flexmock(ok=True, text=pipeline_log)
     flexmock(requests).should_receive("get").with_args(
         "https://artifacts.testing-farm.io/def456/pipeline.log", timeout=30
     ).and_return(mock_resp).once()
 
-    out = await GetTestingFarmReservationDetailsTool().run(
-        input={"request_id": "req-400"}
-    )
+    out = await GetTestingFarmReservationDetailsTool().run(input={"request_id": "req-400"})
     assert out.result == {"state": "running", "ssh_connection": "root@10.0.0.99"}
 
 
@@ -327,6 +310,7 @@ async def test_reservation_details_multihost_realistic_tag(monkeypatch):
     """Multihost pattern with realistic TF tag containing dashes, dots, colons, slashes."""
     monkeypatch.setenv("TESTING_FARM_API_TOKEN", "fake-token")
     tf_module._testing_farm_headers.cache_clear()
+    tf_module._testing_farm_url.cache_clear()
 
     api_response = {
         "state": "running",
@@ -338,18 +322,16 @@ async def test_reservation_details_multihost_realistic_tag(monkeypatch):
         "execute task #1\n"
     )
 
-    flexmock(tf_module).should_receive("_testing_farm_api_get").with_args(
-        "requests/req-500"
-    ).and_return(api_response).once()
+    flexmock(tf_module).should_receive("_testing_farm_api_get").with_args("requests/req-500").and_return(
+        api_response
+    ).once()
 
     mock_resp = flexmock(ok=True, text=pipeline_log)
     flexmock(requests).should_receive("get").with_args(
         "https://artifacts.testing-farm.io/ghi789/pipeline.log", timeout=30
     ).and_return(mock_resp).once()
 
-    out = await GetTestingFarmReservationDetailsTool().run(
-        input={"request_id": "req-500"}
-    )
+    out = await GetTestingFarmReservationDetailsTool().run(input={"request_id": "req-500"})
     assert out.result == {"state": "running", "ssh_connection": "root@10.31.8.81"}
 
 
@@ -361,9 +343,7 @@ async def test_cancel_request_dry_run(monkeypatch):
     """DRY_RUN=true returns cancelled=True with message, no API call."""
     monkeypatch.setenv("DRY_RUN", "true")
 
-    out = await CancelTestingFarmRequestTool().run(
-        input={"request_id": "req-cancel-dry"}
-    )
+    out = await CancelTestingFarmRequestTool().run(input={"request_id": "req-cancel-dry"})
     result = out.result
     assert result["cancelled"] is True
     assert result["request_id"] == "req-cancel-dry"
@@ -376,14 +356,11 @@ async def test_cancel_request_calls_delete(monkeypatch):
     """The tool calls _testing_farm_api_delete with the correct path."""
     monkeypatch.setenv("TESTING_FARM_API_TOKEN", "fake-token")
     tf_module._testing_farm_headers.cache_clear()
+    tf_module._testing_farm_url.cache_clear()
 
-    flexmock(tf_module).should_receive("_testing_farm_api_delete").with_args(
-        "requests/req-500"
-    ).once()
+    flexmock(tf_module).should_receive("_testing_farm_api_delete").with_args("requests/req-500").once()
 
-    await CancelTestingFarmRequestTool().run(
-        input={"request_id": "req-500"}
-    )
+    await CancelTestingFarmRequestTool().run(input={"request_id": "req-500"})
 
 
 @pytest.mark.asyncio
@@ -391,14 +368,11 @@ async def test_cancel_request_returns_confirmation(monkeypatch):
     """The tool returns cancelled=True and the request_id."""
     monkeypatch.setenv("TESTING_FARM_API_TOKEN", "fake-token")
     tf_module._testing_farm_headers.cache_clear()
+    tf_module._testing_farm_url.cache_clear()
 
-    flexmock(tf_module).should_receive("_testing_farm_api_delete").with_args(
-        "requests/req-600"
-    ).once()
+    flexmock(tf_module).should_receive("_testing_farm_api_delete").with_args("requests/req-600").once()
 
-    out = await CancelTestingFarmRequestTool().run(
-        input={"request_id": "req-600"}
-    )
+    out = await CancelTestingFarmRequestTool().run(input={"request_id": "req-600"})
     assert out.result == {"cancelled": True, "request_id": "req-600"}
 
 
@@ -457,9 +431,12 @@ async def test_run_remote_command_success(monkeypatch):
         # Verify SSH args include -i for gateway key
         mock_exec.assert_called_once_with(
             "ssh",
-            "-i", str(_SSH_KEY_PATH),
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            "-i",
+            str(_SSH_KEY_PATH),
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
             "root@10.0.0.1",
             "uname -r",
             stdout=asyncio.subprocess.PIPE,
@@ -610,23 +587,26 @@ async def test_copy_files_timeout_kills_process(monkeypatch):
         pytest.raises(ToolError, match="timed out"),
     ):
         await CopyFilesToRemoteTool().run(
-                input={
-                    "ssh_host": "root@10.0.0.1",
-                    "local_paths": ["/tmp/test.sh"],
-                    "timeout": 5,
-                }
-            )
+            input={
+                "ssh_host": "root@10.0.0.1",
+                "local_paths": ["/tmp/test.sh"],
+                "timeout": 5,
+            }
+        )
 
     fake_proc.kill.assert_called_once()
     fake_proc.wait.assert_awaited_once()
 
 
-@pytest.mark.parametrize("bad_host", [
-    "root@host; rm -rf /",
-    "root@host && curl evil.com",
-    "user@host|cat /etc/passwd",
-    "root@",
-])
+@pytest.mark.parametrize(
+    "bad_host",
+    [
+        "root@host; rm -rf /",
+        "root@host && curl evil.com",
+        "user@host|cat /etc/passwd",
+        "root@",
+    ],
+)
 def test_ssh_host_pattern_rejects_injection(bad_host):
     """ssh_host pattern blocks shell metacharacters."""
     with pytest.raises(ValidationError):
@@ -654,12 +634,15 @@ def test_local_paths_guard_rejects_traversal():
         )
 
 
-@pytest.mark.parametrize("bad_dir", [
-    "/tmp/foo; curl evil.com",
-    "/tmp/foo && rm -rf /",
-    "/tmp/$(whoami)",
-    "/tmp/`id`",
-])
+@pytest.mark.parametrize(
+    "bad_dir",
+    [
+        "/tmp/foo; curl evil.com",
+        "/tmp/foo && rm -rf /",
+        "/tmp/$(whoami)",
+        "/tmp/`id`",
+    ],
+)
 def test_remote_dir_pattern_rejects_injection(bad_dir):
     """remote_dir pattern blocks shell metacharacters."""
     with pytest.raises(ValidationError):
@@ -670,12 +653,15 @@ def test_remote_dir_pattern_rejects_injection(bad_dir):
         )
 
 
-@pytest.mark.parametrize("bad_id", [
-    "../../admin",
-    "req-123/../../secrets",
-    "req 123",
-    "req;drop",
-])
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "../../admin",
+        "req-123/../../secrets",
+        "req 123",
+        "req;drop",
+    ],
+)
 def test_request_id_pattern_rejects_traversal(bad_id):
     """request_id pattern blocks path traversal and special characters."""
     with pytest.raises(ValidationError):
@@ -689,6 +675,7 @@ async def test_reservation_details_transient_http_error_retries(monkeypatch):
     """Transient 503 during polling is retried instead of aborting."""
     monkeypatch.setenv("TESTING_FARM_API_TOKEN", "fake-token")
     tf_module._testing_farm_headers.cache_clear()
+    tf_module._testing_farm_url.cache_clear()
 
     mock_response_503 = MagicMock()
     mock_response_503.status_code = 503
@@ -706,8 +693,6 @@ async def test_reservation_details_transient_http_error_retries(monkeypatch):
     flexmock(tf_module).should_receive("_testing_farm_api_get").replace_with(fake_get)
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
-    out = await GetTestingFarmReservationDetailsTool().run(
-        input={"request_id": "req-transient"}
-    )
+    out = await GetTestingFarmReservationDetailsTool().run(input={"request_id": "req-transient"})
     assert out.result["state"] == "complete"
     assert call_count == 2

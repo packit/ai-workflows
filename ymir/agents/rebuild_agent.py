@@ -269,7 +269,7 @@ async def main() -> None:
                 logger.info(f"Result to be put in Jira comment: {comment_text}")
 
                 all_issues = [state.jira_issue] + [item.issue_key for item in state.consolidated_issues]
-                for issue_key in all_issues:
+                for issue_key in dict.fromkeys(all_issues):
                     try:
                         await tasks.comment_in_jira(
                             jira_issue=issue_key,
@@ -401,7 +401,7 @@ async def main() -> None:
                         f"Task failed after {max_retries} attempts, "
                         f"moving to error list: {rebuild_data.jira_issue}"
                     )
-                    for issue_key in rebuild_data.all_jira_issues:
+                    for issue_key in dict.fromkeys(rebuild_data.all_jira_issues):
                         try:
                             await tasks.set_jira_labels(
                                 jira_issue=issue_key,
@@ -423,7 +423,7 @@ async def main() -> None:
                                 os.environ["MCP_GATEWAY_URL"],
                                 call_meta={"jira_issue": rebuild_data.jira_issue},
                             ) as gateway_tools:
-                                for issue_key in rebuild_data.all_jira_issues:
+                                for issue_key in dict.fromkeys(rebuild_data.all_jira_issues):
                                     try:
                                         await tasks.comment_in_jira(
                                             jira_issue=issue_key,
@@ -476,7 +476,7 @@ async def main() -> None:
             else:
                 if state.rebuild_success:
                     logger.info(f"Rebuild successful for {rebuild_data.jira_issue}, adding to completed list")
-                    for issue_key in rebuild_data.all_jira_issues:
+                    for issue_key in dict.fromkeys(rebuild_data.all_jira_issues):
                         try:
                             await tasks.set_jira_labels(
                                 jira_issue=issue_key,
@@ -502,7 +502,7 @@ async def main() -> None:
                     )
                 else:
                     logger.warning(f"Rebuild failed for {rebuild_data.jira_issue}: {state.rebuild_error}")
-                    for issue_key in rebuild_data.all_jira_issues:
+                    for issue_key in dict.fromkeys(rebuild_data.all_jira_issues):
                         try:
                             await tasks.set_jira_labels(
                                 jira_issue=issue_key,

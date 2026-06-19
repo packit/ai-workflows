@@ -469,7 +469,9 @@ async def main() -> None:
                 + (" (user-triggered via ymir_todo)" if user_triggered else "")
             )
 
-            async def retry(task, error, rebase_data=rebase_data, user_triggered=user_triggered):
+            async def retry(
+                task, error, comment_text=None, rebase_data=rebase_data, user_triggered=user_triggered
+            ):
                 task.attempts += 1
                 if task.attempts < max_retries:
                     logger.warning(
@@ -479,6 +481,7 @@ async def main() -> None:
                     retry_queue = rebase_queue_todo if task.user_triggered else rebase_queue
                     await fix_await(redis.lpush(retry_queue, task.model_dump_json()))
                 else:
+                    # Final attempt exhausted — mark errored and stop retrying.
                     logger.error(
                         f"Task failed after {max_retries} attempts, "
                         f"moving to error list: {rebase_data.jira_issue}"
@@ -490,6 +493,30 @@ async def main() -> None:
                         dry_run=dry_run,
                         user_triggered=user_triggered,
                     )
+                    # Post failure feedback to Jira once, here on the final attempt
+                    # only — never for intermediate retries. Restricted to
+                    # user-triggered (ymir_todo) runs: a maintainer who didn't ask
+                    # for processing shouldn't be notified, so skip the gateway
+                    # connection entirely otherwise.
+                    if user_triggered and comment_text and not dry_run:
+                        try:
+                            async with mcp_tools(
+                                os.environ["MCP_GATEWAY_URL"],
+                                call_meta={"jira_issue": rebase_data.jira_issue},
+                            ) as gateway_tools:
+                                await tasks.comment_in_jira(
+                                    jira_issue=rebase_data.jira_issue,
+                                    agent_type="Rebase",
+                                    comment_text=comment_text,
+                                    available_tools=gateway_tools,
+                                    is_error=True,
+                                    user_triggered=user_triggered,
+                                )
+                        except Exception as comment_error:
+                            logger.warning(
+                                f"Failed to post final rebase failure comment for "
+                                f"{rebase_data.jira_issue}: {comment_error}"
+                            )
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
             try:
@@ -513,9 +540,11 @@ async def main() -> None:
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during rebase processing for {rebase_data.jira_issue}: {error}")
+                reason = e.explain() if isinstance(e, FrameworkError) else e
                 await retry(
                     task,
                     ErrorData(details=error, jira_issue=rebase_data.jira_issue).model_dump_json(),
+                    comment_text=f"Agent failed to perform a rebase: {reason}",
                 )
             else:
                 if state.rebase_result.success:
@@ -546,6 +575,10 @@ async def main() -> None:
                         dry_run=dry_run,
                         user_triggered=user_triggered,
                     )
+                    # No comment_text here: the in-workflow comment_in_jira step has
+                    # already posted the failure feedback for this graceful path.
+                    # Only the crash path (which never reaches that step) passes
+                    # comment_text, so we never double-comment.
                     await retry(task, state.rebase_result.error)
 
 

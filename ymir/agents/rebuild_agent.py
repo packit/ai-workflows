@@ -520,7 +520,7 @@ async def main() -> None:
                     await retry(
                         task,
                         ErrorData(
-                            details=state.rebuild_error,
+                            details=state.rebuild_error or "Unknown rebuild error",
                             jira_issue=rebuild_data.jira_issue,
                         ).model_dump_json(),
                     )

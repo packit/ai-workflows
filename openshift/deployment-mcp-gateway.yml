@@ -42,9 +42,6 @@ spec:
             name: jira-env
         - secretRef:
             name: jira-env
-        - secretRef:
-            name: log-detective-env
-            optional: true
         - configMapRef:
             name: kerberos-env
         image: mcp-server:prod

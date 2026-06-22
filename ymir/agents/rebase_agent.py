@@ -39,7 +39,7 @@ from ymir.agents.utils import (
     resolve_chat_model_override,
     wrap_details,
 )
-from ymir.common.base_utils import fix_await, is_cs_branch, redis_client
+from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.logging_setup import configure_logging
 from ymir.common.mock_repos import get_mock_local_tool_env
@@ -196,7 +196,6 @@ async def main() -> None:
                 return "run_rebase_agent"
 
             async def run_rebase_agent(state):
-                pkg_tool = "centpkg" if is_cs_branch(state.dist_git_branch) else "rhpkg"
                 response = await rebase_agent.run(
                     render_template(
                         get_prompt(),
@@ -208,7 +207,6 @@ async def main() -> None:
                             version=state.version,
                             jira_issue=state.jira_issue,
                             build_error=state.build_error,
-                            pkg_tool=pkg_tool,
                             triage_summary=state.triage_summary,
                         ),
                     ),

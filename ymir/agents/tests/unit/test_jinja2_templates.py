@@ -60,7 +60,6 @@ except ImportError:
         cve_id: str | None = None
         upstream_patches: list[str] = Field(default_factory=list)
         build_error: str | None = None
-        pkg_tool: str = "centpkg"
         triage_summary: str | None = None
 
     class RebaseInputSchema(BaseModel):  # type: ignore[no-redef]
@@ -214,7 +213,6 @@ class TestBackportTemplate:
                     "https://example.com/patch2.patch",
                 ],
                 build_error=None,
-                pkg_tool="centpkg",
             ),
         )
         assert "/tmp/clone" in result
@@ -223,7 +221,6 @@ class TestBackportTemplate:
         assert "RHEL-12345" in result
         assert "patch1.patch" in result
         assert "patch2.patch" in result
-        assert "centpkg" in result
         assert "repeated backport" not in result
 
     def test_renders_with_build_error(self):
@@ -237,7 +234,6 @@ class TestBackportTemplate:
                 jira_issue="RHEL-12345",
                 upstream_patches=["https://example.com/patch1.patch"],
                 build_error="error: implicit declaration of function 'foo'",
-                pkg_tool="centpkg",
             ),
         )
         assert "repeated backport" in result
@@ -256,7 +252,6 @@ class TestBackportTemplate:
                 cve_id="CVE-2024-1234",
                 upstream_patches=["https://example.com/patch1.patch"],
                 build_error=None,
-                pkg_tool="centpkg",
             ),
         )
         assert "CVE-2024-1234" in result
@@ -272,7 +267,6 @@ class TestBackportTemplate:
                 jira_issue="RHEL-12345",
                 upstream_patches=["https://example.com/patch1.patch"],
                 build_error=None,
-                pkg_tool="centpkg",
             ),
         )
         assert "a.k.a." not in result
@@ -290,7 +284,6 @@ class TestBackportFixBuildErrorTemplate:
                 jira_issue="RHEL-12345",
                 upstream_patches=["https://example.com/p1.patch"],
                 build_error="undefined reference to 'bar'",
-                pkg_tool="centpkg",
             ),
         )
         assert "cherry-pick workflow succeeded but the build failed" in result

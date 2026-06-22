@@ -21,6 +21,7 @@ from ymir.common.models import (
 )
 from ymir.common.utils import get_all_sources
 from ymir.tools.unprivileged.specfile import UpdateReleaseTool
+from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
 
 logger = logging.getLogger(__name__)
 
@@ -595,35 +596,17 @@ async def clone_and_prep_sources(
     # Run prep locally rather than via MCP gateway: the agent container is
     # RHEL-based so rpmbuild evaluates %prep macros correctly, whereas the
     # MCP gateway runs Fedora and would expand them differently.
-    if is_cs_branch(dist_git_branch):
-        pkg_cmd = [
-            "centpkg",
-            f"--name={package}",
-            "--namespace=rpms",
-            f"--release={dist_git_branch}",
-        ]
-    else:
-        pkg_cmd = [
-            "rhpkg",
-            f"--name={package}",
-            "--namespace=rpms",
-            f"--release={dist_git_branch}",
-            "--offline",
-            "--released",
-        ]
-    try:
-        exit_code, _, stderr = await run_subprocess([*pkg_cmd, "prep"], cwd=local_clone)
-    except FileNotFoundError:
-        logger.warning(
-            f"prep failed for {package}: {pkg_cmd[0]} is not installed, falling back to manual extraction"
-        )
-        unpacked = await _fallback_extract_sources(local_clone, package)
-        return local_clone, unpacked, False
+    result = await run_tool(
+        RunPackagePrepTool(),
+        dist_git_path=str(local_clone),
+        package=package,
+        dist_git_branch=dist_git_branch,
+    )
 
-    if exit_code == 0:
+    if "Prep FAILED" not in result:
         unpacked = get_unpacked_sources(local_clone, package)
         return local_clone, unpacked, True
 
-    logger.warning(f"prep failed for {package}, falling back to manual extraction: {stderr}")
+    logger.warning(f"prep failed for {package}, falling back to manual extraction: {result}")
     unpacked = await _fallback_extract_sources(local_clone, package)
     return local_clone, unpacked, False

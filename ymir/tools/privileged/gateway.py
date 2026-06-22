@@ -48,7 +48,6 @@ from ymir.tools.privileged.jira import (
     UpdateJiraCommentTool,
     VerifyIssueAuthorTool,
 )
-from ymir.tools.privileged.logdetective import AnalyzeLogsTool
 from ymir.tools.privileged.lookaside import (
     DownloadSourcesTool,
     PrepSourcesTool,
@@ -161,7 +160,6 @@ def main():
             PrepSourcesTool(options=tool_options),
             UploadSourcesTool(options=tool_options),
             ZStreamSearchTool(options=tool_options),
-            AnalyzeLogsTool(options=tool_options),
             MaintainerRulesTool(options=tool_options),
         ]
     )

@@ -113,6 +113,16 @@ logs-redis-commander:
 logs-otel-collector:
 	oc logs -f deployment/otel-collector
 
+process:
+	@if [ -z "$(ISSUE)" ]; then \
+		echo "ERROR: ISSUE parameter is required. Usage: make process ISSUE=RHEL-XXXX"; \
+		exit 1; \
+	fi
+	@echo "Pushing $(ISSUE) to triage_queue..."
+	@oc exec deployment/valkey -- valkey-cli LPUSH triage_queue \
+		'{"metadata":{"issue":"$(ISSUE)"},"attempts":0,"user_triggered":false}'
+	@echo "✓ Task queued successfully. View queue with: make show-triage-queue"
+
 .PHONY: deploy run-jira-issue-fetcher run-jira-issue-fetcher-todo \
 	suspend-jira-issue-fetcher unsuspend-jira-issue-fetcher \
 	suspend-jira-issue-fetcher-todo unsuspend-jira-issue-fetcher-todo \
@@ -123,4 +133,4 @@ logs-otel-collector:
 	logs-triage logs-backport-c9s logs-backport-c10s \
 	logs-rebase-c9s logs-rebase-c10s logs-rebuild-c9s logs-rebuild-c10s \
 	logs-mcp logs-supervisor logs-valkey logs-phoenix \
-	logs-redis-commander logs-otel-collector
+	logs-redis-commander logs-otel-collector process

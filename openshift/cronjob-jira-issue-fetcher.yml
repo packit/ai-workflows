@@ -6,11 +6,11 @@ metadata:
     app: jira-issue-fetcher
     component: scheduler
 spec:
-  schedule: "*/30 * * * *"  # Every 30 minutes — runs the early-adopters filter
+  schedule: "0 8 * * *"  # Daily at 8am UTC — automated CVE batch
   concurrencyPolicy: Forbid  # Prevent overlapping runs
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
-  suspend: true
+  suspend: false
   jobTemplate:
     metadata:
       labels:
@@ -18,7 +18,7 @@ spec:
         component: job
     spec:
       backoffLimit: 2
-      activeDeadlineSeconds: 600  # 10 minutes max runtime (cron is */30, must not overlap)
+      activeDeadlineSeconds: 600  # 10 minutes max runtime
       template:
         metadata:
           labels:

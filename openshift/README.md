@@ -106,28 +106,34 @@ Two CronJobs run the fetcher with different JQL queries:
 
 | CronJob | Schedule | QUERY | ConfigMap |
 |---|---|---|---|
-| `jira-issue-fetcher` | `*/30 * * * *` | A generic filter for processing a batch of issues (e.g. early adopters) — currently `filter = "Ymir early adopters CVEs"` | `jira-issue-fetcher-filter-env` |
+| `jira-issue-fetcher` | `0 8 * * *` (daily, 8am UTC) | Main CVE batch — processes up to `MAX_ISSUES` issues from the filter in `jira-issue-fetcher-filter-env` | `jira-issue-fetcher-filter-env` |
 | `jira-issue-fetcher-todo` | `*/5 * * * *` | `labels = "ymir_todo"` | `jira-issue-fetcher-todo-env` |
 
 Both share the common knobs (`IGNORED_COMPONENTS`, `MAX_ISSUES`, `LOGLEVEL`) from `jira-issue-fetcher-env`. Each pod mounts the shared configmap plus its per-cron QUERY configmap. To target a different batch, edit `configmap-jira-issue-fetcher-filter-env.yml` and re-apply.
 
-Manually run either fetcher:
+Both CronJobs ship with `suspend: false` and run on their schedules out of the box. Pause or resume either one:
 
 ```bash
-make run-jira-issue-fetcher       # generic batch filter
+make suspend-jira-issue-fetcher          # stop scheduled runs
+make unsuspend-jira-issue-fetcher        # resume scheduled runs
+make suspend-jira-issue-fetcher-todo     # stop scheduled runs
+make unsuspend-jira-issue-fetcher-todo   # resume scheduled runs
+```
+
+These patch the live CronJob (`oc patch ... suspend`). Re-applying the manifests (`./deploy.sh`) resets each CronJob to the `suspend` value in its manifest (both default to `false`), so to change the default permanently edit `suspend` in the manifest.
+
+**Manual on-demand runs** work regardless of the suspend state — `suspend` only stops the scheduler, not manual triggers:
+
+```bash
+make run-jira-issue-fetcher       # trigger a one-off run now (works even when suspended)
 make run-jira-issue-fetcher-todo  # ymir_todo sweep
 ```
 
-`jira-issue-fetcher-todo` ships with `suspend: false` (it runs on its schedule out of the box); `jira-issue-fetcher` ships with `suspend: true` and must be resumed before it fires. Enable or pause each one's schedule:
+If the daily scheduled run is already active, check before triggering manually to avoid pushing duplicate issues to the queue:
 
 ```bash
-make unsuspend-jira-issue-fetcher        # resume the generic batch fetcher
-make unsuspend-jira-issue-fetcher-todo   # resume the ymir_todo sweep
-make suspend-jira-issue-fetcher          # pause it again
-make suspend-jira-issue-fetcher-todo     # pause it again
+oc get jobs -l app=jira-issue-fetcher
 ```
-
-These patch the live CronJob (`oc patch ... suspend`). Re-applying the manifests (`./deploy.sh`) resets each CronJob to whatever `suspend` value its `cronjob-jira-issue-fetcher*.yml` declares (`jira-issue-fetcher-todo` → running, `jira-issue-fetcher` → suspended), so to change a fetcher's default permanently edit `suspend` in its manifest.
 
 ## Agent runtime knobs (`agents-env` ConfigMap)
 

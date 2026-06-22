@@ -1,7 +1,7 @@
 apiVersion: v1
 data:
   IGNORED_COMPONENTS: "firefox,thunderbird,firefox-flatpak-container,thunderbird-flatpak-container,webkit2gtk3,openjdk,postfix,xorg-x11-server,xorg-x11-server-Xwayland,OpenEXR"
-  MAX_ISSUES: "20"
+  MAX_ISSUES: "40"
   LOGLEVEL: "INFO"
 immutable: false
 kind: ConfigMap

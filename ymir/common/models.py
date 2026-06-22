@@ -137,7 +137,7 @@ class BackportInputSchema(BaseModel):
     """Input schema for the backport agent."""
 
     local_clone: Path = Field(description="Path to the local clone of forked dist-git repository")
-    unpacked_sources: Path = Field(description="Path to the unpacked (using `centpkg prep`) sources")
+    unpacked_sources: Path = Field(description="Path to the unpacked sources")
     package: str = Field(description="Package to update")
     dist_git_branch: str = Field(description="Git branch in dist-git to be updated")
     jira_issue: str = Field(description="Jira issue to reference as resolved")
@@ -146,7 +146,6 @@ class BackportInputSchema(BaseModel):
         description="List of URLs to upstream patches that were validated using the get_patch_from_url tool"
     )
     build_error: str | None = Field(description="Error encountered during package build")
-    pkg_tool: str = Field(default="centpkg", description="Package tool command with arguments")
     triage_summary: str | None = Field(
         default=None,
         description="Triage context: what was investigated and guidance on how the backport should be done",

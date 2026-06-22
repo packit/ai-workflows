@@ -14,7 +14,6 @@ Backport upstream patches:
 - {{ patch }}
 {% endfor %}
 Unpacked upstream sources are in {{ unpacked_sources }}.
-Use `{{ pkg_tool }}` as the package tool command.
 {% endif %}
 {% if build_error %}
 This is a repeated backport, after the previous attempt the generated SRPM failed to build:

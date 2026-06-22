@@ -34,7 +34,6 @@ from ymir.agents.utils import (
     mcp_tools,
     render_template,
 )
-from ymir.common.base_utils import is_cs_branch
 from ymir.common.logging_setup import configure_logging
 from ymir.common.models import (
     BuildInputSchema,
@@ -190,7 +189,6 @@ async def main() -> None:
                 return "run_merge_request_agent"
 
             async def run_merge_request_agent(state):
-                pkg_tool = "centpkg" if is_cs_branch(state.dist_git_branch) else "rhpkg"
                 response = await merge_request_agent.run(
                     render_template(
                         get_prompt(),
@@ -205,7 +203,6 @@ async def main() -> None:
                             comments=state.merge_request_comments,
                             fedora_clone=state.fedora_clone,
                             build_error=state.build_error,
-                            pkg_tool=pkg_tool,
                         ),
                     ),
                     expected_output=MergeRequestOutputSchema,

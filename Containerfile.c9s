@@ -15,13 +15,13 @@ RUN if [ -n "$INTERNAL_REPO_URL" ]; then \
 
 ARG EXTRA_PACKAGES=""
 RUN dnf -y install --allowerasing \
-      centpkg \
       curl \
       gcc \
       gcc-c++ \
       git \
       krb5-devel \
       python3-rpm \
+      python3-rpkg \
       python3-devel \
       rpm-build \
       rpmdevtools \

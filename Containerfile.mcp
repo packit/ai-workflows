@@ -15,11 +15,11 @@ RUN dnf -y install \
       python3.13 \
       python3.13-devel \
       python3-rpm \
+      python3-rpkg \
       rpm-devel \
       krb5-libs \
       krb5-workstation \
       krb5-devel \
-      centpkg \
       git \
       gcc \
       libpq-devel \

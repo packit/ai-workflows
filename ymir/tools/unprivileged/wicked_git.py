@@ -15,7 +15,7 @@ from ymir.tools.base import CloneableTool as Tool
 
 class GitPreparePackageSourcesInput(BaseModel):
     unpacked_sources_path: AbsolutePath = Field(
-        description="Absolute path to the unpacked sources which result from `centpkg prep`",
+        description="Absolute path to the unpacked sources which result from the run_package_prep tool",
     )
 
 

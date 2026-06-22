@@ -44,7 +44,7 @@ from ymir.agents.utils import (
     run_tool,
     wrap_details,
 )
-from ymir.common.base_utils import fix_await, is_cs_branch, redis_client
+from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.logging_setup import configure_logging
 from ymir.common.mock_repos import get_mock_local_tool_env
@@ -385,7 +385,6 @@ async def run_workflow(
             return "run_backport_agent"
 
         async def run_backport_agent(state):
-            pkg_tool = "centpkg" if is_cs_branch(state.dist_git_branch) else "rhpkg --offline --released"
             response = await backport_agent.run(
                 render_template(
                     get_prompt(),
@@ -398,7 +397,6 @@ async def run_workflow(
                         cve_id=state.cve_id,
                         upstream_patches=state.upstream_patches,
                         build_error=state.build_error,
-                        pkg_tool=pkg_tool,
                         triage_summary=state.triage_summary,
                     ),
                 ),
@@ -477,7 +475,6 @@ async def run_workflow(
                     fix_version=state.fix_version,
                 )
 
-                pkg_tool = "centpkg" if is_cs_branch(state.dist_git_branch) else "rhpkg --offline --released"
                 response = await fix_agent.run(
                     render_template(
                         await get_fix_build_error_prompt(fix_version=state.fix_version),
@@ -490,7 +487,6 @@ async def run_workflow(
                             cve_id=state.cve_id,
                             upstream_patches=state.upstream_patches,
                             build_error=state.build_error,
-                            pkg_tool=pkg_tool,
                             triage_summary=state.triage_summary,
                         ),
                     ),

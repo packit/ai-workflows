@@ -23,6 +23,10 @@ from ymir.tools.privileged.copr import (
     [False, True],
 )
 @pytest.mark.parametrize(
+    "build_timeout",
+    [False, True],
+)
+@pytest.mark.parametrize(
     "exclusive_arch",
     [None, "ppc64le"],
 )
@@ -31,7 +35,10 @@ from ymir.tools.privileged.copr import (
     ["c10s", "rhel-10.1", "rhel-10.0"],
 )
 @pytest.mark.asyncio
-async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
+async def test_build_package(build_failure, build_timeout, exclusive_arch, dist_git_branch):
+    if build_timeout and not build_failure:
+        pytest.skip("timeout only applies to failed builds")
+
     ownername = "jotnar-bot"
     srpm_path = Path("/tmp/test.src.rpm")
     jira_issue = "RHEL-12345"
@@ -101,11 +108,15 @@ async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
         path=str(srpm_path),
         buildopts={"chroots": [chroot], "timeout": COPR_BUILD_TIMEOUT},
     ).and_return(flexmock(id=12345)).once()
+    started_on = 1000
+    ended_on = started_on + (COPR_BUILD_TIMEOUT if build_timeout else 1000)
     flexmock(BuildProxy).should_receive("get").with_args(12345).and_return(
         flexmock(state="running", id=12345)
     ).and_return(
         flexmock(
             state="failed" if build_failure else "succeeded",
+            started_on=started_on,
+            ended_on=ended_on,
             source_package={"name": "test"},
             repo_url="http://some.url",
             id=12345,
@@ -136,6 +147,7 @@ async def test_build_package(build_failure, exclusive_arch, dist_git_branch):
     )
     result = out.result
     assert result.success == (not build_failure)
+    assert result.is_timeout == build_timeout
     assert any(url.endswith("builder-live.log.gz") for url in result.artifacts_urls)
     assert any(url.endswith("root.log.gz") for url in result.artifacts_urls)
     if not build_failure:

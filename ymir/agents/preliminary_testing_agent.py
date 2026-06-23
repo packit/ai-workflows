@@ -91,7 +91,7 @@ def create_preliminary_testing_agent(gateway_tools: list) -> ReasoningAgent:
             in [
                 "fetch_gitlab_mr_notes",
                 "get_jira_details",
-                "get_failed_pipeline_jobs_from_merge_request",
+                "get_failed_pipeline_jobs_from_mr",
             ]
         ],
         memory=UnconstrainedMemory(),

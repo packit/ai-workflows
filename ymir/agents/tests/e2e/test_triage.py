@@ -152,6 +152,22 @@ test_cases = [
         ),
     ),
     TriageAgentTestCase(
+        input="RHEL-179083",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.BACKPORT,
+            data=BackportData(
+                package="memcached",
+                patch_urls=[
+                    "https://github.com/memcached/memcached/commit/d13f282b4bce33a9c33b8a1bbf07f12114160fed.patch",
+                ],
+                justification="not-implemented",
+                jira_issue="RHEL-179083",
+                cve_id="CVE-2026-47783",
+                fix_version="rhel-10.2.z",
+            ),
+        ),
+    ),
+    TriageAgentTestCase(
         input="RHEL-174694",
         expected_output=TriageOutputSchema(
             resolution=Resolution.NOT_AFFECTED,

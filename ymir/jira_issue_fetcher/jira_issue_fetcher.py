@@ -62,12 +62,11 @@ class JiraIssueFetcher:
         self.jira_url = os.environ["JIRA_URL"]
         self.redis_url = os.environ["REDIS_URL"]
 
-        # Allow query override from environment
+        # Allow query override from environment. Component exclusions live in the
+        # Jira filter the QUERY points at (maintained in the cve-scope repo:
+        # https://gitlab.cee.redhat.com/jotnar-project/cve-scope),
+        # not here. ymir_todo bypasses the filter and processes any component.
         self.query = os.getenv("QUERY", self.DEFAULT_QUERY)
-
-        # Optional: comma-separated list of components to ignore
-        ignored = os.getenv("IGNORED_COMPONENTS", "")
-        self.ignored_components: set[str] = {c.strip().lower() for c in ignored.split(",") if c.strip()}
 
         # Optional: maximum number of issues to fetch
         max_issues_str = os.getenv("MAX_ISSUES", "")
@@ -508,7 +507,6 @@ class JiraIssueFetcher:
 
             pushed_count = 0
             skipped_count = 0
-            ignored_count = 0
             modular_count = 0
 
             for issue in issues:
@@ -525,18 +523,6 @@ class JiraIssueFetcher:
                         logger.info(f"Skipping issue {issue_key} - modular issue: {downstream_component}")
                         modular_count += 1
                         continue
-
-                    if self.ignored_components:
-                        components = {
-                            name.lower() for c in (fields.get("components") or []) if (name := c.get("name"))
-                        }
-                        if components & self.ignored_components:
-                            logger.info(
-                                f"Skipping issue {issue_key} - has ignored component(s):"
-                                f" {components & self.ignored_components}"
-                            )
-                            ignored_count += 1
-                            continue
 
                     if issue_key in existing_keys and issue_key not in remove_issues_for_retry:
                         logger.debug(f"Skipping issue {issue_key} - already exists in triage_queue")
@@ -606,8 +592,6 @@ class JiraIssueFetcher:
             logger.info(f"Successfully pushed {pushed_count}/{len(issues)} issues to triage_queue")
             if skipped_count > 0:
                 logger.info(f"Skipped {skipped_count} issues that already exist in queue")
-            if ignored_count > 0:
-                logger.info(f"Skipped {ignored_count} issues due to ignored components")
             if modular_count > 0:
                 logger.info(f"Skipped {modular_count} modular issues")
             return pushed_count

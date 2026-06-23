@@ -198,6 +198,10 @@ class TestRedactFunction:
             assert "[REDACTED]" not in result
 
 
+async def mock_aserve():
+    pass
+
+
 class TestGatewaySharedOptions:
     def test_all_tools_share_options_dict(self):
         registered_tools = []
@@ -206,7 +210,7 @@ class TestGatewaySharedOptions:
         mock_server.should_receive("register_many").once().replace_with(
             lambda tools: registered_tools.extend(tools)
         )
-        mock_server.should_receive("serve").once()
+        mock_server.should_receive("aserve").once().replace_with(mock_aserve)
 
         import ymir.tools.privileged.gateway as gateway_module
 
@@ -220,6 +224,9 @@ class TestGatewaySharedOptions:
         first_options = registered_tools[0].options
         assert first_options is not None
         for tool in registered_tools[1:]:
+            if tool.name == "extract_log_snippets":
+                # extract_log_snippets from Log Detective doesn't need shared options
+                continue
             assert tool.options is first_options, (
                 f"{type(tool).__name__} does not share the same options dict"
             )

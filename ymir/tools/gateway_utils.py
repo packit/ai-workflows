@@ -6,6 +6,8 @@ import re
 from typing import Any
 
 from beeai_framework.emitter.emitter import Emitter
+from beeai_framework.tools.mcp import MCPTool
+from mcp import StdioServerParameters, stdio_client
 
 from ymir.common.logging_setup import configure_logging
 
@@ -56,3 +58,10 @@ def setup_logging():
     Emitter.root().on(re.compile(r"^tool\..+\.start$"), on_tool_start)
     Emitter.root().on(re.compile(r"^tool\..+\.success$"), on_tool_success)
     Emitter.root().on(re.compile(r"^tool\..+\.error$"), on_tool_error)
+
+
+async def get_log_detective_mcp() -> list[MCPTool]:
+    """Get MCP tools provided by Log Detective MCP server."""
+    client = stdio_client(StdioServerParameters(command="logdetective-mcp"))
+
+    return await MCPTool.from_client(client)

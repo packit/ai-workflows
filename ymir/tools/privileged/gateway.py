@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -11,7 +12,7 @@ from beeai_framework.adapters.mcp.serve.server import (
 
 from ymir.common.base_utils import parse_klist_principals
 from ymir.common.mock_repos import apply_zstream_override_from_env
-from ymir.tools.gateway_utils import setup_logging
+from ymir.tools.gateway_utils import get_log_detective_mcp, setup_logging
 from ymir.tools.privileged.copr import BuildPackageTool, DownloadArtifactsTool
 from ymir.tools.privileged.distgit import CreateZstreamBranchTool
 from ymir.tools.privileged.errata import GetErratumBuildNvrTool, GetErratumTool
@@ -103,7 +104,7 @@ def _kerberos_principal() -> str | None:
     return None
 
 
-def main():
+async def _async_main():
     transport = os.getenv("MCP_TRANSPORT", "sse")
     config_kwargs = {"name": "Ymir Privileged MCP Gateway", "transport": transport}
     if transport == "sse":
@@ -117,6 +118,10 @@ def main():
     apply_zstream_override_from_env()
     tool_options: dict = {"working_directory": None}
     mcp = MCPServer(config=config)
+
+    # Get available tools from Log Detective MCP server
+    log_detective_tools = await get_log_detective_mcp()
+
     mcp.register_many(
         [
             BuildPackageTool(options=tool_options),
@@ -159,10 +164,15 @@ def main():
             UploadSourcesTool(options=tool_options),
             ZStreamSearchTool(options=tool_options),
             MaintainerRulesTool(options=tool_options),
+            *log_detective_tools,
         ]
     )
 
-    mcp.serve()
+    await mcp.aserve()
+
+
+def main():
+    asyncio.run(_async_main())
 
 
 if __name__ == "__main__":

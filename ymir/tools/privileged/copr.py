@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 class BuildResult(BaseModel):
     success: bool = Field(description="Whether the build succeeded")
+    is_timeout: bool = Field(default=False, description="Whether the build failed due to a timeout")
     error_message: str | None = Field(description="Error message in case of failure", default=None)
     artifacts_urls: list[str] | None = Field(
         description="URLs to build artifacts (logs and RPM files)", default=None
@@ -222,11 +223,17 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                         result=BuildResult(success=True, artifacts_urls=await get_artifacts_urls(build))
                     )
                 case _:
+                    is_timeout = (
+                        build.started_on is not None
+                        and build.ended_on is not None
+                        and build.ended_on - build.started_on >= COPR_BUILD_TIMEOUT
+                    )
                     message = f"Build {build.id:08d} finished with state: {build.state}"
                     logger.info(message)
                     return BuildPackageToolOutput(
                         result=BuildResult(
                             success=False,
+                            is_timeout=is_timeout,
                             error_message=message,
                             artifacts_urls=await get_artifacts_urls(build),
                         )
@@ -243,6 +250,7 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
         return BuildPackageToolOutput(
             result=BuildResult(
                 success=False,
+                is_timeout=True,
                 error_message=message,
                 artifacts_urls=await get_artifacts_urls(build) if build else None,
             )

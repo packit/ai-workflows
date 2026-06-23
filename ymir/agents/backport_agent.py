@@ -163,7 +163,13 @@ async def create_backport_agent(
 
     # Add build tools if requested (for iterative build error fixing)
     if include_build_tools:
-        base_tools.extend([t for t in mcp_tools if t.name in ["build_package", "download_artifacts"]])
+        base_tools.extend(
+            [
+                t
+                for t in mcp_tools
+                if t.name in ["build_package", "download_artifacts", "extract_log_snippets"]
+            ]
+        )
 
     return ReasoningAgent(
         name="BackportAgent",

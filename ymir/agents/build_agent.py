@@ -54,7 +54,7 @@ def create_build_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]
             SearchTextTool(options=local_tool_options),
             GetCWDTool(options=local_tool_options),
         ]
-        + [t for t in mcp_tools if t.name in ["build_package", "download_artifacts"]],
+        + [t for t in mcp_tools if t.name in ["build_package", "download_artifacts", "extract_log_snippets"]],
         memory=UnconstrainedMemory(),
         requirements=[
             ConditionalRequirement(
@@ -66,6 +66,7 @@ def create_build_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]
             ),
             ConditionalRequirement("build_package", min_invocations=1),
             ConditionalRequirement("download_artifacts", only_after=["build_package"]),
+            ConditionalRequirement("extract_log_snippets", only_after=["download_artifacts"]),
         ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
         role="Red Hat Enterprise Linux developer",

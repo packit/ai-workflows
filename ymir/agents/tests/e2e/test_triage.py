@@ -203,6 +203,22 @@ test_cases = [
             ),
         ),
     ),
+    TriageAgentTestCase(
+        input="RHEL-178684",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.BACKPORT,
+            data=BackportData(
+                package="nginx",
+                patch_urls=[
+                    "https://github.com/nginx/nginx/commit/ca4f92a27464ae6c2082245e4f67048c633aa032.patch",
+                ],
+                justification="not-implemented",
+                jira_issue="RHEL-178684",
+                cve_id="CVE-2026-9256",
+                fix_version="rhel-9.8.z",
+            ),
+        ),
+    ),
 ]
 
 

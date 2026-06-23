@@ -187,6 +187,22 @@ test_cases = [
             ),
         ),
     ),
+    TriageAgentTestCase(
+        input="RHEL-173494",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.BACKPORT,
+            data=BackportData(
+                package="qt6-qtdeclarative",
+                patch_urls=[
+                    "https://download.qt.io/official_releases/qt/6.10/CVE-2025-14576-qtdeclarative-6.10.diff",
+                ],
+                justification="not-implemented",
+                jira_issue="RHEL-173494",
+                cve_id="CVE-2025-14576",
+                fix_version="rhel-10.2.z",
+            ),
+        ),
+    ),
 ]
 
 

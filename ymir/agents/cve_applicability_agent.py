@@ -122,6 +122,18 @@ def build_applicability_prompt(
         or `patch --dry-run`), that is strong evidence the package
         IS affected (the vulnerable code is present and unfixed).
 
+        PHYSICAL PRESENCE RULE: A dependency declared in a manifest
+        (package.json, requirements.txt, go.mod, pom.xml, etc.) does
+        NOT mean the component is shipped. What matters is whether the
+        component's actual source or compiled files exist on disk in
+        {sources_rel}. If the vulnerable library's files are absent
+        (e.g. no node_modules/<lib>/, no vendored source, `find`
+        returns empty), classify as "Component not Present" regardless
+        of what manifests or import statements declare. Manifests can
+        reference dependencies that are never installed because the
+        build system skips them (e.g. BuildNodeJS=false, optional
+        build flags, commented-out BuildRequires).
+
         Steps:
         0. Use get_maintainer_rules with package '{package}' to check for
            maintainer-specific guidelines. If rules are found, treat them
@@ -135,10 +147,18 @@ def build_applicability_prompt(
            search for more information about the CVE online.
         2. If upstream fix patches are available, read them to identify
            the specific files and functions modified by the fix.
+           Then verify whether those files physically exist in
+           {sources_rel} (use `find` to locate them). If the
+           vulnerable library's files are completely absent from
+           the source tree, that is definitive evidence of Component
+           not Present — stop and classify accordingly.
         3. Search for those files/functions in the package source at
            {sources_rel}. Do NOT look at any other copy of the source.
+           If the files do not exist on disk, that is decisive — do not
+           override this with manifest declarations or import statements.
         4. If the vulnerable code is not present, determine why — older
            version that predates the vulnerability? Patched downstream?
+           Build system doesn't install the dependency?
         5. For dependency rebuilds: verify whether the package uses
            the specific affected API/module of the dependency. Check
            direct imports, linked libraries, and build dependencies.

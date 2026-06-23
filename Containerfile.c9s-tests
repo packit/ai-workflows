@@ -40,7 +40,8 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
        rpkg \
        GitPython \
        nitrate \
-       tomli-w
+       tomli-w \
+       logdetective-mcp
 
 # Verify no malicious litellm_init.pth was introduced by compromised litellm packages (e.g. 1.82.7, 1.82.8)
 RUN MALICIOUS=$(find /usr /opt -name "litellm_init.pth" 2>/dev/null); \

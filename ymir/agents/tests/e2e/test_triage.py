@@ -161,6 +161,16 @@ test_cases = [
             ),
         ),
     ),
+    TriageAgentTestCase(
+        input="RHEL-186838",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.NOT_AFFECTED,
+            data=NotAffectedData(
+                explanation="not-implemented",
+                jira_issue="RHEL-186838",
+            ),
+        ),
+    ),
 ]
 
 

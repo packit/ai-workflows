@@ -181,15 +181,27 @@ You must decide between one of the following actions. Follow these guidelines to
      clarification-needed note so a human can evaluate it, but do not use it as the basis
      for a backport decision.
    * **Check for follow-up commits**: After identifying a valid fix, you MUST check
-     whether there are follow-up commits that complement or complete the fix.
-     Common patterns include:
-     - A second commit that fixes a bug or regression introduced by the first fix
-     - An incremental commit that addresses the same CVE/issue from a different angle
-       (e.g. fixing a separate code path or variant of the same vulnerability)
-     - A commit by the same or related author modifying the same files/functions
-       shortly after the primary fix
-     - A commit whose message explicitly references the first fix (e.g. "follow-up to ...",
-       "fix for ...", same CVE ID, or same bug tracker reference)
+     whether there are follow-up commits that are **necessary to make the fix
+     correct and complete**. A follow-up commit should be included ONLY when:
+     - It fixes a bug, crash, or regression introduced by the primary fix
+       (i.e. the primary fix does not work correctly without it)
+     - It completes the fix for the same issue/CVE when the primary commit
+       only addressed part of the problem (e.g. a second code path still
+       vulnerable to the same CVE)
+     - Its commit message explicitly states it fixes or corrects the primary
+       commit (e.g. "fix regression from ...", "complete fix for CVE-...")
+     A follow-up commit should **NOT** be included when:
+     - It adds additional hardening, defensive checks, or robustness
+       improvements beyond what is needed to fix the reported issue
+     - It adds or improves tests, comments, documentation, or code style
+       without changing the fix logic
+     - It refactors or improves the area touched by the fix but is not
+       required for the fix to work (nice-to-have improvements)
+     - It addresses a separate issue or vulnerability, even if it touches
+       the same files or functions
+     The key question is: "Does the primary fix fully resolve the reported
+     issue/CVE on its own?" If yes, subsequent commits that improve,
+     harden, or extend the fix are out of scope and must be excluded.
      Use multiple search strategies — any single strategy can miss commits:
      1. Ancestry search on affected files:
         `git log <primary-fix>..HEAD -- <affected-files>`
@@ -199,14 +211,10 @@ You must decide between one of the following actions. Follow these guidelines to
      3. Keyword search — search for the issue/CVE ID or related
         function names in commit messages:
         `git log --all --grep="<issue-number-or-CVE-ID>"`
-     If you find follow-up commits, validate them the same way (fetch via
-     get_patch_from_url and verify they are real patches) and include ALL of them
+     If you find follow-up commits, evaluate each one against the criteria
+     above. For those that qualify, validate them the same way (fetch via
+     get_patch_from_url and verify they are real patches) and include them
      in your patch_urls list, ordered chronologically (earliest first).
-     **Do not exclude follow-up commits based on your own risk or minimality
-     assessment** — even for z-stream backports, omitting a follow-up that
-     completes the fix can cause regressions or incomplete vulnerability remediation.
-     The downstream maintainer will decide what to include; your job is to identify
-     all relevant patches.
    * **Prefer individual commit URLs; collapse to PR/MR when appropriate**:
      Start by searching for individual fixing commits and use their
      `.patch` URLs in your `patch_urls` list. This is the default.

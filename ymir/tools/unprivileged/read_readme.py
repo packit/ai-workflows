@@ -52,7 +52,7 @@ class ReadReadmeTool(Tool[ReadReadmeInput, ToolRunOptions, StringToolOutput]):
                                 return StringToolOutput(
                                     result=await response.text(),
                                 )
-                    except aiohttp.ClientError:
+                    except (aiohttp.ClientError, TimeoutError):
                         pass
 
         return StringToolOutput(result=f"Failed to find README.md for {input.repo_url}")

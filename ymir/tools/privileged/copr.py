@@ -336,8 +336,6 @@ class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, Str
                             (target_path / target).write_bytes(content)
                         else:
                             raise ToolError(f"Failed to download {url}: {response.status} {response.reason}")
-                except aiohttp.ClientError as e:
+                except (aiohttp.ClientError, TimeoutError) as e:
                     raise ToolError(f"Failed to download {url}: {e}") from e
-                except TimeoutError as e:
-                    raise ToolError(f"Failed to download {url}: timed out") from e
         return StringToolOutput(result="Successfully downloaded the specified build artifacts")

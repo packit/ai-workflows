@@ -988,7 +988,7 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
                         result=f"Error: Failed to fetch patch from {patch_url}: HTTP {response.status}"
                     )
                 text = await response.text()
-        except aiohttp.ClientError as e:
+        except (aiohttp.ClientError, TimeoutError) as e:
             raise ToolError(f"Failed to fetch patch from {patch_url}: {e}") from e
         try:
             hunks = json.loads(text)
@@ -1077,7 +1077,7 @@ class FetchGitlabMrNotesTool(Tool[FetchGitlabMrNotesInput, ToolRunOptions, Strin
 
             return StringToolOutput(result=json.dumps(result, indent=2))
 
-        except aiohttp.ClientError as e:
+        except (aiohttp.ClientError, TimeoutError) as e:
             # Here we handle ClientError as ToolError, because client error
             # signals networking issues which should be flagged (DNS resolution failure, timeouts etc)
             raise ToolError(f"Failed to fetch MR notes for !{input.mr_iid} in {input.project}: {e}") from e

@@ -228,6 +228,17 @@ You must decide between one of the following actions. Follow these guidelines to
      - GitHub PR: `https://github.com/org/repo/pull/N.patch`
      - GitLab MR: `https://gitlab.com/org/repo/-/merge_requests/N.patch`
      Fetch and validate any URL via `get_patch_from_url` before using it.
+   * **Use commits from the target branch, not the PR source branch**:
+     When a PR/MR is merged via rebase or squash on GitHub/GitLab, the
+     commit hashes on the target branch (e.g. `main`, `master`) differ
+     from the hashes shown in the PR's "Commits" tab, which belong to
+     the source/fork branch. Always use the commit hash that landed on
+     the default branch, not the one from the PR branch.
+     To find the correct hash on GitHub: look for "merged commit <hash>
+     into <target-branch>" in the PR timeline, or check `git log` on
+     the default branch. The fork-branch commit may still be accessible
+     via its URL, but it is not the canonical merged commit and should
+     not be used for backporting.
 
    2.4. Decide the Outcome
    {% if not is_older_zstream %}

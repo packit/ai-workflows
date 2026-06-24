@@ -5,7 +5,6 @@ import shutil
 import sys
 import traceback
 from pathlib import Path
-from textwrap import dedent
 
 from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
@@ -14,7 +13,6 @@ from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools.think import ThinkTool
-from beeai_framework.utils.strings import to_json
 from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field
 
@@ -401,96 +399,11 @@ async def run_workflow(
                 logger.warning(f"Failed to pre-fetch fix version for prompt selection: {e}")
 
             input_data = InputSchema(issue=state.jira_issue)
-            output_schema_json = to_json(
-                OutputSchema.model_json_schema(mode="validation"),
-                indent=2,
-                sort_keys=False,
-            )
             response = await triage_agent.run(
                 await render_prompt(input_data, fix_version=fix_version_name),
-                # `OutputSchema` alone is not enough here, some models (cough cough, Claude Sonnet 4.5)
-                # really stuggle with the nesting, let's provide some more hints
-                expected_output=dedent(
-                    f"""
-                    The final answer must fulfill the following.
-
-                    **Important Formatting Rules:**
-                    - The top-level output must be a JSON object with two keys:
-                      `resolution` (a string) and `data` (an object).
-                    - The `data` field MUST be a nested JSON object.
-                      **It must not be a stringified JSON object.**
-                    - The structure of the `data` object must match the schema
-                      corresponding to the chosen `resolution`.
-
-                    **Correct example for a 'backport' resolution:**
-                    ```json
-                    {{
-                        "resolution": "backport",
-                        "data": {{
-                        "package": "some-package",
-                        "patch_urls": ["https://github.com/example-org/example-repo/commit/abc123def456.patch"],
-                        "justification": "Patch adds input validation to parse_input().",
-                        "triage_summary": "Searched upstream git for CVE ID; no match. Found via Fedora.",
-                        "jira_issue": "RHEL-12345",
-                        "cve_id": "CVE-1234-98765",
-                        "fix_version": "rhel-X.Y.Z"
-                        }}
-                    }}
-                    ```
-
-                    **Correct example for a 'rebase' resolution:**
-                    ```json
-                    {{
-                        "resolution": "rebase",
-                        "data": {{
-                        "package": "some-package",
-                        "version": "2.4.1",
-                        "justification": "Version 2.4.1 includes the fix for the crash in parse_uri().",
-                        "triage_summary": "Fedora already rebased to 2.4.1 for this bug. Verified changelog.",
-                        "jira_issue": "RHEL-12345",
-                        "fix_version": "rhel-X.Y.Z"
-                        }}
-                    }}
-                    ```
-
-                    **Correct example for a 'rebuild' resolution:**
-                    ```json
-                    {{
-                        "resolution": "rebuild",
-                        "data": {{
-                        "package": "some-package",
-                        "jira_issue": "RHEL-12345",
-                        "cve_id": "CVE-1234-98765",
-                        "justification": "Package links against golang which got a CVE-1234-98765 fix.",
-                        "triage_summary": "Confirmed package vendors Go deps via spec BuildRequires.",
-                        "dependency_issue": "RHEL-67890",
-                        "dependency_component": "golang",
-                        "fix_version": "rhel-X.Y.Z"
-                        }}
-                    }}
-                    ```
-
-                    **Correct example for a 'postponed' resolution (rebuild waiting for dependency):**
-                    ```json
-                    {{
-                        "resolution": "postponed",
-                        "data": {{
-                        "summary": "Rebuild of some-package waiting for RHEL-67890 (golang) to ship",
-                        "pending_issues": ["RHEL-67890"],
-                        "jira_issue": "RHEL-12345",
-                        "package": "some-package",
-                        "fix_version": "rhel-X.Y.Z",
-                        "cve_id": "CVE-1234-98765",
-                        "dependency_issue": "RHEL-67890",
-                        "dependency_component": "golang"
-                        }}
-                    }}
-                    ```
-
-                    ```json
-                    {output_schema_json}
-                    ```
-                    """
+                expected_output=(
+                    "A JSON object with top-level keys 'resolution' and 'data'. "
+                    "See the task prompt for the exact schema and examples."
                 ),
                 **get_agent_execution_config(),
             )

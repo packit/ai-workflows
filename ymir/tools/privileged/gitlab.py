@@ -283,6 +283,10 @@ class ForkRepositoryTool(Tool[ForkRepositoryToolInput, ToolRunOptions, StringToo
         if fork := await asyncio.to_thread(get_fork):
             return StringToolOutput(result=fork.get_git_urls()["git"])
 
+        if os.getenv("DRY_RUN", "False").lower() == "true":
+            logger.info("DRY_RUN is set, skipping fork creation — returning original repo URL")
+            return StringToolOutput(result=project.get_git_urls()["git"])
+
         def create_fork():
             prefix = "_".join(ns.replace("centos-stream", "centos") for ns in namespace[1:])
             fork_name = (f"{prefix}_" if prefix else "") + project.gitlab_repo.name

@@ -1,18 +1,9 @@
 ---
+name: errata_workflow
 description: >
   Runs the Errata Workflow for an erratum, advancing it through states
   (NEW_FILES -> QE -> REL_PREP), handling stage pushes, CAT test timeouts,
   product listing verification, and flagging for human attention.
-arguments:
-  - name: erratum_id
-    description: "Erratum ID or advisory URL (e.g. '12345' or full URL)"
-    required: true
-  - name: dry_run
-    description: "If true, skip all Errata Tool and JIRA modifications. Default: false"
-    required: false
-  - name: ignore_needs_attention
-    description: "If true, process the erratum even if it already has a ymir_needs_attention RHELMISC issue. Default: false"
-    required: false
 ---
 
 # Errata Workflow Skill

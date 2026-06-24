@@ -38,6 +38,8 @@ RUN pip install --no-cache-dir \
       flexmock \
       koji \
       ogr \
+      beautifulsoup4 \
+      lxml \
       pytest \
       pytest-asyncio \
       rpm \

@@ -37,7 +37,6 @@ This skill uses the following MCP tools:
 - `get_erratum_stage_push_details` — Get latest stage push status and timestamp
 - `erratum_push_to_stage` — Push erratum to CDN stage (respects DRY_RUN)
 - `erratum_change_state` — Change erratum state (respects DRY_RUN)
-- `erratum_change_ownership` — Change erratum ownership (respects DRY_RUN)
 - `erratum_add_comment` — Add comment to erratum (respects DRY_RUN)
 - `erratum_refresh_security_alerts` — Refresh security alerts (respects DRY_RUN)
 
@@ -51,9 +50,9 @@ This skill uses the following MCP tools:
 
 - `WAIT_DELAY`: 20 minutes (1200 seconds) — delay between reschedule checks
 - `POST_PUSH_TESTING_TIMEOUT`: 3 hours — timeout for CAT tests after stage push
-- `ERRATA_JOTNAR_BOT_EMAIL`: jotnar-bot@IPA.REDHAT.COM — Ymir's Errata Tool identity
-- `JIRA_JOTNAR_BOT_EMAIL`: jotnar+bot@redhat.com — Ymir's JIRA identity
-- `JIRA_JOTNAR_TEAM`: rhel-jotnar — Ymir's assigned team name
+- `ERRATA_YMIR_BOT_EMAIL`: jotnar-bot@IPA.REDHAT.COM — Ymir's Errata Tool identity
+- `JIRA_YMIR_BOT_EMAIL`: jotnar+bot@redhat.com — Ymir's JIRA identity
+- `JIRA_YMIR_TEAM`: rhel-jotnar — Ymir's assigned team name
 
 ## Workflow Steps
 
@@ -66,23 +65,17 @@ Unless `ignore_needs_attention` is true, search for an existing RHELMISC issue w
 ### Step 3: Fetch Related Issues
 For each JIRA issue key in the erratum's `jira_issues` list, fetch full issue details using `get_jira_details`. Store all issue data for later checks.
 
-### Step 4: Check Ownership
-Verify the erratum is owned by the Ymir bot (`jotnar-bot@IPA.REDHAT.COM`). If not:
-- Check if all related JIRA issues have `AssignedTeam = rhel-jotnar`
-- If yes: change erratum ownership to the bot and reschedule immediately
-- If no: flag for human attention — erratum has issues not owned by Project Ymir
-
-### Step 5: Route by Status
+### Step 4: Route by Status
 Based on erratum status:
 - **NEW_FILES**: Target advancing to QE
 - **QE**: Check if all related JIRA issues are in "Release Pending" status. If yes, target advancing to REL_PREP. If not, stop.
 - **Other statuses**: No action needed, stop.
 
-### Step 6: Try to Advance
+### Step 5: Try to Advance
 Get transition rules using `get_erratum_transition_rules`. Handle outcomes:
 
 **All rules OK:**
-- For REL_PREP target: proceed to product listing verification (Step 7)
+- For REL_PREP target: proceed to product listing verification (Step 6)
 - For other targets: change state immediately
 
 **Stagepush blocking:**
@@ -102,13 +95,15 @@ Get transition rules using `get_erratum_transition_rules`. Handle outcomes:
 **Unknown blocking rules:**
 - Flag for human attention with details of blocking rules
 
-### Step 7: Verify Product Listings (REL_PREP only)
+### Step 6: Verify Product Listings (REL_PREP only)
+Sanity check before advancing to REL_PREP: compare the package file lists of the current builds against previous erratum builds to catch unintentional changes. A mismatch could mean shipping unwanted packages or dropping packages that should be shipped.
+
 For each package in the erratum build map:
 1. Check if already verified (magic string `ymir-product-listings-checked(NVR)` or `jotnar-product-listings-checked(NVR)` in erratum comments)
 2. Find the previous erratum using `get_previous_erratum` (RHEL version inheritance search)
 3. Compare package file lists between current and previous builds
 4. Add verification comment to erratum
-5. If mismatches found: flag for human attention
+5. If mismatches found: flag for human attention — the change may be unintentional
 6. If all match (or no previous erratum): advance to REL_PREP
 
 ## Flagging for Human Attention

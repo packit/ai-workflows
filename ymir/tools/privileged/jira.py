@@ -1004,7 +1004,7 @@ class SearchJiraIssuesTool(
             }
             for issue in issues
         ]
-        return JSONToolOutput(result={"issues": out})
+        return JSONToolOutput(result=out)
 
 
 async def _fetch_dev_status_details(

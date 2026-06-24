@@ -1,10 +1,3 @@
-"""Errata Workflow Agent — standalone BeeAI agent for erratum lifecycle management.
-
-Advances errata through states (NEW_FILES → QE → REL_PREP), handles stage pushes,
-CAT test timeouts, product listing verification, and flagging for human attention.
-Communicates exclusively through MCP tools.
-"""
-
 import asyncio
 import logging
 import os
@@ -37,9 +30,9 @@ logger = logging.getLogger(__name__)
 WAIT_DELAY = 20 * 60  # 20 minutes
 POST_PUSH_TESTING_TIMEOUT = timedelta(hours=3)
 POST_PUSH_TESTING_TIMEOUT_STR = "3 hours"
-ERRATA_JOTNAR_BOT_EMAIL = "jotnar-bot@IPA.REDHAT.COM"
-JIRA_JOTNAR_BOT_EMAIL = "jotnar+bot@redhat.com"
-JIRA_JOTNAR_TEAM = "rhel-jotnar"
+ERRATA_YMIR_BOT_EMAIL = "jotnar-bot@IPA.REDHAT.COM"
+JIRA_YMIR_BOT_EMAIL = "jotnar+bot@redhat.com"
+JIRA_YMIR_TEAM = "rhel-jotnar"
 ET_URL = "https://errata.engineering.redhat.com"
 
 
@@ -111,14 +104,13 @@ async def run_errata_workflow(
             description_filter = " OR ".join(f'description ~ "\\"{t}\\""' for t in tag.all_formats())
             jql = f"project = RHELMISC AND status NOT IN (Done, Closed) AND ({description_filter})"
 
-            search_result = await run_tool(
+            issues = await run_tool(
                 "search_jira_issues",
                 available_tools=gateway_tools,
                 jql=jql,
                 fields=["key", "summary", "labels"],
                 max_results=2,
             )
-            issues = search_result.get("issues", [])
 
             if issues:
                 if len(issues) > 1:
@@ -139,8 +131,8 @@ async def run_errata_workflow(
                     project="RHELMISC",
                     summary=summary,
                     description=description,
-                    reporter_email=JIRA_JOTNAR_BOT_EMAIL,
-                    assignee_email=JIRA_JOTNAR_BOT_EMAIL,
+                    reporter_email=JIRA_YMIR_BOT_EMAIL,
+                    assignee_email=JIRA_YMIR_BOT_EMAIL,
                     labels=[JiraLabels.NEEDS_ATTENTION.value],
                     components=["jotnar-package-automation"],
                 )
@@ -191,14 +183,13 @@ async def run_errata_workflow(
                 f'AND labels = "{JiraLabels.NEEDS_ATTENTION.value}"'
             )
 
-            search_result = await run_tool(
+            issues = await run_tool(
                 "search_jira_issues",
                 available_tools=gateway_tools,
                 jql=jql,
                 fields=["key"],
                 max_results=1,
             )
-            issues = search_result.get("issues", [])
             if issues:
                 logger.info("Erratum %s already flagged for human attention", erratum_id)
                 state.result = WorkflowResult(
@@ -225,43 +216,7 @@ async def run_errata_workflow(
                 except Exception as e:
                     logger.warning("Failed to fetch issue %s: %s", issue_key, e)
 
-            return "check_ownership"
-
-        async def check_ownership(state: ErrataWorkflowState):
-            """Verify erratum is owned by Ymir bot, change ownership if needed."""
-            erratum = state.erratum
-            assigned_to = erratum.get("assigned_to_email", "")
-            package_owner = erratum.get("package_owner_email", "")
-
-            if assigned_to == ERRATA_JOTNAR_BOT_EMAIL and package_owner == ERRATA_JOTNAR_BOT_EMAIL:
-                return "route_by_status"
-
-            # Check if Ymir owns all related issues
-            all_owned = all(
-                _get_assigned_team(issue) == JIRA_JOTNAR_TEAM for issue in (state.related_issues or [])
-            )
-
-            if all_owned:
-                await run_tool(
-                    "erratum_change_ownership",
-                    available_tools=gateway_tools,
-                    erratum_id=str(erratum["id"]),
-                    new_owner_email=ERRATA_JOTNAR_BOT_EMAIL,
-                )
-                state.result = WorkflowResult(
-                    status=f"Changed ownership of erratum {erratum['id']} to Ymir bot, re-processing",
-                    reschedule_in=0,
-                )
-                return Workflow.END
-
-            state.result = await _flag_attention(
-                state,
-                "Erratum has issues not owned by Project Ymir. Please coordinate with QA Contact for these "
-                "issues to move those issues to Release Pending or change the Assigned Team for the issue "
-                "to rhel-jotnar. No further action will be taken on the erratum until ymir_needs_attention "
-                "is cleared on this issue.",
-            )
-            return Workflow.END
+            return "route_by_status"
 
         async def route_by_status(state: ErrataWorkflowState):
             """Route to appropriate handler based on erratum status."""
@@ -553,7 +508,6 @@ async def run_errata_workflow(
         workflow.add_step("fetch_erratum", fetch_erratum)
         workflow.add_step("check_needs_attention", check_needs_attention)
         workflow.add_step("fetch_related_issues", fetch_related_issues)
-        workflow.add_step("check_ownership", check_ownership)
         workflow.add_step("route_by_status", route_by_status)
         workflow.add_step("try_to_advance", try_to_advance)
         workflow.add_step("verify_product_listings", verify_product_listings)

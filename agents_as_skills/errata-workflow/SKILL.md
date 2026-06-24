@@ -1,5 +1,5 @@
 ---
-name: errata_workflow
+name: errata-workflow
 description: >
   Runs the Errata Workflow for an erratum, advancing it through states
   (NEW_FILES -> QE -> REL_PREP), handling stage pushes, CAT test timeouts,

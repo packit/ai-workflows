@@ -35,6 +35,7 @@ class BackportAgentTestCase:
         self.input: dict = config["input"]
         self.expected: dict = config.get("expected", {})
         self.jira_issue: str = self.input["jira_issue"]
+        self.slow: bool = config.get("slow", False)
         self.metrics: dict = None
         self.finished_state: BackportState | None = None
         self.artifacts: CapturedArtifacts | None = None
@@ -92,6 +93,18 @@ def _load_test_cases(fixtures_dir: str | Path) -> list[BackportAgentTestCase]:
 
 
 test_cases = _load_test_cases(os.getenv("BACKPORT_MOCK_REPOS_DIR") or str(DEFAULT_FIXTURES_DIR))
+
+
+def _parametrize_cases():
+    """Build pytest.param list, tagging slow cases with ``pytest.mark.slow``."""
+    params = []
+    for tc in test_cases:
+        marks = [pytest.mark.slow] if tc.slow else []
+        params.append(pytest.param(tc, id=tc.jira_issue, marks=marks))
+    return params
+
+
+_backport_params = _parametrize_cases()
 
 
 _span_processor = None
@@ -179,7 +192,9 @@ def run_test_cases_concurrently(request, mock_centos_stream_repos):
     selected = {
         item.callspec.params["test_case"]
         for item in request.session.items
-        if hasattr(item, "callspec") and "test_case" in item.callspec.params
+        if hasattr(item, "callspec")
+        and "test_case" in item.callspec.params
+        and not any(item.iter_markers(name="skip"))
     }
     cases_to_run = [tc for tc in test_cases if tc in selected]
 
@@ -205,6 +220,8 @@ def run_test_cases_concurrently(request, mock_centos_stream_repos):
                 m.get("completion_tokens", 0),
             ]
         )
+    skipped_slow = [tc for tc in test_cases if tc.slow and tc not in cases_to_run]
+    collected_metrics.extend([tc.jira_issue, "(skipped — slow)", "-", "-", "-", "-"] for tc in skipped_slow)
     request.config.stash["metrics"] = tabulate(
         collected_metrics, ["Issue", "Agent", "Duration", "Tool Calls", "Prompt Tokens", "Completion Tokens"]
     )
@@ -215,7 +232,7 @@ def run_test_cases_concurrently(request, mock_centos_stream_repos):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("test_case", test_cases, ids=[tc.jira_issue for tc in test_cases])
+@pytest.mark.parametrize("test_case", _backport_params)
 def test_backport_agent_success(test_case: BackportAgentTestCase):
     """Verify the backport workflow completed without exceptions."""
     if test_case.error is not None:
@@ -233,7 +250,7 @@ def test_backport_agent_success(test_case: BackportAgentTestCase):
     )
 
 
-@pytest.mark.parametrize("test_case", test_cases, ids=[tc.jira_issue for tc in test_cases])
+@pytest.mark.parametrize("test_case", _backport_params)
 def test_backport_agent_artifacts(test_case: BackportAgentTestCase):
     """Verify that expected artifacts were produced."""
     if test_case.error is not None:
@@ -270,7 +287,7 @@ def test_backport_agent_artifacts(test_case: BackportAgentTestCase):
         )
 
 
-@pytest.mark.parametrize("test_case", test_cases, ids=[tc.jira_issue for tc in test_cases])
+@pytest.mark.parametrize("test_case", _backport_params)
 def test_backport_agent_patch_scope(test_case: BackportAgentTestCase):
     """Verify the agent's patch does not touch files outside the reference patch scope.
 
@@ -324,7 +341,7 @@ def test_backport_agent_patch_scope(test_case: BackportAgentTestCase):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("test_case", test_cases, ids=[tc.jira_issue for tc in test_cases])
+@pytest.mark.parametrize("test_case", _backport_params)
 def test_backport_agent_llm_judge(test_case: BackportAgentTestCase):
     """Evaluate backport quality using an LLM judge."""
     if os.getenv("RUN_LLM_JUDGE", "").lower() != "true":

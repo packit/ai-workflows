@@ -55,6 +55,14 @@ a backport that won't actually fix the shipped RPM.
    look at the comments above those last patches and replicate that style for
    the new patch.
 
+   IMPORTANT: A patch is "CVE-related" if either its filename contains a CVE
+   ID OR the comments above its `Patch` tag reference a CVE (e.g. a Bugzilla
+   or Jira URL mentioning a CVE, or a `CVE-YYYY-NNNNN` string in the
+   comment). You MUST read the comments above every Patch tag in the spec —
+   do not rely solely on filenames to identify which patches are CVE-related.
+   The LAST CVE-related patch by position in the spec determines the naming
+   convention, regardless of whether its filename contains "CVE".
+
    Priority 3 — Default convention:
    If neither maintainer rules nor existing patches provide guidance, name the
    patch file and add comments as follows:

@@ -42,7 +42,7 @@ class ReadLogfileTool(Tool[ReadLogfileInput, ToolRunOptions, StringToolOutput]):
                     return StringToolOutput(
                         result=await response.text(),
                     )
-        except aiohttp.ClientError as e:
+        except (aiohttp.ClientError, TimeoutError) as e:
             raise ToolError(f"Failed to read logfile from {input.logfile_url}: {e}") from e
 
         return StringToolOutput(result=f"Failed to read logfile from {input.logfile_url}")

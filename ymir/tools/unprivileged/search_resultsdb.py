@@ -148,7 +148,7 @@ class SearchResultsdbTool(Tool[SearchResultsdbInput, ToolRunOptions, SearchResul
             return SearchResultsdbOutput(
                 results=await search_resultsdb(input.package_nvr, input.name_pattern)
             )
-        except aiohttp.ClientError as e:
+        except (aiohttp.ClientError, TimeoutError) as e:
             raise ToolError(f"Failed to fetch resultsdb data: {e}") from e
         except ValueError as e:
             raise ToolError(f"Error parsing resultsdb data: {e}") from e

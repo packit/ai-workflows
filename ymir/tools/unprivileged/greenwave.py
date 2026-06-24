@@ -72,7 +72,7 @@ class FetchGreenWaveTool(Tool[FetchGreenWaveInput, ToolRunOptions, StringToolOut
                 return StringToolOutput(
                     result=f"Failed to fetch GreenWave gating status (HTTP {response.status}): {text}"
                 )
-        except aiohttp.ClientError as e:
+        except (aiohttp.ClientError, TimeoutError) as e:
             # Here we handle ClientError as ToolError, because it signals
             # networking issues. Error statuses are handled above by StringToolOutput
             raise ToolError(f"Failed to fetch GreenWave gating status: {e}") from e

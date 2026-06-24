@@ -132,7 +132,7 @@ class ExtractUpstreamRepositoryTool(
                         # Extract commit hash from API response
                         commit_hash = data["head"]["sha"] if pr_match else data["sha"]
 
-                except (aiohttp.ClientError, KeyError) as e:
+                except (aiohttp.ClientError, TimeoutError, KeyError) as e:
                     raise ToolError(
                         f"Failed to fetch PR/MR information from {api_url}. "
                         f"The PR/MR might be private, deleted, or the API is unavailable. Error: {e}"
@@ -206,7 +206,7 @@ class ExtractUpstreamRepositoryTool(
                                 commits = list(reversed(commits))
                         # Use the last commit (newest) as the commit_hash
                         commit_hash = commits[-1] if commits else target_ref
-                except (aiohttp.ClientError, KeyError):
+                except (aiohttp.ClientError, TimeoutError, KeyError):
                     # If API fails, fall back to using target_ref as commit_hash
                     # This allows the tool to still work even if API is unavailable
                     commit_hash = target_ref

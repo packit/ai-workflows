@@ -372,6 +372,14 @@ a backport that won't actually fix the shipped RPM.
    look at the comments above those last patches and replicate that style for
    the new patch.
 
+   IMPORTANT: A patch is "CVE-related" if either its filename contains a CVE
+   ID OR the comments above its `Patch` tag reference a CVE (e.g. a Bugzilla
+   or Jira URL mentioning a CVE, or a `CVE-YYYY-NNNNN` string in the
+   comment). You MUST read the comments above every Patch tag in the spec —
+   do not rely solely on filenames to identify which patches are CVE-related.
+   The LAST CVE-related patch by position in the spec determines the naming
+   convention, regardless of whether its filename contains "CVE".
+
    Priority 3 — Default convention:
    If neither maintainer rules nor existing patches provide guidance, name the
    patch file and add comments as follows:
@@ -485,6 +493,21 @@ a backport that won't actually fix the shipped RPM.
                   Preserve the patch's original logic — the backport must still fix the bug.
                   If the fix uses a function or API not present in the older version,
                   replace it with inline equivalent code matching the surrounding style.
+
+                  CRITICAL — Separate the fix from unrelated upstream evolution:
+                  The "theirs" (upstream) side of a conflict may contain changes that
+                  are NOT part of the commit being cherry-picked — they come from other
+                  commits that landed between the target version and the upstream HEAD.
+                  When resolving conflicts you MUST keep HEAD-side code for anything
+                  that is not directly part of the fix. To tell the difference, consult
+                  the original upstream commit diff (e.g. `git show <hash>` in
+                  `<UPSTREAM_REPO>`). If a line on the "theirs" side was not changed by
+                  the original commit, take it from the HEAD side instead. Common
+                  examples of unrelated evolution that must be preserved from HEAD:
+                    - Removed or added function calls (e.g. validation guards)
+                    - Renamed API functions (e.g. FooExt → FooExtR)
+                    - Changed coding style (brace placement, indentation)
+                    - Added or removed parameters
                c. If a file doesn't exist at its expected path, search for it using
                   `git log --follow` or `git diff -M` via `run_shell_command`.
                d. Run `cherry_pick_continue` to complete (auto-stages all files).
@@ -555,6 +578,59 @@ a backport that won't actually fix the shipped RPM.
    about newer files: "use '--force' to overwrite".
 
 7. Generate a SRPM using the `build_srpm` tool.
+
+8. Self-Review: Before reporting a result, verify your work meets all criteria
+   below. Run `git diff HEAD -- *.spec` in the dist-git repository root (not in
+   `<UPSTREAM_REPO>`) to inspect what you changed in the spec file.
+
+   Note: If this was a spec-only change (step 3d path), no patch files are
+   generated — criteria 1, 2a, 2b, and 5 will not apply. Criterion 2c still
+   applies: verify that pre-existing Patch tags were not accidentally modified.
+
+   Criterion 1 — Patch correctness:
+   If you generated any patch files, read each one. Verify it is non-empty and
+   contains code changes that address the issue in <JIRA_ISSUE> or <CVE_ID>. A
+   patch that only modifies whitespace, comments, or files entirely unrelated to
+   the fix does not pass. Test files that accompany the fix are acceptable.
+   If no patch files were generated (e.g. a spec-only change), skip this
+   criterion.
+
+   Criterion 2 — Spec file correctness:
+   Read the spec file and verify all of the following:
+   a. A new `Patch:` tag exists for every patch file you generated.
+      (Skip if no patch files were generated.)
+   b. Unless the spec uses `%autosetup` or `%autopatch` (which apply patches
+      automatically), the `%prep` section has a corresponding `%patch` directive
+      for each new tag, with the correct `-p` strip level.
+      (Skip if no patch files were generated.)
+   c. All pre-existing `Patch:` tags and their `%patch` directives remain
+      present with the same tag numbers and `-p` arguments as before.
+
+   Criterion 3 — No unrelated changes:
+   From the git diff output, verify the `%changelog` section was not modified.
+   (Changing the Release field is acceptable in y-stream, unless this was a
+   spec-only change via step 3d — in that case the Release field must not be
+   modified either.)
+
+   Criterion 4 — Completeness:
+   Verify the SRPM generated in step 7 exists on disk. Use the path that the
+   SRPM generation command printed, and run:
+   `test -f "<path-to-srpm>" && echo exists || echo missing`
+
+   Criterion 5 — Patch naming:
+   If you generated any patch files, verify each filename follows the naming
+   convention determined in step 0. If no patch files were generated, skip
+   this criterion.
+
+   If ALL criteria pass, report success as normal.
+
+   If ANY criterion fails, set `success=False` and populate `error` with:
+
+     Self-review failed. The following criteria were not met:
+
+     - <Criterion name>: <specific reason — what was found vs. what was expected>
+
+   List only the failing criteria. Do not mention passing ones.
 
 
 General instructions:
@@ -852,6 +928,54 @@ a backport that won't actually fix the shipped RPM.
    about newer files: "use '--force' to overwrite".
 
 6. Generate a SRPM using the `build_srpm` tool.
+
+7. Self-Review: Before reporting a result, verify your work meets all criteria
+   below. Run `git diff HEAD -- *.spec` in the dist-git repository root (not in
+   any cloned source repository) to inspect what you changed in the spec file.
+
+   Criterion 1 — Patch correctness:
+   If you generated any patch files, read each one. Verify it is non-empty and
+   contains code changes that address the issue in <JIRA_ISSUE> or <CVE_ID>. A
+   patch that only modifies whitespace, comments, or files entirely unrelated to
+   the fix does not pass. Test files that accompany the fix are acceptable.
+   If no patch files were generated (e.g. a spec-only change), skip this
+   criterion.
+
+   Criterion 2 — Spec file correctness:
+   Read the spec file and verify all of the following:
+   a. A new `Patch:` tag exists for every patch file you generated.
+      (Skip if no patch files were generated.)
+   b. Unless the spec uses `%autosetup` or `%autopatch` (which apply patches
+      automatically), the `%prep` section has a corresponding `%patch` directive
+      for each new tag, with the correct `-p` strip level.
+      (Skip if no patch files were generated.)
+   c. All pre-existing `Patch:` tags and their `%patch` directives remain
+      present with the same tag numbers and `-p` arguments as before.
+
+   Criterion 3 — No unrelated changes:
+   From the git diff output, verify all of the following:
+   a. The `%changelog` section was not modified.
+   b. Your changes (visible in the diff) did not modify the `Release:` field.
+
+   Criterion 4 — Completeness:
+   Verify the SRPM generated in step 6 exists on disk. Use the path that the
+   SRPM generation command printed, and run:
+   `test -f "<path-to-srpm>" && echo exists || echo missing`
+
+   Criterion 5 — Patch naming:
+   If you generated any patch files, verify each filename follows the naming
+   convention determined in step 0. If no patch files were generated, skip
+   this criterion.
+
+   If ALL criteria pass, report success as normal.
+
+   If ANY criterion fails, set `success=False` and populate `error` with:
+
+     Self-review failed. The following criteria were not met:
+
+     - <Criterion name>: <specific reason — what was found vs. what was expected>
+
+   List only the failing criteria. Do not mention passing ones.
 
 
 General instructions:

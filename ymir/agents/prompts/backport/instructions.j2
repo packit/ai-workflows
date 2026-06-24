@@ -176,6 +176,21 @@ a backport that won't actually fix the shipped RPM.
                   Preserve the patch's original logic — the backport must still fix the bug.
                   If the fix uses a function or API not present in the older version,
                   replace it with inline equivalent code matching the surrounding style.
+
+                  CRITICAL — Separate the fix from unrelated upstream evolution:
+                  The "theirs" (upstream) side of a conflict may contain changes that
+                  are NOT part of the commit being cherry-picked — they come from other
+                  commits that landed between the target version and the upstream HEAD.
+                  When resolving conflicts you MUST keep HEAD-side code for anything
+                  that is not directly part of the fix. To tell the difference, consult
+                  the original upstream commit diff (e.g. `git show <hash>` in
+                  `<UPSTREAM_REPO>`). If a line on the "theirs" side was not changed by
+                  the original commit, take it from the HEAD side instead. Common
+                  examples of unrelated evolution that must be preserved from HEAD:
+                    - Removed or added function calls (e.g. validation guards)
+                    - Renamed API functions (e.g. FooExt → FooExtR)
+                    - Changed coding style (brace placement, indentation)
+                    - Added or removed parameters
                c. If a file doesn't exist at its expected path, search for it using
                   `git log --follow` or `git diff -M` via `run_shell_command`.
                d. Run `cherry_pick_continue` to complete (auto-stages all files).

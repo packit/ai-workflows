@@ -7,6 +7,7 @@ x-beeai-env: &beeai-env
   COLLECTOR_ENDPOINT: http://otel-collector:4318/v1/traces
   GIT_REPO_BASEPATH: /git-repos
   MAX_RETRIES: 3
+  MAX_CONCURRENT_TASKS: ${MAX_CONCURRENT_TASKS:-1}
   DRY_RUN: ${DRY_RUN:-false}
   JIRA_DRY_RUN: ${JIRA_DRY_RUN:-false}
   JIRA_ALLOW_STATUS_CHANGES: ${JIRA_ALLOW_STATUS_CHANGES:-false}

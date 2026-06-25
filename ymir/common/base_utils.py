@@ -6,7 +6,7 @@ import os
 import re
 import shlex
 import subprocess
-from collections.abc import AsyncGenerator, Awaitable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TypeVar
@@ -14,6 +14,7 @@ from typing import TypeVar
 import redis.asyncio as redis
 
 logger = logging.getLogger(__name__)
+task_loop_logger = logging.getLogger("agent.task_loop")
 
 T = TypeVar("T")
 
@@ -59,6 +60,68 @@ async def redis_client(redis_url: str) -> AsyncGenerator[redis.Redis]:
     finally:
         await client.aclose()
         logger.debug("Disconnected from Redis")
+
+
+async def run_task_loop(
+    redis_conn: redis.Redis,
+    queues: list[str],
+    process_fn: Callable[[bytes], Coroutine],
+    max_concurrent: int = 1,
+    poll_timeout: int = 30,
+) -> None:
+    """Run a concurrent task loop that pops tasks from Redis queues.
+
+    Acquires a semaphore slot before popping to ensure we never hold more
+    tasks in memory than we can process, preventing task loss on crash.
+    """
+    if max_concurrent < 1:
+        raise ValueError("max_concurrent must be at least 1")
+
+    sem = asyncio.Semaphore(max_concurrent)
+    active: set[asyncio.Task] = set()
+
+    task_loop_logger.info(
+        "Task loop started: listening on %s, max_concurrent=%d",
+        queues,
+        max_concurrent,
+    )
+
+    async def _run(payload: bytes) -> None:
+        try:
+            await process_fn(payload)
+        except Exception:
+            logger.exception("Unhandled exception in task processing")
+        finally:
+            sem.release()
+
+    try:
+        while True:
+            await sem.acquire()
+            element = await fix_await(redis_conn.brpop(queues, timeout=poll_timeout))
+            if element is None:
+                sem.release()
+                continue
+
+            _, payload = element
+            task_loop_logger.info("Received task from queue.")
+
+            t = asyncio.create_task(_run(payload))
+            active.add(t)
+            t.add_done_callback(active.discard)
+    except asyncio.CancelledError:
+        if active:
+            task_loop_logger.info(
+                "Task loop cancelled. Waiting for %d active tasks to complete...",
+                len(active),
+            )
+            await asyncio.shield(asyncio.gather(*active, return_exceptions=True))
+        raise
+    finally:
+        if active:
+            task_loop_logger.info("Cancelling %d active tasks...", len(active))
+            for t in active:
+                t.cancel()
+            await asyncio.gather(*active, return_exceptions=True)
 
 
 def get_jira_auth_headers() -> dict[str, str]:

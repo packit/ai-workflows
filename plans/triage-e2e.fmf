@@ -31,7 +31,7 @@ prepare:
             "https://oauth2:${GITLAB_CI_TOKEN}@gitlab.cee.redhat.com/jotnar-project/testing-jiras.git" \
             /tmp/testing-jiras
 
-        cp /tmp/testing-jiras/mock_data/*.json \
+        cp -r /tmp/testing-jiras/mock_data/* \
             ymir/agents/tests/e2e/mock_repos/
 
         cp -r /tmp/testing-jiras/jiras/* \

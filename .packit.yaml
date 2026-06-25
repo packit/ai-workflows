@@ -23,11 +23,11 @@ jobs:
       - fedora-latest-stable
     tf_extra_params:
       environments:
-        - settings:
-            provisioning:
-              tags:
-                - m1.large
-          tmt:
+        # - settings:
+        #     provisioning:
+        #       tags:
+        #         - m1.large
+        - tmt:
             context:
               how: full
 
@@ -41,10 +41,10 @@ jobs:
       - fedora-latest-stable
     tf_extra_params:
       environments:
-        - settings:
-            provisioning:
-              tags:
-                - m1.large
-          tmt:
+        # - settings:
+        #     provisioning:
+        #       tags:
+        #         - m1.large
+        - tmt:
             context:
               how: full

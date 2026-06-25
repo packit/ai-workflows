@@ -12,6 +12,7 @@ x-beeai-env: &beeai-env
   JIRA_ALLOW_STATUS_CHANGES: ${JIRA_ALLOW_STATUS_CHANGES:-false}
   AUTO_CHAIN: ${AUTO_CHAIN:-true}
   REQUESTS_CA_BUNDLE: /etc/pki/tls/certs/ca-bundle.crt
+  SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
 
 # Base template for BeeAI agents
 x-beeai-agent: &beeai-agent

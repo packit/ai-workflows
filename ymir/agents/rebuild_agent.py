@@ -24,7 +24,7 @@ from ymir.agents.utils import (
     resolve_chat_model_override,
     run_subprocess,
 )
-from ymir.common.base_utils import fix_await, redis_client
+from ymir.common.base_utils import fix_await, redis_client, run_task_loop
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.logging_setup import configure_logging
 from ymir.common.mock_repos import get_mock_local_tool_env
@@ -332,6 +332,7 @@ async def main() -> None:
 
     # Queue mode
     logger.info("Starting rebuild agent in queue mode")
+    max_concurrent_tasks = int(os.getenv("MAX_CONCURRENT_TASKS", 1))
     async with redis_client(os.environ["REDIS_URL"]) as redis:
         max_retries = int(os.getenv("MAX_RETRIES", 3))
         container_version = os.getenv("CONTAINER_VERSION", "c10s")
@@ -347,18 +348,7 @@ async def main() -> None:
             f"listening to queues: [{rebuild_queue_todo}, {rebuild_queue}]"
         )
 
-        while True:
-            redis_logger.info(
-                f"Waiting for tasks from [{rebuild_queue_todo}, {rebuild_queue}] (timeout: 30s)..."
-            )
-            element = await fix_await(redis.brpop([rebuild_queue_todo, rebuild_queue], timeout=30))
-            if element is None:
-                redis_logger.info("No tasks received, continuing to wait...")
-                continue
-
-            _, payload = element
-            redis_logger.info("Received task from queue.")
-
+        async def process_task(payload):
             try:
                 task = Task.model_validate_json(payload)
                 triage_state = task.metadata
@@ -375,7 +365,7 @@ async def main() -> None:
                         ).model_dump_json(),
                     )
                 )
-                continue
+                return
 
             logger.info(
                 f"Processing rebuild for package: {rebuild_data.package}, "
@@ -524,6 +514,13 @@ async def main() -> None:
                             jira_issue=rebuild_data.jira_issue,
                         ).model_dump_json(),
                     )
+
+        await run_task_loop(
+            redis,
+            [rebuild_queue_todo, rebuild_queue],
+            process_task,
+            max_concurrent=max_concurrent_tasks,
+        )
 
 
 if __name__ == "__main__":

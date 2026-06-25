@@ -34,7 +34,7 @@ from ymir.agents.utils import (
     resolve_chat_model_override,
     run_tool,
 )
-from ymir.common.base_utils import fix_await, redis_client
+from ymir.common.base_utils import fix_await, redis_client, run_task_loop
 from ymir.common.config import load_rhel_config
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.logging_setup import configure_logging
@@ -819,30 +819,12 @@ async def main() -> None:
             return
 
     logger.info(f"Starting triage agent in queue mode (AUTO_CHAIN={'enabled' if auto_chain else 'disabled'})")
+    max_concurrent_tasks = int(os.getenv("MAX_CONCURRENT_TASKS", 1))
     async with redis_client(os.environ["REDIS_URL"]) as redis:
         max_retries = int(os.getenv("MAX_RETRIES", 3))
         redis_logger.info(f"Connected to Redis, max retries set to {max_retries}")
 
-        while True:
-            redis_logger.info(
-                "Waiting for tasks from triage_queue_todo (priority) and triage_queue (timeout: 30s)..."
-            )
-            # Multi-key BRPOP serves the first non-empty list in order, so
-            # ymir_todo-triggered tasks (TRIAGE_QUEUE_TODO) jump ahead of
-            # normal-flow tasks (TRIAGE_QUEUE).
-            element = await fix_await(
-                redis.brpop(
-                    [RedisQueues.TRIAGE_QUEUE_TODO.value, RedisQueues.TRIAGE_QUEUE.value],
-                    timeout=30,
-                )
-            )
-            if element is None:
-                redis_logger.info("No tasks received, continuing to wait...")
-                continue
-
-            _, payload = element
-            redis_logger.info("Received task from queue")
-
+        async def process_task(payload):
             task = Task.model_validate_json(payload)
             input = InputSchema.model_validate(task.metadata)
             user_triggered = task.user_triggered
@@ -881,7 +863,7 @@ async def main() -> None:
                     f"Skipping duplicate triage for {input.issue} — "
                     f"already has labels: {terminal_ymir_labels}"
                 )
-                continue
+                return
 
             async def retry(task, error, input=input, user_triggered=user_triggered):
                 task.attempts += 1
@@ -968,7 +950,7 @@ async def main() -> None:
                 # ~7s, so we're past transient blips. Typical Jira outages last
                 # minutes; cycling faster just spams the API.
                 await asyncio.sleep(60)
-                continue
+                return
 
             try:
                 logger.info(f"Starting triage processing for {input.issue}")
@@ -1053,10 +1035,10 @@ async def main() -> None:
                     if auto_chain:
                         if output.resolution == Resolution.OPEN_ENDED_ANALYSIS:
                             queue = RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value
-                            payload = output.data.model_dump_json()
+                            downstream_payload = output.data.model_dump_json()
                         else:
                             task = Task(metadata=state.model_dump(), user_triggered=user_triggered)
-                            payload = task.model_dump_json()
+                            downstream_payload = task.model_dump_json()
                             if output.resolution == Resolution.REBASE:
                                 queue = RedisQueues.get_rebase_queue_for_branch(
                                     state.target_branch, task.user_triggered
@@ -1071,10 +1053,17 @@ async def main() -> None:
                                 )
                             else:
                                 queue = RedisQueues.CLARIFICATION_NEEDED_QUEUE.value
-                        await fix_await(redis.lpush(queue, payload))
+                        await fix_await(redis.lpush(queue, downstream_payload))
                         logger.info(f"Pushed {input.issue} to {queue}")
                     else:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
+
+        await run_task_loop(
+            redis,
+            [RedisQueues.TRIAGE_QUEUE_TODO.value, RedisQueues.TRIAGE_QUEUE.value],
+            process_task,
+            max_concurrent=max_concurrent_tasks,
+        )
 
 
 if __name__ == "__main__":

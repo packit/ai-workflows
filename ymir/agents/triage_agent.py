@@ -37,7 +37,7 @@ from ymir.agents.utils import (
 from ymir.common.base_utils import fix_await, redis_client, run_task_loop
 from ymir.common.config import load_rhel_config
 from ymir.common.constants import JiraLabels, RedisQueues
-from ymir.common.logging_setup import configure_logging
+from ymir.common.logging_setup import configure_logging, current_jira_issue, get_trajectory_writeable
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     ApplicabilityResult,
@@ -265,7 +265,7 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
             ConditionalRequirement("search_jira_issues", only_after=["get_jira_details"]),
             ConditionalRequirement("zstream_search", only_after=["get_jira_details"]),
         ],
-        middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
+        middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat Enterprise Linux developer",
         instructions=[
             "Be proactive in your search for fixes and do not give up easily.",
@@ -791,7 +791,7 @@ async def run_workflow(
 async def main() -> None:
     init_sentry()
 
-    configure_logging(level=logging.INFO)
+    configure_logging(level=logging.INFO, buffer_size=int(os.getenv("LOG_BUFFER_SIZE", 0)))
     resolve_chat_model_override("triage")
 
     span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
@@ -827,6 +827,7 @@ async def main() -> None:
         async def process_task(payload):
             task = Task.model_validate_json(payload)
             input = InputSchema.model_validate(task.metadata)
+            current_jira_issue.set(input.issue)
             user_triggered = task.user_triggered
             logger.info(
                 f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}"

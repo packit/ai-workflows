@@ -2,6 +2,7 @@ apiVersion: v1
 data:
   MAX_RETRIES: "3"
   MAX_CONCURRENT_TASKS: "1"
+  LOG_BUFFER_SIZE: "0"
   GIT_REPO_BASEPATH: /git-repos
   # The maximum number of retries for a single step in the agent execution.
   BEEAI_MAX_RETRIES_PER_STEP: "5"

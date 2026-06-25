@@ -13,6 +13,8 @@ from typing import TypeVar
 
 import redis.asyncio as redis
 
+from ymir.common.logging_setup import current_jira_issue, flush_task_logs
+
 logger = logging.getLogger(__name__)
 task_loop_logger = logging.getLogger("agent.task_loop")
 
@@ -92,6 +94,12 @@ async def run_task_loop(
         except Exception:
             logger.exception("Unhandled exception in task processing")
         finally:
+            try:
+                if issue := current_jira_issue.get():
+                    current_jira_issue.set(None)
+                    flush_task_logs(issue)
+            except Exception:
+                logger.exception("Unhandled exception during log flushing")
             sem.release()
 
     try:

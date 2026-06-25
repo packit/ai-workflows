@@ -30,7 +30,7 @@ from ymir.agents.utils import (
     render_template,
     run_tool,
 )
-from ymir.common.logging_setup import configure_logging
+from ymir.common.logging_setup import configure_logging, get_trajectory_writeable
 from ymir.tools.unprivileged.greenwave import FetchGreenWaveTool, FetchTestingFarmResultsTool
 
 logger = logging.getLogger(__file__)
@@ -104,7 +104,7 @@ def create_preliminary_testing_agent(gateway_tools: list) -> ReasoningAgent:
                 only_success_invocations=False,
             ),
         ],
-        middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
+        middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
     )
 
 

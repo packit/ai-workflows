@@ -6,6 +6,7 @@ import sys
 import traceback
 from pathlib import Path
 
+import sentry_sdk
 from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
 )
@@ -849,6 +850,12 @@ async def main() -> None:
                 f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}"
                 + (" (user-triggered via ymir_todo)" if user_triggered else "")
             )
+            if user_triggered and task.attempts == 0:
+                sentry_sdk.metrics.count(
+                    "ymir_todo.processed",
+                    1,
+                    attributes={"issue": input.issue},
+                )
 
             # User-triggered runs will receive an acknowledgement comment,
             # but only after we successfully write the in-progress label to

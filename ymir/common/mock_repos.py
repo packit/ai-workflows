@@ -285,11 +285,20 @@ def setup_mock_repos(repos: list[dict], issue_key: str, base_dir: Path) -> dict[
         refs_to_delete = [ref.path for ref in repo.references if ref.path not in keep_refs]
         for ref_path in refs_to_delete:
             repo.git.update_ref("-d", ref_path)
+        # Point HEAD to the first kept branch so clones can checkout
+        if keep_refs:
+            repo.git.symbolic_ref("HEAD", keep_refs[0])
         repo.git.gc("--prune=now", "-q")
 
         for url in remote_urls[pkg]:
             git_env[f"GIT_CONFIG_KEY_{idx}"] = f"url.file://{local_path}.insteadOf"
             git_env[f"GIT_CONFIG_VALUE_{idx}"] = url
+            idx += 1
+            # Register the alternate form (.git / no .git) so the rewrite
+            # works regardless of whether the agent appends .git to the URL.
+            alt_url = url.removesuffix(".git") if url.endswith(".git") else f"{url}.git"
+            git_env[f"GIT_CONFIG_KEY_{idx}"] = f"url.file://{local_path}.insteadOf"
+            git_env[f"GIT_CONFIG_VALUE_{idx}"] = alt_url
             idx += 1
 
     git_env["GIT_CONFIG_COUNT"] = str(idx)

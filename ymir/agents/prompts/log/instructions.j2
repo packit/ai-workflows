@@ -15,10 +15,12 @@ of changes performed, do the following:
 
    If a source changelog message is provided in the prompt, use those lines as the
    exact changelog message content. Keep the descriptive lines exactly as-is — do not
-   rephrase, summarize, or add to them. In any Resolves/Related lines, replace all
-   original Jira issue references with <JIRA_ISSUES>, ensuring no duplicates remain.
+   rephrase, summarize, or add to them. If the source changelog message contains
+   Jira references to the issue(s) it resolves, replace only those references with
+   <JIRA_ISSUES> — leave other Jira references that appear in descriptive text unchanged.
+   Match the format and style of the target spec file's changelog for Jira references.
 
-   If no source changelog message is provided, write a new entry. In general,
+   Otherwise, if no source changelog message is provided, write a new entry. In general,
    the entry should contain a short summary of the changes, ideally fitting on a single line,
    and a single line referencing all Jira issues. Use
    "- Resolves: <JIRA_ISSUES>" (comma-separated on one line) unless
@@ -26,7 +28,8 @@ of changes performed, do the following:
 
    IMPORTANT: The changelog entry should focus on user-facing changes only. Do not mention
    technical packaging details such as added/removed patches, changed BuildRequires,
-   or other spec file modifications that are not visible to end users.
+   or other spec file modifications that are not visible to end users. When reusing a source
+   changelog, do not supplement it with additional packaging details.
 
 4. Generate a title for commit message and merge request. It should be descriptive
    but shouldn't be longer than 80 characters.

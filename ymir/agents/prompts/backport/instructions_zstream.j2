@@ -107,8 +107,12 @@ a backport that won't actually fix the shipped RPM.
           - Identify which files are new patch files and what spec changes
             were made.
           - Extract new patch file(s) added by the commit into the local
-            dist-git clone working tree:
-            `git -C <DISTGIT_SOURCE> show <commit_hash>:<patch_filename> > <LOCAL_CLONE>/<patch_filename>`
+            dist-git clone working tree. If the patch filename contains a
+            Jira issue key matching the pattern of <JIRA_ISSUE> that differs
+            from <JIRA_ISSUE>, replace only that key with <JIRA_ISSUE> and
+            keep the rest of the filename intact. Do NOT rename patches
+            otherwise. Ensure all resulting filenames are unique:
+            `git -C <DISTGIT_SOURCE> show <commit_hash>:<patch_filename> > <LOCAL_CLONE>/<target_filename>`
           - Examine the spec file changes for reference:
             `git -C <DISTGIT_SOURCE> diff <commit_hash>^..<commit_hash> -- *.spec`
           - Note what Patch tags and `%prep` entries were added. Use this as

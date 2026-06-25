@@ -114,7 +114,6 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
         new_messages = self._process_input(
             input,
             backstory=kwargs.get("backstory"),
-            expected_output=kwargs.get("expected_output"),
         )
         await runner.add_messages(self.memory.messages)
         await runner.add_messages(new_messages)
@@ -136,9 +135,7 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
             state=final_state,
         )
 
-    def _process_input(
-        self, input: str | list[AnyMessage], backstory: str | None, expected_output: Any
-    ) -> list[AnyMessage]:
+    def _process_input(self, input: str | list[AnyMessage], backstory: str | None) -> list[AnyMessage]:
         if not input:
             return []
 
@@ -149,7 +146,6 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
                     ReasoningAgentTaskPromptInput(
                         prompt=last_message.text,
                         context=backstory,
-                        expected_output=expected_output if isinstance(expected_output, str) else None,
                     )
                 ),
                 meta=last_message.meta.copy(),

@@ -26,6 +26,7 @@ from specfile.utils import EVR
 
 from ymir.common.base_utils import is_cs_branch
 from ymir.common.constants import BREWHUB_URL, CENTOS_STREAM_KOJIHUB_URL
+from ymir.common.logging_setup import get_trajectory_writeable
 from ymir.common.version_utils import construct_internal_branch_name, parse_rhel_version
 
 logger = logging.getLogger(__name__)
@@ -82,7 +83,9 @@ async def run_tool(
 ) -> str | dict | list:
     if isinstance(tool, str):
         tool = next(t for t in available_tools or [] if t.name == tool)
-    output = await tool.run(input=kwargs).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    output = await tool.run(input=kwargs).middleware(
+        GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())
+    )
     match output:
         case StringToolOutput():
             result = output.get_text_content()

@@ -26,7 +26,7 @@ from ymir.agents.utils import (
 )
 from ymir.common.base_utils import fix_await, redis_client, run_task_loop
 from ymir.common.constants import JiraLabels, RedisQueues
-from ymir.common.logging_setup import configure_logging
+from ymir.common.logging_setup import configure_logging, current_jira_issue
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     ConsolidatedIssue,
@@ -45,7 +45,7 @@ redis_logger = logging.getLogger("agent.redis")
 async def main() -> None:
     init_sentry()
 
-    configure_logging(level=logging.INFO)
+    configure_logging(level=logging.INFO, buffer_size=int(os.getenv("LOG_BUFFER_SIZE", 0)))
     resolve_chat_model_override("rebuild")
 
     span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
@@ -353,6 +353,7 @@ async def main() -> None:
                 task = Task.model_validate_json(payload)
                 triage_state = task.metadata
                 rebuild_data = RebuildData.model_validate(triage_state["triage_result"]["data"])
+                current_jira_issue.set(rebuild_data.jira_issue)
                 dist_git_branch = triage_state["target_branch"]
                 user_triggered = task.user_triggered
             except Exception as e:

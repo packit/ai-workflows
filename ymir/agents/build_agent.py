@@ -16,6 +16,7 @@ from ymir.agents.utils import (
     is_reasoning_enabled,
     render_template,
 )
+from ymir.common.logging_setup import get_trajectory_writeable
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool
 from ymir.tools.unprivileged.text import (
@@ -68,7 +69,7 @@ def create_build_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]
             ConditionalRequirement("download_artifacts", only_after=["build_package"]),
             ConditionalRequirement("extract_log_snippets", only_after=["download_artifacts"]),
         ],
-        middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
+        middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat Enterprise Linux developer",
         instructions=get_instructions(),
     )

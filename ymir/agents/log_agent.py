@@ -16,6 +16,7 @@ from ymir.agents.utils import (
     is_reasoning_enabled,
     render_template,
 )
+from ymir.common.logging_setup import get_trajectory_writeable
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool
 from ymir.tools.unprivileged.specfile import AddChangelogEntryTool
@@ -66,7 +67,7 @@ def create_log_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> Reaso
                 only_success_invocations=False,
             ),
         ],
-        middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
+        middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat Enterprise Linux developer",
         instructions=get_instructions(),
     )

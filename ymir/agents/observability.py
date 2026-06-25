@@ -1,6 +1,5 @@
 import atexit
 import contextlib
-from contextvars import ContextVar
 
 import sentry_sdk
 from openinference.instrumentation.beeai import BeeAIInstrumentor
@@ -12,21 +11,21 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
+from ymir.common.logging_setup import current_jira_issue
+
 
 class AgentSpanProcessor(SpanProcessor):
-    _jira_issue_var: ContextVar[str | None] = ContextVar("jira_issue", default=None)
-
     def set_jira_issue(self, jira_issue: str | None) -> None:
-        self._jira_issue_var.set(jira_issue)
+        current_jira_issue.set(jira_issue)
 
     @contextlib.contextmanager
     def jira_issue_context(self, jira_issue: str | None):
         """Set the jira issue attribute on all spans created within the context."""
-        token = self._jira_issue_var.set(jira_issue)
+        token = current_jira_issue.set(jira_issue)
         try:
             yield
         finally:
-            self._jira_issue_var.reset(token)
+            current_jira_issue.reset(token)
 
     @contextlib.contextmanager
     def start_transaction(
@@ -40,15 +39,15 @@ class AgentSpanProcessor(SpanProcessor):
             transaction.set_data("workflow", workflow)
             transaction.set_data("jira_issue", jira_issue)
 
-            token = self._jira_issue_var.set(jira_issue)
+            token = current_jira_issue.set(jira_issue)
             try:
                 yield
             finally:
-                self._jira_issue_var.reset(token)
+                current_jira_issue.reset(token)
 
     def on_start(self, span: Span, parent_context: Context | None = None) -> None:
         if span.is_recording():
-            jira_issue = self._jira_issue_var.get()
+            jira_issue = current_jira_issue.get()
             if jira_issue:
                 span.set_attribute("jira.issue", jira_issue)
 

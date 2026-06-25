@@ -34,7 +34,7 @@ from ymir.agents.utils import (
     mcp_tools,
     render_template,
 )
-from ymir.common.logging_setup import configure_logging
+from ymir.common.logging_setup import configure_logging, get_trajectory_writeable
 from ymir.common.models import (
     BuildInputSchema,
     BuildOutputSchema,
@@ -96,7 +96,7 @@ def create_merge_request_agent(mcp_tools: list[Tool], local_tool_options: dict[s
                 only_success_invocations=False,
             ),
         ],
-        middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
+        middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat Enterprise Linux developer",
         instructions=get_instructions(),
     )

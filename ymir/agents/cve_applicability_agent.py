@@ -12,6 +12,7 @@ from beeai_framework.tools.think import ThinkTool
 
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import get_chat_model, get_tool_call_checker_config, is_reasoning_enabled
+from ymir.common.logging_setup import get_trajectory_writeable
 from ymir.common.models import Resolution
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.text import SearchTextTool, ViewTool
@@ -45,7 +46,7 @@ def create_applicability_agent(
                 only_success_invocations=False,
             ),
         ],
-        middlewares=[GlobalTrajectoryMiddleware(pretty=True)],
+        middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat security analyst",
     )
 

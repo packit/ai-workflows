@@ -110,7 +110,6 @@ Never use the tool twice with the same input if not stated otherwise.
 class ReasoningAgentTaskPromptInput(BaseModel):
     prompt: str
     context: str | None = None
-    expected_output: str | None = None
 
 
 ReasoningAgentTaskPrompt = PromptTemplate(
@@ -119,11 +118,6 @@ ReasoningAgentTaskPrompt = PromptTemplate(
 {{&.}}
 
 {{/context}}
-{{#expected_output}}
-This is the expected criteria for your output:
-{{.}}
-
-{{/expected_output}}
 Your task: {{prompt}}""",
 )
 

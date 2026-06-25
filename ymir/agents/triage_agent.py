@@ -401,10 +401,7 @@ async def run_workflow(
             input_data = InputSchema(issue=state.jira_issue)
             response = await triage_agent.run(
                 await render_prompt(input_data, fix_version=fix_version_name),
-                expected_output=(
-                    "A JSON object with top-level keys 'resolution' and 'data'. "
-                    "See the task prompt for the exact schema and examples."
-                ),
+                expected_output=render_template("triage/output_format.j2"),
                 **get_agent_execution_config(),
             )
             state.triage_result = OutputSchema.model_validate_json(response.last_message.text)

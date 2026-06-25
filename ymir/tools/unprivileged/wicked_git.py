@@ -522,7 +522,7 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
                     "or 'apply_downstream_patches' is run before this tool. "
                     f"Options: {self.options}"
                 )
-            cmd = ["git", "format-patch", "--stdout", f"{base_commit_sha}..HEAD"]
+            cmd = ["git", "format-patch", "--no-signature", "--stdout", f"{base_commit_sha}..HEAD"]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repository_path)
             if exit_code != 0:
                 raise ToolError(f"Command git-format-patch failed: {stderr}")

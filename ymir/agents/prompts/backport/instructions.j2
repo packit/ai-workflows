@@ -209,7 +209,7 @@ a backport that won't actually fix the shipped RPM.
           - The tool automatically uses the base commit recorded in step 4e to include
             ALL cherry-picked commits, not just the last one
           - For multi-patch (when maintainer rules request one patch per commit),
-            use `run_shell_command` with `git format-patch -1 <hash> --stdout > <name>`
+            use `run_shell_command` with `git format-patch --no-signature -1 <hash> --stdout > <name>`
             per commit instead of `git_patch_create`
           - IMPORTANT: Only create NEW patch files. Do NOT modify
             existing patches in the dist-git repository
@@ -244,7 +244,7 @@ a backport that won't actually fix the shipped RPM.
               (default: `<JIRA_ISSUE>.patch`) in the current working
               directory (the dist-git repository root)
           - The tool automatically captures all applied changes into one patch file.
-          - For multi-patch, use `run_shell_command` with `git format-patch`
+          - For multi-patch, use `run_shell_command` with `git format-patch --no-signature`
             per commit instead of `git_patch_create`
 
 5. Update the spec file. Add new `Patch` tag(s) for each patch file generated in step 4.

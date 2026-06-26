@@ -38,3 +38,11 @@ repos:
         stages: [pre-push]
         always_run: true
         pass_filenames: false
+      - id: autobump-version
+        name: Auto-bump patch version for changed packages
+        entry: python scripts/autobump-version.py
+        language: python
+        additional_dependencies: [gitpython, tomlkit]
+        stages: [pre-push]
+        always_run: true
+        pass_filenames: false

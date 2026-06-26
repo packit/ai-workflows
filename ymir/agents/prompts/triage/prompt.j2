@@ -165,8 +165,10 @@ You must decide between one of the following actions. Follow these guidelines to
           * The code changes address the specific vulnerability type
             (buffer overflow, integer overflow, etc.)
           * The affected functions/files align with the CVE details
-        - **WARNING**: Patches from bundled CVE updates (e.g., Oracle CPU, bundled library updates)
-          may fix MULTIPLE CVEs - verify you have the correct patch for THIS specific CVE
+        - **Multiple CVEs in one issue**: When the Jira issue covers multiple CVEs,
+          verify you have the correct patches for ALL of them — not just one.
+          Include ALL CVE IDs in the `cve_id` output field so the downstream
+          backport agent knows the full scope and applies all related patches.
         - If you cannot confirm the patch matches the CVE, search for alternative patches or
           request clarification
    * Only proceed with URLs that contain valid patch content AND address the specific issue

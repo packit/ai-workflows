@@ -141,7 +141,10 @@ class BackportInputSchema(BaseModel):
     package: str = Field(description="Package to update")
     dist_git_branch: str = Field(description="Git branch in dist-git to be updated")
     jira_issue: str = Field(description="Jira issue to reference as resolved")
-    cve_id: str | None = Field(default=None, description="CVE ID if the jira issue is a CVE")
+    cve_id: str | None = Field(
+        default=None,
+        description="CVE ID(s) if the jira issue is a CVE; may contain multiple CVE IDs",
+    )
     upstream_patches: list[str] = Field(
         description="List of URLs to upstream patches that were validated using the get_patch_from_url tool"
     )
@@ -241,7 +244,10 @@ class BackportData(BaseModel):
         "Do NOT repeat the justification rationale here.",
     )
     jira_issue: str = Field(description="Jira issue identifier")
-    cve_id: str | None = Field(description="CVE identifier", default=None)
+    cve_id: str | None = Field(
+        description="CVE identifier(s); include ALL CVE IDs when the issue covers multiple CVEs",
+        default=None,
+    )
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
 
 

@@ -17,7 +17,7 @@ jobs:
     trigger: pull_request
     identifier: pr-test-triage-e2e
     skip_build: true
-    manual_trigger: true
+    # manual_trigger: true
     use_internal_tf: true
     targets:
       - fedora-latest-stable

@@ -907,14 +907,19 @@ async def main() -> None:
             # retries, not Jira-write retries — set_jira_labels already retries
             # the write internally) and skip processing this iteration.
             try:
+                # Remove all ymir_* labels currently on the issue (including any
+                # deprecated labels like ymir_fusa), except the in-progress anchor
+                # we're about to add. This ensures cleanup of unknown/legacy labels
+                # without requiring hardcoded references.
+                labels_to_remove = [
+                    label
+                    for label in current_labels
+                    if label.startswith("ymir_") and label != JiraLabels.TRIAGE_IN_PROGRESS.value
+                ]
                 await tasks.set_jira_labels(
                     jira_issue=input.issue,
                     labels_to_add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                    labels_to_remove=[
-                        label
-                        for label in JiraLabels.all_labels()
-                        if label != JiraLabels.TRIAGE_IN_PROGRESS.value
-                    ],
+                    labels_to_remove=labels_to_remove,
                     dry_run=dry_run,
                     user_triggered=user_triggered,
                     critical=True,

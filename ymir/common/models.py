@@ -5,7 +5,7 @@ This module contains common data models used across different agents
 and components to ensure consistency and type safety.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any, Literal
@@ -679,6 +679,88 @@ class CachedMRMetadata(BaseModel):
     details: str = Field(
         description="Operation-specific identifier "
         "(list of upstream patch URLs for backport, version for rebase)"
+    )
+
+
+# ============================================================================
+# MR Consolidation Schemas
+# ============================================================================
+
+
+class MergeConsolidationJob(BaseModel):
+    """A job in the MR consolidation queue.
+
+    Stored as a Redis hash field value under the
+    ``merge_consolidation_queue`` key.
+    """
+
+    package: str = Field(description="RPM package name")
+    target_branch: str = Field(description="Dist-git branch the MRs target")
+    active: bool = Field(default=False, description="Whether this job is currently being processed")
+    submitted_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        description="When this job was submitted",
+    )
+    source_issues: list[str] | None = Field(
+        default=None,
+        description="When set, consolidate only the MRs for these specific Jira issue keys "
+        "(label-triggered mode). When None, pick the two oldest open MRs (auto mode).",
+    )
+    release_strategy: str | None = Field(
+        default=None,
+        description="Release strategy override from package config ('merged' or 'per_commit'). "
+        "When None, the agent uses the RELEASE_STRATEGY environment variable or its default.",
+    )
+
+
+class ConsolidationReleaseStrategy(Enum):
+    """Controls how the package release number is handled during consolidation."""
+
+    MERGED = "merged"
+    PER_COMMIT = "per_commit"
+
+
+class PackageConsolidationConfig(BaseModel):
+    """Machine-readable consolidation config from the per-package rules repo.
+
+    Fetched from ``gitlab.com/redhat/centos-stream/rules/<package>/consolidation.json``.
+    """
+
+    merge_mrs: bool = Field(
+        default=True,
+        description="Whether to consolidate multiple backport MRs into one",
+    )
+    release_strategy: ConsolidationReleaseStrategy = Field(
+        default=ConsolidationReleaseStrategy.PER_COMMIT,
+        description="How to handle release numbers: 'merged' for a single bump, "
+        "'per_commit' for one bump per original commit",
+    )
+
+
+class MRConsolidationInputSchema(BaseModel):
+    """Input schema for the MR consolidation agent."""
+
+    local_clone: Path = Field(description="Path to the local clone of forked dist-git repository")
+    package: str = Field(description="Package name")
+    dist_git_branch: str = Field(description="Target dist-git branch")
+    mr_branches: list[str] = Field(description="Source branches of the MRs being consolidated")
+    mr_descriptions: list[str] = Field(description="Descriptions of the MRs being consolidated")
+    mr_titles: list[str] = Field(description="Titles of the MRs being consolidated")
+    jira_issues: list[str] = Field(description="Jira issues resolved by the source MRs")
+    release_strategy: str = Field(description="Release strategy: 'merged' or 'per_commit'")
+    build_error: str | None = Field(default=None, description="Error encountered during package build")
+
+
+class MRConsolidationOutputSchema(BaseModel):
+    """Output schema for the MR consolidation agent."""
+
+    success: bool = Field(description="Whether the consolidation was successfully completed")
+    status: str = Field(description="Consolidation status with details of how the merge was performed")
+    srpm_path: Path | None = Field(default=None, description="Absolute path to generated SRPM")
+    error: str | None = Field(default=None, description="Specific details about an error")
+    files_to_git_add: list[str] | None = Field(
+        default=None,
+        description="List of files that should be git added and committed",
     )
 
 

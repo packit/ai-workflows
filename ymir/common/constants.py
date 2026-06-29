@@ -47,11 +47,14 @@ class RedisQueues(Enum):
     REBASE_QUEUE = "rebase_queue"
     BACKPORT_QUEUE = "backport_queue"
     POSTPONED_LIST = "postponed_list"
+    # Redis Hash for MR consolidation queue (not a list — uses hash fields
+    # with at-most-one-active/one-pending semantics per package-branch pair).
+    MERGE_CONSOLIDATION_QUEUE = "merge_consolidation_queue"
 
     @classmethod
     def all_queues(cls) -> set[str]:
-        """Return all Redis queue names for operations that need to check all queues"""
-        return {queue.value for queue in cls}
+        """Return all Redis list queue names (excludes Hash-based keys like the consolidation queue)."""
+        return {q.value for q in cls if q is not cls.MERGE_CONSOLIDATION_QUEUE}
 
     @classmethod
     def input_queues(cls) -> set[str]:
@@ -160,6 +163,11 @@ class JiraLabels(Enum):
     TRIAGED_NOT_AFFECTED = "ymir_triaged_not_affected"
 
     RETRY_NEEDED = "ymir_retry_needed"
+
+    MR_CONSOLIDATED = "ymir_consolidated"
+
+    CONSOLIDATE_BASE = "ymir_consolidate_base"
+    CONSOLIDATE_NEXT = "ymir_consolidate_next"
 
     # Maintainer-facing trigger: when a Red Hat Employee adds this label to a CVE
     # issue, the fetcher enqueues it for an e2e run and swaps the label for

@@ -273,6 +273,31 @@ services:
     command: ["python", "-m", "ymir.agents.merge_request_agent"]
     profiles: ["agents"]
 
+  mr-consolidation-agent-c9s:
+    <<: *beeai-agent-c9s
+    command: ["python", "-m", "ymir.agents.mr_consolidation_agent"]
+    profiles: ["agents"]
+
+  mr-consolidation-agent-c10s:
+    <<: *beeai-agent-c10s
+    command: ["python", "-m", "ymir.agents.mr_consolidation_agent"]
+    profiles: ["agents"]
+
+  mr-consolidation-agent-e2e-tests:
+    <<: *beeai-agent-c10s
+    environment:
+      <<: *beeai-env
+      MR_CONSOLIDATION_MOCK_REPOS_DIR: /home/beeai/mock_repos/mr_consolidation
+    volumes:
+      - ./ymir:/home/beeai/ymir:ro,z
+      - git-repos:/git-repos:rw,U
+      - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
+      - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z,U
+      - ${MOCK_REPOS_HOST:-./ymir/agents/tests/e2e/mock_repos}:/home/beeai/mock_repos:ro,z
+    command: ["pytest", "ymir/agents/tests/e2e/mr_consolidation/test_mr_consolidation.py", "-o", "asyncio_default_test_loop_scope=session"]
+    restart: "no"
+    profiles: ["e2e-test"]
+
   # This is here so we can use it for '$(COMPOSE) run'
   supervisor:
     <<: *supervisor

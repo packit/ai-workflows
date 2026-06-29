@@ -1,0 +1,29 @@
+Your working directory is {{ local_clone }}, a clone of the dist-git repository for package {{ package }}.
+The {{ dist_git_branch }} dist-git branch has been checked out as the base.
+
+You need to consolidate the following two merge requests into a single changeset:
+
+MR 1 (oldest):
+- Branch: {{ mr_branches[0] }}
+- Title: {{ mr_titles[0] }}
+- Description:
+{{ mr_descriptions[0] }}
+
+MR 2:
+- Branch: {{ mr_branches[1] }}
+- Title: {{ mr_titles[1] }}
+- Description:
+{{ mr_descriptions[1] }}
+
+Related Jira issues: {{ jira_issues | join(', ') }}
+
+Release strategy: {{ release_strategy }}
+{% if build_error %}
+
+This is a retry after the previous consolidation attempt failed to build:
+
+{{ build_error }}
+
+Everything from the previous attempt has been reset. Start over, follow the instructions
+from the start and fix the build issue.
+{% endif %}

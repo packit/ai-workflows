@@ -30,6 +30,7 @@ from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState
 from ymir.agents.reasoning_agent import ReasoningAgent
+from ymir.agents.tasks import fetch_consolidation_config, submit_merge_job
 from ymir.agents.utils import (
     check_subprocess,
     format_mr_triage_details,
@@ -708,6 +709,50 @@ async def run_workflow(
                 state.merge_request_url = None
                 state.backport_result.success = False
                 state.backport_result.error = f"Could not commit and open MR: {e}"
+            return "submit_consolidation_job"
+
+        async def submit_consolidation_job(state):
+            if (
+                not state.merge_request_url
+                or not state.backport_result
+                or not state.backport_result.success
+                or not state.merge_request_newly_created
+            ):
+                return "comment_in_jira"
+
+            try:
+                config = await fetch_consolidation_config(state.package, gateway_tools)
+                if not config.merge_mrs:
+                    logger.info(
+                        "MR consolidation not enabled for %s, skipping",
+                        state.package,
+                    )
+                    return "comment_in_jira"
+
+                if redis_conn is not None:
+                    submitted = await submit_merge_job(
+                        redis_conn,
+                        state.package,
+                        state.dist_git_branch,
+                        release_strategy=config.release_strategy.value,
+                    )
+                    if submitted:
+                        logger.info(
+                            "Submitted consolidation job for %s/%s",
+                            state.package,
+                            state.dist_git_branch,
+                        )
+                    else:
+                        logger.info(
+                            "Consolidation job already queued for %s/%s",
+                            state.package,
+                            state.dist_git_branch,
+                        )
+                else:
+                    logger.info("No Redis connection (direct mode), skipping consolidation job submission")
+            except Exception as e:
+                logger.warning("Failed to submit consolidation job: %s", e)
+
             return "comment_in_jira"
 
         async def comment_in_jira(state):
@@ -741,6 +786,7 @@ async def run_workflow(
         workflow.add_step("stage_changes", stage_changes)
         workflow.add_step("run_log_agent", run_log_agent)
         workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
+        workflow.add_step("submit_consolidation_job", submit_consolidation_job)
         workflow.add_step("comment_in_jira", comment_in_jira)
 
         response = await workflow.run(

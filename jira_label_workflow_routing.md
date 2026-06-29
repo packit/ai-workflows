@@ -93,6 +93,17 @@ flowchart TD
 | `ymir_retry_needed` | Trigger retry | Forces reprocessing |
 | `ymir_triaged` | Triage completed, no automated follow-up | Terminal state |
 | `ymir_todo` | Maintainer-facing trigger for an e2e run | Fetcher swaps it for `ymir_triage_in_progress` on enqueue; only honored when the changelog shows the label was added by a member of the `Red Hat Employee` Jira group (verified per-issue, not via JQL). The triage run posts an ack comment and a result comment so the requester gets feedback. Default is silent — without `ymir_todo`, no comments are posted. |
+| `ymir_consolidate_base` | Mark a backport MR for consolidation (base) | Paired with `ymir_consolidate_next` on another issue for the same package/branch. The fetcher matches the pair, submits a targeted consolidation job, removes both labels, and posts comments. |
+| `ymir_consolidate_next` | Mark a backport MR for consolidation (next) | Must be on a different issue than `ymir_consolidate_base`, for the same package/branch. |
+
+### GitLab MR Labels
+
+These labels are applied to GitLab merge requests (not Jira issues):
+
+| Label | Purpose | Effect |
+|-------|---------|--------|
+| `ymir_backport` | Marks an MR as a backport | Used by the consolidation agent to discover candidate MRs |
+| `ymir_consolidated` | Marks an MR that has been folded into a consolidated MR | The MR stays open but is excluded from future consolidation searches |
 
 ## Queue Types Summary
 

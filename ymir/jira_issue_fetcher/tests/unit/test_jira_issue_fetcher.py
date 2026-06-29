@@ -149,7 +149,7 @@ async def test_search_issues_single_page(fetcher):
         json_data={
             "jql": 'filter = "Jotnar_1000_packages"',
             "maxResults": 500,
-            "fields": ["key", "labels", "components", "customfield_10669"],
+            "fields": ["key", "labels", "components", "customfield_10669", "fixVersions"],
         },
     ).and_return(
         {
@@ -594,6 +594,9 @@ async def test_run_full_workflow(fetcher):
     ).once()
     flexmock(fetcher).should_receive("push_issues_to_queue").with_args(mock_issues).and_return(
         create_async_mock_return_value(1)
+    ).once()
+    flexmock(fetcher).should_receive("_process_consolidation_labels").with_args(mock_issues).and_return(
+        create_async_mock_return_value(0)
     ).once()
 
     await fetcher.run()

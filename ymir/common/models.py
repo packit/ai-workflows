@@ -62,6 +62,15 @@ class TriageInputSchema(BaseModel):
         default=False,
         description="Whether the issue targets an older Z-stream",
     )
+    needs_internal_fix: bool = Field(
+        default=False,
+        description="Whether the CVE needs an internal RHEL fix (SecurityTracking label, Z-stream)",
+    )
+    internal_target_branch: str | None = Field(
+        default=None,
+        description="Pre-computed internal RHEL branch to inspect (e.g. 'rhel-10.2') "
+        "when needs_internal_fix is true",
+    )
 
 
 class Task(BaseModel):

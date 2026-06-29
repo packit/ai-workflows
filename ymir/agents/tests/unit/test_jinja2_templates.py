@@ -87,6 +87,8 @@ except ImportError:
     class TriageInputSchema(BaseModel):  # type: ignore[no-redef]
         issue: str
         is_older_zstream: bool = False
+        needs_internal_fix: bool = False
+        internal_target_branch: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +397,8 @@ class TestTriageTemplate:
         assert "RHEL-12345" in result
         assert "Fedora" in result
         assert "zstream_search" not in result
+        assert "centos-stream" in result
+        assert "redhat/rhel/rpms" not in result
 
     def test_renders_older_zstream(self):
         result = render_template(
@@ -404,6 +408,33 @@ class TestTriageTemplate:
         assert "RHEL-12345" in result
         assert "zstream_search" in result
         assert "Do not use upstream patches for older z-streams" in result
+
+    def test_renders_needs_internal_fix(self):
+        result = render_template(
+            "triage/prompt.j2",
+            TriageInputSchema(
+                issue="RHEL-189361",
+                needs_internal_fix=True,
+                internal_target_branch="rhel-10.2",
+            ),
+        )
+        assert "RHEL-189361" in result
+        assert "clone_repository" in result
+        assert "redhat/rhel/rpms" in result
+        assert "rhel-10.2" in result
+        assert "centos-stream" in result
+
+    def test_renders_needs_internal_fix_without_branch_falls_back(self):
+        result = render_template(
+            "triage/prompt.j2",
+            TriageInputSchema(
+                issue="RHEL-12345",
+                needs_internal_fix=True,
+                internal_target_branch=None,
+            ),
+        )
+        assert "centos-stream" in result
+        assert "redhat/rhel/rpms" not in result
 
 
 # Lightweight stand-in models to avoid importing modules with heavy deps (nitrate)

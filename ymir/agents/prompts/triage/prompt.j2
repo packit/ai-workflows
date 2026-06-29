@@ -37,9 +37,16 @@ Goal: Analyze the given issue to determine the correct course of action.
 
 2. Identify the package name that must be updated:
    * Determine the name of the package from the issue details (usually component name)
+   {% if needs_internal_fix and internal_target_branch %}
+   * Use the clone_repository tool to clone `https://gitlab.com/redhat/rhel/rpms/<package_name>`
+     with branch `{{ internal_target_branch }}`.
+     If the clone fails (branch or repo not found), fall back to cloning
+     `https://gitlab.com/redhat/centos-stream/rpms/<package_name>` using the same tool.
+   {% else %}
    * Confirm the package repository exists by running
      `GIT_TERMINAL_PROMPT=0 git ls-remote https://gitlab.com/redhat/centos-stream/rpms/<package_name>`
-   * A successful command (exit code 0) confirms the package exists
+     A successful command (exit code 0) confirms the package exists.
+   {% endif %}
    * If the package does not exist, re-examine the Jira issue
      for the correct package name and if it is not found,
      return error and explicitly state the reason

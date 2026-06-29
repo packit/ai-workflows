@@ -208,9 +208,25 @@ async def _map_version_to_branch(
 # All schemas are now imported from ymir.common.models
 
 
-async def render_prompt(input: InputSchema, fix_version: str | None = None) -> str:
+async def render_prompt(
+    input: InputSchema,
+    fix_version: str | None = None,
+    cve_eligibility_result: CVEEligibilityResult | None = None,
+) -> str:
     older_zstream = bool(fix_version and await is_older_zstream(fix_version))
-    input_with_flag = input.model_copy(update={"is_older_zstream": older_zstream})
+
+    updates: dict = {"is_older_zstream": older_zstream}
+
+    cve_needs_internal_fix = (
+        cve_eligibility_result and cve_eligibility_result.is_cve and cve_eligibility_result.needs_internal_fix
+    )
+    if cve_needs_internal_fix and fix_version:
+        internal_branch = await _map_version_to_branch(fix_version, cve_needs_internal_fix=True)
+        if internal_branch and not internal_branch.startswith("c"):
+            updates["needs_internal_fix"] = True
+            updates["internal_target_branch"] = internal_branch
+
+    input_with_flag = input.model_copy(update=updates)
     return render_template("triage/prompt.j2", input_with_flag)
 
 
@@ -247,6 +263,7 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
                 "search_jira_issues",
                 "zstream_search",
                 "get_maintainer_rules",
+                "clone_repository",
             ]
         ],
         memory=UnconstrainedMemory(),
@@ -264,6 +281,7 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
             ConditionalRequirement("set_jira_fields", only_after=["get_jira_details"]),
             ConditionalRequirement("search_jira_issues", only_after=["get_jira_details"]),
             ConditionalRequirement("zstream_search", only_after=["get_jira_details"]),
+            ConditionalRequirement("clone_repository", only_after=["get_jira_details"]),
         ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat Enterprise Linux developer",
@@ -401,7 +419,11 @@ async def run_workflow(
 
             input_data = InputSchema(issue=state.jira_issue)
             response = await triage_agent.run(
-                await render_prompt(input_data, fix_version=fix_version_name),
+                await render_prompt(
+                    input_data,
+                    fix_version=fix_version_name,
+                    cve_eligibility_result=state.cve_eligibility_result,
+                ),
                 expected_output=render_template("triage/output_format.j2"),
                 **get_agent_execution_config(),
             )

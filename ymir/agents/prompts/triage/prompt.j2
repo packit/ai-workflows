@@ -244,6 +244,15 @@ You must decide between one of the following actions. Follow these guidelines to
 
    2.4. Decide the Outcome
    {% if not is_older_zstream %}
+   {% if internal_build_version %}
+   * **IMPORTANT — Internal RHEL build version**: The latest build of this
+     package on the internal RHEL branch is version **{{ internal_build_version }}**,
+     which may be newer than the CentOS Stream version. Use
+     {{ internal_build_version }} as the downstream version when checking
+     whether the fix is already included. If this version already contains
+     the fix, the correct resolution is "not-affected" with justification
+     category "Vulnerable Code not Present".
+   {% endif %}
    * **CRITICAL — Check if the fix belongs to the package or a dependency:**
      Before deciding on backport, verify that the patch you found modifies the package's OWN source
      code, not the source code of a dependency. Watch for these signs that the fix is in a DEPENDENCY:

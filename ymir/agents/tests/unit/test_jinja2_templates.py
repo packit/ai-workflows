@@ -87,6 +87,7 @@ except ImportError:
     class TriageInputSchema(BaseModel):  # type: ignore[no-redef]
         issue: str
         is_older_zstream: bool = False
+        internal_build_version: str | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -62,6 +62,10 @@ class TriageInputSchema(BaseModel):
         default=False,
         description="Whether the issue targets an older Z-stream",
     )
+    internal_build_version: str | None = Field(
+        default=None,
+        description="Latest build version on the internal RHEL branch (from Brew), if known",
+    )
 
 
 class Task(BaseModel):

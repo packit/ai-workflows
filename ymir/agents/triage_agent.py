@@ -208,9 +208,16 @@ async def _map_version_to_branch(
 # All schemas are now imported from ymir.common.models
 
 
-async def render_prompt(input: InputSchema, fix_version: str | None = None) -> str:
+async def render_prompt(
+    input: InputSchema,
+    fix_version: str | None = None,
+    internal_build_version: str | None = None,
+) -> str:
     older_zstream = bool(fix_version and await is_older_zstream(fix_version))
-    input_with_flag = input.model_copy(update={"is_older_zstream": older_zstream})
+    updates: dict = {"is_older_zstream": older_zstream}
+    if internal_build_version:
+        updates["internal_build_version"] = internal_build_version
+    input_with_flag = input.model_copy(update=updates)
     return render_template("triage/prompt.j2", input_with_flag)
 
 
@@ -387,6 +394,7 @@ async def run_workflow(
 
             # Pre-fetch JIRA fix version to determine z-stream prompt variant
             fix_version_name = None
+            jira_details = None
             try:
                 jira_details = await run_tool(
                     "get_jira_details",
@@ -399,9 +407,40 @@ async def run_workflow(
             except Exception as e:
                 logger.warning(f"Failed to pre-fetch fix version for prompt selection: {e}")
 
+            # When the CVE needs an internal RHEL fix, the triage agent will
+            # check CentOS Stream for the downstream version — but the internal
+            # branch may already carry a newer build.  Pre-fetch the latest
+            # Brew candidate build version so the prompt can steer the agent.
+            internal_build_version = None
+            if (
+                state.cve_eligibility_result
+                and state.cve_eligibility_result.needs_internal_fix
+                and fix_version_name
+                and jira_details
+            ):
+                try:
+                    components = jira_details.get("fields", {}).get("components", [])
+                    component_name = components[0].get("name", "") if components else ""
+                    parsed = parse_rhel_version(fix_version_name)
+                    if component_name and parsed:
+                        major, minor, _ = parsed
+                        branch = construct_internal_branch_name(major, minor)
+                        evr, _ = await get_latest_candidate_build(component_name, branch)
+                        internal_build_version = evr.version
+                        logger.info(
+                            f"Latest internal build for {component_name} "
+                            f"on {branch}: {internal_build_version}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to pre-fetch internal build version: {e}")
+
             input_data = InputSchema(issue=state.jira_issue)
             response = await triage_agent.run(
-                await render_prompt(input_data, fix_version=fix_version_name),
+                await render_prompt(
+                    input_data,
+                    fix_version=fix_version_name,
+                    internal_build_version=internal_build_version,
+                ),
                 expected_output=render_template("triage/output_format.j2"),
                 **get_agent_execution_config(),
             )

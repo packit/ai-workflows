@@ -70,6 +70,7 @@ async def run_task_loop(
     process_fn: Callable[[bytes], Coroutine],
     max_concurrent: int = 1,
     poll_timeout: int = 30,
+    poll_fn: Callable[[], Coroutine] | None = None,
 ) -> None:
     """Run a concurrent task loop that pops tasks from Redis queues.
 
@@ -82,9 +83,10 @@ async def run_task_loop(
     sem = asyncio.Semaphore(max_concurrent)
     active: set[asyncio.Task] = set()
 
+    label = "custom poller" if poll_fn else str(queues)
     task_loop_logger.info(
         "Task loop started: listening on %s, max_concurrent=%d",
-        queues,
+        label,
         max_concurrent,
     )
 
@@ -102,15 +104,25 @@ async def run_task_loop(
                 logger.exception("Unhandled exception during log flushing")
             sem.release()
 
+    async def _default_poll() -> bytes | None:
+        element = await fix_await(redis_conn.brpop(queues, timeout=poll_timeout))
+        if element is None:
+            return None
+        _, payload = element
+        return payload
+
+    actual_poll = poll_fn or _default_poll
+
     try:
         while True:
             await sem.acquire()
-            element = await fix_await(redis_conn.brpop(queues, timeout=poll_timeout))
-            if element is None:
+            payload = await actual_poll()
+            if payload is None:
                 sem.release()
+                if poll_fn:
+                    await asyncio.sleep(poll_timeout)
                 continue
 
-            _, payload = element
             task_loop_logger.info("Received task from queue.")
 
             t = asyncio.create_task(_run(payload))

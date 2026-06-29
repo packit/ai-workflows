@@ -1,0 +1,40 @@
+Your working directory is {{ local_clone }}, a clone of the dist-git repository for package {{ package }}.
+
+A previous patch ({{ base_branch }}) has already been applied to the spec file and committed.
+You now need to integrate the patch(es) from commit {{ commit_sha }} of branch {{ other_branch }}
+on top of the current state.
+
+The patch file(s) from that commit are already present in the working directory.
+The spec file does NOT yet contain the Patch tag or %prep application line for them.
+
+Your task:
+1. Examine the new patch file(s) in the working directory to understand what they fix.
+2. Add the appropriate Patch tag(s) and %prep application line(s) to the spec file.
+   Number them sequentially after the last existing Patch tag.
+3. Run `run_package_prep` to verify all patches apply cleanly without fuzz.
+4. If prep fails because the new patch's context lines no longer match the
+   post-first-patch source tree, adapt the patch:
+   - Read the patch content and the target source file(s) to understand the mismatch.
+   - Update only context lines and hunk offsets — preserve the functional change (+/- lines).
+   - Run `run_package_prep` again to verify. Iterate until it succeeds.
+{% if prep_error %}
+
+Note: a preliminary prep check already failed with:
+{{ prep_error }}
+{% endif %}
+
+CRITICAL constraints:
+- Do NOT modify any pre-existing patches in the repository.
+- Never change anything in the spec file changelog. The changelog will be handled by
+  a separate workflow step after your work is complete.
+- Never modify the Release field in the spec file. The Release field will be updated
+  by a separate deterministic workflow step.
+- Do NOT run `git fetch`, `git pull`, or `git clone`.
+- Do NOT run `git commit` — the commit will be created by a separate step.
+- Only add or modify the patch file(s) from commit {{ commit_sha }}.
+{% if build_error %}
+
+This is a retry. The previous adaptation attempt led to a build failure:
+{{ build_error }}
+Start over and fix the issue.
+{% endif %}

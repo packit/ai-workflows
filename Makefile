@@ -49,6 +49,11 @@ run-triage-agent-standalone:
 
 .PHONY: run-triage-agent-e2e-tests
 run-triage-agent-e2e-tests:
+	@if [ -n "$(TMT_PLAN_DATA)" ]; then \
+		mv $(TMT_PLAN_DATA)/mock_repos/* ymir/agents/tests/e2e/mock_repos/; \
+		mv $(TMT_PLAN_DATA)/jiras/* ymir/tools/privileged/tests/data/; \
+		mv $(TMT_PLAN_DATA)/.secrets .secrets; \
+	fi
 	# SAFETY: MOCK_JIRA=true and DRY_RUN=true prevent writes to production Jira.
 	# These are REQUIRED — tests use real issue keys and would otherwise post
 	# comments to production. Setting them in the environment (not just -e flags)

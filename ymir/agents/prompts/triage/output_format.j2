@@ -21,6 +21,8 @@ Backport resolution:
     }
 }
 ```
+Note: When the Jira issue covers multiple CVEs, include ALL CVE IDs in `cve_id`, e.g.:
+`"cve_id": "CVE-1234-98765 CVE-1234-98766"`
 
 Rebase resolution:
 ```json
@@ -36,6 +38,8 @@ Rebase resolution:
     }
 }
 ```
+Note: When the Jira issue covers multiple CVEs, include ALL CVE IDs in `cve_id`, e.g.:
+`"cve_id": "CVE-1234-98765 CVE-1234-98766"`
 
 Rebuild resolution:
 ```json
@@ -53,6 +57,8 @@ Rebuild resolution:
     }
 }
 ```
+Note: When the Jira issue covers multiple CVEs, include ALL CVE IDs in `cve_id`, e.g.:
+`"cve_id": "CVE-1234-98765 CVE-1234-98766"`
 
 Postponed resolution (rebuild waiting for dependency):
 ```json
@@ -70,6 +76,8 @@ Postponed resolution (rebuild waiting for dependency):
     }
 }
 ```
+Note: When the Jira issue covers multiple CVEs, include ALL CVE IDs in `cve_id`, e.g.:
+`"cve_id": "CVE-1234-98765 CVE-1234-98766"`
 
 Not-affected resolution (CVE does not apply):
 ```json

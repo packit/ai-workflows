@@ -203,6 +203,16 @@ async def test_git_patch_creation_tool_with_hideous_patch_file(git_repo, tmp_pat
         ("CVE-2025-12346", "", "No matches found for 'CVE-2025-12346'"),
         ("", "RHEL-123456", "Found 1 matching commit(s) for 'RHEL-123456'"),
         ("", "RHEL-123457", "No matches found for 'RHEL-123457'"),
+        (
+            "CVE-2025-12345 CVE-2025-99999",
+            "",
+            "Found 1 matching commit(s) for 'CVE-2025-12345, CVE-2025-99999'",
+        ),
+        (
+            "CVE-2025-99998, CVE-2025-99999",
+            "",
+            "No matches found for 'CVE-2025-99998, CVE-2025-99999'",
+        ),
     ],
 )
 async def test_git_log_search_tool_found(git_repo, cve_id, jira_issue, expected):

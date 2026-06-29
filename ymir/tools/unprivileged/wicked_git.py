@@ -12,6 +12,10 @@ from ymir.common.validators import AbsolutePath
 from ymir.common.version_utils import parse_branch_name
 from ymir.tools.base import CloneableTool as Tool
 
+# Pattern to extract CVE IDs. Needs to handles space-separated, comma-separated,
+# or any other separator as there is no standard in how those can be provided.
+CVE_ID_PATTERN = re.compile(r"CVE-\d{4}-\d{4,}")
+
 
 class GitPreparePackageSourcesInput(BaseModel):
     unpacked_sources_path: AbsolutePath = Field(
@@ -541,7 +545,7 @@ class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, Strin
 
 class GitLogSearchToolInput(BaseModel):
     repository_path: AbsolutePath = Field(description="Absolute path to the git repository")
-    cve_id: str = Field(description="CVE ID to look for in git history")
+    cve_id: str = Field(description="CVE ID(s) to look for in git history (may contain multiple CVE IDs)")
     jira_issue: str = Field(description="Jira issue to look for in git history")
 
 
@@ -571,24 +575,23 @@ class GitLogSearchTool(Tool[GitLogSearchToolInput, ToolRunOptions, StringToolOut
 
         if not (repo_path / ".git").exists():
             raise ToolError(f"Not a git repository: {repo_path}")
-        search = tool_input.cve_id or tool_input.jira_issue
-        if not search:
+        cve_ids = CVE_ID_PATTERN.findall(tool_input.cve_id) if tool_input.cve_id else []
+        search_terms = cve_ids or ([tool_input.jira_issue] if tool_input.jira_issue else [])
+        if not search_terms:
             raise ToolError("No search string provided, jira_issue or cve_id is required")
 
-        cmd = [
-            "git",
-            "log",
-            "--no-merges",
-            f"--grep={search}",
-            "-n",
-            "1",
-            "--pretty=%s %H",
-        ]
+        cmd = ["git", "log", "--no-merges"]
+        for term in search_terms:
+            cmd.extend(["--grep", term])
+        if cve_ids and tool_input.jira_issue:
+            cmd.extend(["--grep", tool_input.jira_issue])
+        cmd.extend(["-n", "1", "--pretty=%s %H"])
 
         exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
         if exit_code != 0:
             raise ToolError(f"Git command failed: {stderr}")
 
+        search = ", ".join(search_terms)
         output = (stdout or "").strip()
         if not output:
             return StringToolOutput(result=f"No matches found for '{search}'")

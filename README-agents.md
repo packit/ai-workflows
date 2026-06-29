@@ -162,10 +162,6 @@ Issues can be re-triggered through the workflow in two ways:
    - Package maintainers who have made changes (e.g., updated some fields, added links, commented)
    - Ymir team members after production code updates to resolve issues
 
-### FuSa (Functional Safety) Packages
-
-The `ymir_fusa` label will be automatically added by the triage agent to JIRA issues involving FuSa packages. Related merge requests will need to be reviewed and approved by subject matter experts before merging.
-
 ## Troubleshooting
 
 ### Phoenix: Alembic migration failure after version rollback

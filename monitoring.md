@@ -46,7 +46,7 @@ The team primarily tracks these items using Jira dashboards:
 ### Manual Review Focus
 - **Quality**: Incorrect patches, incomplete fixes, spec file errors, backwards compatibility issues
 - **Patterns**: Repeated failures by package type or upstream source, declining success rates
-- **Edge Cases**: RHIVOS/FuSa packages, modules, embargoed CVEs
+- **Edge Cases**: Modules, embargoed CVEs
 
 ## Escalation Process
 
@@ -58,7 +58,6 @@ The team primarily tracks these items using Jira dashboards:
 | **4. Anonymous** | [Feedback form](https://docs.google.com/forms/d/1bqPhabn5M_D6qBNW0nAoucdlbU0TNl48AJmgptJQ8hI/viewform) | Sensitive concerns |
 
 ### Special Cases
-- **RHIVOS/FuSa** (24 packages): Maintainer approval required before merge
 - **Embargoed CVEs**: NOT handled by agents; escalate if urgent
 
 ## Key Performance Metrics
@@ -89,7 +88,6 @@ The team reviews agent results during weekly sessions, identifies failing use ca
 | `ymir_needs_attention` | Requires team review | Weekly priority |
 | `ymir_*_errored` | Workflow failed | Review if >3 attempts |
 | `ymir_cant_do` | Agent cannot handle | Human takeover |
-| `ymir_fusa` | RHIVOS FuSa package | Maintainer approval |
 
 ### Links
 - [Skald Role](https://github.com/packit/agile/issues/972)

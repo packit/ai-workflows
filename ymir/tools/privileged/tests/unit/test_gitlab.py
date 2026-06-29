@@ -271,12 +271,12 @@ async def test_push_to_remote_repository():
 )
 @pytest.mark.asyncio
 async def test_add_merge_request_labels(merge_request_url, expected_project_path):
-    labels = ["ymir_fusa", "test-label"]
+    labels = ["test-label-1", "test-label-2"]
 
     # Mock the merge request object
     mr_mock = flexmock()
-    mr_mock.should_receive("add_label").with_args("ymir_fusa").once()
-    mr_mock.should_receive("add_label").with_args("test-label").once()
+    mr_mock.should_receive("add_label").with_args("test-label-1").once()
+    mr_mock.should_receive("add_label").with_args("test-label-2").once()
 
     # Mock the project object
     project_mock = flexmock()

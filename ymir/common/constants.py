@@ -160,7 +160,6 @@ class JiraLabels(Enum):
     TRIAGED_NOT_AFFECTED = "ymir_triaged_not_affected"
 
     RETRY_NEEDED = "ymir_retry_needed"
-    FUSA = "ymir_fusa"
 
     # Maintainer-facing trigger: when a Red Hat Employee adds this label to a CVE
     # issue, the fetcher enqueues it for an e2e run and swaps the label for

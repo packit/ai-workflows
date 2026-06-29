@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mr-consolidation-agent-c10s
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: mr-consolidation-agent-c10s
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: mr-consolidation-agent-c10s
+        deployment: mr-consolidation-agent-c10s
+    spec:
+      containers:
+      - args:
+        - -m
+        - ymir.agents.mr_consolidation_agent
+        command:
+        - /usr/bin/python
+        env:
+        - name: CONTAINER_VERSION
+          value: "c10s"
+        - name: REQUESTS_CA_BUNDLE
+          value: /etc/pki/tls/certs/ca-bundle.crt
+        envFrom:
+        - configMapRef:
+            name: agents-env
+        - configMapRef:
+            name: chat-env
+        - configMapRef:
+            name: endpoints-env
+        - secretRef:
+            name: sentry-env
+        image: 'beeai-agent:c10s'
+        imagePullPolicy: IfNotPresent
+        name: mr-consolidation-agent-c10s
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        resources:
+          limits:
+            memory: 4Gi
+          requests:
+            memory: 2Gi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /git-repos
+          name: mcp-server-git-repos
+        - mountPath: /home/beeai/rhel-config.json
+          name: rhel-config
+          subPath: rhel-config.json
+        - mountPath: /etc/secrets/jotnar-vertex-prod.json
+          name: vertex-key
+          subPath: jotnar-vertex-prod.json
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: mcp-server-git-repos
+        persistentVolumeClaim:
+          claimName: mcp-server-git-repos
+      - name: rhel-config
+        configMap:
+          name: rhel-config
+      - name: vertex-key
+        secret:
+          secretName: vertex-key #pragma: allowlist secret

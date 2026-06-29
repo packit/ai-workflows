@@ -72,6 +72,7 @@ For installation instructions (skill setup and MCP tool configuration), see the 
 - [Brew/Konflux Build System Data Flow](brew_konflux_data_flow.md) - Build system integration
 - [AI Providers Data Flow](ai_providers_data_flow.md) - Google Vertex AI integration and model usage
 - [Agent Monitoring and Performance Review](monitoring.md) - Monitoring processes, anomaly detection, and continuous improvement
+- [MR Consolidation Architecture](docs/mr_consolidation_architecture.md) - Merging multiple backport MRs into a single MR
 
 **Data management:**
 

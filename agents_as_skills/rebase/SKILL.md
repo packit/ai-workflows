@@ -235,13 +235,6 @@ Save `merge_request_url` and whether it was newly created.
 
 If this fails, set `success=false` with the error but continue to Step 9 (via Step 9a).
 
-### Step 9a: Add FuSa Label
-
-If the package is a FuSa (Functional Safety) package on a FuSa branch (c9s or rhel-9.N.0 where N is 1-10):
-1. If `dry_run` is false:
-   - Add the `fusa` label to the JIRA issue using `set_jira_labels`.
-   - Add the `fusa` label to the MR using `add_merge_request_labels`.
-
 ### Step 9: Comment in JIRA
 
 If `dry_run` is true, end the workflow.

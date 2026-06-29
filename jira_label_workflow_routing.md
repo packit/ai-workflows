@@ -92,7 +92,6 @@ flowchart TD
 |-------|---------|--------|
 | `ymir_retry_needed` | Trigger retry | Forces reprocessing |
 | `ymir_triaged` | Triage completed, no automated follow-up | Terminal state |
-| `ymir_fusa` | Functional Safety | Requires maintainer review |
 | `ymir_todo` | Maintainer-facing trigger for an e2e run | Fetcher swaps it for `ymir_triage_in_progress` on enqueue; only honored when the changelog shows the label was added by a member of the `Red Hat Employee` Jira group (verified per-issue, not via JQL). The triage run posts an ack comment and a result comment so the requester gets feedback. Default is silent — without `ymir_todo`, no comments are posted. |
 
 ## Queue Types Summary

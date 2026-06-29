@@ -28,7 +28,7 @@ from ymir.agents.constants import I_AM_YMIR, mr_description_footer
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
-from ymir.agents.package_update_steps import PackageUpdateState, PackageUpdateStep
+from ymir.agents.package_update_steps import PackageUpdateState
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import (
     check_subprocess,
@@ -703,15 +703,7 @@ async def run_workflow(
                 state.merge_request_url = None
                 state.backport_result.success = False
                 state.backport_result.error = f"Could not commit and open MR: {e}"
-            return "add_fusa_label"
-
-        async def add_fusa_label(state):
-            return await PackageUpdateStep.add_fusa_label(
-                state,
-                "comment_in_jira",
-                dry_run=dry_run,
-                gateway_tools=gateway_tools,
-            )
+            return "comment_in_jira"
 
         async def comment_in_jira(state):
             if dry_run:
@@ -744,7 +736,6 @@ async def run_workflow(
         workflow.add_step("stage_changes", stage_changes)
         workflow.add_step("run_log_agent", run_log_agent)
         workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
-        workflow.add_step("add_fusa_label", add_fusa_label)
         workflow.add_step("comment_in_jira", comment_in_jira)
 
         response = await workflow.run(

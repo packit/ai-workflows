@@ -722,7 +722,7 @@ class GetFailedPipelineJobsFromMergeRequestTool(
         JSONToolOutput[list[FailedPipelineJob]],
     ]
 ):
-    name = "get_failed_pipeline_jobs_from_merge_request"
+    name = "get_failed_pipeline_jobs_from_mr"
     description = """
     Gets the failed pipeline jobs from the latest pipeline of a merge request.
     Returns a list of failed pipeline jobs with their details.
@@ -847,7 +847,7 @@ class GetAuthorizedCommentsFromMergeRequestTool(
         JSONToolOutput[list[MergeRequestComment]],
     ]
 ):
-    name = "get_authorized_comments_from_merge_request"
+    name = "get_authorized_comments_from_mr"
     description = """
     Gets all comments from a merge request, filtered to only include
     comments from authorized members with Developer role or higher.

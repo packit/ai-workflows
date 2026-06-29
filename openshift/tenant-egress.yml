@@ -50,6 +50,9 @@ spec:
     - type: Allow
       to:
         dnsName: api.github.com
+    - type: Allow
+      to:
+        dnsName: release-assets.githubusercontent.com
     # Fedora package repository
     - type: Allow
       to:

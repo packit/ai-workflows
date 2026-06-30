@@ -50,6 +50,7 @@ prepare:
         cp /tmp/ci-secrets/rhel-config.json $TMT_PLAN_DATA/.secrets/
         cp /tmp/ci-secrets/jotnar-vertex-dev.json $TMT_PLAN_DATA/.secrets/
         cp /tmp/ci-secrets/otel-collector-config.yaml $TMT_PLAN_DATA/.secrets/
+        cp /tmp/ci-secrets/.env $TMT_PLAN_DATA/.secrets/
         touch $TMT_PLAN_DATA/.secrets/keytab
 
         rm -rf /tmp/testing-jiras /tmp/ci-secrets

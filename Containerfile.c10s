@@ -54,6 +54,9 @@ RUN dnf -y install --allowerasing \
       perl-ExtUtils-MakeMaker \
       javapackages-tools \
       javapackages-local \
+      java-devel \
+      ant \
+      libbase \
       xmvn-tools \
       xmlto \
       ${EXTRA_PACKAGES} \

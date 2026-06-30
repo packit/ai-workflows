@@ -241,5 +241,7 @@ def init_sentry() -> None:
             LiteLLMIntegration(),
         ],
     )
-    ignore_logger("agent.redis")
-    ignore_logger_for_sentry_logs("agent.redis")
+
+    for ignored_logger in ("agent.redis", "agent.task_loop", "agent.trajectory"):
+        ignore_logger(ignored_logger)
+        ignore_logger_for_sentry_logs(ignored_logger)

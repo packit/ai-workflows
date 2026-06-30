@@ -568,6 +568,11 @@ async def run_workflow(
             if build_result.is_timeout:
                 logger.info(f"Build timed out for {state.jira_issue}, proceeding")
                 return "update_release"
+            if build_result.is_infra_error:
+                logger.error(f"Copr infrastructure error for {state.jira_issue}: {build_result.error}")
+                state.backport_result.success = False
+                state.backport_result.error = build_result.error or "Copr API infrastructure error"
+                return "comment_in_jira"
             state.attempts_remaining -= 1
             if state.attempts_remaining <= 0:
                 state.backport_result.success = False

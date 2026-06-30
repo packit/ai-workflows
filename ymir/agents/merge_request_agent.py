@@ -238,6 +238,11 @@ async def main() -> None:
                 if build_result.is_timeout:
                     logger.info(f"Build timed out for {state.jira_issue}, proceeding")
                     return "stage_changes"
+                if build_result.is_infra_error:
+                    logger.error(f"Copr infrastructure error for {state.jira_issue}: {build_result.error}")
+                    state.mr_update_result.success = False
+                    state.mr_update_result.error = build_result.error or "Copr API infrastructure error"
+                    return "comment_in_mr"
                 state.attempts_remaining -= 1
                 if state.attempts_remaining <= 0:
                     state.mr_update_result.success = False

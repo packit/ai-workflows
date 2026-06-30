@@ -57,6 +57,7 @@ RUN dnf -y install --allowerasing \
       java-devel \
       ant \
       libbase \
+      libloader \
       xmvn-tools \
       xmlto \
       ${EXTRA_PACKAGES} \

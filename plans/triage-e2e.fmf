@@ -59,7 +59,7 @@ discover:
     how: shell
     tests:
       - name: triage-agent-e2e
-        test: make run-triage-agent-e2e-tests
+        test: plans/run-triage.sh
         duration: 45m
 
 execute:

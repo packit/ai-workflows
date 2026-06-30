@@ -151,6 +151,7 @@ async def test_build_package(build_failure, build_timeout, exclusive_arch, dist_
     )
     result = out.result
     assert result.success == (not build_failure)
+    assert result.is_timeout == build_timeout
     assert any(url.endswith("builder-live.log.gz") for url in result.artifacts_urls)
     assert any(url.endswith("root.log.gz") for url in result.artifacts_urls)
     if not build_failure:

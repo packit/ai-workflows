@@ -82,6 +82,7 @@ async def _copr_api_call(func, *args, **kwargs):
 
 class BuildResult(BaseModel):
     success: bool = Field(description="Whether the build succeeded")
+    is_timeout: bool = Field(default=False, description="Whether the build failed due to a timeout")
     error_message: str | None = Field(description="Error message in case of failure", default=None)
     artifacts_urls: list[str] | None = Field(
         description="URLs to build artifacts (logs and RPM files)", default=None

@@ -141,7 +141,6 @@ async def main() -> None:
 
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
             merge_request_agent = create_merge_request_agent(gateway_tools, local_tool_options)
-            build_agent = create_build_agent(gateway_tools, local_tool_options)
 
             workflow = Workflow(State, name="MergeRequestWorkflow")
 
@@ -220,6 +219,7 @@ async def main() -> None:
                 return "comment_in_mr"
 
             async def run_build_agent(state):
+                build_agent = create_build_agent(gateway_tools, local_tool_options)
                 response = await build_agent.run(
                     render_template(
                         get_build_prompt(),

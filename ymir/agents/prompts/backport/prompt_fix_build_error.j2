@@ -25,6 +25,11 @@ CRITICAL CONSTRAINTS:
   the backport patch file(s) you created (by regenerating them from upstream repo).
   Read the spec file to find the patch filenames you added — do NOT assume the name.
 - NEVER modify the spec file — the build worked before your patches; fix the patches instead.
+  The build runs in COPR, not on official RHEL builders. COPR environments may have
+  differences (e.g. unbuffer/expect wrappers, pipefail behavior, locale settings) that
+  can cause spurious failures unrelated to your patches. If the failure is caused by the
+  build environment rather than by your code changes, report success=false and explain
+  the environmental issue — do not modify the spec to work around it.
 - Fix BOTH compilation errors AND test failures. NEVER skip or disable tests.
 - Make ONE attempt — you will be called again if the build still fails.
 

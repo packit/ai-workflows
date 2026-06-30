@@ -115,6 +115,7 @@ RUN git config --global user.email "redhat-ymir-agent@redhat.com" \
     && git config --global core.editor "true" \
     && git config --global --add safe.directory '/git-repos/*' \
     && git config --global --add safe.directory '/git-repos/applicability/*' \
-    && git config --global include.path /git-repos/.mock_gitconfig
+    && git config --global include.path /git-repos/.mock_gitconfig \
+    && printf "max-time = 60\nconnect-timeout = 30\n" > ~/.curlrc
 
 CMD ["/bin/bash"]

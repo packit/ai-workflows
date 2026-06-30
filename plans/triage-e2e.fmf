@@ -6,7 +6,9 @@ description: |
     for cloning internal fixture and secrets repos.
 
 environment:
+    # SAFETY: These prevent E2E tests from writing to production Jira
     DRY_RUN: "true"
+    MOCK_JIRA: "true"
     LITELLM_DEBUG: ""
 
 prepare:

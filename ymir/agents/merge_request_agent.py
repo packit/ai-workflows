@@ -141,7 +141,6 @@ async def main() -> None:
 
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
             merge_request_agent = create_merge_request_agent(gateway_tools, local_tool_options)
-            build_agent = create_build_agent(gateway_tools, local_tool_options)
 
             workflow = Workflow(State, name="MergeRequestWorkflow")
 
@@ -220,6 +219,7 @@ async def main() -> None:
                 return "comment_in_mr"
 
             async def run_build_agent(state):
+                build_agent = create_build_agent(gateway_tools, local_tool_options)
                 response = await build_agent.run(
                     render_template(
                         get_build_prompt(),
@@ -238,6 +238,11 @@ async def main() -> None:
                 if build_result.is_timeout:
                     logger.info(f"Build timed out for {state.jira_issue}, proceeding")
                     return "stage_changes"
+                if build_result.is_infra_error:
+                    logger.error(f"Copr infrastructure error for {state.jira_issue}: {build_result.error}")
+                    state.mr_update_result.success = False
+                    state.mr_update_result.error = build_result.error or "Copr API infrastructure error"
+                    return "comment_in_mr"
                 state.attempts_remaining -= 1
                 if state.attempts_remaining <= 0:
                     state.mr_update_result.success = False

@@ -158,7 +158,6 @@ async def main() -> None:
             os.environ["MCP_GATEWAY_URL"], call_meta={"jira_issue": jira_issue}
         ) as gateway_tools:
             rebase_agent = create_rebase_agent(gateway_tools, local_tool_options)
-            build_agent = create_build_agent(gateway_tools, local_tool_options)
             log_agent = create_log_agent(gateway_tools, local_tool_options)
 
             workflow = Workflow(State, name="RebaseWorkflow")
@@ -225,6 +224,7 @@ async def main() -> None:
                 return "comment_in_jira"
 
             async def run_build_agent(state):
+                build_agent = create_build_agent(gateway_tools, local_tool_options)
                 response = await build_agent.run(
                     render_template(
                         get_build_prompt(),
@@ -243,6 +243,11 @@ async def main() -> None:
                 if build_result.is_timeout:
                     logger.info(f"Build timed out for {state.jira_issue}, proceeding")
                     return "update_release"
+                if build_result.is_infra_error:
+                    logger.error(f"Copr infrastructure error for {state.jira_issue}: {build_result.error}")
+                    state.rebase_result.success = False
+                    state.rebase_result.error = build_result.error or "Copr API infrastructure error"
+                    return "comment_in_jira"
                 state.attempts_remaining -= 1
                 if state.attempts_remaining <= 0:
                     state.rebase_result.success = False

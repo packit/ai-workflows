@@ -599,6 +599,10 @@ class BuildOutputSchema(BaseModel):
     success: bool = Field(description="Whether the build was successfully completed")
     error: str | None = Field(description="Specific details about an error")
     is_timeout: bool = Field(default=False, description="Whether the build failed due to a timeout")
+    is_infra_error: bool = Field(
+        default=False,
+        description="Whether the failure was caused by a Copr API or infrastructure error, not a build error",
+    )
 
 
 # ============================================================================

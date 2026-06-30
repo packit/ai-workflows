@@ -621,7 +621,17 @@ class ReasoningAgentRunner:
             self._tool_call_cycle_checker.register(tool_call_msg)
             if self._tool_call_cycle_checker.cycle_found:
                 self._tool_call_cycle_checker.reset()
-                await self._state.memory.add_many(response.output)
+                cycle_tool_results = [
+                    ToolMessage(
+                        MessageToolResultContent(
+                            tool_name=tc.tool_name,
+                            tool_call_id=tc.id,
+                            result="Tool call was not executed due to a cycle detection.",
+                        )
+                    )
+                    for tc in tool_calls
+                ]
+                await self._state.memory.add_many([*response.output, *cycle_tool_results])
 
                 await self._state.memory.add(
                     UserMessage(

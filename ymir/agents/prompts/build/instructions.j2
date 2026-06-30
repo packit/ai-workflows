@@ -7,7 +7,9 @@ just return the error message. Otherwise, use the `extract_log_snippets` tool wi
 `log_path` pointing to the location of `builder-live.log` and try to identify
 the build failure. If not found, try the same with `root.log`. Summarize the findings
 and return them as `error`. Set `is_timeout` to the value of the `is_timeout` field
-from the `build_package` tool output.
+from the `build_package` tool output. If the build_package tool itself returned an error (e.g. Copr API error,
+project setup failure, or build submission failure) rather than a build failure with logs,
+set `is_infra_error` to `true`.
 
 General instructions:
 

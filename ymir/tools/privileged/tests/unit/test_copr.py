@@ -7,14 +7,18 @@ import aiohttp
 import pytest
 from beeai_framework.tools import ToolError
 from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
+from copr.v3.exceptions import CoprException
 from flexmock import flexmock
 
 from ymir.tools.privileged import copr as copr_tools
 from ymir.tools.privileged.copr import (
+    COPR_API_MAX_RETRIES,
     COPR_BUILD_TIMEOUT,
     COPR_PROJECT_LIFETIME,
     BuildPackageTool,
     DownloadArtifactsTool,
+    _copr_api_call,
+    _copr_error_detail,
 )
 
 
@@ -199,3 +203,75 @@ async def test_download_artifacts(url, tmp_path):
         assert not path.is_file()
     else:
         assert path.read_bytes() == content
+
+
+def test_copr_error_detail_copr_exception_with_response():
+    resp = flexmock(status_code=500, url="https://copr.example.com/api/foo", text="Internal Server Error")
+    exc = CoprException()
+    exc.result = flexmock(__response__=resp)
+    assert _copr_error_detail(exc) == "HTTP 500 from https://copr.example.com/api/foo: Internal Server Error"
+
+
+def test_copr_error_detail_copr_exception_without_response():
+    exc = CoprException("something went wrong")
+    assert _copr_error_detail(exc) == "something went wrong"
+
+
+def test_copr_error_detail_generic_exception():
+    exc = RuntimeError("generic error")
+    assert _copr_error_detail(exc) == "generic error"
+
+
+@pytest.mark.asyncio
+async def test_copr_api_call_success():
+    result = await _copr_api_call(lambda x, key=None: (x, key), 1, key="val")
+    assert result == (1, "val")
+
+
+@pytest.mark.asyncio
+async def test_copr_api_call_retries_on_copr_exception():
+    async def noop_sleep(*_):
+        return
+
+    flexmock(asyncio).should_receive("sleep").replace_with(noop_sleep)
+
+    call_count = 0
+
+    def failing_then_ok():
+        nonlocal call_count
+        call_count += 1
+        if call_count < COPR_API_MAX_RETRIES:
+            raise CoprException("transient")
+        return "recovered"
+
+    result = await _copr_api_call(failing_then_ok)
+    assert result == "recovered"
+    assert call_count == COPR_API_MAX_RETRIES
+
+
+@pytest.mark.asyncio
+async def test_copr_api_call_raises_after_max_retries():
+    async def noop_sleep(*_):
+        return
+
+    flexmock(asyncio).should_receive("sleep").replace_with(noop_sleep)
+
+    def always_fails():
+        raise CoprException("persistent failure")
+
+    with pytest.raises(CoprException, match="persistent failure"):
+        await _copr_api_call(always_fails)
+
+
+@pytest.mark.asyncio
+async def test_copr_api_call_no_retry_on_non_copr_exception():
+    call_count = 0
+
+    def non_copr_error():
+        nonlocal call_count
+        call_count += 1
+        raise ValueError("not a copr error")
+
+    with pytest.raises(ValueError, match="not a copr error"):
+        await _copr_api_call(non_copr_error)
+    assert call_count == 1

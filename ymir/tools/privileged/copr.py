@@ -1,6 +1,7 @@
 import asyncio
 import gzip
 import logging
+import random
 import time
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -16,6 +17,7 @@ from beeai_framework.tools import (
     ToolRunOptions,
 )
 from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
+from copr.v3.exceptions import CoprException
 from pydantic import BaseModel, Field
 
 from ymir.common import load_rhel_config
@@ -41,9 +43,41 @@ COPR_ARCHES = {
     "x86_64",
 }
 COPR_ARCH_PREFERENCE = ("x86_64", "aarch64", "s390x", "ppc64le")
+COPR_API_MAX_RETRIES = 3
+COPR_API_RETRY_BACKOFF_BASE = 5  # seconds
 
 
 logger = logging.getLogger(__name__)
+
+
+def _copr_error_detail(exc: Exception) -> str:
+    if isinstance(exc, CoprException):
+        result = getattr(exc, "result", None)
+        resp = getattr(result, "__response__", None) if result is not None else None
+        if resp is not None:
+            body = resp.text[:500] if resp.text else "(empty body)"
+            return f"HTTP {resp.status_code} from {resp.url}: {body}"
+    return str(exc)
+
+
+async def _copr_api_call(func, *args, **kwargs):
+    """Call a Copr API function with retries on transient errors."""
+    for attempt in range(COPR_API_MAX_RETRIES):
+        try:
+            return await asyncio.to_thread(func, *args, **kwargs)
+        except CoprException as e:
+            if attempt >= COPR_API_MAX_RETRIES - 1:
+                raise
+            delay = COPR_API_RETRY_BACKOFF_BASE * (2**attempt) + random.uniform(0, 1)  # noqa: S311
+            logger.warning(
+                "Copr API error (%s), retrying in %.1fs (attempt %d/%d)",
+                _copr_error_detail(e),
+                delay,
+                attempt + 1,
+                COPR_API_MAX_RETRIES,
+            )
+            await asyncio.sleep(delay)
+    raise RuntimeError("unreachable")
 
 
 class BuildResult(BaseModel):
@@ -121,13 +155,13 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
         try:
             # if the project already exists, nothing is updated, so we have to edit it
             # afterwards unless our chroot is already enabled
-            project = await asyncio.to_thread(project_proxy.add, exist_ok=True, **kwargs)
+            project = await _copr_api_call(project_proxy.add, exist_ok=True, **kwargs)
             if chroot not in project.chroot_repos:
                 # make sure to preserve existing chroots
                 kwargs["chroots"] = sorted(set(project.chroot_repos.keys()) | {chroot})
-                await asyncio.to_thread(project_proxy.edit, **kwargs)
+                await _copr_api_call(project_proxy.edit, **kwargs)
         except Exception as e:
-            raise ToolError(f"Failed to create or update Copr project: {e}") from e
+            raise ToolError(f"Failed to create or update Copr project: {_copr_error_detail(e)}") from e
         if chroot.startswith("custom-"):
             # make sure the chroot has access to corresponding buildroot repository
             logger.info(f"Connecting to Copr API to update chroot configuration for {chroot}")
@@ -140,7 +174,7 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 f"brewroot/repos/{dist_git_branch}-z-build/latest/{build_arch}",
             )
             try:
-                chroot_config = await asyncio.to_thread(
+                chroot_config = await _copr_api_call(
                     chroot_proxy.get,
                     ownername=copr_user,
                     projectname=jira_issue,
@@ -162,7 +196,7 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                         set(chroot_config.additional_packages) | {build_group}
                     )
                 if kwargs:
-                    await asyncio.to_thread(
+                    await _copr_api_call(
                         chroot_proxy.edit,
                         ownername=copr_user,
                         projectname=jira_issue,
@@ -170,11 +204,11 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                         **kwargs,
                     )
             except Exception as e:
-                raise ToolError(f"Failed to update Copr chroot: {e}") from e
+                raise ToolError(f"Failed to update Copr chroot: {_copr_error_detail(e)}") from e
         logger.info(f"Connecting to Copr API to submit build for {srpm_path}")
         build_proxy = BuildProxy({"username": copr_user, **COPR_CONFIG})
         try:
-            build = await asyncio.to_thread(
+            build = await _copr_api_call(
                 build_proxy.create_from_file,
                 ownername=copr_user,
                 projectname=jira_issue,
@@ -182,7 +216,7 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 buildopts={"chroots": [chroot], "timeout": COPR_BUILD_TIMEOUT},
             )
         except Exception as e:
-            raise ToolError(f"Failed to submit Copr build: {e}") from e
+            raise ToolError(f"Failed to submit Copr build: {_copr_error_detail(e)}") from e
         else:
             logger.info(f"{jira_issue}: build of {srpm_path} in {chroot} started: {build.id:08d}")
 

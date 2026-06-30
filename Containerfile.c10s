@@ -116,6 +116,12 @@ RUN git config --global user.email "redhat-ymir-agent@redhat.com" \
     && git config --global --add safe.directory '/git-repos/*' \
     && git config --global --add safe.directory '/git-repos/applicability/*' \
     && git config --global include.path /git-repos/.mock_gitconfig \
-    && printf "max-time = 60\nconnect-timeout = 30\n" > ~/.curlrc
+    && git config --global http.lowSpeedLimit 1000 \
+    && git config --global http.lowSpeedTime 900 \
+    && printf "max-time = 60\nconnect-timeout = 30\n" > ~/.curlrc \
+    && mkdir -p ~/.ssh \
+    && chmod 0700 ~/.ssh \
+    && printf "Host *\n    ServerAliveInterval 60\n    ServerAliveCountMax 15\n" > ~/.ssh/config \
+    && chmod 0600 ~/.ssh/config
 
 CMD ["/bin/bash"]

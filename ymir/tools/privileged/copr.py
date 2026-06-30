@@ -52,7 +52,8 @@ logger = logging.getLogger(__name__)
 
 def _copr_error_detail(exc: Exception) -> str:
     if isinstance(exc, CoprException):
-        resp = getattr(exc.result, "__response__", None)
+        result = getattr(exc, "result", None)
+        resp = getattr(result, "__response__", None) if result is not None else None
         if resp is not None:
             body = resp.text[:500] if resp.text else "(empty body)"
             return f"HTTP {resp.status_code} from {resp.url}: {body}"

@@ -99,6 +99,11 @@ services:
       - KEYTAB_FILE=/home/mcp/keytab
       # default cache location is a keyring
       - KRB5CCNAME=FILE:/tmp/krb5cc
+      # SAFETY: These default to false for production agents, but MUST be true for E2E tests.
+      # The E2E Makefile targets set them in the environment before invoking compose
+      # (e.g., MOCK_JIRA=true DRY_RUN=true make run-triage-agent-e2e-tests) so the
+      # ${VAR:-false} substitution picks up the true value. This prevents E2E tests
+      # from writing to production Jira when run via make targets.
       - DRY_RUN=${DRY_RUN:-false}
       - MOCK_JIRA=${MOCK_JIRA:-false}
       - JIRA_DRY_RUN=${JIRA_DRY_RUN:-false}
@@ -206,6 +211,13 @@ services:
     environment:
       <<: *beeai-env
       MOCK_REPOS_DIR: /home/beeai/mock_repos/triage
+      # SAFETY: These MUST be set to prevent E2E tests from writing to production Jira.
+      # Tests use real issue keys (e.g., RHEL-174694) and will post comments to
+      # production if these are not enforced. The Makefile passes them via -e flags,
+      # but setting them here provides defense-in-depth if someone runs the container
+      # directly via podman-compose.
+      MOCK_JIRA: ${MOCK_JIRA:-true}
+      DRY_RUN: ${DRY_RUN:-true}
     volumes:  # YAML doesn't support list concatenation
       - ./ymir:/home/beeai/ymir:ro,z
       - git-repos:/git-repos:rw,U
@@ -223,6 +235,9 @@ services:
     environment:
       <<: *beeai-env
       BACKPORT_MOCK_REPOS_DIR: /home/beeai/mock_repos/backport
+      # SAFETY: These MUST be set to prevent E2E tests from writing to production Jira.
+      MOCK_JIRA: ${MOCK_JIRA:-true}
+      DRY_RUN: ${DRY_RUN:-true}
     volumes:
       - ./ymir:/home/beeai/ymir:ro,z
       - git-repos:/git-repos:rw,U

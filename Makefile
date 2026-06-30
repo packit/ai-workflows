@@ -48,14 +48,21 @@ run-triage-agent-standalone:
 
 .PHONY: run-triage-agent-e2e-tests
 run-triage-agent-e2e-tests:
-	$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run \
+	# SAFETY: MOCK_JIRA=true and DRY_RUN=true prevent writes to production Jira.
+	# These are REQUIRED — tests use real issue keys and would otherwise post
+	# comments to production. Setting them in the environment (not just -e flags)
+	# ensures dependent services like mcp-gateway pick them up via ${VAR:-default}.
+	# The conftest.py enforces this in the test container itself.
+	MOCK_JIRA=true DRY_RUN=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		triage-agent-e2e-tests
 
 .PHONY: run-backport-agent-e2e-tests
 run-backport-agent-e2e-tests:
-	$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+	# SAFETY: MOCK_JIRA=true and DRY_RUN=true prevent writes to production Jira.
+	# Setting them in the environment ensures mcp-gateway picks them up.
+	MOCK_JIRA=true DRY_RUN=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \

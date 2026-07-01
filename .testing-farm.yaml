@@ -17,4 +17,7 @@ version: 1
 
 environments:
   secrets:
-    GITLAB_CI_TOKEN: "<paste encrypted value here>"
+    GITLAB_CI_TOKEN:
+      # TODO automated for `main`
+      # mfocko
+      - "ea2a89aa-6a78-40e0-906e-140f623c45b0,Pk5X+XenyDxsMNgX/k/lIehht6kSOi/vBQR8Hm0X8Q5KDcyTcTXk3LgFDQWeoeb3X214aIMmmVHxo0t2UUDhg1S7Yv5pA86oounM+1K2KWoatjpBbn2pK/0G3IkRCxibkm+JJVeBtXzgk3vdTF1SpoQg0IWt708nzmedjjk/1uHoZVG6SW8yv2O3IPS7jZwXK3IUJEA1e3LkhvjN0i8fIlVNwyBRRyMEjF63MbObfvcyylDcc4MRhi+tP+DW45WyVAa5mZoz2OIHosG+7cHQ4ywbpzyGOU+Gqj7/gJpRxntXn+BaM/VHeshy/RUoimwhYUbvhl+XGGmMCyP4jFl3OWyS6ptMlSc9n2vuObZMl5TlRc4nmYE4kgO9pVdE8NvMKsRWqT4djVPm094gYAJNVJmUEmh/AoTLgVxI/WoxxuSTAli1pxz3mC663ChG0WAjOlonCdGGzPttpuKZtrsvHloi66V9cJ3p8Gq3r7waDoL5Hs4h2OJ1tqfMlLv7+Q3UEqziZVdpn+XTPUtay67RcYODrF2XzN4BjFMVY5VteMnmNRqUxy0U0G3rXgA+ftVidLb2YG1S0YvR6DMClpfZpSaSVYgBKJc3VP4tTY6H5Tdii9qYcY63h//1i2lZkC/Aa/0ec6XjDYx4UE+d397b0tx08XpaNf8Mx/01AI5zqyY="

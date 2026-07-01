@@ -224,9 +224,17 @@ services:
       - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
       - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z,U
       - ${MOCK_REPOS_HOST:-./ymir/agents/tests/e2e/mock_repos}:/home/beeai/mock_repos:ro,z
+      - ${TMT_TEST_DATA:-./tmt-out}/results.yaml:/home/beeai/results.yaml:rw,z,U
     # the option about default loop is here because of litellm issue
     # https://github.com/BerriAI/litellm/issues/14521
-    command: ["pytest", "ymir/agents/tests/e2e/test_triage.py", "-o", "asyncio_default_test_loop_scope=session"]
+    command:
+      [
+        "pytest",
+        "ymir/agents/tests/e2e/test_triage.py",
+        "-o",
+        "asyncio_default_test_loop_scope=session",
+        "--log-disable=agent.trajectory",
+      ]
     restart: "no"
     profiles: ["e2e-test"]
 
@@ -244,7 +252,14 @@ services:
       - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
       - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z,U
       - ${MOCK_REPOS_HOST:-./ymir/agents/tests/e2e/mock_repos}:/home/beeai/mock_repos:ro,z
-    command: ["pytest", "ymir/agents/tests/e2e/backport_agent/test_backport.py", "-o", "asyncio_default_test_loop_scope=session"]
+    command:
+      [
+        "pytest",
+        "ymir/agents/tests/e2e/backport_agent/test_backport.py",
+        "-o",
+        "asyncio_default_test_loop_scope=session",
+        "--log-disable=agent.trajectory",
+      ]
     restart: "no"
     profiles: ["e2e-test"]
 

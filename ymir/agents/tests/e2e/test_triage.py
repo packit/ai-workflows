@@ -338,7 +338,7 @@ def run_test_cases_concurrently(request, mock_centos_stream_repos):
 
 @pytest.mark.parametrize(
     "test_case",
-    test_cases,
+    (pytest.param(test_case, id=test_case.input) for test_case in test_cases),
 )
 def test_triage_agent(test_case: TriageAgentTestCase, observability_fixture):
     if test_case.error is not None:

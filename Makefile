@@ -46,8 +46,14 @@ run-triage-agent-standalone:
 		-e FORCE_CVE_TRIAGE=$(FORCE_CVE_TRIAGE) \
 		triage-agent
 
-.PHONY: run-triage-agent-e2e-tests
+.PHONY: run-triage-agent-e2e-tests list-triage-agent-e2e-tests
 run-triage-agent-e2e-tests:
+	@if [ -n "$(TMT_PLAN_DATA)" ]; then \
+		mv $(TMT_PLAN_DATA)/mock_repos/* ymir/agents/tests/e2e/mock_repos/; \
+		mv $(TMT_PLAN_DATA)/jiras/* ymir/tools/privileged/tests/data/; \
+		mv $(TMT_PLAN_DATA)/.secrets .secrets; \
+		mv .secrets/.env ./; \
+	fi
 	# SAFETY: MOCK_JIRA=true and DRY_RUN=true prevent writes to production Jira.
 	# These are REQUIRED — tests use real issue keys and would otherwise post
 	# comments to production. Setting them in the environment (not just -e flags)
@@ -57,6 +63,12 @@ run-triage-agent-e2e-tests:
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		triage-agent-e2e-tests
+
+list-triage-agent-e2e-tests:
+	MOCK_JIRA=true DRY_RUN=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+		-e MOCK_JIRA="true" \
+		-e DRY_RUN="true" \
+		triage-agent-e2e-tests pytest ymir/agents/tests/e2e/test_triage.py --collect-only
 
 .PHONY: run-backport-agent-e2e-tests
 run-backport-agent-e2e-tests:

@@ -31,23 +31,27 @@ prepare:
             "https://oauth2:${GITLAB_CI_TOKEN}@gitlab.cee.redhat.com/jotnar-project/testing-jiras.git" \
             /tmp/testing-jiras
 
-        cp /tmp/testing-jiras/mock_data/*.json \
-            ymir/agents/tests/e2e/mock_repos/
+        mkdir $TMT_PLAN_DATA/mock_repos
+        cp -r /tmp/testing-jiras/mock_data/* \
+            $TMT_PLAN_DATA/mock_repos/
 
+        mkdir $TMT_PLAN_DATA/jiras
         cp -r /tmp/testing-jiras/jiras/* \
-            ymir/tools/privileged/tests/data/
+            $TMT_PLAN_DATA/jiras
 
         # Clone CI secrets repo and populate .secrets/
         git clone --depth 1 \
             "https://oauth2:${GITLAB_CI_TOKEN}@gitlab.cee.redhat.com/jotnar-project/ci-secrets.git" \
             /tmp/ci-secrets
 
-        mkdir -p .secrets
-        cp /tmp/ci-secrets/beeai-agent.env .secrets/
-        cp /tmp/ci-secrets/mcp-gateway.env .secrets/
-        cp /tmp/ci-secrets/rhel-config.json .secrets/
-        cp /tmp/ci-secrets/jotnar-vertex-dev.json .secrets/
-        touch .secrets/keytab
+        mkdir -p $TMT_PLAN_DATA/.secrets
+        cp /tmp/ci-secrets/beeai-agent.env $TMT_PLAN_DATA/.secrets/
+        cp /tmp/ci-secrets/mcp-gateway.env $TMT_PLAN_DATA/.secrets/
+        cp /tmp/ci-secrets/rhel-config.json $TMT_PLAN_DATA/.secrets/
+        cp /tmp/ci-secrets/jotnar-vertex-dev.json $TMT_PLAN_DATA/.secrets/
+        cp /tmp/ci-secrets/otel-collector-config.yaml $TMT_PLAN_DATA/.secrets/
+        cp /tmp/ci-secrets/.env $TMT_PLAN_DATA/.secrets/
+        touch $TMT_PLAN_DATA/.secrets/keytab
 
         rm -rf /tmp/testing-jiras /tmp/ci-secrets
 
@@ -55,8 +59,9 @@ discover:
     how: shell
     tests:
       - name: triage-agent-e2e
-        test: make run-triage-agent-e2e-tests
+        test: plans/run-triage.sh
         duration: 45m
+        result: custom
 
 execute:
     how: tmt

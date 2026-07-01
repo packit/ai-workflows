@@ -17,17 +17,17 @@ jobs:
     trigger: pull_request
     identifier: pr-test-triage-e2e
     skip_build: true
-    manual_trigger: true
+    # manual_trigger: true
     use_internal_tf: true
     targets:
-      - centos-stream-10-x86_64
+      - fedora-latest-stable
     tf_extra_params:
       environments:
-        - settings:
-            provisioning:
-              tags:
-                - m1.large
-          tmt:
+        # - settings:
+        #     provisioning:
+        #       tags:
+        #         - m1.large
+        - tmt:
             context:
               how: full
 
@@ -38,13 +38,13 @@ jobs:
     skip_build: true
     use_internal_tf: true
     targets:
-      - centos-stream-10-x86_64
+      - fedora-latest-stable
     tf_extra_params:
       environments:
-        - settings:
-            provisioning:
-              tags:
-                - m1.large
-          tmt:
+        # - settings:
+        #     provisioning:
+        #       tags:
+        #         - m1.large
+        - tmt:
             context:
               how: full

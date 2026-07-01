@@ -59,6 +59,44 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_slow)
 
 
+@pytest.hookimpl(wrapper=True, trylast=True)
+def pytest_runtest_makereport(item, call):
+    # execute all other hooks to obtain the report object
+    rep = yield
+    if rep.when != "call":
+        return rep
+
+    test_case = item.callspec.params["test_case"]
+
+    mode = "a" if os.path.exists("/home/beeai/results.yaml") else "w"
+    with open("/home/beeai/results.yaml", mode, encoding="utf-8") as f:
+        f.write(f'\n- name: "/{test_case.input}"\n')
+
+        result = "fail" if rep.failed else "pass" if rep.passed else "skip"
+        f.write(f'  result: "{result}"\n')
+
+        f.write("  note:\n")
+        for note, value in (
+            ("Agent", test_case.metrics.get("agent_name", None)),
+            ("Tool Calls", test_case.metrics.get("tool_calls", None)),
+            ("Prompt Tokens", test_case.metrics.get("prompt_tokens", None)),
+            ("Completion Tokens", test_case.metrics.get("completion_tokens", None)),
+        ):
+            if value is None:
+                continue
+            f.write(f'    - "{note}: {value}"\n')
+
+        f.write("  log:\n")
+        for log in (f"{test_case.input}.html", f"{test_case.input}.json"):
+            f.write(f"    - {log}\n")
+
+        minutes, seconds = divmod(int(test_case.metrics.get("duration", 0)), 60)
+        hours, minutes = divmod(minutes, 60)
+        f.write(f"  duration: {hours:02d}:{minutes:02d}:{seconds:02d}\n")
+
+    return rep
+
+
 @pytest.hookimpl(wrapper=True)
 def pytest_terminal_summary(
     terminalreporter: pytest.TerminalReporter, exitstatus, config: pytest.Config

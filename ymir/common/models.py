@@ -162,6 +162,10 @@ class BackportInputSchema(BaseModel):
         default=None,
         description="Triage context: what was investigated and guidance on how the backport should be done",
     )
+    has_extract_log_snippets: bool = Field(
+        default=False,
+        description="Whether the extract_log_snippets tool is available",
+    )
 
 
 class BackportOutputSchema(BaseModel):
@@ -583,6 +587,15 @@ class TriageOutputSchema(BaseModel):
 # ============================================================================
 # Build Agent Schemas
 # ============================================================================
+
+
+class BuildInstructionsInput(BaseModel):
+    """Input schema for the build agent instructions template."""
+
+    has_extract_log_snippets: bool = Field(
+        default=False,
+        description="Whether the extract_log_snippets tool is available",
+    )
 
 
 class BuildInputSchema(BaseModel):

@@ -33,6 +33,7 @@ try:
     from ymir.common.models import (
         BackportInputSchema,
         BuildInputSchema,
+        BuildInstructionsInput,
         LogInputSchema,
         MergeRequestInputSchema,
         RebaseInputSchema,
@@ -40,6 +41,9 @@ try:
     )
 except ImportError:
     # Fallback stand-in schemas when ymir.common is not importable
+
+    class BuildInstructionsInput(BaseModel):  # type: ignore[no-redef]
+        has_extract_log_snippets: bool = False
 
     class BuildInputSchema(BaseModel):  # type: ignore[no-redef]
         srpm_path: Path
@@ -61,6 +65,7 @@ except ImportError:
         upstream_patches: list[str] = Field(default_factory=list)
         build_error: str | None = None
         triage_summary: str | None = None
+        has_extract_log_snippets: bool = False
 
     class RebaseInputSchema(BaseModel):  # type: ignore[no-redef]
         local_clone: Path
@@ -97,11 +102,27 @@ except ImportError:
 
 
 class TestBuildInstructions:
-    def test_loads(self):
-        result = render_template("build/instructions.j2")
+    def test_loads_with_extract_log_snippets(self):
+        result = render_template(
+            "build/instructions.j2",
+            BuildInstructionsInput(has_extract_log_snippets=True),
+        )
         assert "expert on building packages" in result
         assert "build_package" in result
         assert "builder-live.log" in result
+        assert "extract_log_snippets" in result
+        assert "start with" not in result
+
+    def test_loads_without_extract_log_snippets(self):
+        result = render_template(
+            "build/instructions.j2",
+            BuildInstructionsInput(has_extract_log_snippets=False),
+        )
+        assert "expert on building packages" in result
+        assert "build_package" in result
+        assert "builder-live.log" in result
+        assert "extract_log_snippets" not in result
+        assert "start with" in result
 
 
 class TestLogInstructions:
@@ -275,7 +296,7 @@ class TestBackportTemplate:
 
 
 class TestBackportFixBuildErrorTemplate:
-    def test_renders(self):
+    def test_renders_with_extract_log_snippets(self):
         result = render_template(
             "backport/prompt_fix_build_error.j2",
             BackportInputSchema(
@@ -286,11 +307,34 @@ class TestBackportFixBuildErrorTemplate:
                 jira_issue="RHEL-12345",
                 upstream_patches=["https://example.com/p1.patch"],
                 build_error="undefined reference to 'bar'",
+                has_extract_log_snippets=True,
             ),
         )
         assert "cherry-pick workflow succeeded but the build failed" in result
         assert "undefined reference" in result
         assert "fix-attempts.md" in result
+        assert "extract_log_snippets" in result
+        assert "start with" not in result
+
+    def test_renders_without_extract_log_snippets(self):
+        result = render_template(
+            "backport/prompt_fix_build_error.j2",
+            BackportInputSchema(
+                local_clone=Path("/tmp/clone"),
+                unpacked_sources=Path("/tmp/sources"),
+                package="libfoo",
+                dist_git_branch="c9s",
+                jira_issue="RHEL-12345",
+                upstream_patches=["https://example.com/p1.patch"],
+                build_error="undefined reference to 'bar'",
+                has_extract_log_snippets=False,
+            ),
+        )
+        assert "cherry-pick workflow succeeded but the build failed" in result
+        assert "undefined reference" in result
+        assert "fix-attempts.md" in result
+        assert "extract_log_snippets" not in result
+        assert "get logs and identify the new error" in result
 
 
 class TestRebaseTemplate:

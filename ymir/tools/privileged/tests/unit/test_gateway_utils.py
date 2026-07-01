@@ -1,5 +1,7 @@
 """Unit tests for ymir.tools.gateway_utils.get_log_detective_mcp."""
 
+import logging
+
 import pytest
 from beeai_framework.tools.mcp import MCPTool
 from flexmock import flexmock
@@ -50,12 +52,41 @@ class TestGetLogDetectiveMcp:
         await get_log_detective_mcp()
 
     @pytest.mark.asyncio
-    async def test_propagates_runtime_error(self):
+    async def test_returns_empty_list_on_runtime_error(self):
         mock_client = flexmock()
         flexmock(gateway_utils_module).should_receive("stdio_client").once().and_return(mock_client)
         flexmock(MCPTool).should_receive("from_client").with_args(mock_client).once().and_raise(
             RuntimeError("MCP Client Session has been destroyed.")
         )
 
-        with pytest.raises(RuntimeError, match="MCP Client Session has been destroyed"):
+        result = await get_log_detective_mcp()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_list_on_file_not_found(self):
+        flexmock(gateway_utils_module).should_receive("stdio_client").once().and_raise(
+            FileNotFoundError("logdetective-mcp")
+        )
+
+        result = await get_log_detective_mcp()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_list_on_os_error(self):
+        flexmock(gateway_utils_module).should_receive("stdio_client").once().and_raise(
+            OSError("Permission denied")
+        )
+
+        result = await get_log_detective_mcp()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_logs_warning_on_failure(self, caplog):
+        flexmock(gateway_utils_module).should_receive("stdio_client").once().and_raise(
+            FileNotFoundError("logdetective-mcp")
+        )
+
+        with caplog.at_level(logging.WARNING, logger="ymir.tools.gateway_utils"):
             await get_log_detective_mcp()
+
+        assert "LogDetective MCP server is not available" in caplog.text

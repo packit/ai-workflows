@@ -40,7 +40,7 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `download_artifacts` — Download build log artifacts (*.log.gz)
 - `download_sources` — Download sources for a dist-git package
 - `get_patch_from_url` — Download patch content from a URL
-- `extract_log_snippets` — Extract representative log snippets from build logs using Drain3 clustering
+- `extract_log_snippets` — Extract representative log snippets from build logs using Drain3 clustering (if it is available)
 
 **Local Tools (text, filesystem, git, specfile):**
 - `create` — Create new files
@@ -159,7 +159,7 @@ If the backport fails (success=false), skip to **Step 10: Comment in JIRA** with
 
 When analyzing build failures:
 1. Download all `*.log.gz` files returned in `artifacts_urls` (if any) using `download_artifacts`.
-2. Use `extract_log_snippets` with `log_path` pointing to `builder-live.log` to extract the most relevant snippets. If `builder-live.log` is not available, try `root.log` instead.
+2. If `extract_log_snippets` is available, use it with `log_path` pointing to `builder-live.log` to extract the most relevant snippets. Otherwise, start with `builder-live.log` and try to identify the build failure. If `builder-live.log` is not available, try `root.log` instead.
 3. Analyze the returned snippets to identify the build failure.
 4. Summarize the failure as the `build_error` for the retry.
 5. Remove the downloaded `*.log.gz` files after analysis.

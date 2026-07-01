@@ -61,7 +61,17 @@ def setup_logging():
 
 
 async def get_log_detective_mcp() -> list[MCPTool]:
-    """Get MCP tools provided by Log Detective MCP server."""
-    client = stdio_client(StdioServerParameters(command="logdetective-mcp"))
+    """Get MCP tools provided by Log Detective MCP server.
 
-    return await MCPTool.from_client(client)
+    Returns an empty list if the logdetective-mcp binary is not installed
+    or the server is not accessible.
+    """
+    try:
+        client = stdio_client(StdioServerParameters(command="logdetective-mcp"))
+        return await MCPTool.from_client(client)
+    except Exception:
+        logger.warning(
+            "LogDetective MCP server is not available; extract_log_snippets tool will not be registered.",
+            exc_info=True,
+        )
+        return []

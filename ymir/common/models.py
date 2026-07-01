@@ -568,8 +568,14 @@ class TriageOutputSchema(BaseModel):
 
             case NotAffectedData():
                 category = self.data.justification_category or "Not Affected"
+                vex_guide = (
+                    "\n\n_See [VEX Not Affected Justifications|"
+                    "https://redhat.atlassian.net/wiki/spaces/PRODSEC/pages/289223326]"
+                    " for justification category definitions._"
+                )
                 return (
-                    f"*Recommendation: Not a Bug / {category}*\n\n{self.data.explanation}{TRIAGE_DISCLAIMER}"
+                    f"*Recommendation: Not a Bug / {category}*\n\n"
+                    f"{self.data.explanation}{vex_guide}{TRIAGE_DISCLAIMER}"
                 )
 
             case ErrorData():

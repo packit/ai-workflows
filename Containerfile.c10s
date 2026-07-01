@@ -8,6 +8,10 @@ RUN dnf -y install epel-release \
 COPY files/Current-IT-Root-CAs.pem /etc/pki/ca-trust/source/anchors/
 RUN update-ca-trust
 
+# Prefer IPv4 over IPv6; cluster has no IPv6 egress routing.
+# Full table must be specified — a single precedence line discards all defaults.
+RUN printf "precedence ::1/128       50\nprecedence ::/0          40\nprecedence 2002::/16     30\nprecedence ::/96         20\nprecedence ::ffff:0:0/96 100\n" > /etc/gai.conf
+
 ARG INTERNAL_REPO_URL=""
 RUN if [ -n "$INTERNAL_REPO_URL" ]; then \
       curl -fsSL -o /etc/yum.repos.d/internal.repo "$INTERNAL_REPO_URL"; \

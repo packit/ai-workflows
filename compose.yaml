@@ -248,6 +248,26 @@ services:
     restart: "no"
     profiles: ["e2e-test"]
 
+  reproducer-agent-e2e-tests:
+    <<: *beeai-agent-c10s
+    environment:
+      <<: *beeai-env
+      REPRODUCER_MOCK_REPOS_DIR: /home/beeai/mock_repos/reproducer
+    volumes:
+      - ./ymir:/home/beeai/ymir:ro,z
+      - git-repos:/git-repos:rw,U
+      - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
+      - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z,U
+      - ${MOCK_REPOS_HOST:-./ymir/agents/tests/e2e/mock_repos}:/home/beeai/mock_repos:ro,z
+    command: ["pytest", "ymir/agents/tests/e2e/reproducer_agent/test_reproducer.py", "-o", "asyncio_default_test_loop_scope=session"]
+    restart: "no"
+    profiles: ["e2e-test"]
+
+  reproducer-agent:
+    <<: *beeai-agent-c10s
+    command: ["python", "-m", "ymir.agents.reproducer_agent"]
+    profiles: ["agents"]
+
   backport-agent-c9s:
     <<: *beeai-agent-c9s
     command: ["python", "-m", "ymir.agents.backport_agent"]

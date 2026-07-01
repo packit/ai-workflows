@@ -69,6 +69,22 @@ run-backport-agent-e2e-tests:
 		backport-agent-e2e-tests
 
 
+.PHONY: run-reproducer-agent-e2e-tests
+run-reproducer-agent-e2e-tests:
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+		-e MOCK_JIRA="true" \
+		-e DRY_RUN="true" \
+		reproducer-agent-e2e-tests
+
+.PHONY: run-reproducer-agent-standalone
+run-reproducer-agent-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e MOCK_JIRA=$(MOCK_JIRA) \
+		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
+		reproducer-agent
+
 .PHONY: run-rebase-agent-c9s-standalone
 run-rebase-agent-c9s-standalone:
 	$(COMPOSE_AGENTS) run --rm \

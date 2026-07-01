@@ -238,10 +238,14 @@ def test_not_affected_formatting():
     )
     result = TriageOutputSchema(resolution=Resolution.NOT_AFFECTED, data=data)
 
-    assert result.format_for_comment() == (
+    comment = result.format_for_comment()
+    assert comment == (
         "*Recommendation: Not a Bug / Vulnerable Code not Present*\n\n"
         "The vulnerable function foo_parse() was introduced in version 3.2. "
         "This package ships version 3.1, which does not contain the affected code path."
+        "\n\n_See [VEX Not Affected Justifications|"
+        "https://redhat.atlassian.net/wiki/spaces/PRODSEC/pages/289223326]"
+        " for justification category definitions._"
         f"{TRIAGE_DISCLAIMER}"
     )
 

@@ -61,6 +61,7 @@ discover:
       - name: triage-agent-e2e
         test: plans/run-triage.sh
         duration: 45m
+        result: custom
 
 execute:
     how: tmt

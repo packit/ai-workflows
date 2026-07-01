@@ -232,6 +232,7 @@ services:
       - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
       - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z,U
       - ${MOCK_REPOS_HOST:-./ymir/agents/tests/e2e/mock_repos}:/home/beeai/mock_repos:ro,z
+      - ${TMT_TEST_DATA:-./.tmt}/results.yaml:/home/beeai/results.yaml:rw,z,U
     # the option about default loop is here because of litellm issue
     # https://github.com/BerriAI/litellm/issues/14521
     command:

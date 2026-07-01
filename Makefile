@@ -54,6 +54,8 @@ run-triage-agent-e2e-tests:
 		mv $(TMT_PLAN_DATA)/jiras/* ymir/tools/privileged/tests/data/; \
 		mv $(TMT_PLAN_DATA)/.secrets .secrets; \
 		mv .secrets/.env ./; \
+	else \
+		touch .tmt/results.yaml; \
 	fi
 	# SAFETY: MOCK_JIRA=true and DRY_RUN=true prevent writes to production Jira.
 	# These are REQUIRED — tests use real issue keys and would otherwise post

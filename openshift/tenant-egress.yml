@@ -97,15 +97,11 @@ spec:
       to:
         dnsName: googleapis.com
     # GNU project hosting (gnu.org, ftp.gnu.org, savannah.gnu.org, savannah.nongnu.org,
-    # git.savannah.nongnu.org). IPv4: all resolve to 209.51.188.0/24; dnsName selector
-    # picks AAAA records which don't match this cluster's IPv4-only egress policy, so
-    # use CIDR instead. IPv6: savannah hosts use 2001:470:142::/48 (Hurricane Electric).
+    # git.savannah.nongnu.org). All resolve to 209.51.188.0/24; dnsName selector picks
+    # AAAA records which don't match this cluster's IPv4-only egress, so use CIDR instead.
     - type: Allow
       to:
         cidrSelector: 209.51.188.0/24
-    - type: Allow
-      to:
-        cidrSelector: 2001:470:142::/48
     # sourceware.org — upstream git for glibc, binutils, elfutils, newlib, etc.
     # Resolves to 38.145.34.32 (Cogent); not covered by existing CIDRs.
     - type: Allow
@@ -115,6 +111,9 @@ spec:
     - type: Allow
       to:
         dnsName: o490301.ingest.us.sentry.io
+    # IPv6 note: this cluster has no IPv6 egress routing. curl -6 to both allowed CIDRs
+    # (e.g. 2001:470:142::/48 for savannah) and arbitrary hosts (ipv6.google.com) time out
+    # identically — the EgressFirewall never sees IPv6 traffic. No IPv6 rules needed.
     # Catch-all deny
     - type: Deny
       to:

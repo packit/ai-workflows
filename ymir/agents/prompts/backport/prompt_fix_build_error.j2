@@ -65,10 +65,12 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
    - Use the `run_package_prep` tool to verify patches apply cleanly
    - Use the `build_srpm` tool to generate a SRPM
    - Call `build_package` with the SRPM path, dist_git_branch, and jira_issue
-   - If build fails: use `download_artifacts` to get logs, then use
-     `extract_log_snippets` with `log_path` pointing to `builder-live.log`
+   - If build fails: use `download_artifacts` to get logs and identify the new error
+{% if has_extract_log_snippets %}
+   - Use `extract_log_snippets` with `log_path` pointing to `builder-live.log`
      (or `root.log` if unavailable) to extract the most relevant snippets
      and identify the new error
+{% endif %}
 
 6. Append a summary to {{ local_clone }}-upstream/build-logs/fix-attempts.md documenting:
    - What you identified as the root cause

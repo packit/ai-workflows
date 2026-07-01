@@ -119,8 +119,14 @@ async def _async_main():
     tool_options: dict = {"working_directory": None}
     mcp = MCPServer(config=config)
 
-    # Get available tools from Log Detective MCP server
     log_detective_tools = await get_log_detective_mcp()
+    if log_detective_tools:
+        logger.info(
+            "LogDetective MCP tools registered: %s",
+            [t.name for t in log_detective_tools],
+        )
+    else:
+        logger.info("Gateway starting without LogDetective MCP tools.")
 
     mcp.register_many(
         [

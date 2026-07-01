@@ -494,6 +494,9 @@ async def run_workflow(
                             upstream_patches=state.upstream_patches,
                             build_error=state.build_error,
                             triage_summary=state.triage_summary,
+                            has_extract_log_snippets=any(
+                                t.name == "extract_log_snippets" for t in gateway_tools
+                            ),
                         ),
                     ),
                     expected_output=BackportOutputSchema,

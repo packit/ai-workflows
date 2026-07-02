@@ -639,15 +639,24 @@ async def clone_and_prep_sources(
     return local_clone, unpacked, False
 
 
+class InvalidConsolidationConfigError(Exception):
+    """Raised when ymir.yaml exists but the consolidation section cannot be parsed."""
+
+
 async def fetch_consolidation_config(
     package: str,
     available_tools: list,
 ) -> PackageConsolidationConfig:
     """Fetch the consolidation config from the per-package rules repo.
 
-    Reads ``consolidation.json`` from
+    Reads the ``consolidation`` section from ``ymir.yaml`` at
     ``gitlab.com/redhat/centos-stream/rules/<package>``.
-    Returns the default config (merge enabled) when the file is absent.
+    Returns the default config (merge enabled) when the file is absent
+    or has no ``consolidation`` key.
+
+    Raises:
+        InvalidConsolidationConfigError: When the file exists but the
+            ``consolidation`` section does not conform to the expected schema.
 
     Args:
         package: RPM package name.
@@ -656,16 +665,33 @@ async def fetch_consolidation_config(
     Returns:
         Parsed consolidation config.
     """
+    import yaml
+
     try:
         raw = await run_tool(
             "get_maintainer_rules",
             package=package,
-            file_path="consolidation.json",
+            file_path="ymir.yaml",
             available_tools=available_tools,
         )
-        if "not found" in raw.lower():
-            return PackageConsolidationConfig()
-        return PackageConsolidationConfig.model_validate_json(raw)
     except Exception as e:
-        logger.warning("Failed to fetch consolidation config for %s: %s", package, e)
+        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, e)
         return PackageConsolidationConfig()
+
+    if "not found" in raw.lower():
+        return PackageConsolidationConfig()
+
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        raise InvalidConsolidationConfigError(f"ymir.yaml for {package} is not valid YAML: {e}") from e
+
+    if not isinstance(data, dict) or "consolidation" not in data:
+        return PackageConsolidationConfig()
+
+    try:
+        return PackageConsolidationConfig.model_validate(data["consolidation"])
+    except Exception as e:
+        raise InvalidConsolidationConfigError(
+            f"ymir.yaml consolidation section for {package} is malformed: {e}"
+        ) from e

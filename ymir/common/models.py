@@ -743,7 +743,8 @@ class ConsolidationReleaseStrategy(Enum):
 class PackageConsolidationConfig(BaseModel):
     """Machine-readable consolidation config from the per-package rules repo.
 
-    Fetched from ``gitlab.com/redhat/centos-stream/rules/<package>/consolidation.json``.
+    Parsed from the ``consolidation`` section of
+    ``gitlab.com/redhat/centos-stream/rules/<package>/ymir.yaml``.
     """
 
     merge_mrs: bool = Field(

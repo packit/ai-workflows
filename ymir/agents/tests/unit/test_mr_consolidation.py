@@ -6,13 +6,14 @@ from ymir.agents.tasks import (
     _CONSOLIDATION_HASH_KEY as HASH_KEY,
 )
 from ymir.agents.tasks import (
-    _consolidation_field_key as _field_key,
-)
-from ymir.agents.tasks import (
+    InvalidConsolidationConfigError,
     complete_job,
     fetch_consolidation_config,
     pick_next_job,
     submit_merge_job,
+)
+from ymir.agents.tasks import (
+    _consolidation_field_key as _field_key,
 )
 from ymir.common.models import MergeConsolidationJob
 
@@ -201,23 +202,21 @@ async def test_full_cycle_submit_pick_complete_repeat(fake_redis):
 @pytest.mark.asyncio
 async def test_fetch_config_returns_default_when_not_found():
     with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = (
-            "No maintainer rules found for package 'bash' (file 'consolidation.json' not found)"
-        )
-        config = await fetch_consolidation_config("bash", [])
-
-    assert config.merge_mrs is False
-    assert config.release_strategy.value == "merged"
-
-
-@pytest.mark.asyncio
-async def test_fetch_config_parses_valid_json():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = '{"merge_mrs": true, "release_strategy": "per_commit"}'
+        mock_run.return_value = "No maintainer rules found for package 'bash' (file 'ymir.yaml' not found)"
         config = await fetch_consolidation_config("bash", [])
 
     assert config.merge_mrs is True
     assert config.release_strategy.value == "per_commit"
+
+
+@pytest.mark.asyncio
+async def test_fetch_config_parses_valid_yaml():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "consolidation:\n  merge_mrs: false\n  release_strategy: merged\n"
+        config = await fetch_consolidation_config("bash", [])
+
+    assert config.merge_mrs is False
+    assert config.release_strategy.value == "merged"
 
 
 @pytest.mark.asyncio
@@ -226,4 +225,30 @@ async def test_fetch_config_returns_default_on_exception():
         mock_run.side_effect = RuntimeError("network error")
         config = await fetch_consolidation_config("bash", [])
 
-    assert config.merge_mrs is False
+    assert config.merge_mrs is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_config_raises_on_malformed_yaml():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "consolidation:\n  merge_mrs: not_a_bool\n"
+        with pytest.raises(InvalidConsolidationConfigError, match="malformed"):
+            await fetch_consolidation_config("bash", [])
+
+
+@pytest.mark.asyncio
+async def test_fetch_config_raises_on_invalid_yaml_syntax():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "consolidation:\n  merge_mrs: [\n"
+        with pytest.raises(InvalidConsolidationConfigError, match="not valid YAML"):
+            await fetch_consolidation_config("bash", [])
+
+
+@pytest.mark.asyncio
+async def test_fetch_config_returns_default_when_no_consolidation_key():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "some_other_setting: true\n"
+        config = await fetch_consolidation_config("bash", [])
+
+    assert config.merge_mrs is True
+    assert config.release_strategy.value == "per_commit"

@@ -18,7 +18,7 @@ originals as consolidated.
 ┌──────────────┐       submit_merge_job()       ┌────────────────────┐
 │              │  ─────────────────────────────▶ │                    │
 │   Backport   │   (after filing an MR, if       │   Redis Queue      │
-│   Agent      │    consolidation.json enables   │   (Hash-based,     │
+│   Agent      │    ymir.yaml enables it          │   (Hash-based,     │
 │              │    it for the package)           │    per pkg/branch) │
 └──────────────┘                                 └────────┬───────────┘
                                                           │
@@ -211,15 +211,14 @@ i.e., when 3+ MRs were present.
 ## Per-Package Configuration
 
 Consolidation is enabled by default for all packages. The backport agent reads
-`consolidation.json` from the per-package rules repository
-(`gitlab.com/redhat/centos-stream/rules/<package>/consolidation.json`) before
+`ymir.yaml` from the per-package rules repository
+(`gitlab.com/redhat/centos-stream/rules/<package>/ymir.yaml`) before
 submitting a consolidation job.
 
-```json
-{
-  "merge_mrs": true,
-  "release_strategy": "per_commit"
-}
+```yaml
+consolidation:
+  merge_mrs: true
+  release_strategy: per_commit
 ```
 
 | Field              | Default          | Description                                             |

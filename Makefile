@@ -182,6 +182,23 @@ run-mr-agent-c10s-standalone:
 .PHONY: run-mr-agent-standalone
 run-mr-agent-standalone: run-mr-agent-c10s-standalone
 
+.PHONY: run-mr-consolidation-agent-standalone
+run-mr-consolidation-agent-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e PACKAGE=$(PACKAGE) \
+		-e BRANCH=$(BRANCH) \
+		-e RELEASE_STRATEGY=$(RELEASE_STRATEGY) \
+		-e DRY_RUN=$(DRY_RUN) \
+		mr-consolidation-agent-c10s
+
+.PHONY: run-mr-consolidation-agent-e2e-tests
+run-mr-consolidation-agent-e2e-tests:
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+		-e MOCK_JIRA="true" \
+		-e DRY_RUN="true" \
+		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \
+		mr-consolidation-agent-e2e-tests
+
 
 .PHONY: run-jira-issue-fetcher
 run-jira-issue-fetcher:
@@ -239,6 +256,10 @@ logs-rebase:
 .PHONY: logs-rebuild
 logs-rebuild:
 	$(COMPOSE_AGENTS) logs -f rebuild-agent
+
+.PHONY: logs-mr-consolidation
+logs-mr-consolidation:
+	$(COMPOSE_AGENTS) logs -f mr-consolidation-agent-c9s mr-consolidation-agent-c10s
 
 .PHONY: logs-jira-issue-fetcher
 logs-jira-issue-fetcher:

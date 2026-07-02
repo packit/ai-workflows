@@ -531,6 +531,55 @@ class PushToRemoteRepositoryTool(Tool[PushToRemoteRepositoryToolInput, ToolRunOp
         return StringToolOutput(result=f"Successfully pushed the specified branch to {repository}")
 
 
+class FetchBranchToolInput(BaseModel):
+    repository: str = Field(description="Remote repository URL to fetch from")
+    branch: str = Field(description="Branch name to fetch")
+    clone_path: AbsolutePath = Field(description="Absolute path to the local clone")
+
+
+class FetchBranchTool(Tool[FetchBranchToolInput, ToolRunOptions, StringToolOutput]):
+    name = "fetch_branch"
+    description = """
+    Fetches a single branch from a remote repository into a local clone.
+    The branch is created as a local ref.
+    """
+    input_schema = FetchBranchToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: FetchBranchToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        repository = tool_input.repository
+        branch = tool_input.branch
+        clone_path = tool_input.clone_path
+        auth_args = _get_git_auth_args(repository)
+        git_env = _get_mock_git_env()
+        command = [
+            "git",
+            *auth_args,
+            "fetch",
+            repository,
+            f"{branch}:refs/heads/{branch}",
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            command[0],
+            *command[1:],
+            cwd=clone_path,
+            env=git_env,
+        )
+        if await proc.wait():
+            raise ToolError(f"Failed to fetch branch {branch} from {repository}")
+        return StringToolOutput(result=f"Successfully fetched branch {branch} from {repository}")
+
+
 class AddMergeRequestLabelsToolInput(BaseModel):
     merge_request_url: str = Field(description="URL of the merge request")
     labels: list[str] = Field(description="List of labels to add to the merge request")
@@ -1164,3 +1213,114 @@ class SearchGitlabProjectMrsTool(
             from beeai_framework.tools import ToolError
 
             raise ToolError(f"Failed to search MRs in {project}: {e}") from e
+
+
+class ListProjectMergeRequestsToolInput(BaseModel):
+    project: str = Field(description="Full GitLab project path (e.g. 'redhat/centos-stream/rpms/bash')")
+    state: str | None = Field(
+        default="opened",
+        description="Filter by state: 'opened', 'closed', 'merged', or None for all",
+    )
+    target_branch: str | None = Field(
+        default=None,
+        description="Filter by target branch (e.g. 'c10s')",
+    )
+    labels: list[str] | None = Field(
+        default=None,
+        description="Filter by labels (all must be present)",
+    )
+    author_username: str | None = Field(
+        default=None,
+        description="Filter by MR author username",
+    )
+    order_by: str = Field(
+        default="created_at",
+        description="Order by field: 'created_at' or 'updated_at'",
+    )
+    sort: str = Field(default="asc", description="Sort direction: 'asc' or 'desc'")
+
+
+class ListProjectMergeRequestsTool(
+    Tool[
+        ListProjectMergeRequestsToolInput,
+        ToolRunOptions,
+        JSONToolOutput[list[dict[str, Any]]],
+    ]
+):
+    name = "list_project_merge_requests"
+    description = """
+    Lists merge requests for a GitLab project with filtering by state,
+    target branch, labels, and author. Returns MRs sorted by creation date
+    (ascending by default, i.e. oldest first).
+    Returns at most 100 MRs (single page, no pagination).
+    """
+    input_schema = ListProjectMergeRequestsToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: ListProjectMergeRequestsToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[list[dict[str, Any]]]:
+        encoded_project = quote(tool_input.project, safe="")
+        url = f"https://gitlab.com/api/v4/projects/{encoded_project}/merge_requests"
+
+        params: dict[str, str] = {
+            "order_by": tool_input.order_by,
+            "sort": tool_input.sort,
+            "per_page": "100",
+        }
+        if tool_input.state is not None:
+            params["state"] = tool_input.state
+        if tool_input.target_branch is not None:
+            params["target_branch"] = tool_input.target_branch
+        if tool_input.labels:
+            params["labels"] = ",".join(tool_input.labels)
+        if tool_input.author_username is not None:
+            params["author_username"] = tool_input.author_username
+
+        headers = _get_auth_headers(f"https://gitlab.com/{tool_input.project}")
+        logger.info(
+            "Listing MRs for project %s (state=%s, target=%s, labels=%s, author=%s)",
+            tool_input.project,
+            tool_input.state,
+            tool_input.target_branch,
+            tool_input.labels,
+            tool_input.author_username,
+        )
+
+        try:
+            async with (
+                aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
+                aiohttp_get_with_retries(session, url, headers=headers, params=params) as response,
+            ):
+                response.raise_for_status()
+                data = await response.json()
+
+            results = [
+                {
+                    "iid": mr["iid"],
+                    "url": mr["web_url"],
+                    "title": mr["title"],
+                    "description": mr.get("description", ""),
+                    "state": mr["state"],
+                    "source_branch": mr.get("source_branch", ""),
+                    "target_branch": mr.get("target_branch", ""),
+                    "author": mr.get("author", {}).get("username", ""),
+                    "created_at": mr.get("created_at"),
+                    "labels": mr.get("labels", []),
+                }
+                for mr in data
+            ]
+
+            logger.info("Found %d MR(s) for project %s", len(results), tool_input.project)
+            return JSONToolOutput(result=results)
+
+        except Exception as e:
+            raise ToolError(f"Failed to list MRs for {tool_input.project}: {e}") from e

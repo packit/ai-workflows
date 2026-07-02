@@ -3,6 +3,7 @@ import hashlib
 import logging
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -12,11 +13,19 @@ from specfile import Specfile
 from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
 from ymir.agents.utils import check_subprocess, mcp_tools, run_subprocess, run_tool
 from ymir.common.base_utils import is_cs_branch
+from ymir.common.merge_queue import (  # noqa: F401 — re-exported for agents and tests
+    _CONSOLIDATION_HASH_KEY,
+    _consolidation_field_key,
+    complete_job,
+    pick_next_job,
+    submit_merge_job,
+)
 from ymir.common.models import (
     CachedMRMetadata,
     LogOutputSchema,
     MergeRequestDetails,
     OpenMergeRequestResult,
+    PackageConsolidationConfig,
     Task,
 )
 from ymir.common.utils import get_all_sources
@@ -47,6 +56,24 @@ async def _clone_fedora_dist_git(package: str, destination: Path) -> bool:
     return True
 
 
+def _force_rmtree(path: Path | str) -> None:
+    """Best-effort removal of a directory tree.
+
+    In containerised setups the MCP gateway (running as a different UID)
+    creates files that the agent container cannot delete.  We try
+    ``rm -rf`` and tolerate partial failures — the subsequent clone will
+    reinitialise the git state over any leftover files.
+    """
+    result = subprocess.run(["rm", "-rf", str(path)], capture_output=True)  # noqa: S603, S607
+    if result.returncode != 0:
+        logger.warning(
+            "Could not fully remove %s (exit %d): %s — proceeding anyway",
+            path,
+            result.returncode,
+            result.stderr.decode().strip(),
+        )
+
+
 async def fork_and_prepare_dist_git(
     jira_issue: str,
     package: str,
@@ -58,7 +85,7 @@ async def fork_and_prepare_dist_git(
         raise ValueError(f"Invalid jira_issue: {jira_issue}")
     working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / jira_issue
     if working_dir.is_dir():
-        shutil.rmtree(working_dir, ignore_errors=False)
+        _force_rmtree(working_dir)
     working_dir.mkdir(parents=True, exist_ok=True)
     namespace = "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
     repository = f"https://gitlab.com/redhat/{namespace}/rpms/{package}"
@@ -560,7 +587,7 @@ async def clone_and_prep_sources(
         raise ValueError(f"Invalid jira_issue: {jira_issue}")
     working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "applicability" / jira_issue
     if working_dir.is_dir():
-        shutil.rmtree(working_dir)
+        _force_rmtree(working_dir)
     working_dir.mkdir(parents=True, exist_ok=True)
     local_clone = working_dir / package
 
@@ -610,3 +637,61 @@ async def clone_and_prep_sources(
     logger.warning(f"prep failed for {package}, falling back to manual extraction: {result}")
     unpacked = await _fallback_extract_sources(local_clone, package)
     return local_clone, unpacked, False
+
+
+class InvalidConsolidationConfigError(Exception):
+    """Raised when ymir.yaml exists but the consolidation section cannot be parsed."""
+
+
+async def fetch_consolidation_config(
+    package: str,
+    available_tools: list,
+) -> PackageConsolidationConfig:
+    """Fetch the consolidation config from the per-package rules repo.
+
+    Reads the ``consolidation`` section from ``ymir.yaml`` at
+    ``gitlab.com/redhat/centos-stream/rules/<package>``.
+    Returns the default config (merge enabled) when the file is absent
+    or has no ``consolidation`` key.
+
+    Raises:
+        InvalidConsolidationConfigError: When the file exists but the
+            ``consolidation`` section does not conform to the expected schema.
+
+    Args:
+        package: RPM package name.
+        available_tools: MCP gateway tools (must include ``get_maintainer_rules``).
+
+    Returns:
+        Parsed consolidation config.
+    """
+    import yaml
+
+    try:
+        raw = await run_tool(
+            "get_maintainer_rules",
+            package=package,
+            file_path="ymir.yaml",
+            available_tools=available_tools,
+        )
+    except Exception as e:
+        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, e)
+        return PackageConsolidationConfig()
+
+    if "not found" in raw.lower():
+        return PackageConsolidationConfig()
+
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        raise InvalidConsolidationConfigError(f"ymir.yaml for {package} is not valid YAML: {e}") from e
+
+    if not isinstance(data, dict) or "consolidation" not in data:
+        return PackageConsolidationConfig()
+
+    try:
+        return PackageConsolidationConfig.model_validate(data["consolidation"])
+    except Exception as e:
+        raise InvalidConsolidationConfigError(
+            f"ymir.yaml consolidation section for {package} is malformed: {e}"
+        ) from e

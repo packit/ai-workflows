@@ -30,7 +30,7 @@ from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState
 from ymir.agents.reasoning_agent import ReasoningAgent
-from ymir.agents.tasks import fetch_consolidation_config, submit_merge_job
+from ymir.agents.tasks import InvalidConsolidationConfigError, fetch_consolidation_config, submit_merge_job
 from ymir.agents.utils import (
     check_subprocess,
     format_mr_triage_details,
@@ -722,6 +722,23 @@ async def run_workflow(
 
             try:
                 config = await fetch_consolidation_config(state.package, gateway_tools)
+            except InvalidConsolidationConfigError as e:
+                logger.warning("Invalid consolidation config for %s: %s", state.package, e)
+                await tasks.comment_in_jira(
+                    jira_issue=state.jira_issue,
+                    agent_type="Backport",
+                    comment_text=(
+                        f"ymir.yaml for {state.package} has a malformed consolidation "
+                        f"section: {e}\n\nMR consolidation was skipped. Please fix "
+                        f"the config file in the rules repository."
+                    ),
+                    is_error=True,
+                    available_tools=gateway_tools,
+                    user_triggered=user_triggered,
+                )
+                return "comment_in_jira"
+
+            try:
                 if not config.merge_mrs:
                     logger.info(
                         "MR consolidation not enabled for %s, skipping",

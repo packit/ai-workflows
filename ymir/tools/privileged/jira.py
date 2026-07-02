@@ -946,7 +946,7 @@ class SearchJiraIssuesToolInput(BaseModel):
 
 
 class SearchJiraIssuesTool(
-    Tool[SearchJiraIssuesToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]
+    Tool[SearchJiraIssuesToolInput, ToolRunOptions, JSONToolOutput[dict[str, list[dict[str, Any]]]]]
 ):
     name = "search_jira_issues"
     description = """
@@ -966,7 +966,7 @@ class SearchJiraIssuesTool(
         tool_input: SearchJiraIssuesToolInput,
         options: ToolRunOptions | None,
         context: RunContext,
-    ) -> JSONToolOutput[list[dict[str, Any]]]:
+    ) -> JSONToolOutput[dict[str, list[dict[str, Any]]]]:
         jql = tool_input.jql
         fields = tool_input.fields if tool_input.fields is not None else ["key", "summary", "fixVersions"]
         max_results = tool_input.max_results
@@ -1445,3 +1445,109 @@ class GetJiraAttachmentTool(Tool[GetJiraAttachmentToolInput, ToolRunOptions, Str
             return StringToolOutput(result=f"Failed to decode attachment {filename} as UTF-8")
 
         return StringToolOutput(result=text)
+
+
+# -- Helpers for CreateJiraIssueTool --
+
+
+async def _get_user_identifier(session: Any, headers: dict, email: str) -> tuple[str, str]:
+    """Resolve a user email to a Jira (field_key, value) tuple.
+
+    Returns ("name", username) for Jira Server or ("accountId", id) for Cloud.
+    """
+    jira_base = os.getenv("JIRA_URL")
+    url = urljoin(jira_base, "rest/api/3/user/search")
+    try:
+        async with session.get(url, params={"query": email}, headers=headers) as response:
+            response.raise_for_status()
+            users = await response.json()
+    except aiohttp.ClientError as e:
+        raise ToolError(f"Failed to search for user {email}: {e}") from e
+
+    matches = [u for u in users if u.get("emailAddress") == email]
+    if len(matches) == 0:
+        raise ToolError(f"No JIRA user with email {email}")
+    if len(matches) > 1:
+        raise ToolError(f"Multiple JIRA users with email {email}")
+
+    user = matches[0]
+    if user.get("name"):
+        return ("name", user["name"])
+    if user.get("accountId"):
+        return ("accountId", user["accountId"])
+    raise ToolError(f"User {email} has neither name nor accountId")
+
+
+class CreateJiraIssueToolInput(BaseModel):
+    project: str = Field(description="Jira project key (e.g. 'RHELMISC')")
+    summary: str = Field(description="Issue summary")
+    description: str = Field(description="Issue description")
+    assignee_email: str | None = Field(default=None, description="Assignee email address")
+    reporter_email: str | None = Field(default=None, description="Reporter email address")
+    components: list[str] | None = Field(default=None, description="List of component names")
+    labels: list[str] | None = Field(default=None, description="List of labels")
+
+
+class CreateJiraIssueTool(Tool[CreateJiraIssueToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]):
+    name = "create_jira_issue"
+    description = """
+    Creates a new Jira issue. Respects DRY_RUN and JIRA_DRY_RUN.
+    Returns a dict with 'key' (e.g. 'RHELMISC-12345').
+    """
+    input_schema = CreateJiraIssueToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "jira", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: CreateJiraIssueToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[dict[str, Any]]:
+        if os.getenv("DRY_RUN", "False").lower() == "true":
+            return JSONToolOutput(
+                result={"key": None, "dry_run": True, "message": "Dry run, not creating issue"}
+            )
+        if _skip_jira_writes():
+            return JSONToolOutput(
+                result={"key": None, "dry_run": True, "message": "JIRA_DRY_RUN is set, not creating issue"}
+            )
+
+        headers = get_jira_auth_headers()
+        jira_base = os.getenv("JIRA_URL")
+
+        fields: dict[str, Any] = {
+            "project": {"key": tool_input.project},
+            "summary": tool_input.summary,
+            "description": tool_input.description,
+            "issuetype": {"name": "Task"},
+        }
+
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            if tool_input.assignee_email:
+                id_type, id_val = await _get_user_identifier(session, headers, tool_input.assignee_email)
+                fields["assignee"] = {id_type: id_val}
+
+            if tool_input.reporter_email:
+                id_type, id_val = await _get_user_identifier(session, headers, tool_input.reporter_email)
+                fields["reporter"] = {id_type: id_val}
+            url = urljoin(jira_base, "rest/api/2/issue")
+            logger.info("Creating Jira issue in project %s", tool_input.project)
+            try:
+                async with session.post(
+                    url,
+                    json={"fields": fields},
+                    headers=headers,
+                ) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+            except aiohttp.ClientError as e:
+                raise ToolError(f"Failed to create Jira issue: {e}") from e
+
+        key = data["key"]
+        logger.info("Created Jira issue %s", key)
+        return JSONToolOutput(result={"key": key})

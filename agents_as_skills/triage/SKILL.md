@@ -897,7 +897,7 @@ Where:
 
 Post the formatted comment using `add_jira_comment` with:
 - `issue_key` = `{{jira_issue}}`
-- `comment` = `"Output from Ymir Triage Agent: \n\n<formatted_comment>\n\nWarning: This is an AI-Generated contribution and may contain mistakes. Please carefully review the contributions made by AI agents.\nYou can learn more about the Ymir project at https://docs.google.com/document/d/1zKeJQtIlGkgQ7QoEVFxz4dLVEjqB74_E3tW0_wCo6YM/edit?usp=sharing"`
+- `comment` = `"Output from Ymir Triage Agent: \n\n<formatted_comment>\n\nWarning: This is an AI-Generated contribution and may contain mistakes. Please carefully review the contributions made by AI agents.\nYou can learn more about the Ymir project at https://ymir.pages.redhat.com/\n\n💬 *Have suggestions or complaints?* Please reach out to us on the [Slack forum #forum-ymir-package-automation|https://redhat.enterprise.slack.com/archives/C095699FLMR] where your feedback will be more visible than pinging us on individual issues."`
 - `private` = true
 
 ---

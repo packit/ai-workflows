@@ -252,6 +252,9 @@ Output from Ymir Rebase Agent:
 
 Warning: This is an AI-Generated contribution and may contain mistakes.
 Please carefully review the contributions made by AI agents.
+You can learn more about the Ymir project at https://ymir.pages.redhat.com/
+
+💬 *Have suggestions or complaints?* Please reach out to us on the [Slack forum #forum-ymir-package-automation|https://redhat.enterprise.slack.com/archives/C095699FLMR] where your feedback will be more visible than pinging us on individual issues.
 ```
 
 ---

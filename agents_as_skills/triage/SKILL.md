@@ -191,7 +191,7 @@ This path is for issues that represent a clear bug or CVE that needs a targeted 
    * There are 2 locations where you can search for the fixes: Fedora and upstream project.
    * First, check if the fix is in Fedora repository in `https://src.fedoraproject.org/rpms/<package_name>`.
      * In Fedora, search for .patch files and check git commit history for fixes using relevant keywords (CVE IDs, function names, error messages)
-     * If the fix is found in Fedora, use the Fedora dist-git commit `.patch` URL in your patch_urls — do not substitute the upstream commit URL.
+     * If the fix is found in Fedora as a `.patch` file, use its raw file URL (`https://src.fedoraproject.org/rpms/<package>/raw/<ref>/f/<name>.patch`) in your patch_urls — not the upstream commit URL.
    * If it's not, identify the official upstream project from the following 2 sources and search there:
      * Links from the Jira issue (if any direct upstream links are provided)
      * Package spec file (`<package>.spec`) in the GitLab repository: check the URL field or Source0 field for upstream project location

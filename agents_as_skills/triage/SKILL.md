@@ -191,6 +191,7 @@ This path is for issues that represent a clear bug or CVE that needs a targeted 
    * There are 2 locations where you can search for the fixes: Fedora and upstream project.
    * First, check if the fix is in Fedora repository in `https://src.fedoraproject.org/rpms/<package_name>`.
      * In Fedora, search for .patch files and check git commit history for fixes using relevant keywords (CVE IDs, function names, error messages)
+     * If the fix is found in Fedora, use the Fedora dist-git commit `.patch` URL in your patch_urls — do not substitute the upstream commit URL.
    * If it's not, identify the official upstream project from the following 2 sources and search there:
      * Links from the Jira issue (if any direct upstream links are provided)
      * Package spec file (`<package>.spec`) in the GitLab repository: check the URL field or Source0 field for upstream project location
@@ -203,7 +204,7 @@ This path is for issues that represent a clear bug or CVE that needs a targeted 
    * Using the details from your analysis, search these sources:
      - Bug Trackers (for fixed bugs matching the issue summary and description)
      - Git / Version Control (for commit messages, using keywords, CVE IDs, function names, etc.)
-   * **Always prefer patches from the canonical upstream repository** over mirrors or forks. For example, if the upstream is `https://gitlab.com/libtiff/libtiff`, use that — not a GitHub mirror like `https://github.com/libsdl-org/libtiff/`. Mirrors may carry extra commits or miss upstream changes.
+   * **When searching upstream**, always prefer the canonical upstream repository over mirrors or forks of the same project. For example, if the upstream is `https://gitlab.com/libtiff/libtiff`, use that — not a GitHub mirror like `https://github.com/libsdl-org/libtiff/`. Mirrors may carry extra commits or miss upstream changes. This applies only to choosing between repositories for the same upstream project — it does not apply to the Fedora-vs-upstream choice above.
    * Be thorough in your search - try multiple search terms and approaches based on the issue details
    * Advanced investigation techniques:
      - **Use targeted git searches when the issue describes specific code**:

@@ -2,8 +2,10 @@ import asyncio
 import gzip
 import logging
 import random
+import tempfile
 import time
 from pathlib import Path
+from shutil import rmtree
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
@@ -12,7 +14,6 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import (
     JSONToolOutput,
-    StringToolOutput,
     ToolError,
     ToolRunOptions,
 )
@@ -324,13 +325,22 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
 
 class DownloadArtifactsToolInput(BaseModel):
     artifacts_urls: list[str] = Field(description="URLs to build artifacts (logs and RPM files)")
-    target_path: AbsolutePath = Field(description="Absolute path where to download the artifacts")
 
 
-class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, StringToolOutput]):
+class DownloadArtifactsResult(BaseModel):
+    target_path: Path = Field(description="Location of downloaded files")
+
+
+class DownloadArtifactsToolOutput(JSONToolOutput[DownloadArtifactsResult]):
+    def get_text_content(self) -> str:
+        """Return content with minimum tokens possible"""
+        return f"target_path: {self.result.target_path}"
+
+
+class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, DownloadArtifactsToolOutput]):
     name = "download_artifacts"
     description = """
-    Downloads build artifacts to the specified location.
+    Downloads build artifacts to a temporary location.
     Any gzipped log files will be automatically decompressed,
     for example `http://example.com/builder-live.log.gz`
     will be downloaded as `builder-live.log`.
@@ -348,9 +358,9 @@ class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, Str
         tool_input: DownloadArtifactsToolInput,
         options: ToolRunOptions | None,
         context: RunContext,
-    ) -> StringToolOutput:
+    ) -> DownloadArtifactsToolOutput:
         artifacts_urls = tool_input.artifacts_urls
-        target_path = tool_input.target_path
+        target_path = Path(tempfile.mkdtemp())
         async with aiohttp.ClientSession(
             timeout=AIOHTTP_TIMEOUT, headers={"User-Agent": YMIR_USER_AGENT}
         ) as session:
@@ -369,7 +379,9 @@ class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, Str
                                     target = target.with_suffix("")
                             (target_path / target).write_bytes(content)
                         else:
-                            raise ToolError(f"Failed to download {url}: {response.status} {response.reason}")
-                except (aiohttp.ClientError, TimeoutError) as e:
+                            raise ValueError(f"{response.status} {response.reason}")
+                except Exception as e:
+                    # Cleanup temporary dir
+                    rmtree(target_path)
                     raise ToolError(f"Failed to download {url}: {e}") from e
-        return StringToolOutput(result="Successfully downloaded the specified build artifacts")
+        return DownloadArtifactsToolOutput(result=DownloadArtifactsResult(target_path=target_path))

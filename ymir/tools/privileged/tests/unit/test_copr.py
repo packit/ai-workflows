@@ -170,9 +170,8 @@ async def test_build_package(build_failure, build_timeout, exclusive_arch, dist_
     ],
 )
 @pytest.mark.asyncio
-async def test_download_artifacts(url, tmp_path):
+async def test_download_artifacts(url):
     artifacts_urls = [url]
-    target_path = tmp_path
     content = b"12345"
     content_gz = b"\x1f\x8b\x00\x00"
 
@@ -189,19 +188,12 @@ async def test_download_artifacts(url, tmp_path):
     )
     if "broken" in url:
         with pytest.raises(ToolError):
-            await DownloadArtifactsTool().run(
-                input={"artifacts_urls": artifacts_urls, "target_path": target_path}
-            )
+            await DownloadArtifactsTool().run(input={"artifacts_urls": artifacts_urls})
     else:
-        out = await DownloadArtifactsTool().run(
-            input={"artifacts_urls": artifacts_urls, "target_path": target_path}
-        )
+        out = await DownloadArtifactsTool().run(input={"artifacts_urls": artifacts_urls})
         result = out.result
-        assert result.startswith("Successfully")
-    path = target_path / url.rsplit("/", 1)[-1].removesuffix(".gz")
-    if "broken" in url:
-        assert not path.is_file()
-    else:
+        target_path = Path(result.target_path)
+        path = target_path / url.rsplit("/", 1)[-1].removesuffix(".gz")
         assert path.read_bytes() == content
 
 

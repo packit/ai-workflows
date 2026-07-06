@@ -305,6 +305,10 @@ class RebuildData(BaseModel):
         default=None,
     )
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
+    side_tag: str | None = Field(
+        description="Koji build side-tag name from the Jira issue, if specified (older z-streams only)",
+        default=None,
+    )
     consolidated_issues: list[ConsolidatedIssue] = Field(
         default_factory=list,
         description="Sibling issues consolidated into this rebuild task",

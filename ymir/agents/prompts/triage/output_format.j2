@@ -53,12 +53,15 @@ Rebuild resolution:
         "triage_summary": "Confirmed package vendors Go deps via spec BuildRequires.",
         "dependency_issue": "RHEL-67890",
         "dependency_component": "golang",
-        "fix_version": "rhel-X.Y.Z"
+        "fix_version": "rhel-X.Y.Z",
+        "side_tag": "rhel-9.4.0-z-build-sidetag-188995"
     }
 }
 ```
 Note: When the Jira issue covers multiple CVEs, include ALL CVE IDs in `cve_id`, e.g.:
 `"cve_id": "CVE-1234-98765 CVE-1234-98766"`
+Note: Include `side_tag` only for older z-stream rebuilds, when the Jira issue
+mentions a build side-tag. Do not set it otherwise.
 
 Postponed resolution (rebuild waiting for dependency):
 ```json

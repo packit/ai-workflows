@@ -59,7 +59,9 @@ a backport that won't actually fix the shipped RPM.
    If neither maintainer rules nor existing patches provide guidance, name the
    patch file as follows:
      - Non-CVE: `<PACKAGE>-<VERSION>-<JIRA_ISSUE>.patch`
-     - CVE:     `<PACKAGE>-<VERSION>-<CVE_ID>.patch`
+     - Single CVE: `<PACKAGE>-<VERSION>-<CVE_ID>.patch`
+     - Multiple CVEs: `<PACKAGE>-<VERSION>-<JIRA_ISSUE>.patch`
+       (use Jira issue instead of CVE IDs to avoid excessively long filenames)
    where <VERSION> is the upstream version from the spec file's Version field.
    Do NOT add comments above the Patch tag for z-stream branches unless
    existing patches in the spec already use comments (see Priority 2).

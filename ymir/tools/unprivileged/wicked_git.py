@@ -12,7 +12,7 @@ from ymir.common.validators import AbsolutePath
 from ymir.common.version_utils import parse_branch_name
 from ymir.tools.base import CloneableTool as Tool
 
-# Pattern to extract CVE IDs. Needs to handles space-separated, comma-separated,
+# Pattern to extract CVE IDs. Needs to handle space-separated, comma-separated,
 # or any other separator as there is no standard in how those can be provided.
 CVE_ID_PATTERN = re.compile(r"CVE-\d{4}-\d{4,}")
 
@@ -552,8 +552,8 @@ class GitLogSearchToolInput(BaseModel):
 class GitLogSearchTool(Tool[GitLogSearchToolInput, ToolRunOptions, StringToolOutput]):
     name = "git_log_search"
     description = """
-    Searches the git history for a reference to either the provided cve_id or jira_issue.
-    Returns the commit hash and the commit message.
+    Searches the git history for references to the provided CVE ID(s) and/or jira_issue.
+    Reports found/not found for each search term individually.
     """
     input_schema = GitLogSearchToolInput
 
@@ -580,23 +580,18 @@ class GitLogSearchTool(Tool[GitLogSearchToolInput, ToolRunOptions, StringToolOut
         if not search_terms:
             raise ToolError("No search string provided, jira_issue or cve_id is required")
 
-        cmd = ["git", "log", "--no-merges"]
-        for term in search_terms:
-            cmd.extend(["--grep", term])
         if cve_ids and tool_input.jira_issue:
-            cmd.extend(["--grep", tool_input.jira_issue])
-        cmd.extend(["-n", "1", "--pretty=%s %H"])
+            search_terms.append(tool_input.jira_issue)
 
-        exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
-        if exit_code != 0:
-            raise ToolError(f"Git command failed: {stderr}")
+        results: list[str] = []
+        for term in search_terms:
+            cmd = ["git", "log", "--no-merges", "--grep", term, "-n", "1", "--pretty=%H"]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
+            if exit_code != 0:
+                raise ToolError(f"Git command failed: {stderr}")
+            if (stdout or "").strip():
+                results.append(f"{term}: found")
+            else:
+                results.append(f"{term}: not found")
 
-        search = ", ".join(search_terms)
-        output = (stdout or "").strip()
-        if not output:
-            return StringToolOutput(result=f"No matches found for '{search}'")
-
-        lines = output.splitlines()
-        header = f"Found {len(lines)} matching commit(s) for '{search}'"
-        # We do not return the output because it could confuse the agent
-        return StringToolOutput(result=header)
+        return StringToolOutput(result="\n".join(results))

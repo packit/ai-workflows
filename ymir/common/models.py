@@ -228,6 +228,10 @@ class RebaseData(BaseModel):
         "Do NOT repeat the justification rationale here.",
     )
     jira_issue: str = Field(description="Jira issue identifier")
+    cve_id: str | None = Field(
+        description="CVE identifier(s); include ALL CVE IDs when the issue covers multiple CVEs",
+        default=None,
+    )
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
 
 
@@ -284,7 +288,10 @@ class RebuildData(BaseModel):
 
     package: str = Field(description="Package name")
     jira_issue: str = Field(description="Jira issue identifier")
-    cve_id: str | None = Field(description="CVE identifier", default=None)
+    cve_id: str | None = Field(
+        description="CVE identifier(s); include ALL CVE IDs when the issue covers multiple CVEs",
+        default=None,
+    )
     justification: str | None = Field(
         default=None,
         description="Reviewer-facing rationale: why a rebuild is needed and how it addresses the issue. "
@@ -364,7 +371,10 @@ class PostponedData(BaseModel):
     fix_version: str | None = Field(
         default=None, description="Fix version in Jira (for rebuild postponements)"
     )
-    cve_id: str | None = Field(default=None, description="CVE identifier (for rebuild postponements)")
+    cve_id: str | None = Field(
+        description="CVE identifier(s); include ALL CVE IDs when the issue covers multiple CVEs",
+        default=None,
+    )
     dependency_issue: str | None = Field(
         default=None,
         description="Key of the dependency Jira issue that triggered the rebuild (for rebuild postponements)",

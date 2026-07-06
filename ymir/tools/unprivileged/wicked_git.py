@@ -582,10 +582,11 @@ class GitLogSearchTool(Tool[GitLogSearchToolInput, ToolRunOptions, StringToolOut
 
         if cve_ids and tool_input.jira_issue:
             search_terms.append(tool_input.jira_issue)
+        search_terms = list(dict.fromkeys(search_terms))
 
         results: list[str] = []
         for term in search_terms:
-            cmd = ["git", "log", "--no-merges", "--grep", term, "-n", "1", "--pretty=%H"]
+            cmd = ["git", "log", "--no-merges", "-i", "--grep", term, "-n", "1", "--pretty=%H"]
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=repo_path)
             if exit_code != 0:
                 raise ToolError(f"Git command failed: {stderr}")

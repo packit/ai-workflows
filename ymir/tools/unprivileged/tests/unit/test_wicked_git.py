@@ -202,6 +202,7 @@ async def test_git_patch_creation_tool_with_hideous_patch_file(git_repo, tmp_pat
         ("CVE-2025-12345", "", "CVE-2025-12345: found"),
         ("CVE-2025-12346", "", "CVE-2025-12346: not found"),
         ("", "RHEL-123456", "RHEL-123456: found"),
+        ("", "rhel-123456", "rhel-123456: found"),
         ("", "RHEL-123457", "RHEL-123457: not found"),
         (
             "CVE-2025-12345 CVE-2025-99999",

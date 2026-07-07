@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import logging
 import os
@@ -19,8 +20,15 @@ from pydantic import BaseModel, Field
 
 from ymir.common import CVEEligibilityResult, TriageEligibility, load_rhel_config
 from ymir.common.base_utils import get_jira_auth_headers
-from ymir.common.constants import JIRA_SEARCH_PATH
-from ymir.common.version_utils import get_fix_version_variants, get_maintenance_majors, normalize_fix_version
+from ymir.common.constants import CENTOS_STREAM_KOJIHUB_URL, JIRA_SEARCH_PATH
+from ymir.common.utils import _get_koji_build
+from ymir.common.version_utils import (
+    get_fix_version_variants,
+    get_maintenance_majors,
+    normalize_fix_version,
+    nvr_to_cs_nvr,
+    parse_rhel_version,
+)
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT
 from ymir.tools.http import aiohttp_get_with_retries
@@ -100,6 +108,13 @@ class PreliminaryTesting(Enum):
     PASS = "Pass"  # noqa: S105
     FAIL = "Fail"
     REQUESTED = "Requested"
+
+
+class FixApproach(Enum):
+    CS_FIRST = "cs_first"
+    RHEL_FIRST = "rhel_first"
+    PENDING = "pending"
+    NO_ZSTREAM_CLONES = "no_zstream_clones"
 
 
 class GetJiraDetailsToolInput(BaseModel):
@@ -381,6 +396,12 @@ def extract_cve_id(summary: str) -> str | None:
 async def _check_zstream_clones_shipped(
     cve_id: str, component: str, exclude_key: str
 ) -> tuple[bool, list[str]]:
+    """Check whether any Z-stream clone has shipped (Critical/Important Y-stream path).
+
+    Used for Critical/Important CVEs where the Y-stream fix requires an internal
+    build — we wait for at least one Z-stream clone to reach Done-Errata before
+    the Y-stream becomes eligible for triage.  Checks all non-maintenance majors.
+    """
     escaped_cve_id = cve_id.replace('"', '\\"')
     escaped_component = component.replace('"', '\\"')
     jql = (
@@ -546,6 +567,101 @@ async def _check_duplicate_tracker(
     return (None, False)
 
 
+async def _check_zstream_fix_approach(
+    cve_id: str, component: str, exclude_key: str, major_version: str
+) -> tuple[FixApproach, list[str], str]:
+    """Determine fix approach from Z-stream clone NVR (Low/Moderate Y-stream path).
+
+    Used for Low/Moderate CVEs where the fix may come through CentOS Stream
+    (no triage needed) or internally (triage needed).  Checks the Fixed in Build
+    NVR on the same-major Z-stream clone and looks it up in CS Koji to decide.
+
+    Returns (approach, pending_keys, detail) where detail describes why
+    the decision was made (clone key, NVR checked, Koji result).
+    """
+    escaped_cve_id = cve_id.replace('"', '\\"')
+    escaped_component = component.replace('"', '\\"')
+    jql = (
+        f'summary ~ "{escaped_cve_id}" AND component = "{escaped_component}"'
+        f' AND labels = "SecurityTracking" AND key != "{exclude_key}"'
+    )
+    logger.info(f"Checking Z-stream fix approach for {cve_id} (major={major_version})")
+
+    tool = SearchJiraIssuesTool()
+    output = await tool.run(
+        input={
+            "jql": jql,
+            "fields": ["fixVersions", FIXED_IN_BUILD_CUSTOM_FIELD],
+            "max_results": 50,
+        }
+    )
+    issues = output.result or []
+
+    rhel_config = await load_rhel_config()
+    current_z_streams = rhel_config.get("current_z_streams", {})
+    upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
+    maintenance_majors = get_maintenance_majors(rhel_config)
+
+    relevant_z_streams = {
+        variant.lower()
+        for streams in (current_z_streams, upcoming_z_streams)
+        for major, v in streams.items()
+        if major not in maintenance_majors and major == major_version
+        for variant in get_fix_version_variants(v)
+    }
+
+    pending_keys = []
+    for issue in issues:
+        key = issue.get("key", "")
+        fix_versions = issue.get("fields", {}).get("fixVersions", [])
+        fv_names = [fv.get("name", "") for fv in fix_versions]
+        if not any(fv.lower() in relevant_z_streams for fv in fv_names):
+            continue
+
+        fixed_in_build = issue.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
+        if not fixed_in_build:
+            logger.info(f"  {key}: no Fixed in Build yet")
+            pending_keys.append(key)
+            continue
+
+        cs_nvr = nvr_to_cs_nvr(fixed_in_build)
+        if not cs_nvr:
+            logger.warning(f"  {key}: cannot derive CS NVR from {fixed_in_build}, assuming RHEL first")
+            return (
+                FixApproach.RHEL_FIRST,
+                [],
+                f"{key} has Fixed in Build {fixed_in_build} (could not derive CentOS Stream NVR)",
+            )
+
+        logger.info(f"  {key}: Fixed in Build={fixed_in_build}, checking CS NVR={cs_nvr}")
+        cs_build = await asyncio.to_thread(_get_koji_build, CENTOS_STREAM_KOJIHUB_URL, cs_nvr)
+        if cs_build is not None:
+            logger.info(f"  {key}: CS build {cs_nvr} found — CentOS Stream first approach")
+            return (
+                FixApproach.CS_FIRST,
+                [],
+                f"{key} has Fixed in Build {fixed_in_build}, "
+                f"matching CentOS Stream build {cs_nvr} found in CS Koji",
+            )
+        logger.info(f"  {key}: CS build {cs_nvr} not found — RHEL first approach")
+        return (
+            FixApproach.RHEL_FIRST,
+            [],
+            f"{key} has Fixed in Build {fixed_in_build}, no matching CentOS Stream build {cs_nvr} in CS Koji",
+        )
+
+    if pending_keys:
+        logger.info(f"No Z-stream clone has Fixed in Build yet for {cve_id}, waiting: {pending_keys}")
+        return (FixApproach.PENDING, pending_keys, "")
+
+    logger.info(f"No relevant Z-stream clones for {cve_id} (major={major_version})")
+    return (
+        FixApproach.NO_ZSTREAM_CLONES,
+        [],
+        f"no relevant RHEL-{major_version} Z-stream clones",
+    )
+
+
 class CheckCveTriageEligibilityToolInput(BaseModel):
     issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
 
@@ -563,8 +679,8 @@ class CheckCveTriageEligibilityTool(
 
     Returns CVEEligibilityResult with eligibility:
     - IMMEDIATELY: proceed to triage
-    - PENDING_DEPENDENCIES: Y-stream Critical/Important CVE waiting for Z-stream errata to ship
-    - NEVER: reject (embargoed, Low/Moderate Y-stream, missing data, etc.)
+    - PENDING_DEPENDENCIES: waiting for Z-stream dependency (errata to ship, or Fixed in Build NVR)
+    - NEVER: reject (embargoed, CentOS Stream first approach, missing data, etc.)
     """
     input_schema = CheckCveTriageEligibilityToolInput
 
@@ -665,12 +781,18 @@ class CheckCveTriageEligibilityTool(
 
         if target_version.lower() not in [v.lower() for v in latest_z_streams.values()]:
             needs_internal_fix = True
-            reason = f"Z-stream CVE ({target_version}) not in latest z-streams, needs RHEL fix first"
+            reason = f"Z-stream CVE ({target_version}) not in latest z-streams, internal fix is needed first"
         elif severity not in (Severity.LOW.value, Severity.MODERATE.value):
             needs_internal_fix = True
-            reason = f"High severity CVE ({severity}) eligible for Z-stream, needs RHEL fix first"
+            reason = (
+                f"High severity Z-stream CVE ({target_version}, {severity}) — "
+                "RHEL first approach, internal fix is needed first"
+            )
         else:
-            reason = "CVE eligible for Z-stream fix in CentOS Stream"
+            reason = (
+                f"Z-stream CVE ({target_version}, {severity} severity) — "
+                "CentOS Stream first approach, fix will be inherited"
+            )
 
         return JSONToolOutput(
             CVEEligibilityResult(
@@ -744,7 +866,11 @@ class CheckCveTriageEligibilityTool(
             CVEEligibilityResult(
                 is_cve=True,
                 eligibility=TriageEligibility.PENDING_DEPENDENCIES,
-                reason=f"CVE {cve_id} ({target_version}): waiting for at least one clone to ship",
+                reason=(
+                    f"CVE {cve_id} ({target_version}): "
+                    "waiting for at least one Z-stream clone to ship — "
+                    "RHEL first approach, internal fix is needed first"
+                ),
                 needs_internal_fix=False,
                 pending_zstream_issues=pending_keys,
             ).model_dump()
@@ -806,20 +932,18 @@ class CheckCveTriageEligibilityTool(
         logger.info(f"Y-stream CVE detected ({target_version})")
 
         severity = fields.get(SEVERITY_CUSTOM_FIELD, {}).get("value", "")
-        if severity in (Severity.LOW.value, Severity.MODERATE.value):
-            logger.info(
-                f"Y-stream CVE {issue_key} has {severity} severity — "
-                "fix is handled via Z-stream CentOS Stream path, skipping"
-            )
-            return JSONToolOutput(
-                CVEEligibilityResult(
-                    is_cve=True,
-                    eligibility=TriageEligibility.NEVER,
-                    reason=(
-                        f"Y-stream CVE ({target_version}, {severity} severity): "
-                        "fix is handled via Z-stream CentOS Stream path"
-                    ),
-                ).model_dump()
+        is_low_moderate = severity in (Severity.LOW.value, Severity.MODERATE.value)
+        parsed = parse_rhel_version(target_version)
+        major_version = parsed[0] if parsed else None
+
+        if is_low_moderate:
+            return await self._check_lowmod_ystream_eligibility(
+                issue_key,
+                fields,
+                target_version,
+                severity,
+                major_version,
+                duplicate_of=duplicate_of,
             )
 
         logger.info(f"Severity is {severity or 'unset'}, checking Z-stream dependencies")
@@ -831,7 +955,124 @@ class CheckCveTriageEligibilityTool(
             CVEEligibilityResult(
                 is_cve=True,
                 eligibility=TriageEligibility.IMMEDIATELY,
-                reason="Y-stream CVE: at least one Z-stream clone shipped, eligible for triage",
+                reason=(
+                    f"Y-stream CVE ({target_version}): "
+                    "at least one Z-stream clone shipped, eligible for triage"
+                ),
+                needs_internal_fix=False,
+                duplicate_of=duplicate_of,
+            ).model_dump()
+        )
+
+    async def _check_lowmod_ystream_eligibility(
+        self,
+        issue_key: str,
+        fields: dict[str, Any],
+        target_version: str,
+        severity: str,
+        major_version: str | None,
+        *,
+        duplicate_of: str | None = None,
+    ) -> JSONToolOutput[dict[str, Any]]:
+        logger.info(
+            f"Y-stream CVE {issue_key} has {severity} severity, "
+            "checking Z-stream fix approach via Fixed in Build NVR"
+        )
+
+        summary = fields.get("summary", "")
+        cve_id = extract_cve_id(summary)
+        if not cve_id:
+            return JSONToolOutput(
+                CVEEligibilityResult(
+                    is_cve=True,
+                    eligibility=TriageEligibility.NEVER,
+                    reason=f"CVE ({target_version}): cannot extract CVE ID from summary",
+                ).model_dump()
+            )
+
+        components = fields.get("components", [])
+        component = components[0].get("name", "") if components else ""
+        if not component:
+            return JSONToolOutput(
+                CVEEligibilityResult(
+                    is_cve=True,
+                    eligibility=TriageEligibility.NEVER,
+                    reason=f"CVE {cve_id} ({target_version}): no component set on issue",
+                ).model_dump()
+            )
+
+        if not major_version:
+            return JSONToolOutput(
+                CVEEligibilityResult(
+                    is_cve=True,
+                    eligibility=TriageEligibility.NEVER,
+                    reason=f"CVE {cve_id} ({target_version}): cannot parse major version",
+                ).model_dump()
+            )
+
+        try:
+            approach, pending_keys, detail = await _check_zstream_fix_approach(
+                cve_id, component, issue_key, major_version
+            )
+        except Exception as e:
+            logger.warning(f"Z-stream fix approach check failed for {cve_id}: {e}")
+            return JSONToolOutput(
+                CVEEligibilityResult(
+                    is_cve=True,
+                    eligibility=TriageEligibility.NEVER,
+                    reason=f"CVE {cve_id} ({target_version}): fix approach check failed: {e}",
+                    error=str(e),
+                ).model_dump()
+            )
+
+        if approach is FixApproach.PENDING:
+            return JSONToolOutput(
+                CVEEligibilityResult(
+                    is_cve=True,
+                    eligibility=TriageEligibility.PENDING_DEPENDENCIES,
+                    reason=(
+                        f"Y-stream CVE ({target_version}, {severity} severity): "
+                        f"waiting for RHEL-{major_version} Z-stream clone Fixed in Build "
+                        "to determine fix path (CentOS Stream first or RHEL first approach)"
+                    ),
+                    needs_internal_fix=False,
+                    pending_zstream_issues=pending_keys,
+                ).model_dump()
+            )
+
+        if approach is FixApproach.CS_FIRST:
+            return JSONToolOutput(
+                CVEEligibilityResult(
+                    is_cve=True,
+                    eligibility=TriageEligibility.NEVER,
+                    reason=(
+                        f"Y-stream CVE ({target_version}, {severity} severity): "
+                        f"CentOS Stream first approach, fix will be inherited — {detail}"
+                    ),
+                    needs_internal_fix=False,
+                ).model_dump()
+            )
+
+        if approach is FixApproach.NO_ZSTREAM_CLONES:
+            return JSONToolOutput(
+                CVEEligibilityResult(
+                    is_cve=True,
+                    eligibility=TriageEligibility.IMMEDIATELY,
+                    reason=(
+                        f"Y-stream CVE ({target_version}, {severity} severity): {detail}, eligible for triage"
+                    ),
+                    needs_internal_fix=False,
+                    duplicate_of=duplicate_of,
+                ).model_dump()
+            )
+
+        return JSONToolOutput(
+            CVEEligibilityResult(
+                is_cve=True,
+                eligibility=TriageEligibility.IMMEDIATELY,
+                reason=(
+                    f"Y-stream CVE ({target_version}, {severity} severity): RHEL first approach — {detail}"
+                ),
                 needs_internal_fix=False,
                 duplicate_of=duplicate_of,
             ).model_dump()

@@ -71,6 +71,36 @@ Execute the following steps in order.
 
    1.6. If neither `{{ triage_summary }}` nor `{{ patch_urls }}` are provided, design the test based solely on the Jira issue description, comments, and any reproducer steps or error messages described in the issue. In this case, the test may require more iteration in step 5.
 
+   1.7. **Check for Existing Test in the Tests Repository**
+
+   Before proceeding further, check whether the tests repository already contains a test for this issue. This avoids duplicating work.
+
+   * Clone the RHEL tests repository using `clone_repository`:
+     - URL: `https://gitlab.com/redhat/rhel/tests/<package_name>`
+     - Do NOT specify a `branch` parameter — omit it so the tool clones the default branch.
+     - Use clone path `/git-repos/tests-<package_name>`.
+     - If the clone path already exists, delete it first with `run_shell_command("rm -rf /git-repos/tests-<package_name>")`.
+   * Determine the expected test directory:
+     - For CVEs (when `{{ cve_id }}` is set): check for `Security/{{ cve_id }}/`
+     - For bugs (non-CVE): check for `Regression/{{ jira_issue }}/`
+   * Run `run_shell_command("ls /git-repos/tests-<package_name>/<expected_test_dir>/")` to check if it exists.
+   * Additionally, search for any existing test referencing this issue:
+     ```
+     run_shell_command("grep -rl '{{ jira_issue }}' /git-repos/tests-<package_name>/ --include='*.fmf' --include='*.sh' || true")
+     ```
+     {% if cve_id %}Also search for the CVE ID:
+     ```
+     run_shell_command("grep -rl '{{ cve_id }}' /git-repos/tests-<package_name>/ --include='*.fmf' --include='*.sh' || true")
+     ```
+     {% endif %}
+   * **If the test directory already exists OR a matching test is found**, STOP immediately. Do NOT reserve a Testing Farm machine or create any test files. Produce your final output JSON with:
+     - `success`: `false`
+     - `test_already_exists`: `true`
+     - `summary`: "Test already exists in the tests repository at <path>. Skipping reproducer creation to avoid duplication."
+     - `not_reproducible_reason`: null
+     - `pass_fail_criteria`: "N/A — existing test found, no new reproducer needed."
+     - Fill in `package`, `jira_issue`, and `reproducer_type` as normal. Leave `compose`, `arch`, and `testing_farm_request_id` as null.
+
 2. **Get Maintainer Rules**
 
    2.1. Call `get_maintainer_rules` with the package name.
@@ -129,13 +159,10 @@ Execute the following steps in order.
 
    Use the Jira issue description, triage summary, and patch URLs to understand the bug and design the test. The patch URLs show what the fix changes — by reading the fix you can determine what behavior to test (the pre-fix, buggy behavior).
 
-   4.1. Clone the Tests Repository
+   4.1. Use the Already-Cloned Tests Repository
 
-   * Clone the RHEL tests repository using `clone_repository`:
-     - URL: `https://gitlab.com/redhat/rhel/tests/<package_name>`
-     - Do NOT specify a `branch` parameter — omit it so the tool clones the default branch (it may not be `main`).
-     - Use a clone path under `/git-repos/` (the shared volume), e.g. `/git-repos/tests-<package_name>`.
-     - If the clone path already exists from a previous failed attempt, delete it first with `run_shell_command("rm -rf /git-repos/tests-<package_name>")` before retrying.
+   The tests repository was already cloned in step 1.7 at `/git-repos/tests-<package_name>`. If for any reason the clone is missing, re-clone it using `clone_repository` with URL `https://gitlab.com/redhat/rhel/tests/<package_name>` (no `branch` parameter) to `/git-repos/tests-<package_name>`.
+
    * Create the test directory:
      - For CVEs: `<tests_clone>/Security/<cve_id>/`
      - For bugs (non-CVE): `<tests_clone>/Regression/<jira_issue>/`

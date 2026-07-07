@@ -169,6 +169,7 @@ class JiraLabels(Enum):
     REPRODUCER_FAILED = "ymir_reproducer_failed"
     REPRODUCER_ERRORED = "ymir_reproducer_errored"
     REPRODUCER_NOT_REPRODUCIBLE = "ymir_reproducer_not_reproducible"
+    REPRODUCER_ALREADY_EXISTS = "ymir_reproducer_already_exists"
 
     TRIAGED_POSTPONED = "ymir_triaged_postponed"
     TRIAGED_NOT_AFFECTED = "ymir_triaged_not_affected"

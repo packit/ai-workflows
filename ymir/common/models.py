@@ -1295,3 +1295,7 @@ class ReproducerOutputSchema(BaseModel):
     not_reproducible_reason: str | None = Field(
         default=None, description="Reason the issue could not be reproduced, if applicable"
     )
+    test_already_exists: bool = Field(
+        default=False,
+        description="Whether a test for this issue already exists in the tests repository",
+    )

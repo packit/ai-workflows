@@ -343,6 +343,13 @@ You must decide between one of the following actions. Follow these guidelines to
    3.3. You must provide a clear justification explaining why a rebuild is needed
         and how it addresses the issue.
    3.4. If rebuild: set Jira fields as per the instructions below.
+   {% if is_older_zstream %}
+   3.5. Check the Jira issue description and comments for any mention of a build
+        side-tag. A side-tag is a Koji build tag name that the build pipeline
+        needs when building packages for this z-stream (e.g.,
+        "rhel-9.4.0-z-build-sidetag-188995"). If a side-tag is mentioned, set
+        the `side_tag` field in your output to the exact side-tag name.
+   {% endif %}
 
 4. **Open-Ended Analysis**
    This is the catch-all for issues that are NOT bugs or CVEs

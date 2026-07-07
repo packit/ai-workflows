@@ -63,6 +63,7 @@ async def main() -> None:
         dependency_component: str | None = Field(default=None)
         consolidated_issues: list[ConsolidatedIssue] = Field(default_factory=list)
         consolidation_summary: str | None = Field(default=None)
+        side_tag: str | None = Field(default=None)
 
     async def run_workflow(
         package,
@@ -74,6 +75,7 @@ async def main() -> None:
         dependency_component=None,
         consolidated_issues=None,
         consolidation_summary=None,
+        side_tag=None,
         user_triggered=False,
     ):
         local_tool_options["working_directory"] = None
@@ -115,7 +117,7 @@ async def main() -> None:
                     state.rebuild_success = False
                     state.rebuild_error = f"Could not update release: {e}"
                     return "comment_in_jira"
-                return "run_log_agent"
+                return "stage_changes"
 
             def _all_dependency_components(state):
                 components = set()
@@ -176,7 +178,9 @@ async def main() -> None:
                     state.rebuild_success = False
                     state.rebuild_error = f"Could not stage changes: {e}"
                     return "comment_in_jira"
-                return "commit_push_and_open_mr"
+                if state.log_result:
+                    return "commit_push_and_open_mr"
+                return "run_log_agent"
 
             async def commit_push_and_open_mr(state):
                 try:
@@ -206,6 +210,8 @@ async def main() -> None:
                     all_issues = [state.jira_issue] + [ci.issue_key for ci in state.consolidated_issues]
                     resolves_text = "Resolves: " + ", ".join(all_issues)
 
+                    side_tag_text = f"\nside-tag: {state.side_tag}\n" if state.side_tag else ""
+
                     consolidation_text = ""
                     if state.consolidation_summary:
                         consolidation_text = (
@@ -233,10 +239,11 @@ async def main() -> None:
                         mr_title=state.log_result.title,
                         mr_description=(
                             f"{state.log_result.description}\n\n"
-                            f"{triage_details_text}"
                             f"{dep_text}"
                             f"{dep_issues_text}"
                             f"{resolves_text}\n"
+                            f"{side_tag_text}\n"
+                            f"{triage_details_text}"
                             f"{consolidation_text}"
                             f"\n\n{mr_description_footer(state.package)}"
                         ),
@@ -285,8 +292,8 @@ async def main() -> None:
 
             workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
             workflow.add_step("update_release", update_release)
-            workflow.add_step("run_log_agent", run_log_agent)
             workflow.add_step("stage_changes", stage_changes)
+            workflow.add_step("run_log_agent", run_log_agent)
             workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
             workflow.add_step("comment_in_jira", comment_in_jira)
 
@@ -301,6 +308,7 @@ async def main() -> None:
                     dependency_component=dependency_component,
                     consolidated_issues=consolidated_issues or [],
                     consolidation_summary=consolidation_summary,
+                    side_tag=side_tag,
                 ),
             )
             return response.state
@@ -448,6 +456,7 @@ async def main() -> None:
                         dependency_component=rebuild_data.dependency_component,
                         consolidated_issues=rebuild_data.consolidated_issues,
                         consolidation_summary=rebuild_data.consolidation_summary,
+                        side_tag=rebuild_data.side_tag,
                         user_triggered=user_triggered,
                     )
                     logger.info(

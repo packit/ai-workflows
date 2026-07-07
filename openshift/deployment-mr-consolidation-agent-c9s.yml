@@ -22,7 +22,7 @@ spec:
         - -m
         - ymir.agents.mr_consolidation_agent
         command:
-        - /usr/bin/python
+        - python
         env:
         - name: CONTAINER_VERSION
           value: "c9s"

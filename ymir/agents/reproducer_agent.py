@@ -57,6 +57,7 @@ _REPRODUCER_TERMINAL_LABELS = {
     JiraLabels.REPRODUCER_FAILED.value,
     JiraLabels.REPRODUCER_ERRORED.value,
     JiraLabels.REPRODUCER_NOT_REPRODUCIBLE.value,
+    JiraLabels.REPRODUCER_ALREADY_EXISTS.value,
 }
 
 _PROMPT_TEMPLATE = "reproducer/prompt.j2"
@@ -133,6 +134,8 @@ def _render_prompt(input_data: InputSchema, dry_run: bool = False) -> str:
 
 def _determine_result_label(result: OutputSchema) -> JiraLabels:
     """Map reproducer output to the appropriate Jira label."""
+    if result.test_already_exists:
+        return JiraLabels.REPRODUCER_ALREADY_EXISTS
     if result.success:
         return JiraLabels.REPRODUCER_CREATED
     if result.not_reproducible_reason:

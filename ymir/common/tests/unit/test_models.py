@@ -544,6 +544,25 @@ def test_reproducer_output_not_reproducible():
     )
 
 
+def test_reproducer_output_test_already_exists():
+    """Create output indicating a test already exists in the repo."""
+    data = ReproducerOutputSchema(
+        jira_issue="RHEL-44444",
+        success=False,
+        reproducer_type="bug",
+        package="libxml2",
+        pass_fail_criteria="N/A — existing test found, no new reproducer needed.",
+        summary="Test already exists in the tests repository at Regression/RHEL-44444/.",
+        test_already_exists=True,
+    )
+    assert data.success is False
+    assert data.test_already_exists is True
+    assert data.compose is None
+    assert data.arch is None
+    assert data.testing_farm_request_id is None
+    assert data.not_reproducible_reason is None
+
+
 def test_reproducer_output_roundtrip():
     """Serialize to JSON and back, verify all fields survive."""
     original = ReproducerOutputSchema(
@@ -572,3 +591,4 @@ def test_reproducer_output_roundtrip():
     assert restored.pass_fail_criteria == original.pass_fail_criteria
     assert restored.summary == original.summary
     assert restored.not_reproducible_reason is None
+    assert restored.test_already_exists is False

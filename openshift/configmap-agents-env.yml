@@ -1,7 +1,7 @@
 apiVersion: v1
 data:
   MAX_RETRIES: "3"
-  MAX_CONCURRENT_TASKS: "1"
+  MAX_CONCURRENT_TASKS: "2"
   LOG_BUFFER_SIZE: "0"
   GIT_REPO_BASEPATH: /git-repos
   # The maximum number of retries for a single step in the agent execution.

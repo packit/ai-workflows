@@ -127,8 +127,6 @@ async def main() -> None:
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
 
-    local_tool_options: dict[str, Any] = {"working_directory": None}
-
     class State(PackageUpdateState):
         version: str
         justification: str | None = Field(default=None)
@@ -150,7 +148,7 @@ async def main() -> None:
         redis_conn=None,
         user_triggered=False,
     ):
-        local_tool_options["working_directory"] = None
+        local_tool_options: dict[str, Any] = {"working_directory": None}
         if mock_env := get_mock_local_tool_env(jira_issue):
             local_tool_options["env"] = mock_env
 

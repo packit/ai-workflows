@@ -116,8 +116,6 @@ async def main() -> None:
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
 
-    local_tool_options = {"working_directory": None}
-
     class State(BaseModel):
         merge_request_url: str
         local_clone: Path | None = Field(default=None)
@@ -137,7 +135,7 @@ async def main() -> None:
         all_files_git_to_add: set[str] = Field(default_factory=set)
 
     async def run_workflow(merge_request_url):
-        local_tool_options["working_directory"] = None
+        local_tool_options = {"working_directory": None}
 
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
             merge_request_agent = create_merge_request_agent(gateway_tools, local_tool_options)

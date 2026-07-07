@@ -52,8 +52,6 @@ async def main() -> None:
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
 
-    local_tool_options = {"working_directory": None}
-
     class State(PackageUpdateState):
         rebuild_success: bool = Field(default=False)
         rebuild_error: str | None = Field(default=None)
@@ -78,7 +76,7 @@ async def main() -> None:
         side_tag=None,
         user_triggered=False,
     ):
-        local_tool_options["working_directory"] = None
+        local_tool_options = {"working_directory": None}
         if mock_env := get_mock_local_tool_env(jira_issue):
             local_tool_options["env"] = mock_env
 

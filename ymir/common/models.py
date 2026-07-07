@@ -1145,3 +1145,40 @@ class WorkflowResult(BaseModel):
     reschedule_in: float = Field(
         description="Delay in seconds to reschedule the work item. Negative value means don't reschedule"
     )
+
+
+# ============================================================================
+# Reproducer Agent Schemas
+# ============================================================================
+
+
+class ReproducerInputSchema(BaseModel):
+    """Input schema for the reproducer agent."""
+
+    jira_issue: str = Field(description="Jira issue identifier")
+    package: str | None = Field(default=None, description="Package name")
+    cve_id: str | None = Field(default=None, description="CVE identifier")
+    patch_urls: list[str] | None = Field(default=None, description="List of URLs to upstream patches")
+    triage_summary: str | None = Field(
+        default=None,
+        description="Triage context: what was investigated and guidance on how the reproducer should be done",
+    )
+    fix_version: str | None = Field(default=None, description="Fix version in Jira (e.g., 'rhel-9.8')")
+    target_branch: str | None = Field(default=None, description="Target dist-git branch")
+
+
+class ReproducerOutputSchema(BaseModel):
+    """Output schema for the reproducer agent."""
+
+    jira_issue: str = Field(description="Jira issue identifier")
+    success: bool = Field(description="Whether the reproducer was successfully completed")
+    reproducer_type: Literal["cve", "bug"] = Field(description="Type of reproducer: 'cve' or 'bug'")
+    test_mr_url: str | None = Field(default=None, description="URL of the test merge request")
+    testing_farm_request_id: str | None = Field(
+        default=None, description="Testing Farm request ID for the submitted test run"
+    )
+    pass_fail_criteria: str = Field(description="Criteria used to determine pass or fail")
+    summary: str = Field(description="Summary of the reproducer result")
+    not_reproducible_reason: str | None = Field(
+        default=None, description="Reason the issue could not be reproduced, if applicable"
+    )

@@ -67,8 +67,13 @@ from ymir.tools.privileged.lookaside import (
 )
 from ymir.tools.privileged.maintainer_rules import MaintainerRulesTool
 from ymir.tools.privileged.testing_farm import (
+    CancelTestingFarmRequestTool,
+    CopyFilesToRemoteTool,
     GetTestingFarmRequestTool,
+    GetTestingFarmReservationDetailsTool,
     ReproduceTestingFarmRequestTool,
+    ReserveTestingFarmMachineTool,
+    RunRemoteCommandTool,
 )
 from ymir.tools.privileged.zstream_search import ZStreamSearchTool
 
@@ -172,6 +177,11 @@ async def _async_main():
             ErratumRefreshSecurityAlertsTool(options=tool_options),
             GetTestingFarmRequestTool(options=tool_options),
             ReproduceTestingFarmRequestTool(options=tool_options),
+            ReserveTestingFarmMachineTool(options=tool_options),
+            GetTestingFarmReservationDetailsTool(options=tool_options),
+            CancelTestingFarmRequestTool(options=tool_options),
+            RunRemoteCommandTool(options=tool_options),
+            CopyFilesToRemoteTool(options=tool_options),
             AddJiraAttachmentsTool(options=tool_options),
             AddJiraCommentTool(options=tool_options),
             ChangeJiraStatusTool(options=tool_options),

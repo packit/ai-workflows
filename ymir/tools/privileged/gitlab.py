@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -127,6 +128,17 @@ def _get_auth_headers(url: str) -> dict[str, str]:
         if token:
             headers["PRIVATE-TOKEN"] = token
     return headers
+
+
+_SENSITIVE_STDERR_RE = re.compile(
+    r"authorization|basic\s+[A-Za-z0-9+/=]|token|password|credential",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_git_stderr(text: str) -> str:
+    """Filter out lines from git stderr that may contain auth credentials."""
+    return "\n".join(line for line in text.splitlines() if not _SENSITIVE_STDERR_RE.search(line))
 
 
 def _get_git_auth_args(repository_url: str) -> list[str]:
@@ -465,9 +477,8 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
         auth_args = _get_git_auth_args(repository)
         git_env = _get_mock_git_env()
 
-        clone_path.mkdir(parents=True, exist_ok=True)
-
         if branch:
+            clone_path.mkdir(parents=True, exist_ok=True)
             proc = await asyncio.create_subprocess_exec("git", "init", cwd=clone_path, env=git_env)
             if await proc.wait():
                 raise ToolError(f"Failed to initialize git repo at {clone_path}")
@@ -483,6 +494,15 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
             if await proc.wait():
                 raise ToolError(f"Failed to checkout branch {branch}")
         else:
+            if clone_path.exists():
+                allowed_parents = {
+                    Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")),
+                    Path("/tmp"),  # noqa: S108
+                }
+                if not any(clone_path.resolve().is_relative_to(p) for p in allowed_parents):
+                    raise ToolError(f"Refusing to remove {clone_path}: not under an allowed base directory")
+                await asyncio.to_thread(shutil.rmtree, clone_path)
+            clone_path.parent.mkdir(parents=True, exist_ok=True)
             command = ["git", *auth_args, "clone", repository, str(clone_path)]
             proc = await asyncio.create_subprocess_exec(command[0], *command[1:], env=git_env)
             if await proc.wait():
@@ -518,17 +538,37 @@ class PushToRemoteRepositoryTool(Tool[PushToRemoteRepositoryToolInput, ToolRunOp
         context: RunContext,
     ) -> StringToolOutput:
         repository = tool_input.repository
-        clone_path = tool_input.clone_path
         branch = tool_input.branch
-        force = tool_input.force
-        auth_args = _get_git_auth_args(repository)
-        command = ["git", *auth_args, "push", repository, branch]
-        if force:
-            command.append("--force")
-        proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
-        if await proc.wait():
-            raise ToolError("Failed to push to the specified repository")
-        return StringToolOutput(result=f"Successfully pushed the specified branch to {repository}")
+
+        try:
+            clone_path = tool_input.clone_path
+            force = tool_input.force
+            auth_args = _get_git_auth_args(repository)
+            command = ["git", *auth_args, "push", repository, branch]
+            if force:
+                command.append("--force")
+            env = _get_mock_git_env()
+            proc = await asyncio.create_subprocess_exec(
+                command[0],
+                *command[1:],
+                cwd=clone_path,
+                env=env,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode:
+                stderr_text = stderr.decode(errors="replace").strip() if stderr else ""
+                safe_stderr = _sanitize_git_stderr(stderr_text)
+                detail = safe_stderr or f"exit code {proc.returncode} (stderr redacted)"
+                logger.error("git push failed (exit %d): %s", proc.returncode, detail)
+                raise ToolError(f"Failed to push to {repository}: {detail}")
+            return StringToolOutput(result=f"Successfully pushed the specified branch to {repository}")
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to push to repository {repository}: {e}")
+            raise ToolError(f"Failed to push to repository {repository}: {e}") from e
 
 
 class AddMergeRequestLabelsToolInput(BaseModel):
@@ -564,6 +604,8 @@ class AddMergeRequestLabelsTool(Tool[AddMergeRequestLabelsToolInput, ToolRunOpti
             return StringToolOutput(
                 result=f"Successfully added labels {labels} to merge request {merge_request_url}"
             )
+        except ToolError:
+            raise
         except Exception as e:
             raise ToolError(f"Failed to add labels to merge request: {e}") from e
 
@@ -598,6 +640,8 @@ class AddMergeRequestCommentTool(Tool[AddMergeRequestCommentToolInput, ToolRunOp
             mr = await _get_merge_request_from_url(merge_request_url)
             await asyncio.to_thread(mr._raw_pr.notes.create, {"body": comment})
             return StringToolOutput(result=f"Successfully added comment to merge request {merge_request_url}")
+        except ToolError:
+            raise
         except Exception as e:
             raise ToolError(f"Failed to add comment to merge request: {e}") from e
 
@@ -870,6 +914,8 @@ class GetAuthorizedCommentsFromMergeRequestTool(
         try:
             comments = await _fetch_authorized_comments_from_merge_request_url(merge_request_url)
             return JSONToolOutput(result=comments)
+        except ToolError:
+            raise
         except Exception as e:
             raise ToolError(f"Failed to get authorized comments from merge request: {e}") from e
 
@@ -920,6 +966,8 @@ class GetMergeRequestDetailsTool(
                     comments=[c for c in comments if f"@{username}" in c.message],
                 )
             )
+        except ToolError:
+            raise
         except Exception as e:
             raise ToolError(f"Failed to get merge request details: {e}") from e
 
@@ -1160,7 +1208,7 @@ class SearchGitlabProjectMrsTool(
             logger.info("Found %d MR(s) for %s in %s", len(results), search, project)
             return JSONToolOutput(result=results)
 
+        except ToolError:
+            raise
         except Exception as e:
-            from beeai_framework.tools import ToolError
-
             raise ToolError(f"Failed to search MRs in {project}: {e}") from e

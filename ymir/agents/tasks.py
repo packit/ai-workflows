@@ -113,7 +113,7 @@ async def prepare_dist_git_from_merge_request(
     fedora_clone = None
     if with_fedora:
         package = details.target_repo_name
-        fedora_clone = working_dir / f"{package}-fedora"
+        fedora_clone = working_dir / f"{package}-fedora-{local_clone.name}"
         if not await _clone_fedora_dist_git(package, fedora_clone):
             fedora_clone = None
     return local_clone, details, fedora_clone

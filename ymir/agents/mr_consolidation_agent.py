@@ -139,8 +139,35 @@ class ConsolidationState(PackageUpdateState):
 
 
 def _extract_jira_issues_from_description(description: str) -> list[str]:
-    """Extract RHEL-NNNNN Jira issue keys from MR description text."""
-    return list(set(re.findall(r"RHEL-\d+", description)))
+    """Extract RHEL-NNNNN Jira issue keys from structured lines in MR descriptions.
+
+    Only extracts from:
+    - ``Resolves: RHEL-NNNNN, ...`` lines (backport agent format)
+    - Bullet items under ``### Resolved Jira Issues`` (consolidated MR format)
+
+    Ignores RHEL-NNNNN references in triage detail prose, ``<details>``
+    blocks, and other free-text context to prevent spurious issue collection.
+    """
+    issues: list[str] = []
+
+    for line in description.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("Resolves:", "Related:")):
+            issues.extend(re.findall(r"RHEL-\d+", stripped))
+
+    in_resolved_section = False
+    for line in description.splitlines():
+        stripped = line.strip()
+        if re.match(r"^#{1,4}\s+Resolved Jira Issues", stripped):
+            in_resolved_section = True
+            continue
+        if in_resolved_section:
+            if stripped.startswith("#") or (stripped and not stripped.startswith("-")):
+                in_resolved_section = False
+                continue
+            issues.extend(re.findall(r"RHEL-\d+", stripped))
+
+    return list(set(issues))
 
 
 async def _resolve_source_issues(

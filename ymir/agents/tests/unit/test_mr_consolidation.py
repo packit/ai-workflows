@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from ymir.agents.mr_consolidation_agent import _extract_jira_issues_from_description
 from ymir.agents.tasks import (
     _CONSOLIDATION_HASH_KEY as HASH_KEY,
 )
@@ -252,3 +253,108 @@ async def test_fetch_config_returns_default_when_no_consolidation_key():
 
     assert config.merge_mrs is True
     assert config.release_strategy.value == "per_commit"
+
+
+# -- _extract_jira_issues_from_description ------------------------------------
+
+
+def test_extract_from_resolves_line():
+    desc = "Some backport description.\n\nResolves: RHEL-154342\n"
+    assert _extract_jira_issues_from_description(desc) == ["RHEL-154342"]
+
+
+def test_extract_from_resolves_line_multiple():
+    desc = "Description.\n\nResolves: RHEL-100, RHEL-200, RHEL-300\n"
+    result = _extract_jira_issues_from_description(desc)
+    assert sorted(result) == ["RHEL-100", "RHEL-200", "RHEL-300"]
+
+
+def test_extract_from_resolved_jira_issues_section():
+    desc = (
+        "## Consolidated Backport MR\n\n"
+        "### Resolved Jira Issues\n\n"
+        "- [RHEL-159051](https://issues.redhat.com/browse/RHEL-159051)\n"
+        "- [RHEL-159070](https://issues.redhat.com/browse/RHEL-159070)\n\n"
+        "### Source Merge Requests\n\n"
+        "Some other text mentioning RHEL-999999\n"
+    )
+    result = _extract_jira_issues_from_description(desc)
+    assert sorted(result) == ["RHEL-159051", "RHEL-159070"]
+
+
+def test_ignores_issues_in_triage_details():
+    desc = (
+        "Backport fix for CVE-2026-3833.\n\n"
+        "<details>\n"
+        "<summary>Triage Details</summary>\n\n"
+        "The gnutls RHEL 8 package (RHEL-154320, version 3.6.16) "
+        "already shipped this fix.\n"
+        "Verified that RHEL-159046 was already closed.\n"
+        "</details>\n\n"
+        "Resolves: RHEL-154342\n"
+    )
+    result = _extract_jira_issues_from_description(desc)
+    assert result == ["RHEL-154342"]
+
+
+def test_ignores_issues_in_prose_text():
+    desc = (
+        "This is related to RHEL-99999 which was fixed upstream.\n"
+        "See also RHEL-88888 for context.\n\n"
+        "Resolves: RHEL-11111\n"
+    )
+    result = _extract_jira_issues_from_description(desc)
+    assert result == ["RHEL-11111"]
+
+
+def test_consolidated_mr_with_nested_triage_details():
+    """The exact scenario from the production bug: a consolidated MR whose
+    sub-MR descriptions contain triage details referencing other issues."""
+    desc = (
+        "## Consolidated Backport MR\n\n"
+        "### Resolved Jira Issues\n\n"
+        "- [RHEL-159051](https://issues.redhat.com/browse/RHEL-159051)\n"
+        "- [RHEL-159075](https://issues.redhat.com/browse/RHEL-159075)\n\n"
+        "### Source Merge Requests\n\n"
+        "#### MR 1: [Fix CVE-2026-33845](https://gitlab.com/example/-/merge_requests/1)\n\n"
+        "<details><summary>Original description</summary>\n\n"
+        "Backport fix for CVE-2026-33845.\n"
+        "Verified that the gnutls package (RHEL-159046) was already closed.\n\n"
+        "Resolves: RHEL-159051\n"
+        "</details>\n\n"
+        "#### MR 2: [Fix CVE-2026-3833](https://gitlab.com/example/-/merge_requests/2)\n\n"
+        "<details><summary>Original description</summary>\n\n"
+        "The gnutls RHEL 8 package (RHEL-154320) already shipped this.\n\n"
+        "Resolves: RHEL-159075\n"
+        "</details>\n"
+    )
+    result = _extract_jira_issues_from_description(desc)
+    assert sorted(result) == ["RHEL-159051", "RHEL-159075"]
+
+
+def test_extract_from_related_line():
+    desc = "Some description.\n\nRelated: RHEL-12345\n"
+    assert _extract_jira_issues_from_description(desc) == ["RHEL-12345"]
+
+
+def test_empty_description():
+    assert _extract_jira_issues_from_description("") == []
+
+
+def test_no_structured_issues():
+    desc = "Just a plain description with no Resolves line."
+    assert _extract_jira_issues_from_description(desc) == []
+
+
+def test_deduplicates_issues():
+    desc = (
+        "## Consolidated Backport MR\n\n"
+        "### Resolved Jira Issues\n\n"
+        "- [RHEL-100](https://issues.redhat.com/browse/RHEL-100)\n\n"
+        "### Source Merge Requests\n\n"
+        "<details><summary>Original description</summary>\n\n"
+        "Resolves: RHEL-100\n"
+        "</details>\n"
+    )
+    result = _extract_jira_issues_from_description(desc)
+    assert result == ["RHEL-100"]

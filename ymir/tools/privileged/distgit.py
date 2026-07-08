@@ -17,8 +17,8 @@ from pydantic import BaseModel, Field
 from specfile import Specfile
 
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket
-from ymir.common.utils import get_latest_candidate_build
-from ymir.common.version_utils import parse_zstream_branch_name
+from ymir.common.utils import get_latest_candidate_build, get_latest_z_pending_build
+from ymir.common.version_utils import is_older_zstream, parse_zstream_branch_name
 from ymir.tools.base import CloneableTool as Tool
 
 logger = logging.getLogger(__name__)
@@ -226,7 +226,10 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                         "skipping push and waiting for mirror sync"
                     )
                 else:
-                    _, ref = await get_latest_candidate_build(package, branch)
+                    if await is_older_zstream(branch):
+                        _, ref = await get_latest_z_pending_build(package, branch)
+                    else:
+                        _, ref = await get_latest_candidate_build(package, branch)
                     if source_branch := self._find_source_branch(repo, branch):
                         ref = await self._find_latest_same_nvr_ref(
                             repo,

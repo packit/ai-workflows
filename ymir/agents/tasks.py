@@ -380,7 +380,6 @@ async def get_jira_issue_metadata(jira_issue: str) -> tuple[list[str], str | Non
         return [], None
 
 
-
 # Intermediate "_failed" labels (transient retry-state) are suppressed for
 # non-user-triggered runs — they're noise for maintainers and a retry will
 # follow. Terminal "_errored" labels are kept regardless: they are the only

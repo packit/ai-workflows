@@ -9,7 +9,12 @@ from specfile.utils import EVR
 
 import ymir.common.utils as _ymir_utils
 from ymir.common.base_utils import KerberosError, extract_principal, init_kerberos_ticket
-from ymir.common.utils import _is_connection_error, get_latest_candidate_build, mcp_tools
+from ymir.common.utils import (
+    _is_connection_error,
+    get_latest_candidate_build,
+    get_latest_z_pending_build,
+    mcp_tools,
+)
 
 
 async def _coro(val):
@@ -511,3 +516,33 @@ async def test_get_latest_candidate_build_no_builds():
     )
     with pytest.raises(RuntimeError, match="no builds"):
         await get_latest_candidate_build("bash", "rhel-9.6.0")
+
+
+# ============================================================================
+# get_latest_z_pending_build
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_latest_z_pending_build():
+    _mock_koji_session(
+        {
+            "rhel-9.6.0-z-pending": [
+                {"build_id": 1, "epoch": 0, "version": "1.0", "release": "1.el9"},
+            ],
+        },
+        {"source": "git+https://pkgs.example.com/rpms/bash#abc123"},
+    )
+    evr, ref = await get_latest_z_pending_build("bash", "rhel-9.6.0")
+    assert evr == EVR(epoch=0, version="1.0", release="1.el9")
+    assert ref == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_get_latest_z_pending_build_no_builds():
+    _mock_koji_session(
+        {"rhel-9.6.0-z-pending": []},
+        None,
+    )
+    with pytest.raises(RuntimeError, match="no builds"):
+        await get_latest_z_pending_build("bash", "rhel-9.6.0")

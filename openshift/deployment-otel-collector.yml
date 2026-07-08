@@ -82,11 +82,11 @@ spec:
           periodSeconds: 10
         resources:
           limits:
-            cpu: "100m"
-            memory: 384Mi
+            cpu: "200m"
+            memory: 1Gi
           requests:
-            cpu: "10m"
-            memory: 128Mi
+            cpu: "20m"
+            memory: 384Mi
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
         volumeMounts:

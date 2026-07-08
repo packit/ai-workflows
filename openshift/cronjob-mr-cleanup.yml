@@ -1,0 +1,58 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mr-cleanup
+  labels:
+    app: mr-cleanup
+    component: scheduler
+spec:
+  schedule: "0 4 * * *"  # Daily at 4am UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  suspend: false
+  jobTemplate:
+    metadata:
+      labels:
+        app: mr-cleanup
+        component: job
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800  # 30 minutes max runtime
+      template:
+        metadata:
+          labels:
+            app: mr-cleanup
+            component: pod
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: mr-cleanup
+            image: 'mr-cleanup:prod'
+            imagePullPolicy: IfNotPresent
+            envFrom:
+            - secretRef:
+                name: gitlab-env
+            - configMapRef:
+                name: jira-env
+            - secretRef:
+                name: jira-env
+            resources:
+              limits:
+                cpu: "200m"
+                memory: "128Mi"
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+              capabilities:
+                drop:
+                - ALL
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          dnsPolicy: ClusterFirst
+          schedulerName: default-scheduler
+          terminationGracePeriodSeconds: 30

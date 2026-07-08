@@ -343,6 +343,16 @@ services:
     restart: "no"
     profiles: ["manual"]  # Don't start by default, run manually for testing
 
+  mr-cleanup:
+    image: mr-cleanup
+    build:
+      context: .
+      dockerfile: Containerfile.mr-cleanup
+    env_file:
+      - .secrets/mr-cleanup.env
+    restart: "no"
+    profiles: ["manual"]
+
 
 volumes:
   valkey-data:

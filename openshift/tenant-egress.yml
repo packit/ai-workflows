@@ -121,6 +121,10 @@ spec:
     - type: Allow
       to:
         dnsName: o490301.ingest.us.sentry.io
+    # Brave Search (used by DuckDuckGoSearchTool)
+    - type: Allow
+      to:
+        dnsName: search.brave.com
     # IPv6 note: this cluster has no IPv6 egress routing. curl -6 to both allowed CIDRs
     # (e.g. 2001:470:142::/48 for savannah) and arbitrary hosts (ipv6.google.com) time out
     # identically — the EgressFirewall never sees IPv6 traffic. No IPv6 rules needed.

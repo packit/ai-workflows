@@ -58,7 +58,7 @@ def get_chat_model() -> ChatModel:
             temperature=1 if "claude" in chat_model and reasoning_effort else temperature,
             reasoning_effort=reasoning_effort,
         ),
-        timeout=1200,
+        timeout=int(os.getenv("CHAT_MODEL_TIMEOUT", 1200)),
         # beeai hardcodes max_retries=0 in its litellm adapter; num_retries
         # bypasses that and enables litellm's built-in retry with back-off
         # for transient 429 / rate-limit errors from the provider.

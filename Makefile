@@ -89,6 +89,7 @@ run-reproducer-agent-e2e-tests:
 	$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
+		-e TESTING_FARM_DRY_RUN="false" \
 		reproducer-agent-e2e-tests
 
 .PHONY: run-reproducer-agent-standalone

@@ -20,3 +20,10 @@ def is_not_empty_string(value: str) -> str:
 
 
 NonEmptyString = Annotated[str, AfterValidator(is_not_empty_string)]
+
+
+def deduplicate_and_sort(value: list) -> list:
+    return sorted(set(value))
+
+
+UniqueSortedList = Annotated[list[str], AfterValidator(deduplicate_and_sort)]

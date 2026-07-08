@@ -13,6 +13,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, RootModel
 
+from ymir.common.validators import UniqueSortedList
+
 
 class TriageEligibility(StrEnum):
     """Three-state triage eligibility."""
@@ -624,7 +626,7 @@ class BuildInputSchema(BaseModel):
 
     srpm_path: Path = Field(description="Path to SRPM to build")
     dist_git_branch: str = Field(description="dist-git branch to update")
-    jira_issue: str = Field(description="Jira issue to reference as resolved")
+    jira_issue: str | None = Field(description="Jira issue to reference as resolved")
 
 
 class BuildOutputSchema(BaseModel):
@@ -647,7 +649,7 @@ class BuildOutputSchema(BaseModel):
 class LogInputSchema(BaseModel):
     """Input schema for the log agent."""
 
-    jira_issue: str = Field(description="Jira issue to reference as resolved")
+    jira_issue: str | None = Field(description="Jira issue to reference as resolved")
     changes_summary: str = Field(description="Summary of performed changes")
     source_changelog: str | None = Field(
         default=None,
@@ -735,10 +737,11 @@ class MergeConsolidationJob(BaseModel):
         default_factory=lambda: datetime.now(UTC),
         description="When this job was submitted",
     )
-    source_issues: list[str] | None = Field(
+    source_issues: UniqueSortedList | None = Field(
         default=None,
         description="When set, consolidate only the MRs for these specific Jira issue keys "
-        "(label-triggered mode). When None, pick the two oldest open MRs (auto mode).",
+        "(label-triggered mode). When None, pick the two oldest open MRs (auto mode). "
+        "Always stored sorted for deterministic logging and span correlation.",
     )
     release_strategy: str | None = Field(
         default=None,

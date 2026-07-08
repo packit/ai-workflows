@@ -238,8 +238,8 @@ async def _resolve_source_issues(
     all_jira: list[str] = list(issue_keys)
     for mr in matched_mrs:
         all_jira.extend(_extract_jira_issues_from_description(mr.get("description", "")))
-    state.jira_issues_collected = list(set(all_jira))
-    state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else ""
+    state.jira_issues_collected = sorted(set(all_jira))
+    state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
 
     logger.info(
         "Label-triggered consolidation: resolved %s to MRs %s",
@@ -466,8 +466,10 @@ async def run_workflow(
             all_jira = []
             for mr in oldest_two:
                 all_jira.extend(_extract_jira_issues_from_description(mr.get("description", "")))
-            state.jira_issues_collected = list(set(all_jira))
-            state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else package
+            state.jira_issues_collected = sorted(set(all_jira))
+            state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
+            if state.jira_issues_collected:
+                current_jira_issue.set(",".join(state.jira_issues_collected))
 
             state.current_mrs_count = len(current_mrs)
 
@@ -1119,7 +1121,7 @@ async def run_workflow(
         initial_state = ConsolidationState(
             package=package,
             dist_git_branch=dist_git_branch,
-            jira_issue=f"consolidation-{package}",
+            jira_issue=None,
             release_strategy=release_strategy,
             attempts_remaining=max_build_attempts,
         )
@@ -1130,7 +1132,7 @@ async def run_workflow(
             all_jira = []
             for b in backport_branches:
                 all_jira.extend(b.get("jira_issues", []))
-            initial_state.jira_issues_collected = list(set(all_jira))
+            initial_state.jira_issues_collected = sorted(set(all_jira))
             if initial_state.jira_issues_collected:
                 initial_state.jira_issue = initial_state.jira_issues_collected[0]
 
@@ -1242,7 +1244,7 @@ async def main() -> None:
     if (package := os.getenv("PACKAGE")) and (branch := os.getenv("BRANCH")):
         release_strategy = os.getenv("RELEASE_STRATEGY", "per_commit")
         logger.info("Running in direct mode for %s/%s", package, branch)
-        with span_processor.start_transaction(f"consolidation-{package}", workflow="mr_consolidation"):
+        with span_processor.start_transaction(None, workflow="mr_consolidation"):
             state = await run_workflow(
                 package=package,
                 dist_git_branch=branch,
@@ -1272,11 +1274,11 @@ async def main() -> None:
 
         async def process_task(payload: bytes) -> None:
             job = MergeConsolidationJob.model_validate_json(payload)
-            jira_key = job.source_issues[0] if job.source_issues else f"{job.package}/{job.target_branch}"
+            jira_key = ",".join(job.source_issues) if job.source_issues else None
             current_jira_issue.set(jira_key)
             try:
                 with span_processor.start_transaction(
-                    f"consolidation-{job.package}",
+                    jira_key,
                     workflow="mr_consolidation",
                 ):
                     job_strategy = job.release_strategy or os.getenv(

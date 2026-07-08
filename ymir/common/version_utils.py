@@ -118,6 +118,13 @@ def normalize_fix_version(fix_version: str, rhel_config: dict) -> str:
     return f"rhel-{major}.{minor}.z"
 
 
+def get_maintenance_majors(rhel_config: dict) -> set[str]:
+    """Major versions with a Z-stream but no Y-stream (maintenance phase)."""
+    current_z_streams = rhel_config.get("current_z_streams", {})
+    current_y_streams = rhel_config.get("current_y_streams", {})
+    return set(current_z_streams.keys()) - set(current_y_streams.keys())
+
+
 def get_fix_version_variants(fix_version: str) -> list[str]:
     """
     Return both Y-stream and Z-stream forms for a given fixVersion.

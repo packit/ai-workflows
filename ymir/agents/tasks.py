@@ -363,7 +363,8 @@ async def change_jira_status(
     )
 
 
-async def get_jira_labels(jira_issue: str) -> list[str]:
+async def get_jira_issue_metadata(jira_issue: str) -> tuple[list[str], str | None]:
+    """Fetch labels and status for a Jira issue in a single API call."""
     try:
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
             details = await run_tool(
@@ -371,10 +372,13 @@ async def get_jira_labels(jira_issue: str) -> list[str]:
                 issue_key=jira_issue,
                 available_tools=gateway_tools,
             )
-            return details.get("fields", {}).get("labels", [])
+            labels = details.get("fields", {}).get("labels", [])
+            status = details.get("fields", {}).get("status", {}).get("name")
+            return labels, status
     except Exception as e:
-        logger.warning(f"Failed to get labels for {jira_issue}: {e}")
-        return []
+        logger.warning(f"Failed to get metadata for {jira_issue}: {e}")
+        return [], None
+
 
 
 # Intermediate "_failed" labels (transient retry-state) are suppressed for

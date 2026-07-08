@@ -68,7 +68,8 @@ class SiblingRebuildAnalysis(BaseModel):
     )
     cve_id: str | None = Field(
         default=None,
-        description="CVE identifier from the issue summary (e.g. 'CVE-2024-1234')",
+        description="CVE identifier(s) from the issue summary (e.g. 'CVE-2024-1234'); "
+        "include ALL CVE IDs when the issue covers multiple CVEs",
     )
 
 
@@ -287,7 +288,8 @@ def _build_sibling_analysis_prompt(
         5. Set is_dependency_rebuild=true ONLY if the dependency was
            genuinely fixed (has 'Fixed in Build' and was not
            dropped/rejected)
-        6. Extract the CVE ID from the issue summary (e.g. CVE-2024-1234)
+        6. Extract CVE ID(s) from the issue summary (e.g. CVE-2024-1234).
+           Note: the summary may contain multiple CVE IDs — include all of them.
 
         Return your analysis as JSON.""")
 

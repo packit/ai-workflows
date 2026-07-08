@@ -15,7 +15,8 @@ import requests
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, Tool, ToolError, ToolRunOptions
-from pydantic import BaseModel, Field
+from mcp.server.lowlevel.server import request_ctx
+from pydantic import BaseModel, Field, field_validator
 
 from ymir.common.models import (
     TestingFarmRequest,
@@ -35,6 +36,18 @@ def _redact_secrets(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_redact_secrets(item) for item in obj]
     return obj
+
+
+def _tf_dry_run() -> bool:
+    """Check if Testing Farm operations should be dry-run.
+
+    ``TESTING_FARM_DRY_RUN`` takes precedence when set explicitly.
+    Falls back to ``DRY_RUN`` for backward compatibility.
+    """
+    tf_override = os.getenv("TESTING_FARM_DRY_RUN")
+    if tf_override is not None:
+        return tf_override.lower() == "true"
+    return os.getenv("DRY_RUN", "False").lower() == "true"
 
 
 @cache
@@ -193,7 +206,7 @@ class ReproduceTestingFarmRequestTool(
         build_nvr = tool_input.build_nvr
         logger.info("Reproducing Testing Farm request %s with build %s", request_id, build_nvr)
 
-        if os.getenv("DRY_RUN", "False").lower() == "true":
+        if _tf_dry_run():
             return JSONToolOutput(
                 result={
                     "id": f"dry-run-{request_id}",
@@ -254,6 +267,108 @@ class ReproduceTestingFarmRequestTool(
 _RESERVATION_DURATION_MINUTES = 30
 
 
+def _get_compose_filter() -> str | None:
+    """Return the compose filter for the current MCP request, if any.
+
+    Checks for a per-issue ``.compose_filter_<ISSUE>`` file written by
+    the e2e test fixture, scoped via the ``jira_issue`` field in the MCP
+    request ``_meta`` — same pattern as ``_get_mock_git_env`` in
+    ``gitlab.py``.  Falls back to the ``TESTING_FARM_COMPOSE_FILTER``
+    env var for non-per-issue filtering.
+    """
+    try:
+        ctx = request_ctx.get()
+        meta = ctx.meta
+    except LookupError:
+        meta = None
+
+    if meta is not None:
+        issue_key = getattr(meta, "jira_issue", None)
+        if not issue_key:
+            extra = getattr(meta, "__pydantic_extra__", None) or {}
+            issue_key = extra.get("jira_issue")
+        if issue_key:
+            base = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos"))
+            per_issue = base / f".compose_filter_{issue_key}"
+            if per_issue.is_file():
+                return per_issue.read_text().strip()
+
+    return os.getenv("TESTING_FARM_COMPOSE_FILTER") or None
+
+
+class ListTestingFarmComposesToolInput(BaseModel):
+    ranch: str = Field(
+        default="redhat",
+        description="Testing Farm ranch to query. "
+        "Use 'redhat' for RHEL composes, 'public' for Fedora/CentOS.",
+    )
+    arch: str = Field(
+        default="x86_64",
+        description="Filter composes to those available for this architecture.",
+    )
+
+
+class ListTestingFarmComposesTool(
+    Tool[ListTestingFarmComposesToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
+):
+    name = "list_testing_farm_composes"
+    description = """List available composes on Testing Farm.
+    Call this BEFORE reserve_testing_farm_machine to discover valid compose names.
+    Returns a list of compose names that can be passed to reserve_testing_farm_machine.
+    """
+    input_schema = ListTestingFarmComposesToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "testing_farm", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: ListTestingFarmComposesToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[dict[str, Any]]:
+        logger.info("Listing Testing Farm composes: ranch=%s arch=%s", tool_input.ranch, tool_input.arch)
+
+        if _tf_dry_run():
+            return JSONToolOutput(
+                result={
+                    "composes": ["RHEL-10.1-Nightly", "RHEL-10.2-Nightly", "RHEL-9.6.0-Nightly"],
+                    "message": "Dry run: returning sample compose list",
+                }
+            )
+
+        try:
+            base_url = _testing_farm_url().rsplit("/v0", 1)[0]
+            url = f"{base_url}/v0.2/composes/{tool_input.ranch}"
+            response = await asyncio.to_thread(requests.get, url, headers=_testing_farm_headers(), timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            composes = [c["name"] for c in data.get("composes", [])]
+
+            if tool_input.arch:
+                arch_suffix = f"-{tool_input.arch}"
+                composes = [
+                    c
+                    for c in composes
+                    if not any(c.endswith(f"-{a}") for a in ("aarch64", "ppc64le", "s390x"))
+                    or c.endswith(arch_suffix)
+                ]
+
+            compose_filter = _get_compose_filter()
+            if compose_filter:
+                allowed = {name.strip() for name in compose_filter.split(",")}
+                composes = [c for c in composes if c in allowed]
+
+            return JSONToolOutput(result={"composes": composes})
+
+        except Exception as e:
+            raise ToolError(f"Failed to list Testing Farm composes: {e}") from e
+
+
 class ReserveTestingFarmMachineToolInput(BaseModel):
     compose: str = Field(description="Compose to reserve, e.g. RHEL-9.8.0-Nightly")
     arch: str = Field(default="x86_64", description="Architecture of the machine")
@@ -291,7 +406,7 @@ class ReserveTestingFarmMachineTool(
             _RESERVATION_DURATION_MINUTES,
         )
 
-        if os.getenv("DRY_RUN", "False").lower() == "true":
+        if _tf_dry_run():
             return JSONToolOutput(
                 result={
                     "id": "dry-run-reservation",
@@ -389,10 +504,10 @@ class GetTestingFarmReservationDetailsTool(
     ) -> JSONToolOutput[dict[str, Any]]:
         logger.info("Getting Testing Farm reservation details for %s", tool_input.request_id)
 
-        if os.getenv("DRY_RUN", "False").lower() == "true":
+        if _tf_dry_run():
             return JSONToolOutput(result={"state": "complete", "ssh_connection": "root@dry-run-host"})
 
-        max_attempts = 20
+        max_attempts = 120
         poll_interval = 30
         state = "unknown"
 
@@ -435,7 +550,13 @@ class GetTestingFarmReservationDetailsTool(
 
             if state == "running":
                 artifacts_url = (response.get("run") or {}).get("artifacts")
-                if artifacts_url:
+                if not artifacts_url:
+                    logger.warning(
+                        "No artifacts URL in TF response for %s (attempt %d)",
+                        tool_input.request_id,
+                        attempt,
+                    )
+                else:
                     try:
                         log_url = f"{artifacts_url}/pipeline.log"
                         log_resp = await asyncio.to_thread(requests.get, log_url, timeout=30)
@@ -458,8 +579,28 @@ class GetTestingFarmReservationDetailsTool(
                                 return JSONToolOutput(
                                     result={"state": state, "ssh_connection": ssh_connection}
                                 )
-                    except Exception:
-                        logger.debug("Could not fetch pipeline.log for %s", tool_input.request_id)
+                            logger.info(
+                                "pipeline.log fetched for %s but not ready yet "
+                                "(guest_match=%s, ready=%s, attempt %d)",
+                                tool_input.request_id,
+                                bool(guest_match),
+                                ready,
+                                attempt,
+                            )
+                        else:
+                            logger.warning(
+                                "pipeline.log fetch failed for %s: HTTP %d (attempt %d)",
+                                tool_input.request_id,
+                                log_resp.status_code,
+                                attempt,
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "Could not fetch pipeline.log for %s: %s (attempt %d)",
+                            tool_input.request_id,
+                            exc,
+                            attempt,
+                        )
 
             if attempt < max_attempts:
                 logger.info(
@@ -502,7 +643,7 @@ class CancelTestingFarmRequestTool(
         request_id = tool_input.request_id
         logger.info("Cancelling Testing Farm request %s", request_id)
 
-        if os.getenv("DRY_RUN", "False").lower() == "true":
+        if _tf_dry_run():
             return JSONToolOutput(
                 result={
                     "cancelled": True,
@@ -549,7 +690,7 @@ class RunRemoteCommandTool(Tool[RunRemoteCommandToolInput, ToolRunOptions, JSONT
         timeout = tool_input.timeout
         logger.info("Running remote command on %s: %s", ssh_host, command)
 
-        if os.getenv("DRY_RUN", "False").lower() == "true":
+        if _tf_dry_run():
             return JSONToolOutput(
                 result={
                     "stdout": "",
@@ -642,7 +783,7 @@ class CopyFilesToRemoteTool(Tool[CopyFilesToRemoteToolInput, ToolRunOptions, JSO
         timeout = tool_input.timeout
         logger.info("Copying %s to %s:%s", local_paths, ssh_host, remote_dir)
 
-        if os.getenv("DRY_RUN", "False").lower() == "true":
+        if _tf_dry_run():
             return JSONToolOutput(
                 result={
                     "copied": True,

@@ -112,7 +112,9 @@ services:
       - DRY_RUN=${DRY_RUN:-false}
       - MOCK_JIRA=${MOCK_JIRA:-false}
       - JIRA_DRY_RUN=${JIRA_DRY_RUN:-false}
-      - GIT_REPO_BASEPATH=${GIT_REPO_BASEPATH:-/git-repos}
+      - TESTING_FARM_DRY_RUN=${TESTING_FARM_DRY_RUN:-false}
+      - TESTING_FARM_COMPOSE_FILTER=${TESTING_FARM_COMPOSE_FILTER:-}
+      - GIT_REPO_BASEPATH=/git-repos
       - JIRA_MOCK_FILES=ymir/tools/privileged/tests/data
       # e2e tests write insteadOf rewrites here; ignored when the file is absent
       - GIT_CONFIG_GLOBAL=${GIT_REPO_BASEPATH:-/git-repos}/.mock_gitconfig
@@ -331,6 +333,12 @@ services:
     environment:
       <<: *beeai-env
       REPRODUCER_MOCK_REPOS_DIR: /home/beeai/mock_repos/reproducer
+      # SAFETY: These MUST be set to prevent E2E tests from writing to production Jira.
+      MOCK_JIRA: ${MOCK_JIRA:-true}
+      DRY_RUN: ${DRY_RUN:-true}
+      # TF dry-run defaults safe; overridden to false via Makefile for real TF provisioning.
+      TESTING_FARM_DRY_RUN: ${TESTING_FARM_DRY_RUN:-true}
+      CHAT_MODEL_TIMEOUT: ${CHAT_MODEL_TIMEOUT:-600}
     volumes:
       - ./ymir:/home/beeai/ymir:ro,z
       - git-repos:/git-repos:rw,U

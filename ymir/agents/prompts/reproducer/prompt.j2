@@ -122,12 +122,10 @@ Execute the following steps in order.
 
    3.1. Determine the RHEL compose for the affected version:
    * Extract the RHEL major version from `{{ fix_version }}`, `{{ target_branch }}`, or the Jira issue's Affects Version field.
-   * You MUST call `map_version` with the major version (e.g., `9` or `10`) to get the current Y-stream and Z-stream version strings. Do NOT guess or hardcode version numbers — always use `map_version` to get the correct compose name.
-   * Construct the compose string using the `map_version` output:
-     - For Y-stream (e.g., `rhel-9.8.0`): use `RHEL-<major>.<minor>.0-Nightly` (e.g., `RHEL-9.8.0-Nightly`)
-     - For Z-stream (e.g., `rhel-9.6.0.z`): use `RHEL-<major>.<minor>.0-Nightly`
-     - If version cannot be determined, default to the latest Y-stream nightly for the major version.
-     - If the compose from `map_version` is not available on Testing Farm (400 error), try the previous minor version (e.g., if `RHEL-10.3.0-Nightly` fails, try `RHEL-10.2.0-Nightly`, then `RHEL-10.1.0-Nightly`). Stop at minor version 0 — do not cross major version boundaries.
+   * Call `map_version` with the major version (e.g., `9` or `10`) to get the current Y-stream and Z-stream version strings.
+   * Call `list_testing_farm_composes` with `ranch="redhat"` to get the list of available composes. Do NOT guess compose names — always pick from this list.
+   * Select the compose that matches the version from `map_version`. The compose you need is one where the fix has NOT been applied yet. Prefer `-Nightly` composes (e.g., `RHEL-10.1-Nightly`). If a nightly is not available, pick a dated compose for the same minor version.
+   * If the version from `map_version` has no matching compose in the list, try the previous minor version within the same major version. Stop at minor version 0.
 
    3.2. Determine the architecture:
    * Default to `x86_64`.

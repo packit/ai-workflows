@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from ymir.common import CVEEligibilityResult, TriageEligibility, load_rhel_config
 from ymir.common.base_utils import get_jira_auth_headers
 from ymir.common.constants import JIRA_SEARCH_PATH
-from ymir.common.version_utils import get_fix_version_variants, normalize_fix_version
+from ymir.common.version_utils import get_fix_version_variants, get_maintenance_majors, normalize_fix_version
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT
 from ymir.tools.http import aiohttp_get_with_retries
@@ -370,13 +370,6 @@ class AddJiraCommentTool(Tool[AddJiraCommentToolInput, ToolRunOptions, StringToo
         return StringToolOutput(result=f"Successfully added the specified comment to {issue_key}")
 
 
-def _get_maintenance_majors(rhel_config: dict) -> set[str]:
-    """Major versions with a Z-stream but no Y-stream (maintenance phase)."""
-    current_z_streams = rhel_config.get("current_z_streams", {})
-    current_y_streams = rhel_config.get("current_y_streams", {})
-    return set(current_z_streams.keys()) - set(current_y_streams.keys())
-
-
 CVE_ID_PATTERN = re.compile(r"(CVE-\d{4}-\d{4,})")
 
 
@@ -411,7 +404,7 @@ async def _check_zstream_clones_shipped(
     rhel_config = await load_rhel_config()
     current_z_streams = rhel_config.get("current_z_streams", {})
     upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
-    maintenance_majors = _get_maintenance_majors(rhel_config)
+    maintenance_majors = get_maintenance_majors(rhel_config)
     if maintenance_majors:
         logger.info(f"Maintenance-phase major versions (excluded): {sorted(maintenance_majors)}")
 

@@ -3,7 +3,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ymir.agents.tasks import change_jira_status, fork_and_prepare_dist_git, post_user_ack_once
+from ymir.agents.tasks import (
+    change_jira_status,
+    fork_and_prepare_dist_git,
+    get_jira_issue_metadata,
+    post_user_ack_once,
+)
 from ymir.common.models import Task
 
 
@@ -193,3 +198,48 @@ async def test_post_user_ack_once_does_not_persist_on_failure():
 
     mock_comment.assert_awaited_once()
     assert "ack_posted" not in task.metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status_name, expected_status",
+    [
+        ("Closed", "Closed"),
+        ("Done", "Done"),
+        ("In Progress", "In Progress"),
+        ("New", "New"),
+    ],
+)
+async def test_get_jira_issue_metadata_returns_labels_and_status(status_name, expected_status):
+    """get_jira_issue_metadata extracts both labels and status from one API call."""
+    fake_details = {
+        "fields": {
+            "labels": ["ymir_todo", "SecurityTracking"],
+            "status": {"name": status_name},
+        }
+    }
+    with (
+        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
+        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock, return_value=fake_details),
+    ):
+        labels, status = await get_jira_issue_metadata("RHEL-99999")
+
+    assert labels == ["ymir_todo", "SecurityTracking"]
+    assert status == expected_status
+
+
+@pytest.mark.asyncio
+async def test_get_jira_issue_metadata_returns_defaults_on_failure():
+    """On MCP/network failure, return empty labels and None status."""
+    with (
+        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
+        patch(
+            "ymir.agents.tasks.run_tool",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("connection refused"),
+        ),
+    ):
+        labels, status = await get_jira_issue_metadata("RHEL-99999")
+
+    assert labels == []
+    assert status is None

@@ -25,13 +25,13 @@ Five agents process tasks through Redis queues (see [README-agents.md](README-ag
 1. **Edit agent code** in `ymir/agents/`
 2. **Run dry-run test**:
    ```bash
-   make run-triage-agent-standalone JIRA_ISSUE=RHEL-12345 DRY_RUN=true MOCK_JIRA=true
+just run-triage-agent RHEL-12345 DRY_RUN=true MOCK_JIRA=true
    ```
 3. **Use mock Jira** (from `git@gitlab.cee.redhat.com:jotnar-project/testing-jiras.git`) for consistent test data
 4. **Verify with full pipeline**:
    ```bash
-   make start DRY_RUN=true
-   make trigger-pipeline JIRA_ISSUE=RHEL-12345
+just start DRY_RUN=true
+just trigger-pipeline RHEL-12345
    ```
 5. **Check agent logs**: Review output to ensure logic works as expected
 
@@ -43,7 +43,7 @@ Tools in `ymir/tools/privileged/` require special care:
 2. **Test against actual repos** (dist-git clones) when possible
 3. **Run full test suite before submitting**:
    ```bash
-   make check-in-container
+   just check-in-container
    ```
 4. **Key file**: `ymir/tools/privileged/distgit.py` — handles clone/checkout for dist-git
 
@@ -53,24 +53,24 @@ Tools in `ymir/tools/privileged/` require special care:
 ### Unit Tests
 ```bash
 # All tests in containers
-make check-in-container
+just check-in-container
 
 # Specific components in containers
-make check-agents-in-container
-make check-privileged-tools-in-container
-make check-unprivileged-tools-in-container
+just check-agents-in-container
+just check-privileged-tools-in-container
+just check-unprivileged-tools-in-container
 ```
 
 > **Rootless podman**: if the build step fails with "cannot re-exec process to join the existing user namespace", skip the image build and run the container directly with `--privileged`:
 > ```bash
-> podman run --rm --privileged -v $(pwd):/src:z beeai-tests make -f Makefile.tests check-privileged-tools
+> podman run --rm --privileged -v $(pwd):/src:z beeai-tests just check-privileged-tools
 > ```
 
 ### Manual Testing with Real Data Flow
-1. Start full pipeline: `make start DRY_RUN=true`
+1. Start full pipeline: `just start DRY_RUN=true`
 2. Monitor traces: http://localhost:6006/ (Phoenix)
 3. Monitor queues: http://localhost:8081/ (Redis)
-4. Trigger: `make trigger-pipeline JIRA_ISSUE=RHEL-12345`
+4. Trigger: `just trigger-pipeline RHEL-12345`
 5. Review agent logs to see decision-making
 
 ## Common Issues & Gotchas
@@ -114,7 +114,7 @@ For detailed deployment info: see [openshift/README.md](openshift/README.md)
 ## Code Changes Checklist
 
 - [ ] Write tests first (especially for tools/git operations)
-- [ ] Run `make check-in-container` — all tests pass
+- [ ] Run `just check-in-container` — all tests pass
 - [ ] Test with `DRY_RUN=true` — don't touch real Jira/git
 - [ ] Use rebase merge (see [CONTRIBUTING.md](CONTRIBUTING.md))
 - [ ] Don't modify `.env`, `.secrets/`, keytab files in PRs
@@ -127,10 +127,10 @@ For detailed deployment info: see [openshift/README.md](openshift/README.md)
 uv sync --extra test
 
 # Run all tests in containers
-make check-in-container
+just check-in-container
 
 # Test single agent
-make run-triage-agent-standalone JIRA_ISSUE=RHEL-12345 DRY_RUN=true MOCK_JIRA=true
+just run-triage-agent RHEL-12345 DRY_RUN=true MOCK_JIRA=true
 
 # Run full pipeline with monitoring
 make start DRY_RUN=true

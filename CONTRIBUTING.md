@@ -28,8 +28,8 @@ only need to clone it once; the tests run entirely offline against the local cop
 ### Running
 
 ```bash
-make run-triage-agent-e2e-tests
-make run-backport-agent-e2e-tests
+just run-triage-agent-e2e-tests
+just run-backport-agent-e2e-tests
 ```
 
 Both targets hardcode `MOCK_JIRA=true` and `DRY_RUN=true`. The mock Jira files are writable,

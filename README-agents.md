@@ -51,14 +51,14 @@ you can use them to work with pre-downloaded jira content instead of real Jira s
 
 Example:
 
-`make run-triage-agent-standalone JIRA_ISSUE=RHEL-15216 MOCK_JIRA=true`
+`just run-triage-agent RHEL-15216 MOCK_JIRA=true`
 
 If used together with `DRY_RUN`, the agents won't edit the Jira files,
 otherwise they will.
 
 Example:
 
-`make run-triage-agent-standalone JIRA_ISSUE=RHEL-15216 DRY_RUN=true MOCK_JIRA=true`
+`just run-triage-agent RHEL-15216 DRY_RUN=true MOCK_JIRA=true`
 
 ## Setup
 
@@ -99,23 +99,23 @@ To be able to access internal RHEL dist-git with your identity, update the `User
 
 ## Running the System
 
-Please do not run `podman-compose up` directly; use the provided Makefile instead.
+Please do not run `podman-compose up` directly; use the provided justfile instead.
 
 ### Full Pipeline (Production)
 ```bash
 # Start all agents and services
-make start
+just start
 
 # With options:
-make start DRY_RUN=true                    # Skip Jira writes and git pushes
-make start AUTO_CHAIN=false                # Disable downstream queue routing (triage only)
-make start DRY_RUN=true AUTO_CHAIN=false   # Combine both
+just start DRY_RUN=true                    # Skip Jira writes and git pushes
+just start AUTO_CHAIN=false                # Disable downstream queue routing (triage only)
+just start DRY_RUN=true AUTO_CHAIN=false   # Combine both
 
 # Process a JIRA issue
-make trigger-pipeline JIRA_ISSUE=RHEL-12345
+just trigger-pipeline RHEL-12345
 
 # Force triage of Y-stream CVEs (normally skipped)
-make trigger-pipeline JIRA_ISSUE=RHEL-12345 FORCE_CVE_TRIAGE=true
+just trigger-pipeline RHEL-12345 FORCE_CVE_TRIAGE=true
 ```
 
 **Environment variables:**
@@ -131,15 +131,15 @@ make trigger-pipeline JIRA_ISSUE=RHEL-12345 FORCE_CVE_TRIAGE=true
 ```bash
 # Test specific agents standalone
 make JIRA_ISSUE=RHEL-12345 run-triage-agent-standalone
-make PACKAGE=httpd VERSION=2.4.62 JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-rebase-agent-standalone
-make PACKAGE=httpd UPSTREAM_PATCHES=https://github.com/... JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-backport-agent-standalone
-make PACKAGE=httpd JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-rebuild-agent-standalone
+just run-rebase-agent c10s httpd 2.4.62 RHEL-12345 c10s "Initial rebase"
+just run-backport-agent c10s httpd https://github.com/... RHEL-12345 c10s "Initial backport"
+just run-rebuild-agent c10s httpd RHEL-12345 c10s "Initial rebuild"
 
 # Or with dry-run
-DRY_RUN=true make JIRA_ISSUE=RHEL-12345 run-triage-agent-standalone
+DRY_RUN=true just run-triage-agent RHEL-12345
 
 # Force triage of a Y-stream CVE
-make JIRA_ISSUE=RHEL-12345 FORCE_CVE_TRIAGE=true run-triage-agent-standalone
+FORCE_CVE_TRIAGE=true just run-triage-agent RHEL-12345
 ```
 
 Use commas to delimit multiple patch/commit URLs in `UPSTREAM_PATCHES`.
@@ -278,6 +278,6 @@ unused columns, so this is generally safe.
 ```bash
 # Setup automatic issue fetching from JIRA
 cp templates/jira-issue-fetcher.env .secrets/jira-issue-fetcher.env
-make build-jira-issue-fetcher
-make run-jira-issue-fetcher
+just build-jira-issue-fetcher
+just run-jira-issue-fetcher
 ```

@@ -89,7 +89,7 @@ Then, use the provided stub pyproject.toml file to set up the development enviro
 
 ```
 uv sync --extra test
-uv run make -f Makefile.tests check
+uv run just check
 ```
 
 You'll also need to have `python3-rpm` installed on the host system -
@@ -104,7 +104,7 @@ to this upstream repository. To include them in your local container builds:
 
 1. Copy the template: `cp -n templates/build.env .env` (or append its contents to your existing `.env` file)
 2. Fill in the internal repo URLs and package names in `.env`
-3. Run `make build` or `podman-compose build` — podman-compose automatically
+3. Run `just build` or `podman-compose build` — podman-compose automatically
    loads `.env` and passes the values as build args to the Containerfiles.
 
 Without `.env`, containers build normally but without any

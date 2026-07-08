@@ -21,10 +21,10 @@ The Makefile automatically sets both safety vars:
 
 ```bash
 # Triage agent E2E tests
-make run-triage-agent-e2e-tests
+just run-triage-agent-e2e-tests
 
 # Backport agent E2E tests
-make run-backport-agent-e2e-tests
+just run-backport-agent-e2e-tests
 ```
 
 #### Manual Execution
@@ -63,5 +63,5 @@ SAFETY CHECK FAILED: E2E tests MUST run with production Jira writes disabled.
 **Do NOT disable the check.** Instead:
 
 1. Set `MOCK_JIRA=true DRY_RUN=true` when invoking pytest
-2. Use `make run-triage-agent-e2e-tests` instead of direct pytest
+2. Use `just run-triage-agent-e2e-tests` instead of direct pytest
 3. Check if your shell has stray env vars overriding the defaults

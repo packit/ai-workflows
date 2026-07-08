@@ -1,6 +1,7 @@
 from string import Template
 
 BRANCH_PREFIX = "automated-package-update"
+ZSTREAM_TARGET_LABEL = "target::zstream"
 
 AGENT_WARNING = (
     "Warning: This is an AI-Generated contribution and may contain mistakes. "

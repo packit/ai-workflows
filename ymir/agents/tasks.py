@@ -13,6 +13,7 @@ from specfile import Specfile
 from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
 from ymir.agents.utils import check_subprocess, mcp_tools, run_subprocess, run_tool
 from ymir.common.base_utils import is_cs_branch
+from ymir.common.config import load_rhel_config
 from ymir.common.merge_queue import (  # noqa: F401 — re-exported for agents and tests
     _CONSOLIDATION_HASH_KEY,
     _consolidation_field_key,
@@ -29,10 +30,29 @@ from ymir.common.models import (
     Task,
 )
 from ymir.common.utils import get_all_sources
+from ymir.common.version_utils import parse_rhel_version
 from ymir.tools.unprivileged.specfile import UpdateReleaseTool
 from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
 
 logger = logging.getLogger(__name__)
+
+
+async def needs_zstream_target_label(dist_git_branch: str, fix_version: str | None) -> bool:
+    """Check if the fix targets a z-stream on an active CentOS Stream.
+
+    Maintenance streams (e.g. c8s / RHEL 8) are excluded — all builds there are
+    z-stream by default, so the label would add no information.
+    """
+    if not fix_version or not is_cs_branch(dist_git_branch):
+        return False
+    parsed = parse_rhel_version(fix_version)
+    if not parsed or not parsed[2]:
+        return False
+
+    config = await load_rhel_config()
+    major = parsed[0]
+    y_streams = config.get("current_y_streams", {})
+    return major in y_streams
 
 
 async def _clone_fedora_dist_git(package: str, destination: Path) -> bool:
@@ -252,13 +272,18 @@ async def commit_push_and_open_mr(
         allow_empty,
     ):
         return None, False
+    tool_kwargs = {
+        "fork_url": fork_url,
+        "title": mr_title,
+        "description": mr_description,
+        "target": dist_git_branch,
+        "source": update_branch,
+    }
+    if labels:
+        tool_kwargs["labels"] = labels
     result = await run_tool(
         "open_merge_request",
-        fork_url=fork_url,
-        title=mr_title,
-        description=mr_description,
-        target=dist_git_branch,
-        source=update_branch,
+        **tool_kwargs,
         available_tools=available_tools,
     )
     mr = OpenMergeRequestResult.model_validate(result)

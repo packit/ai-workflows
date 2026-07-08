@@ -24,7 +24,7 @@ from specfile import Specfile
 import ymir.agents.tasks as tasks
 from ymir.agents.build_agent import create_build_agent
 from ymir.agents.build_agent import get_prompt as get_build_prompt
-from ymir.agents.constants import I_AM_YMIR, mr_description_footer
+from ymir.agents.constants import I_AM_YMIR, ZSTREAM_TARGET_LABEL, mr_description_footer
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
@@ -705,7 +705,12 @@ async def run_workflow(
                     ),
                     available_tools=gateway_tools,
                     commit_only=dry_run,
-                    labels=["ymir_backport"],
+                    labels=["ymir_backport"]
+                    + (
+                        [ZSTREAM_TARGET_LABEL]
+                        if await tasks.needs_zstream_target_label(state.dist_git_branch, state.fix_version)
+                        else []
+                    ),
                 )
             except Exception as e:
                 logger.warning(f"Error committing and opening MR: {e}")

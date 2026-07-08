@@ -19,7 +19,7 @@ from specfile import Specfile
 import ymir.agents.tasks as tasks
 from ymir.agents.build_agent import create_build_agent
 from ymir.agents.build_agent import get_prompt as get_build_prompt
-from ymir.agents.constants import I_AM_YMIR, mr_description_footer
+from ymir.agents.constants import I_AM_YMIR, ZSTREAM_TARGET_LABEL, mr_description_footer
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
@@ -1058,6 +1058,11 @@ async def run_workflow(
                     available_tools=gateway_tools,
                 )
 
+                source_labels = {label for mr in state.all_open_mrs for label in (mr.get("labels") or [])}
+                labels = ["ymir_backport"]
+                if ZSTREAM_TARGET_LABEL in source_labels:
+                    labels.append(ZSTREAM_TARGET_LABEL)
+
                 mr_result_raw = await run_tool(
                     "open_merge_request",
                     fork_url=state.fork_url,
@@ -1065,23 +1070,13 @@ async def run_workflow(
                     description=combined_description,
                     target=dist_git_branch,
                     source=state.update_branch,
+                    labels=labels,
                     available_tools=gateway_tools,
                 )
                 mr_result = json.loads(mr_result_raw) if isinstance(mr_result_raw, str) else mr_result_raw
                 state.merge_request_url = mr_result.get("url", mr_result_raw)
                 state.merge_request_newly_created = mr_result.get("is_new", True)
                 logger.info("Consolidated MR created: %s", state.merge_request_url)
-
-                if state.merge_request_url:
-                    try:
-                        await run_tool(
-                            "add_merge_request_labels",
-                            merge_request_url=state.merge_request_url,
-                            labels=["ymir_backport"],
-                            available_tools=gateway_tools,
-                        )
-                    except Exception as e:
-                        logger.warning("Failed to label consolidated MR: %s", e)
             except Exception as e:
                 logger.error("Failed to create consolidated MR: %s", e)
                 state.consolidation_result = MRConsolidationOutputSchema(

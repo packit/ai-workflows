@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 import aiohttp
+import gitlab
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import (
@@ -321,6 +322,10 @@ class OpenMergeRequestToolInput(BaseModel):
     description: str = Field(description="MR description")
     target: str = Field(description="Target branch (in the original repository)")
     source: str = Field(description="Source branch (in the fork)")
+    labels: list[str] | None = Field(
+        default=None,
+        description="Labels to set on the MR at creation time (atomic, avoids webhook race)",
+    )
 
 
 class OpenMergeRequestTool(
@@ -344,6 +349,25 @@ class OpenMergeRequestTool(
             creator=self,
         )
 
+    @staticmethod
+    def _create_mr(project, title, description, target, source, labels):
+        parameters = {
+            "source_branch": source,
+            "target_branch": target,
+            "title": title,
+            "description": description,
+        }
+        if labels:
+            parameters["labels"] = ",".join(labels)
+        if project.is_fork:
+            parameters["target_project_id"] = project.parent.gitlab_repo.attributes["id"]
+        target_project = project.parent if project.is_fork else project
+        try:
+            raw_mr = project.gitlab_repo.mergerequests.create(parameters)
+        except gitlab.GitlabError as ex:
+            raise GitlabAPIException() from ex
+        return GitlabPullRequest(raw_mr, target_project)
+
     async def _run(
         self,
         tool_input: OpenMergeRequestToolInput,
@@ -355,13 +379,14 @@ class OpenMergeRequestTool(
         description = tool_input.description
         target = tool_input.target
         source = tool_input.source
+        labels = tool_input.labels
         logger.info(f"Connecting to GitLab API to open merge request from fork: {fork_url}")
         project = await asyncio.to_thread(get_project, url=fork_url, token=os.getenv("GITLAB_TOKEN"))
         if not project:
             raise ToolError("Failed to get the specified fork")
         is_new_mr = True
         try:
-            pr = await asyncio.to_thread(project.create_pr, title, description, target, source)
+            pr = await asyncio.to_thread(self._create_mr, project, title, description, target, source, labels)
         except GitlabAPIException as ex:
             logger.info("Gitlab API exception: %s", ex)
             if ex.response_code == 409:

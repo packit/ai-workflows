@@ -10,7 +10,7 @@ from beeai_framework.workflows import Workflow
 from pydantic import Field
 
 import ymir.agents.tasks as tasks
-from ymir.agents.constants import I_AM_YMIR, mr_description_footer
+from ymir.agents.constants import I_AM_YMIR, ZSTREAM_TARGET_LABEL, mr_description_footer
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
@@ -55,6 +55,7 @@ async def main() -> None:
     class State(PackageUpdateState):
         rebuild_success: bool = Field(default=False)
         rebuild_error: str | None = Field(default=None)
+        fix_version: str | None = Field(default=None)
         justification: str | None = Field(default=None)
         triage_summary: str | None = Field(default=None)
         dependency_issue: str | None = Field(default=None)
@@ -67,6 +68,7 @@ async def main() -> None:
         package,
         dist_git_branch,
         jira_issue,
+        fix_version=None,
         justification=None,
         triage_summary=None,
         dependency_issue=None,
@@ -248,7 +250,14 @@ async def main() -> None:
                         available_tools=gateway_tools,
                         commit_only=dry_run,
                         allow_empty=is_empty_commit,
-                        labels=["ymir_rebuild"],
+                        labels=["ymir_rebuild"]
+                        + (
+                            [ZSTREAM_TARGET_LABEL]
+                            if await tasks.needs_zstream_target_label(
+                                state.dist_git_branch, state.fix_version
+                            )
+                            else []
+                        ),
                     )
                     state.rebuild_success = True
                 except Exception as e:
@@ -300,6 +309,7 @@ async def main() -> None:
                     package=package,
                     dist_git_branch=dist_git_branch,
                     jira_issue=jira_issue,
+                    fix_version=fix_version,
                     justification=justification,
                     triage_summary=triage_summary,
                     dependency_issue=dependency_issue,
@@ -327,6 +337,7 @@ async def main() -> None:
                 package=package,
                 dist_git_branch=branch,
                 jira_issue=jira_issue,
+                fix_version=os.getenv("FIX_VERSION"),
                 justification=os.getenv("JUSTIFICATION", None),
                 triage_summary=os.getenv("TRIAGE_SUMMARY", None),
                 dependency_issue=dependency_issue,
@@ -448,6 +459,7 @@ async def main() -> None:
                         package=rebuild_data.package,
                         dist_git_branch=dist_git_branch,
                         jira_issue=rebuild_data.jira_issue,
+                        fix_version=rebuild_data.fix_version,
                         justification=rebuild_data.justification,
                         triage_summary=rebuild_data.triage_summary,
                         dependency_issue=rebuild_data.dependency_issue,

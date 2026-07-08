@@ -69,6 +69,7 @@ _REPRODUCER_MCP_TOOLS = [
     "get_patch_from_url",
     "get_maintainer_rules",
     "clone_repository",
+    "list_testing_farm_composes",
     "reserve_testing_farm_machine",
     "get_testing_farm_reservation_details",
     "cancel_testing_farm_request",

@@ -219,6 +219,42 @@ run-jira-issue-fetcher:
 build-jira-issue-fetcher:
 	$(COMPOSE) --profile manual build jira-issue-fetcher
 
+.PHONY: build-mr-cleanup
+build-mr-cleanup:
+	$(COMPOSE) --profile manual build mr-cleanup
+
+# Usage:
+#   make run-mr-cleanup-dry-run    # dry run, lists what would be closed
+#   make run-mr-cleanup            # live run, closes MRs
+#   TARGET_MR=<url> make run-mr-cleanup-dry-run   # dry run on single MR
+#   TARGET_MR=<url> make run-mr-cleanup           # live run on single MR
+define mr-cleanup-check-env
+	@if [ ! -f .secrets/mr-cleanup.env ]; then \
+		echo "Error: .secrets/mr-cleanup.env not found"; \
+		echo "Copy the template: cp templates/mr-cleanup.env .secrets/mr-cleanup.env"; \
+		echo "Then edit it with your credentials"; \
+		exit 1; \
+	fi
+endef
+
+.PHONY: run-mr-cleanup-dry-run
+run-mr-cleanup-dry-run:
+	$(mr-cleanup-check-env)
+	@echo "Running MR Cleanup (dry run)..."
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile manual run --rm \
+		-e DRY_RUN=true \
+		$(if $(TARGET_MR),-e TARGET_MR=$(TARGET_MR)) \
+		mr-cleanup
+
+.PHONY: run-mr-cleanup
+run-mr-cleanup:
+	$(mr-cleanup-check-env)
+	@echo "Running MR Cleanup (LIVE — will close MRs and post comments)..."
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile manual run --rm \
+		-e DRY_RUN=false \
+		$(if $(TARGET_MR),-e TARGET_MR=$(TARGET_MR)) \
+		mr-cleanup
+
 
 
 

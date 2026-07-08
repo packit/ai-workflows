@@ -70,15 +70,20 @@ a backport that won't actually fix the shipped RPM.
        # <link to JIRA issue the patch is fixing>
        # <link to upstream commit or pull request the patch is backporting>
        PatchN: <PACKAGE>-<VERSION>-<JIRA_ISSUE>.patch
-     For a CVE issue:
+     For a single CVE issue:
        # <link to JIRA issue the patch is fixing>
        # <link to upstream commit or pull request the patch is backporting>
        PatchN: <PACKAGE>-<VERSION>-<CVE_ID>.patch
+     For a multi-CVE issue (more than one CVE):
+       # <link to JIRA issue the patch is fixing>
+       # <link to upstream commit or pull request the patch is backporting>
+       PatchN: <PACKAGE>-<VERSION>-<JIRA_ISSUE>.patch
+       (use Jira issue instead of CVE IDs to avoid excessively long filenames)
    where <VERSION> is the upstream version from the spec file's Version field.
 
 1. Knowing Jira issue <JIRA_ISSUE>, CVE ID(s) <CVE_ID> or both, use the `git_log_search` tool to check
-   in the dist-git repository whether each issue/CVE has already been resolved. If it has,
-   end the process with `success=True` and `status="Backport already applied"`.
+   in the dist-git repository whether each issue/CVE has already been resolved. If all of them
+   have been resolved, end the process with `success=True` and `status="Backport already applied"`.
    Note: <CVE_ID> may contain multiple CVE IDs when the Jira issue covers multiple CVEs.
    The `git_log_search` tool handles multiple CVE IDs automatically.
 

@@ -1188,6 +1188,34 @@ async def test_push_stale_triaged_backport_reenqueued(fetcher, mock_redis_contex
 
 
 @pytest.mark.asyncio
+async def test_push_stale_label_skipped_when_still_queued_in_redis(fetcher, mock_redis_context):
+    """Regression test: a stale-looking in-flight label whose task is still
+    genuinely queued in Redis (e.g. the SIGTERM handler already re-pushed
+    it, or a downstream queue is simply backed up) must NOT be flipped to
+    ymir_retry_needed and re-enqueued - doing so would bypass the
+    existing_keys dedup guard and start a second, concurrent agent run on
+    top of the one already queued."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "STUCK-QUEUED",
+            "fields": {"labels": [JiraLabels.TRIAGED_BACKPORT.value], "updated": _STALE_UPDATED},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value({"STUCK-QUEUED"})
+    )
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+    mock_redis.should_receive("lpush").never()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 0
+
+
+@pytest.mark.asyncio
 async def test_push_fresh_triage_in_progress_still_skipped(fetcher, mock_redis_context):
     """Non-stale ymir_triage_in_progress: unchanged pre-existing behavior —
     skip and don't touch Jira or Redis."""

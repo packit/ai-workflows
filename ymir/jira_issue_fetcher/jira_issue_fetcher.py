@@ -605,7 +605,20 @@ class JiraIssueFetcher:
                 # payload (package, patch_urls, target_branch, etc.) only ever
                 # existed in the now-unrecoverable Redis message.
                 stale_label = self._find_stale_in_flight_label(issue, ymir_labels)
-                if stale_label:
+                if stale_label and issue_key in existing_keys:
+                    # The label looks abandoned, but its payload is still sitting in a
+                    # live Redis queue (e.g. the SIGTERM handler already re-pushed it,
+                    # or a downstream queue is simply backed up — ymir_triaged_backport
+                    # et al. legitimately persist for as long as the task waits to be
+                    # picked up). Flipping to ymir_retry_needed here would bypass the
+                    # existing_keys guard below and LPUSH a second, duplicate task on
+                    # top of the one already queued. Leave it - it'll drain naturally,
+                    # and if it's genuinely stuck the next sweep will re-check.
+                    logger.info(
+                        f"Issue {issue_key} has stale {stale_label} but its task is "
+                        f"still queued in Redis - not treating as abandoned"
+                    )
+                elif stale_label:
                     logger.warning(
                         f"Issue {issue_key} has stale {stale_label} (no update in "
                         f">{self.stale_label_threshold_hours}h, no other Ymir label) - "

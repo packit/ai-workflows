@@ -125,6 +125,27 @@ def get_maintenance_majors(rhel_config: dict) -> set[str]:
     return set(current_z_streams.keys()) - set(current_y_streams.keys())
 
 
+async def get_maintenance_rhel_branch(branch: str) -> str | None:
+    """Get internal maintenance phase RHEL branch corresponding to the given CentOS Stream branch, if any."""
+    from ymir.common.base_utils import is_cs_branch
+    from ymir.common.config import load_rhel_config
+
+    if not is_cs_branch(branch):
+        return None
+    if not (parsed := parse_branch_name(branch)):
+        return None
+    major, _ = parsed
+
+    config = await load_rhel_config()
+    if major not in get_maintenance_majors(config):
+        return None
+    z_stream = config.get("current_z_streams", {}).get(major)
+    if not z_stream or not (z_parsed := parse_rhel_version(z_stream)):
+        return None
+    z_major, z_minor, _ = z_parsed
+    return construct_internal_branch_name(z_major, z_minor)
+
+
 def get_fix_version_variants(fix_version: str) -> list[str]:
     """
     Return both Y-stream and Z-stream forms for a given fixVersion.

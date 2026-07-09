@@ -425,6 +425,13 @@ async def test_update_release(
         mock_get_latest_candidate_build
     )
 
+    async def mock_get_maintenance_rhel_branch(_):
+        return None
+
+    flexmock(specfile_tools).should_receive("get_maintenance_rhel_branch").replace_with(
+        mock_get_maintenance_rhel_branch
+    )
+
     tool = UpdateReleaseTool()
 
     async def run_and_check(spec, expected_release, error=False):
@@ -507,6 +514,62 @@ async def test_update_release(
             minimal_spec,
             "0%{?dist}.1" if rebase_in_current_stream else "5%{?alphatag:.%{alphatag}}%{?dist}.10",
         )
+
+
+@pytest.mark.parametrize(
+    "rebase_in_current_stream",
+    [False, True],
+)
+@pytest.mark.asyncio
+async def test_update_release_maintenance_cs_branch(
+    rebase_in_current_stream,
+    minimal_spec,
+    autorelease_spec,
+    release_macro_spec,
+):
+    """Test that CentOS Stream branches for maintenance RHEL get Z-stream release bumping."""
+    package = "test"
+    dist_git_branch = "c8s"
+
+    async def mock_get_latest_candidate_build(package, dist_git_branch_arg):
+        return EVR(version="0.1", release="5.elX"), "dummy_ref"
+
+    flexmock(specfile_tools).should_receive("get_latest_candidate_build").replace_with(
+        mock_get_latest_candidate_build
+    )
+
+    async def mock_get_maintenance_rhel_branch(_):
+        return "rhel-8.10.0"
+
+    flexmock(specfile_tools).should_receive("get_maintenance_rhel_branch").replace_with(
+        mock_get_maintenance_rhel_branch
+    )
+
+    tool = UpdateReleaseTool()
+
+    async def run_and_check(spec, expected_release):
+        output = await tool.run(
+            input=UpdateReleaseToolInput(
+                spec=spec,
+                package=package,
+                dist_git_branch=dist_git_branch,
+                rebase=rebase_in_current_stream,
+            )
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+        result = output.result
+        assert result.startswith("Successfully")
+        release_line = next(line for line in spec.read_text().splitlines() if line.startswith("Release:"))
+        assert release_line == f"Release:        {expected_release}"
+
+    await run_and_check(minimal_spec, "0%{?dist}.1" if rebase_in_current_stream else "5%{?dist}.1")
+    await run_and_check(
+        autorelease_spec,
+        "0%{?dist}.%{autorelease -n}" if rebase_in_current_stream else "5%{?dist}.%{autorelease -n}",
+    )
+    await run_and_check(
+        release_macro_spec,
+        "0%{?dist}.1" if rebase_in_current_stream else "5%{?dist}.1",
+    )
 
 
 @pytest.mark.parametrize(
@@ -612,6 +675,13 @@ async def test_update_release_abandon_autorelease_non_zstream(autorelease_spec):
     """Test that abandon_autorelease has no effect on non-Z-stream branches."""
     package = "test"
     dist_git_branch = "c10s"
+
+    async def mock_get_maintenance_rhel_branch(_):
+        return None
+
+    flexmock(specfile_tools).should_receive("get_maintenance_rhel_branch").replace_with(
+        mock_get_maintenance_rhel_branch
+    )
 
     tool = UpdateReleaseTool()
 

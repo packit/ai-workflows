@@ -23,6 +23,7 @@ from specfile.value_parser import (
 )
 
 from ymir.common.utils import get_absolute_path, get_all_patches, get_latest_candidate_build
+from ymir.common.version_utils import get_maintenance_rhel_branch
 from ymir.tools.base import CloneableTool as Tool
 
 logger = logging.getLogger(__name__)
@@ -192,9 +193,13 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
     description = """
     Updates the value of the `Release` field in the specified spec file.
 
-    If branch is a Z-Stream branch (rhel-X.Y or rhel-X.Y.Z), release is updated in the following way:
-        - base release is established - from the latest current stream candidate build unless the latest
-          higher stream (Y + 1) candidate build shares the same version but has a higher release
+    If branch is a Z-Stream branch (rhel-X.Y or rhel-X.Y.Z) or a CentOS Stream branch for a
+    RHEL version in maintenance phase (e.g. c8s), release is updated in the following way:
+        - base release is established - from the latest candidate build of the current stream (for
+          CentOS Stream branches corresponding to a RHEL version in maintenance phase, the internal
+          RHEL branch is used for the candidate build lookup), unless the latest higher stream (Y + 1)
+          candidate build shares the same version but has a higher release (not applicable to
+          maintenance phase RHEL as there is no higher stream)
         - if %autorelease is present in the current Release:
             - if abandon_autorelease is True, %autorelease is removed and Release is set to
               "N%{?dist}.1" (or "0%{?dist}.1" for rebase), using a plain numeric Z-stream counter
@@ -293,7 +298,7 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         package: str,
         rebase: bool,
         current_stream_branch: str,
-        higher_stream_branch: str,
+        higher_stream_branch: str | None = None,
         abandon_autorelease: bool = False,
     ) -> None:
         def extract_numeric_release(evr):
@@ -313,18 +318,25 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                     return 0
             return 0
 
-        (latest_current_stream_build, _), (latest_higher_stream_build, _) = await asyncio.gather(
-            get_latest_candidate_build(package, current_stream_branch),
-            get_latest_candidate_build(package, higher_stream_branch),
-        )
-        base_build = (
-            latest_current_stream_build
-            if EVR(epoch=latest_current_stream_build.epoch, version=latest_current_stream_build.version)
-            != EVR(epoch=latest_higher_stream_build.epoch, version=latest_higher_stream_build.version)
-            or extract_numeric_release(latest_current_stream_build)
-            > extract_numeric_release(latest_higher_stream_build)
-            else latest_higher_stream_build
-        )
+        if higher_stream_branch:
+            (latest_current_stream_build, _), (latest_higher_stream_build, _) = await asyncio.gather(
+                get_latest_candidate_build(package, current_stream_branch),
+                get_latest_candidate_build(package, higher_stream_branch),
+            )
+            base_build = latest_current_stream_build
+            if EVR(
+                epoch=latest_higher_stream_build.epoch,
+                version=latest_higher_stream_build.version,
+            ) == EVR(
+                epoch=latest_current_stream_build.epoch,
+                version=latest_current_stream_build.version,
+            ) and extract_numeric_release(latest_higher_stream_build) >= extract_numeric_release(
+                latest_current_stream_build
+            ):
+                base_build = latest_higher_stream_build
+        else:
+            latest_current_stream_build, _ = await get_latest_candidate_build(package, current_stream_branch)
+            base_build = latest_current_stream_build
         base_release = extract_numeric_release(base_build)
         with Specfile(spec_path) as spec:
             current_release = spec.raw_release
@@ -386,17 +398,21 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
     ) -> StringToolOutput:
         spec_path = get_absolute_path(tool_input.spec, self)
         try:
-            if not (higher_stream_branch := self._get_higher_stream_branch(tool_input.dist_git_branch)):
-                await self._bump_or_reset_release(spec_path, tool_input.rebase)
-            else:
+            higher_stream_branch = self._get_higher_stream_branch(tool_input.dist_git_branch)
+            maintenance_rhel_branch = not higher_stream_branch and await get_maintenance_rhel_branch(
+                tool_input.dist_git_branch
+            )
+            if higher_stream_branch or maintenance_rhel_branch:
                 await self._set_zstream_release(
                     spec_path,
                     tool_input.package,
                     tool_input.rebase,
-                    tool_input.dist_git_branch,
+                    maintenance_rhel_branch or tool_input.dist_git_branch,
                     higher_stream_branch,
                     abandon_autorelease=tool_input.abandon_autorelease,
                 )
+            else:
+                await self._bump_or_reset_release(spec_path, tool_input.rebase)
         except Exception as e:
             raise ToolError(f"Failed to update release: {e}") from e
         return StringToolOutput(result=f"Successfully updated release in {spec_path}")

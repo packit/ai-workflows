@@ -1204,7 +1204,9 @@ def _build_consolidated_description(
 
     parts = [
         "## Consolidated Backport MR\n",
-        f"This MR consolidates multiple backport merge requests {I_AM_YMIR}\n",
+        f"This MR consolidates multiple backport merge requests {I_AM_YMIR} "
+        "Learn more about [MR consolidation and configuration of its behavior]"
+        "(https://ymir.pages.redhat.com/docs/agents/mr-consolidation/).\n",
     ]
 
     if jira_issues:

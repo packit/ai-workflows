@@ -256,6 +256,17 @@ async def test_clone_repository_rejects_path_traversal(mock_git_repo_basepath):
 
 
 @pytest.mark.asyncio
+async def test_clone_repository_rejects_basepath_root(mock_git_repo_basepath):
+    with pytest.raises(ToolError, match="must be under"):
+        await CloneRepositoryTool().run(
+            input={
+                "repository": "https://gitlab.com/redhat/rhel/rpms/bash",
+                "clone_path": mock_git_repo_basepath,
+            }
+        )
+
+
+@pytest.mark.asyncio
 async def test_clone_repository_accepts_path_inside_basepath(mock_git_repo_basepath):
     valid_path = mock_git_repo_basepath / "RHEL-12345" / "bash"
 

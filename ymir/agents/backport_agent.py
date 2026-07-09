@@ -45,7 +45,7 @@ from ymir.agents.utils import (
     run_tool,
     wrap_details,
 )
-from ymir.common.base_utils import fix_await, redis_client, run_task_loop
+from ymir.common.base_utils import fix_await, install_shutdown_handler, redis_client, run_task_loop
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.logging_setup import configure_logging, current_jira_issue, get_trajectory_writeable
 from ymir.common.mock_repos import get_mock_local_tool_env
@@ -1027,11 +1027,14 @@ async def main() -> None:
                         ).model_dump_json(),
                     )
 
+        shutdown_event = asyncio.Event()
+        install_shutdown_handler(asyncio.get_running_loop(), shutdown_event)
         await run_task_loop(
             redis,
             [backport_queue_todo, backport_queue],
             process_task,
             max_concurrent=max_concurrent_tasks,
+            shutdown_event=shutdown_event,
         )
 
 

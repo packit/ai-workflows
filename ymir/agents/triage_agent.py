@@ -902,7 +902,7 @@ async def main() -> None:
                         task,
                         input.issue,
                         "triage",
-                        f"Issue is already **{current_status}** — skipping triage.",
+                        f"Issue is already **{current_status}** — skipping processing.",
                         user_triggered=True,
                         dry_run=dry_run,
                     )

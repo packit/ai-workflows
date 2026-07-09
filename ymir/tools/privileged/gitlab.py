@@ -432,7 +432,9 @@ class GetInternalRhelBranchesTool(
 class CloneRepositoryToolInput(BaseModel):
     repository: str = Field(description="Repository to clone")
     branch: str | None = Field(default=None, description="Branch to clone. If omitted, all refs are fetched.")
-    clone_path: AbsolutePath = Field(description="Absolute path where to clone the repository")
+    clone_path: AbsolutePath = Field(
+        description="Absolute path under the shared /git-repos volume where to clone the repository"
+    )
 
 
 class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringToolOutput]):
@@ -460,6 +462,13 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
         repository = tool_input.repository
         branch = tool_input.branch
         clone_path = tool_input.clone_path
+
+        basepath = Path(os.getenv("GIT_REPO_BASEPATH", "/git-repos")).resolve()
+        resolved = clone_path.resolve()
+        if not resolved.is_relative_to(basepath):
+            raise ToolError(f"clone_path must be under {basepath} (the shared volume). Got: {clone_path}")
+        clone_path = resolved
+
         await clean_stale_repositories()
 
         auth_args = _get_git_auth_args(repository)

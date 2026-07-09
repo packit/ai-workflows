@@ -102,22 +102,13 @@ def collect_credentials() -> dict:
 
     creds = {}
 
-    creds["JIRA_URL"] = prompt_value(
-        "Jira URL", env_var="JIRA_URL",
-        default="https://redhat.atlassian.net"
-    )
+    creds["JIRA_URL"] = prompt_value("Jira URL", env_var="JIRA_URL", default="https://redhat.atlassian.net")
 
-    creds["JIRA_EMAIL"] = prompt_value(
-        "Jira email", env_var="JIRA_EMAIL"
-    )
+    creds["JIRA_EMAIL"] = prompt_value("Jira email", env_var="JIRA_EMAIL")
 
-    creds["JIRA_TOKEN"] = prompt_value(
-        "Jira API token", env_var="JIRA_TOKEN", secret=True
-    )
+    creds["JIRA_TOKEN"] = prompt_value("Jira API token", env_var="JIRA_TOKEN", secret=True)
 
-    creds["GITLAB_TOKEN"] = prompt_value(
-        "GitLab personal access token", env_var="GITLAB_TOKEN", secret=True
-    )
+    creds["GITLAB_TOKEN"] = prompt_value("GitLab personal access token", env_var="GITLAB_TOKEN", secret=True)
 
     print("\n  Kerberos configuration:")
     klist_result = subprocess.run(["klist"], capture_output=True)
@@ -129,8 +120,7 @@ def collect_credentials() -> dict:
     use_keytab = input("  Do you have a keytab file for automated kinit? [y/N]: ").strip().lower() == "y"
     if use_keytab:
         creds["KEYTAB_FILE"] = prompt_value(
-            "Keytab file path", env_var="KEYTAB_FILE",
-            default=str(Path.home() / ".secrets" / "keytab")
+            "Keytab file path", env_var="KEYTAB_FILE", default=str(Path.home() / ".secrets" / "keytab")
         )
 
     krb5cc = os.environ.get("KRB5CCNAME")
@@ -173,17 +163,29 @@ def install_venv():
 
     pip = str(VENV_PATH / "bin" / "pip")
     print("\n=> Installing ymir-common...")
-    run([pip, "install", "--upgrade",
-         "git+https://github.com/packit/ai-workflows.git#subdirectory=ymir/common"])
+    run(
+        [
+            pip,
+            "install",
+            "--upgrade",
+            "git+https://github.com/packit/ai-workflows.git#subdirectory=ymir/common",
+        ]
+    )
 
     print("\n=> Installing ymir-tools...")
-    run([pip, "install", "--upgrade",
-         "git+https://github.com/packit/ai-workflows.git#subdirectory=ymir/tools"])
+    run(
+        [
+            pip,
+            "install",
+            "--upgrade",
+            "git+https://github.com/packit/ai-workflows.git#subdirectory=ymir/tools",
+        ]
+    )
 
     priv_gw = VENV_PATH / "bin" / "ymir-privileged-gateway"
     unpriv_gw = VENV_PATH / "bin" / "ymir-unprivileged-gateway"
     if priv_gw.exists() and unpriv_gw.exists():
-        print(f"\n=> Gateways installed:")
+        print("\n=> Gateways installed:")
         print(f"   Privileged:   {priv_gw}")
         print(f"   Unprivileged: {unpriv_gw}")
     else:
@@ -196,7 +198,7 @@ def write_mcp_config(client: str, creds: dict):
 
     priv_env = {"MCP_TRANSPORT": "stdio"}
     for key in ("GITLAB_TOKEN", "JIRA_URL", "JIRA_EMAIL", "JIRA_TOKEN", "KRB5CCNAME", "KEYTAB_FILE"):
-        if key in creds and creds[key]:
+        if creds.get(key):
             priv_env[key] = creds[key]
 
     unpriv_env = {
@@ -277,12 +279,12 @@ def main():
     print(f"\n  Skills:     {CLIENT_SKILLS_DIRS[client]}")
     print(f"  Venv:       {VENV_PATH}")
     print(f"  MCP config: {CLIENT_MCP_CONFIG_PATHS[client]}")
-    print(f"\n  Next steps:")
+    print("\n  Next steps:")
     if "KEYTAB_FILE" not in creds:
-        print(f"  1. Run 'kinit <your-kerberos-id>@IPA.REDHAT.COM'")
+        print("  1. Run 'kinit <your-kerberos-id>@IPA.REDHAT.COM'")
     print(f"  2. Restart your {client} client")
-    print(f"  3. Verify MCP servers are connected (in Cursor: check MCP panel)")
-    print(f"  4. Try: 'Use the triage skill with jira_issue=RHEL-12345'")
+    print("  3. Verify MCP servers are connected (in Cursor: check MCP panel)")
+    print("  4. Try: 'Use the triage skill with jira_issue=RHEL-12345'")
 
 
 if __name__ == "__main__":

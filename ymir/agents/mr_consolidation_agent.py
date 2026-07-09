@@ -401,13 +401,91 @@ async def run_workflow(
                 if not fetched:
                     raise RuntimeError(f"Could not fetch branch {branch_name} from any remote")
 
-            for branch_name in candidate_branches:
-                _, diff_out, _ = await run_subprocess(
+            next_step = "per_commit_flow" if release_strategy == "per_commit" else "run_consolidation_agent"
+
+            if not state.mr_branches:
+                all_mrs = state.all_open_mrs
+                _, target_head, _ = await run_subprocess(
+                    ["git", "rev-parse", dist_git_branch],
+                    cwd=state.local_clone,
+                    env=git_env,
+                )
+                target_head = (target_head or "").strip()
+
+                current_mrs = []
+                for mr in all_mrs:
+                    branch_name = mr["source_branch"]
+                    _, merge_base, _ = await run_subprocess(
+                        ["git", "merge-base", dist_git_branch, branch_name],
+                        cwd=state.local_clone,
+                        env=git_env,
+                    )
+                    merge_base = (merge_base or "").strip()
+                    if merge_base == target_head:
+                        current_mrs.append(mr)
+                    else:
+                        logger.warning(
+                            "Skipping stale MR '%s' (%s): based on %s, current %s HEAD is %s",
+                            mr["title"],
+                            mr["url"],
+                            merge_base[:12] or "???",
+                            dist_git_branch,
+                            target_head[:12],
+                        )
+
+                if len(current_mrs) < 2:
+                    logger.info(
+                        "Fewer than 2 MRs share the current %s HEAD, nothing to consolidate",
+                        dist_git_branch,
+                    )
+                    state.consolidation_result = MRConsolidationOutputSchema(
+                        success=True,
+                        status="Fewer than 2 MRs based on current HEAD; nothing to do.",
+                    )
+                    return Workflow.END
+
+                oldest_two = current_mrs[:2]
+                state.mr_urls = [mr["url"] for mr in oldest_two]
+                state.mr_branches = [mr["source_branch"] for mr in oldest_two]
+                state.mr_titles = [mr["title"] for mr in oldest_two]
+                state.mr_descriptions = [mr.get("description", "") for mr in oldest_two]
+
+                all_jira = []
+                for mr in oldest_two:
+                    all_jira.extend(_extract_jira_issues_from_description(mr.get("description", "")))
+                state.jira_issues_collected = list(set(all_jira))
+                state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else package
+
+                state.current_mrs_count = len(current_mrs)
+
+                logger.info(
+                    "Selected MRs for consolidation (same HEAD): %s",
+                    [mr["url"] for mr in oldest_two],
+                )
+
+            for branch_name in state.mr_branches:
+                exit_code, diff_out, diff_err = await run_subprocess(
                     ["git", "diff", "--name-only", "--diff-filter=A", f"{dist_git_branch}...{branch_name}"],
                     cwd=state.local_clone,
                     env=git_env,
                 )
-                new_patches = [f for f in diff_out.strip().splitlines() if f.endswith(".patch")]
+                if exit_code != 0:
+                    err_msg = (diff_err or "").strip()
+                    logger.error(
+                        "git diff failed for %s...%s (exit %d): %s",
+                        dist_git_branch,
+                        branch_name,
+                        exit_code,
+                        err_msg,
+                    )
+                    state.consolidation_result = MRConsolidationOutputSchema(
+                        success=False,
+                        status="Failed to diff branch",
+                        error=f"git diff {dist_git_branch}...{branch_name} "
+                        f"failed (exit {exit_code}): {err_msg}",
+                    )
+                    return "handle_failure"
+                new_patches = [f for f in (diff_out or "").strip().splitlines() if f.endswith(".patch")]
                 if new_patches:
                     state.patches_per_mr[branch_name] = new_patches
             logger.info("Per-MR patch mapping: %s", state.patches_per_mr)

@@ -287,7 +287,7 @@ async def commit_push_and_open_mr(
         available_tools=available_tools,
     )
     mr = OpenMergeRequestResult.model_validate(result)
-    if mr.url and labels:
+    if not mr.is_new_mr and mr.url and labels:
         try:
             await run_tool(
                 "add_merge_request_labels",

@@ -1,6 +1,8 @@
 import pytest
+from flexmock import flexmock
 
 from ymir.common.version_utils import (
+    get_maintenance_rhel_branch,
     is_older_zstream,
     parse_branch_name,
     parse_rhel_version,
@@ -134,4 +136,36 @@ async def test_is_older_zstream(version_or_branch, expected):
         "10": "rhel-10.1.z",
     }
     result = await is_older_zstream(version_or_branch, CURRENT_Z_STREAMS)
+    assert result == expected
+
+
+RHEL_CONFIG = {
+    "current_y_streams": {"9": "rhel-9.8", "10": "rhel-10.2"},
+    "current_z_streams": {"8": "rhel-8.10.z", "9": "rhel-9.7.z", "10": "rhel-10.1.z"},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "branch, expected",
+    [
+        ("c8s", "rhel-8.10.0"),
+        ("c9s", None),
+        ("c10s", None),
+        ("rhel-8.10.0", None),
+        ("rhel-8-main", None),
+        ("rhel-9.7.0", None),
+        ("rhel-10-main", None),
+        ("invalid", None),
+        ("", None),
+    ],
+)
+async def test_get_maintenance_rhel_branch(branch, expected):
+    from ymir.common import config
+
+    async def mock_load_rhel_config():
+        return RHEL_CONFIG
+
+    flexmock(config).should_receive("load_rhel_config").replace_with(mock_load_rhel_config)
+    result = await get_maintenance_rhel_branch(branch)
     assert result == expected

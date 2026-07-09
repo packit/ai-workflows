@@ -4,6 +4,7 @@ from pathlib import Path
 
 import gitlab
 import pytest
+from beeai_framework.tools import ToolError
 from flexmock import flexmock
 from ogr.abstract import PRStatus
 from ogr.exceptions import GitlabAPIException
@@ -224,6 +225,51 @@ async def test_clone_repository(mock_git_repo_basepath):
     result = (
         await CloneRepositoryTool().run(
             input={"repository": repository, "branch": branch, "clone_path": clone_path}
+        )
+    ).result
+    assert result.startswith("Successfully")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        Path("/tmp/bash"),
+        Path("/var/lib/bash"),
+    ],
+    ids=["outside-base", "unrelated-absolute"],
+)
+async def test_clone_repository_rejects_path_outside_basepath(mock_git_repo_basepath, bad_path):
+    with pytest.raises(ToolError, match="must be under"):
+        await CloneRepositoryTool().run(
+            input={"repository": "https://gitlab.com/redhat/rhel/rpms/bash", "clone_path": bad_path}
+        )
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_rejects_path_traversal(mock_git_repo_basepath):
+    traversal_path = mock_git_repo_basepath / ".." / "tmp" / "bash"
+    with pytest.raises(ToolError, match="must be under"):
+        await CloneRepositoryTool().run(
+            input={"repository": "https://gitlab.com/redhat/rhel/rpms/bash", "clone_path": traversal_path}
+        )
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_accepts_path_inside_basepath(mock_git_repo_basepath):
+    valid_path = mock_git_repo_basepath / "RHEL-12345" / "bash"
+
+    async def create_subprocess_exec(cmd, *args, **kwargs):
+        async def wait():
+            return 0
+
+        return flexmock(wait=wait)
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+
+    result = (
+        await CloneRepositoryTool().run(
+            input={"repository": "https://gitlab.com/redhat/rhel/rpms/bash", "clone_path": valid_path}
         )
     ).result
     assert result.startswith("Successfully")

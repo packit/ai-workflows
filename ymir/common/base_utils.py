@@ -71,11 +71,14 @@ async def _race_shutdown(
     shutdown_event: asyncio.Event,
     *,
     cancel_on_shutdown: bool,
-) -> tuple[bool, object]:
+) -> tuple[bool, object, asyncio.Task | None]:
     """Race `coro` against `shutdown_event`.
 
-    Returns `(True, result)` if `coro` finished first, or `(False, None)`
-    if shutdown fired first.
+    Returns `(True, result, None)` if `coro` finished first.
+
+    If shutdown fires first: returns `(False, None, None)` when
+    `cancel_on_shutdown=True`, or `(False, None, work_task)` when
+    `cancel_on_shutdown=False` — see below.
 
     `cancel_on_shutdown` controls what happens to `coro` when shutdown
     wins: pure in-process awaitables (`Semaphore.acquire`, `Event.wait`)
@@ -85,10 +88,10 @@ async def _race_shutdown(
     in a `finally`. Cancelling mid-read risks a stale response sitting on
     that connection, which the next command drawn from the pool (e.g. our
     own re-push RPUSH calls on shutdown) could read instead of its own.
-    So for live I/O, `coro` is abandoned instead via a done-callback that
-    only silences an "exception was never retrieved" warning if it
-    eventually errors out on its own; `asyncio.run()`'s teardown cancels
-    it for real once nothing else needs the connection pool.
+    So for live I/O, `coro` is left running and handed back to the caller
+    as `work_task` instead: if it eventually returns a real task (rather
+    than timing out with `None`), the caller must still account for it
+    (e.g. re-push it) rather than silently letting the result vanish.
     """
     work_task = asyncio.create_task(coro)
     stop_task = asyncio.create_task(shutdown_event.wait())
@@ -99,14 +102,13 @@ async def _race_shutdown(
             work_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await work_task
-        else:
-            work_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-        return False, None
+            return False, None, None
+        return False, None, work_task
 
     with contextlib.suppress(asyncio.CancelledError):
         stop_task.cancel()
         await stop_task
-    return True, work_task.result()
+    return True, work_task.result(), None
 
 
 def install_shutdown_handler(
@@ -141,11 +143,18 @@ async def run_task_loop(
     On `shutdown_event`, stops pulling new tasks, cancels whatever is
     still in flight, and re-pushes their original payloads back to the
     queues they came from via RPUSH (tail — next to be popped by BRPOP)
-    so no work is silently dropped. There's no grace period: task
-    processing runs for minutes (sometimes hours, e.g. build polling), so
-    waiting for in-flight work to finish naturally would rarely succeed
-    and just delays recovery. Callers that can tolerate losing work
-    outright can simply not pass `shutdown_event`.
+    so no work is silently dropped. There's no grace period for that:
+    task processing runs for minutes (sometimes hours, e.g. build
+    polling), so waiting for in-flight work to finish naturally would
+    rarely succeed and just delays recovery. Callers that can tolerate
+    losing work outright can simply not pass `shutdown_event`.
+
+    A poll (BRPOP or `poll_fn`) already in flight when shutdown fires is
+    a different story: it's abandoned rather than cancelled (see
+    `_race_shutdown`'s docstring), but it's bounded by `poll_timeout` and
+    can still return a real task once it resolves. That result is waited
+    for and re-pushed too, so a task isn't silently consumed from Redis
+    and dropped just because it arrived a moment after shutdown.
     """
     if max_concurrent < 1:
         raise ValueError("max_concurrent must be at least 1")
@@ -181,6 +190,7 @@ async def run_task_loop(
         return await fix_await(redis_conn.brpop(queues, timeout=poll_timeout))
 
     actual_poll = poll_fn or _default_poll
+    orphan_poll_task: asyncio.Task | None = None
 
     while not shutdown_event.is_set():
         # Race the semaphore acquire against shutdown too — not just the
@@ -190,7 +200,7 @@ async def run_task_loop(
         # would block forever waiting for a slot that never frees up
         # naturally, and the loop would never reach the shutdown check at
         # all: SIGTERM would fire and nothing would happen.
-        acquired, _ = await _race_shutdown(sem.acquire(), shutdown_event, cancel_on_shutdown=True)
+        acquired, _, _ = await _race_shutdown(sem.acquire(), shutdown_event, cancel_on_shutdown=True)
         if not acquired:
             break
         if shutdown_event.is_set():
@@ -200,8 +210,12 @@ async def run_task_loop(
         # Race the poll against shutdown so we don't block on BRPOP (or a
         # custom poll_fn) after shutdown has been requested. Live I/O, so
         # cancel_on_shutdown=False — see _race_shutdown's docstring for
-        # why cancelling a live Redis call mid-flight is unsafe.
-        got_result, result = await _race_shutdown(actual_poll(), shutdown_event, cancel_on_shutdown=False)
+        # why cancelling a live Redis call mid-flight is unsafe. If
+        # shutdown wins, the poll is still running; hang onto it so it
+        # can be resolved (and re-pushed if it returns a task) below.
+        got_result, result, orphan_poll_task = await _race_shutdown(
+            actual_poll(), shutdown_event, cancel_on_shutdown=False
+        )
         if not got_result:
             sem.release()
             break
@@ -223,25 +237,44 @@ async def run_task_loop(
         active[t] = (source_queue, payload)
         t.add_done_callback(lambda _t: active.pop(_t, None))
 
-    if not active:
-        return
+    if active:
+        # Snapshot BEFORE cancelling: the done-callback above pops entries
+        # out of `active` as each task transitions to done, which happens
+        # *during* the gather below. Iterating `active` after the gather
+        # would see an already-emptied dict and silently re-push nothing.
+        to_repush = list(active.items())
+        task_loop_logger.info(
+            "Shutting down: cancelling %d active task(s) and re-pushing to Redis",
+            len(to_repush),
+        )
+        for t, _ in to_repush:
+            t.cancel()
+        await asyncio.gather(*(t for t, _ in to_repush), return_exceptions=True)
 
-    # Snapshot BEFORE cancelling: the done-callback above pops entries out
-    # of `active` as each task transitions to done, which happens *during*
-    # the gather below. Iterating `active` after the gather would see an
-    # already-emptied dict and silently re-push nothing.
-    to_repush = list(active.items())
-    task_loop_logger.info(
-        "Shutting down: cancelling %d active task(s) and re-pushing to Redis",
-        len(to_repush),
-    )
-    for t, _ in to_repush:
-        t.cancel()
-    await asyncio.gather(*(t for t, _ in to_repush), return_exceptions=True)
+        for _t, (source_queue, payload) in to_repush:
+            await fix_await(redis_conn.rpush(source_queue, payload))
+            task_loop_logger.info("Re-pushed task to %s on shutdown", source_queue)
 
-    for _t, (source_queue, payload) in to_repush:
-        await fix_await(redis_conn.rpush(source_queue, payload))
-        task_loop_logger.info("Re-pushed task to %s on shutdown", source_queue)
+    if orphan_poll_task is not None:
+        # Bounded by poll_timeout (BRPOP's own timeout, or a well-behaved
+        # poll_fn) — not an indefinite wait, so this doesn't reintroduce a
+        # grace period for task processing. Must be resolved here, before
+        # returning, rather than left for the event loop to clean up on
+        # its own: otherwise a task it pops from Redis after we've already
+        # returned is consumed and dropped with nothing to re-push it.
+        task_loop_logger.info(
+            "Shutting down: waiting on in-flight poll (bounded by poll_timeout=%ds)",
+            poll_timeout,
+        )
+        try:
+            orphan_result = await orphan_poll_task
+        except Exception:
+            logger.exception("Orphaned poll task failed after shutdown; its result, if any, is lost")
+        else:
+            if orphan_result is not None:
+                source_queue, payload = orphan_result
+                await fix_await(redis_conn.rpush(source_queue, payload))
+                task_loop_logger.info("Re-pushed orphaned poll result to %s on shutdown", source_queue)
 
 
 def get_jira_auth_headers() -> dict[str, str]:

@@ -6,26 +6,45 @@ from flexmock import flexmock
 
 from ymir.common.base_utils import install_shutdown_handler, run_task_loop
 
+_NO_DELAYED_RESULT = object()
+
 
 class FakeRedis:
     """Minimal stand-in for the pieces of redis.asyncio.Redis that run_task_loop uses.
 
     `brpop_results` is consumed in order for successive calls; once exhausted,
-    brpop hangs forever (mirroring a real BRPOP with no data available), so
-    tests must either not wait on that call or trigger shutdown to abandon it.
+    brpop resolves to None after a short simulated delay (mirroring a real
+    BRPOP timing out with no data available - it's always eventually
+    resolved, just possibly after `poll_timeout`), unless a delayed result is
+    armed via `arm_delayed_result`.
     """
 
     def __init__(self, brpop_results: list[tuple[bytes, bytes] | None] | None = None):
         self._results = list(brpop_results or [])
         self.brpop_calls = 0
         self.rpush_calls: list[tuple[bytes, bytes]] = []
+        self._delayed_result: tuple[bytes, bytes] | None | object = _NO_DELAYED_RESULT
+        self._release_delayed = asyncio.Event()
 
     async def brpop(self, queues, timeout=None):
         self.brpop_calls += 1
         if self._results:
             return self._results.pop(0)
-        await asyncio.Event().wait()
+        if self._delayed_result is not _NO_DELAYED_RESULT:
+            await self._release_delayed.wait()
+            return self._delayed_result
+        await asyncio.sleep(0.05)
         return None
+
+    def arm_delayed_result(self, result: tuple[bytes, bytes] | None) -> None:
+        """Make the next (post-exhaustion) brpop call block until
+        `release_delayed()` is called, then return `result` — simulating a
+        BRPOP that was already in flight when shutdown fired and only
+        resolves (with a real item, or a natural timeout) afterwards."""
+        self._delayed_result = result
+
+    def release_delayed(self) -> None:
+        self._release_delayed.set()
 
     async def rpush(self, queue, payload):
         self.rpush_calls.append((queue, payload))
@@ -145,6 +164,67 @@ class TestRunTaskLoopShutdown:
         # the "queue" and the first was re-pushed once, unprocessed.
         assert fake_redis.brpop_calls == 1
         assert fake_redis.rpush_calls == [(b"queue1", b"payload1")]
+
+    @pytest.mark.asyncio
+    async def test_orphaned_poll_result_is_repushed_after_shutdown(self):
+        """Regression test: if shutdown fires while a BRPOP is already in
+        flight (so it's abandoned rather than cancelled, per _race_shutdown's
+        docstring), and that BRPOP later resolves with a real task rather
+        than a natural timeout, the task must not be silently consumed from
+        Redis and dropped — it must be re-pushed."""
+        fake_redis = FakeRedis()
+        fake_redis.arm_delayed_result((b"queue1", b"payload1"))
+        shutdown_event = asyncio.Event()
+
+        loop_task = asyncio.create_task(
+            run_task_loop(
+                fake_redis,
+                ["queue1"],
+                _noop,
+                max_concurrent=1,
+                shutdown_event=shutdown_event,
+            )
+        )
+        await _wait_until(lambda: fake_redis.brpop_calls >= 1)
+        await asyncio.sleep(0.01)
+
+        shutdown_event.set()
+        # The loop must not exit until the in-flight BRPOP is resolved one
+        # way or another - it can't just abandon it and return.
+        await asyncio.sleep(0.05)
+        assert not loop_task.done()
+
+        fake_redis.release_delayed()
+        await asyncio.wait_for(loop_task, timeout=1)
+
+        assert fake_redis.rpush_calls == [(b"queue1", b"payload1")]
+
+    @pytest.mark.asyncio
+    async def test_orphaned_poll_natural_timeout_repushes_nothing(self):
+        """If the in-flight BRPOP that was abandoned on shutdown resolves
+        with None (a natural timeout, no data arrived), there's nothing to
+        re-push."""
+        fake_redis = FakeRedis()
+        fake_redis.arm_delayed_result(None)
+        shutdown_event = asyncio.Event()
+
+        loop_task = asyncio.create_task(
+            run_task_loop(
+                fake_redis,
+                ["queue1"],
+                _noop,
+                max_concurrent=1,
+                shutdown_event=shutdown_event,
+            )
+        )
+        await _wait_until(lambda: fake_redis.brpop_calls >= 1)
+        await asyncio.sleep(0.01)
+
+        shutdown_event.set()
+        fake_redis.release_delayed()
+        await asyncio.wait_for(loop_task, timeout=1)
+
+        assert fake_redis.rpush_calls == []
 
     @pytest.mark.asyncio
     async def test_custom_poll_fn_idle_sleep_is_interrupted_by_shutdown(self):

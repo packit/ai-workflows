@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import time
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urljoin
 
@@ -60,6 +61,21 @@ class JiraIssueFetcher:
     API_TIMEOUT = 90  # 90 seconds timeout
     MODULAR_COMPONENT_PATTERN = re.compile(r".+:.+/.+")
 
+    # "In-flight" labels: each marks an issue as currently being worked on by
+    # an agent. If an agent crashes (SIGKILL/OOM) after setting one of these
+    # but before reaching the label write that replaces it with an outcome,
+    # the label is stuck forever and the fetcher skips the issue on every
+    # subsequent sweep — this is the bug the staleness check below guards
+    # against. (Planned redeployments are instead handled instantly by the
+    # SIGTERM handler in run_task_loop; this is the safety net for everything
+    # else.)
+    IN_FLIGHT_LABELS = (
+        JiraLabels.TRIAGE_IN_PROGRESS.value,
+        JiraLabels.TRIAGED_BACKPORT.value,
+        JiraLabels.TRIAGED_REBASE.value,
+        JiraLabels.TRIAGED_REBUILD.value,
+    )
+
     def __init__(self):
         self.jira_url = os.environ["JIRA_URL"]
         self.redis_url = os.environ["REDIS_URL"]
@@ -76,6 +92,17 @@ class JiraIssueFetcher:
 
         # Use constant page size
         self.max_results_per_page = self.MAX_RESULTS_PER_PAGE
+
+        # Staleness threshold for the in-flight-label safety net (see
+        # IN_FLIGHT_LABELS above). Conservative default pending real task
+        # duration data from Phoenix traces (http://localhost:6006/) — the
+        # longest documented single phase today is the 3h post-push testing
+        # window (POST_PUSH_TESTING_TIMEOUT), and a full task can involve
+        # several such phases plus retries, so 24h leaves comfortable margin
+        # while still being far short of "stuck forever". Too aggressive a
+        # value risks a false-positive re-enqueue of a still-running task —
+        # two agents processing the same issue concurrently.
+        self.stale_label_threshold_hours = float(os.getenv("STALE_LABEL_THRESHOLD_HOURS", "24"))
 
         self.headers = get_jira_auth_headers()
 
@@ -279,6 +306,60 @@ class JiraIssueFetcher:
             )
             return False
 
+    @staticmethod
+    def _is_label_stale(issue: dict[str, Any], threshold_hours: float) -> bool:
+        """Check whether `issue`'s bulk-fetched `fields.updated` timestamp is
+        older than `threshold_hours`.
+
+        Uses data already in hand from the bulk search — no extra per-issue
+        Jira API calls, so this scales to the full sweep with zero added
+        load. This is intentionally coarser than "when was this specific
+        label added": any field update (e.g. an unrelated human comment)
+        resets `updated` too. Acceptable for a best-effort safety net —
+        false negatives (staleness masked by an unrelated update) just wait
+        for the next sweep, which is safe.
+
+        Returns False (not stale) if `updated` is missing or unparseable,
+        since we can't tell without it — fails closed to the current
+        "always skip" behavior rather than risking a false-positive
+        re-enqueue of still-running work.
+        """
+        updated_str = (issue.get("fields") or {}).get("updated")
+        if not updated_str:
+            return False
+        try:
+            updated = datetime.fromisoformat(updated_str)
+        except ValueError:
+            return False
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=UTC)
+        return datetime.now(UTC) - updated > timedelta(hours=threshold_hours)
+
+    def _find_stale_in_flight_label(self, issue: dict[str, Any], ymir_labels: list[str]) -> str | None:
+        """Return the in-flight label on `issue` if it looks abandoned, else None.
+
+        "Abandoned" means: one of IN_FLIGHT_LABELS is present, no other Ymir
+        label coexists with it (the same signal triage_agent's own dedup
+        check uses to decide a stage already produced an outcome — see
+        triage_agent.py's `terminal_ymir_labels` check), and the issue hasn't
+        been updated in over `stale_label_threshold_hours`. A coexisting
+        label means either the outcome label was written but the in-flight
+        one wasn't cleaned up (not actually stuck), or it's an orthogonal
+        label from an unrelated workflow (e.g. ymir_consolidate_base) — in
+        both cases we can't be confident it's abandoned, so we leave it
+        alone rather than risk a false-positive re-enqueue.
+        """
+        ignorable = {JiraLabels.RETRY_NEEDED.value, JiraLabels.TODO.value}
+        for label in self.IN_FLIGHT_LABELS:
+            if label not in ymir_labels:
+                continue
+            other_labels = [ol for ol in ymir_labels if ol != label and ol not in ignorable]
+            if other_labels:
+                continue
+            if self._is_label_stale(issue, self.stale_label_threshold_hours):
+                return label
+        return None
+
     async def search_issues(self) -> list[dict[str, Any]]:
         """
         Search for issues using the configured query with cursor-based pagination.
@@ -295,6 +376,7 @@ class JiraIssueFetcher:
             "components",  # Issue components
             "customfield_10669",  # Downstream Component Name
             "fixVersions",  # Fix Version/s (e.g., rhel-9.8)
+            "updated",  # Last-modified timestamp — used for stale in-flight-label detection
         ]
 
         while True:
@@ -511,6 +593,42 @@ class JiraIssueFetcher:
                     )
                     remove_issues_for_retry.add(issue_key)
                     user_triggered_keys.add(issue_key)
+                    continue
+
+                # Safety net for tasks lost to a hard crash/OOM/SIGKILL (planned
+                # redeployments are instead recovered instantly by the SIGTERM
+                # handler in run_task_loop, which re-pushes the original Redis
+                # payload — unavailable here). Flip the stuck in-flight label to
+                # ymir_retry_needed so the existing retry_needed handling below
+                # re-triages the issue from scratch — the only generically
+                # correct recovery path, since the original downstream Task
+                # payload (package, patch_urls, target_branch, etc.) only ever
+                # existed in the now-unrecoverable Redis message.
+                stale_label = self._find_stale_in_flight_label(issue, ymir_labels)
+                if stale_label:
+                    logger.warning(
+                        f"Issue {issue_key} has stale {stale_label} (no update in "
+                        f">{self.stale_label_threshold_hours}h, no other Ymir label) - "
+                        f"treating as abandoned and flipping to {JiraLabels.RETRY_NEEDED.value}"
+                    )
+                    if self.dry_run:
+                        logger.info(
+                            f"DRY_RUN: would flip {stale_label} -> "
+                            f"{JiraLabels.RETRY_NEEDED.value} on {issue_key}"
+                        )
+                    else:
+                        try:
+                            self._edit_jira_labels(
+                                issue_key,
+                                add=[JiraLabels.RETRY_NEEDED.value],
+                                remove=[stale_label],
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to flip stale {stale_label} on {issue_key}: {e}")
+                            existing_keys.add(issue_key)
+                            continue
+                    remove_issues_for_retry.add(issue_key)
+                    retry_needed_keys.add(issue_key)
                     continue
 
                 # If issue has Ymir labels and there is no ymir_retry_needed label, mark as existing

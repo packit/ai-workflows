@@ -2,6 +2,11 @@ apiVersion: v1
 data:
   MAX_ISSUES: "70"
   LOGLEVEL: "INFO"
+  # Conservative default pending real task duration data from Phoenix traces;
+  # see the comment next to stale_label_threshold_hours in
+  # jira_issue_fetcher.py. Shared by both cronjobs (daily + todo) since it's a
+  # property of agent task duration, not of which query triggered the sweep.
+  STALE_LABEL_THRESHOLD_HOURS: "24"
 immutable: false
 kind: ConfigMap
 metadata:

@@ -3,6 +3,7 @@ import json
 import sys
 import time
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import requests
@@ -149,7 +150,7 @@ async def test_search_issues_single_page(fetcher):
         json_data={
             "jql": 'filter = "Jotnar_1000_packages"',
             "maxResults": 500,
-            "fields": ["key", "labels", "components", "customfield_10669", "fixVersions"],
+            "fields": ["key", "labels", "components", "customfield_10669", "fixVersions", "updated"],
         },
     ).and_return(
         {
@@ -1023,6 +1024,283 @@ def test_label_added_by_rh_employee_false_when_no_add_event(fetcher):
     flexmock(requests).should_receive("get").and_return(_changelog_response(histories)).once()
 
     assert fetcher._label_added_by_rh_employee("RHEL-4") is False
+
+
+# ============================================================================
+# _is_label_stale / _find_stale_in_flight_label
+# ============================================================================
+
+_STALE_UPDATED = (datetime.now(UTC) - timedelta(hours=100)).isoformat()
+_FRESH_UPDATED = datetime.now(UTC).isoformat()
+
+
+@pytest.mark.parametrize(
+    ("updated", "expected"),
+    [
+        (_STALE_UPDATED, True),
+        (_FRESH_UPDATED, False),
+        # Real Jira format: no colon in the UTC offset.
+        ("2020-01-01T00:00:00.000+0000", True),
+        (None, False),  # missing field fails closed
+        ("not-a-timestamp", False),  # unparseable fails closed
+    ],
+)
+def test_is_label_stale(updated, expected):
+    issue = {"fields": {"updated": updated}} if updated is not None else {"fields": {}}
+    assert JiraIssueFetcher._is_label_stale(issue, threshold_hours=24) is expected
+
+
+def test_is_label_stale_naive_datetime_treated_as_utc():
+    """A timestamp with no timezone info is treated as UTC rather than raising."""
+    naive_but_old = (datetime.now(UTC) - timedelta(hours=100)).replace(tzinfo=None).isoformat()
+    issue = {"fields": {"updated": naive_but_old}}
+    assert JiraIssueFetcher._is_label_stale(issue, threshold_hours=24) is True
+
+
+def test_find_stale_in_flight_label_returns_label_when_alone_and_stale(fetcher):
+    issue = {"fields": {"updated": _STALE_UPDATED}}
+    result = fetcher._find_stale_in_flight_label(issue, [JiraLabels.TRIAGE_IN_PROGRESS.value])
+    assert result == JiraLabels.TRIAGE_IN_PROGRESS.value
+
+
+def test_find_stale_in_flight_label_none_when_fresh(fetcher):
+    issue = {"fields": {"updated": _FRESH_UPDATED}}
+    result = fetcher._find_stale_in_flight_label(issue, [JiraLabels.TRIAGE_IN_PROGRESS.value])
+    assert result is None
+
+
+def test_find_stale_in_flight_label_none_when_no_in_flight_label(fetcher):
+    issue = {"fields": {"updated": _STALE_UPDATED}}
+    result = fetcher._find_stale_in_flight_label(issue, [JiraLabels.RETRY_NEEDED.value])
+    assert result is None
+
+
+def test_find_stale_in_flight_label_none_when_terminal_label_coexists(fetcher):
+    """A terminal outcome label alongside the in-flight one means it's not
+    actually stuck — just not cleaned up, or the two are unrelated."""
+    issue = {"fields": {"updated": _STALE_UPDATED}}
+    result = fetcher._find_stale_in_flight_label(
+        issue, [JiraLabels.TRIAGED_BACKPORT.value, JiraLabels.BACKPORTED.value]
+    )
+    assert result is None
+
+
+def test_find_stale_in_flight_label_ignores_retry_needed_and_todo(fetcher):
+    """ymir_retry_needed / ymir_todo are trigger labels, not outcomes — their
+    presence alongside a stale in-flight label doesn't block detection."""
+    issue = {"fields": {"updated": _STALE_UPDATED}}
+    result = fetcher._find_stale_in_flight_label(
+        issue,
+        [JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.RETRY_NEEDED.value, JiraLabels.TODO.value],
+    )
+    assert result == JiraLabels.TRIAGE_IN_PROGRESS.value
+
+
+def test_find_stale_in_flight_label_downstream_stage(fetcher):
+    issue = {"fields": {"updated": _STALE_UPDATED}}
+    result = fetcher._find_stale_in_flight_label(issue, [JiraLabels.TRIAGED_REBUILD.value])
+    assert result == JiraLabels.TRIAGED_REBUILD.value
+
+
+# ============================================================================
+# push_issues_to_queue: stale in-flight label safety net
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_push_stale_triage_in_progress_reenqueued(fetcher, mock_redis_context):
+    """Stale ymir_triage_in_progress with no other Ymir label: flip to
+    ymir_retry_needed, then let the existing retry machinery re-triage it
+    (non-user-triggered, since the original trigger context is lost)."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "STUCK-1",
+            "fields": {"labels": [JiraLabels.TRIAGE_IN_PROGRESS.value], "updated": _STALE_UPDATED},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    # First flip: the stale-detection safety net itself.
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "STUCK-1",
+        add=[JiraLabels.RETRY_NEEDED.value],
+        remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+    ).once()
+    # Second flip: the pre-existing retry_needed handling consumes the
+    # trigger it just created, same as for a maintainer-set ymir_retry_needed.
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "STUCK-1",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+        remove=[JiraLabels.RETRY_NEEDED.value],
+    ).once()
+
+    expected_task = Task.from_issue("STUCK-1", user_triggered=False)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE.value, expected_task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_push_stale_triaged_backport_reenqueued(fetcher, mock_redis_context):
+    """Stale ymir_triaged_backport with no terminal outcome label: same
+    flip-to-retry-needed recovery as the triage-stage case."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "STUCK-2",
+            "fields": {"labels": [JiraLabels.TRIAGED_BACKPORT.value], "updated": _STALE_UPDATED},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "STUCK-2",
+        add=[JiraLabels.RETRY_NEEDED.value],
+        remove=[JiraLabels.TRIAGED_BACKPORT.value],
+    ).once()
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "STUCK-2",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+        remove=[JiraLabels.RETRY_NEEDED.value],
+    ).once()
+
+    expected_task = Task.from_issue("STUCK-2", user_triggered=False)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE.value, expected_task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_push_fresh_triage_in_progress_still_skipped(fetcher, mock_redis_context):
+    """Non-stale ymir_triage_in_progress: unchanged pre-existing behavior —
+    skip and don't touch Jira or Redis."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "FRESH-1",
+            "fields": {"labels": [JiraLabels.TRIAGE_IN_PROGRESS.value], "updated": _FRESH_UPDATED},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+    mock_redis.should_receive("lpush").never()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_push_stale_in_progress_with_terminal_label_still_skipped(fetcher, mock_redis_context):
+    """Stale ymir_triaged_rebase alongside its terminal outcome label
+    (ymir_rebased) means processing actually finished — the in-flight label
+    just wasn't cleaned up. Not a stuck task: leave it alone."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "DONE-1",
+            "fields": {
+                "labels": [JiraLabels.TRIAGED_REBASE.value, JiraLabels.REBASED.value],
+                "updated": _STALE_UPDATED,
+            },
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+    mock_redis.should_receive("lpush").never()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_push_stale_reenqueue_skips_when_flip_fails(fetcher, mock_redis_context):
+    """If the stale-recovery flip itself raises, skip the Redis push —
+    otherwise the next sweep would find no trigger label at all."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "STUCK-FAIL",
+            "fields": {"labels": [JiraLabels.TRIAGE_IN_PROGRESS.value], "updated": _STALE_UPDATED},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_edit_jira_labels").and_raise(
+        requests.HTTPError("Jira write failed")
+    ).once()
+    mock_redis.should_receive("lpush").never()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_push_stale_reenqueue_dry_run_skips_flip_but_still_pushes(monkeypatch, mock_env_vars):
+    """DRY_RUN=true: skip both Jira label flips, but still reconstruct and
+    push the task, matching the existing dry-run contract for other trigger
+    paths (ymir_todo, ymir_retry_needed)."""
+    monkeypatch.setenv("DRY_RUN", "true")
+    fetcher = JiraIssueFetcher()
+
+    mock_redis = flexmock()
+
+    @asynccontextmanager
+    async def mock_context_manager(*_, **__):
+        yield mock_redis
+
+    flexmock(jira_issue_fetcher_impl).should_receive("redis_client").replace_with(mock_context_manager)
+
+    issues = [
+        {
+            "key": "STUCK-DRY",
+            "fields": {"labels": [JiraLabels.TRIAGE_IN_PROGRESS.value], "updated": _STALE_UPDATED},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+
+    expected_task = Task.from_issue("STUCK-DRY", user_triggered=False)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE.value, expected_task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 1
 
 
 def test_label_added_by_rh_employee_walks_paginated_changelog(fetcher):

@@ -39,9 +39,11 @@ Goal: Analyze the given issue to determine the correct course of action.
    * Determine the name of the package from the issue details (usually component name)
    {% if needs_internal_fix and internal_target_branch %}
    * Use the clone_repository tool to clone `https://gitlab.com/redhat/rhel/rpms/<package_name>`
-     with branch `{{ internal_target_branch }}`.
+     with branch `{{ internal_target_branch }}` and
+     clone_path `/git-repos/{{ issue }}/<package_name>`.
      If the clone fails (branch or repo not found), fall back to cloning
-     `https://gitlab.com/redhat/centos-stream/rpms/<package_name>` using the same tool.
+     `https://gitlab.com/redhat/centos-stream/rpms/<package_name>` using the same tool
+     (keep the same clone_path).
    {% else %}
    * Confirm the package repository exists by running
      `GIT_TERMINAL_PROMPT=0 git ls-remote https://gitlab.com/redhat/centos-stream/rpms/<package_name>`

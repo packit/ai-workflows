@@ -41,7 +41,7 @@ from ymir.agents.utils import (
     run_subprocess,
     run_tool,
 )
-from ymir.common.base_utils import is_cs_branch, redis_client, run_task_loop
+from ymir.common.base_utils import install_shutdown_handler, is_cs_branch, redis_client, run_task_loop
 from ymir.common.constants import JiraLabels
 from ymir.common.logging_setup import configure_logging, current_jira_issue, get_trajectory_writeable
 from ymir.common.mock_repos import get_mock_local_tool_env
@@ -1377,12 +1377,19 @@ async def main() -> None:
 
     async with redis_client(os.environ["REDIS_URL"]) as redis_conn:
 
-        async def poll_consolidation_queue() -> bytes | None:
+        async def poll_consolidation_queue() -> tuple[bytes, bytes] | None:
             job = await pick_next_job(redis_conn)
             if job is None:
                 return None
             redis_logger.info("Picked job for %s/%s", job.package, job.target_branch)
-            return job.model_dump_json().encode()
+            # This queue is a Redis Hash (pick_next_job/complete_job), not a
+            # list run_task_loop can RPUSH back into on shutdown — re-push
+            # doesn't apply here (see process_task's finally: complete_job
+            # already drops cancelled-mid-flight jobs the same way it drops
+            # any other failure). The sentinel is only so a cancelled job
+            # still satisfies run_task_loop's generic (source_queue, payload)
+            # bookkeeping; nothing ever reads from it.
+            return b"mr_consolidation", job.model_dump_json().encode()
 
         async def process_task(payload: bytes) -> None:
             job = MergeConsolidationJob.model_validate_json(payload)
@@ -1429,12 +1436,15 @@ async def main() -> None:
             finally:
                 await complete_job(redis_conn, job.package, job.target_branch)
 
+        shutdown_event = asyncio.Event()
+        install_shutdown_handler(asyncio.get_running_loop(), shutdown_event)
         await run_task_loop(
             redis_conn,
             [],
             process_task,
             max_concurrent=max_concurrent_tasks,
             poll_fn=poll_consolidation_queue,
+            shutdown_event=shutdown_event,
         )
 
 

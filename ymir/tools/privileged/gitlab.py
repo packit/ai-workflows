@@ -465,7 +465,7 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
 
         basepath = Path(os.getenv("GIT_REPO_BASEPATH", "/git-repos")).resolve()
         resolved = clone_path.resolve()
-        if not resolved.is_relative_to(basepath):
+        if resolved == basepath or not resolved.is_relative_to(basepath):
             raise ToolError(f"clone_path must be under {basepath} (the shared volume). Got: {clone_path}")
         clone_path = resolved
 

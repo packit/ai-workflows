@@ -107,6 +107,16 @@ spec:
     - type: Allow
       to:
         dnsName: sourceware.org
+    # Upstream git forges
+    - type: Allow
+      to:
+        dnsName: gitlab.freedesktop.org
+    - type: Allow
+      to:
+        dnsName: gitlab.gnome.org
+    - type: Allow
+      to:
+        dnsName: git.postgresql.org
     # Sentry monitoring
     - type: Allow
       to:

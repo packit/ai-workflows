@@ -401,6 +401,19 @@ async def run_workflow(
                 if not fetched:
                     raise RuntimeError(f"Could not fetch branch {branch_name} from any remote")
 
+            # The fetch_branch MCP tool runs on the mcp-gateway pod while
+            # subsequent git commands run on this (agent) pod.  Both share
+            # an NFS4 PVC whose default acdirmin=30s means the agent's
+            # NFS client may serve stale directory listings for up to 30s
+            # after the gateway writes new ref files.  Sleep long enough
+            # for the directory attribute cache to expire.
+            _NFS_CACHE_WAIT = 60
+            logger.info(
+                "Waiting %ds for NFS attribute cache to expire after MCP fetch",
+                _NFS_CACHE_WAIT,
+            )
+            await asyncio.sleep(_NFS_CACHE_WAIT)
+
             next_step = "per_commit_flow" if release_strategy == "per_commit" else "run_consolidation_agent"
 
             if not state.mr_branches:

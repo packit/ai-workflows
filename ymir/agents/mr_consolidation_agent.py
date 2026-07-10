@@ -1384,11 +1384,11 @@ async def main() -> None:
             redis_logger.info("Picked job for %s/%s", job.package, job.target_branch)
             # This queue is a Redis Hash (pick_next_job/complete_job), not a
             # list run_task_loop can RPUSH back into on shutdown — re-push
-            # doesn't apply here (see process_task's finally: complete_job
-            # already drops cancelled-mid-flight jobs the same way it drops
-            # any other failure). The sentinel is only so a cancelled job
-            # still satisfies run_task_loop's generic (source_queue, payload)
-            # bookkeeping; nothing ever reads from it.
+            # doesn't apply here.  On cancellation, process_task leaves the
+            # :active field in place (see its CancelledError handler).
+            # The sentinel is only so a cancelled job still satisfies
+            # run_task_loop's generic (source_queue, payload) bookkeeping;
+            # nothing ever reads from it.
             return b"mr_consolidation", job.model_dump_json().encode()
 
         async def process_task(payload: bytes) -> None:
@@ -1426,6 +1426,13 @@ async def main() -> None:
                             job.target_branch,
                             state.consolidation_result.error if state.consolidation_result else "unknown",
                         )
+            except asyncio.CancelledError:
+                # Deliberately leave the :active hash field alone — calling
+                # complete_job() here would silently erase the job.  This
+                # matches pre-PR behavior (SIGTERM killed the process
+                # outright, so finally never ran).  Proper recovery for
+                # stuck :active entries is separate follow-up work.
+                raise
             except Exception:
                 logger.error(
                     "Unhandled error processing %s/%s:\n%s",
@@ -1433,7 +1440,8 @@ async def main() -> None:
                     job.target_branch,
                     traceback.format_exc(),
                 )
-            finally:
+                await complete_job(redis_conn, job.package, job.target_branch)
+            else:
                 await complete_job(redis_conn, job.package, job.target_branch)
 
         shutdown_event = asyncio.Event()

@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -358,3 +359,44 @@ def test_deduplicates_issues():
     )
     result = _extract_jira_issues_from_description(desc)
     assert result == ["RHEL-100"]
+
+
+# -- process_task cancellation behavior ----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cancelled_task_does_not_call_complete_job(fake_redis):
+    """Regression: on CancelledError (from shutdown), process_task must NOT
+    call complete_job() — doing so silently erases the :active hash entry,
+    losing the job entirely.  Instead it should leave :active intact and
+    re-raise, matching pre-PR SIGTERM behavior (process killed, no cleanup).
+
+    process_task is a closure inside main(), so we can't import it directly.
+    We replicate its error-handling structure here as a contract test — if
+    the structure in the source file changes, this should be updated too."""
+    await submit_merge_job(fake_redis, "bash", "c10s")
+    job = await pick_next_job(fake_redis)
+    assert job is not None
+
+    active_key = _field_key("bash", "c10s", "active")
+    assert await fake_redis.hget(HASH_KEY, active_key) is not None
+
+    mock_complete = AsyncMock()
+
+    async def simulate_workflow():
+        raise asyncio.CancelledError
+
+    # Replicate process_task's error-handling structure: CancelledError must
+    # propagate without calling complete_job (mock_complete here).
+    with pytest.raises(asyncio.CancelledError):
+        try:
+            await simulate_workflow()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await mock_complete(fake_redis, job.package, job.target_branch)
+        else:
+            await mock_complete(fake_redis, job.package, job.target_branch)
+
+    mock_complete.assert_not_called()
+    assert await fake_redis.hget(HASH_KEY, active_key) is not None

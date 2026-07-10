@@ -856,7 +856,7 @@ async def run_workflow(
                         log_prompt = render_template(
                             get_log_prompt(),
                             LogInputSchema(
-                                jira_issue=other_jira[0] if other_jira else package,
+                                jira_issue=other_jira[0] if other_jira else None,
                                 changes_summary=summary,
                             ),
                         )

@@ -76,6 +76,7 @@ except ImportError:
         jira_issue: str
         build_error: str | None = None
         triage_summary: str | None = None
+        leading_zstream_branch: str | None = None
 
     class MergeRequestInputSchema(BaseModel):  # type: ignore[no-redef]
         local_clone: Path
@@ -372,6 +373,23 @@ class TestRebaseTemplate:
         )
         assert "/tmp/fedora" in result
         assert "Fedora repository" in result
+
+    def test_renders_with_leading_zstream_branch(self):
+        result = render_template(
+            "rebase/prompt.j2",
+            RebaseInputSchema(
+                local_clone=Path("/tmp/clone"),
+                fedora_clone=None,
+                package="libfoo",
+                dist_git_branch="rhel-9.6.0",
+                version="2.0.1",
+                jira_issue="RHEL-12345",
+                build_error=None,
+                leading_zstream_branch="rhel-9.8.0",
+            ),
+        )
+        assert "rhel-9.8.0" in result
+        assert "git show origin/rhel-9.8.0:libfoo.spec" in result
 
     def test_renders_with_build_error(self):
         result = render_template(

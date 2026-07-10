@@ -50,6 +50,7 @@ async def test_fork_and_prepare_dist_git_wipes_stale_working_dir(git_repo_basepa
     with (
         patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
         patch("ymir.agents.tasks.check_subprocess", new_callable=AsyncMock),
+        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
     ):
         mock_run_tool.return_value = "https://fork.example.com"
 

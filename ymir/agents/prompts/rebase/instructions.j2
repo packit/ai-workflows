@@ -36,7 +36,23 @@ To rebase package <PACKAGE> to version <VERSION> in dist-git branch <DIST_GIT_BR
 
 4. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
-5. Download upstream sources using `spectool -g -S <PACKAGE>.spec`.
+5. VERIFY SOURCE URLs before downloading.
+   Compare ALL Source URL(s) in the spec with the same entries in the following
+   reference specs, listed from highest to lowest priority:
+   a. The leading z-stream spec, if one is specified.
+   b. The Fedora spec, if a Fedora clone is available.
+   c. The original spec before your changes.
+   If a higher-priority reference uses a different Source URL, adopt it —
+   the goal is to use the same source file(s) as the reference.
+   If a Source URL needs to be changed and no reference spec is available,
+   ensure the new URL points to the same upstream project. URLs from a
+   different project or an unknown origin are NOT ACCEPTABLE — end the
+   process with an error explaining the discrepancy. Do not download source
+   files with unknown or unvetted provenance due to security risks.
+   When choosing among multiple source files on an upstream release page,
+   prefer files explicitly marked or described as official releases.
+
+6. Download upstream sources using `spectool -g -S <PACKAGE>.spec`.
    Use the `run_package_prep` tool to see if everything is in order.
    It is possible that some *.patch files will fail to apply now
    that the spec file has been updated. Don't jump to conclusions -
@@ -47,16 +63,16 @@ To rebase package <PACKAGE> to version <VERSION> in dist-git branch <DIST_GIT_BR
    to the upstream sources.
    Note: <PKG_TOOL> is `centpkg` for CentOS Stream branches (c9s, c10s) and `rhpkg` for RHEL branches.
 
-6. Upload new upstream sources (files that the `spectool` command downloaded in the previous step)
+7. Upload new upstream sources (files that the `spectool` command downloaded in the previous step)
    to lookaside cache using the `upload_sources` tool.
 
-7. If you removed any patch file references from the spec file
+8. If you removed any patch file references from the spec file
    (e.g. because they were already applied upstream),
    you must remove all the corresponding patch files from the repository as well.
 
-8. Generate a SRPM using the `build_srpm` tool.
+9. Generate a SRPM using the `build_srpm` tool.
 
-9. In your output, provide a "files_to_git_add" list containing all files
+10. In your output, provide a "files_to_git_add" list containing all files
    that should be git added for this rebase.
    This typically includes the updated spec file and any new/modified/deleted
    patch files or other files you've changed or added/removed during

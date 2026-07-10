@@ -80,6 +80,8 @@ from ymir.tools.unprivileged.wicked_git import (
 logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")
 
+_NFS_CACHE_WAIT = 60
+
 
 async def create_consolidation_agent(
     mcp_tools_list: list[Tool],
@@ -357,6 +359,15 @@ async def run_workflow(
                 dist_git_branch=dist_git_branch,
                 available_tools=gateway_tools,
             )
+            local_tool_options["working_directory"] = state.local_clone
+
+            await run_tool(
+                "download_sources",
+                dist_git_path=str(state.local_clone),
+                package=package,
+                dist_git_branch=dist_git_branch,
+                available_tools=gateway_tools,
+            )
 
             namespace = "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
             repo_url = f"https://gitlab.com/redhat/{namespace}/rpms/{package}"
@@ -370,6 +381,7 @@ async def run_workflow(
                 state.mr_branches if state.mr_branches else [mr["source_branch"] for mr in state.all_open_mrs]
             )
 
+            any_fetched = False
             for branch_name in candidate_branches:
                 if branch_name == state.update_branch:
                     logger.warning(
@@ -395,26 +407,25 @@ async def run_workflow(
                             available_tools=gateway_tools,
                         )
                         fetched = True
+                        any_fetched = True
                         break
                     except Exception:
                         logger.info("Branch %s not found at %s", branch_name, url)
                 if not fetched:
                     raise RuntimeError(f"Could not fetch branch {branch_name} from any remote")
 
-            # The fetch_branch MCP tool runs on the mcp-gateway pod while
-            # subsequent git commands run on this (agent) pod.  Both share
-            # an NFS4 PVC whose default acdirmin=30s means the agent's
-            # NFS client may serve stale directory listings for up to 30s
-            # after the gateway writes new ref files.  Sleep long enough
-            # for the directory attribute cache to expire.
-            _NFS_CACHE_WAIT = 60
-            logger.info(
-                "Waiting %ds for NFS attribute cache to expire after MCP fetch",
-                _NFS_CACHE_WAIT,
-            )
-            await asyncio.sleep(_NFS_CACHE_WAIT)
-
-            next_step = "per_commit_flow" if release_strategy == "per_commit" else "run_consolidation_agent"
+            if any_fetched:
+                # The fetch_branch MCP tool runs on the mcp-gateway pod
+                # while subsequent git commands run on this (agent) pod.
+                # Both share an NFS4 PVC whose default acdirmin=30s means
+                # the agent's NFS client may serve stale directory
+                # listings for up to 30s after the gateway writes new ref
+                # files.  Sleep long enough for the cache to expire.
+                logger.info(
+                    "Waiting %ds for NFS attribute cache to expire after MCP fetch",
+                    _NFS_CACHE_WAIT,
+                )
+                await asyncio.sleep(_NFS_CACHE_WAIT)
 
             if not state.mr_branches:
                 all_mrs = state.all_open_mrs
@@ -466,8 +477,10 @@ async def run_workflow(
                 all_jira = []
                 for mr in oldest_two:
                     all_jira.extend(_extract_jira_issues_from_description(mr.get("description", "")))
-                state.jira_issues_collected = list(set(all_jira))
-                state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else package
+                state.jira_issues_collected = sorted(set(all_jira))
+                state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
+                if state.jira_issues_collected:
+                    current_jira_issue.set(",".join(state.jira_issues_collected))
 
                 state.current_mrs_count = len(current_mrs)
 
@@ -503,72 +516,7 @@ async def run_workflow(
                     state.patches_per_mr[branch_name] = new_patches
             logger.info("Per-MR patch mapping: %s", state.patches_per_mr)
 
-            next_step = "per_commit_flow" if release_strategy == "per_commit" else "run_consolidation_agent"
-
-            if state.mr_branches:
-                return next_step
-
-            all_mrs = state.all_open_mrs
-            _, target_head, _ = await run_subprocess(
-                ["git", "rev-parse", dist_git_branch],
-                cwd=state.local_clone,
-                env=git_env,
-            )
-            target_head = target_head.strip()
-
-            current_mrs = []
-            for mr in all_mrs:
-                branch_name = mr["source_branch"]
-                _, merge_base, _ = await run_subprocess(
-                    ["git", "merge-base", dist_git_branch, branch_name],
-                    cwd=state.local_clone,
-                    env=git_env,
-                )
-                merge_base = merge_base.strip()
-                if merge_base == target_head:
-                    current_mrs.append(mr)
-                else:
-                    logger.warning(
-                        "Skipping stale MR '%s' (%s): based on %s, current %s HEAD is %s",
-                        mr["title"],
-                        mr["url"],
-                        merge_base[:12],
-                        dist_git_branch,
-                        target_head[:12],
-                    )
-
-            if len(current_mrs) < 2:
-                logger.info(
-                    "Fewer than 2 MRs share the current %s HEAD, nothing to consolidate",
-                    dist_git_branch,
-                )
-                state.consolidation_result = MRConsolidationOutputSchema(
-                    success=True,
-                    status="Fewer than 2 MRs based on current HEAD; nothing to do.",
-                )
-                return Workflow.END
-
-            oldest_two = current_mrs[:2]
-            state.mr_urls = [mr["url"] for mr in oldest_two]
-            state.mr_branches = [mr["source_branch"] for mr in oldest_two]
-            state.mr_titles = [mr["title"] for mr in oldest_two]
-            state.mr_descriptions = [mr.get("description", "") for mr in oldest_two]
-
-            all_jira = []
-            for mr in oldest_two:
-                all_jira.extend(_extract_jira_issues_from_description(mr.get("description", "")))
-            state.jira_issues_collected = sorted(set(all_jira))
-            state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
-            if state.jira_issues_collected:
-                current_jira_issue.set(",".join(state.jira_issues_collected))
-
-            state.current_mrs_count = len(current_mrs)
-
-            logger.info(
-                "Selected MRs for consolidation (same HEAD): %s",
-                [mr["url"] for mr in oldest_two],
-            )
-            return next_step
+            return "per_commit_flow" if release_strategy == "per_commit" else "run_consolidation_agent"
 
         async def run_consolidation_agent(state):
             prompt = render_template(
@@ -671,7 +619,7 @@ async def run_workflow(
                     env=env,
                 )
                 total = 0
-                for line in diff.strip().splitlines():
+                for line in (diff or "").strip().splitlines():
                     parts = line.split("|")
                     if len(parts) == 2:
                         nums = re.findall(r"\d+", parts[1])
@@ -738,7 +686,7 @@ async def run_workflow(
                     cwd=state.local_clone,
                     env=git_env,
                 )
-                base_commits = [c for c in base_commits_raw.strip().splitlines() if c]
+                base_commits = [c for c in (base_commits_raw or "").strip().splitlines() if c]
 
                 if base_commits:
                     logger.info(
@@ -753,6 +701,22 @@ async def run_workflow(
                     )
 
                 logger.info("Base branch commits applied")
+
+                # The base branch may have added new source tarballs to the
+                # lookaside cache (updated `sources` file).  Re-download so
+                # subsequent prep / SRPM builds find them.
+                await run_tool(
+                    "download_sources",
+                    dist_git_path=str(state.local_clone),
+                    package=package,
+                    dist_git_branch=dist_git_branch,
+                    available_tools=gateway_tools,
+                )
+                logger.info(
+                    "Waiting %ds for NFS attribute cache after source download",
+                    _NFS_CACHE_WAIT,
+                )
+                await asyncio.sleep(_NFS_CACHE_WAIT)
 
                 # --- Step 2: process each commit from other branches ---
                 for other_branch in other_branches:
@@ -769,7 +733,7 @@ async def run_workflow(
                         cwd=state.local_clone,
                         env=git_env,
                     )
-                    other_commits = [c for c in other_commits_raw.strip().splitlines() if c]
+                    other_commits = [c for c in (other_commits_raw or "").strip().splitlines() if c]
 
                     for ci, commit_sha in enumerate(other_commits):
                         logger.info(
@@ -787,12 +751,14 @@ async def run_workflow(
                             cwd=state.local_clone,
                             env=git_env,
                         )
-                        original_msg = original_msg.strip()
+                        original_msg = (original_msg or "").strip()
 
-                        # Cherry-pick to get patch files, then restore the spec
-                        # so the LLM handles Patch-tag insertion (without
-                        # touching Release or changelog).
-                        await run_subprocess(
+                        has_patches = bool(state.patches_per_mr.get(other_branch))
+
+                        # Cherry-pick to get patch files into the working tree,
+                        # then restore the spec so the LLM handles integration
+                        # (without touching Release or changelog).
+                        cp_exit, _, _ = await run_subprocess(
                             ["git", "cherry-pick", "--no-commit", commit_sha],
                             cwd=state.local_clone,
                             env=git_env,
@@ -802,23 +768,65 @@ async def run_workflow(
                             cwd=state.local_clone,
                             env=git_env,
                         )
+                        if cp_exit != 0:
+                            await run_subprocess(
+                                ["git", "cherry-pick", "--quit"],
+                                cwd=state.local_clone,
+                                env=git_env,
+                            )
+                            await run_subprocess(
+                                ["git", "reset", "HEAD"],
+                                cwd=state.local_clone,
+                                env=git_env,
+                            )
 
                         # Run a preliminary prep check to give the LLM useful
                         # context if the patch already conflicts.
                         prep_ok, prep_output = await _run_prep(state.local_clone)
 
                         j2_env = _get_jinja2_env(_PROMPTS_DIR)
-                        adapt_prompt = j2_env.get_template(
-                            "mr_consolidation/adapt_patch.j2",
-                        ).render(
-                            local_clone=state.local_clone,
-                            package=package,
-                            base_branch=base_branch,
-                            other_branch=other_branch,
-                            commit_sha=commit_sha[:12],
-                            prep_error=prep_output if not prep_ok else "",
-                            build_error=state.build_error,
-                        )
+                        cherry_pick_conflict = cp_exit != 0
+
+                        if has_patches:
+                            adapt_prompt = j2_env.get_template(
+                                "mr_consolidation/adapt_patch.j2",
+                            ).render(
+                                local_clone=state.local_clone,
+                                package=package,
+                                base_branch=base_branch,
+                                other_branch=other_branch,
+                                commit_sha=commit_sha[:12],
+                                prep_error=prep_output if not prep_ok else "",
+                                build_error=state.build_error,
+                                cherry_pick_conflict=cherry_pick_conflict,
+                            )
+                        else:
+                            _, spec_diff, _ = await run_subprocess(
+                                [
+                                    "git",
+                                    "diff",
+                                    f"{commit_sha}^",
+                                    commit_sha,
+                                    "--",
+                                    f"{package}.spec",
+                                ],
+                                cwd=state.local_clone,
+                                env=git_env,
+                            )
+                            adapt_prompt = j2_env.get_template(
+                                "mr_consolidation/adapt_spec.j2",
+                            ).render(
+                                local_clone=state.local_clone,
+                                package=package,
+                                dist_git_branch=dist_git_branch,
+                                base_branch=base_branch,
+                                other_branch=other_branch,
+                                commit_sha=commit_sha[:12],
+                                spec_diff=(spec_diff or "").strip(),
+                                prep_error=prep_output if not prep_ok else "",
+                                build_error=state.build_error,
+                                cherry_pick_conflict=cherry_pick_conflict,
+                            )
                         try:
                             await consolidation_agent.run(
                                 adapt_prompt,
@@ -1010,7 +1018,7 @@ async def run_workflow(
                     ["git", "rev-list", "--count", f"{dist_git_branch}..HEAD"],
                     cwd=state.local_clone,
                 )
-                commits_ahead = int(commit_count_str.strip()) if exit_code == 0 else 0
+                commits_ahead = int((commit_count_str or "").strip()) if exit_code == 0 else 0
 
                 if has_staged:
                     await check_subprocess(

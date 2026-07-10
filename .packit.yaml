@@ -33,7 +33,7 @@ jobs:
 
   - job: tests
     trigger: commit
-    branch: main
+    branch: "(main|test-pr/.+)"
     identifier: commit-test-triage-e2e
     skip_build: true
     use_internal_tf: true

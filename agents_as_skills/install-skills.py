@@ -44,7 +44,9 @@ CLIENT_MCP_CONFIG_PATHS = {
 }
 
 
-def prompt_value(label: str, env_var: str = None, default: str = None, secret: bool = False) -> str:
+def prompt_value(
+    label: str, env_var: str | None = None, default: str | None = None, secret: bool = False
+) -> str:
     existing = os.environ.get(env_var) if env_var else None
     if existing:
         masked = existing[:4] + "..." if secret and len(existing) > 4 else existing
@@ -57,15 +59,12 @@ def prompt_value(label: str, env_var: str = None, default: str = None, secret: b
         prompt_text += f" [{default}]"
     prompt_text += ": "
 
-    if secret:
-        value = getpass.getpass(prompt_text)
-    else:
-        value = input(prompt_text)
+    value = getpass.getpass(prompt_text) if secret else input(prompt_text)
 
     return value.strip() or default or ""
 
 
-def prompt_choice(label: str, choices: list[str], default: str = None) -> str:
+def prompt_choice(label: str, choices: list[str], default: str | None = None) -> str:
     print(f"\n  {label}")
     for i, choice in enumerate(choices, 1):
         marker = " (default)" if choice == default else ""
@@ -115,15 +114,6 @@ def collect_credentials() -> dict:
     creds["GITLAB_TOKEN"] = prompt_value("GitLab personal access token", env_var="GITLAB_TOKEN", secret=True)
 
     print("\n  Kerberos configuration:")
-    klist_result = subprocess.run(["klist"], capture_output=True)
-    if klist_result.returncode == 0:
-        print("  Kerberos ticket found (klist succeeded).")
-    else:
-        print("  WARNING: No active Kerberos ticket. Run 'kinit' before using the tools.")
-
-    use_keytab = input("  Do you have a keytab file for automated kinit? [y/N]: ").strip().lower() == "y"
-    if use_keytab:
-        creds["KEYTAB_FILE"] = prompt_value(
     try:
         klist_result = subprocess.run(["klist"], capture_output=True)
         if klist_result.returncode == 0:
@@ -132,6 +122,17 @@ def collect_credentials() -> dict:
             print("  WARNING: No active Kerberos ticket. Run 'kinit' before using the tools.")
     except FileNotFoundError:
         print("  WARNING: 'klist' command not found. Ensure Kerberos client tools are installed.")
+
+    use_keytab = input("  Do you have a keytab file for automated kinit? [y/N]: ").strip().lower() == "y"
+    if use_keytab:
+        creds["KEYTAB_FILE"] = prompt_value(
+            "Keytab file path",
+            env_var="KEYTAB_FILE",
+            default=str(Path.home() / ".secrets" / "keytab"),
+        )
+
+    krb5cc = os.environ.get("KRB5CCNAME")
+    if krb5cc:
         creds["KRB5CCNAME"] = krb5cc
         print(f"  Using KRB5CCNAME from env: {krb5cc}")
 
@@ -157,16 +158,6 @@ def install_venv():
     print(f"\n=> Creating virtual environment at {VENV_PATH}")
 
     python = "python3.13"
-    result = subprocess.run([python, "--version"], capture_output=True)
-    if result.returncode != 0:
-        python = "python3"
-        print(f"  python3.13 not found, falling back to {python}")
-        print("  WARNING: BeeAI framework requires Python < 3.14. Ensure your Python is compatible.")
-
-    if not VENV_PATH.exists():
-        run([python, "-m", "venv", str(VENV_PATH)])
-    else:
-    python = "python3.13"
     try:
         result = subprocess.run([python, "--version"], capture_output=True)
         if result.returncode != 0:
@@ -177,6 +168,16 @@ def install_venv():
     if python == "python3":
         print(f"  python3.13 not found, falling back to {python}")
         print("  WARNING: BeeAI framework requires Python < 3.14. Ensure your Python is compatible.")
+
+    if not VENV_PATH.exists():
+        run([python, "-m", "venv", str(VENV_PATH)])
+    else:
+        print(f"  Venv already exists at {VENV_PATH}")
+
+    pip = str(VENV_PATH / "bin" / "pip")
+    print("\n=> Installing ymir-common...")
+    run(
+        [
             pip,
             "install",
             "--upgrade",
@@ -211,6 +212,8 @@ def write_mcp_config(client: str, creds: dict):
     priv_env = {"MCP_TRANSPORT": "stdio"}
     for key in ("GITLAB_TOKEN", "JIRA_URL", "JIRA_EMAIL", "JIRA_TOKEN", "KRB5CCNAME", "KEYTAB_FILE"):
         if creds.get(key):
+            priv_env[key] = creds[key]
+
     unpriv_env = {
         "MCP_TRANSPORT": "stdio",
         "UPSTREAM_SEARCH_API_URL": "http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1",
@@ -218,8 +221,6 @@ def write_mcp_config(client: str, creds: dict):
     ca_bundle = Path("/etc/pki/tls/certs/ca-bundle.crt")
     if ca_bundle.exists():
         unpriv_env["REQUESTS_CA_BUNDLE"] = str(ca_bundle)
-        "REQUESTS_CA_BUNDLE": "/etc/pki/tls/certs/ca-bundle.crt",
-    }
 
     config_path = CLIENT_MCP_CONFIG_PATHS[client]
 
@@ -248,6 +249,8 @@ def write_mcp_config(client: str, creds: dict):
                 "env": unpriv_env,
             },
         }
+        config_key = "mcpServers"
+
     existing_config = {}
     if config_path.exists():
         try:
@@ -261,8 +264,6 @@ def write_mcp_config(client: str, creds: dict):
         except OSError as e:
             print(f"  ERROR: Failed to read existing config at {config_path}: {e}")
             sys.exit(1)
-        except (json.JSONDecodeError, OSError):
-            pass
 
     if config_key not in existing_config:
         existing_config[config_key] = {}

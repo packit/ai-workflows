@@ -19,7 +19,17 @@ Each skill is a directory containing a `SKILL.md` file that follows the [Agent S
 
 ## Installation
 
-For per-client installation instructions (skill placement paths, MCP tool configuration), see the [Skills Installation Guide](../skills_installation.md).
+Quick install with the interactive script (skills + MCP tools + credentials):
+
+```bash
+python3 agents_as_skills/install-skills.py
+```
+
+1. Choose your client (`cursor`, `claude`, or `opencode`)
+2. Enter credentials when prompted (Jira, GitLab, Kerberos/keytab)
+3. Restart the client and confirm the MCP servers are connected
+
+For manual per-client setup (skill paths, MCP config), see the [Skills Installation Guide](../skills_installation.md).
 
 ## How to use
 

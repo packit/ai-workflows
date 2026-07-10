@@ -44,6 +44,10 @@ class CVEEligibilityResult(BaseModel):
         default=None,
         description="Jira issue keys of unshipped Z-stream clones; at least one must ship before triage",
     )
+    duplicate_of: str | None = Field(
+        default=None,
+        description="Jira key of an older tracker for the same CVE, component, and fix version",
+    )
 
     @property
     def is_eligible_for_triage(self) -> bool:

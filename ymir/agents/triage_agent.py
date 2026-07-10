@@ -44,6 +44,7 @@ from ymir.common.models import (
     ClarificationNeededData,
     CVEEligibilityResult,
     ErrorData,
+    IssueStatus,
     NotAffectedData,
     OpenEndedAnalysisData,
     PostponedData,
@@ -869,7 +870,7 @@ async def main() -> None:
             # retries do not re-post the ack after it has already been
             # delivered.
 
-            current_labels = await tasks.get_jira_labels(input.issue)
+            current_labels, current_status = await tasks.get_jira_issue_metadata(input.issue)
             all_labels = JiraLabels.all_labels()
             terminal_ymir_labels = [
                 label
@@ -886,6 +887,25 @@ async def main() -> None:
                     f"Skipping duplicate triage for {input.issue} — "
                     f"already has labels: {terminal_ymir_labels}"
                 )
+                return
+
+            if current_status in (IssueStatus.CLOSED.value, IssueStatus.DONE.value):
+                logger.info(f"Skipping triage for {input.issue} — issue is already {current_status}")
+                if user_triggered:
+                    await tasks.set_jira_labels(
+                        jira_issue=input.issue,
+                        labels_to_remove=["ymir_todo"],
+                        dry_run=dry_run,
+                        user_triggered=True,
+                    )
+                    await tasks.post_user_ack_once(
+                        task,
+                        input.issue,
+                        "triage",
+                        f"Issue is already **{current_status}** — skipping processing.",
+                        user_triggered=True,
+                        dry_run=dry_run,
+                    )
                 return
 
             async def retry(task, error, input=input, user_triggered=user_triggered):

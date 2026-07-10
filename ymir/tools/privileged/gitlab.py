@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 import aiohttp
+import gitlab
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import (
@@ -321,6 +322,10 @@ class OpenMergeRequestToolInput(BaseModel):
     description: str = Field(description="MR description")
     target: str = Field(description="Target branch (in the original repository)")
     source: str = Field(description="Source branch (in the fork)")
+    labels: list[str] | None = Field(
+        default=None,
+        description="Labels to set on the MR at creation time (atomic, avoids webhook race)",
+    )
 
 
 class OpenMergeRequestTool(
@@ -344,6 +349,25 @@ class OpenMergeRequestTool(
             creator=self,
         )
 
+    @staticmethod
+    def _create_mr(project, title, description, target, source, labels):
+        parameters = {
+            "source_branch": source,
+            "target_branch": target,
+            "title": title,
+            "description": description,
+        }
+        if labels:
+            parameters["labels"] = ",".join(labels)
+        if project.is_fork:
+            parameters["target_project_id"] = project.parent.gitlab_repo.attributes["id"]
+        target_project = project.parent if project.is_fork else project
+        try:
+            raw_mr = project.gitlab_repo.mergerequests.create(parameters)
+        except gitlab.GitlabError as ex:
+            raise GitlabAPIException() from ex
+        return GitlabPullRequest(raw_mr, target_project)
+
     async def _run(
         self,
         tool_input: OpenMergeRequestToolInput,
@@ -355,13 +379,14 @@ class OpenMergeRequestTool(
         description = tool_input.description
         target = tool_input.target
         source = tool_input.source
+        labels = tool_input.labels
         logger.info(f"Connecting to GitLab API to open merge request from fork: {fork_url}")
         project = await asyncio.to_thread(get_project, url=fork_url, token=os.getenv("GITLAB_TOKEN"))
         if not project:
             raise ToolError("Failed to get the specified fork")
         is_new_mr = True
         try:
-            pr = await asyncio.to_thread(project.create_pr, title, description, target, source)
+            pr = await asyncio.to_thread(self._create_mr, project, title, description, target, source, labels)
         except GitlabAPIException as ex:
             logger.info("Gitlab API exception: %s", ex)
             if ex.response_code == 409:
@@ -432,7 +457,9 @@ class GetInternalRhelBranchesTool(
 class CloneRepositoryToolInput(BaseModel):
     repository: str = Field(description="Repository to clone")
     branch: str | None = Field(default=None, description="Branch to clone. If omitted, all refs are fetched.")
-    clone_path: AbsolutePath = Field(description="Absolute path where to clone the repository")
+    clone_path: AbsolutePath = Field(
+        description="Absolute path under the shared /git-repos volume where to clone the repository"
+    )
 
 
 class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringToolOutput]):
@@ -460,6 +487,13 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
         repository = tool_input.repository
         branch = tool_input.branch
         clone_path = tool_input.clone_path
+
+        basepath = Path(os.getenv("GIT_REPO_BASEPATH", "/git-repos")).resolve()
+        resolved = clone_path.resolve()
+        if resolved == basepath or not resolved.is_relative_to(basepath):
+            raise ToolError(f"clone_path must be under {basepath} (the shared volume). Got: {clone_path}")
+        clone_path = resolved
+
         await clean_stale_repositories()
 
         auth_args = _get_git_auth_args(repository)

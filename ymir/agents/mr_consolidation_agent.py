@@ -19,7 +19,7 @@ from specfile import Specfile
 import ymir.agents.tasks as tasks
 from ymir.agents.build_agent import create_build_agent
 from ymir.agents.build_agent import get_prompt as get_build_prompt
-from ymir.agents.constants import I_AM_YMIR, mr_description_footer
+from ymir.agents.constants import I_AM_YMIR, ZSTREAM_TARGET_LABEL, mr_description_footer
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
@@ -238,8 +238,8 @@ async def _resolve_source_issues(
     all_jira: list[str] = list(issue_keys)
     for mr in matched_mrs:
         all_jira.extend(_extract_jira_issues_from_description(mr.get("description", "")))
-    state.jira_issues_collected = list(set(all_jira))
-    state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else ""
+    state.jira_issues_collected = sorted(set(all_jira))
+    state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
 
     logger.info(
         "Label-triggered consolidation: resolved %s to MRs %s",
@@ -401,13 +401,104 @@ async def run_workflow(
                 if not fetched:
                     raise RuntimeError(f"Could not fetch branch {branch_name} from any remote")
 
-            for branch_name in candidate_branches:
-                _, diff_out, _ = await run_subprocess(
+            # The fetch_branch MCP tool runs on the mcp-gateway pod while
+            # subsequent git commands run on this (agent) pod.  Both share
+            # an NFS4 PVC whose default acdirmin=30s means the agent's
+            # NFS client may serve stale directory listings for up to 30s
+            # after the gateway writes new ref files.  Sleep long enough
+            # for the directory attribute cache to expire.
+            _NFS_CACHE_WAIT = 60
+            logger.info(
+                "Waiting %ds for NFS attribute cache to expire after MCP fetch",
+                _NFS_CACHE_WAIT,
+            )
+            await asyncio.sleep(_NFS_CACHE_WAIT)
+
+            next_step = "per_commit_flow" if release_strategy == "per_commit" else "run_consolidation_agent"
+
+            if not state.mr_branches:
+                all_mrs = state.all_open_mrs
+                _, target_head, _ = await run_subprocess(
+                    ["git", "rev-parse", dist_git_branch],
+                    cwd=state.local_clone,
+                    env=git_env,
+                )
+                target_head = (target_head or "").strip()
+
+                current_mrs = []
+                for mr in all_mrs:
+                    branch_name = mr["source_branch"]
+                    _, merge_base, _ = await run_subprocess(
+                        ["git", "merge-base", dist_git_branch, branch_name],
+                        cwd=state.local_clone,
+                        env=git_env,
+                    )
+                    merge_base = (merge_base or "").strip()
+                    if merge_base == target_head:
+                        current_mrs.append(mr)
+                    else:
+                        logger.warning(
+                            "Skipping stale MR '%s' (%s): based on %s, current %s HEAD is %s",
+                            mr["title"],
+                            mr["url"],
+                            merge_base[:12] or "???",
+                            dist_git_branch,
+                            target_head[:12],
+                        )
+
+                if len(current_mrs) < 2:
+                    logger.info(
+                        "Fewer than 2 MRs share the current %s HEAD, nothing to consolidate",
+                        dist_git_branch,
+                    )
+                    state.consolidation_result = MRConsolidationOutputSchema(
+                        success=True,
+                        status="Fewer than 2 MRs based on current HEAD; nothing to do.",
+                    )
+                    return Workflow.END
+
+                oldest_two = current_mrs[:2]
+                state.mr_urls = [mr["url"] for mr in oldest_two]
+                state.mr_branches = [mr["source_branch"] for mr in oldest_two]
+                state.mr_titles = [mr["title"] for mr in oldest_two]
+                state.mr_descriptions = [mr.get("description", "") for mr in oldest_two]
+
+                all_jira = []
+                for mr in oldest_two:
+                    all_jira.extend(_extract_jira_issues_from_description(mr.get("description", "")))
+                state.jira_issues_collected = list(set(all_jira))
+                state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else package
+
+                state.current_mrs_count = len(current_mrs)
+
+                logger.info(
+                    "Selected MRs for consolidation (same HEAD): %s",
+                    [mr["url"] for mr in oldest_two],
+                )
+
+            for branch_name in state.mr_branches:
+                exit_code, diff_out, diff_err = await run_subprocess(
                     ["git", "diff", "--name-only", "--diff-filter=A", f"{dist_git_branch}...{branch_name}"],
                     cwd=state.local_clone,
                     env=git_env,
                 )
-                new_patches = [f for f in diff_out.strip().splitlines() if f.endswith(".patch")]
+                if exit_code != 0:
+                    err_msg = (diff_err or "").strip()
+                    logger.error(
+                        "git diff failed for %s...%s (exit %d): %s",
+                        dist_git_branch,
+                        branch_name,
+                        exit_code,
+                        err_msg,
+                    )
+                    state.consolidation_result = MRConsolidationOutputSchema(
+                        success=False,
+                        status="Failed to diff branch",
+                        error=f"git diff {dist_git_branch}...{branch_name} "
+                        f"failed (exit {exit_code}): {err_msg}",
+                    )
+                    return "handle_failure"
+                new_patches = [f for f in (diff_out or "").strip().splitlines() if f.endswith(".patch")]
                 if new_patches:
                     state.patches_per_mr[branch_name] = new_patches
             logger.info("Per-MR patch mapping: %s", state.patches_per_mr)
@@ -466,8 +557,10 @@ async def run_workflow(
             all_jira = []
             for mr in oldest_two:
                 all_jira.extend(_extract_jira_issues_from_description(mr.get("description", "")))
-            state.jira_issues_collected = list(set(all_jira))
-            state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else package
+            state.jira_issues_collected = sorted(set(all_jira))
+            state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
+            if state.jira_issues_collected:
+                current_jira_issue.set(",".join(state.jira_issues_collected))
 
             state.current_mrs_count = len(current_mrs)
 
@@ -978,6 +1071,16 @@ async def run_workflow(
                     available_tools=gateway_tools,
                 )
 
+                source_labels = {
+                    label
+                    for mr in state.all_open_mrs
+                    if mr["url"] in state.mr_urls
+                    for label in (mr.get("labels") or [])
+                }
+                labels = ["ymir_backport"]
+                if ZSTREAM_TARGET_LABEL in source_labels:
+                    labels.append(ZSTREAM_TARGET_LABEL)
+
                 mr_result_raw = await run_tool(
                     "open_merge_request",
                     fork_url=state.fork_url,
@@ -985,23 +1088,24 @@ async def run_workflow(
                     description=combined_description,
                     target=dist_git_branch,
                     source=state.update_branch,
+                    labels=labels,
                     available_tools=gateway_tools,
                 )
                 mr_result = json.loads(mr_result_raw) if isinstance(mr_result_raw, str) else mr_result_raw
                 state.merge_request_url = mr_result.get("url", mr_result_raw)
-                state.merge_request_newly_created = mr_result.get("is_new", True)
+                state.merge_request_newly_created = mr_result.get("is_new_mr", True)
                 logger.info("Consolidated MR created: %s", state.merge_request_url)
 
-                if state.merge_request_url:
+                if not state.merge_request_newly_created and state.merge_request_url and labels:
                     try:
                         await run_tool(
                             "add_merge_request_labels",
                             merge_request_url=state.merge_request_url,
-                            labels=["ymir_backport"],
+                            labels=labels,
                             available_tools=gateway_tools,
                         )
                     except Exception as e:
-                        logger.warning("Failed to label consolidated MR: %s", e)
+                        logger.warning("Failed to label reused consolidated MR: %s", e)
             except Exception as e:
                 logger.error("Failed to create consolidated MR: %s", e)
                 state.consolidation_result = MRConsolidationOutputSchema(
@@ -1119,7 +1223,7 @@ async def run_workflow(
         initial_state = ConsolidationState(
             package=package,
             dist_git_branch=dist_git_branch,
-            jira_issue=f"consolidation-{package}",
+            jira_issue=None,
             release_strategy=release_strategy,
             attempts_remaining=max_build_attempts,
         )
@@ -1130,7 +1234,7 @@ async def run_workflow(
             all_jira = []
             for b in backport_branches:
                 all_jira.extend(b.get("jira_issues", []))
-            initial_state.jira_issues_collected = list(set(all_jira))
+            initial_state.jira_issues_collected = sorted(set(all_jira))
             if initial_state.jira_issues_collected:
                 initial_state.jira_issue = initial_state.jira_issues_collected[0]
 
@@ -1204,7 +1308,9 @@ def _build_consolidated_description(
 
     parts = [
         "## Consolidated Backport MR\n",
-        f"This MR consolidates multiple backport merge requests {I_AM_YMIR}\n",
+        f"This MR consolidates multiple backport merge requests {I_AM_YMIR} "
+        "Learn more about [MR consolidation and configuration of its behavior]"
+        "(https://ymir.pages.redhat.com/docs/agents/mr-consolidation/).\n",
     ]
 
     if jira_issues:
@@ -1242,7 +1348,7 @@ async def main() -> None:
     if (package := os.getenv("PACKAGE")) and (branch := os.getenv("BRANCH")):
         release_strategy = os.getenv("RELEASE_STRATEGY", "per_commit")
         logger.info("Running in direct mode for %s/%s", package, branch)
-        with span_processor.start_transaction(f"consolidation-{package}", workflow="mr_consolidation"):
+        with span_processor.start_transaction(None, workflow="mr_consolidation"):
             state = await run_workflow(
                 package=package,
                 dist_git_branch=branch,
@@ -1272,11 +1378,11 @@ async def main() -> None:
 
         async def process_task(payload: bytes) -> None:
             job = MergeConsolidationJob.model_validate_json(payload)
-            jira_key = job.source_issues[0] if job.source_issues else f"{job.package}/{job.target_branch}"
+            jira_key = ",".join(job.source_issues) if job.source_issues else None
             current_jira_issue.set(jira_key)
             try:
                 with span_processor.start_transaction(
-                    f"consolidation-{job.package}",
+                    jira_key,
                     workflow="mr_consolidation",
                 ):
                     job_strategy = job.release_strategy or os.getenv(

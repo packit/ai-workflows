@@ -20,43 +20,52 @@ prepare:
       - git
       - make
 
-  - name: Fetch test fixtures and secrets
+  - name: Clone git repo with Jiras and repos for mocking
     how: shell
     script: |
         set -euo pipefail
-        cd $TMT_TREE
+        cd $TMT_PLAN_DATA
 
-        # Clone testing-jiras for mock Jira data and mock_repos fixtures
         git clone --depth 1 \
             "https://oauth2:${GITLAB_CI_TOKEN}@gitlab.cee.redhat.com/jotnar-project/testing-jiras.git" \
             /tmp/testing-jiras
 
-        cp /tmp/testing-jiras/mock_data/*.json \
-            ymir/agents/tests/e2e/mock_repos/
+        mkdir ./mock_repos
+        cp -r /tmp/testing-jiras/mock_data/* ./mock_repos/
 
-        cp -r /tmp/testing-jiras/jiras/* \
-            ymir/tools/privileged/tests/data/
+        mkdir ./jiras
+        cp -r /tmp/testing-jiras/jiras/* ./jiras
 
-        # Clone CI secrets repo and populate .secrets/
+        rm -rf /tmp/testing-jiras
+
+  - name: Fetch and set up secrets
+    how: shell
+    script: |
+        set -euo pipefail
+        cd $TMT_PLAN_DATA
+
         git clone --depth 1 \
             "https://oauth2:${GITLAB_CI_TOKEN}@gitlab.cee.redhat.com/jotnar-project/ci-secrets.git" \
             /tmp/ci-secrets
 
-        mkdir -p .secrets
-        cp /tmp/ci-secrets/beeai-agent.env .secrets/
-        cp /tmp/ci-secrets/mcp-gateway.env .secrets/
-        cp /tmp/ci-secrets/rhel-config.json .secrets/
-        cp /tmp/ci-secrets/jotnar-vertex-dev.json .secrets/
-        touch .secrets/keytab
+        mkdir -p ./.secrets
+        cp /tmp/ci-secrets/beeai-agent.env ./.secrets/
+        cp /tmp/ci-secrets/mcp-gateway.env ./.secrets/
+        cp /tmp/ci-secrets/rhel-config.json ./.secrets/
+        cp /tmp/ci-secrets/jotnar-vertex-dev.json ./.secrets/
+        cp /tmp/ci-secrets/otel-collector-config.yaml ./.secrets/
+        cp /tmp/ci-secrets/.env ./.secrets/
+        touch ./.secrets/keytab
 
-        rm -rf /tmp/testing-jiras /tmp/ci-secrets
+        rm -rf /tmp/ci-secrets
 
 discover:
     how: shell
     tests:
       - name: triage-agent-e2e
-        test: make run-triage-agent-e2e-tests
+        test: plans/run-triage.sh
         duration: 45m
+        result: custom
 
 execute:
     how: tmt

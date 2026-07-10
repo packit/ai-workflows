@@ -20,31 +20,31 @@ jobs:
     manual_trigger: true
     use_internal_tf: true
     targets:
-      - centos-stream-10-x86_64
+      - fedora-latest-stable
     tf_extra_params:
       environments:
-        - settings:
-            provisioning:
-              tags:
-                - m1.large
-          tmt:
+        # - settings:
+        #     provisioning:
+        #       tags:
+        #         - m1.large
+        - tmt:
             context:
               how: full
 
   - job: tests
     trigger: commit
-    branch: main
+    branch: "(main|test-pr/.+)"
     identifier: commit-test-triage-e2e
     skip_build: true
     use_internal_tf: true
     targets:
-      - centos-stream-10-x86_64
+      - fedora-latest-stable
     tf_extra_params:
       environments:
-        - settings:
-            provisioning:
-              tags:
-                - m1.large
-          tmt:
+        # - settings:
+        #     provisioning:
+        #       tags:
+        #         - m1.large
+        - tmt:
             context:
               how: full

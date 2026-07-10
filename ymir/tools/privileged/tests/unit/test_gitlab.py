@@ -4,9 +4,9 @@ from pathlib import Path
 
 import gitlab
 import pytest
+from beeai_framework.tools import ToolError
 from flexmock import flexmock
 from ogr.abstract import PRStatus
-from ogr.exceptions import GitlabAPIException
 from ogr.services.gitlab import GitlabService
 from ogr.services.gitlab.project import GitlabProject
 
@@ -134,14 +134,28 @@ async def test_open_merge_request():
     target = "c10s"
     source = "automated-package-update-RHEL-12345"
     mr_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/1"
-    pr_mock = flexmock(url=mr_url, status=PRStatus.open, id=1)
-    flexmock(GitlabService).should_receive("get_project_from_url").with_args(url=fork_url).and_return(
-        flexmock(
-            create_pr=lambda title, body, target, source: pr_mock,
-            parent=flexmock(get_pr=lambda id: pr_mock),
-        )
+    parent_project_id = 42
+    raw_mr_mock = flexmock(web_url=mr_url, iid=1, author={"username": "bot"})
+    mr_manager_mock = flexmock()
+    expected_params = {
+        "source_branch": source,
+        "target_branch": target,
+        "title": title,
+        "description": description,
+        "target_project_id": parent_project_id,
+    }
+    mr_manager_mock.should_receive("create").with_args(expected_params).and_return(raw_mr_mock).once()
+
+    parent_gitlab_repo = flexmock(attributes={"id": parent_project_id})
+    parent_project = flexmock(gitlab_repo=parent_gitlab_repo)
+    fork_project = flexmock(
+        is_fork=True,
+        parent=parent_project,
+        gitlab_repo=flexmock(mergerequests=mr_manager_mock),
     )
-    pr_mock.should_receive("add_label").never()
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(url=fork_url).and_return(
+        fork_project
+    )
     out = await OpenMergeRequestTool().run(
         input={
             "fork_url": fork_url,
@@ -155,6 +169,50 @@ async def test_open_merge_request():
 
 
 @pytest.mark.asyncio
+async def test_open_merge_request_with_labels():
+    fork_url = "https://gitlab.com/ai-bot/bash.git"
+    title = "Fix RHEL-12345"
+    description = "Resolves RHEL-12345"
+    target = "c10s"
+    source = "automated-package-update-RHEL-12345"
+    mr_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/1"
+    parent_project_id = 42
+    raw_mr_mock = flexmock(web_url=mr_url, iid=1, author={"username": "bot"})
+    mr_manager_mock = flexmock()
+    expected_params = {
+        "source_branch": source,
+        "target_branch": target,
+        "title": title,
+        "description": description,
+        "labels": "ymir_backport,target::zstream",
+        "target_project_id": parent_project_id,
+    }
+    mr_manager_mock.should_receive("create").with_args(expected_params).and_return(raw_mr_mock).once()
+
+    parent_gitlab_repo = flexmock(attributes={"id": parent_project_id})
+    parent_project = flexmock(gitlab_repo=parent_gitlab_repo)
+    fork_project = flexmock(
+        is_fork=True,
+        parent=parent_project,
+        gitlab_repo=flexmock(mergerequests=mr_manager_mock),
+    )
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(url=fork_url).and_return(
+        fork_project
+    )
+    out = await OpenMergeRequestTool().run(
+        input={
+            "fork_url": fork_url,
+            "title": title,
+            "description": description,
+            "target": target,
+            "source": source,
+            "labels": ["ymir_backport", "target::zstream"],
+        }
+    )
+    assert out.result == OpenMergeRequestResult(url=mr_url, is_new_mr=True)
+
+
+@pytest.mark.asyncio
 async def test_open_merge_request_with_existing_mr():
     fork_url = "https://gitlab.com/ai-bot/bash.git"
     title = "Fix RHEL-12345"
@@ -162,6 +220,7 @@ async def test_open_merge_request_with_existing_mr():
     target = "c10s"
     source = "automated-package-update-RHEL-12345"
     mr_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/1"
+    parent_project_id = 42
     pr_mock = flexmock(
         url=mr_url,
         source_branch=source,
@@ -170,19 +229,23 @@ async def test_open_merge_request_with_existing_mr():
         id=1,
     )
 
-    # create_pr raises an exception with code 409 indicating the MR already exists
-    def create_pr_raises(*args, **kwargs):
-        exc = GitlabAPIException()
-        exc.__cause__ = gitlab.GitlabError(response_code=409)
-        raise exc
+    # mergerequests.create raises 409 indicating the MR already exists
+    mr_manager_mock = flexmock()
+    mr_manager_mock.should_receive("create").and_raise(gitlab.GitlabError(response_code=409))
 
-    flexmock(GitlabService).should_receive("get_project_from_url").with_args(url=fork_url).and_return(
-        flexmock(
-            create_pr=create_pr_raises,
-            parent=flexmock(get_pr_list=lambda: [pr_mock], get_pr=lambda id: pr_mock),
-        )
+    parent_gitlab_repo = flexmock(attributes={"id": parent_project_id})
+    parent_project = flexmock(
+        gitlab_repo=parent_gitlab_repo,
+        get_pr_list=lambda: [pr_mock],
     )
-    pr_mock.should_receive("add_label").never()
+    fork_project = flexmock(
+        is_fork=True,
+        parent=parent_project,
+        gitlab_repo=flexmock(mergerequests=mr_manager_mock),
+    )
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(url=fork_url).and_return(
+        fork_project
+    )
     out = await OpenMergeRequestTool().run(
         input={
             "fork_url": fork_url,
@@ -224,6 +287,62 @@ async def test_clone_repository(mock_git_repo_basepath):
     result = (
         await CloneRepositoryTool().run(
             input={"repository": repository, "branch": branch, "clone_path": clone_path}
+        )
+    ).result
+    assert result.startswith("Successfully")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        Path("/tmp/bash"),
+        Path("/var/lib/bash"),
+    ],
+    ids=["outside-base", "unrelated-absolute"],
+)
+async def test_clone_repository_rejects_path_outside_basepath(mock_git_repo_basepath, bad_path):
+    with pytest.raises(ToolError, match="must be under"):
+        await CloneRepositoryTool().run(
+            input={"repository": "https://gitlab.com/redhat/rhel/rpms/bash", "clone_path": bad_path}
+        )
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_rejects_path_traversal(mock_git_repo_basepath):
+    traversal_path = mock_git_repo_basepath / ".." / "tmp" / "bash"
+    with pytest.raises(ToolError, match="must be under"):
+        await CloneRepositoryTool().run(
+            input={"repository": "https://gitlab.com/redhat/rhel/rpms/bash", "clone_path": traversal_path}
+        )
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_rejects_basepath_root(mock_git_repo_basepath):
+    with pytest.raises(ToolError, match="must be under"):
+        await CloneRepositoryTool().run(
+            input={
+                "repository": "https://gitlab.com/redhat/rhel/rpms/bash",
+                "clone_path": mock_git_repo_basepath,
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_accepts_path_inside_basepath(mock_git_repo_basepath):
+    valid_path = mock_git_repo_basepath / "RHEL-12345" / "bash"
+
+    async def create_subprocess_exec(cmd, *args, **kwargs):
+        async def wait():
+            return 0
+
+        return flexmock(wait=wait)
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+
+    result = (
+        await CloneRepositoryTool().run(
+            input={"repository": "https://gitlab.com/redhat/rhel/rpms/bash", "clone_path": valid_path}
         )
     ).result
     assert result.startswith("Successfully")

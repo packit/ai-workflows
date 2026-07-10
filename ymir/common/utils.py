@@ -201,14 +201,12 @@ def _get_koji_build(koji_url: str, nvr: str) -> dict | None:
     return koji.ClientSession(koji_url).getBuild(nvr)
 
 
-async def get_latest_candidate_build(package: str, dist_git_branch: str) -> tuple[EVR, str]:
-    candidate_tags = [
-        f"{dist_git_branch}-candidate",
-        f"{dist_git_branch}-z-candidate",
-    ]
-
+async def _get_latest_build_from_tags(
+    package: str,
+    *tags: str,
+) -> tuple[EVR, str]:
     results = await asyncio.gather(
-        *(asyncio.to_thread(_get_latest_koji_build, BREWHUB_URL, tag, package) for tag in candidate_tags),
+        *(asyncio.to_thread(_get_latest_koji_build, BREWHUB_URL, tag, package) for tag in tags),
     )
     latest = None
     for build in results:
@@ -218,12 +216,27 @@ async def get_latest_candidate_build(package: str, dist_git_branch: str) -> tupl
         if latest is None or latest[0] < evr:
             latest = (evr, build["build_id"])
     if latest is None:
-        raise RuntimeError(f"There are no builds of {package} in {' or '.join(candidate_tags)}")
+        raise RuntimeError(f"There are no builds of {package} in {' or '.join(tags)}")
     evr, build_id = latest
     session = koji.ClientSession(BREWHUB_URL)
     metadata = await asyncio.to_thread(session.getBuild, build_id, strict=True)
     source_ref = metadata["source"].split("#")[-1]
     return evr, source_ref
+
+
+async def get_latest_candidate_build(package: str, dist_git_branch: str) -> tuple[EVR, str]:
+    return await _get_latest_build_from_tags(
+        package,
+        f"{dist_git_branch}-candidate",
+        f"{dist_git_branch}-z-candidate",
+    )
+
+
+async def get_latest_z_pending_build(package: str, dist_git_branch: str) -> tuple[EVR, str]:
+    return await _get_latest_build_from_tags(
+        package,
+        f"{dist_git_branch}-z-pending",
+    )
 
 
 def _resolve_buildroot_checks(

@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class PackageUpdateState(BaseModel):
-    jira_issue: str
+    jira_issue: str | None
     package: str
     dist_git_branch: str
     local_clone: Path | None = Field(default=None)

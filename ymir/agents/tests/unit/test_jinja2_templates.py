@@ -468,6 +468,8 @@ class TestTriageTemplate:
         assert "redhat/rhel/rpms" in result
         assert "rhel-10.2" in result
         assert "centos-stream" in result
+        assert "clone_path" in result
+        assert "/git-repos/RHEL-189361/" in result
 
     def test_renders_needs_internal_fix_without_branch_falls_back(self):
         result = render_template(

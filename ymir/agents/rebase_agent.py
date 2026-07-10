@@ -21,7 +21,7 @@ from pydantic import Field
 import ymir.agents.tasks as tasks
 from ymir.agents.build_agent import create_build_agent
 from ymir.agents.build_agent import get_prompt as get_build_prompt
-from ymir.agents.constants import I_AM_YMIR, mr_description_footer
+from ymir.agents.constants import I_AM_YMIR, ZSTREAM_TARGET_LABEL, mr_description_footer
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
@@ -129,6 +129,7 @@ async def main() -> None:
 
     class State(PackageUpdateState):
         version: str
+        fix_version: str | None = Field(default=None)
         justification: str | None = Field(default=None)
         triage_summary: str | None = Field(default=None)
         fedora_clone: Path | None = Field(default=None)
@@ -144,6 +145,7 @@ async def main() -> None:
         dist_git_branch,
         version,
         jira_issue,
+        fix_version=None,
         justification=None,
         triage_summary=None,
         redis_conn=None,
@@ -351,7 +353,14 @@ async def main() -> None:
                         ),
                         available_tools=gateway_tools,
                         commit_only=dry_run,
-                        labels=["ymir_rebase"],
+                        labels=["ymir_rebase"]
+                        + (
+                            [ZSTREAM_TARGET_LABEL]
+                            if await tasks.needs_zstream_target_label(
+                                state.dist_git_branch, state.fix_version
+                            )
+                            else []
+                        ),
                     )
                 except Exception as e:
                     logger.warning(f"Error committing and opening MR: {e}")
@@ -397,6 +406,7 @@ async def main() -> None:
                     dist_git_branch=dist_git_branch,
                     version=version,
                     jira_issue=jira_issue,
+                    fix_version=fix_version,
                     justification=justification,
                     triage_summary=triage_summary,
                 ),
@@ -416,6 +426,7 @@ async def main() -> None:
                 dist_git_branch=branch,
                 version=version,
                 jira_issue=jira_issue,
+                fix_version=os.getenv("FIX_VERSION"),
                 justification=os.getenv("JUSTIFICATION", None),
                 triage_summary=os.getenv("TRIAGE_SUMMARY", None),
                 redis_conn=None,
@@ -513,6 +524,7 @@ async def main() -> None:
                         dist_git_branch=dist_git_branch,
                         version=rebase_data.version,
                         jira_issue=rebase_data.jira_issue,
+                        fix_version=rebase_data.fix_version,
                         justification=rebase_data.justification,
                         triage_summary=rebase_data.triage_summary,
                         redis_conn=redis,

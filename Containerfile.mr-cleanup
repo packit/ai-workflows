@@ -1,0 +1,19 @@
+FROM fedora:43
+
+RUN dnf -y install \
+      python3 \
+      python3-backoff \
+      python3-requests \
+    && dnf clean all
+
+RUN useradd -m mrcleanup
+
+WORKDIR /home/mrcleanup
+
+COPY ymir/mr_cleanup/ /home/mrcleanup/ymir/mr_cleanup/
+
+RUN chgrp -R root /home/mrcleanup && chmod -R g+rwX /home/mrcleanup
+
+USER mrcleanup
+
+CMD ["python3", "-m", "ymir.mr_cleanup.mr_cleanup"]

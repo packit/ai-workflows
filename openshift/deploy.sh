@@ -104,6 +104,11 @@ apply configmap-jira-issue-fetcher-todo-env.yml
 apply cronjob-jira-issue-fetcher.yml
 apply cronjob-jira-issue-fetcher-todo.yml
 
+# MR Cleanup
+apply imagestream-mr-cleanup.yml
+import_image mr-cleanup
+apply cronjob-mr-cleanup.yml
+
 # # Supervisor
 # apply imagestream-supervisor.yml
 # import_image supervisor

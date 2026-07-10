@@ -13,6 +13,7 @@ from specfile import Specfile
 from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
 from ymir.agents.utils import check_subprocess, mcp_tools, run_subprocess, run_tool
 from ymir.common.base_utils import is_cs_branch
+from ymir.common.config import load_rhel_config
 from ymir.common.merge_queue import (  # noqa: F401 — re-exported for agents and tests
     _CONSOLIDATION_HASH_KEY,
     _consolidation_field_key,
@@ -39,6 +40,24 @@ from ymir.tools.unprivileged.specfile import UpdateReleaseTool
 from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
 
 logger = logging.getLogger(__name__)
+
+
+async def needs_zstream_target_label(dist_git_branch: str, fix_version: str | None) -> bool:
+    """Check if the fix targets a z-stream on an active CentOS Stream.
+
+    Maintenance streams (e.g. c8s / RHEL 8) are excluded — all builds there are
+    z-stream by default, so the label would add no information.
+    """
+    if not fix_version or not is_cs_branch(dist_git_branch):
+        return False
+    parsed = parse_rhel_version(fix_version)
+    if not parsed or not parsed[2]:
+        return False
+
+    config = await load_rhel_config()
+    major = parsed[0]
+    y_streams = config.get("current_y_streams", {})
+    return major in y_streams
 
 
 async def _clone_fedora_dist_git(package: str, destination: Path) -> bool:
@@ -294,17 +313,22 @@ async def commit_push_and_open_mr(
         allow_empty,
     ):
         return None, False
+    tool_kwargs = {
+        "fork_url": fork_url,
+        "title": mr_title,
+        "description": mr_description,
+        "target": dist_git_branch,
+        "source": update_branch,
+    }
+    if labels:
+        tool_kwargs["labels"] = labels
     result = await run_tool(
         "open_merge_request",
-        fork_url=fork_url,
-        title=mr_title,
-        description=mr_description,
-        target=dist_git_branch,
-        source=update_branch,
+        **tool_kwargs,
         available_tools=available_tools,
     )
     mr = OpenMergeRequestResult.model_validate(result)
-    if mr.url and labels:
+    if not mr.is_new_mr and mr.url and labels:
         try:
             await run_tool(
                 "add_merge_request_labels",
@@ -405,7 +429,8 @@ async def change_jira_status(
     )
 
 
-async def get_jira_labels(jira_issue: str) -> list[str]:
+async def get_jira_issue_metadata(jira_issue: str) -> tuple[list[str], str | None]:
+    """Fetch labels and status for a Jira issue in a single API call."""
     try:
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
             details = await run_tool(
@@ -413,10 +438,12 @@ async def get_jira_labels(jira_issue: str) -> list[str]:
                 issue_key=jira_issue,
                 available_tools=gateway_tools,
             )
-            return details.get("fields", {}).get("labels", [])
+            labels = details.get("fields", {}).get("labels", [])
+            status = details.get("fields", {}).get("status", {}).get("name")
+            return labels, status
     except Exception as e:
-        logger.warning(f"Failed to get labels for {jira_issue}: {e}")
-        return []
+        logger.warning(f"Failed to get metadata for {jira_issue}: {e}")
+        return [], None
 
 
 # Intermediate "_failed" labels (transient retry-state) are suppressed for

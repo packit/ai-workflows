@@ -3,7 +3,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ymir.agents.tasks import change_jira_status, fork_and_prepare_dist_git, post_user_ack_once
+from ymir.agents.tasks import (
+    change_jira_status,
+    fork_and_prepare_dist_git,
+    get_jira_issue_metadata,
+    needs_zstream_target_label,
+    post_user_ack_once,
+)
 from ymir.common.models import Task
 
 
@@ -193,3 +199,75 @@ async def test_post_user_ack_once_does_not_persist_on_failure():
 
     mock_comment.assert_awaited_once()
     assert "ack_posted" not in task.metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status_name, expected_status",
+    [
+        ("Closed", "Closed"),
+        ("Done", "Done"),
+        ("In Progress", "In Progress"),
+        ("New", "New"),
+    ],
+)
+async def test_get_jira_issue_metadata_returns_labels_and_status(status_name, expected_status):
+    """get_jira_issue_metadata extracts both labels and status from one API call."""
+    fake_details = {
+        "fields": {
+            "labels": ["ymir_todo", "SecurityTracking"],
+            "status": {"name": status_name},
+        }
+    }
+    with (
+        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
+        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock, return_value=fake_details),
+    ):
+        labels, status = await get_jira_issue_metadata("RHEL-99999")
+
+    assert labels == ["ymir_todo", "SecurityTracking"]
+    assert status == expected_status
+
+
+@pytest.mark.asyncio
+async def test_get_jira_issue_metadata_returns_defaults_on_failure():
+    """On MCP/network failure, return empty labels and None status."""
+    with (
+        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
+        patch(
+            "ymir.agents.tasks.run_tool",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("connection refused"),
+        ),
+    ):
+        labels, status = await get_jira_issue_metadata("RHEL-99999")
+
+    assert labels == []
+    assert status is None
+
+
+MOCK_RHEL_CONFIG = {
+    "current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"},
+    "current_z_streams": {"8": "rhel-8.10.z", "9": "rhel-9.8.z", "10": "rhel-10.2.z"},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "branch, fix_version, expected",
+    [
+        ("c10s", "rhel-10.0.z", True),
+        ("c9s", "rhel-9.7.z", True),
+        ("c10s", "rhel-10.1", False),
+        ("c9s", None, False),
+        ("rhel-9.7.0", "rhel-9.7.z", False),
+        ("c10s", "rhel-9.0.0.z", True),
+        ("c8s", "rhel-8.10.z", False),
+    ],
+)
+async def test_needs_zstream_target_label(branch, fix_version, expected):
+    async def _mock_config():
+        return MOCK_RHEL_CONFIG
+
+    with patch("ymir.agents.tasks.load_rhel_config", _mock_config):
+        assert await needs_zstream_target_label(branch, fix_version) == expected

@@ -87,7 +87,11 @@ def prompt_choice(label: str, choices: list[str], default: str = None) -> str:
 
 def run(cmd, **kwargs):
     print(f"  $ {' '.join(str(c) for c in cmd)}")
-    result = subprocess.run(cmd, **kwargs)
+    try:
+        result = subprocess.run(cmd, **kwargs)
+    except FileNotFoundError:
+        print(f"  ERROR: command '{cmd[0]}' not found. Please ensure it is installed and in your PATH.")
+        sys.exit(1)
     if result.returncode != 0:
         print(f"  ERROR: command failed with exit code {result.returncode}")
         sys.exit(1)
@@ -120,11 +124,14 @@ def collect_credentials() -> dict:
     use_keytab = input("  Do you have a keytab file for automated kinit? [y/N]: ").strip().lower() == "y"
     if use_keytab:
         creds["KEYTAB_FILE"] = prompt_value(
-            "Keytab file path", env_var="KEYTAB_FILE", default=str(Path.home() / ".secrets" / "keytab")
-        )
-
-    krb5cc = os.environ.get("KRB5CCNAME")
-    if krb5cc:
+    try:
+        klist_result = subprocess.run(["klist"], capture_output=True)
+        if klist_result.returncode == 0:
+            print("  Kerberos ticket found (klist succeeded).")
+        else:
+            print("  WARNING: No active Kerberos ticket. Run 'kinit' before using the tools.")
+    except FileNotFoundError:
+        print("  WARNING: 'klist' command not found. Ensure Kerberos client tools are installed.")
         creds["KRB5CCNAME"] = krb5cc
         print(f"  Using KRB5CCNAME from env: {krb5cc}")
 
@@ -159,12 +166,17 @@ def install_venv():
     if not VENV_PATH.exists():
         run([python, "-m", "venv", str(VENV_PATH)])
     else:
-        print(f"  Venv already exists at {VENV_PATH}")
+    python = "python3.13"
+    try:
+        result = subprocess.run([python, "--version"], capture_output=True)
+        if result.returncode != 0:
+            python = "python3"
+    except FileNotFoundError:
+        python = "python3"
 
-    pip = str(VENV_PATH / "bin" / "pip")
-    print("\n=> Installing ymir-common...")
-    run(
-        [
+    if python == "python3":
+        print(f"  python3.13 not found, falling back to {python}")
+        print("  WARNING: BeeAI framework requires Python < 3.14. Ensure your Python is compatible.")
             pip,
             "install",
             "--upgrade",
@@ -199,11 +211,13 @@ def write_mcp_config(client: str, creds: dict):
     priv_env = {"MCP_TRANSPORT": "stdio"}
     for key in ("GITLAB_TOKEN", "JIRA_URL", "JIRA_EMAIL", "JIRA_TOKEN", "KRB5CCNAME", "KEYTAB_FILE"):
         if creds.get(key):
-            priv_env[key] = creds[key]
-
     unpriv_env = {
         "MCP_TRANSPORT": "stdio",
         "UPSTREAM_SEARCH_API_URL": "http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1",
+    }
+    ca_bundle = Path("/etc/pki/tls/certs/ca-bundle.crt")
+    if ca_bundle.exists():
+        unpriv_env["REQUESTS_CA_BUNDLE"] = str(ca_bundle)
         "REQUESTS_CA_BUNDLE": "/etc/pki/tls/certs/ca-bundle.crt",
     }
 
@@ -234,12 +248,19 @@ def write_mcp_config(client: str, creds: dict):
                 "env": unpriv_env,
             },
         }
-        config_key = "mcpServers"
-
     existing_config = {}
     if config_path.exists():
         try:
-            existing_config = json.loads(config_path.read_text())
+            content = config_path.read_text()
+            if content.strip():
+                existing_config = json.loads(content)
+        except json.JSONDecodeError as e:
+            print(f"  ERROR: Failed to parse existing config at {config_path}: {e}")
+            print("  Please fix the JSON syntax or backup and remove the file before running again.")
+            sys.exit(1)
+        except OSError as e:
+            print(f"  ERROR: Failed to read existing config at {config_path}: {e}")
+            sys.exit(1)
         except (json.JSONDecodeError, OSError):
             pass
 

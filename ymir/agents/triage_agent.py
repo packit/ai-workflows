@@ -344,7 +344,28 @@ async def run_workflow(
                 f"pending_zstream_issues={state.cve_eligibility_result.pending_zstream_issues}"
             )
 
+            dup_key = state.cve_eligibility_result.duplicate_of
+
             if eligibility == TriageEligibility.IMMEDIATELY:
+                if dup_key and not dry_run:
+                    logger.info(
+                        f"Issue {state.jira_issue} has a closed/rejected duplicate "
+                        f"{dup_key} — posting informational comment and proceeding"
+                    )
+                    try:
+                        await tasks.comment_in_jira(
+                            jira_issue=state.jira_issue,
+                            agent_type="Triage",
+                            comment_text=(
+                                f"An older tracker {dup_key} exists for the same CVE, "
+                                f"component, and fix version, but it was closed/rejected. "
+                                f"Proceeding with triage for this tracker."
+                            ),
+                            available_tools=gateway_tools,
+                            user_triggered=user_triggered,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to post duplicate info comment: {e}")
                 return "run_triage_analysis"
 
             if force_cve_triage and not state.cve_eligibility_result.error:
@@ -385,6 +406,18 @@ async def run_workflow(
                     resolution=Resolution.ERROR,
                     data=ErrorData(
                         details=f"CVE eligibility check error: {state.cve_eligibility_result.error}",
+                        jira_issue=state.jira_issue,
+                    ),
+                )
+            elif dup_key:
+                state.triage_result = OutputSchema(
+                    resolution=Resolution.OPEN_ENDED_ANALYSIS,
+                    data=OpenEndedAnalysisData(
+                        summary=(
+                            f"Duplicate tracker detected. {state.jira_issue} appears to be "
+                            f"a duplicate of {dup_key} (same CVE, component, and fix version)."
+                        ),
+                        recommendation=(f"Consider closing this issue as a duplicate of {dup_key}."),
                         jira_issue=state.jira_issue,
                     ),
                 )

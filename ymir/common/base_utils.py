@@ -95,7 +95,12 @@ async def _race_shutdown(
     """
     work_task = asyncio.create_task(coro)
     stop_task = asyncio.create_task(shutdown_event.wait())
-    done, _ = await asyncio.wait({work_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+    try:
+        done, _ = await asyncio.wait({work_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        work_task.cancel()
+        stop_task.cancel()
+        raise
 
     if stop_task in done and work_task not in done:
         if cancel_on_shutdown:
@@ -242,7 +247,10 @@ async def run_task_loop(
         # out of `active` as each task transitions to done, which happens
         # *during* the gather below. Iterating `active` after the gather
         # would see an already-emptied dict and silently re-push nothing.
-        to_repush = list(active.items())
+        # Filter out tasks that are already done() — done-callbacks run via
+        # call_soon, so a completed task can still be in `active` briefly;
+        # re-pushing it would duplicate work that already ran.
+        to_repush = [(t, meta) for t, meta in active.items() if not t.done()]
         task_loop_logger.info(
             "Shutting down: cancelling %d active task(s) and re-pushing to Redis",
             len(to_repush),
@@ -252,8 +260,11 @@ async def run_task_loop(
         await asyncio.gather(*(t for t, _ in to_repush), return_exceptions=True)
 
         for _t, (source_queue, payload) in to_repush:
-            await fix_await(redis_conn.rpush(source_queue, payload))
-            task_loop_logger.info("Re-pushed task to %s on shutdown", source_queue)
+            try:
+                await fix_await(redis_conn.rpush(source_queue, payload))
+                task_loop_logger.info("Re-pushed task to %s on shutdown", source_queue)
+            except Exception:
+                task_loop_logger.exception("Failed to re-push task to %s on shutdown", source_queue)
 
     if orphan_poll_task is not None:
         # Bounded by poll_timeout (BRPOP's own timeout, or a well-behaved
@@ -268,13 +279,12 @@ async def run_task_loop(
         )
         try:
             orphan_result = await orphan_poll_task
-        except Exception:
-            logger.exception("Orphaned poll task failed after shutdown; its result, if any, is lost")
-        else:
             if orphan_result is not None:
                 source_queue, payload = orphan_result
                 await fix_await(redis_conn.rpush(source_queue, payload))
                 task_loop_logger.info("Re-pushed orphaned poll result to %s on shutdown", source_queue)
+        except Exception:
+            logger.exception("Failed to resolve or re-push orphaned poll task after shutdown")
 
 
 def get_jira_auth_headers() -> dict[str, str]:

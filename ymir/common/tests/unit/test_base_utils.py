@@ -4,7 +4,7 @@ import signal
 import pytest
 from flexmock import flexmock
 
-from ymir.common.base_utils import install_shutdown_handler, run_task_loop
+from ymir.common.base_utils import _race_shutdown, install_shutdown_handler, run_task_loop
 
 _NO_DELAYED_RESULT = object()
 
@@ -25,6 +25,7 @@ class FakeRedis:
         self.rpush_calls: list[tuple[bytes, bytes]] = []
         self._delayed_result: tuple[bytes, bytes] | None | object = _NO_DELAYED_RESULT
         self._release_delayed = asyncio.Event()
+        self._rpush_failures: set[tuple[bytes, bytes]] = set()
 
     async def brpop(self, queues, timeout=None):
         self.brpop_calls += 1
@@ -46,7 +47,12 @@ class FakeRedis:
     def release_delayed(self) -> None:
         self._release_delayed.set()
 
+    def fail_rpush_for(self, queue: bytes, payload: bytes) -> None:
+        self._rpush_failures.add((queue, payload))
+
     async def rpush(self, queue, payload):
+        if (queue, payload) in self._rpush_failures:
+            raise RuntimeError("simulated rpush failure")
         self.rpush_calls.append((queue, payload))
         return 1
 
@@ -227,6 +233,58 @@ class TestRunTaskLoopShutdown:
         assert fake_redis.rpush_calls == []
 
     @pytest.mark.asyncio
+    async def test_repush_failure_does_not_abort_remaining_tasks(self):
+        """If RPUSH fails for one task during shutdown, the rest must still
+        be re-pushed rather than the whole batch being aborted."""
+        fake_redis = FakeRedis([(b"q1", b"p1"), (b"q1", b"p2")])
+        fake_redis.fail_rpush_for(b"q1", b"p1")
+        shutdown_event = asyncio.Event()
+
+        loop_task = asyncio.create_task(
+            run_task_loop(
+                fake_redis,
+                ["q1"],
+                _hang_forever,
+                max_concurrent=2,
+                shutdown_event=shutdown_event,
+            )
+        )
+        await _wait_until(lambda: fake_redis.brpop_calls >= 2)
+        await asyncio.sleep(0.01)
+
+        shutdown_event.set()
+        await asyncio.wait_for(loop_task, timeout=1)
+
+        assert fake_redis.rpush_calls == [(b"q1", b"p2")]
+
+    @pytest.mark.asyncio
+    async def test_orphan_poll_rpush_failure_does_not_crash(self):
+        """If the RPUSH for an orphaned poll result fails, run_task_loop
+        must return cleanly instead of raising."""
+        fake_redis = FakeRedis()
+        fake_redis.arm_delayed_result((b"q1", b"p1"))
+        fake_redis.fail_rpush_for(b"q1", b"p1")
+        shutdown_event = asyncio.Event()
+
+        loop_task = asyncio.create_task(
+            run_task_loop(
+                fake_redis,
+                ["q1"],
+                _noop,
+                max_concurrent=1,
+                shutdown_event=shutdown_event,
+            )
+        )
+        await _wait_until(lambda: fake_redis.brpop_calls >= 1)
+        await asyncio.sleep(0.01)
+
+        shutdown_event.set()
+        fake_redis.release_delayed()
+        await asyncio.wait_for(loop_task, timeout=1)
+
+        assert fake_redis.rpush_calls == []
+
+    @pytest.mark.asyncio
     async def test_custom_poll_fn_idle_sleep_is_interrupted_by_shutdown(self):
         """A custom poll_fn (e.g. mr_consolidation_agent) that repeatedly
         returns None while idle must not delay shutdown by the full
@@ -257,6 +315,30 @@ class TestRunTaskLoopShutdown:
     async def test_max_concurrent_below_one_raises(self):
         with pytest.raises(ValueError, match="max_concurrent must be at least 1"):
             await run_task_loop(FakeRedis(), ["queue1"], _noop, max_concurrent=0)
+
+
+class TestRaceShutdown:
+    @pytest.mark.asyncio
+    async def test_outer_cancellation_cleans_up_both_tasks(self):
+        """If the caller of _race_shutdown is itself cancelled, the two
+        internal tasks must not be left running in the background."""
+        shutdown_event = asyncio.Event()
+        started = asyncio.Event()
+
+        async def slow_coro():
+            started.set()
+            await asyncio.Event().wait()
+
+        runner = asyncio.ensure_future(_race_shutdown(slow_coro(), shutdown_event, cancel_on_shutdown=True))
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        runner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await runner
+
+        await asyncio.sleep(0)
+        leftover = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
+        assert leftover == []
 
 
 class TestInstallShutdownHandler:

@@ -29,6 +29,12 @@ from ymir.common.models import (
     Task,
 )
 from ymir.common.utils import get_all_sources
+from ymir.common.version_utils import (
+    construct_internal_branch_name,
+    is_older_zstream,
+    parse_rhel_version,
+    parse_zstream_branch_name,
+)
 from ymir.tools.unprivileged.specfile import UpdateReleaseTool
 from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
 
@@ -98,13 +104,22 @@ async def fork_and_prepare_dist_git(
             branch=dist_git_branch,
             available_tools=available_tools,
         )
-    await run_tool(
-        "clone_repository",
-        repository=repository,
-        branch=dist_git_branch,
-        clone_path=str(local_clone),
-        available_tools=available_tools,
-    )
+    if await is_older_zstream(dist_git_branch):
+        await run_tool(
+            "clone_repository",
+            repository=repository,
+            clone_path=str(local_clone),
+            available_tools=available_tools,
+        )
+        await check_subprocess(["git", "checkout", dist_git_branch], cwd=local_clone)
+    else:
+        await run_tool(
+            "clone_repository",
+            repository=repository,
+            branch=dist_git_branch,
+            clone_path=str(local_clone),
+            available_tools=available_tools,
+        )
     update_branch = f"{BRANCH_PREFIX}-{jira_issue}"
     await check_subprocess(["git", "checkout", "-B", update_branch], cwd=local_clone)
     fedora_clone = None
@@ -113,6 +128,33 @@ async def fork_and_prepare_dist_git(
         if not await _clone_fedora_dist_git(package, fedora_clone):
             fedora_clone = None
     return local_clone, update_branch, fork_url, fedora_clone
+
+
+async def find_leading_zstream_branch(dist_git_branch: str) -> str | None:
+    """Return the current (leading) z-stream branch if it is higher than *dist_git_branch*.
+
+    Looks up the leading z-stream for the same RHEL major version from
+    rhel-config.json and returns its dist-git branch name, or ``None`` when
+    the branch is already the leading z-stream (or not a z-stream at all).
+    """
+    parsed = parse_zstream_branch_name(dist_git_branch)
+    if not parsed:
+        return None
+    major, minor_str = parsed
+
+    from ymir.common.config import load_rhel_config
+
+    config = await load_rhel_config()
+    current_zstream = (config.get("current_z_streams") or {}).get(major)
+    if not current_zstream:
+        return None
+    current_parsed = parse_rhel_version(current_zstream)
+    if not current_parsed:
+        return None
+    current_minor = int(current_parsed[1])
+    if current_minor <= int(minor_str):
+        return None
+    return construct_internal_branch_name(major, current_parsed[1])
 
 
 async def prepare_dist_git_from_merge_request(

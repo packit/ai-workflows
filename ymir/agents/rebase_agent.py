@@ -132,6 +132,7 @@ async def main() -> None:
         justification: str | None = Field(default=None)
         triage_summary: str | None = Field(default=None)
         fedora_clone: Path | None = Field(default=None)
+        leading_zstream_branch: str | None = Field(default=None)
         rebase_log: list[str] = Field(default_factory=list)
         rebase_result: RebaseOutputSchema | None = Field(default=None)
         attempts_remaining: int = Field(default=max_build_attempts)
@@ -190,6 +191,7 @@ async def main() -> None:
                     with_fedora=True,
                 )
                 local_tool_options["working_directory"] = state.local_clone
+                state.leading_zstream_branch = await tasks.find_leading_zstream_branch(state.dist_git_branch)
                 return "run_rebase_agent"
 
             async def run_rebase_agent(state):
@@ -205,6 +207,7 @@ async def main() -> None:
                             jira_issue=state.jira_issue,
                             build_error=state.build_error,
                             triage_summary=state.triage_summary,
+                            leading_zstream_branch=state.leading_zstream_branch,
                         ),
                     ),
                     expected_output=RebaseOutputSchema,

@@ -8,6 +8,12 @@ This can be used as a reference for comparing package versions, spec
 files, patches, and other packaging details when explicitly instructed
 to do so.
 {% endif %}
+{% if leading_zstream_branch %}
+The leading z-stream branch {{ leading_zstream_branch }} is available locally.
+You can inspect its spec file by running:
+  git show origin/{{ leading_zstream_branch }}:{{ package }}.spec
+Use it as an additional reference for Source URLs and packaging decisions.
+{% endif %}
 
 {% if triage_summary %}
 Triage context (from the triage agent that selected this rebase):

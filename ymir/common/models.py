@@ -119,6 +119,10 @@ class RebaseInputSchema(BaseModel):
         default=None,
         description="Triage context: what was investigated and guidance on how the rebase should be done",
     )
+    leading_zstream_branch: str | None = Field(
+        default=None,
+        description="Leading z-stream branch in the same dist-git repo, if one exists",
+    )
 
 
 class RebaseOutputSchema(BaseModel):

@@ -76,6 +76,7 @@ except ImportError:
         jira_issue: str
         build_error: str | None = None
         triage_summary: str | None = None
+        leading_zstream_branch: str | None = None
 
     class MergeRequestInputSchema(BaseModel):  # type: ignore[no-redef]
         local_clone: Path

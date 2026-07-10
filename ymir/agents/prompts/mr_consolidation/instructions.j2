@@ -60,6 +60,12 @@ To consolidate the two MRs, follow these steps:
    - If patches modify the same file, combine the changes logically
    - If Patch tag numbers conflict, renumber to be sequential
 
+Note: not every MR adds a new patch file. Some MRs only modify the spec file
+(e.g. adding BuildRequires, changing configure flags, updating macros, or
+adjusting existing Patch tags). When one MR has no new patches, apply its
+spec-file changes on top of the other MR's changes. Do not skip an MR just
+because it has no patches — its spec changes are equally important.
+
 CRITICAL: Do NOT modify or remove any pre-existing patches in the repository.
 Only combine the NEW patches added by the two source MRs.
 

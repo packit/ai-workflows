@@ -6,6 +6,12 @@ on top of the current state.
 
 The patch file(s) from that commit are already present in the working directory.
 The spec file does NOT yet contain the Patch tag or %prep application line for them.
+{% if cherry_pick_conflict %}
+
+WARNING: The cherry-pick of this commit conflicted. Some files in the working
+tree may contain conflict markers (<<<<<<< / ======= / >>>>>>>). Resolve all
+conflicts before proceeding.
+{% endif %}
 
 Your task:
 1. Examine the new patch file(s) in the working directory to understand what they fix.

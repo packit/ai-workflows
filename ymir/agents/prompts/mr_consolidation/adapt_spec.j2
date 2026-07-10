@@ -1,0 +1,49 @@
+Your working directory is {{ local_clone }}, a clone of the dist-git repository for package {{ package }}.
+
+A previous patch ({{ base_branch }}) has already been applied to the spec file and committed.
+You now need to integrate the spec-file changes from commit {{ commit_sha }} of branch {{ other_branch }}.
+This commit did NOT add any new patch files — it only modified the spec file (e.g. BuildRequires,
+configure flags, macros, or similar).
+
+Here is the diff of the spec file introduced by that commit:
+
+```
+{{ spec_diff }}
+```
+
+{% if cherry_pick_conflict %}
+WARNING: The cherry-pick of this commit conflicted. The spec file in the working
+tree may contain conflict markers (<<<<<<< / ======= / >>>>>>>). You must resolve
+all conflicts before proceeding.
+{% endif %}
+Your task:
+1. Examine the diff above to understand what spec changes need to be applied.
+2. Apply those changes to the current spec file ({{ package }}.spec).
+   Ignore any changes to the Release field or %changelog section — those are
+   handled by separate workflow steps.
+{% if cherry_pick_conflict %}
+   First resolve any conflict markers in the spec file, then apply the changes.
+{% endif %}
+3. Run `run_package_prep` to verify the spec file is valid and all patches apply cleanly.
+4. If prep fails, investigate and fix the issue. The change from the other branch
+   may conflict with changes from the base branch — resolve such conflicts.
+{% if prep_error %}
+
+Note: a preliminary prep check already failed with:
+{{ prep_error }}
+{% endif %}
+
+CRITICAL constraints:
+- Do NOT modify any pre-existing patches in the repository.
+- Never change anything in the spec file changelog. The changelog will be handled by
+  a separate workflow step after your work is complete.
+- Never modify the Release field in the spec file. The Release field will be updated
+  by a separate deterministic workflow step.
+- Do NOT run `git fetch`, `git pull`, or `git clone`.
+- Do NOT run `git commit` — the commit will be created by a separate step.
+{% if build_error %}
+
+This is a retry. The previous adaptation attempt led to a build failure:
+{{ build_error }}
+Start over and fix the issue.
+{% endif %}

@@ -461,6 +461,91 @@ async def _check_zstream_clones_shipped(
     return (True, [])
 
 
+_REJECTED_RESOLUTIONS = frozenset({"NOTABUG", "WONTFIX", "WON'T DO", "DUPLICATE", "CANTFIX", "DROPPED"})
+
+
+class _DuplicateTrackerBlocked(Exception):
+    """Raised when a blocking duplicate tracker is found."""
+
+    def __init__(self, duplicate_of: str, reason: str) -> None:
+        super().__init__(reason)
+        self.duplicate_of = duplicate_of
+        self.reason = reason
+
+
+def _issue_number(key: str) -> int:
+    """Extract the numeric suffix from a Jira key like RHEL-12345."""
+    return int(key.rsplit("-", 1)[1])
+
+
+async def _check_duplicate_tracker(
+    cve_id: str, component: str, fix_version: str, issue_key: str
+) -> tuple[str | None, bool]:
+    """Check for duplicate CVE trackers (same CVE + component + fix version).
+
+    Returns (older_tracker_key, should_block):
+      - (None, False): no duplicate found
+      - ("RHEL-123", True): active older tracker exists, should block triage
+      - ("RHEL-123", False): older tracker exists but closed/rejected, flag only
+    """
+    project = issue_key.rsplit("-", 1)[0]
+    escaped_cve_id = cve_id.replace('"', '\\"')
+    escaped_component = component.replace('"', '\\"')
+    escaped_fix_version = fix_version.replace('"', '\\"')
+    jql = (
+        f'project = "{project}"'
+        f' AND summary ~ "{escaped_cve_id}" AND component = "{escaped_component}"'
+        f' AND fixVersion = "{escaped_fix_version}"'
+        f' AND labels = "SecurityTracking" AND key != "{issue_key}"'
+    )
+    logger.info(f"Checking for duplicate trackers with JQL: {jql}")
+
+    tool = SearchJiraIssuesTool()
+    output = await tool.run(input={"jql": jql, "fields": ["status", "resolution"], "max_results": 50})
+    issues = output.result
+
+    if not issues:
+        logger.info(f"No duplicate trackers found for {cve_id} in {component}/{fix_version}")
+        return (None, False)
+
+    current_num = _issue_number(issue_key)
+    active_older: list[str] = []
+    rejected_older: list[str] = []
+
+    for issue in issues:
+        key = issue.get("key", "")
+        try:
+            num = _issue_number(key)
+        except (ValueError, IndexError):
+            continue
+        if not key.startswith(f"{project}-") or num >= current_num:
+            continue
+
+        resolution = issue.get("fields", {}).get("resolution")
+        resolution_name = resolution.get("name", "") if isinstance(resolution, dict) else ""
+
+        if resolution_name.upper() in _REJECTED_RESOLUTIONS:
+            logger.info(f"  {key}: resolution={resolution_name} — rejected older tracker")
+            rejected_older.append(key)
+        else:
+            status_name = (issue.get("fields", {}).get("status") or {}).get("name", "")
+            logger.info(f"  {key}: status={status_name}, resolution={resolution_name} — active older tracker")
+            active_older.append(key)
+
+    if active_older:
+        oldest = min(active_older, key=_issue_number)
+        logger.info(f"Active duplicate tracker found: {oldest} (blocking {issue_key})")
+        return (oldest, True)
+
+    if rejected_older:
+        oldest = min(rejected_older, key=_issue_number)
+        logger.info(f"Rejected duplicate tracker found: {oldest} (flagging {issue_key}, not blocking)")
+        return (oldest, False)
+
+    logger.info(f"No older trackers found for {cve_id} in {component}/{fix_version}")
+    return (None, False)
+
+
 class CheckCveTriageEligibilityToolInput(BaseModel):
     issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
 
@@ -540,8 +625,26 @@ class CheckCveTriageEligibilityTool(
         rhel_config = await load_rhel_config()
         target_version = normalize_fix_version(target_version, rhel_config)
 
+        # --- Duplicate tracker check (runs before Y/Z-stream branching) ---
+        try:
+            duplicate_of = await self._check_for_duplicate(issue_key, fields, target_version)
+        except _DuplicateTrackerBlocked as dup:
+            return JSONToolOutput(
+                CVEEligibilityResult(
+                    is_cve=True,
+                    eligibility=TriageEligibility.NEVER,
+                    reason=dup.reason,
+                    duplicate_of=dup.duplicate_of,
+                ).model_dump()
+            )
+
         if re.match(r"^rhel-\d+\.\d+$", target_version.lower()):
-            return await self._check_ystream_eligibility(issue_key, fields, target_version)
+            return await self._check_ystream_eligibility(
+                issue_key,
+                fields,
+                target_version,
+                duplicate_of=duplicate_of,
+            )
 
         embargo = fields.get(EMBARGO_CUSTOM_FIELD, {}).get("value", "")
         if embargo == "True":
@@ -575,6 +678,7 @@ class CheckCveTriageEligibilityTool(
                 eligibility=TriageEligibility.IMMEDIATELY,
                 reason=reason,
                 needs_internal_fix=needs_internal_fix,
+                duplicate_of=duplicate_of,
             ).model_dump()
         )
 
@@ -646,11 +750,58 @@ class CheckCveTriageEligibilityTool(
             ).model_dump()
         )
 
+    async def _check_for_duplicate(
+        self,
+        issue_key: str,
+        fields: dict[str, Any],
+        target_version: str,
+    ) -> str | None:
+        """Run the duplicate tracker check and return early for blocking duplicates.
+
+        Returns the ``duplicate_of`` key (for non-blocking flagging) or *None*.
+        For blocking duplicates, returns the key directly — the caller must
+        check and short-circuit.  We intentionally return just the key here
+        so the caller can decide whether to block (NEVER) based on context;
+        the blocking decision is made by ``_check_duplicate_tracker`` already.
+        """
+        summary = fields.get("summary", "")
+        cve_id = extract_cve_id(summary)
+        components = fields.get("components", [])
+        component = components[0].get("name", "") if components else ""
+
+        if not cve_id or not component:
+            return None
+
+        try:
+            dup_key, should_block = await _check_duplicate_tracker(
+                cve_id,
+                component,
+                target_version,
+                issue_key,
+            )
+        except Exception as e:
+            logger.warning(f"Duplicate tracker check failed for {issue_key}: {e}")
+            return None
+
+        if dup_key and should_block:
+            raise _DuplicateTrackerBlocked(
+                duplicate_of=dup_key,
+                reason=(
+                    f"Duplicate tracker: {issue_key} duplicates older active tracker "
+                    f"{dup_key} (same CVE {cve_id}, component {component}, "
+                    f"fix version {target_version})"
+                ),
+            )
+
+        return dup_key
+
     async def _check_ystream_eligibility(
         self,
         issue_key: str,
         fields: dict[str, Any],
         target_version: str,
+        *,
+        duplicate_of: str | None = None,
     ) -> JSONToolOutput[dict[str, Any]]:
         logger.info(f"Y-stream CVE detected ({target_version})")
 
@@ -682,6 +833,7 @@ class CheckCveTriageEligibilityTool(
                 eligibility=TriageEligibility.IMMEDIATELY,
                 reason="Y-stream CVE: at least one Z-stream clone shipped, eligible for triage",
                 needs_internal_fix=False,
+                duplicate_of=duplicate_of,
             ).model_dump()
         )
 

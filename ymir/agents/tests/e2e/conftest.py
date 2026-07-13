@@ -76,21 +76,26 @@ def pytest_runtest_makereport(item, call):
         f.write(f'  result: "{result}"\n')
 
         f.write("  note:\n")
-        for note, value in (
-            ("Agent", test_case.metrics.get("agent_name", None)),
-            ("Tool Calls", test_case.metrics.get("tool_calls", None)),
-            ("Prompt Tokens", test_case.metrics.get("prompt_tokens", None)),
-            ("Completion Tokens", test_case.metrics.get("completion_tokens", None)),
-        ):
-            if value is None:
-                continue
-            f.write(f'    - "{note}: {value}"\n')
+        if test_case.metrics is not None:
+            for note, value in (
+                ("Agent", test_case.metrics.get("agent_name", None)),
+                ("Tool Calls", test_case.metrics.get("tool_calls", None)),
+                ("Prompt Tokens", test_case.metrics.get("prompt_tokens", None)),
+                ("Completion Tokens", test_case.metrics.get("completion_tokens", None)),
+            ):
+                if value is None:
+                    continue
+                f.write(f'    - "{note}: {value}"\n')
+
+        # Add additional note, if the test was skipped
+        if test_case.skip_reason is not None:
+            f.write(f'    - "Skipped because {test_case.skip_reason}"\n')
 
         f.write("  log:\n")
         for log in (f"{test_case.input}.html", f"{test_case.input}.json"):
             f.write(f"    - {log}\n")
 
-        minutes, seconds = divmod(int(test_case.metrics.get("duration", 0)), 60)
+        minutes, seconds = divmod(int((test_case.metrics or {}).get("duration", 0)), 60)
         hours, minutes = divmod(minutes, 60)
         f.write(f"  duration: {hours:02d}:{minutes:02d}:{seconds:02d}\n")
 

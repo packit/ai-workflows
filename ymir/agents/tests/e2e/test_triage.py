@@ -32,8 +32,12 @@ class TriageAgentTestCase:
     finished_state: TriageState | None = None
     error: BaseException | None = None
     zstream_override: dict[str, str] | None = None
+    skip_reason: str | None = None
 
     async def run(self) -> None:
+        if self.skip_reason is not None:
+            return
+
         if self.zstream_override:
             apply_zstream_override(self.zstream_override)
 
@@ -56,24 +60,7 @@ class TriageAgentTestCase:
         return hash(self.input)
 
 
-"""
-# These cases are not ready yet to be enabled. They are kept here for reference.
-    TriageAgentTestCase(
-        input="RHEL-61943",
-        expected_output=TriageOutputSchema(
-            resolution=Resolution.BACKPORT,
-            data=BackportData(
-                package="dnsmasq",
-                patch_urls=[
-                    "http://thekelleys.org.uk/gitweb/?p=dnsmasq.git;a=patch;h=eb1fe15ca80b6bc43cd6bfdf309ec6c590aff811"
-                ],
-                justification="not-implemented",
-                jira_issue="RHEL-61943",
-                cve_id=None,
-                fix_version="rhel-8.10.z",
-            ),
-        ),
-    ),
+test_cases = [
     TriageAgentTestCase(
         input="RHEL-29712",
         expected_output=TriageOutputSchema(
@@ -89,10 +76,8 @@ class TriageAgentTestCase:
                 fix_version="rhel-8.10.z",
             ),
         ),
+        skip_reason="it requires agent to debug / reproduce the problem",
     ),
-"""
-
-test_cases = [
     TriageAgentTestCase(
         input="RHEL-15216",
         expected_output=TriageOutputSchema(
@@ -107,6 +92,27 @@ test_cases = [
                 cve_id=None,
                 fix_version="rhel-8.10.z",
             ),
+        ),
+        skip_reason="dnsmasq (upstream) requires auth to avoid AI scraping…",
+    ),
+    TriageAgentTestCase(
+        input="RHEL-61943",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.BACKPORT,
+            data=BackportData(
+                package="dnsmasq",
+                patch_urls=[
+                    "https://thekelleys.org.uk/gitweb/?p=dnsmasq.git;a=patch;h=eb1fe15ca80b6bc43cd6bfdf309ec6c590aff811"
+                ],
+                justification="not-implemented",
+                jira_issue="RHEL-61943",
+                cve_id=None,
+                fix_version="rhel-8.10.z",
+            ),
+        ),
+        skip_reason=(
+            "dnsmasq (upstream) requires auth to avoid AI scraping"
+            " and also requires agent to debug / reproduce the problem"
         ),
     ),
     TriageAgentTestCase(
@@ -345,6 +351,9 @@ def run_test_cases_concurrently(request, mock_centos_stream_repos):
     (pytest.param(test_case, id=test_case.input) for test_case in test_cases),
 )
 def test_triage_agent(test_case: TriageAgentTestCase, observability_fixture):
+    if test_case.skip_reason is not None:
+        pytest.skip(test_case.skip_reason)
+
     if test_case.error is not None:
         raise test_case.error
 

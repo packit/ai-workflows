@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -23,14 +24,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_FIXTURES_DIR = Path(__file__).parent / "mock_repos" / "triage"
 
 
+@dataclass
 class TriageAgentTestCase:
-    def __init__(self, input: str, expected_output: TriageOutputSchema):
-        self.input: str = input
-        self.expected_output: TriageOutputSchema = expected_output
-        self.metrics: dict = None
-        self.finished_state: TriageState | None = None
-        self.error: BaseException | None = None
-        self.zstream_override: dict[str, str] | None = None
+    input: str
+    expected_output: TriageOutputSchema
+    metrics: dict | None = None
+    finished_state: TriageState | None = None
+    error: BaseException | None = None
+    zstream_override: dict[str, str] | None = None
 
     async def run(self) -> None:
         if self.zstream_override:
@@ -50,6 +51,9 @@ class TriageAgentTestCase:
             self.error = e
         finally:
             self.metrics = metrics_middleware.get_metrics()
+
+    def __hash__(self) -> int:
+        return hash(self.input)
 
 
 """

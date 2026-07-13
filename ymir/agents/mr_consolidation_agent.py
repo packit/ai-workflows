@@ -5,6 +5,7 @@ import os
 import re
 import time
 import traceback
+from datetime import timedelta
 from typing import Any
 
 from beeai_framework.errors import FrameworkError
@@ -25,7 +26,7 @@ from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState
 from ymir.agents.reasoning_agent import ReasoningAgent
-from ymir.agents.tasks import complete_job, pick_next_job
+from ymir.agents.tasks import complete_job, pick_next_job, sweep_stale_active_jobs
 from ymir.agents.utils import (
     _PROMPTS_DIR,
     _get_jinja2_env,
@@ -1376,8 +1377,10 @@ async def main() -> None:
     max_concurrent_tasks = int(os.getenv("MAX_CONCURRENT_TASKS", 1))
 
     async with redis_client(os.environ["REDIS_URL"]) as redis_conn:
+        stale_threshold = timedelta(hours=int(os.getenv("STALE_ACTIVE_THRESHOLD_HOURS", "6")))
 
         async def poll_consolidation_queue() -> tuple[bytes, bytes] | None:
+            await sweep_stale_active_jobs(redis_conn, threshold=stale_threshold)
             job = await pick_next_job(redis_conn)
             if job is None:
                 return None

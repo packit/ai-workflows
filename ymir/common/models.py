@@ -747,6 +747,12 @@ class MergeConsolidationJob(BaseModel):
         "(label-triggered mode). When None, pick the two oldest open MRs (auto mode). "
         "Always stored sorted for deterministic logging and span correlation.",
     )
+    activated_at: datetime | None = Field(
+        default=None,
+        description="When this job was promoted from :pending to :active by pick_next_job. "
+        "Set by the caller immediately after Lua promotion; used by sweep_stale_active_jobs "
+        "to measure genuine active-time rather than total queue-time.",
+    )
     release_strategy: str | None = Field(
         default=None,
         description="Release strategy override from package config ('merged' or 'per_commit'). "

@@ -1,7 +1,7 @@
 # Dependencies specific to the root ymir package
 ymir-common
 ymir-tools
-litellm!=1.82.7,!=1.82.8
+litellm!=1.82.7,!=1.82.8,!=1.92.0
 aiohttp>=3.12.15
 arize-phoenix-otel>=0.13.0
 beautifulsoup4>=4.13.4

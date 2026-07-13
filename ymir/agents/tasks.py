@@ -20,6 +20,7 @@ from ymir.common.merge_queue import (  # noqa: F401 — re-exported for agents a
     complete_job,
     pick_next_job,
     submit_merge_job,
+    sweep_stale_active_jobs,
 )
 from ymir.common.models import (
     CachedMRMetadata,

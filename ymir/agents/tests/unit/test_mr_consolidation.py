@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,6 +14,7 @@ from ymir.agents.tasks import (
     fetch_consolidation_config,
     pick_next_job,
     submit_merge_job,
+    sweep_stale_active_jobs,
 )
 from ymir.agents.tasks import (
     _consolidation_field_key as _field_key,
@@ -41,8 +43,19 @@ class FakeRedis:
         return dict(self._data.get(name, {}))
 
     async def eval(self, script: str, num_keys: int, *args):
-        """Simulate the pick-next-job Lua script atomically."""
+        """Dispatch to the correct Lua-script simulation based on args.
+
+        pick_next_job: eval(script, 1, hash_key) — 1 arg after num_keys
+        conditional HDEL: eval(script, 1, hash_key, field, expected) — 3 args
+        """
         hash_key = args[0]
+        if len(args) == 1:
+            return self._eval_pick_next_job(hash_key)
+        if len(args) == 3:
+            return self._eval_conditional_hdel(hash_key, args[1], args[2])
+        return None
+
+    def _eval_pick_next_job(self, hash_key):
         bucket = self._data.get(hash_key, {})
         for field, value in list(bucket.items()):
             field_str = field.decode() if isinstance(field, bytes) else field
@@ -55,6 +68,19 @@ class FakeRedis:
                 bucket[active_key] = value
                 return [field.encode() if isinstance(field, str) else field, value]
         return None
+
+    def _eval_conditional_hdel(self, hash_key, field, expected_value):
+        bucket = self._data.get(hash_key, {})
+        field_str = field.decode() if isinstance(field, bytes) else field
+        expected = expected_value.decode() if isinstance(expected_value, bytes) else expected_value
+        current = bucket.get(field_str)
+        if current is None:
+            return 0
+        current_str = current.decode() if isinstance(current, bytes) else current
+        if current_str == expected:
+            del bucket[field_str]
+            return 1
+        return 0
 
 
 @pytest.fixture
@@ -126,12 +152,16 @@ async def test_pick_promotes_pending_to_active(fake_redis):
     assert job.package == "bash"
     assert job.target_branch == "c10s"
     assert job.active is True
+    assert job.activated_at is not None
 
     pending_key = _field_key("bash", "c10s", "pending")
     assert await fake_redis.hget(HASH_KEY, pending_key) is None
 
     active_key = _field_key("bash", "c10s", "active")
-    assert await fake_redis.hget(HASH_KEY, active_key) is not None
+    stored = await fake_redis.hget(HASH_KEY, active_key)
+    assert stored is not None
+    stored_job = MergeConsolidationJob.model_validate_json(stored)
+    assert stored_job.activated_at is not None
 
 
 @pytest.mark.asyncio
@@ -399,4 +429,179 @@ async def test_cancelled_task_does_not_call_complete_job(fake_redis):
             await mock_complete(fake_redis, job.package, job.target_branch)
 
     mock_complete.assert_not_called()
+    assert await fake_redis.hget(HASH_KEY, active_key) is not None
+
+
+# -- sweep_stale_active_jobs ---------------------------------------------------
+
+
+def _make_active_job(package, branch, activated_hours_ago):
+    """Create a MergeConsolidationJob with activated_at set."""
+    return MergeConsolidationJob(
+        package=package,
+        target_branch=branch,
+        active=True,
+        activated_at=datetime.now(UTC) - timedelta(hours=activated_hours_ago),
+    )
+
+
+@pytest.mark.asyncio
+async def test_sweep_removes_stale_active_entry(fake_redis):
+    """An :active entry whose activated_at exceeds the threshold is
+    removed, unblocking pick_next_job for that package/branch."""
+    job = _make_active_job("bash", "c10s", activated_hours_ago=7)
+    active_key = _field_key("bash", "c10s", "active")
+    await fake_redis.hset(HASH_KEY, active_key, job.model_dump_json())
+
+    removed = await sweep_stale_active_jobs(fake_redis, threshold=timedelta(hours=6))
+
+    assert removed == 1
+    assert await fake_redis.hget(HASH_KEY, active_key) is None
+
+
+@pytest.mark.asyncio
+async def test_sweep_leaves_fresh_active_entry(fake_redis):
+    """An :active entry whose activated_at is within the threshold must
+    not be touched."""
+    job = _make_active_job("bash", "c10s", activated_hours_ago=1)
+    active_key = _field_key("bash", "c10s", "active")
+    await fake_redis.hset(HASH_KEY, active_key, job.model_dump_json())
+
+    removed = await sweep_stale_active_jobs(fake_redis, threshold=timedelta(hours=6))
+
+    assert removed == 0
+    assert await fake_redis.hget(HASH_KEY, active_key) is not None
+
+
+@pytest.mark.asyncio
+async def test_sweep_ignores_entry_without_activated_at(fake_redis):
+    """An :active entry with no activated_at (promoted before sweep support
+    was deployed) is skipped — we can't know when it actually started."""
+    job = MergeConsolidationJob(
+        package="bash",
+        target_branch="c10s",
+        active=True,
+        submitted_at=datetime.now(UTC) - timedelta(hours=24),
+    )
+    active_key = _field_key("bash", "c10s", "active")
+    await fake_redis.hset(HASH_KEY, active_key, job.model_dump_json())
+
+    removed = await sweep_stale_active_jobs(fake_redis, threshold=timedelta(hours=6))
+
+    assert removed == 0
+    assert await fake_redis.hget(HASH_KEY, active_key) is not None
+
+
+@pytest.mark.asyncio
+async def test_sweep_does_not_touch_pending(fake_redis):
+    """:pending entries must never be removed by the sweep, regardless of age."""
+    old_time = datetime.now(UTC) - timedelta(hours=24)
+    job = MergeConsolidationJob(
+        package="bash",
+        target_branch="c10s",
+        active=False,
+        submitted_at=old_time,
+    )
+    pending_key = _field_key("bash", "c10s", "pending")
+    await fake_redis.hset(HASH_KEY, pending_key, job.model_dump_json())
+
+    removed = await sweep_stale_active_jobs(fake_redis, threshold=timedelta(hours=6))
+
+    assert removed == 0
+    assert await fake_redis.hget(HASH_KEY, pending_key) is not None
+
+
+@pytest.mark.asyncio
+async def test_sweep_unblocks_pending_promotion(fake_redis):
+    """After sweeping a stale :active entry, pick_next_job should be able
+    to promote a :pending entry for the same package/branch."""
+    active_job = _make_active_job("bash", "c10s", activated_hours_ago=10)
+    active_key = _field_key("bash", "c10s", "active")
+    await fake_redis.hset(HASH_KEY, active_key, active_job.model_dump_json())
+
+    await submit_merge_job(fake_redis, "bash", "c10s")
+
+    # Before sweep: pick_next_job can't promote because :active blocks it
+    assert await pick_next_job(fake_redis) is None
+
+    await sweep_stale_active_jobs(fake_redis, threshold=timedelta(hours=6))
+
+    # After sweep: :active is gone, pick_next_job can promote
+    job = await pick_next_job(fake_redis)
+    assert job is not None
+    assert job.package == "bash"
+    assert job.target_branch == "c10s"
+
+
+@pytest.mark.asyncio
+async def test_sweep_handles_unparseable_entry(fake_redis):
+    """If an :active entry has corrupted JSON, the sweep logs a warning
+    and skips it rather than crashing."""
+    active_key = _field_key("bash", "c10s", "active")
+    await fake_redis.hset(HASH_KEY, active_key, b"not-valid-json")
+
+    removed = await sweep_stale_active_jobs(fake_redis, threshold=timedelta(hours=1))
+
+    assert removed == 0
+    assert await fake_redis.hget(HASH_KEY, active_key) is not None
+
+
+@pytest.mark.asyncio
+async def test_sweep_multiple_packages(fake_redis):
+    """Sweep should handle multiple stale entries across different
+    package/branch pairs independently."""
+    for pkg, hours in [("bash", 10), ("curl", 10), ("gzip", 1)]:
+        job = _make_active_job(pkg, "c10s", activated_hours_ago=hours)
+        active_key = _field_key(pkg, "c10s", "active")
+        await fake_redis.hset(HASH_KEY, active_key, job.model_dump_json())
+
+    removed = await sweep_stale_active_jobs(fake_redis, threshold=timedelta(hours=6))
+
+    assert removed == 2
+    assert await fake_redis.hget(HASH_KEY, _field_key("bash", "c10s", "active")) is None
+    assert await fake_redis.hget(HASH_KEY, _field_key("curl", "c10s", "active")) is None
+    assert await fake_redis.hget(HASH_KEY, _field_key("gzip", "c10s", "active")) is not None
+
+
+@pytest.mark.asyncio
+async def test_sweep_skips_if_value_changed_since_snapshot(fake_redis):
+    """If the :active entry is replaced between HGETALL and the conditional
+    HDEL (e.g. complete_job + pick_next_job raced), the sweep must not
+    delete the fresh entry."""
+    stale_job = _make_active_job("bash", "c10s", activated_hours_ago=10)
+    active_key = _field_key("bash", "c10s", "active")
+    await fake_redis.hset(HASH_KEY, active_key, stale_job.model_dump_json())
+
+    # Take snapshot (simulating what sweep does internally)
+    snapshot_value = await fake_redis.hget(HASH_KEY, active_key)
+
+    # Simulate a race: between HGETALL and HDEL, the old job completes and
+    # a fresh one is promoted into the same field
+    fresh_job = _make_active_job("bash", "c10s", activated_hours_ago=0)
+    await fake_redis.hset(HASH_KEY, active_key, fresh_job.model_dump_json())
+
+    # The conditional HDEL should see the value mismatch and skip
+    deleted = await fake_redis.eval("unused", 1, HASH_KEY, active_key.encode(), snapshot_value)
+    assert deleted == 0
+    assert await fake_redis.hget(HASH_KEY, active_key) is not None
+
+
+@pytest.mark.asyncio
+async def test_sweep_uses_activated_at_not_submitted_at(fake_redis):
+    """Regression: staleness must be measured from activated_at, not
+    submitted_at.  A job that was queued 8 hours ago but only activated
+    1 hour ago must not be swept with a 6-hour threshold."""
+    job = MergeConsolidationJob(
+        package="bash",
+        target_branch="c10s",
+        active=True,
+        submitted_at=datetime.now(UTC) - timedelta(hours=8),
+        activated_at=datetime.now(UTC) - timedelta(hours=1),
+    )
+    active_key = _field_key("bash", "c10s", "active")
+    await fake_redis.hset(HASH_KEY, active_key, job.model_dump_json())
+
+    removed = await sweep_stale_active_jobs(fake_redis, threshold=timedelta(hours=6))
+
+    assert removed == 0
     assert await fake_redis.hget(HASH_KEY, active_key) is not None

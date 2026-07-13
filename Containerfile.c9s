@@ -74,7 +74,7 @@ COPY openinference-reasoning.patch /tmp
 RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
     && /opt/beeai-venv/bin/pip install --upgrade pip \
     && /opt/beeai-venv/bin/pip install --no-cache-dir \
-         "litellm!=1.82.7,!=1.82.8" \
+         "litellm!=1.82.7,!=1.82.8,!=1.92.0" \
          beeai-framework[vertexai,mcp,duckduckgo]==0.1.80 \
          google-cloud-aiplatform \
          openinference-instrumentation-beeai \

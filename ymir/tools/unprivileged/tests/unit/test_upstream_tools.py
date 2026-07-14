@@ -449,6 +449,8 @@ class TestFindBaseCommitTool:
         repo = tmp_path / dir_name
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
         (repo / "file.c").write_text("int main() {}\n")
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-m", "Initial"], cwd=repo, check=True)
@@ -527,7 +529,8 @@ class TestFindBaseCommitTool:
         assert "base_tag_commit" not in tool.options
 
     @pytest.mark.asyncio
-    async def test_finds_curl_style_tag(self, tool, tmp_path):
+    async def test_finds_curl_style_tag(self, tmp_path):
+        tool = FindBaseCommitTool(options={"working_directory": None})
         repo = self._make_repo(tmp_path, "curl-upstream", ["curl-7_76_1"])
         result = await tool.run(
             input=FindBaseCommitToolInput(repo_path=str(repo), version="7.76.1")
@@ -602,6 +605,18 @@ class TestFindBaseCommitTool:
         ).middleware(GlobalTrajectoryMiddleware(pretty=True))
 
         assert "v7.76.1" in result.result
+
+    @pytest.mark.asyncio
+    async def test_finds_versioned_package_tag(self, tmp_path):
+        """RHEL versioned packages like nodejs22 strip trailing digits to match tags like nodejs-20_11_0."""
+        tool = FindBaseCommitTool(options={"working_directory": None})
+        repo = self._make_repo(tmp_path, "nodejs22-upstream", ["nodejs-20_11_0"])
+        result = await tool.run(
+            input=FindBaseCommitToolInput(repo_path=str(repo), version="20.11.0")
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert "nodejs-20_11_0" in result.result
+        assert "base_tag_commit" in tool.options
 
     @pytest.mark.asyncio
     async def test_no_pkg_name_without_upstream_suffix(self, tmp_path):

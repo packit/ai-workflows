@@ -411,6 +411,10 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
             dir_name = tool_input.repo_path.name
             if dir_name.endswith("-upstream"):
                 pkg_name = dir_name.removesuffix("-upstream")
+            # RHEL versioned packages (nodejs22, python39) → strip trailing digits
+            pkg_base = re.sub(r"[-_]?\d+$", "", pkg_name) if pkg_name else None
+            if pkg_base == pkg_name:
+                pkg_base = None
 
             if tool_input.tag:
                 cmd = ["git", "rev-parse", "--verify", f"refs/tags/{tool_input.tag}"]
@@ -449,6 +453,18 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
                         ]
                     )
 
+                if pkg_base:
+                    tag_patterns.extend(
+                        [
+                            f"{pkg_base}-{ver_under}",
+                            f"{pkg_base}-{ver}",
+                            f"{pkg_base}_{ver_under}",
+                            f"{pkg_base.upper()}-{ver_under}",
+                            f"{pkg_base.upper()}_{ver_upper}",
+                        ]
+                    )
+
+                tag_patterns = list(dict.fromkeys(tag_patterns))
                 found_tag = None
                 for tag in tag_patterns:
                     cmd = ["git", "rev-parse", "--verify", f"refs/tags/{tag}"]
@@ -465,8 +481,9 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
                     )
                     all_tags = stdout.strip().split("\n") if stdout.strip() else []
 
-                    relevant = [t for t in all_tags if ver_under in t or ver in t]
-                    other = [t for t in all_tags if t not in set(relevant)]
+                    relevant = [t for t in all_tags if ver_under in t or ver in t or ver_upper in t]
+                    relevant_set = set(relevant)
+                    other = [t for t in all_tags if t not in relevant_set]
 
                     if relevant:
                         tag_info = f"Tags matching version components: {', '.join(relevant[:15])}"

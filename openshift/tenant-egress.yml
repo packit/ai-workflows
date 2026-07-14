@@ -125,6 +125,2309 @@ spec:
     - type: Allow
       to:
         dnsName: search.brave.com
+
+    # ==========================================================================
+    # Remote sources referenced by RHEL and CentOS Stream spec files (generated)
+    # beignet, dleyna-connector-dbus, dleyna-core, dleyna-server
+    - type: Allow
+      to:
+        dnsName: 01.org
+    # libasyncns, libatasmart, libdaemon, mod_dnssd, nss-myhostname, rtkit
+    - type: Allow
+      to:
+        dnsName: 0pointer.de
+    # mythes-sl
+    - type: Allow
+      to:
+        cidrSelector: 88.200.20.8/32
+    # hunspell-mos
+    - type: Allow
+      to:
+        dnsName: www.abcburkina.net
+    # latex2html
+    - type: Allow
+      to:
+        dnsName: takeno.iee.niit.ac.jp
+    # mingw-pcre
+    - type: Allow
+      to:
+        dnsName: ftp.csx.cam.ac.uk
+    # jbigkit, ucs-miscfixed-fonts
+    - type: Allow
+      to:
+        dnsName: www.cl.cam.ac.uk
+    # acpica-tools
+    - type: Allow
+      to:
+        dnsName: acpica.org
+    # iasl
+    - type: Allow
+      to:
+        dnsName: www.acpica.org
+    # aic94xx-firmware
+    - type: Allow
+      to:
+        dnsName: download.adaptec.com
+    # mod_authnz_pam, mod_intercept_form_submit, mod_lookup_identity
+    - type: Allow
+      to:
+        dnsName: www.adelton.com
+    # libestr
+    - type: Allow
+      to:
+        dnsName: libestr.adiscon.com
+    # acroread
+    - type: Allow
+      to:
+        dnsName: ardownload.adobe.com
+    # qca2
+    - type: Allow
+      to:
+        dnsName: delta.affinix.com
+    # hunspell-lt
+    - type: Allow
+      to:
+        dnsName: ftp.akl.lt
+    # xmlsec1
+    - type: Allow
+      to:
+        dnsName: www.aleksey.com
+    # alsa-firmware, alsa-lib, alsa-plugins, alsa-tools, alsa-utils, python-alsa
+    - type: Allow
+      to:
+        dnsName: ftp.alsa-project.org
+    # alsa-lib
+    - type: Allow
+      to:
+        dnsName: www.alsa-project.org
+    # kbd, libutempter
+    - type: Allow
+      to:
+        dnsName: ftp.altlinux.org
+    # jcip-annotations
+    - type: Allow
+      to:
+        dnsName: jcip.net.s3-website-us-east-1.amazonaws.com
+    # highlight
+    - type: Allow
+      to:
+        dnsName: www.andre-simon.de
+    # ansible
+    - type: Allow
+      to:
+        dnsName: releases.ansible.com
+    # xhtml2fo-style-xsl
+    - type: Allow
+      to:
+        dnsName: www.antennahouse.com
+    # plexus-utils
+    - type: Allow
+      to:
+        dnsName: apache.org
+    # ant, apache-commons-beanutils, apache-commons-codec, apache-commons-collections4, apache-commons-compress, apache-commons-configuration, apache-commons-io, apache-commons-lang3, apache-commons-net, bcel, felix-gogo-command, felix-gogo-parent, felix-gogo-runtime, felix-gogo-shell, felix-scr-annotations, felix-scr-generator, felix-shell, httpcomponents-project, jakarta-commons-digester, jakarta-commons-io, libserf, maven, maven-compiler-plugin, regexp, rsyslog, thrift, xmlgraphics-commons
+    - type: Allow
+      to:
+        dnsName: archive.apache.org
+    # httpd
+    - type: Allow
+      to:
+        dnsName: dist.apache.org
+    # subversion, xerces-c
+    - type: Allow
+      to:
+        dnsName: downloads.apache.org
+    # maven-plugins-pom, objectweb-pom, plexus-components-pom, plexus-tools-pom
+    - type: Allow
+      to:
+        dnsName: repo.maven.apache.org
+    # geronimo-parent-poms
+    - type: Allow
+      to:
+        dnsName: svn.apache.org
+    # aether, ant-antunit, apache-commons-cli, apache-commons-collections, apache-commons-exec, apache-commons-fileupload, apache-commons-logging, apache-commons-validator, apache-commons-vfs, apr, apr-util, cobertura-maven-plugin, felix-framework, felix-osgi-core, felix-osgi-obr, fop, forge-parent, fusesource-pom, geronimo-parent-poms, glassfish-el, glassfish-el-api, glassfish-jsp-api, glassfish-servlet-api, google-crosextra-caladea-fonts, hadoop, http-builder, httpcomponents-asyncclient, httpcomponents-project, httpd, jackson-parent, javacc-maven-plugin, jboss-logging-tools, jboss-servlet-3.1-api, jetty-artifact-remote-resources, jetty-assembly-descriptors, jetty-parent, johnzon, log4j, maven-downloader, maven-osgi, maven-repository-builder, maven-verifier-plugin, mod_fcgid, modello, modulemaker-maven-plugin, mojo-parent, objectweb-asm3, objectweb-pom, plexus-ant-factory, plexus-build-api0, plexus-compiler, plexus-component-factories-pom, plexus-components-pom, plexus-containers, plexus-io, plexus-languages, plexus-pom, plexus-sec-dispatcher, plexus-tools-pom, plexus-velocity, qpid-proton-java, slf4j, sonatype-plugins-parent
+    - type: Allow
+      to:
+        dnsName: www.apache.org
+    # pcsc-lite-ccid
+    - type: Allow
+      to:
+        dnsName: ccid.apdu.fr
+    # pcsc-lite
+    - type: Allow
+      to:
+        dnsName: pcsclite.apdu.fr
+    # google-carlito-fonts, google-crosextra-caladea-fonts, google-crosextra-carlito-fonts
+    - type: Allow
+      to:
+        dnsName: gsdview.appspot.com
+    # vsftpd
+    - type: Allow
+      to:
+        dnsName: security.appspot.com
+    # aqute-bndlib
+    - type: Allow
+      to:
+        dnsName: www.aqute.biz
+    # nss-pam-ldapd
+    - type: Allow
+      to:
+        dnsName: arthurdejong.org
+    # file, tcsh
+    - type: Allow
+      to:
+        dnsName: ftp.astron.com
+    # ruby-augeas
+    - type: Allow
+      to:
+        dnsName: augeas.net
+    # hunspell-shs
+    - type: Allow
+      to:
+        dnsName: secpewt.sd73.bc.ca
+    # dbus-qt
+    - type: Allow
+      to:
+        dnsName: ranger.befunk.com
+    # decentxml, fonts-tweak-tool, imsettings, libeasyfc, libgxim, liblangtag, python-polib, python-ruamel-yaml
+    - type: Allow
+      to:
+        dnsName: bitbucket.org
+    # mtdev
+    - type: Allow
+      to:
+        dnsName: bitmath.org
+    # bouncycastle-tsp
+    - type: Allow
+      to:
+        dnsName: www.bouncycastle.org
+    # brltty
+    - type: Allow
+      to:
+        dnsName: brltty.app
+    # mandoc
+    - type: Allow
+      to:
+        dnsName: mandoc.bsd.lv
+    # mpdecimal
+    - type: Allow
+      to:
+        dnsName: www.bytereef.org
+    # openvswitch-selinux-extra-policy
+    - type: Allow
+      to:
+        dnsName: aconole.bytheb.org
+    # c-ares
+    - type: Allow
+      to:
+        dnsName: c-ares.org
+    # cairo, mingw-pixman
+    - type: Allow
+      to:
+        dnsName: cairographics.org
+    # cairomm, cairomm1.16
+    - type: Allow
+      to:
+        dnsName: www.cairographics.org
+    # at
+    - type: Allow
+      to:
+        dnsName: software.calhariz.com
+    # ocaml-findlib
+    - type: Allow
+      to:
+        dnsName: download.camlcity.org
+    # latexmk
+    - type: Allow
+      to:
+        dnsName: www.cantab.net
+    # capnproto
+    - type: Allow
+      to:
+        dnsName: capnproto.org
+    # open-vm-tools
+    - type: Allow
+      to:
+        dnsName: kojihub.stream.centos.org
+    # ceph
+    - type: Allow
+      to:
+        dnsName: download.ceph.com
+    # ceres-solver
+    - type: Allow
+      to:
+        dnsName: ceres-solver.org
+    # libkcapi
+    - type: Allow
+      to:
+        dnsName: www.chronox.de
+    # chrony
+    - type: Allow
+      to:
+        dnsName: chrony-project.org
+    # hunspell-cv
+    - type: Allow
+      to:
+        dnsName: hunspell.chv.su
+    # enca
+    - type: Allow
+      to:
+        dnsName: dl.cihar.com
+    # junitperf
+    - type: Allow
+      to:
+        dnsName: www.clarkware.com
+    # corosync
+    - type: Allow
+      to:
+        dnsName: build.clusterlabs.org
+    # cmake
+    - type: Allow
+      to:
+        dnsName: www.cmake.org
+    # cmocka
+    - type: Allow
+      to:
+        dnsName: cmocka.org
+    # pakchois
+    - type: Allow
+      to:
+        dnsName: www.manyfish.co.uk
+    # xapian-core
+    - type: Allow
+      to:
+        dnsName: www.oligarchy.co.uk
+    # libmad, sanlock
+    - type: Allow
+      to:
+        dnsName: codeberg.org
+    # bea-stax
+    - type: Allow
+      to:
+        dnsName: dist.codehaus.org
+    # rt61pci-firmware, rt73usb-firmware
+    - type: Allow
+      to:
+        dnsName: www.ralinktech.com.tw
+    # comic-neue-fonts
+    - type: Allow
+      to:
+        dnsName: comicneue.com
+    # seabios
+    - type: Allow
+      to:
+        dnsName: code.coreboot.org
+    # tinycdb
+    - type: Allow
+      to:
+        dnsName: www.corpit.ru
+    # perl-Config-Simple, perl-Font-TTF, perl-Spreadsheet-WriteExcel
+    - type: Allow
+      to:
+        dnsName: cpan.org
+    # perl-Net-Telnet
+    - type: Allow
+      to:
+        dnsName: ftp.cpan.org
+    # perl-Algorithm-Dependency, perl-BDB, perl-Cache-Memcached, perl-Class-Autouse, perl-Class-C3, perl-Class-C3-Componentised, perl-Class-DBI, perl-Class-DBI-Plugin, perl-Class-DBI-Plugin-DeepAbstractSearch, perl-Class-Factory-Util, perl-Class-Trigger, perl-Context-Preserve, perl-DBIx-ContextualFetch, perl-DBIx-Simple, perl-Data-Dumper-Concise, perl-Data-Page, perl-DateTime-Format-Pg, perl-DateTime-Format-SQLite, perl-Digest-Perl-MD5, perl-Directory-Scratch, perl-Event-Lib, perl-ExtUtils-CChecker, perl-ExtUtils-MakeMaker-Coverage, perl-File-Flat, perl-File-chmod, perl-Geo-IP, perl-HTML-Tagset, perl-Ima-DBI, perl-Locale-PO, perl-MooseX-Types-JSON, perl-MooseX-Types-Path-Class, perl-Net-Daemon, perl-Net-Jabber, perl-Net-XMPP, perl-OLE-Storage_Lite, perl-PDF-Reuse, perl-Parse-CPAN-Meta, perl-Perl6-Junction, perl-Pod-Plainer, perl-Pod-Tests, perl-SQL-Abstract, perl-SQL-Translator, perl-Socket-GetAddrInfo, perl-Test-ClassAPI, perl-Test-Inline, perl-Test-MockModule, perl-Text-PDF, perl-Text-RecordParser, perl-Time-Piece-MySQL, perl-Tree-DAG_Node, perl-XML-RSS, perl-libintl
+    - type: Allow
+      to:
+        dnsName: search.cpan.org
+    # perl, perl-Async-MergePoint, perl-CGI-Session, perl-CPANPLUS-Dist-Build, perl-Class-Unload, perl-Clone-PP, perl-Crypt-RC4, perl-Data-Flow, perl-Data-GUID, perl-DateTime-Format-W3CDTF, perl-Devel-ArgNames, perl-Devel-Refcount, perl-Email-Address, perl-GDGraph, perl-GDGraph3d, perl-GDTextUtil, perl-Graph, perl-GraphViz, perl-HTML-Entities-Numbered, perl-HTML-Template, perl-HTML-Tidy, perl-Log-Log4perl, perl-Log-Message, perl-Log-Message-Simple, perl-MD5, perl-Mail-AuthenticationResults, perl-Makefile-DOM, perl-Makefile-Parser, perl-Module-Info, perl-MooseX-Types-LoadableClass, perl-Net-CIDR, perl-Package-Variant, perl-Perl4-CoreLibs, perl-Perlilog, perl-Pod-LaTeX, perl-SGMLSpm, perl-Spreadsheet-ParseExcel, perl-TeX-Hyphen, perl-Term-ProgressBar, perl-Term-UI, perl-Test-Tester, perl-Test-use-ok, perl-Text-Autoformat, perl-Text-Reform, perl-Text-TabularDisplay, perl-Time-modules, perl-Unicode-Map, perl-Version-Requirements, perl-XML-DOM-XPath
+    - type: Allow
+      to:
+        dnsName: www.cpan.org
+    # cbindgen, coreos-installer, mdevctl, mesa, rust-actix-macros, rust-actix_derive, rust-afterburn, rust-anyhow, rust-async-trait, rust-bincode, rust-bindgen, rust-bindgen-cli, rust-bootupd, rust-byte-unit, rust-cargo_metadata, rust-charset, rust-clap, rust-coreos-installer, rust-crc, rust-criterion, rust-encoding_rs, rust-err-derive, rust-failure, rust-futures, rust-futures-executor, rust-futures-macro, rust-futures-util, rust-getrandom0.1, rust-gptman, rust-half, rust-http, rust-indexmap, rust-ipnetwork, rust-itertools, rust-libcryptsetup-rs, rust-mime_guess, rust-mockito, rust-netlink-packet-utils, rust-nom, rust-openssl, rust-palette, rust-pin-project, rust-pin-project-internal, rust-pin-project-internal0.4, rust-pin-project-lite, rust-podman-sequoia, rust-prefixdevname, rust-proc-macro-error, rust-proc-macro-error-attr, rust-pulldown-cmark, rust-quote, rust-rand, rust-rand_chacha, rust-rand_hc, rust-rand_pcg, rust-rav1e, rust-ref-cast, rust-ref-cast-impl, rust-regex-automata, rust-reqwest, rust-rpm-sequoia, rust-semver-parser, rust-sequoia-sq, rust-sequoia-sqv, rust-serde-xml-rs, rust-serde_cbor, rust-serde_derive, rust-serde_yaml, rust-sevctl, rust-skeptic, rust-smallvec, rust-ssh-key-dir, rust-structopt, rust-syn, rust-synstructure, rust-tempfile, rust-thiserror, rust-thiserror-impl, rust-tiff, rust-tinytemplate, rust-tokio-macros, rust-toml, rust-tracing, rust-tracing-attributes, rust-tracing-futures, rust-trust-dns-resolver, rust-trybuild, rust-users, rust-uuid, rust-version-sync0.8, rust-vmw_backdoor, rust-yaml-rust, rust-zincati, rust-zram-generator, virtiofsd
+    - type: Allow
+      to:
+        dnsName: crates.io
+    # libssh
+    - type: Allow
+      to:
+        dnsName: cryptomilk.org
+    # hyphen-ru
+    - type: Allow
+      to:
+        dnsName: mirrors.ctan.org
+    # texlive
+    - type: Allow
+      to:
+        dnsName: tug.ctan.org
+    # curl
+    - type: Allow
+      to:
+        dnsName: curl.se
+    # patchutils
+    - type: Allow
+      to:
+        dnsName: cyberelk.net
+    # libotr
+    - type: Allow
+      to:
+        dnsName: otr.cypherpunks.ca
+    # python-ply
+    - type: Allow
+      to:
+        dnsName: www.dabeaz.com
+    # lsscsi, sdparm, sg3_utils
+    - type: Allow
+      to:
+        dnsName: sg.danny.cz
+    # kyotocabinet
+    - type: Allow
+      to:
+        dnsName: dbmx.net
+    # python-inotify
+    - type: Allow
+      to:
+        dnsName: seb.dbzteam.org
+    # datefudge
+    - type: Allow
+      to:
+        dnsName: cdn.debian.net
+    # hunspell-no
+    - type: Allow
+      to:
+        dnsName: alioth-archive.debian.org
+    # chrpath, minicom, pinfo
+    - type: Allow
+      to:
+        dnsName: alioth.debian.org
+    # fakeroot
+    - type: Allow
+      to:
+        dnsName: cdn-aws.deb.debian.org
+    # console-setup, fluid-soundfont, hostname, liblockfile, man2html
+    - type: Allow
+      to:
+        dnsName: ftp.de.debian.org
+    # cjkuni-ukai-fonts, cjkuni-uming-fonts, dpkg, iasl, libpaper, whois
+    - type: Allow
+      to:
+        dnsName: ftp.debian.org
+    # os-prober
+    - type: Allow
+      to:
+        dnsName: ftp.us.debian.org
+    # linuxdoc-tools
+    - type: Allow
+      to:
+        dnsName: http.us.debian.org
+    # bacula, iso-codes, lshw, minicom
+    - type: Allow
+      to:
+        dnsName: salsa.debian.org
+    # dcraw
+    - type: Allow
+      to:
+        dnsName: www.dechifro.org
+    # biosdevname
+    - type: Allow
+      to:
+        dnsName: linux.dell.com
+    # uboot-tools
+    - type: Allow
+      to:
+        dnsName: ftp.denx.de
+    # pkgconf
+    - type: Allow
+      to:
+        dnsName: distfiles.dereferenced.org
+    # socat
+    - type: Allow
+      to:
+        dnsName: www.dest-unreach.org
+    # aajohan-comfortaa-fonts
+    - type: Allow
+      to:
+        dnsName: www.deviantart.com
+    # hunspell-fr, hyphen-fr, mythes-fr
+    - type: Allow
+      to:
+        dnsName: www.dicollecte.org
+    # schroedinger
+    - type: Allow
+      to:
+        dnsName: www.diracvideo.org
+    # hunspell-se, hunspell-smj
+    - type: Allow
+      to:
+        dnsName: divvun.no
+    # libaec
+    - type: Allow
+      to:
+        dnsName: gitlab.dkrz.de
+    # cim-schema
+    - type: Allow
+      to:
+        dnsName: www.dmtf.org
+    # python-dns
+    - type: Allow
+      to:
+        dnsName: www.dnspython.org
+    # docbook-dtds, docbook-simple, docbook5-schemas
+    - type: Allow
+      to:
+        dnsName: www.docbook.org
+    # libreoffice
+    - type: Allow
+      to:
+        dnsName: download.documentfoundation.org
+    # dovecot
+    - type: Allow
+      to:
+        dnsName: pigeonhole.dovecot.org
+    # dovecot
+    - type: Allow
+      to:
+        dnsName: www.dovecot.org
+    # doxygen
+    - type: Allow
+      to:
+        dnsName: www.doxygen.nl
+    # dpdk
+    - type: Allow
+      to:
+        dnsName: fast.dpdk.org
+    # usb_modeswitch-data
+    - type: Allow
+      to:
+        dnsName: www.draisberghof.de
+    # duktape
+    - type: Allow
+      to:
+        dnsName: duktape.org
+    # openoffice-lv
+    - type: Allow
+      to:
+        dnsName: dict.dv.lv
+    # ecj, eclipse-nls
+    - type: Allow
+      to:
+        dnsName: download.eclipse.org
+    # cbi-plugins, eclipse-gef, eclipse-license, eclipse-mylyn-context, eclipse-ptp, jetty-artifact-remote-resources, jetty-assembly-descriptors, jetty-build-support, jetty-distribution-remote-resources, jetty-toolchain, jetty-version-maven-plugin, jetty8, sisu-mojos
+    - type: Allow
+      to:
+        dnsName: git.eclipse.org
+    # aether, jetty-artifact-remote-resources, jetty-assembly-descriptors, jetty-parent
+    - type: Allow
+      to:
+        dnsName: www.eclipse.org
+    # babeltrace
+    - type: Allow
+      to:
+        dnsName: www.efficios.com
+    # libdisplay-info
+    - type: Allow
+      to:
+        dnsName: emersion.fr
+    # lasso
+    - type: Allow
+      to:
+        dnsName: dev.entrouvert.org
+    # gnulib
+    - type: Allow
+      to:
+        dnsName: erislabs.net
+    # ocaml-react
+    - type: Allow
+      to:
+        dnsName: erratique.ch
+    # hunspell-eo
+    - type: Allow
+      to:
+        dnsName: www.esperantilo.org
+    # cpuid
+    - type: Allow
+      to:
+        dnsName: www.etallen.com
+    # ganymed-ssh2
+    - type: Allow
+      to:
+        dnsName: www.ganymed.ethz.ch
+    # iftop
+    - type: Allow
+      to:
+        dnsName: www.ex-parrot.com
+    # xorg-x11-server
+    - type: Allow
+      to:
+        dnsName: svn.exactcode.de
+    # kstart
+    - type: Allow
+      to:
+        dnsName: archives.eyrie.org
+    # lshw
+    - type: Allow
+      to:
+        dnsName: www.ezix.org
+    # tokyocabinet
+    - type: Allow
+      to:
+        dnsName: fallabs.com
+    # fstrm
+    - type: Allow
+      to:
+        dnsName: dl.farsightsecurity.com
+    # pyxf86config
+    - type: Allow
+      to:
+        dnsName: ajax.fedorapeople.org
+    # hunspell-bn, hunspell-gu, hunspell-hi, hunspell-mr, hunspell-or, hunspell-pa, hunspell-ta, hunspell-te
+    - type: Allow
+      to:
+        dnsName: anishpatil.fedorapeople.org
+    # 389-ds-base, dwarves, s390utils
+    - type: Allow
+      to:
+        dnsName: fedorapeople.org
+    # perl-generators
+    - type: Allow
+      to:
+        dnsName: jplesnik.fedorapeople.org
+    # ibus-table, ibus-table-others
+    - type: Allow
+      to:
+        dnsName: mfabian.fedorapeople.org
+    # annobin
+    - type: Allow
+      to:
+        dnsName: nickc.fedorapeople.org
+    # perl-Fedora-VSP
+    - type: Allow
+      to:
+        dnsName: ppisar.fedorapeople.org
+    # ghostscript-chinese
+    - type: Allow
+      to:
+        dnsName: pwu.fedorapeople.org
+    # libv4l
+    - type: Allow
+      to:
+        dnsName: people.fedoraproject.org
+    # osutil
+    - type: Allow
+      to:
+        dnsName: pki.fedoraproject.org
+    # speech-tools
+    - type: Allow
+      to:
+        dnsName: festvox.org
+    # fftw
+    - type: Allow
+      to:
+        dnsName: www.fftw.org
+    # flashrom
+    - type: Allow
+      to:
+        dnsName: download.flashrom.org
+    # fltk
+    - type: Allow
+      to:
+        dnsName: fltk.org
+    # libdmapsharing
+    - type: Allow
+      to:
+        dnsName: www.flyn.org
+    # fontawesome-fonts, fontawesome4-fonts
+    - type: Allow
+      to:
+        dnsName: fontawesome.io
+    # fontconfig
+    - type: Allow
+      to:
+        dnsName: fontconfig.org
+    # paratype-pt-sans-fonts, pt-sans-fonts
+    - type: Allow
+      to:
+        dnsName: www.fontstock.com
+    # lx
+    - type: Allow
+      to:
+        dnsName: moinejf.free.fr
+    # festival-freebsoft-utils
+    - type: Allow
+      to:
+        dnsName: devel.freebsoft.org
+    # speech-dispatcher
+    - type: Allow
+      to:
+        dnsName: www.freebsoft.org
+    # eggdbus
+    - type: Allow
+      to:
+        dnsName: cgit.freedesktop.org
+    # dbus, dbus-glib, dbus-python
+    - type: Allow
+      to:
+        dnsName: dbus.freedesktop.org
+    # libdrm
+    - type: Allow
+      to:
+        dnsName: dri.freedesktop.org
+    # libqmi, libqrtr-glib, pavucontrol, pulseaudio, webrtc-audio-processing
+    - type: Allow
+      to:
+        dnsName: freedesktop.org
+    # mesa-libGLU
+    - type: Allow
+      to:
+        dnsName: ftp.freedesktop.org
+    # gstreamer-python, gstreamer1, gstreamer1-plugins-bad-free, gstreamer1-plugins-base, gstreamer1-plugins-good, gstreamer1-plugins-ugly-free, gstreamer1-rtsp-server, orc
+    - type: Allow
+      to:
+        dnsName: gstreamer.freedesktop.org
+    # gypsy
+    - type: Allow
+      to:
+        dnsName: gypsy.freedesktop.org
+    # hicolor-icon-theme
+    - type: Allow
+      to:
+        dnsName: icon-theme.freedesktop.org
+    # exempi, libopenraw
+    - type: Allow
+      to:
+        dnsName: libopenraw.freedesktop.org
+    # libspectre
+    - type: Allow
+      to:
+        dnsName: libspectre.freedesktop.org
+    # argyllcms, fdk-aac-free, fwupd, libappstream-glib, libgusb, libxklavier, libxmlb, shared-color-profiles, sound-theme-freedesktop, xdg-utils
+    - type: Allow
+      to:
+        dnsName: people.freedesktop.org
+    # poppler, poppler-data
+    - type: Allow
+      to:
+        dnsName: poppler.freedesktop.org
+    # telepathy-farstream, telepathy-gabble, telepathy-idle, telepathy-logger, telepathy-mission-control, telepathy-salut
+    - type: Allow
+      to:
+        dnsName: telepathy.freedesktop.org
+    # compat-upower09
+    - type: Allow
+      to:
+        dnsName: upower.freedesktop.org
+    # xdg-user-dirs
+    - type: Allow
+      to:
+        dnsName: user-dirs.freedesktop.org
+    # wayland-utils
+    - type: Allow
+      to:
+        dnsName: wayland.freedesktop.org
+    # ModemManager, PackageKit, accountsservice, appstream, colord, colord-gtk, compat-colord10, cups-pk-helper, desktop-file-utils, evemu, libevdev, libinput, media-player-info, startup-notification, uchardet
+    - type: Allow
+      to:
+        dnsName: www.freedesktop.org
+    # libxcb, xcb-util, xcb-util-cursor, xcb-util-image, xcb-util-keysyms, xcb-util-renderutil, xcb-util-wm
+    - type: Allow
+      to:
+        dnsName: xcb.freedesktop.org
+    # Xaw3d, libX11, libXcursor, libXext, libXfixes, libXinerama, libXpresent, libXrandr, libXrender, libXt, libXtst, libXv, libXvMC, libXxf86vm, libdmx, libxcvt, libxshmfence, pixman, xcb-proto, xkeyboard-config, xorg-x11-drv-geode, xorg-x11-drv-nouveau, xorg-x11-drv-openchrome, xorg-x11-drv-qxl, xorg-x11-drv-vesa
+    - type: Allow
+      to:
+        dnsName: xorg.freedesktop.org
+    # freeradius
+    - type: Allow
+      to:
+        dnsName: ftp.freeradius.org
+    # tabish-eeyek-fonts
+    - type: Allow
+      to:
+        dnsName: tabish.freeshell.org
+    # freetds
+    - type: Allow
+      to:
+        dnsName: ftp.freetds.org
+    # qrencode
+    - type: Allow
+      to:
+        dnsName: fukuchi.org
+    # fwupd
+    - type: Allow
+      to:
+        dnsName: fwupd.org
+    # freexl
+    - type: Allow
+      to:
+        dnsName: www.gaia-gis.it
+    # galera
+    - type: Allow
+      to:
+        dnsName: releases.galeracluster.com
+    # babl, gegl, gegl03, gegl04, gimp
+    - type: Allow
+      to:
+        dnsName: download.gimp.org
+    # gimp-data-extras, gimp-help
+    - type: Allow
+      to:
+        dnsName: ftp.gimp.org
+    # ibus-table-cangjie, libfep, libtranslit
+    - type: Allow
+      to:
+        dnsName: cloud.github.com
+    # pacemaker, python-fasteners
+    - type: Allow
+      to:
+        dnsName: codeload.github.com
+    # bytelist
+    - type: Allow
+      to:
+        dnsName: download.github.com
+    # thrift
+    - type: Allow
+      to:
+        dnsName: raw.github.com
+    # libconfig
+    - type: Allow
+      to:
+        dnsName: hyperrealm.github.io
+    # glassfish-jsp-api
+    - type: Allow
+      to:
+        dnsName: javaee.github.io
+    # p11-kit
+    - type: Allow
+      to:
+        dnsName: p11-glue.github.io
+    # taglib
+    - type: Allow
+      to:
+        dnsName: taglib.github.io
+    # appstream-data, containers-common, dconf-editor, fuse3, gnome-shell-extension-no-overview, google-roboto-slab-fonts, iotop-c, libreoffice, m17n-db, nodejs-find-up, nodejs-supports-color, ps_mem, python-nose_warnings_filters, python-rpm-generators, rubygem-faraday, string-template-maven-plugin
+    - type: Allow
+      to:
+        dnsName: raw.githubusercontent.com
+    # gmp
+    - type: Allow
+      to:
+        dnsName: gmplib.org
+    # NetworkManager-libreswan, abattis-cantarell-fonts, adwaita-icon-theme, aisleriot, amtk, at-spi2-atk, at-spi2-core, atk, atkmm, baobab, brasero, cheese, chrome-gnome-shell, clutter, clutter-gst3, clutter-gtk, cogl, compat-cheese314, compat-libgdata013, compat-libmediaart0, dconf, dconf-editor, devhelp, eog, evince, evolution, evolution-data-server, evolution-ews, evolution-mapi, gcr, gcr3, gdk-pixbuf2, gdk-pixbuf2-xlib, gdm, gedit, gedit-plugins, geocode-glib, gfbgraph, gjs, glade, glib-networking, glib2, glibmm2.68, glycin-loaders, gmime30, gnome-autoar, gnome-backgrounds, gnome-bluetooth, gnome-boxes, gnome-browser-connector, gnome-calculator, gnome-characters, gnome-clocks, gnome-color-manager, gnome-common, gnome-connections, gnome-contacts, gnome-control-center, gnome-desktop3, gnome-devel-docs, gnome-dictionary, gnome-disk-utility, gnome-documents, gnome-extensions-app, gnome-font-viewer, gnome-getting-started-docs, gnome-icon-theme, gnome-icon-theme-extras, gnome-initial-setup, gnome-keyring, gnome-kiosk, gnome-logs, gnome-menus, gnome-online-accounts, gnome-online-miners, gnome-photos, gnome-pilot-conduits, gnome-remote-desktop, gnome-screenshot, gnome-session, gnome-settings-daemon, gnome-shell, gnome-software, gnome-system-log, gnome-system-monitor, gnome-terminal, gnome-text-editor, gnome-themes-extra, gnome-themes-standard, gnome-tour, gnome-tweak-tool, gnome-tweaks, gnome-user-docs, gnome-weather, gobject-introspection, gom, grilo, grilo-plugins, gsettings-desktop-schemas, gsound, gspell, gssdp, gtk-doc, gtk-vnc, gtk2, gtk3, gtk4, gtkmm30, gtkmm4.0, gtksourceview3, gtksourceview4, gtksourceview5, gupnp, gupnp-av, gupnp-igd, gvfs, java-atk-wrapper, json-glib, libIDL, libadwaita, libbonoboui, libchamplain, libdazzle, libdex, libepoxy, libgail-gnome, libgdata, libgdl, libgee, libgee06, libgepub, libgexiv2, libgit2-glib, libgnome-keyring, libgnome-media-profiles, libgnomecanvas, libgnomekbd, libgovirt, libgsf, libgtop2, libgudev, libgweather, libhandy, libhandy1, libmediaart, libnma, libnotify, libpanel, libpeas, libpeas1, librsvg2, libsecret, libsoup, libsoup3, libspelling, libwnck3, libxml2, libxslt, libzapojit, loupe, metacity, mingw-glib2, mingw32-glib2, mm-common, mobile-broadband-provider-info, mousetweaks, mutter, nautilus, nautilus-sendto, network-manager-applet, notification-daemon, orca, pango, pangomm, pangomm2.48, papers, phodav, ptyxis, pyatspi, pygobject3, python-SecretStorage, rest, rhythmbox, seahorse, shotwell, snapshot, sysprof, tecla, tepl, totem, totem-pl-parser, tracker, tracker-miners, tracker3-miners, unique3, vala, vte291, xdg-desktop-portal-gnome, xdg-user-dirs-gtk, yelp, yelp-tools, yelp-xsl, zenity
+    - type: Allow
+      to:
+        dnsName: download.gnome.org
+    # bitstream-vera-fonts, clutter-gst2, compat-glade315, dia, folks, gcab, glade3, glibmm24, gnome-shell-extensions, gnome-video-effects, gtkhtml2, gtkmm24, gupnp-dlna, libgsf, libgxps, libpanelappletmm, libsocialweb, msitools, pangox-compat, pygobject2, pygtk2, seahorse-nautilus, seahorse-sharing
+    - type: Allow
+      to:
+        dnsName: ftp.gnome.org
+    # acl, attr, gpsd, gpsd-minimal, m17n-db
+    - type: Allow
+      to:
+        dnsName: download-mirror.savannah.gnu.org
+    # dmidecode, ed, freetype, hunspell-ia, hunspell-ml, hyphen-as, hyphen-bn, hyphen-gu, hyphen-hi, hyphen-kn, hyphen-ml, hyphen-mr, hyphen-or, hyphen-pa, hyphen-ta, hyphen-te, libotf, libpipeline, m17n-lib, man-db, ocaml-curses, quagga, smc-fonts, ttfautohint
+    - type: Allow
+      to:
+        dnsName: download.savannah.gnu.org
+    # aspell-en, autoconf, autoconf-archive, automake, bash, bc, binutils, bison, coreutils, cpio, crash, diffutils, emacs, emacs-auctex, findutils, freeipmi, gawk, gdbm, gettext, glibc, glpk, gperf, grep, groff, gzip, help2man, hunspell-az, hunspell-csb, hunspell-fa, hunspell-gv, hunspell-ky, libcdio, libidn2, libmicrohttpd, libmpc, libsigsegv, libtasn1, libtool, libunistring, m4, make, mingw-binutils, mingw-gettext, mingw-termcap, mingw32-iconv, mingw32-termcap, mtools, parted, patch, psacct, readline, screen, sed, sharutils, source-highlight, tar, texinfo, time, unifont, units, wget, which
+    - type: Allow
+      to:
+        dnsName: ftp.gnu.org
+    # compat-sap-c++, compat-sap-c++-13, gcc, gcc-toolset-15-gcc
+    - type: Allow
+      to:
+        dnsName: gcc.gnu.org
+    # automake, gnulib, redhat-rpm-config
+    - type: Allow
+      to:
+        dnsName: git.savannah.gnu.org
+    # grep
+    - type: Allow
+      to:
+        dnsName: savannah.gnu.org
+    # audit, bpg-fonts, cc-config, dracut, gzip, hardlink, hostname, iputils, libatomic_ops, ps_mem, python-argh, shadow-utils
+    - type: Allow
+      to:
+        dnsName: www.gnu.org
+    # dirmngr
+    - type: Allow
+      to:
+        dnsName: ftp.gnupg.org
+    # gnupg, gnupg2, gpgme, libassuan, libgcrypt, libgpg-error, libksba, npth, pinentry
+    - type: Allow
+      to:
+        dnsName: gnupg.org
+    # gnutls, libgcrypt, libgpg-error, libksba
+    - type: Allow
+      to:
+        dnsName: www.gnupg.org
+    # gnutls
+    - type: Allow
+      to:
+        dnsName: gnutls.org
+    # ipa-gothic-fonts, ipa-mincho-fonts, ipa-pgothic-fonts, ipa-pmincho-fonts
+    - type: Allow
+      to:
+        dnsName: info.openlab.ipa.go.jp
+    # hunspell-mai
+    - type: Allow
+      to:
+        dnsName: storage.googleapis.com
+    # jomolhari-fonts
+    - type: Allow
+      to:
+        dnsName: chris.fynn.googlepages.com
+    # gprolog
+    - type: Allow
+      to:
+        dnsName: www.gprolog.org
+    # skkdic
+    - type: Allow
+      to:
+        dnsName: openlab.ring.gr.jp
+    # grantlee
+    - type: Allow
+      to:
+        dnsName: downloads.grantlee.org
+    # less
+    - type: Allow
+      to:
+        dnsName: www.greenwoodsoftware.com
+    # haproxy
+    - type: Allow
+      to:
+        dnsName: www.haproxy.org
+    # alex, cabal-install, ghc-Glob, ghc-HTTP, ghc-HUnit, ghc-JuicyPixels, ghc-QuickCheck, ghc-SHA, ghc-aeson, ghc-aeson-pretty, ghc-ansi-terminal, ghc-ansi-wl-pprint, ghc-asn1-encoding, ghc-asn1-parse, ghc-asn1-types, ghc-async, ghc-attoparsec, ghc-base-compat, ghc-base16-bytestring, ghc-base64-bytestring, ghc-basement, ghc-blaze-builder, ghc-blaze-html, ghc-blaze-markup, ghc-byteable, ghc-call-stack, ghc-case-insensitive, ghc-cereal, ghc-clock, ghc-cmark-gfm, ghc-cmdargs, ghc-colour, ghc-conduit, ghc-conduit-extra, ghc-connection, ghc-cookie, ghc-cryptohash-sha256, ghc-cryptonite, ghc-data-default, ghc-data-default-class, ghc-data-default-instances-containers, ghc-data-default-instances-dlist, ghc-data-default-instances-old-locale, ghc-digest, ghc-dlist, ghc-doctemplates, ghc-echo, ghc-ed25519, ghc-edit-distance, ghc-exceptions, ghc-extra, ghc-foundation, ghc-hackage-security, ghc-haddock-library, ghc-hashable, ghc-hourglass, ghc-hs-bibutils, ghc-hslua, ghc-hslua-module-text, ghc-hspec, ghc-hspec-core, ghc-hspec-discover, ghc-hspec-expectations, ghc-http-client, ghc-http-client-tls, ghc-http-types, ghc-hxt, ghc-hxt-charproperties, ghc-hxt-regex-xmlschema, ghc-hxt-unicode, ghc-integer-logarithms, ghc-lifted-base, ghc-memory, ghc-mime-types, ghc-mmorph, ghc-monad-control, ghc-mtl, ghc-network, ghc-network-uri, ghc-old-locale, ghc-old-time, ghc-optparse-applicative, ghc-pandoc-types, ghc-parsec, ghc-pem, ghc-primitive, ghc-quickcheck-io, ghc-random, ghc-regex-base, ghc-regex-pcre, ghc-regex-tdfa, ghc-resourcet, ghc-rfc5051, ghc-safe, ghc-scientific, ghc-semigroups, ghc-setenv, ghc-skylighting, ghc-socks, ghc-split, ghc-stm, ghc-streaming-commons, ghc-syb, ghc-tagged, ghc-tagsoup, ghc-tar, ghc-tasty, ghc-tasty-hunit, ghc-tasty-quickcheck, ghc-temporary, ghc-texmath, ghc-text, ghc-tf-random, ghc-th-abstraction, ghc-time-locale-compat, ghc-tls, ghc-transformers-base, ghc-transformers-compat, ghc-typed-process, ghc-unbounded-delays, ghc-unix-compat, ghc-unliftio-core, ghc-unordered-containers, ghc-utf8-string, ghc-uuid-types, ghc-vector, ghc-void, ghc-x509, ghc-x509-store, ghc-x509-system, ghc-x509-validation, ghc-xml, ghc-xml-conduit, ghc-xml-types, ghc-yaml, ghc-zip-archive, ghc-zlib, happy, hscolour, pandoc, pandoc-citeproc
+    - type: Allow
+      to:
+        dnsName: hackage.haskell.org
+    # haskell-platform
+    - type: Allow
+      to:
+        dnsName: www.haskell.org
+    # python3.11-cffi
+    - type: Allow
+      to:
+        dnsName: foss.heptapod.net
+    # hexchat
+    - type: Allow
+      to:
+        dnsName: dl.hexchat.net
+    # min12xxw
+    - type: Allow
+      to:
+        dnsName: www.hinterbergen.de
+    # pnm2ppa
+    - type: Allow
+      to:
+        dnsName: www.httptech.com
+    # libconfig
+    - type: Allow
+      to:
+        dnsName: www.hyperrealm.com
+    # unbound
+    - type: Allow
+      to:
+        dnsName: data.iana.org
+    # tzdata
+    - type: Allow
+      to:
+        dnsName: ftp.iana.org
+    # symlinks
+    - type: Allow
+      to:
+        dnsName: ibiblio.org
+    # apache-commons-logging, ggz-base-libs, jcip-annotations
+    - type: Allow
+      to:
+        dnsName: mirrors.ibiblio.org
+    # libzfcphbaapi
+    - type: Allow
+      to:
+        dnsName: download.boulder.ibm.com
+    # physfs
+    - type: Allow
+      to:
+        dnsName: www.icculus.org
+    # opus
+    - type: Allow
+      to:
+        dnsName: tools.ietf.org
+    # texlive
+    - type: Allow
+      to:
+        dnsName: ctan.math.illinois.edu
+    # ImageMagick
+    - type: Allow
+      to:
+        dnsName: www.imagemagick.org
+    # impallari-lobster-fonts
+    - type: Allow
+      to:
+        dnsName: www.impallari.com
+    # tree-pkg
+    - type: Allow
+      to:
+        dnsName: mama.indstate.edu
+    # nvmetcli
+    - type: Allow
+      to:
+        dnsName: ftp.infradead.org
+    # python3.11-psycopg2
+    - type: Allow
+      to:
+        dnsName: initd.org
+    # inkscape, inkscape1
+    - type: Allow
+      to:
+        dnsName: inkscape.org
+    # ocaml
+    - type: Allow
+      to:
+        dnsName: caml.inria.fr
+    # scotch
+    - type: Allow
+      to:
+        dnsName: gforge.inria.fr
+    # isl
+    - type: Allow
+      to:
+        dnsName: isl.gforge.inria.fr
+    # iwl100-firmware, iwl1000-firmware, iwl3945-firmware, iwl4965-firmware, iwl5000-firmware, iwl5150-firmware, iwl6000-firmware, iwl6000g2a-firmware, iwl6000g2b-firmware, iwl6050-firmware
+    - type: Allow
+      to:
+        dnsName: intellinuxwireless.org
+    # bind, bind9.16
+    - type: Allow
+      to:
+        dnsName: www.internic.net
+    # libftdi
+    - type: Allow
+      to:
+        dnsName: www.intra2net.com
+    # byacc, lynx, ncurses, xterm
+    - type: Allow
+      to:
+        dnsName: invisible-island.net
+    # diffstat, ncurses
+    - type: Allow
+      to:
+        dnsName: invisible-mirror.net
+    # bind, bind9.16, kea
+    - type: Allow
+      to:
+        dnsName: downloads.isc.org
+    # dhcp
+    - type: Allow
+      to:
+        dnsName: ftp.isc.org
+    # bind, kea
+    - type: Allow
+      to:
+        dnsName: www.isc.org
+    # hunspell-sw
+    - type: Allow
+      to:
+        dnsName: www.it46.se
+    # itstool
+    - type: Allow
+      to:
+        dnsName: files.itstool.org
+    # ivtv-firmware
+    - type: Allow
+      to:
+        dnsName: dl.ivtvdriver.org
+    # convmv
+    - type: Allow
+      to:
+        dnsName: j3e.de
+    # hunspell-de
+    - type: Allow
+      to:
+        dnsName: www.j3e.de
+    # jetty-schemas
+    - type: Allow
+      to:
+        dnsName: glassfish.dev.java.net
+    # jmc-core
+    - type: Allow
+      to:
+        dnsName: hg.openjdk.java.net
+    # javamail
+    - type: Allow
+      to:
+        dnsName: java.net
+    # glassfish-jaxb
+    - type: Allow
+      to:
+        dnsName: jaxb.java.net
+    # jboss-parent, jboss-servlet-3.1-api, junitperf
+    - type: Allow
+      to:
+        dnsName: repository.jboss.org
+    # jdom
+    - type: Allow
+      to:
+        dnsName: jdom.org
+    # boost
+    - type: Allow
+      to:
+        dnsName: boostorg.jfrog.io
+    # pyxattr
+    - type: Allow
+      to:
+        dnsName: k1024.org
+    # pyxattr
+    - type: Allow
+      to:
+        dnsName: pyxattr.k1024.org
+    # attica, audiocd-kio, bluedevil, breeze-icon-theme, colord-kde, dragon, extra-cmake-modules, juk, kactivities, kcharselect, kde-base-artwork, kde-l10n, kde-print-manager, kdegraphics-strigi-analyzer, kdegraphics-thumbnailers, kdf, kf5-kconfig, kmousetool, kmouth, ksaneplugin, kscd, ksnapshot, ktimer, kwallet, libbluedevil, libkipi, nepomuk-widgets, oxygen-gtk2, oxygen-icon-theme, phonon, phonon-backend-gstreamer, polkit-qt, svgpart
+    - type: Allow
+      to:
+        dnsName: download.kde.org
+    # automoc, kaccessible, kamera, kcolorchooser, kcoloredit, kde-i18n, kde-wallpapers, kdelibs-experimental, kdepim3, kgamma, kiconedit, kolourpaint, kruler, libkcompactdisc, libkexiv2
+    - type: Allow
+      to:
+        dnsName: ftp.kde.org
+    # kio_sysinfo
+    - type: Allow
+      to:
+        dnsName: ktown.kde.org
+    # keepalived
+    - type: Allow
+      to:
+        dnsName: www.keepalived.org
+    # blktrace, fio, liburing
+    - type: Allow
+      to:
+        dnsName: brick.kernel.dk
+    # python-linux-procfs, python-schedutils
+    - type: Allow
+      to:
+        dnsName: cdn.kernel.org
+    # blktrace, erofs-utils, fio, kernelshark, keyutils, libcap, libtracecmd, libtraceevent, libtracefs, mdadm, stalld, trace-cmd, tuned-profiles-nfv-host-bin, xfsdump, xfsprogs
+    - type: Allow
+      to:
+        dnsName: git.kernel.org
+    # iproute, kexec-tools, xfsdump, xfsprogs
+    - type: Allow
+      to:
+        dnsName: kernel.org
+    # libcap, libgpiod
+    - type: Allow
+      to:
+        dnsName: mirrors.edge.kernel.org
+    # libabigail
+    - type: Allow
+      to:
+        dnsName: mirrors.kernel.org
+    # ar9170-firmware, autofs, bluez, btrfs-progs, cryptsetup, dtc, e2fsprogs, ethtool, git, i2c-tools, iw, kmod, libell, libguestfs-fssupport, libiec61883, libraw1394, linux-firmware, man-pages, mdadm, nfs-utils, pciutils, pcmciautils, python-linux-procfs, realtime-tests, rteval, rteval-loads, sbc, syslinux, tuna, usbutils, util-linux, wireless-regdb
+    - type: Allow
+      to:
+        dnsName: www.kernel.org
+    # python3.11
+    - type: Allow
+      to:
+        dnsName: keybase.io
+    # opencl-headers
+    - type: Allow
+      to:
+        dnsName: www.khronos.org
+    # baekmuk-ttf-fonts, un-core-fonts
+    - type: Allow
+      to:
+        dnsName: kldp.net
+    # libixion, liborcus, mdds
+    - type: Allow
+      to:
+        dnsName: kohei.us
+    # amtterm
+    - type: Allow
+      to:
+        dnsName: www.kraxel.org
+    # kronosnet
+    - type: Allow
+      to:
+        dnsName: kronosnet.org
+    # kurdit-unikurd-web-fonts
+    - type: Allow
+      to:
+        dnsName: www.kurditgroup.org
+    # libertas-usb8388-firmware
+    - type: Allow
+      to:
+        dnsName: dev.laptop.org
+    # intltool
+    - type: Allow
+      to:
+        dnsName: edge.launchpad.net
+    # cloud-init, cloud-utils-growpart, dbusmenu-qt, libdbusmenu, libmetalink, pbzip2, python-distutils-extra, subunit
+    - type: Allow
+      to:
+        dnsName: launchpad.net
+    # tcpdump
+    - type: Allow
+      to:
+        dnsName: ftp.ee.lbl.gov
+    # t1utils
+    - type: Allow
+      to:
+        dnsName: www.lcdf.org
+    # libarchive
+    - type: Allow
+      to:
+        dnsName: libarchive.org
+    # libee
+    - type: Allow
+      to:
+        dnsName: www.libee.org
+    # hunspell-fur
+    - type: Allow
+      to:
+        dnsName: digilander.libero.it
+    # guestfs-tools, ocaml-augeas, supermin, virt-p2v, virt-v2v
+    - type: Allow
+      to:
+        dnsName: download.libguestfs.org
+    # hivex, libguestfs, libnbd, nbdkit
+    - type: Allow
+      to:
+        dnsName: libguestfs.org
+    # usbmuxd
+    - type: Allow
+      to:
+        dnsName: www.libimobiledevice.org
+    # liblognorm
+    - type: Allow
+      to:
+        dnsName: www.liblognorm.com
+    # libndp
+    - type: Allow
+      to:
+        dnsName: www.libndp.org
+    # raptor2, rasqal, redland
+    - type: Allow
+      to:
+        dnsName: download.librdf.org
+    # cppunit, libabw, libcdr, libeot, libetonyek, libexttextcat, libfreehand, libmspub, libpagemaker, libqxp, libreoffice, libvisio, libzmf
+    - type: Allow
+      to:
+        dnsName: dev-www.libreoffice.org
+    # hunspell-ast, hunspell-mr, hunspell-sv
+    - type: Allow
+      to:
+        dnsName: extensions.libreoffice.org
+    # hunspell-pt, hyphen-pt
+    - type: Allow
+      to:
+        dnsName: pt-br.libreoffice.org
+    # libreswan
+    - type: Allow
+      to:
+        dnsName: download.libreswan.org
+    # SDL2, SDL2_mixer, SDL3, SDL_image
+    - type: Allow
+      to:
+        dnsName: www.libsdl.org
+    # libsodium
+    - type: Allow
+      to:
+        dnsName: download.libsodium.org
+    # libssh
+    - type: Allow
+      to:
+        dnsName: www.libssh.org
+    # libteam
+    - type: Allow
+      to:
+        dnsName: www.libteam.org
+    # libuv
+    - type: Allow
+      to:
+        dnsName: dist.libuv.org
+    # libvirt, ocaml-libvirt
+    - type: Allow
+      to:
+        dnsName: download.libvirt.org
+    # libvirt-dbus, libvirt-glib, libvirt-python, ocaml-libvirt
+    - type: Allow
+      to:
+        dnsName: libvirt.org
+    # libvirt-snmp
+    - type: Allow
+      to:
+        dnsName: www.libvirt.org
+    # libzip
+    - type: Allow
+      to:
+        dnsName: libzip.org
+    # nfs4-acl-tools
+    - type: Allow
+      to:
+        dnsName: linux-nfs.org
+    # hunspell-hr
+    - type: Allow
+      to:
+        dnsName: cvs.linux.hr
+    # whois
+    - type: Allow
+      to:
+        dnsName: www.linux.it
+    # c2050
+    - type: Allow
+      to:
+        dnsName: www.prato.linux.it
+    # v4l-utils
+    - type: Allow
+      to:
+        dnsName: linuxtv.org
+    # radvd
+    - type: Allow
+      to:
+        dnsName: radvd.litech.org
+    # radvd
+    - type: Allow
+      to:
+        dnsName: www.litech.org
+    # lcms2
+    - type: Allow
+      to:
+        dnsName: www.littlecms.com
+    # nettle
+    - type: Allow
+      to:
+        dnsName: www.lysator.liu.se
+    # lttng-ust, userspace-rcu
+    - type: Allow
+      to:
+        dnsName: lttng.org
+    # lua
+    - type: Allow
+      to:
+        dnsName: www.lua.org
+    # luajit
+    - type: Allow
+      to:
+        dnsName: luajit.org
+    # python-lxml
+    - type: Allow
+      to:
+        dnsName: lxml.de
+    # lzop
+    - type: Allow
+      to:
+        dnsName: www.lzop.org
+    # hyphen-gl
+    - type: Allow
+      to:
+        dnsName: forxa.mancomun.org
+    # mariadb-connector-c, mariadb-connector-odbc
+    - type: Allow
+      to:
+        dnsName: archive.mariadb.org
+    # mariadb-connector-c, mariadb10.11, mariadb11.8
+    - type: Allow
+      to:
+        dnsName: downloads.mariadb.org
+    # libgta
+    - type: Allow
+      to:
+        dnsName: marlam.de
+    # libfakekey
+    - type: Allow
+      to:
+        dnsName: matchbox-project.org
+    # maven-script-interpreter
+    - type: Allow
+      to:
+        dnsName: central.maven.org
+    # aopalliance, apache-parent, apache-resource-bundles, apiguardian, aqute-bnd, backport-util-concurrent, bouncycastle, build-helper-maven-plugin, disruptor, ecj, exec-maven-plugin, extra-enforcer-rules, felix-parent, felix-utils, fop, forge-parent, fusesource-pom, glassfish-jaxb-api, httpcomponents-client, httpcomponents-core, jdom, jetty-parent, junit5, kxml, maven-antrun-plugin, maven-archiver, maven-artifact-transfer, maven-assembly-plugin, maven-bundle-plugin, maven-clean-plugin, maven-common-artifact-filters, maven-dependency-analyzer, maven-dependency-plugin, maven-dependency-tree, maven-deploy-plugin, maven-enforcer, maven-file-management, maven-jar-plugin, maven-jarsigner-plugin, maven-javadoc-plugin, maven-mapping, maven-parent, maven-plugin-build-helper, maven-plugin-bundle, maven-plugin-testing, maven-plugin-tools, maven-remote-resources-plugin, maven-resources-plugin, maven-shade-plugin, maven-shared-incremental, maven-shared-io, maven-shared-jar, maven-shared-utils, maven-source-plugin, maven-verifier, maven-wagon, mockito, mojo-parent, objectweb-asm, opentest4j, osgi-annotation, plexus-component-factories-pom, postgresql-jdbc, sac, testng, thrift, wsdl4j, xml-commons-apis, xml-maven-plugin
+    - type: Allow
+      to:
+        dnsName: repo1.maven.org
+    # base64coder, bouncycastle-mail, bouncycastle-tsp, cobertura-maven-plugin, geronimo-annotation, geronimo-jaspic-spec, maven-checkstyle-plugin, maven-ear-plugin, maven-ejb-plugin, maven-install-plugin, maven-invoker-plugin, maven-jar-plugin, maven-jxr, maven-plugin-cobertura, maven-project-info-reports-plugin, maven-war-plugin, modello
+    - type: Allow
+      to:
+        dnsName: repo2.maven.org
+    # GeoIP-GeoLite-data
+    - type: Allow
+      to:
+        dnsName: download.maxmind.com
+    # GeoIP-GeoLite-data, geolite2
+    - type: Allow
+      to:
+        dnsName: geolite.maxmind.com
+    # GeoIP
+    - type: Allow
+      to:
+        dnsName: www.maxmind.com
+    # libecap
+    - type: Allow
+      to:
+        dnsName: www.measurement-factory.com
+    # libsamplerate
+    - type: Allow
+      to:
+        dnsName: www.mega-nerd.com
+    # memcached
+    - type: Allow
+      to:
+        dnsName: www.memcached.org
+    # mercurial
+    - type: Allow
+      to:
+        dnsName: www.mercurial-scm.org
+    # mesa, mesa-compat
+    - type: Allow
+      to:
+        dnsName: archive.mesa3d.org
+    # hunspell-et
+    - type: Allow
+      to:
+        dnsName: www.meso.ee
+    # perl-Algorithm-C3, perl-Algorithm-Diff, perl-Any-Moose, perl-AnyEvent, perl-AnyEvent-AIO, perl-AnyEvent-BDB, perl-App-cpanminus, perl-AppConfig, perl-Archive-Extract, perl-Archive-Tar, perl-Archive-Zip, perl-Authen-SASL, perl-B-COW, perl-B-Debug, perl-B-Keywords, perl-B-Utils, perl-BSD-Resource, perl-Bit-Vector, perl-Browser-Open, perl-Business-ISBN, perl-CGI, perl-CPAN, perl-CPAN-Changes, perl-CPAN-DistnameInfo, perl-CPAN-Meta, perl-CPAN-Meta-Check, perl-CPAN-Meta-Requirements, perl-CPAN-Meta-YAML, perl-CPANPLUS, perl-CSS-Tiny, perl-Canary-Stability, perl-Capture-Tiny, perl-Carp, perl-Carp-Clan, perl-Class-Accessor, perl-Class-ISA, perl-Class-Inner, perl-Class-Inspector, perl-Class-Load, perl-Class-Load-XS, perl-Class-Method-Modifiers, perl-Class-ReturnValue, perl-Class-Singleton, perl-Class-Tiny, perl-Class-XSAccessor, perl-Clone, perl-Clone-Choose, perl-Compress-Bzip2, perl-Compress-Raw-Bzip2, perl-Compress-Raw-Lzma, perl-Compress-Raw-Zlib, perl-Config-AutoConf, perl-Config-IniFiles, perl-Config-Tiny, perl-Convert-ASN1, perl-Convert-Base64, perl-Convert-BinHex, perl-Crypt-Blowfish, perl-Crypt-CBC, perl-Crypt-DES, perl-Crypt-OpenSSL-Bignum, perl-Crypt-OpenSSL-Guess, perl-Crypt-OpenSSL-RSA, perl-Crypt-OpenSSL-Random, perl-Curses, perl-Cwd-Guard, perl-DBD-CSV, perl-DBD-MariaDB, perl-DBD-MySQL, perl-DBD-Pg, perl-DBD-SQLite, perl-DBI, perl-DB_File, perl-Data-Dump, perl-Data-Dump-Streamer, perl-Data-Dumper, perl-Data-ICal, perl-Data-ICal-TimeZone, perl-Data-OptList, perl-Data-Section, perl-Data-Section-Simple, perl-Data-UUID, perl-Data-Visitor, perl-Date-Calc, perl-Date-ISO8601, perl-Date-Manip, perl-Date-Simple, perl-DateTime, perl-DateTime-Calendar-Mayan, perl-DateTime-Event-ICal, perl-DateTime-Event-Recurrence, perl-DateTime-Format-Builder, perl-DateTime-Format-DateParse, perl-DateTime-Format-HTTP, perl-DateTime-Format-ICal, perl-DateTime-Format-ISO8601, perl-DateTime-Format-Mail, perl-DateTime-Format-MySQL, perl-DateTime-Format-Strptime, perl-DateTime-Locale, perl-DateTime-TimeZone-SystemV, perl-DateTime-TimeZone-Tzfile, perl-Devel-CallChecker, perl-Devel-Caller, perl-Devel-CheckBin, perl-Devel-CheckCompiler, perl-Devel-CheckLib, perl-Devel-Cover, perl-Devel-EnforceEncapsulation, perl-Devel-GlobalDestruction, perl-Devel-Hide, perl-Devel-Leak, perl-Devel-LexAlias, perl-Devel-PPPort, perl-Devel-PartialDump, perl-Devel-Size, perl-Devel-StackTrace, perl-Devel-Symdump, perl-Digest, perl-Digest-BubbleBabble, perl-Digest-CRC, perl-Digest-HMAC, perl-Digest-MD5, perl-Digest-SHA, perl-Digest-SHA1, perl-Dist-CheckConflicts, perl-DynaLoader-Functions, perl-Email-Date-Format, perl-Encode, perl-Encode-Detect, perl-Encode-EUCJPASCII, perl-Encode-IMAPUTF7, perl-Encode-Locale, perl-Env, perl-Env-Sanctify, perl-Error, perl-Eval-Closure, perl-Event, perl-Exception-Class, perl-Exporter, perl-Exporter-Tiny, perl-ExtUtils-CBuilder, perl-ExtUtils-CChecker, perl-ExtUtils-Config, perl-ExtUtils-Depends, perl-ExtUtils-Helpers, perl-ExtUtils-Install, perl-ExtUtils-InstallPaths, perl-ExtUtils-MakeMaker, perl-ExtUtils-MakeMaker-CPANfile, perl-ExtUtils-Manifest, perl-ExtUtils-ParseXS, perl-ExtUtils-PkgConfig, perl-FCGI, perl-File-BaseDir, perl-File-CheckTree, perl-File-Copy-Recursive, perl-File-DesktopEntry, perl-File-Fetch, perl-File-Find-Object, perl-File-Find-Rule, perl-File-HomeDir, perl-File-Inplace, perl-File-LibMagic, perl-File-Listing, perl-File-MimeInfo, perl-File-Path, perl-File-ReadBackwards, perl-File-Remove, perl-File-ShareDir, perl-File-ShareDir-Install, perl-File-Slurp, perl-File-Slurper, perl-File-Temp, perl-File-Which, perl-File-chdir, perl-File-pushd, perl-Filter, perl-Filter-Simple, perl-Font-AFM, perl-FreezeThaw, perl-GD-Barcode, perl-GTop, perl-Getopt-Long, perl-Glib, perl-Graphics-TIFF, perl-Guard, perl-HTML-Format, perl-HTML-FormatText-WithLinks, perl-HTML-FormatText-WithLinks-AndTables, perl-HTML-Parser, perl-HTML-Tagset, perl-HTML-Tree, perl-HTTP-CookieJar, perl-HTTP-Cookies, perl-HTTP-Daemon, perl-HTTP-Date, perl-HTTP-Message, perl-HTTP-Negotiate, perl-HTTP-Tiny, perl-Hash-Merge, perl-Heap, perl-Hook-LexWrap, perl-IO-All, perl-IO-CaptureOutput, perl-IO-Compress, perl-IO-Compress-Lzma, perl-IO-Multiplex, perl-IO-Socket-INET6, perl-IO-Socket-IP, perl-IO-Socket-SSL, perl-IO-String, perl-IO-Tty, perl-IO-Zlib, perl-IO-stringy, perl-IPC-Cmd, perl-IPC-Run, perl-IPC-Run3, perl-IPC-ShareLite, perl-IPC-SysV, perl-IPC-System-Simple, perl-Image-Base, perl-Image-Info, perl-Image-Xbm, perl-Image-Xpm, perl-Import-Into, perl-Importer, perl-Inline, perl-Inline-Files, perl-JSON, perl-JSON-PP, perl-JSON-XS, perl-LDAP, perl-LWP-MediaTypes, perl-LWP-Protocol-https, perl-Lexical-SealRequireHints, perl-Lexical-Var, perl-Linux-Pid, perl-List-MoreUtils, perl-List-MoreUtils-XS, perl-Locale-Codes, perl-Locale-Maketext, perl-Log-Dispatch, perl-Log-Dispatch-FileRotate, perl-MIME-Base64, perl-MIME-Charset, perl-MIME-Lite, perl-MIME-Types, perl-MLDBM, perl-MRO-Compat, perl-Mail-DKIM, perl-Mail-IMAPTalk, perl-Mail-JMAPTalk, perl-Mail-Sender, perl-Mail-Sendmail, perl-MailTools, perl-Math-BigInt, perl-Math-BigInt-FastCalc, perl-Math-BigInt-GMP, perl-Math-BigRat, perl-Math-Int64, perl-Mixin-Linewise, perl-Mock-Config, perl-Module-Build, perl-Module-Build-Tiny, perl-Module-Build-XSUtil, perl-Module-CPANfile, perl-Module-CoreList, perl-Module-Find, perl-Module-Implementation, perl-Module-Install, perl-Module-Install-AuthorRequires, perl-Module-Install-AuthorTests, perl-Module-Install-GithubMeta, perl-Module-Install-ManifestSkip, perl-Module-Install-ReadmeMarkdownFromPod, perl-Module-Install-TestBase, perl-Module-Load, perl-Module-Load-Conditional, perl-Module-Manifest, perl-Module-Metadata, perl-Module-Package, perl-Module-Package-Au, perl-Module-Pluggable, perl-Module-Refresh, perl-Module-Runtime, perl-Module-ScanDeps, perl-Module-Signature, perl-Moo, perl-Moose, perl-MooseX-AttributeHelpers, perl-MooseX-Types, perl-Mouse, perl-MouseX-Types, perl-Mozilla-CA, perl-Mozilla-PublicSuffix, perl-NTLM, perl-Net-CIDR-Lite, perl-Net-CalDAVTalk, perl-Net-CardDAVTalk, perl-Net-DAVTalk, perl-Net-DNS, perl-Net-DNS-Resolver-Mock, perl-Net-DNS-Resolver-Programmable, perl-Net-HTTP, perl-Net-LDAP-Server, perl-Net-LibIDN2, perl-Net-Ping, perl-Net-SMTP-SSL, perl-Net-SNMP, perl-Net-SSLeay, perl-Net-Server, perl-NetAddr-IP, perl-Number-Compare, perl-Object-Accessor, perl-Object-Deadly, perl-Object-HashBase, perl-PAR-Dist, perl-POE, perl-POE-Test-Loops, perl-PPI, perl-PPI-HTML, perl-PPIx-Regexp, perl-PPIx-Utilities, perl-Package-DeprecationManager, perl-Package-Generator, perl-Package-Stash, perl-Package-Stash-XS, perl-PadWalker, perl-Parallel-ForkManager, perl-Parallel-Iterator, perl-Params-Check, perl-Params-Classify, perl-Params-Util, perl-Params-Validate, perl-Params-ValidationCompiler, perl-Parse-PMFile, perl-Parse-Yapp, perl-Path-Class, perl-Path-Tiny, perl-PathTools, perl-Perl-Critic-Deprecated, perl-Perl-Critic-More, perl-Perl-Destruct-Level, perl-Perl-MinimumVersion, perl-Perl-OSType, perl-PerlIO-gzip, perl-PerlIO-utf8_strict, perl-PerlIO-via-QuotedPrint, perl-Pod-Checker, perl-Pod-Coverage, perl-Pod-Coverage-Moose, perl-Pod-Coverage-TrustPod, perl-Pod-Escapes, perl-Pod-Eventual, perl-Pod-Markdown, perl-Pod-MinimumVersion, perl-Pod-POM, perl-Pod-Parser, perl-Pod-Perldoc, perl-Pod-Readme, perl-Pod-Simple, perl-Pod-Spell, perl-Pod-Usage, perl-Probe-Perl, perl-Readonly, perl-Ref-Util, perl-Ref-Util-XS, perl-Regexp-Common, perl-Role-Tiny, perl-SGMLSpm, perl-SQL-Statement, perl-SUPER, perl-Scalar-List-Utils, perl-Scope-Guard, perl-Sereal, perl-Sereal-Decoder, perl-Sereal-Encoder, perl-Set-Infinite, perl-Socket, perl-Socket6, perl-Software-License, perl-Sort-Versions, perl-Specio, perl-Spiffy, perl-Storable, perl-String-CRC32, perl-String-Format, perl-String-ShellQuote, perl-String-Similarity, perl-Sub-Exporter, perl-Sub-Exporter-Progressive, perl-Sub-Identify, perl-Sub-Info, perl-Sub-Install, perl-Sub-Name, perl-Sub-Quote, perl-Sub-Uplevel, perl-Syntax-Highlight-Engine-Kate, perl-Syntax-Keyword-Try, perl-Sys-MemInfo, perl-Sys-Syslog, perl-Sys-Virt, perl-Taint-Runtime, perl-Task-Weaken, perl-Template-Toolkit, perl-Term-ANSIColor, perl-Term-Cap, perl-Term-Size-Any, perl-Term-Size-Perl, perl-Term-Table, perl-TermReadKey, perl-Test-Base, perl-Test-CPAN-Meta, perl-Test-CPAN-Meta-JSON, perl-Test-CheckChanges, perl-Test-Deep, perl-Test-Differences, perl-Test-DistManifest, perl-Test-EOL, perl-Test-Exception, perl-Test-FailWarnings, perl-Test-Fatal, perl-Test-File-ShareDir, perl-Test-Harness, perl-Test-HasVersion, perl-Test-InDistDir, perl-Test-Inter, perl-Test-LeakTrace, perl-Test-LongString, perl-Test-Manifest, perl-Test-Memory-Cycle, perl-Test-MinimumVersion, perl-Test-MockObject, perl-Test-Mojibake, perl-Test-Needs, perl-Test-NoTabs, perl-Test-NoWarnings, perl-Test-Object, perl-Test-Output, perl-Test-Perl-Critic, perl-Test-Pod, perl-Test-Pod-Coverage, perl-Test-Portability-Files, perl-Test-Prereq, perl-Test-Refcount, perl-Test-Requires, perl-Test-RequiresInternet, perl-Test-Script, perl-Test-Simple, perl-Test-Spelling, perl-Test-SubCalls, perl-Test-Synopsis, perl-Test-Taint, perl-Test-TrailingSpace, perl-Test-Valgrind, perl-Test-Vars, perl-Test-Version, perl-Test-Warn, perl-Test-Warnings, perl-Test-Without-Module, perl-Test-XML, perl-Test2-Plugin-NoWarnings, perl-Test2-Suite, perl-Text-Balanced, perl-Text-CSV, perl-Text-CSV_XS, perl-Text-CharWidth, perl-Text-Diff, perl-Text-Glob, perl-Text-Iconv, perl-Text-LevenshteinXS, perl-Text-ParseWords, perl-Text-Soundex, perl-Text-Template, perl-Text-Unidecode, perl-Text-VCardFast, perl-Text-WrapI18N, perl-Text-vFile-asData, perl-Thread-Queue, perl-Tie-DataUUID, perl-Tie-IxHash, perl-Tie-RefHash, perl-Tie-ToObject, perl-Time-HiRes, perl-Time-Local, perl-TimeDate, perl-Tk, perl-Try-Tiny, perl-Type-Tiny, perl-Types-Serialiser, perl-UNIVERSAL-can, perl-UNIVERSAL-isa, perl-URI, perl-Unicode-CheckUTF8, perl-Unicode-Collate, perl-Unicode-EastAsianWidth, perl-Unicode-LineBreak, perl-Unicode-Normalize, perl-Unicode-UTF8, perl-Unix-Syslog, perl-Variable-Magic, perl-WWW-RobotRules, perl-XML-Catalog, perl-XML-DOM, perl-XML-Dumper, perl-XML-Filter-BufferText, perl-XML-Generator, perl-XML-LibXML, perl-XML-LibXSLT, perl-XML-NamespaceSupport, perl-XML-Parser, perl-XML-RegExp, perl-XML-SAX-Base, perl-XML-SAX-Writer, perl-XML-SemanticDiff, perl-XML-Simple, perl-XML-Spice, perl-XML-TokeParser, perl-XML-TreeBuilder, perl-XML-Twig, perl-XML-Writer, perl-XML-XPath, perl-XML-XPathEngine, perl-XS-Parse-Keyword, perl-XString, perl-YAML-LibYAML, perl-YAML-Syck, perl-YAML-Tiny, perl-aliased, perl-autodie, perl-bignum, perl-common-sense, perl-constant, perl-experimental, perl-gettext, perl-inc-latest, perl-libintl-perl, perl-libnet, perl-libwww-perl, perl-libxml-perl, perl-local-lib, perl-namespace-autoclean, perl-namespace-clean, perl-parent, perl-perlfaq, perl-podlators, perl-prefork, perl-strictures, perl-threads, perl-threads-shared, perl-utf8-all, perl-version, perltidy
+    - type: Allow
+      to:
+        dnsName: cpan.metacpan.org
+    # dotnet10.0, dotnet8.0, dotnet9.0
+    - type: Allow
+      to:
+        dnsName: dotnet.microsoft.com
+    # mksh
+    - type: Allow
+      to:
+        dnsName: www.mirbsd.org
+    # hesinfo, hesiod
+    - type: Allow
+      to:
+        dnsName: athena-dist.mit.edu
+    # krb5
+    - type: Allow
+      to:
+        dnsName: web.mit.edu
+    # hunspell-cop
+    - type: Allow
+      to:
+        dnsName: www.moheb.de
+    # hunspell-ak, hunspell-fj, hunspell-fy, hunspell-haw, hunspell-hil, hunspell-hsb, hunspell-oc, hunspell-tn, hunspell-ts
+    - type: Allow
+      to:
+        dnsName: addons.mozilla.org
+    # gjs, mozldap, nss, perl-Mozilla-LDAP
+    - type: Allow
+      to:
+        dnsName: ftp.mozilla.org
+    # hunspell-tk
+    - type: Allow
+      to:
+        dnsName: releases.mozilla.org
+    # publicsuffix-list, saxon
+    - type: Allow
+      to:
+        dnsName: www.mozilla.org
+    # mpfr
+    - type: Allow
+      to:
+        dnsName: www.mpfr.org
+    # mpg123
+    - type: Allow
+      to:
+        dnsName: mpg123.org
+    # mpich
+    - type: Allow
+      to:
+        dnsName: www.mpich.org
+    # libmpcdec
+    - type: Allow
+      to:
+        dnsName: files.musepack.net
+    # libmusicbrainz4
+    - type: Allow
+      to:
+        dnsName: ftp.musicbrainz.org
+    # libdiscid
+    - type: Allow
+      to:
+        dnsName: users.musicbrainz.org
+    # mutt
+    - type: Allow
+      to:
+        dnsName: ftp.mutt.org
+    # mythes-eo
+    - type: Allow
+      to:
+        dnsName: esperanto.mv.ru
+    # mysql, mysql8.4
+    - type: Allow
+      to:
+        dnsName: cdn.mysql.com
+    # nano
+    - type: Allow
+      to:
+        dnsName: www.nano-editor.org
+    # nasm
+    - type: Allow
+      to:
+        dnsName: www.nasm.us
+    # hunspell-ne
+    - type: Allow
+      to:
+        dnsName: nepalinux.org
+    # lua-lunit
+    - type: Allow
+      to:
+        dnsName: nessie.de
+    # arptables, ebtables
+    - type: Allow
+      to:
+        dnsName: ftp.netfilter.org
+    # ipset
+    - type: Allow
+      to:
+        dnsName: ipset.netfilter.org
+    # conntrack-tools, libmnl, libnetfilter_conntrack, libnetfilter_cttimeout, libnetfilter_queue, libnfnetlink, libnftnl, nftables
+    - type: Allow
+      to:
+        dnsName: netfilter.org
+    # iptables, libnetfilter_cthelper
+    - type: Allow
+      to:
+        dnsName: www.netfilter.org
+    # lapack
+    - type: Allow
+      to:
+        dnsName: www.netlib.org
+    # nginx
+    - type: Allow
+      to:
+        dnsName: nginx.org
+    # unbound
+    - type: Allow
+      to:
+        dnsName: nlnetlabs.nl
+    # ldns
+    - type: Allow
+      to:
+        dnsName: www.nlnetlabs.nl
+    # nmap
+    - type: Allow
+      to:
+        dnsName: nmap.org
+    # nmap
+    - type: Allow
+      to:
+        dnsName: svn.nmap.org
+    # nmstate
+    - type: Allow
+      to:
+        dnsName: nmstate.io
+    # attr
+    - type: Allow
+      to:
+        dnsName: download.savannah.nongnu.org
+    # libntlm
+    - type: Allow
+      to:
+        dnsName: nongnu.org
+    # icoutils
+    - type: Allow
+      to:
+        dnsName: savannah.nongnu.org
+    # nodejs-acorn, nodejs-constantinople, nodejs-diff, nodejs-find-up, nodejs-growl, nodejs-grunt-legacy-log, nodejs-hawk, nodejs-hoek, nodejs-http-signature, nodejs-is-my-json-valid, nodejs-jju, nodejs-json-parse-helpfulerror, nodejs-monocle, nodejs-normalize-package-data, nodejs-promise, nodejs-string, nodejs-string-dot-prototype-dot-trim, nodejs-supports-color, nodejs-test, nodejs-transformers, nodejs-tunnel-agent, nodejs-underscore, nodejs-vows, uglify-js
+    - type: Allow
+      to:
+        dnsName: registry.npmjs.org
+    # numpy
+    - type: Allow
+      to:
+        dnsName: numpy.org
+    # libXNVCtrl, nvidia-modprobe, nvidia-persistenced, nvidia-settings
+    - type: Allow
+      to:
+        dnsName: download.nvidia.com
+    # linuxptp
+    - type: Allow
+      to:
+        dnsName: downloads.nwtime.org
+    # docbook-dtds, gl-manpages
+    - type: Allow
+      to:
+        dnsName: www.oasis-open.org
+    # lzo
+    - type: Allow
+      to:
+        dnsName: www.oberhumer.com
+    # objectweb-anttask
+    - type: Allow
+      to:
+        dnsName: download.forge.objectweb.org
+    # ocaml-calendar, ocaml-fileutils
+    - type: Allow
+      to:
+        dnsName: forge.ocamlcore.org
+    # mrtg
+    - type: Allow
+      to:
+        dnsName: oss.oetiker.ch
+    # mpitests
+    - type: Allow
+      to:
+        dnsName: mvapich.cse.ohio-state.edu
+    # hwloc
+    - type: Allow
+      to:
+        dnsName: download.open-mpi.org
+    # hwloc, openmpi, plpa
+    - type: Allow
+      to:
+        dnsName: www.open-mpi.org
+    # openal-soft
+    - type: Allow
+      to:
+        dnsName: openal-soft.org
+    # openssh
+    - type: Allow
+      to:
+        dnsName: ftp.openbsd.org
+    # libdap
+    - type: Allow
+      to:
+        dnsName: www.opendap.org
+    # opendnssec, softhsm
+    - type: Allow
+      to:
+        dnsName: dist.opendnssec.org
+    # opendnssec
+    - type: Allow
+      to:
+        dnsName: www.opendnssec.org
+    # libmthca
+    - type: Allow
+      to:
+        dnsName: openfabrics.org
+    # compat-dapl, compat-opensm-libs, ibacm, ibsim, iwpmd, libcxgb3, libcxgb4, libi40iw, libibcm, libibcommon, libibmad, libibumad, libmlx4-rocee, libmlx5, libnes, libocrdma, librdmacm, qperf, srptools
+    - type: Allow
+      to:
+        dnsName: www.openfabrics.org
+    # tog-pegasus
+    - type: Allow
+      to:
+        dnsName: collaboration.opengroup.org
+    # efont-unicode-bdf
+    - type: Allow
+      to:
+        dnsName: openlab.jp
+    # lmdb
+    - type: Allow
+      to:
+        dnsName: git.openldap.org
+    # openldap
+    - type: Allow
+      to:
+        dnsName: openldap.org
+    # hunspell-cy, hunspell-en, hunspell-id, hunspell-mg, hunspell-mi, hunspell-mk, hunspell-ms, hunspell-rw, hunspell-sl, hunspell-tet, hunspell-th, hunspell-tl, hyphen-da, hyphen-de, hyphen-el, hyphen-ga, hyphen-id, hyphen-is, hyphen-it, hyphen-nl, hyphen-pl, hyphen-pt, hyphen-sk, hyphen-sl, hyphen-uk, mythes-cs, mythes-ga, mythes-ne, mythes-pt
+    - type: Allow
+      to:
+        dnsName: download.services.openoffice.org
+    # hunspell-ht, hunspell-qu, mythes-sv
+    - type: Allow
+      to:
+        dnsName: extensions.services.openoffice.org
+    # emacs, ethtool, expat, ldns, libidn2, unbound, weldr-client
+    - type: Allow
+      to:
+        dnsName: keys.openpgp.org
+    # foomatic, foomatic-db
+    - type: Allow
+      to:
+        dnsName: www.openprinting.org
+    # engine_pkcs11, libp11
+    - type: Allow
+      to:
+        dnsName: www.opensc-project.org
+    # linux-sgx
+    - type: Allow
+      to:
+        dnsName: www.openssl.org
+    # python-debtcollector, python-keystoneauth1, python-oslo-config, python-oslo-i18n, python-oslo-serialization, python-oslo-utils, python-oslotest, python-stevedore
+    - type: Allow
+      to:
+        dnsName: releases.openstack.org
+    # python-debtcollector, python-keystoneauth1, python-mox3, python-os-service-types, python-oslo-config, python-oslo-i18n, python-oslo-serialization, python-oslo-sphinx, python-oslo-utils, python-oslotest, python-stevedore, python-sushy
+    - type: Allow
+      to:
+        dnsName: tarballs.openstack.org
+    # mythes-nl
+    - type: Allow
+      to:
+        dnsName: data.opentaal.org
+    # mythes-de
+    - type: Allow
+      to:
+        dnsName: www.openthesaurus.de
+    # openvswitch
+    - type: Allow
+      to:
+        dnsName: openvswitch.org
+    # passwdqc
+    - type: Allow
+      to:
+        dnsName: www.openwall.com
+    # elinks
+    - type: Allow
+      to:
+        dnsName: elinks.or.cz
+    # libtar
+    - type: Allow
+      to:
+        dnsName: repo.or.cz
+    # mecab-ipadic
+    - type: Allow
+      to:
+        dnsName: www.jipdec.or.jp
+    # hspell
+    - type: Allow
+      to:
+        dnsName: hspell.ivrix.org.il
+    # madan-fonts
+    - type: Allow
+      to:
+        dnsName: ltk.org.np
+    # libmspack
+    - type: Allow
+      to:
+        dnsName: www.cabextract.org.uk
+    # x86info
+    - type: Allow
+      to:
+        dnsName: www.codemonkey.org.uk
+    # mactel-boot
+    - type: Allow
+      to:
+        dnsName: www.codon.org.uk
+    # atmel-firmware, dnsmasq
+    - type: Allow
+      to:
+        dnsName: www.thekelleys.org.uk
+    # hunspell-af
+    - type: Allow
+      to:
+        dnsName: downloads.translate.org.za
+    # java-17-openjdk
+    - type: Allow
+      to:
+        dnsName: openjdk-sources.osci.io
+    # nkf
+    - type: Allow
+      to:
+        dnsName: iij.dl.osdn.jp
+    # man-pages-ja
+    - type: Allow
+      to:
+        dnsName: linuxjm.osdn.jp
+    # gdal, geos, libtiff, postgresql16-postgis, postgresql18-postgis, proj, shapelib
+    - type: Allow
+      to:
+        dnsName: download.osgeo.org
+    # osgi-core
+    - type: Allow
+      to:
+        dnsName: docs.osgi.org
+    # osgi-compendium
+    - type: Allow
+      to:
+        dnsName: osgi.org
+    # uuid
+    - type: Allow
+      to:
+        dnsName: ftp.ossp.org
+    # opus, vorbis-tools
+    - type: Allow
+      to:
+        dnsName: ftp.osuosl.org
+    # objectweb-asm3
+    - type: Allow
+      to:
+        dnsName: download.forge.ow2.org
+    # libtopology
+    - type: Allow
+      to:
+        dnsName: libtopology.ozlabs.org
+    # powerpc-utils-papr
+    - type: Allow
+      to:
+        dnsName: powerpc-utils.ozlabs.org
+    # clufter, copy-jdk-configs, filesystem, fonts-rpm-macros, go-rpm-macros, golist, hardlink, hunspell-it, hyphen-it, kde-settings, lohit-tamil-fonts, mailcap, newt, pungi, python-rpmfluff, rust-packaging, rust-srpm-macros
+    - type: Allow
+      to:
+        dnsName: pagure.io
+    # libosinfo, osinfo-db-tools
+    - type: Allow
+      to:
+        dnsName: releases.pagure.io
+    # authconfig, bind-dyndb-ldap, certmonger, comps-extras, ding-libs, fipscheck, fontpackages, gfs2-utils, gnome-shell-extension-background-logo, hmaccalc, ibus-sayura, koji, libosinfo, lohit-assamese-fonts, lohit-devanagari-fonts, lohit-gujarati-fonts, lohit-gurmukhi-fonts, lohit-kannada-fonts, lohit-malayalam-fonts, lohit-marathi-fonts, lohit-nepali-fonts, lohit-odia-fonts, lohit-telugu-fonts, m17n-db, memcached, oddjob, osinfo-db-tools, polkit-pkla-compat, rpmdevtools, setroubleshoot-plugins, setup, slapi-nis, tmpwatch, usermode, virt-manager, volume_key, xmlto
+    - type: Allow
+      to:
+        dnsName: releases.pagure.org
+    # pt-sans-fonts
+    - type: Allow
+      to:
+        dnsName: rus.paratype.ru
+    # passt
+    - type: Allow
+      to:
+        dnsName: passt.top
+    # rdfind
+    - type: Allow
+      to:
+        dnsName: rdfind.pauldreik.se
+    # pcre2
+    - type: Allow
+      to:
+        dnsName: ftp.pcre.org
+    # perl-DateTime-Format-IBeat
+    - type: Allow
+      to:
+        dnsName: backpan.perl.org
+    # php-pear
+    - type: Allow
+      to:
+        dnsName: download.pear.php.net
+    # php-pear
+    - type: Allow
+      to:
+        dnsName: pear.php.net
+    # php-pecl-apc, php-pecl-apcu, php-pecl-redis6, php-pecl-rrd, php-pecl-zip, php8.4-pecl-apcu, php8.4-pecl-redis6, php8.4-pecl-rrd, php8.4-pecl-zip
+    - type: Allow
+      to:
+        dnsName: pecl.php.net
+    # php, php8.4
+    - type: Allow
+      to:
+        dnsName: www.php.net
+    # man-pages-it
+    - type: Allow
+      to:
+        dnsName: ftp.pluto.it
+    # svrcore
+    - type: Allow
+      to:
+        dnsName: www.port389.org
+    # libecpg, libpq, postgresql-odbc, postgresql16, postgresql18
+    - type: Allow
+      to:
+        dnsName: ftp.postgresql.org
+    # postgresql-jdbc
+    - type: Allow
+      to:
+        dnsName: jdbc.postgresql.org
+    # libprelude
+    - type: Allow
+      to:
+        dnsName: www.prelude-siem.org
+    # libdwarf
+    - type: Allow
+      to:
+        dnsName: www.prevanders.net
+    # mallard-rng
+    - type: Allow
+      to:
+        dnsName: projectmallard.org
+    # latexmk
+    - type: Allow
+      to:
+        dnsName: personal.psu.edu
+    # publicsuffix-list
+    - type: Allow
+      to:
+        dnsName: publicsuffix.org
+    # lua-lpeg
+    - type: Allow
+      to:
+        dnsName: www.inf.puc-rio.br
+    # rply
+    - type: Allow
+      to:
+        dnsName: www.tecgraf.puc-rio.br
+    # libvoikko, malaga-suomi-voikko, mozvoikko, voikko-fi
+    - type: Allow
+      to:
+        dnsName: www.puimula.org
+    # python-boto, python-cliff, python-contextlib2, python-cryptography-vectors, python-extras, python-freezegun, python-funcsigs, python-hacking, python-idna, python-jsonpatch, python-jsonpointer, python-justbases, python-justbytes, python-novaclient, python-openstackdocstheme, python-passlib, python-pbr, python-prompt_toolkit, python-pyudev, python-setproctitle, python-wcwidth, python-zope-interface, python3.11-idna, python3.14-idna
+    - type: Allow
+      to:
+        dnsName: pypi.io
+    # python-flit
+    - type: Allow
+      to:
+        dnsName: pypi.org
+    # pcs, python-WSGIProxy2, python-backports-functools_lru_cache, python-blinker, python-blist, python-configparser, python-construct, python-cov-core, python-coverage, python-d2to1, python-fixtures, python-google-apputils, python-humanize, python-ipaddress, python-ipython_genutils, python-iso8601, python-kerberos, python-lesscpy, python-linecache2, python-markupsafe, python-ndg_httpsclient, python-netaddr, python-nose, python-nose-cov, python-nose-testconfig, python-ntplib, python-ordered-set, python-pam, python-parse, python-pathlib, python-pid, python-pretend, python-prettytable, python-pydotplus, python-pyqt6, python-qrcode, python-requests-ftp, python-requests-unixsocket, python-rfc3986, python-rjsmin, python-rsa, python-singledispatch, python-snowballstemmer, python-sphinx-theme-alabaster, python-sphinx-theme-py3doc-enhanced, python-tempita, python-testrepository, python-testscenarios, python-traceback2, python-venusian, python-whoosh
+    - type: Allow
+      to:
+        dnsName: pypi.python.org
+    # python3-docs, python3.11, python3.12, python3.14, python3.9, python36, python39
+    - type: Allow
+      to:
+        dnsName: www.python.org
+    # PyQt-builder, ansible-core, argparse-manpage, awscli, babel, google-auth-httplib2, ipython, kobo, maturin, modulemd, oval-graph, pyOpenSSL, pylint, pyserial, pytest, python-Automat, python-CommonMark, python-IPy, python-Pallets-Sphinx-Themes, python-PyMySQL, python-SecretStorage, python-alembic, python-appdirs, python-argcomplete, python-argh, python-asn1crypto, python-asttokens, python-awscrt, python-backports-shutil_get_terminal_size, python-backports-unittest_mock, python-backports_abc, python-bcrypt, python-beautifulsoup4, python-bleach, python-boto3, python-botocore, python-cachetools, python-cffi, python-cffsubr, python-chardet, python-colorama, python-constantly, python-dasbus, python-dateutil, python-dbusmock, python-ddt, python-decorator, python-distro, python-django, python-docker, python-docker-pycreds, python-drgn, python-elementpath, python-enchant, python-enum34, python-ethtool, python-eventlet, python-execnet, python-flake8, python-flaky, python-flask, python-flexmock, python-flit-core, python-futures, python-genshi, python-genty, python-gevent, python-graphviz, python-h2, python-hatchling, python-httpretty, python-hupper, python-hyperframe, python-hyperlink, python-ifaddr, python-imagesize, python-incremental, python-iniconfig, python-installer, python-isodate, python-isort, python-itsdangerous, python-jinja2, python-jsonpointer, python-jsonschema, python-jsonschema-specifications, python-jupyter-client, python-jupyter-core, python-jwt, python-lark, python-lark-parser, python-latexcodec, python-ldap, python-ldap3, python-lit, python-lockfile, python-markdown, python-mccabe, python-meson-python, python-mimeparse, python-monotonic, python-more-itertools, python-nbformat, python-netifaces, python-nose2, python-nose_warnings_filters, python-numpydoc, python-olefile, python-orderedset, python-outcome, python-parameterized, python-parso, python-paste, python-paste-deploy, python-path, python-pathlib2, python-pathspec, python-pickleshare, python-pid, python-pikepdf, python-pkgconfig, python-pluggy, python-prettytable, python-priority, python-productmd, python-progressbar2, python-prompt-toolkit, python-ptyprocess, python-py, python-pybtex, python-pybtex-docutils, python-pycdio, python-pycodestyle, python-pycotap, python-pydbus, python-pygments, python-pygpgme, python-pypandoc, python-pyperclip, python-pyproject-hooks, python-pyqt5-sip, python-pyqt6-sip, python-pysocks, python-pytest-expect, python-pytest-fixture-config, python-pytest-flake8, python-pytest-forked, python-pytest-lazy-fixture, python-pytest-mock, python-pytest-randomly, python-pytest-runner, python-pytest-shutil, python-pytest-subtests, python-pytest-timeout, python-pytest-venv, python-pytest-virtualenv, python-pytest-xdist, python-qrcode, python-rdflib, python-referencing, python-requests-file, python-rpds-py, python-rpmautospec-core, python-s3transfer, python-setuptools, python-setuptools-rust, python-setuptools_git, python-setuptools_scm, python-simpleaudio, python-simplejson, python-six, python-sphinx, python-sphinx-epytext, python-sphinx-issues, python-sphinx-testing, python-sphinx-theme-alabaster, python-sphinx_rtd_theme, python-sphinxcontrib-apidoc, python-sphinxcontrib-applehelp, python-sphinxcontrib-devhelp, python-sphinxcontrib-htmlhelp, python-sphinxcontrib-jsmath, python-sphinxcontrib-log-cabinet, python-sphinxcontrib-qthelp, python-sphinxcontrib-serializinghtml, python-sphinxcontrib-trio, python-sqlalchemy, python-stestr, python-sure, python-testpath, python-testtools, python-tox-current-env, python-tpm2-pytss, python-tqdm, python-trio, python-trove-classifiers, python-trustme, python-twisted, python-typing-extensions, python-typogrify, python-u-msgpack-python, python-unidecode, python-urwid, python-vcrpy, python-virt-firmware, python-voluptuous, python-wcwidth, python-websocket-client, python-werkzeug, python-wxpython4, python-xkbregistry, python-xmlschema, python-xmp-toolkit, python-yarl, python-zmq, python-zstandard, python-zstd, python2-ipython, python2-setuptools, python2-six, python2-typing, python3-setuptools, python3.11-PyMySQL, python3.11-iniconfig, python3.11-pluggy, python3.11-pysocks, python3.11-pytest, python3.11-setuptools, python3.11-setuptools-rust, python3.11-six, python3.14-PyMySQL, python3.14-flit-core, python3.14-meson-python, python3.14-pip, python3.14-pluggy, python3.14-pytest, python3.14-setuptools, python3.14-setuptools-rust, python3.14-setuptools_scm, python3x-setuptools, python3x-six, pyusb, pyxdg, sip6, xonsh
+    - type: Allow
+      to:
+        dnsName: files.pythonhosted.org
+    # libyaml
+    - type: Allow
+      to:
+        dnsName: pyyaml.org
+    # qemu-guest-agent, qemu-kvm
+    - type: Allow
+      to:
+        dnsName: wiki.qemu.org
+    # netxen-firmware, ql2100-firmware, ql2200-firmware, ql23xx-firmware, ql2400-firmware, ql2500-firmware
+    - type: Allow
+      to:
+        dnsName: ftp.qlogic.com
+    # qt
+    - type: Allow
+      to:
+        dnsName: download.qt-project.org
+    # qt5-qt3d, qt5-qtcanvas3d, qt5-qtdeclarative, qt5-qtdoc, qt5-qtenginio, qt5-qtgraphicaleffects, qt5-qtimageformats, qt5-qtquickcontrols, qt5-qtquickcontrols2, qt5-qtscript, qt5-qtsensors, qt5-qtserialbus, qt5-qtserialport, qt5-qtsvg, qt5-qttranslations, qt5-qtwayland, qt5-qtwebchannel, qt5-qtx11extras, qt5-qtxmlpatterns, qt6-qt3d, qt6-qt5compat, qt6-qtbase, qt6-qtcharts, qt6-qtconnectivity, qt6-qtdatavis3d, qt6-qtdeclarative, qt6-qtimageformats, qt6-qtlanguageserver, qt6-qtlocation, qt6-qtlottie, qt6-qtmultimedia, qt6-qtnetworkauth, qt6-qtpositioning, qt6-qtquick3d, qt6-qtquicktimeline, qt6-qtremoteobjects, qt6-qtscxml, qt6-qtsensors, qt6-qtserialbus, qt6-qtserialport, qt6-qtshadertools, qt6-qtspeech, qt6-qtsvg, qt6-qttools, qt6-qttranslations, qt6-qtvirtualkeyboard, qt6-qtwayland, qt6-qtwebchannel, qt6-qtwebsockets
+    - type: Allow
+      to:
+        dnsName: download.qt.io
+    # rabbitmq-java-client
+    - type: Allow
+      to:
+        dnsName: www.rabbitmq.com
+    # jakarta-commons-net
+    - type: Allow
+      to:
+        dnsName: apache.mirror.rbftpnetworks.com
+    # python-sphinx_rtd_theme
+    - type: Allow
+      to:
+        dnsName: docs.readthedocs.io
+    # ovmf
+    - type: Allow
+      to:
+        dnsName: batcave.lab.eng.brq.redhat.com
+    # mingw32-portablexdr
+    - type: Allow
+      to:
+        dnsName: et.redhat.com
+    # open-vm-tools
+    - type: Allow
+      to:
+        dnsName: kojihub.stream.rdu2.redhat.com
+    # appstream-data, cachefilesd, clufter, fapolicyd, foghorn, fwupd, keyutils, latrace, libcap-ng, ocaml-augeas, redhat-support-lib-python, redhat-support-tool, virt-top, virt-what
+    - type: Allow
+      to:
+        dnsName: people.redhat.com
+    # redis
+    - type: Allow
+      to:
+        dnsName: download.redis.io
+    # popt, rpm
+    - type: Allow
+      to:
+        dnsName: ftp.rpm.org
+    # libfastjson, liblogging, librelp
+    - type: Allow
+      to:
+        dnsName: download.rsyslog.com
+    # rsyslog
+    - type: Allow
+      to:
+        dnsName: www.rsyslog.com
+    # hunspell-am, hunspell-ti
+    - type: Allow
+      to:
+        dnsName: www.cs.ru.nl
+    # pcs, rubygem-ZenTest, rubygem-abrt, rubygem-activemodel, rubygem-activerecord, rubygem-addressable, rubygem-atk, rubygem-atomic, rubygem-backports, rubygem-bootsnap, rubygem-bson, rubygem-bundler, rubygem-capybara, rubygem-coffee-script, rubygem-coffee-script-source, rubygem-concurrent-ruby, rubygem-connection_pool, rubygem-creole, rubygem-diff-lcs, rubygem-faraday, rubygem-ffi, rubygem-gdk_pixbuf2, rubygem-glib2, rubygem-gtk2, rubygem-haml, rubygem-image_processing, rubygem-json_pure, rubygem-kramdown, rubygem-kramdown-parser-gfm, rubygem-loofah, rubygem-maruku, rubygem-memcache-client, rubygem-mime-types, rubygem-mime-types-data, rubygem-minitest, rubygem-mongo, rubygem-multi_json, rubygem-mustermann, rubygem-net-http-persistent, rubygem-nokogiri, rubygem-open4, rubygem-pango, rubygem-pg, rubygem-prawn, rubygem-racc, rubygem-rack, rubygem-rack-test, rubygem-rails-controller-testing, rubygem-railties, rubygem-rake, rubygem-rake-compiler, rubygem-redcarpet, rubygem-redis, rubygem-ronn, rubygem-ronn-ng, rubygem-rouge, rubygem-rr, rubygem-rspec, rubygem-rspec-collection_matchers, rubygem-rspec-core, rubygem-rspec-expectations, rubygem-rspec-mocks, rubygem-rspec-support, rubygem-rubyzip, rubygem-sprockets, rubygem-thin, rubygem-thor, rubygem-thread_order, rubygem-thread_safe, rubygem-webmock, rubygem-zeitwerk
+    - type: Allow
+      to:
+        dnsName: rubygems.org
+    # wacomexpresskeys
+    - type: Allow
+      to:
+        dnsName: expresskeys.ruivo.org
+    # hunspell-quh
+    - type: Allow
+      to:
+        dnsName: www.runasimipi.org
+    # rust
+    - type: Allow
+      to:
+        dnsName: static.rust-lang.org
+    # cifs-utils, libtalloc, rsync
+    - type: Allow
+      to:
+        dnsName: download.samba.org
+    # nss_wrapper, pam_wrapper, priv_wrapper, resolv_wrapper, samba, socket_wrapper, uid_wrapper
+    - type: Allow
+      to:
+        dnsName: ftp.samba.org
+    # libtdb, libtevent
+    - type: Allow
+      to:
+        dnsName: samba.org
+    # libldb, libtalloc
+    - type: Allow
+      to:
+        dnsName: www.samba.org
+    # hunspell-si
+    - type: Allow
+      to:
+        dnsName: www.sandaru1.com
+    # libev
+    - type: Allow
+      to:
+        dnsName: dist.schmorp.de
+    # s-nail
+    - type: Allow
+      to:
+        dnsName: www.sdaoden.eu
+    # plocate
+    - type: Allow
+      to:
+        dnsName: plocate.sesse.net
+    # ht2html, libytnef
+    - type: Allow
+      to:
+        dnsName: dl.sf.net
+    # Judy, saab-fonts
+    - type: Allow
+      to:
+        dnsName: downloads.sf.net
+    # hunspell-sq
+    - type: Allow
+      to:
+        dnsName: www.shkenca.org
+    # xdvipdfmx
+    - type: Allow
+      to:
+        dnsName: scripts.sil.org
+    # sil-scheherazade-fonts
+    - type: Allow
+      to:
+        dnsName: software.sil.org
+    # mingw-libtiff
+    - type: Allow
+      to:
+        dnsName: ftp.simplesystems.org
+    # hunspell-pl
+    - type: Allow
+      to:
+        dnsName: sjp.pl
+    # hunspell-sk, mythes-sk
+    - type: Allow
+      to:
+        dnsName: www.sk-spell.sk.cx
+    # hunspell-om
+    - type: Allow
+      to:
+        dnsName: borel.slu.edu
+    # hunspell-ca, mythes-ca
+    - type: Allow
+      to:
+        dnsName: www.softcatala.org
+    # kasumi
+    - type: Allow
+      to:
+        dnsName: jaist.dl.sourceforge.jp
+    # anthy, vlgothic-fonts
+    - type: Allow
+      to:
+        dnsName: osdn.dl.sourceforge.jp
+    # hunspell-ber
+    - type: Allow
+      to:
+        dnsName: ayaspell.sourceforge.net
+    # hunspell-sc, hunspell-so
+    - type: Allow
+      to:
+        dnsName: ayera.dl.sourceforge.net
+    # edac-utils, kxml, libtnc, makebootfat
+    - type: Allow
+      to:
+        dnsName: dl.sourceforge.net
+    # jsch, libmng, libmtp, libwpg, openjade, pnm2ppa, tk
+    - type: Allow
+      to:
+        dnsName: download.sourceforge.net
+    # CUnit, OpenIPMI, acpid, amanda, asio, bacula, bogofilter, bwidget, c2esp, collectl, compat-giflib, cpptest, cscope, culmus-fonts, dblatex, docbook-slides, docbook2X, docbook5-style-xsl, environment-modules, fetchmail, flute, freeglut, gdcm, giflib, gphoto2, graphite2, gtkspell3, gutenprint, hdparm, hunspell-ar, hunspell-as, hunspell-be, hunspell-bg, hunspell-br, hunspell-dsb, hunspell-gd, hunspell-gl, hunspell-grc, hunspell-hu, hunspell-hy, hunspell-is, hunspell-kk, hunspell-km, hunspell-kn, hunspell-ku, hunspell-la, hunspell-ln, hunspell-mn, hunspell-mt, hunspell-nds, hunspell-nr, hunspell-nso, hunspell-ny, hunspell-ro, hunspell-sr, hunspell-ss, hunspell-st, hunspell-tpi, hunspell-uk, hunspell-ve, hunspell-vi, hunspell-xh, hunspell-yi, hunspell-zu, hyphen, hyphen-bg, hyphen-ca, hyphen-ku, hyphen-ro, hyphen-sv, ibus-libpinyin, ibus-libzhuyin, icc-profiles-openicc, ignition, kacst-fonts, khmer-os-fonts, khmeros-fonts, lame, libEMF, libdc1394, libepubgen, libgphoto2, libieee1284, libirman, libkeepalive, libmikmod, libmwaw, liboauth, libodfgen, libpinyin, libquvi, librevenge, libtirpc, libupnp, libwpd, libwps, linuxconsoletools, lirc, man-pages-uk, mecab-ipadic, mingw-crt, mingw-headers, mingw-w64-tools, mingw-winpthreads, mingw32-expat, mingw32-runtime, mingw32-w32api, mtx, mythes, mythes-bg, mythes-hu, mythes-it, mythes-pl, mythes-ro, mythes-uk, net-snmp, openhpi, optipng, paps, pidgin-sipe, pngcrush, potrace, procps-ng, pyparsing, python-basemap-data, rpcbind, saxon, saxpath, sblim-cim-client, sblim-cmpi-base, sblim-cmpi-dhcp, sblim-cmpi-nfsv3, sblim-cmpi-nfsv4, sblim-cmpi-sysfs, sblim-cmpi-syslog, sblim-gather, sblim-indication_helper, sblim-sfcCommon, sblim-sfcb, sblim-sfcc, sblim-testsuite, sblim-tools-libra, shared-desktop-ontologies, smartmontools, sshpass, star, swig, tboot, tcl, terminus-fonts, tix, tpm-quote-tools, tpm-tools, traceroute, trousers, tunctl, twolame, virtuoso-opensource, watchdog, wqy-microhei-fonts, wqy-zenhei-fonts, wsdl4j, wxPython, x3270, xmlstarlet, xqc, xqilla, zip, zsh
+    - type: Allow
+      to:
+        dnsName: downloads.sourceforge.net
+    # mythes-da
+    - type: Allow
+      to:
+        dnsName: excellmedia.dl.sourceforge.net
+    # gtkspell
+    - type: Allow
+      to:
+        dnsName: gtkspell.sourceforge.net
+    # maven-surefire
+    - type: Allow
+      to:
+        dnsName: junit.sourceforge.net
+    # a52dec
+    - type: Allow
+      to:
+        dnsName: liba52.sourceforge.net
+    # potrace
+    - type: Allow
+      to:
+        dnsName: potrace.sourceforge.net
+    # cdrdao, docbook-style-dsssl, dtach, relaxngcc, scons, sox
+    - type: Allow
+      to:
+        dnsName: prdownloads.sourceforge.net
+    # sed
+    - type: Allow
+      to:
+        dnsName: sed.sourceforge.net
+    # aide, armadillo, byaccj, glew, gnu-efi, half, hunspell-ar, libpfm, logwatch, man-pages-pl, man-pages-ru, nmon, oprofile, paktype-naqsh-fonts, paktype-naskh-basic-fonts, paktype-tehreer-fonts, psmisc, python-docutils, python-ruamel-yaml, python-ruamel-yaml-clib, tss2
+    - type: Allow
+      to:
+        dnsName: sourceforge.net
+    # mpdecimal
+    - type: Allow
+      to:
+        dnsName: speleotrove.com
+    # hunspell-da
+    - type: Allow
+      to:
+        dnsName: da.speling.org
+    # hunspell-fo, hyphen-fo
+    - type: Allow
+      to:
+        dnsName: fo.speling.org
+    # hunspell-lb
+    - type: Allow
+      to:
+        dnsName: downloads.spellchecker.lu
+    # spice-vdagent, usbredir
+    - type: Allow
+      to:
+        dnsName: spice-space.org
+    # mingw-spice-gtk, spice, spice-gtk, spice-protocol
+    - type: Allow
+      to:
+        dnsName: www.spice-space.org
+    # sqlite
+    - type: Allow
+      to:
+        dnsName: www.sqlite.org
+    # squid
+    - type: Allow
+      to:
+        dnsName: www.squid-cache.org
+    # forge-srpm-macros
+    - type: Allow
+      to:
+        dnsName: git.sr.ht
+    # strace
+    - type: Allow
+      to:
+        dnsName: strace.io
+    # stunnel
+    - type: Allow
+      to:
+        dnsName: www.stunnel.org
+    # sudo
+    - type: Allow
+      to:
+        dnsName: www.sudo.ws
+    # deltarpm
+    - type: Allow
+      to:
+        dnsName: ftp.suse.com
+    # libstemmer
+    - type: Allow
+      to:
+        dnsName: snowball.tartarus.org
+    # taskjuggler
+    - type: Allow
+      to:
+        dnsName: www.taskjuggler.org
+    # libpcap, tcpdump
+    - type: Allow
+      to:
+        dnsName: www.tcpdump.org
+    # libdatrie, libthai, thai-scalable-fonts
+    - type: Allow
+      to:
+        dnsName: linux.thai.net
+    # libedit
+    - type: Allow
+      to:
+        dnsName: www.thrysoee.dk
+    # hunspell-csb
+    - type: Allow
+      to:
+        dnsName: addons.thunderbird.net
+    # gnu-regexp
+    - type: Allow
+      to:
+        dnsName: ftp.tralfamadore.com
+    # perl-Template-Toolkit
+    - type: Allow
+      to:
+        dnsName: tt2.org
+    # libsmi
+    - type: Allow
+      to:
+        dnsName: gitlab.ibr.cs.tu-bs.de
+    # texlive
+    - type: Allow
+      to:
+        dnsName: ftp.tu-chemnitz.de
+    # xz, xz-java
+    - type: Allow
+      to:
+        dnsName: tukaani.org
+    # dhcpcd, dos2unix, ed, python-breathe
+    - type: Allow
+      to:
+        dnsName: keyserver.ubuntu.com
+    # man-pages-es
+    - type: Allow
+      to:
+        dnsName: ditec.um.es
+    # hunspell-pt
+    - type: Allow
+      to:
+        dnsName: natura.di.uminho.pt
+    # hunspell-uz
+    - type: Allow
+      to:
+        dnsName: www-user.uni-bremen.de
+    # vigra
+    - type: Allow
+      to:
+        dnsName: kogs-www.informatik.uni-hamburg.de
+    # b43-openfwwf
+    - type: Allow
+      to:
+        dnsName: www.ing.unibs.it
+    # unicode-emoji, unicode-ucd
+    - type: Allow
+      to:
+        dnsName: www.unicode.org
+    # unixODBC
+    - type: Allow
+      to:
+        dnsName: www.unixodbc.org
+    # hunspell-el
+    - type: Allow
+      to:
+        dnsName: ispell.math.upatras.gr
+    # gnu-getopt
+    - type: Allow
+      to:
+        dnsName: www.urbanophile.com
+    # papi
+    - type: Allow
+      to:
+        dnsName: icl.cs.utk.edu
+    # varnish
+    - type: Allow
+      to:
+        dnsName: varnish-cache.org
+    # libdvdnav, libdvdread
+    - type: Allow
+      to:
+        dnsName: download.videolan.org
+    # vim
+    - type: Allow
+      to:
+        dnsName: ftp.vim.org
+    # tibetan-machine-uni-fonts
+    - type: Allow
+      to:
+        dnsName: collab.itc.virginia.edu
+    # virt-manager, virt-viewer
+    - type: Allow
+      to:
+        dnsName: virt-manager.org
+    # hostapd, wpa_supplicant
+    - type: Allow
+      to:
+        dnsName: w1.fi
+    # decentxml, gl-manpages, libxml2
+    - type: Allow
+      to:
+        dnsName: www.w3.org
+    # wavpack
+    - type: Allow
+      to:
+        dnsName: www.wavpack.com
+    # webkit2gtk3, webkitgtk4
+    - type: Allow
+      to:
+        dnsName: webkitgtk.org
+    # libwebp
+    - type: Allow
+      to:
+        dnsName: downloads.webmproject.org
+    # wireshark
+    - type: Allow
+      to:
+        dnsName: wireshark.org
+    # wireshark
+    - type: Allow
+      to:
+        dnsName: www.wireshark.org
+    # libXevie, libfontenc, xorg-x11-drv-ast, xorg-x11-drv-evdev, xorg-x11-drv-keyboard, xorg-x11-drv-mouse, xorg-x11-drv-neomagic, xorg-x11-drv-rendition, xorg-x11-drv-s3virge, xorg-x11-drv-savage, xorg-x11-drv-siliconmotion, xorg-x11-drv-sis, xorg-x11-drv-tdfx, xorg-x11-drv-vmmouse, xorg-x11-drv-void, xorg-x11-twm, xorg-x11-xbitmaps
+    - type: Allow
+      to:
+        dnsName: ftp.x.org
+    # bdftopcf, fonttosfnt, libICE, libSM, libXScrnSaver, libXau, libXaw, libXcomposite, libXdamage, libXdmcp, libXfont2, libXft, libXi, libXmu, libXpm, libXres, libXxf86dga, libXxf86misc, libfontenc, libpciaccess, libxkbfile, mkfontscale, rgb, setxkbmap, xhost, xkbcomp, xmodmap, xorg-sgml-doctools, xorg-x11-drv-libinput, xorg-x11-drv-r128, xorg-x11-drv-v4l, xorg-x11-font-utils, xorg-x11-fonts, xorg-x11-proto-devel, xorg-x11-server, xorg-x11-server-Xwayland, xorg-x11-util-macros, xorg-x11-utils, xorg-x11-xauth, xprop, xrandr, xrdb
+    - type: Allow
+      to:
+        dnsName: www.x.org
+    # xfconf
+    - type: Allow
+      to:
+        dnsName: archive.xfce.org
+    # man2html
+    - type: Allow
+      to:
+        dnsName: primates.ximian.com
+    # celt, celt051
+    - type: Allow
+      to:
+        dnsName: downloads.us.xiph.org
+    # flac, libogg, libvorbis, opus, speex, speexdsp
+    - type: Allow
+      to:
+        dnsName: downloads.xiph.org
+    # libxkbcommon
+    - type: Allow
+      to:
+        dnsName: xkbcommon.org
+    # libxslt
+    - type: Allow
+      to:
+        dnsName: xmlsoft.org
+    # dos2unix
+    - type: Allow
+      to:
+        dnsName: waterlan.home.xs4all.nl
+    # subversion
+    - type: Allow
+      to:
+        dnsName: www.xsteve.at
+    # hunspell-eu
+    - type: Allow
+      to:
+        dnsName: xuxen.eus
+    # lftp
+    - type: Allow
+      to:
+        dnsName: lftp.yar.ru
+    # libfido2
+    - type: Allow
+      to:
+        dnsName: developers.yubico.com
+    # mingw-zlib, pigz
+    - type: Allow
+      to:
+        dnsName: www.zlib.net
+    # wireguard-tools
+    - type: Allow
+      to:
+        dnsName: git.zx2c4.com
     # IPv6 note: this cluster has no IPv6 egress routing. curl -6 to both allowed CIDRs
     # (e.g. 2001:470:142::/48 for savannah) and arbitrary hosts (ipv6.google.com) time out
     # identically — the EgressFirewall never sees IPv6 traffic. No IPv6 rules needed.

@@ -866,6 +866,61 @@ class GetFailedPipelineJobsFromMergeRequestTool(
             raise ToolError(f"Failed to get failed jobs from merge request: {e}") from e
 
 
+MAX_LOG_LINES = 500
+
+
+class GetPipelineJobLogToolInput(BaseModel):
+    project_path: str = Field(description="GitLab project path (e.g. 'redhat/rhel/rpms/curl')")
+    job_id: str = Field(description="GitLab job ID (from get_failed_pipeline_jobs_from_merge_request output)")
+
+
+class GetPipelineJobLogTool(Tool[GetPipelineJobLogToolInput, ToolRunOptions, StringToolOutput]):
+    name = "get_pipeline_job_log"
+    description = (
+        "Fetches the raw log output from a specific GitLab CI job. "
+        "Use after get_failed_pipeline_jobs_from_merge_request to read WHY a job failed. "
+        "Returns the last 500 lines of log output."
+    )
+    input_schema = GetPipelineJobLogToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: GetPipelineJobLogToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        encoded_path = quote(tool_input.project_path, safe="")
+        url = f"https://gitlab.com/api/v4/projects/{encoded_path}/jobs/{tool_input.job_id}/trace"
+        headers = _get_auth_headers(url)
+
+        try:
+            async with (
+                aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
+                aiohttp_get_with_retries(session, url, headers=headers) as response,
+            ):
+                response.raise_for_status()
+                log_text = await response.text()
+        except (aiohttp.ClientError, TimeoutError) as e:
+            raise ToolError(
+                f"Failed to fetch log for job {tool_input.job_id} in {tool_input.project_path}: {e}"
+            ) from e
+
+        lines = log_text.splitlines()
+        if len(lines) > MAX_LOG_LINES:
+            log_text = (
+                f"[... truncated, showing last {MAX_LOG_LINES} of {len(lines)} lines ...]\n"
+                + "\n".join(lines[-MAX_LOG_LINES:])
+            )
+
+        return StringToolOutput(result=log_text)
+
+
 def _get_authorized_member_ids(project: GitlabProject) -> set[int]:
     """
     Fetch all project members and return a set of IDs for members

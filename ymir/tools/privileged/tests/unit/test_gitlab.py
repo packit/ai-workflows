@@ -1,7 +1,9 @@
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
+import aiohttp
 import gitlab
 import pytest
 from beeai_framework.tools import ToolError
@@ -19,6 +21,7 @@ from ymir.tools.privileged.gitlab import (
     ForkRepositoryTool,
     GetAuthorizedCommentsFromMergeRequestTool,
     GetFailedPipelineJobsFromMergeRequestTool,
+    GetPipelineJobLogTool,
     OpenMergeRequestTool,
     PushToRemoteRepositoryTool,
     RetryPipelineJobTool,
@@ -897,3 +900,57 @@ async def test_get_authorized_comments_invalid_url():
             input={"merge_request_url": "https://github.com/user/repo/pull/123"}
         )
     assert "Could not parse merge request URL" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_get_pipeline_job_log():
+    """Verify GetPipelineJobLogTool fetches job trace and returns log text."""
+    project_path = "redhat/rhel/rpms/curl"
+    job_id = "12345"
+    log_content = "Running tests...\nFAILED: test_curl_connect\nExit code: 1"
+
+    @asynccontextmanager
+    async def mock_get(url, **kwargs):
+        assert f"/projects/redhat%2Frhel%2Frpms%2Fcurl/jobs/{job_id}/trace" in url
+
+        async def text():
+            return log_content
+
+        yield flexmock(status=200, text=text, raise_for_status=lambda: None)
+
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(mock_get)
+    flexmock(os).should_call("getenv")
+    flexmock(os).should_receive("getenv").with_args("GITLAB_TOKEN").and_return("test-token").once()
+
+    tool = GetPipelineJobLogTool()
+    result = await tool.run(
+        input={"project_path": project_path, "job_id": job_id},
+    )
+    assert "FAILED: test_curl_connect" in result.result
+
+
+@pytest.mark.asyncio
+async def test_get_pipeline_job_log_truncates_large_output():
+    """Verify logs exceeding MAX_LOG_LINES are truncated to last N lines."""
+    project_path = "redhat/rhel/rpms/curl"
+    job_id = "12345"
+    long_log = "\n".join(f"line {i}" for i in range(1000))
+
+    @asynccontextmanager
+    async def mock_get(url, **kwargs):
+        async def text():
+            return long_log
+
+        yield flexmock(status=200, text=text, raise_for_status=lambda: None)
+
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(mock_get)
+    flexmock(os).should_call("getenv")
+    flexmock(os).should_receive("getenv").with_args("GITLAB_TOKEN").and_return("test-token").once()
+
+    tool = GetPipelineJobLogTool()
+    result = await tool.run(
+        input={"project_path": project_path, "job_id": job_id},
+    )
+    assert "[... truncated, showing last 500 of 1000 lines ...]" in result.result
+    assert "line 999" in result.result
+    assert "line 0" not in result.result

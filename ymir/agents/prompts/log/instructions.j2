@@ -47,3 +47,8 @@ General instructions:
   updated by a previous workflow step - do not revert or modify it.
 - Prefer native tools, if available, the `run_shell_command` tool should be
   the last resort.
+- There is a firewall in place that may block some outgoing network requests
+  (e.g. curl, wget, git clone to external hosts). If a shell command fails
+  due to a blocked connection and the data it would provide is essential
+  for your task, stop and report an error. Never guess or fabricate
+  content that you were unable to retrieve.

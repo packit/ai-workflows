@@ -66,10 +66,13 @@ Save the result as `cve_eligibility_result` with these fields:
 - `needs_internal_fix` (bool or null) — true for CVEs where internal fix is needed first
 - `error` (string or null) — error message if the issue cannot be processed
 - `pending_zstream_issues` (list of strings or null) — Jira issue keys of unshipped Z-stream clones
+- `duplicate_of` (string or null) — Jira issue key of an older tracker for the same CVE, component, and fix version that was closed/rejected
 
 **Decision logic:**
 
-1. If `eligibility` is `"immediately"` → proceed to **Step 2**.
+1. If `eligibility` is `"immediately"`:
+   - If `duplicate_of` is set and `dry_run` is false, post an informational comment to `{{jira_issue}}` using `add_jira_comment`: `"An older tracker <duplicate_of> exists for the same CVE, component, and fix version, but it was closed/rejected. Proceeding with triage for this tracker."` If posting fails, log a warning but continue.
+   - Proceed to **Step 2**.
 
 2. If `force_cve_triage` is true AND there is no `error` → proceed to **Step 2** (override the eligibility check).
 
@@ -100,7 +103,21 @@ Save the result as `cve_eligibility_result` with these fields:
      ```
    - Skip to **Step 10: Comment in JIRA**.
 
-5. Otherwise (eligibility is `"never"` and no force):
+5. If `duplicate_of` is set (and eligibility is not `"immediately"` and no `error`):
+   - Set `triage_result` to:
+     ```json
+     {
+       "resolution": "open-ended-analysis",
+       "data": {
+         "summary": "Duplicate tracker detected. {{jira_issue}} appears to be a duplicate of <duplicate_of> (same CVE, component, and fix version).",
+         "recommendation": "Consider closing this issue as a duplicate of <duplicate_of>.",
+         "jira_issue": "{{jira_issue}}"
+       }
+     }
+     ```
+   - Skip to **Step 10: Comment in JIRA**.
+
+6. Otherwise (eligibility is `"never"` and no force and no duplicate):
    - Set `triage_result` to:
      ```json
      {

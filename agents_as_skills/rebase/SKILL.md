@@ -13,7 +13,6 @@ You are a Red Hat Enterprise Linux developer performing an end-to-end rebase of 
 - `dist_git_branch`: {{dist_git_branch}}
 - `version`: {{version}}
 - `jira_issue`: {{jira_issue}}
-- `cve_id`: {{cve_id}}
 - `dry_run`: {{dry_run}}
 - `justification`: {{justification}}
 - `triage_summary`: {{triage_summary}}
@@ -24,14 +23,13 @@ You are a Red Hat Enterprise Linux developer performing an end-to-end rebase of 
 This skill uses the following tools. Do not restrict tool usage — use any tool available as needed.
 
 **MCP Tools (called via MCP gateway):**
-- `change_jira_issue_status` — Change the status of a JIRA issue
-- `fork_dist_git_repo` — Fork a dist-git repository and prepare a working branch
+- `change_jira_status` — Change the status of a JIRA issue
+- `fork_repository` — Fork a dist-git repository and prepare a working branch
 - `clone_repository` — Clone a dist-git repository (with authentication, used for z-stream dist-git workflow)
 - `create_zstream_branch` — Create a z-stream branch for a package (non-CentOS Stream branches only)
 - `push_to_remote_repository` — Push a branch to a remote repository
 - `open_merge_request` — Open a merge request against dist-git
 - `add_merge_request_labels` — Add labels to a merge request
-- `set_jira_labels` — Set labels on a JIRA issue
 - `edit_jira_labels` — Edit labels on a JIRA issue (add/remove)
 - `add_jira_comment` — Post a comment to a JIRA issue
 - `upload_sources` — Upload new upstream sources to the lookaside cache
@@ -70,7 +68,7 @@ Initialize `attempts_remaining` to `max_build_attempts` (default 10). Initialize
 ### Step 1: Change JIRA Status
 
 If `dry_run` is false:
-1. Call `change_jira_issue_status` with `issue_key` = `{{jira_issue}}` and `status` = `"In Progress"`.
+1. Call `change_jira_status` with `issue_key` = `{{jira_issue}}` and `status` = `"In Progress"`.
 2. If the call fails, log a warning but continue.
 
 If `dry_run` is true, skip this step.
@@ -80,14 +78,15 @@ If `dry_run` is true, skip this step.
 1. Determine the namespace from the branch:
    - If `dist_git_branch` starts with `c` and ends with `s` (e.g., `c10s`, `c9s`): namespace is `centos-stream`.
    - Otherwise: namespace is `rhel`.
-2. Fork the repository by calling `fork_dist_git_repo` (or `fork_repository`) with `repository` = `https://gitlab.com/redhat/<namespace>/rpms/{{package}}`. Save the returned `fork_url`.
+2. Fork the repository by calling `fork_repository` with `repository` = `https://gitlab.com/redhat/<namespace>/rpms/{{package}}`. Save the returned `fork_url`.
 3. If the namespace is `rhel` (not CentOS Stream), call `create_zstream_branch` with `package` = `{{package}}` and `branch` = `{{dist_git_branch}}` to ensure the branch exists.
 4. Clone the repository by calling `clone_repository` with the repository URL, `branch` = `{{dist_git_branch}}`, and a local clone path. Save `local_clone`.
 5. Create a working branch: `git checkout -B automated-package-update-{{jira_issue}}` in `local_clone`. Save `update_branch` = `automated-package-update-{{jira_issue}}`.
 6. Also clone the corresponding Fedora repository (rawhide branch) for reference:
    `git clone --single-branch --branch rawhide https://src.fedoraproject.org/rpms/{{package}} <fedora_clone_path>`
    Save as `fedora_clone`. If the clone fails, set `fedora_clone` to null and continue.
-7. Set the working directory to `local_clone`.
+7. Find the leading z-stream branch: if `dist_git_branch` is a z-stream branch (e.g. `rhel-9.6.0`), check whether a higher z-stream exists for the same RHEL major version (e.g. `rhel-9.8.0`). If so, save it as `leading_zstream_branch`; otherwise set it to null. The leading z-stream spec can be inspected with `git show origin/<leading_zstream_branch>:{{package}}.spec` and used as a reference for Source URLs.
+8. Set the working directory to `local_clone`.
 
 ### Step 3: Run Rebase
 
@@ -100,10 +99,10 @@ Provide the following context to the instructions:
 - `dist_git_branch`: `{{dist_git_branch}}`
 - `version`: `{{version}}`
 - `jira_issue`: `{{jira_issue}}`
-- `cve_id`: `{{cve_id}}`
 - `pkg_tool`: determined above
 - `build_error`: current build error context (null on first attempt, set on retry)
 - `triage_summary`: `{{triage_summary}}` (if set, provides guidance on how the rebase should be done)
+- `leading_zstream_branch`: the leading z-stream branch from Step 2 (if found)
 
 The rebase must produce:
 - `success`: boolean
@@ -127,7 +126,8 @@ If the rebase fails (success=false), skip to **Step 9: Comment in JIRA** with th
 1. Call `build_package` with the SRPM path from Step 3, `dist_git_branch`, and `jira_issue`.
 2. If the build **succeeds** -> proceed to Step 5.
 3. If the build **timed out** (`is_timeout` = true) -> proceed to Step 5 (treat as success).
-4. If the build **fails**:
+4. If the build returned an **infrastructure error** (`is_infra_error` = true, e.g. Copr API error, project setup failure) -> set `success=false`, `error` to the infra error message, skip to Step 9.
+5. If the build **fails** (not infra error):
    a. Decrement `attempts_remaining`.
    b. If `attempts_remaining <= 0` -> set `success=false`, `error="Unable to successfully build the package in N attempts"`, skip to Step 9.
    c. Set `build_error` to the build failure details.
@@ -186,7 +186,9 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
 
 2. If `dry_run` is true, stop after the commit (do not push or create MR).
 
-3. Push the branch and open a merge request using `open_merge_request` with:
+3. Push the branch to the fork using `push_to_remote_repository` with `repository` = `fork_url`, `clone_path` = `local_clone`, `branch` = `update_branch`, `force` = true.
+
+4. Open a merge request using `open_merge_request` with:
    - `fork_url`: from Step 2
    - `dist_git_branch`: target branch
    - `update_branch`: source branch from Step 2
@@ -229,7 +231,9 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
      **Contact:** redhat-ymir-agent@redhat.com | **Slack:** #forum-ymir-package-automation |
      **Report AI Issues:** Jira (project: Packit, component: jotnar) or GitHub
      ```
-   - `labels`: `["ymir_rebase"]`
+   - `labels`: `["ymir_rebase"]` plus `["target::zstream"]` if the `fix_version` targets a z-stream (determined by checking if the dist-git branch needs a z-stream target label based on the fix version)
+
+5. If the MR already existed (was not newly created) and labels were provided, call `add_merge_request_labels` with `merge_request_url` and `labels` to ensure the labels are applied.
 
 Save `merge_request_url` and whether it was newly created.
 
@@ -299,7 +303,23 @@ To rebase package <PACKAGE> to version <VERSION> in dist-git branch <DIST_GIT_BR
 
 4. Use `rpmlint <PACKAGE>.spec` to validate your changes and fix any new issues.
 
-5. Download upstream sources using `spectool -g -S <PACKAGE>.spec`.
+5. VERIFY SOURCE URLs before downloading.
+   Compare ALL Source URL(s) in the spec with the same entries in the following
+   reference specs, listed from highest to lowest priority:
+   a. The leading z-stream spec, if one is specified.
+   b. The Fedora spec, if a Fedora clone is available.
+   c. The original spec before your changes.
+   If a higher-priority reference uses a different Source URL, adopt it —
+   the goal is to use the same source file(s) as the reference.
+   If a Source URL needs to be changed and no reference spec is available,
+   ensure the new URL points to the same upstream project. URLs from a
+   different project or an unknown origin are NOT ACCEPTABLE — end the
+   process with an error explaining the discrepancy. Do not download source
+   files with unknown or unvetted provenance due to security risks.
+   When choosing among multiple source files on an upstream release page,
+   prefer files explicitly marked or described as official releases.
+
+6. Download upstream sources using `spectool -g -S <PACKAGE>.spec`.
    Use the `run_package_prep` tool to see if everything is in order.
    It is possible that some *.patch files will fail to apply now
    that the spec file has been updated. Don't jump to conclusions -
@@ -310,16 +330,16 @@ To rebase package <PACKAGE> to version <VERSION> in dist-git branch <DIST_GIT_BR
    to the upstream sources.
    Note: <PKG_TOOL> is `centpkg` for CentOS Stream branches (c9s, c10s) and `rhpkg` for RHEL branches.
 
-6. Upload new upstream sources (files that the `spectool` command downloaded in the previous step)
+7. Upload new upstream sources (files that the `spectool` command downloaded in the previous step)
    to lookaside cache using the `upload_sources` tool.
 
-7. If you removed any patch file references from the spec file
+8. If you removed any patch file references from the spec file
    (e.g. because they were already applied upstream),
    you must remove all the corresponding patch files from the repository as well.
 
-8. Generate a SRPM using the `build_srpm` tool.
+9. Generate a SRPM using the `build_srpm` tool.
 
-9. In your output, provide a "files_to_git_add" list containing all files
+10. In your output, provide a "files_to_git_add" list containing all files
    that should be git added for this rebase.
    This typically includes the updated spec file and any new/modified/deleted
    patch files or other files you've changed or added/removed during
@@ -336,12 +356,14 @@ and don't forget to fix the issue.
 Your working directory is <LOCAL_CLONE>, a clone of dist-git repository of package <PACKAGE>.
 <DIST_GIT_BRANCH> dist-git branch has been checked out. You are working on Jira issue <JIRA_ISSUE>.
 
-If <CVE_ID> is set, it is also known as <CVE_ID>.
-
 If a Fedora clone is available at <FEDORA_CLONE>, you can use it as a reference for comparing
 package versions, spec files, patches, and other packaging details. If a rebase to <VERSION>
 was done in Fedora, use that as the primary reference and include all changes, even if they
 may seem irrelevant - they are there for a reason.
+
+If a leading z-stream branch is available (e.g. <LEADING_ZSTREAM_BRANCH>), you can inspect its
+spec file by running `git show origin/<LEADING_ZSTREAM_BRANCH>:<PACKAGE>.spec`. Use it as an
+additional reference for Source URLs and packaging decisions.
 
 If <TRIAGE_SUMMARY> is set, it provides triage context from the triage agent that selected
 this rebase.
@@ -355,6 +377,14 @@ this rebase.
 - If the package calls `autoreconf` in `%prep` and the rebase fails
   because of a version constraint,
   try removing that constraint, but never remove the `autoreconf` call.
+- If a rebase to <VERSION> was done in Fedora, use that as the primary
+  reference and include all changes,
+  even if they may seem irrelevant - they are there for a reason.
+- There is a firewall in place that may block some outgoing network requests
+  (e.g. curl, wget, git clone to external hosts). If a shell command fails
+  due to a blocked connection and the data it would provide is essential
+  for your task, stop and report an error. Never guess or fabricate
+  content that you were unable to retrieve.
 
 ---
 

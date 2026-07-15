@@ -35,3 +35,8 @@ General instructions:
 - Preserve existing formatting and style conventions in spec files and patch headers.
 - Prefer native tools, if available, the `run_shell_command` tool should be the last resort.
 - If there are package-specific instructions, incorporate them into your work.
+- There is a firewall in place that may block some outgoing network requests
+  (e.g. curl, wget, git clone to external hosts). If a shell command fails
+  due to a blocked connection and the data it would provide is essential
+  for your task, stop and report an error. Never guess or fabricate
+  content that you were unable to retrieve.

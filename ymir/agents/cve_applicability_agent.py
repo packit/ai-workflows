@@ -185,4 +185,11 @@ def build_applicability_prompt(
         If affected or cannot determine with confidence, classify as
         "Inconclusive". Be conservative: default to "Inconclusive"
         when unsure.
+
+        IMPORTANT: There is a firewall in place that may block some
+        outgoing network requests (e.g. curl, wget, git clone to
+        external hosts). If a shell command fails due to a blocked
+        connection and the data it would provide is essential for your
+        task, stop and report an error. Never guess or fabricate
+        content that you were unable to retrieve.
     """)

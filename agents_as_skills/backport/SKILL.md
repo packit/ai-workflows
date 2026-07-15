@@ -25,14 +25,13 @@ You are a Red Hat Enterprise Linux developer performing an end-to-end backport o
 This skill uses the following tools. Do not restrict tool usage — use any tool available as needed.
 
 **MCP Tools (called via MCP gateway):**
-- `change_jira_issue_status` — Change the status of a JIRA issue
-- `fork_dist_git_repo` — Fork a dist-git repository and prepare a working branch
-- `clone_repository` — Clone a dist-git repository (with authentication, used for z-stream dist-git workflow)
+- `change_jira_status` — Change the status of a JIRA issue
+- `fork_repository` — Fork a dist-git repository and prepare a working branch
+- `clone_repository` — Clone a dist-git repository (with authentication)
 - `create_zstream_branch` — Create a z-stream branch for a package (non-CentOS Stream branches only)
 - `push_to_remote_repository` — Push a branch to a remote repository
 - `open_merge_request` — Open a merge request against dist-git
 - `add_merge_request_labels` — Add labels to a merge request
-- `set_jira_labels` — Set labels on a JIRA issue
 - `edit_jira_labels` — Edit labels on a JIRA issue (add/remove)
 - `add_jira_comment` — Post a comment to a JIRA issue
 - `get_maintainer_rules` — Get maintainer-specific rules and guidelines for a package
@@ -40,7 +39,7 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `download_artifacts` — Download build log artifacts (*.log.gz)
 - `download_sources` — Download sources for a dist-git package
 - `get_patch_from_url` — Download patch content from a URL
-- `extract_log_snippets` — Extract representative log snippets from build logs using Drain3 clustering (if it is available)
+- `extract_log_snippets` — Extract representative log snippets from build logs using Drain3 clustering (if available)
 
 **Local Tools (text, filesystem, git, specfile):**
 - `create` — Create new files
@@ -89,7 +88,7 @@ Determine if this is an **older z-stream** branch: if `fix_version` is set and r
 ### Step 1: Change JIRA Status
 
 If `dry_run` is false:
-1. Call `change_jira_issue_status` with `issue_key` = `{{jira_issue}}` and `status` = `"In Progress"`.
+1. Call `change_jira_status` with `issue_key` = `{{jira_issue}}` and `status` = `"In Progress"`.
 2. If the call fails, log a warning but continue.
 
 If `dry_run` is true, skip this step.
@@ -99,9 +98,9 @@ If `dry_run` is true, skip this step.
 1. Determine the namespace from the branch:
    - If `dist_git_branch` starts with `c` and ends with `s` (e.g., `c10s`, `c9s`): namespace is `centos-stream`.
    - Otherwise: namespace is `rhel`.
-2. Fork the repository by calling `fork_dist_git_repo` (or `fork_repository`) with `repository` = `https://gitlab.com/redhat/<namespace>/rpms/{{package}}`. Save the returned `fork_url`.
+2. Fork the repository by calling `fork_repository` with `repository` = `https://gitlab.com/redhat/<namespace>/rpms/{{package}}`. Save the returned `fork_url`.
 3. If the namespace is `rhel` (not CentOS Stream), call `create_zstream_branch` with `package` = `{{package}}` and `branch` = `{{dist_git_branch}}` to ensure the branch exists.
-4. Clone the repository by calling `clone_repository` with the repository URL, `branch` = `{{dist_git_branch}}`, and a local clone path. Save `local_clone`.
+4. Clone the repository by calling `clone_repository` with the repository URL and a local clone path. For older z-stream branches, omit the `branch` parameter and then checkout the branch manually with `git checkout {{dist_git_branch}}`. For other branches, pass `branch` = `{{dist_git_branch}}`. Save `local_clone`.
 5. Create a working branch: `git checkout -B automated-package-update-{{jira_issue}}` in `local_clone`. Save `update_branch` = `automated-package-update-{{jira_issue}}`.
 6. Download sources using `download_sources` with the dist-git path, package name, and branch.
 7. Use the `run_package_prep` tool with `dist_git_path` = `local_clone`, `package` = `{{package}}`, and `dist_git_branch` = `{{dist_git_branch}}` to unpack sources.
@@ -148,7 +147,8 @@ If the backport fails (success=false), skip to **Step 10: Comment in JIRA** with
 1. Call `build_package` with the SRPM path from Step 3, `dist_git_branch`, and `jira_issue`.
 2. If the build **succeeds** -> proceed to Step 5.
 3. If the build **timed out** (`is_timeout` = true) -> proceed to Step 5 (treat as success).
-4. If the build **fails**:
+4. If the build has an **infrastructure error** (`is_infra_error` = true) -> set `success=false` with the infrastructure error, skip to Step 10.
+5. If the build **fails**:
    a. Decrement `attempts_remaining`.
    b. If `attempts_remaining <= 0` -> set `success=false`, `error="Unable to successfully build the package in N attempts"`, skip to Step 10.
    c. Set `build_error` to the build failure details.
@@ -171,7 +171,7 @@ This step is ONLY used when `used_cherry_pick_workflow` is true and the upstream
 1. Increment `incremental_fix_attempts`.
 2. If `incremental_fix_attempts > 1`, move build logs from `local_clone` to `<local_clone>-upstream/build-logs/attempt-<N>/`.
 3. Create or update `<local_clone>-upstream/build-logs/fix-attempts.md` with the current attempt number and build error.
-4. Follow the **Build Error Fix Instructions** below with build tools enabled (`build_package` and `download_artifacts`).
+4. Follow the **Build Error Fix Instructions** below with build tools enabled (`build_package`, `download_artifacts`, and `extract_log_snippets`).
 5. If the fix succeeds (build passes): reset `incremental_fix_attempts` to 0, proceed to **Step 5**.
 6. If the fix fails:
    a. If `incremental_fix_attempts < max_incremental_fix_attempts`: repeat **Step 4a**.
@@ -234,12 +234,14 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
 
 2. If `dry_run` is true, stop after the commit (do not push or create MR).
 
-3. Push the branch and open a merge request using `open_merge_request` with:
+3. Push the branch using `push_to_remote_repository` with `repository` = `fork_url`, `clone_path` = `local_clone`, `branch` = `update_branch`, and `force` = true.
+
+4. Open a merge request using `open_merge_request` with:
    - `fork_url`: from Step 2
-   - `dist_git_branch`: target branch
-   - `update_branch`: source branch from Step 2
-   - `mr_title`: the title from Step 7
-   - `mr_description`:
+   - `target`: `dist_git_branch`
+   - `source`: `update_branch` from Step 2
+   - `title`: the title from Step 7
+   - `description`:
      ```
      <description>
 
@@ -247,13 +249,27 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
       - <patch_url_1>
       - <patch_url_2>
 
-     <justification_text (if justification is set): "Triage Decision Justification:\n<justification>">
+     <triage_details (if justification or triage_summary is set):
+       <details>
+       <summary>Triage Details</summary>
+
+       **Reasoning:**
+       <triage_summary>
+
+       **Justification:**
+       <justification>
+
+       </details>
+     >
 
      Resolves: {{jira_issue}}
 
-     Backporting steps:
+     <details>
+     <summary>Backporting steps</summary>
 
      <backport_status from Step 3>
+
+     </details>
 
      ---
 
@@ -268,6 +284,12 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
 
      You can check out the source branch from the fork and push your changes directly.
 
+     ## Retrigger Ymir
+
+     If you'd like Ymir to run again on this issue (e.g. after fixing the rules or resolving
+     a blocker), add the `ymir_todo` label to the Jira issue.
+     See the triggering docs for details.
+
      ## Customize Ymir's behavior for your package
 
      If there is anything that could be adjusted regarding Ymir's behavior
@@ -277,14 +299,24 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
 
      ## Questions or Issues?
 
-     **Contact:** redhat-ymir-agent@redhat.com | **Slack:** #forum-ymir-package-automation |
+     **Contact:** redhat-ymir-agent@redhat.com | **Slack Forum:** #forum-ymir-package-automation |
      **Report AI Issues:** Jira (project: Packit, component: jotnar) or GitHub
+
+     ### Feedback Welcome
+
+     If you have suggestions or complaints about the quality of this MR,
+     please reach out to us on the Slack forum
+     where your feedback will be more visible than pinging us on individual issues.
+     Your feedback helps us continuously improve Ymir's capabilities and
+     deliver better results.
      ```
-   - `labels`: `["ymir_backport"]`
+   - `labels`: `["ymir_backport"]` — additionally add `"target::zstream"` if the branch is a z-stream that requires it (check using `fix_version`)
+
+5. If the MR already existed (was reused, not newly created), call `add_merge_request_labels` with the same labels to ensure they are set.
 
 Save `merge_request_url` and whether it was newly created.
 
-If this fails, set `success=false` with the error but continue to Step 9 (then Step 10).
+If this fails, set `success=false` with the error but continue to Step 10.
 
 ### Step 10: Comment in JIRA
 
@@ -293,6 +325,7 @@ If `dry_run` is true, end the workflow.
 Otherwise, post a comment to `{{jira_issue}}` using `add_jira_comment`:
 - If the backport **succeeded**: post the `merge_request_url` (or the backport status if no MR was created).
 - If the backport **failed**: post `"Agent failed to perform a backport: <error>"`.
+- Error comments are only posted on user-triggered runs. If the run was not user-triggered, skip posting error comments.
 
 Format the comment as:
 ```
@@ -304,7 +337,7 @@ Warning: This is an AI-Generated contribution and may contain mistakes.
 Please carefully review the contributions made by AI agents.
 You can learn more about the Ymir project at https://ymir.pages.redhat.com/
 
-💬 *Have suggestions or complaints?* Please reach out to us on the [Slack forum #forum-ymir-package-automation|https://redhat.enterprise.slack.com/archives/C095699FLMR] where your feedback will be more visible than pinging us on individual issues.
+Have suggestions or complaints? Please reach out to us on the Slack forum #forum-ymir-package-automation where your feedback will be more visible than pinging us on individual issues.
 ```
 
 ---
@@ -383,15 +416,22 @@ a backport that won't actually fix the shipped RPM.
        # <link to JIRA issue the patch is fixing>
        # <link to upstream commit or pull request the patch is backporting>
        PatchN: <PACKAGE>-<VERSION>-<JIRA_ISSUE>.patch
-     For a CVE issue:
+     For a single CVE issue:
        # <link to JIRA issue the patch is fixing>
        # <link to upstream commit or pull request the patch is backporting>
        PatchN: <PACKAGE>-<VERSION>-<CVE_ID>.patch
+     For a multi-CVE issue (more than one CVE):
+       # <link to JIRA issue the patch is fixing>
+       # <link to upstream commit or pull request the patch is backporting>
+       PatchN: <PACKAGE>-<VERSION>-<JIRA_ISSUE>.patch
+       (use Jira issue instead of CVE IDs to avoid excessively long filenames)
    where <VERSION> is the upstream version from the spec file's Version field.
 
-1. Knowing Jira issue <JIRA_ISSUE>, CVE ID <CVE_ID> or both, use the `git_log_search` tool to check
-   in the dist-git repository whether the issue/CVE has already been resolved. If it has,
-   end the process with `success=True` and `status="Backport already applied"`.
+1. Knowing Jira issue <JIRA_ISSUE>, CVE ID(s) <CVE_ID> or both, use the `git_log_search` tool to check
+   in the dist-git repository whether each issue/CVE has already been resolved. If all of them
+   have been resolved, end the process with `success=True` and `status="Backport already applied"`.
+   Note: <CVE_ID> may contain multiple CVE IDs when the Jira issue covers multiple CVEs.
+   The `git_log_search` tool handles multiple CVE IDs automatically.
 
 2. Use the `git_prepare_package_sources` tool to prepare package sources in directory <UNPACKED_SOURCES>
    for application of the upstream patch.
@@ -659,6 +699,11 @@ General instructions:
 - Never apply the patches yourself, always use the `git_patch_apply` tool.
 - Never run `git am --skip`, always use the `git_apply_finish` tool instead.
 - Never abort the existing git am session.
+- There is a firewall in place that may block some outgoing network requests
+  (e.g. curl, wget, git clone to external hosts). If a shell command fails
+  due to a blocked connection and the data it would provide is essential
+  for your task, stop and report an error. Never guess or fabricate
+  content that you were unable to retrieve.
 
 ---
 
@@ -727,14 +772,18 @@ a backport that won't actually fix the shipped RPM.
    If neither maintainer rules nor existing patches provide guidance, name the
    patch file as follows:
      - Non-CVE: `<PACKAGE>-<VERSION>-<JIRA_ISSUE>.patch`
-     - CVE:     `<PACKAGE>-<VERSION>-<CVE_ID>.patch`
+     - Single CVE: `<PACKAGE>-<VERSION>-<CVE_ID>.patch`
+     - Multiple CVEs: `<PACKAGE>-<VERSION>-<JIRA_ISSUE>.patch`
+       (use Jira issue instead of CVE IDs to avoid excessively long filenames)
    where <VERSION> is the upstream version from the spec file's Version field.
    Do NOT add comments above the Patch tag for z-stream branches unless
    existing patches in the spec already use comments (see Priority 2).
 
-1. Knowing Jira issue <JIRA_ISSUE>, CVE ID <CVE_ID> or both, use the `git_log_search` tool to check
-   in the dist-git repository whether the issue/CVE has already been resolved. If it has,
-   end the process with `success=True` and `status="Backport already applied"`.
+1. Knowing Jira issue <JIRA_ISSUE>, CVE ID(s) <CVE_ID> or both, use the `git_log_search` tool to check
+   in the dist-git repository whether each issue/CVE has already been resolved. If all of them
+   have been resolved, end the process with `success=True` and `status="Backport already applied"`.
+   Note: <CVE_ID> may contain multiple CVE IDs when the Jira issue covers several CVEs.
+   The `git_log_search` tool handles multiple CVE IDs automatically.
 
 2. Use the `git_prepare_package_sources` tool to prepare package sources in directory <UNPACKED_SOURCES>
    for application of the upstream patch.
@@ -775,8 +824,12 @@ a backport that won't actually fix the shipped RPM.
           - Identify which files are new patch files and what spec changes
             were made.
           - Extract new patch file(s) added by the commit into the local
-            dist-git clone working tree:
-            `git -C <DISTGIT_SOURCE> show <commit_hash>:<patch_filename> > <LOCAL_CLONE>/<patch_filename>`
+            dist-git clone working tree. If the patch filename contains a
+            Jira issue key matching the pattern of <JIRA_ISSUE> that differs
+            from <JIRA_ISSUE>, replace only that key with <JIRA_ISSUE> and
+            keep the rest of the filename intact. Do NOT rename patches
+            otherwise. Ensure all resulting filenames are unique:
+            `git -C <DISTGIT_SOURCE> show <commit_hash>:<patch_filename> > <LOCAL_CLONE>/<target_filename>`
           - Examine the spec file changes for reference:
             `git -C <DISTGIT_SOURCE> diff <commit_hash>^..<commit_hash> -- *.spec`
           - Note what Patch tags and `%prep` entries were added. Use this as
@@ -1009,6 +1062,11 @@ General instructions:
 - Never apply the patches yourself, always use the `git_patch_apply` tool.
 - Never run `git am --skip`, always use the `git_apply_finish` tool instead.
 - Never abort the existing git am session.
+- There is a firewall in place that may block some outgoing network requests
+  (e.g. curl, wget, git clone to external hosts). If a shell command fails
+  due to a blocked connection and the data it would provide is essential
+  for your task, stop and report an error. Never guess or fabricate
+  content that you were unable to retrieve.
 
 ---
 
@@ -1033,6 +1091,11 @@ CRITICAL CONSTRAINTS:
   the backport patch file(s) you created (by regenerating them from upstream repo).
   Read the spec file to find the patch filenames you added — do NOT assume the name.
 - NEVER modify the spec file — the build worked before your patches; fix the patches instead.
+  The build runs in COPR, not on official RHEL builders. COPR environments may have
+  differences (e.g. unbuffer/expect wrappers, pipefail behavior, locale settings) that
+  can cause spurious failures unrelated to your patches. If the failure is caused by the
+  build environment rather than by your code changes, report success=false and explain
+  the environmental issue — do not modify the spec to work around it.
 - Fix BOTH compilation errors AND test failures. NEVER skip or disable tests.
 - Make ONE attempt — you will be called again if the build still fails.
 
@@ -1069,11 +1132,68 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
    - Use the `build_srpm` tool to generate a SRPM
    - Call `build_package` with the SRPM path, dist_git_branch, and jira_issue
    - If build fails: use `download_artifacts` to get logs and identify the new error
+   - If `extract_log_snippets` is available, use it with `log_path` pointing to `builder-live.log`
+     (or `root.log` if unavailable) to extract the most relevant snippets
+     and identify the new error
 
 6. Append a summary to <LOCAL_CLONE>-upstream/build-logs/fix-attempts.md documenting:
    - What you identified as the root cause
    - Which commits you cherry-picked or what manual edits you made
    - The build result (pass/fail and error if applicable)
+
+7. Self-Review: Before reporting a result, verify your work meets all criteria
+   below. Run `git diff HEAD -- *.spec` in <LOCAL_CLONE> to inspect what
+   changed in the spec file.
+
+   Criterion 1 — Patch correctness:
+   Read each regenerated patch file. Verify it is non-empty and contains code
+   changes that address the build failure. A patch that only modifies whitespace
+   or comments does not pass.
+
+   Criterion 2 — Spec file not modified:
+   From the git diff output, verify the spec file was NOT modified. The spec
+   already has the correct `Patch:` tags from the original backport — your job
+   is to fix the patches, not the spec. If the diff shows any spec changes,
+   this criterion fails.
+
+   Criterion 3 — No unrelated changes:
+   From the git diff output, verify your changes are limited to the patch
+   file(s) listed in step 4. No other files in <LOCAL_CLONE> should be
+   modified. Also verify that no tests were silently disabled, commented out,
+   or skipped in the regenerated patches unless the build error explicitly
+   required it.
+
+   Criterion 4 — Completeness:
+   Verify the SRPM generated in step 5 exists on disk. Use the path returned
+   by the `build_srpm` tool, and run:
+   `test -f "<path-to-srpm>" && echo exists || echo missing`
+
+   Criterion 5 — Patch naming:
+   Verify each patch filename matches the original name from the spec file.
+   Do not rename patch files.
+
+   If ALL criteria pass, report success as normal.
+
+   If ANY criterion fails, attempt to fix the problem before reporting failure:
+   - Criterion 1 or 3 (bad patch content or disabled tests): return to step 3
+     and re-fix the issue, then regenerate patches (step 4) and rebuild (step 5).
+   - Criterion 2 (spec modified): revert the spec with
+     `git checkout HEAD -- *.spec` in <LOCAL_CLONE>, verify the revert with
+     `git diff HEAD -- *.spec`, then rebuild (step 5).
+   - Criterion 4 (SRPM missing): re-run `build_srpm` (step 5).
+   - Criterion 5 (wrong patch name): rename the file to match the spec, then
+     rebuild (step 5).
+
+   After fixing, re-run this self-review before reporting.
+
+   Only if the fix attempt itself fails, set `success=False` and populate
+   `error` with:
+
+     Self-review failed. The following criteria were not met:
+
+     - <Criterion name>: <specific reason — what was found vs. what was expected>
+
+   List only the failing criteria. Do not mention passing ones.
 
 Report success=true with SRPM path if build passes.
 Report success=false with the extracted error if build fails or you can't find a fix.

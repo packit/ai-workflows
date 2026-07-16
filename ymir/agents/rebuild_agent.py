@@ -15,6 +15,7 @@ from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState
+from ymir.agents.tasks import InvalidConsolidationConfigError, fetch_consolidation_config, submit_merge_job
 from ymir.agents.utils import (
     format_mr_triage_details,
     get_agent_execution_config,
@@ -77,6 +78,7 @@ async def main() -> None:
         consolidation_summary=None,
         side_tag=None,
         user_triggered=False,
+        redis_conn=None,
     ):
         local_tool_options = {"working_directory": None}
         if mock_env := get_mock_local_tool_env(jira_issue):
@@ -265,6 +267,56 @@ async def main() -> None:
                     state.merge_request_url = None
                     state.rebuild_success = False
                     state.rebuild_error = f"Could not commit and open MR: {e}"
+                return "submit_consolidation_job"
+
+            async def submit_consolidation_job(state):
+                if (
+                    not state.merge_request_url
+                    or not state.rebuild_success
+                    or not state.merge_request_newly_created
+                ):
+                    return "comment_in_jira"
+
+                try:
+                    config = await fetch_consolidation_config(state.package, gateway_tools)
+                except InvalidConsolidationConfigError as e:
+                    logger.warning("Invalid consolidation config for %s: %s", state.package, e)
+                    return "comment_in_jira"
+
+                try:
+                    if not config.merge_mrs:
+                        logger.info(
+                            "MR consolidation not enabled for %s, skipping",
+                            state.package,
+                        )
+                        return "comment_in_jira"
+
+                    if redis_conn is not None:
+                        submitted = await submit_merge_job(
+                            redis_conn,
+                            state.package,
+                            state.dist_git_branch,
+                            release_strategy=config.release_strategy.value,
+                        )
+                        if submitted:
+                            logger.info(
+                                "Submitted consolidation job for %s/%s",
+                                state.package,
+                                state.dist_git_branch,
+                            )
+                        else:
+                            logger.info(
+                                "Consolidation job already queued for %s/%s",
+                                state.package,
+                                state.dist_git_branch,
+                            )
+                    else:
+                        logger.info(
+                            "No Redis connection (direct mode), skipping consolidation job submission"
+                        )
+                except Exception as e:
+                    logger.warning("Failed to submit consolidation job: %s", e)
+
                 return "comment_in_jira"
 
             async def comment_in_jira(state):
@@ -302,6 +354,7 @@ async def main() -> None:
             workflow.add_step("stage_changes", stage_changes)
             workflow.add_step("run_log_agent", run_log_agent)
             workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
+            workflow.add_step("submit_consolidation_job", submit_consolidation_job)
             workflow.add_step("comment_in_jira", comment_in_jira)
 
             response = await workflow.run(
@@ -468,6 +521,7 @@ async def main() -> None:
                         consolidation_summary=rebuild_data.consolidation_summary,
                         side_tag=rebuild_data.side_tag,
                         user_triggered=user_triggered,
+                        redis_conn=redis,
                     )
                     logger.info(
                         f"Rebuild processing completed for {rebuild_data.jira_issue}, "

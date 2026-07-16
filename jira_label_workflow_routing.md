@@ -103,6 +103,7 @@ These labels are applied to GitLab merge requests (not Jira issues):
 | Label | Purpose | Effect |
 |-------|---------|--------|
 | `ymir_backport` | Marks an MR as a backport | Used by the consolidation agent to discover candidate MRs |
+| `ymir_rebuild` | Marks an MR as a rebuild | Used by the consolidation agent to discover rebuild MRs for backport+rebuild consolidation |
 | `ymir_consolidated` | Marks an MR that has been folded into a consolidated MR | The MR stays open but is excluded from future consolidation searches |
 
 ## Queue Types Summary

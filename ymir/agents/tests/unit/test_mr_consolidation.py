@@ -4,7 +4,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ymir.agents.mr_consolidation_agent import _extract_jira_issues_from_description
+from ymir.agents.mr_consolidation_agent import (
+    _extract_cves_from_text,
+    _extract_jira_issues_from_description,
+    _mr_type_from_labels,
+)
 from ymir.agents.tasks import (
     _CONSOLIDATION_HASH_KEY as HASH_KEY,
 )
@@ -605,3 +609,104 @@ async def test_sweep_uses_activated_at_not_submitted_at(fake_redis):
 
     assert removed == 0
     assert await fake_redis.hget(HASH_KEY, active_key) is not None
+
+
+# -- _extract_cves_from_text ---------------------------------------------------
+
+
+class TestExtractCves:
+    def test_single_cve(self):
+        assert _extract_cves_from_text("Fixed CVE-2024-12345") == ["CVE-2024-12345"]
+
+    def test_multiple_cves(self):
+        text = "CVE: CVE-2024-1111, CVE-2024-2222\nAlso fixes CVE-2023-99999"
+        result = _extract_cves_from_text(text)
+        assert result == ["CVE-2023-99999", "CVE-2024-1111", "CVE-2024-2222"]
+
+    def test_no_cves(self):
+        assert _extract_cves_from_text("No vulnerabilities here") == []
+
+    def test_deduplication(self):
+        text = "CVE-2024-1111 and CVE-2024-1111 again"
+        assert _extract_cves_from_text(text) == ["CVE-2024-1111"]
+
+    def test_cve_in_commit_message_format(self):
+        text = "Rebuild gnutls\n\nCVE: CVE-2024-55555\nResolves: RHEL-12345"
+        assert _extract_cves_from_text(text) == ["CVE-2024-55555"]
+
+
+# -- _mr_type_from_labels ------------------------------------------------------
+
+
+class TestMrTypeFromLabels:
+    def test_backport_label(self):
+        mr = {"labels": ["ymir_backport"]}
+        assert _mr_type_from_labels(mr) == "backport"
+
+    def test_rebuild_label(self):
+        mr = {"labels": ["ymir_rebuild"]}
+        assert _mr_type_from_labels(mr) == "rebuild"
+
+    def test_both_labels_rebuild_wins(self):
+        mr = {"labels": ["ymir_backport", "ymir_rebuild"]}
+        assert _mr_type_from_labels(mr) == "rebuild"
+
+    def test_no_labels_defaults_to_backport(self):
+        mr = {"labels": []}
+        assert _mr_type_from_labels(mr) == "backport"
+
+    def test_none_labels_defaults_to_backport(self):
+        mr = {}
+        assert _mr_type_from_labels(mr) == "backport"
+
+
+# -- MR selection priority (backport+backport > backport+rebuild) --------------
+
+
+class TestMrSelectionPriority:
+    """Verify the selection logic prefers backport+backport over backport+rebuild."""
+
+    def _make_mr(self, branch, label):
+        return {
+            "source_branch": branch,
+            "labels": [label],
+            "url": f"https://gitlab.com/mr/{branch}",
+            "title": f"MR for {branch}",
+            "description": f"Resolves: RHEL-{branch[-3:]}",
+        }
+
+    def test_two_backports_selected_over_rebuild(self):
+        mrs = [
+            self._make_mr("bp1", "ymir_backport"),
+            self._make_mr("bp2", "ymir_backport"),
+            self._make_mr("rb1", "ymir_rebuild"),
+        ]
+        backport_mrs = [mr for mr in mrs if _mr_type_from_labels(mr) == "backport"]
+        rebuild_mrs = [mr for mr in mrs if _mr_type_from_labels(mr) == "rebuild"]
+
+        if len(backport_mrs) >= 2:
+            selected = backport_mrs[:2]
+        elif backport_mrs and rebuild_mrs:
+            selected = [backport_mrs[0], rebuild_mrs[0]]
+        else:
+            selected = mrs[:2]
+
+        assert all(_mr_type_from_labels(mr) == "backport" for mr in selected)
+
+    def test_one_backport_one_rebuild_selected(self):
+        mrs = [
+            self._make_mr("bp1", "ymir_backport"),
+            self._make_mr("rb1", "ymir_rebuild"),
+        ]
+        backport_mrs = [mr for mr in mrs if _mr_type_from_labels(mr) == "backport"]
+        rebuild_mrs = [mr for mr in mrs if _mr_type_from_labels(mr) == "rebuild"]
+
+        if len(backport_mrs) >= 2:
+            selected = backport_mrs[:2]
+        elif backport_mrs and rebuild_mrs:
+            selected = [backport_mrs[0], rebuild_mrs[0]]
+        else:
+            selected = mrs[:2]
+
+        assert _mr_type_from_labels(selected[0]) == "backport"
+        assert _mr_type_from_labels(selected[1]) == "rebuild"

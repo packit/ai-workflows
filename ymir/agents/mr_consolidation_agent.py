@@ -139,6 +139,8 @@ class ConsolidationState(PackageUpdateState):
     patches_per_mr: dict[str, list[str]] = Field(default_factory=dict)
     all_open_mrs: list[dict] = Field(default_factory=list)
     current_mrs_count: int = Field(default=0)
+    mr_types: dict[str, str] = Field(default_factory=dict)
+    cves_collected: list[str] = Field(default_factory=list)
 
 
 def _extract_jira_issues_from_description(description: str) -> list[str]:
@@ -173,6 +175,22 @@ def _extract_jira_issues_from_description(description: str) -> list[str]:
     return list(set(issues))
 
 
+def _extract_cves_from_text(text: str) -> list[str]:
+    """Extract CVE IDs (e.g. CVE-2024-12345) from arbitrary text."""
+    return sorted(set(re.findall(r"CVE-\d{4}-\d+", text)))
+
+
+_CONSOLIDATION_MR_LABELS = ["ymir_backport", "ymir_rebuild"]
+
+
+def _mr_type_from_labels(mr: dict) -> str:
+    """Determine if an MR is a backport or rebuild from its GitLab labels."""
+    labels = mr.get("labels") or []
+    if "ymir_rebuild" in labels:
+        return "rebuild"
+    return "backport"
+
+
 async def _resolve_source_issues(
     state,
     project_path: str,
@@ -188,27 +206,31 @@ async def _resolve_source_issues(
     """
     matched_mrs = []
     for issue_key in issue_keys:
-        kwargs: dict[str, Any] = {
-            "project": project_path,
-            "state": "opened",
-            "labels": ["ymir_backport"],
-            "order_by": "updated_at",
-            "sort": "desc",
-            "available_tools": gateway_tools,
-        }
-        if target_branch:
-            kwargs["target_branch"] = target_branch
-        result = await run_tool("list_project_merge_requests", **kwargs)
-        mrs = json.loads(result) if isinstance(result, str) else result
-        mrs = [m for m in mrs if JiraLabels.MR_CONSOLIDATED.value not in m.get("labels", [])]
+        all_mrs_for_issue: list[dict] = []
+        for label in _CONSOLIDATION_MR_LABELS:
+            kwargs: dict[str, Any] = {
+                "project": project_path,
+                "state": "opened",
+                "labels": [label],
+                "order_by": "updated_at",
+                "sort": "desc",
+                "available_tools": gateway_tools,
+            }
+            if target_branch:
+                kwargs["target_branch"] = target_branch
+            result = await run_tool("list_project_merge_requests", **kwargs)
+            mrs = json.loads(result) if isinstance(result, str) else result
+            all_mrs_for_issue.extend(
+                m for m in mrs if JiraLabels.MR_CONSOLIDATED.value not in m.get("labels", [])
+            )
 
         mr = next(
-            (m for m in mrs if issue_key in m.get("title", "")),
+            (m for m in all_mrs_for_issue if issue_key in m.get("title", "")),
             None,
         )
         if not mr:
             mr = next(
-                (m for m in mrs if issue_key in m.get("description", "")),
+                (m for m in all_mrs_for_issue if issue_key in m.get("description", "")),
                 None,
             )
 
@@ -227,21 +249,42 @@ async def _resolve_source_issues(
 
         matched_mrs.append(mr)
         logger.info(
-            "Resolved %s to MR '%s' (branch: %s)",
+            "Resolved %s to MR '%s' (branch: %s, type: %s)",
             issue_key,
             mr["title"],
             mr["source_branch"],
+            _mr_type_from_labels(mr),
         )
+
+    seen_urls: set[str] = set()
+    unique_mrs: list[dict] = []
+    for mr in matched_mrs:
+        if mr["url"] not in seen_urls:
+            seen_urls.add(mr["url"])
+            unique_mrs.append(mr)
+    matched_mrs = unique_mrs
+
+    if len(matched_mrs) < 2:
+        logger.info("Fewer than 2 unique MRs resolved, nothing to consolidate")
+        state.consolidation_result = MRConsolidationOutputSchema(
+            success=True,
+            status="Fewer than 2 unique MRs resolved; nothing to do.",
+        )
+        return Workflow.END
 
     state.mr_urls = [mr["url"] for mr in matched_mrs]
     state.mr_branches = [mr["source_branch"] for mr in matched_mrs]
     state.mr_titles = [mr["title"] for mr in matched_mrs]
     state.mr_descriptions = [mr.get("description", "") for mr in matched_mrs]
+    state.mr_types = {mr["source_branch"]: _mr_type_from_labels(mr) for mr in matched_mrs}
 
     all_jira: list[str] = list(issue_keys)
+    all_cves: list[str] = []
     for mr in matched_mrs:
         all_jira.extend(_extract_jira_issues_from_description(mr.get("description", "")))
+        all_cves.extend(_extract_cves_from_text(mr.get("description", "")))
     state.jira_issues_collected = sorted(set(all_jira))
+    state.cves_collected = sorted(set(all_cves))
     state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
 
     logger.info(
@@ -298,7 +341,7 @@ async def run_workflow(
         workflow = Workflow(ConsolidationState, name="MRConsolidationWorkflow")
 
         async def list_open_mrs(state):
-            """List open backport MRs for the package/branch and pick the two oldest."""
+            """List open backport and rebuild MRs for the package/branch."""
             if state.mr_branches:
                 logger.info(
                     "Branch info pre-populated (%s), skipping GitLab MR lookup",
@@ -318,24 +361,32 @@ async def run_workflow(
                     target_branch=dist_git_branch,
                 )
 
-            result = await run_tool(
-                "list_project_merge_requests",
-                project=project_path,
-                state="opened",
-                target_branch=dist_git_branch,
-                labels=["ymir_backport"],
-                order_by="created_at",
-                sort="asc",
-                available_tools=gateway_tools,
-            )
+            all_mrs: list[dict] = []
+            seen_urls: set[str] = set()
+            for label in _CONSOLIDATION_MR_LABELS:
+                result = await run_tool(
+                    "list_project_merge_requests",
+                    project=project_path,
+                    state="opened",
+                    target_branch=dist_git_branch,
+                    labels=[label],
+                    order_by="created_at",
+                    sort="asc",
+                    available_tools=gateway_tools,
+                )
+                mrs = json.loads(result) if isinstance(result, str) else result
+                for mr in mrs:
+                    if JiraLabels.MR_CONSOLIDATED.value in mr.get("labels", []):
+                        continue
+                    if mr.get("url") in seen_urls:
+                        continue
+                    seen_urls.add(mr.get("url"))
+                    all_mrs.append(mr)
 
-            mrs = json.loads(result) if isinstance(result, str) else result
-            mrs = [mr for mr in mrs if JiraLabels.MR_CONSOLIDATED.value not in mr.get("labels", [])]
-            state.all_open_mrs = mrs
-
-            if len(mrs) < 2:
+            has_backport = any(_mr_type_from_labels(mr) == "backport" for mr in all_mrs)
+            if not has_backport or len(all_mrs) < 2:
                 logger.info(
-                    "Fewer than 2 open MRs for %s/%s, nothing to consolidate",
+                    "Fewer than 2 open MRs (or no backport MR) for %s/%s, nothing to consolidate",
                     package,
                     dist_git_branch,
                 )
@@ -345,6 +396,7 @@ async def run_workflow(
                 )
                 return Workflow.END
 
+            state.all_open_mrs = all_mrs
             return "fork_and_prepare_dist_git"
 
         async def fork_and_prepare_dist_git(state):
@@ -469,16 +521,42 @@ async def run_workflow(
                     )
                     return Workflow.END
 
-                oldest_two = current_mrs[:2]
-                state.mr_urls = [mr["url"] for mr in oldest_two]
-                state.mr_branches = [mr["source_branch"] for mr in oldest_two]
-                state.mr_titles = [mr["title"] for mr in oldest_two]
-                state.mr_descriptions = [mr.get("description", "") for mr in oldest_two]
+                # Selection priority: backport+backport first; backport+rebuild
+                # only when fewer than 2 backport MRs exist.
+                backport_mrs = [mr for mr in current_mrs if _mr_type_from_labels(mr) == "backport"]
+                rebuild_mrs = [mr for mr in current_mrs if _mr_type_from_labels(mr) == "rebuild"]
 
-                all_jira = []
-                for mr in oldest_two:
+                if len(backport_mrs) >= 2:
+                    selected = backport_mrs[:2]
+                elif backport_mrs and rebuild_mrs:
+                    selected = [backport_mrs[0], rebuild_mrs[0]]
+                elif not backport_mrs:
+                    logger.info(
+                        "No backport MRs on current HEAD for %s/%s, cannot consolidate rebuild-only",
+                        package,
+                        dist_git_branch,
+                    )
+                    state.consolidation_result = MRConsolidationOutputSchema(
+                        success=True,
+                        status="No backport MR on current HEAD; rebuild-only consolidation not supported.",
+                    )
+                    return Workflow.END
+                else:
+                    selected = current_mrs[:2]
+
+                state.mr_urls = [mr["url"] for mr in selected]
+                state.mr_branches = [mr["source_branch"] for mr in selected]
+                state.mr_titles = [mr["title"] for mr in selected]
+                state.mr_descriptions = [mr.get("description", "") for mr in selected]
+                state.mr_types = {mr["source_branch"]: _mr_type_from_labels(mr) for mr in selected}
+
+                all_jira: list[str] = []
+                all_cves: list[str] = []
+                for mr in selected:
                     all_jira.extend(_extract_jira_issues_from_description(mr.get("description", "")))
+                    all_cves.extend(_extract_cves_from_text(mr.get("description", "")))
                 state.jira_issues_collected = sorted(set(all_jira))
+                state.cves_collected = sorted(set(all_cves))
                 state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
                 if state.jira_issues_collected:
                     current_jira_issue.set(",".join(state.jira_issues_collected))
@@ -486,8 +564,9 @@ async def run_workflow(
                 state.current_mrs_count = len(current_mrs)
 
                 logger.info(
-                    "Selected MRs for consolidation (same HEAD): %s",
-                    [mr["url"] for mr in oldest_two],
+                    "Selected MRs for consolidation (same HEAD): %s (types: %s)",
+                    [mr["url"] for mr in selected],
+                    state.mr_types,
                 )
 
             for branch_name in state.mr_branches:
@@ -516,6 +595,12 @@ async def run_workflow(
                 if new_patches:
                     state.patches_per_mr[branch_name] = new_patches
             logger.info("Per-MR patch mapping: %s", state.patches_per_mr)
+
+            # If all non-base branches are rebuild MRs, use the simplified
+            # append-only flow (no cherry-pick, no Release bump for rebuilds).
+            non_backport = [b for b in state.mr_branches if state.mr_types.get(b) == "rebuild"]
+            if non_backport and len(non_backport) == len(state.mr_branches) - 1:
+                return "rebuild_append_flow"
 
             return "per_commit_flow" if release_strategy == "per_commit" else "run_consolidation_agent"
 
@@ -576,6 +661,16 @@ async def run_workflow(
                     jira_issue=state.jira_issue,
                 ),
             )
+
+            def _retry_step_for_build(state):
+                """Determine which flow to retry on build failure."""
+                has_rebuild_other = any(t == "rebuild" for t in state.mr_types.values())
+                if has_rebuild_other and len(state.mr_types) > 1:
+                    return "rebuild_append_flow"
+                if release_strategy == "per_commit":
+                    return "per_commit_flow"
+                return "run_consolidation_agent"
+
             try:
                 build_result = await build_agent.run(
                     build_prompt,
@@ -586,21 +681,15 @@ async def run_workflow(
                 if not build_output.success:
                     state.build_error = build_output.error
                     state.attempts_remaining -= 1
-                    retry_step = (
-                        "per_commit_flow" if release_strategy == "per_commit" else "run_consolidation_agent"
-                    )
                     if state.attempts_remaining > 0:
-                        return retry_step
+                        return _retry_step_for_build(state)
                     return "handle_failure"
             except Exception as e:
                 logger.error("Build verification error: %s", e)
                 state.build_error = str(e)
                 state.attempts_remaining -= 1
-                retry_step = (
-                    "per_commit_flow" if release_strategy == "per_commit" else "run_consolidation_agent"
-                )
                 if state.attempts_remaining > 0:
-                    return retry_step
+                    return _retry_step_for_build(state)
                 return "handle_failure"
 
             if release_strategy == "per_commit":
@@ -922,6 +1011,196 @@ async def run_workflow(
 
             return "run_build_agent"
 
+        async def rebuild_append_flow(state):
+            """Append rebuild ticket(s) to the backport MR without cherry-picking.
+
+            The backport branch is cherry-picked as base (it has patches + Release
+            bump).  Rebuild branches are skipped entirely — only their Jira tickets
+            and CVEs are recorded for inclusion in the final commit message and
+            changelog.
+            """
+            git_env = local_tool_options.get("env")
+            spec_name = f"{package}.spec"
+
+            try:
+                # The backport branch is always the base
+                backport_branches = [b for b in state.mr_branches if state.mr_types.get(b) != "rebuild"]
+                rebuild_branches = [b for b in state.mr_branches if state.mr_types.get(b) == "rebuild"]
+
+                if not backport_branches:
+                    raise RuntimeError("No backport branch found for rebuild_append_flow")
+
+                base_branch = backport_branches[0]
+
+                # Cherry-pick the backport branch as-is
+                _, base_commits_raw, _ = await run_subprocess(
+                    ["git", "rev-list", "--reverse", f"{dist_git_branch}..{base_branch}"],
+                    cwd=state.local_clone,
+                    env=git_env,
+                )
+                base_commits = [c for c in (base_commits_raw or "").strip().splitlines() if c]
+
+                if not base_commits:
+                    raise RuntimeError(
+                        f"No commits found on backport branch {base_branch} "
+                        f"relative to {dist_git_branch}. Cannot consolidate."
+                    )
+
+                logger.info(
+                    "Cherry-picking %d commit(s) from backport branch %s",
+                    len(base_commits),
+                    base_branch,
+                )
+                await check_subprocess(
+                    ["git", "cherry-pick", *base_commits],
+                    cwd=state.local_clone,
+                    env=git_env,
+                )
+
+                # The base branch may have added new source tarballs to the
+                # lookaside cache (updated `sources` file).  Re-download so
+                # subsequent SRPM builds find them.
+                await run_tool(
+                    "download_sources",
+                    dist_git_path=str(state.local_clone),
+                    package=package,
+                    dist_git_branch=dist_git_branch,
+                    available_tools=gateway_tools,
+                )
+                logger.info(
+                    "Waiting %ds for NFS attribute cache after source download",
+                    _NFS_CACHE_WAIT,
+                )
+                await asyncio.sleep(_NFS_CACHE_WAIT)
+
+                # Collect Jira issues and CVEs from rebuild branches
+                rebuild_jira: list[str] = []
+                rebuild_cves: list[str] = []
+                for rb_branch in rebuild_branches:
+                    idx = state.mr_branches.index(rb_branch)
+                    desc = state.mr_descriptions[idx] if idx < len(state.mr_descriptions) else ""
+                    rebuild_jira.extend(_extract_jira_issues_from_description(desc))
+                    rebuild_cves.extend(_extract_cves_from_text(desc))
+
+                # Also extract CVEs from the base backport commit messages
+                for commit_sha in base_commits:
+                    _, msg, _ = await run_subprocess(
+                        ["git", "log", "-1", "--format=%B", commit_sha],
+                        cwd=state.local_clone,
+                        env=git_env,
+                    )
+                    state.cves_collected = sorted(
+                        set(state.cves_collected + _extract_cves_from_text(msg or ""))
+                    )
+
+                state.cves_collected = sorted(set(state.cves_collected + rebuild_cves))
+
+                # Update changelog with the rebuild ticket reference
+                rebuild_issues_str = ", ".join(sorted(set(rebuild_jira))) or "rebuild"
+                log_prompt = render_template(
+                    get_log_prompt(),
+                    LogInputSchema(
+                        jira_issue=rebuild_issues_str,
+                        changes_summary=(
+                            f"Rebuild for {rebuild_issues_str} consolidated into backport. "
+                            f"No additional source changes — the backport's Release bump covers "
+                            f"both the backport and the rebuild."
+                        ),
+                    ),
+                )
+                try:
+                    await log_agent.run(
+                        log_prompt,
+                        expected_output=LogOutputSchema,
+                        **get_agent_execution_config(),
+                    )
+                except Exception as e:
+                    logger.warning("Log agent error (non-fatal) for rebuild append: %s", e)
+
+                await tasks.stage_changes(
+                    local_clone=state.local_clone,
+                    files_to_commit=[spec_name],
+                )
+
+                # Amend the last backport commit to include rebuild tickets
+                _, last_msg, _ = await run_subprocess(
+                    ["git", "log", "-1", "--format=%B"],
+                    cwd=state.local_clone,
+                    env=git_env,
+                )
+                last_msg = (last_msg or "").strip()
+
+                # Append rebuild Resolves: compare against what the commit
+                # message already contains, not state.jira_issues_collected
+                # (which includes rebuild tickets from discovery).
+                already_in_commit = set(re.findall(r"RHEL-\d+", last_msg))
+                extra_resolves = sorted(set(rebuild_jira) - already_in_commit)
+                if extra_resolves:
+                    state.jira_issues_collected = sorted(set(state.jira_issues_collected + extra_resolves))
+
+                # Add rebuild CVEs to commit message only if original already had CVE line
+                if rebuild_cves and re.search(r"^CVE:", last_msg, re.MULTILINE):
+                    existing_cves = _extract_cves_from_text(last_msg)
+                    all_cves = sorted(set(existing_cves + rebuild_cves))
+                    last_msg = re.sub(
+                        r"^CVE:.*$",
+                        f"CVE: {', '.join(all_cves)}",
+                        last_msg,
+                        count=1,
+                        flags=re.MULTILINE,
+                    )
+
+                # Append rebuild tickets to Resolves line
+                if extra_resolves:
+                    resolves_addition = ", ".join(extra_resolves)
+                    if re.search(r"^Resolves:", last_msg, re.MULTILINE):
+                        last_msg = re.sub(
+                            r"^(Resolves:.*)$",
+                            rf"\1, {resolves_addition}",
+                            last_msg,
+                            count=1,
+                            flags=re.MULTILINE,
+                        )
+                    else:
+                        last_msg += f"\nResolves: {resolves_addition}"
+
+                await check_subprocess(
+                    ["git", "commit", "--amend", "-m", last_msg],
+                    cwd=state.local_clone,
+                    env=git_env,
+                )
+
+                # Build SRPM for verification
+                srpm_tool = BuildSrpmTool(options=local_tool_options)
+                srpm_result = await srpm_tool.run(
+                    input=BuildSrpmInput(
+                        dist_git_path=state.local_clone,
+                        package=package,
+                        dist_git_branch=dist_git_branch,
+                    ),
+                )
+                output = srpm_result.result
+                srpm_path = output.strip() if "FAILED" not in output else None
+                state.consolidation_result = MRConsolidationOutputSchema(
+                    success=srpm_path is not None,
+                    status="rebuild_append consolidation complete",
+                    srpm_path=srpm_path,
+                )
+                if not srpm_path:
+                    state.consolidation_result.error = output
+                    return "handle_failure"
+
+            except Exception as e:
+                logger.error("rebuild_append flow error: %s", e)
+                state.consolidation_result = MRConsolidationOutputSchema(
+                    success=False,
+                    status="rebuild_append flow failed",
+                    error=str(e),
+                )
+                return "handle_failure"
+
+            return "run_build_agent"
+
         async def update_release(state):
             try:
                 await tasks.update_release(
@@ -1057,14 +1336,20 @@ async def run_workflow(
 
         async def push_and_open_mr(state):
             """Push commits and open the consolidated MR on GitLab."""
+            has_rebuild = any(t == "rebuild" for t in state.mr_types.values())
             combined_description = _build_consolidated_description(
                 state.mr_titles,
                 state.mr_descriptions,
                 state.mr_urls,
                 state.jira_issues_collected,
                 package,
+                cves=state.cves_collected,
+                has_rebuild=has_rebuild,
             )
-            title = f"[Consolidated] Backport fixes for {package} ({dist_git_branch})"
+            if has_rebuild:
+                title = f"[Consolidated] Backport + rebuild fixes for {package} ({dist_git_branch})"
+            else:
+                title = f"[Consolidated] Backport fixes for {package} ({dist_git_branch})"
 
             try:
                 if dry_run:
@@ -1154,11 +1439,18 @@ async def run_workflow(
             if not state.jira_issues_collected or not state.merge_request_url:
                 return "requeue_if_needed"
 
+            has_rebuild = any(t == "rebuild" for t in state.mr_types.values())
             for issue_key in state.jira_issues_collected:
-                comment = (
-                    f"Your backport MR has been consolidated with other fixes "
-                    f"into a single MR: {state.merge_request_url}"
-                )
+                if has_rebuild:
+                    comment = (
+                        f"Your MR has been consolidated (backport + rebuild) "
+                        f"into a single MR: {state.merge_request_url}"
+                    )
+                else:
+                    comment = (
+                        f"Your backport MR has been consolidated with other fixes "
+                        f"into a single MR: {state.merge_request_url}"
+                    )
                 if dry_run:
                     logger.info(
                         "Dry run: would post consolidation comment on %s",
@@ -1219,6 +1511,7 @@ async def run_workflow(
         workflow.add_step("run_consolidation_agent", run_consolidation_agent)
         workflow.add_step("run_build_agent", run_build_agent)
         workflow.add_step("per_commit_flow", per_commit_flow)
+        workflow.add_step("rebuild_append_flow", rebuild_append_flow)
         workflow.add_step("update_release", update_release)
         workflow.add_step("stage_changes", stage_changes)
         workflow.add_step("run_log_agent", run_log_agent)
@@ -1302,6 +1595,8 @@ def _build_consolidated_description(
     mr_urls: list[str],
     jira_issues: list[str],
     package: str,
+    cves: list[str] | None = None,
+    has_rebuild: bool = False,
 ) -> str:
     """Build the description for the consolidated MR.
 
@@ -1315,12 +1610,27 @@ def _build_consolidated_description(
         desc = mr_descriptions[i] if i < len(mr_descriptions) else None
         all_sub_mrs.extend(_extract_sub_mrs(title, desc or "", url))
 
-    parts = [
-        "## Consolidated Backport MR\n",
-        f"This MR consolidates multiple backport merge requests {I_AM_YMIR} "
-        "Learn more about [MR consolidation and configuration of its behavior]"
-        "(https://ymir.pages.redhat.com/docs/agents/mr-consolidation/).\n",
-    ]
+    if has_rebuild:
+        header = "## Consolidated Backport + Rebuild MR\n"
+        intro = (
+            f"This MR consolidates backport and rebuild merge requests {I_AM_YMIR} "
+            "Learn more about [MR consolidation and configuration of its behavior]"
+            "(https://ymir.pages.redhat.com/docs/agents/mr-consolidation/).\n"
+        )
+    else:
+        header = "## Consolidated Backport MR\n"
+        intro = (
+            f"This MR consolidates multiple backport merge requests {I_AM_YMIR} "
+            "Learn more about [MR consolidation and configuration of its behavior]"
+            "(https://ymir.pages.redhat.com/docs/agents/mr-consolidation/).\n"
+        )
+
+    parts = [header, intro]
+
+    if cves:
+        parts.append("### CVEs Fixed\n")
+        parts.extend(f"- {cve}" for cve in cves)
+        parts.append("")
 
     if jira_issues:
         parts.append("### Resolved Jira Issues\n")

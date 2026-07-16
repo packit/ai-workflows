@@ -2,7 +2,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ymir.agents.triage_agent import _should_update_jira
+from ymir.agents.triage_agent import (
+    _is_modular,
+    _map_version_to_module_branch,
+    _parse_module_summary,
+    _should_update_jira,
+)
 from ymir.common.models import Resolution, Task
 
 
@@ -163,3 +168,94 @@ async def test_process_task_proceeds_for_open_issues():
         await process_task(_make_payload())
 
     mock_workflow.assert_awaited_once()
+
+
+# --- Modular detection tests ---
+
+
+@pytest.mark.parametrize(
+    "summary, expected",
+    [
+        ("postgresql:12/postgresql:PostgreSQL: Arbitrary code execution", True),
+        ("postgresql:12.0/postgresql:PostgreSQL: some vulnerability", True),
+        ("nodejs:18/nodejs:Node.js: buffer overflow", True),
+        ("perl-DBD-MySQL:8.0/perl-DBD-MySQL:Fix for crash", True),
+        ("ruby:3.1-beta/ruby:Ruby: CVE fix", True),
+        ("python3.11:3.11/python3.11:Python: CVE fix", True),
+        ("gcc-c++:10/gcc-c++:GCC: CVE fix", True),
+        ("postgresql:PostgreSQL: Arbitrary code execution", False),
+        ("some plain summary without colons", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_is_modular(summary, expected):
+    assert _is_modular(summary) is expected
+
+
+# --- Module summary parsing tests ---
+
+
+@pytest.mark.parametrize(
+    "summary, expected_module, expected_stream",
+    [
+        ("postgresql:12/postgresql:PostgreSQL: vuln", "postgresql", "12"),
+        ("nodejs:18/nodejs:Node.js: issue", "nodejs", "18"),
+        ("perl-DBD-MySQL:8.0/perl-DBD-MySQL:Fix", "perl-DBD-MySQL", "8.0"),
+        ("ruby:3.1-beta/ruby:Ruby: CVE", "ruby", "3.1-beta"),
+        ("python3.11:3.11/python3.11:Python: CVE", "python3.11", "3.11"),
+        ("gcc-c++:10/gcc-c++:GCC: CVE", "gcc-c++", "10"),
+    ],
+)
+def test_parse_module_summary(summary, expected_module, expected_stream):
+    result = _parse_module_summary(summary)
+    assert result is not None
+    module, stream = result
+    assert module == expected_module
+    assert stream == expected_stream
+
+
+def test_parse_module_summary_non_modular():
+    assert _parse_module_summary("postgresql:PostgreSQL: vuln") is None
+
+
+# --- Modular branch mapping tests ---
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "version, summary, expected_branch",
+    [
+        (
+            "rhel-9.8",
+            "postgresql:12/postgresql:PostgreSQL: vuln",
+            "stream-postgresql-12-rhel-9.8.0",
+        ),
+        (
+            "rhel-9.9",
+            "postgresql:12/postgresql:PostgreSQL: vuln",
+            "stream-postgresql-12-rhel-9.9.0",
+        ),
+        (
+            "rhel-10.2",
+            "nodejs:18/nodejs:Node.js: issue",
+            "stream-nodejs-18-rhel-10.2.0",
+        ),
+        (
+            "rhel-9.8.z",
+            "postgresql:12/postgresql:PostgreSQL: vuln",
+            "stream-postgresql-12-rhel-9.8.0",
+        ),
+    ],
+)
+async def test_map_version_to_module_branch(version, summary, expected_branch):
+    branch = await _map_version_to_module_branch(version, summary, cve_needs_internal_fix=False)
+    assert branch == expected_branch
+
+
+@pytest.mark.asyncio
+async def test_map_version_to_module_branch_invalid_version():
+    branch = await _map_version_to_module_branch(
+        "not-a-version", "postgresql:12/postgresql:vuln", cve_needs_internal_fix=False
+    )
+    assert branch is None

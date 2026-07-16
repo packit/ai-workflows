@@ -913,10 +913,10 @@ async def test_get_pipeline_job_log():
     async def mock_get(url, **kwargs):
         assert f"/projects/redhat%2Frhel%2Frpms%2Fcurl/jobs/{job_id}/trace" in url
 
-        async def text():
-            return log_content
+        async def read():
+            return log_content.encode("utf-8")
 
-        yield flexmock(status=200, text=text, raise_for_status=lambda: None)
+        yield flexmock(status=200, read=read, raise_for_status=lambda: None)
 
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(mock_get)
     flexmock(os).should_call("getenv")
@@ -938,10 +938,10 @@ async def test_get_pipeline_job_log_truncates_large_output():
 
     @asynccontextmanager
     async def mock_get(url, **kwargs):
-        async def text():
-            return long_log
+        async def read():
+            return long_log.encode("utf-8")
 
-        yield flexmock(status=200, text=text, raise_for_status=lambda: None)
+        yield flexmock(status=200, read=read, raise_for_status=lambda: None)
 
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(mock_get)
     flexmock(os).should_call("getenv")

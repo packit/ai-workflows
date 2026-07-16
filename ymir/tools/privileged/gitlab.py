@@ -897,7 +897,7 @@ class GetPipelineJobLogTool(Tool[GetPipelineJobLogToolInput, ToolRunOptions, Str
     ) -> StringToolOutput:
         encoded_path = quote(tool_input.project_path, safe="")
         url = f"https://gitlab.com/api/v4/projects/{encoded_path}/jobs/{tool_input.job_id}/trace"
-        headers = _get_auth_headers(url)
+        headers = _get_auth_headers(f"https://gitlab.com/{tool_input.project_path}")
 
         try:
             async with (
@@ -905,7 +905,8 @@ class GetPipelineJobLogTool(Tool[GetPipelineJobLogToolInput, ToolRunOptions, Str
                 aiohttp_get_with_retries(session, url, headers=headers) as response,
             ):
                 response.raise_for_status()
-                log_text = await response.text()
+                raw = await response.read()
+                log_text = raw.decode("utf-8", errors="replace")
         except (aiohttp.ClientError, TimeoutError) as e:
             raise ToolError(
                 f"Failed to fetch log for job {tool_input.job_id} in {tool_input.project_path}: {e}"
@@ -1111,7 +1112,7 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
     ) -> StringToolOutput:
         patch_url = tool_input.patch_url
         request_url = _get_api_diff_url(patch_url)
-        headers = _get_auth_headers(request_url)
+        headers = _get_auth_headers(patch_url)
 
         try:
             async with (
@@ -1172,7 +1173,7 @@ class FetchGitlabMrNotesTool(Tool[FetchGitlabMrNotesInput, ToolRunOptions, Strin
     ) -> StringToolOutput:
         encoded_project = quote(input.project, safe="")
         url = f"https://gitlab.com/api/v4/projects/{encoded_project}/merge_requests/{input.mr_iid}/notes"
-        headers = _get_auth_headers(url)
+        headers = _get_auth_headers(f"https://gitlab.com/{input.project}")
         logger.info("Fetching MR notes from %s", url)
 
         try:

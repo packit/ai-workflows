@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import shutil
 import sys
 import traceback
@@ -113,6 +114,61 @@ _RESOLUTION_TO_LABEL: dict[Resolution, JiraLabels] = {
 }
 
 
+_MODULAR_SUMMARY_RE = re.compile(r"^[\w.+-]+:[^/]+/[\w.+-]+:")
+
+
+def _is_modular(jira_summary: str | None) -> bool:
+    """Detect whether the Jira ticket targets a modular package.
+
+    Modular summaries follow the pattern ``module:stream/component:Title``
+    (e.g. ``postgresql:12/postgresql:PostgreSQL: some vulnerability``),
+    while non-modular ones are ``component:Title``.
+    """
+    if not jira_summary:
+        return False
+    return bool(_MODULAR_SUMMARY_RE.match(jira_summary))
+
+
+def _parse_module_summary(summary: str) -> tuple[str, str] | None:
+    """Extract module name and stream from a modular Jira summary.
+
+    E.g. ``postgresql:12/postgresql:...`` → ``("postgresql", "12")``.
+    """
+    m = _MODULAR_SUMMARY_RE.match(summary)
+    if not m:
+        return None
+    prefix = summary[: m.end() - 1]  # "postgresql:12/postgresql"
+    module_stream, _, _ = prefix.partition("/")
+    module, _, stream = module_stream.partition(":")
+    return module, stream
+
+
+async def _map_version_to_module_branch(
+    version: str, summary: str, cve_needs_internal_fix: bool, package: str | None = None
+) -> str | None:
+    """Map version string to a modular target branch.
+
+    Branch format: ``stream-{module}-{stream}-rhel-{major}.{minor}.0``
+    E.g. version ``rhel-9.8`` + summary ``postgresql:12/...``
+    → ``stream-postgresql-12-rhel-9.8.0``
+    """
+    parsed_version = parse_rhel_version(version)
+    if not parsed_version:
+        logger.warning(f"Failed to parse version for modular branch: {version}")
+        return None
+
+    parsed_module = _parse_module_summary(summary)
+    if not parsed_module:
+        logger.warning(f"Failed to parse module/stream from summary: {summary!r}")
+        return None
+
+    major, minor, _ = parsed_version
+    module, stream = parsed_module
+    branch = f"stream-{module}-{stream}-rhel-{major}.{minor}.0"
+    logger.info(f"Mapped {version} -> {branch} (modular)")
+    return branch
+
+
 async def determine_target_branch(
     cve_eligibility_result: CVEEligibilityResult | None, triage_data: BaseModel
 ) -> str | None:
@@ -129,6 +185,19 @@ async def determine_target_branch(
     )
 
     package = triage_data.package if hasattr(triage_data, "package") else None
+    jira_summary = triage_data.summary if hasattr(triage_data, "summary") else None
+
+    if _is_modular(jira_summary):
+        branch = await _map_version_to_module_branch(
+            triage_data.fix_version, jira_summary, cve_needs_internal_fix, package
+        )
+        logger.info(
+            f"Modular package detected for {triage_data.jira_issue} "
+            f"(summary={jira_summary!r}, would map to branch={branch}) — "
+            f"skipping automated processing (not yet supported)"
+        )
+        # TODO: not yet implemented, this is the first step of modular support
+        return None
 
     return await _map_version_to_branch(triage_data.fix_version, cve_needs_internal_fix, package)
 
@@ -443,8 +512,9 @@ async def run_workflow(
             """Run the main triage analysis"""
             logger.info(f"Running triage analysis for {state.jira_issue}")
 
-            # Pre-fetch JIRA fix version to determine z-stream prompt variant
+            # Pre-fetch JIRA details for z-stream prompt variant and summary propagation
             fix_version_name = None
+            jira_details = {}
             try:
                 jira_details = await run_tool(
                     "get_jira_details",
@@ -455,7 +525,7 @@ async def run_workflow(
                 if fix_versions:
                     fix_version_name = fix_versions[0].get("name", "")
             except Exception as e:
-                logger.warning(f"Failed to pre-fetch fix version for prompt selection: {e}")
+                logger.warning(f"Failed to pre-fetch Jira details for prompt selection: {e}")
 
             input_data = InputSchema(issue=state.jira_issue)
             response = await triage_agent.run(
@@ -478,6 +548,12 @@ async def run_workflow(
                 state.triage_result.data.fix_version = normalize_fix_version(
                     state.triage_result.data.fix_version, rhel_config
                 )
+
+            # Propagate Jira summary to triage data for downstream agents
+            if hasattr(state.triage_result.data, "summary"):
+                jira_summary = jira_details.get("fields", {}).get("summary")
+                if jira_summary:
+                    state.triage_result.data.summary = jira_summary
 
             if state.triage_result.resolution == Resolution.REBASE:
                 return "verify_rebase_author"
@@ -1123,6 +1199,8 @@ async def main() -> None:
                         if output.resolution == Resolution.OPEN_ENDED_ANALYSIS:
                             queue = RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value
                             downstream_payload = output.data.model_dump_json()
+                        elif not state.target_branch:
+                            logger.info(f"No target branch for {input.issue} — skipping downstream dispatch")
                         else:
                             task = Task(metadata=state.model_dump(), user_triggered=user_triggered)
                             downstream_payload = task.model_dump_json()
@@ -1140,8 +1218,8 @@ async def main() -> None:
                                 )
                             else:
                                 queue = RedisQueues.CLARIFICATION_NEEDED_QUEUE.value
-                        await fix_await(redis.lpush(queue, downstream_payload))
-                        logger.info(f"Pushed {input.issue} to {queue}")
+                            await fix_await(redis.lpush(queue, downstream_payload))
+                            logger.info(f"Pushed {input.issue} to {queue}")
                     else:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
 

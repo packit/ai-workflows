@@ -1,6 +1,8 @@
 """Tools for working with upstream repositories and fix URLs."""
 
+import asyncio
 import re
+import shutil
 from urllib.parse import quote, urlparse
 
 import aiohttp
@@ -287,6 +289,10 @@ class CloneUpstreamRepositoryTool(Tool[CloneUpstreamRepositoryToolInput, ToolRun
     description = """
     Clone an upstream git repository to a specified directory.
 
+    Uses a blobless partial clone (--filter=blob:none): the full commit graph,
+    tags, and trees are fetched, but file contents are downloaded on demand.
+    All git operations (log, diff, cherry-pick, checkout) work normally.
+
     This is used to get a local copy of the upstream repository so we can:
     - Checkout a specific version/tag
     - Apply existing patches
@@ -319,11 +325,19 @@ class CloneUpstreamRepositoryTool(Tool[CloneUpstreamRepositoryToolInput, ToolRun
             # Create parent directory if needed
             clone_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Clone the repository
-            cmd = ["git", "clone", tool_input.repo_url, str(clone_path)]
-            exit_code, _, stderr = await run_subprocess(cmd)
+            # Clone the repository (blobless: full commit graph but deferred blobs)
+            cmd = ["git", "clone", "--filter=blob:none", tool_input.repo_url, str(clone_path)]
+            try:
+                exit_code, _, stderr = await asyncio.wait_for(run_subprocess(cmd), timeout=3600)
+            except TimeoutError:
+                shutil.rmtree(clone_path, ignore_errors=True)
+                raise ToolError("Clone timed out after 60 minutes") from None
+            except BaseException:
+                shutil.rmtree(clone_path, ignore_errors=True)
+                raise
 
             if exit_code != 0:
+                shutil.rmtree(clone_path, ignore_errors=True)
                 raise ToolError(f"Git clone failed: {stderr}")
 
             # Verify the clone was successful

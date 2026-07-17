@@ -35,6 +35,14 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   SENTRY_DSN
   ```
 
+  `phoenix-db-env` (PostgreSQL credentials for Phoenix observability):
+  ```bash
+  oc create secret generic phoenix-db-env \
+    --from-literal=POSTGRESQL_USER=phoenix \
+    --from-literal=POSTGRESQL_PASSWORD=<generate-strong-password> \
+    --from-literal=POSTGRESQL_DATABASE=phoenix
+  ```
+
   Values of these secrets are documented in [README](https://github.com/packit/jotnar?tab=readme-ov-file#service-accounts--authentication).
 
 - Create RHEL configuration ConfigMap manually:

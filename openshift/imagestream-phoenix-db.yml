@@ -1,0 +1,14 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: phoenix-db
+spec:
+  lookupPolicy:
+    local: true
+  tags:
+    - name: prod
+      from:
+        kind: DockerImage
+        name: quay.io/sclorg/postgresql-16-c9s
+      importPolicy:
+        scheduled: true

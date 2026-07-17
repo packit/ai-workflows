@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: phoenix-data
+  name: phoenix-db-data
   annotations:
     trident.netapp.io/reclaimPolicy: Retain
     volume.beta.kubernetes.io/storage-provisioner: netapp.io/trident
@@ -12,6 +12,6 @@ spec:
   - ReadWriteOnce
   resources:
     requests:
-      storage: 2Gi
-  storageClassName: netapp-nfs
+      storage: 20Gi
+  storageClassName: rh-internal-iscsi
   volumeMode: Filesystem

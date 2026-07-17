@@ -44,7 +44,14 @@ apply configmap-endpoints-env.yml
 apply configmap-jira-env.yml
 apply configmap-kerberos-env.yml
 
-# # Phoenix (observability)
+# Phoenix PostgreSQL database
+apply imagestream-phoenix-db.yml
+import_image phoenix-db
+apply pvc-phoenix-db-data.yml
+apply service-phoenix-db.yml
+apply deployment-phoenix-db.yml
+
+# Phoenix (observability)
 apply imagestream-phoenix.yml
 import_image phoenix
 apply pvc-phoenix-data.yml

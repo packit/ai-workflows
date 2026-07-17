@@ -508,7 +508,12 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
                 raise ToolError(f"Failed to initialize git repo at {clone_path}")
 
             command = ["git", *auth_args, "fetch", repository, f"{branch}:refs/heads/{branch}"]
-            returncode, _, _ = await run_subprocess(command, cwd=clone_path, env=git_env)
+            try:
+                returncode, _, _ = await asyncio.wait_for(
+                    run_subprocess(command, cwd=clone_path, env=git_env), timeout=3600
+                )
+            except TimeoutError:
+                raise ToolError(f"Fetch of {branch} timed out after 60 minutes") from None
             if returncode:
                 raise ToolError(f"Failed to fetch {branch} from {repository}")
 
@@ -517,7 +522,10 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
                 raise ToolError(f"Failed to checkout branch {branch}")
         else:
             command = ["git", *auth_args, "clone", repository, str(clone_path)]
-            returncode, _, _ = await run_subprocess(command, env=git_env)
+            try:
+                returncode, _, _ = await asyncio.wait_for(run_subprocess(command, env=git_env), timeout=3600)
+            except TimeoutError:
+                raise ToolError(f"Clone of {repository} timed out after 60 minutes") from None
             if returncode:
                 raise ToolError(f"Failed to clone {repository}")
 

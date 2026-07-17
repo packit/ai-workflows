@@ -25,6 +25,7 @@ from ogr.services.gitlab.project import GitlabProject
 from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import BaseModel, Field
 
+from ymir.common.base_utils import run_subprocess
 from ymir.common.models import (
     CommentReply,
     FailedPipelineJob,
@@ -502,24 +503,22 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
         clone_path.mkdir(parents=True, exist_ok=True)
 
         if branch:
-            proc = await asyncio.create_subprocess_exec("git", "init", cwd=clone_path, env=git_env)
-            if await proc.wait():
+            returncode, _, _ = await run_subprocess(["git", "init"], cwd=clone_path, env=git_env)
+            if returncode:
                 raise ToolError(f"Failed to initialize git repo at {clone_path}")
 
             command = ["git", *auth_args, "fetch", repository, f"{branch}:refs/heads/{branch}"]
-            proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path, env=git_env)
-            if await proc.wait():
+            returncode, _, _ = await run_subprocess(command, cwd=clone_path, env=git_env)
+            if returncode:
                 raise ToolError(f"Failed to fetch {branch} from {repository}")
 
-            proc = await asyncio.create_subprocess_exec(
-                "git", "checkout", branch, cwd=clone_path, env=git_env
-            )
-            if await proc.wait():
+            returncode, _, _ = await run_subprocess(["git", "checkout", branch], cwd=clone_path, env=git_env)
+            if returncode:
                 raise ToolError(f"Failed to checkout branch {branch}")
         else:
             command = ["git", *auth_args, "clone", repository, str(clone_path)]
-            proc = await asyncio.create_subprocess_exec(command[0], *command[1:], env=git_env)
-            if await proc.wait():
+            returncode, _, _ = await run_subprocess(command, env=git_env)
+            if returncode:
                 raise ToolError(f"Failed to clone {repository}")
 
         return StringToolOutput(result=f"Successfully cloned the specified repository to {clone_path}")
@@ -559,8 +558,8 @@ class PushToRemoteRepositoryTool(Tool[PushToRemoteRepositoryToolInput, ToolRunOp
         command = ["git", *auth_args, "push", repository, branch]
         if force:
             command.append("--force")
-        proc = await asyncio.create_subprocess_exec(command[0], *command[1:], cwd=clone_path)
-        if await proc.wait():
+        returncode, _, _ = await run_subprocess(command, cwd=clone_path)
+        if returncode:
             raise ToolError("Failed to push to the specified repository")
         return StringToolOutput(result=f"Successfully pushed the specified branch to {repository}")
 
@@ -603,13 +602,8 @@ class FetchBranchTool(Tool[FetchBranchToolInput, ToolRunOptions, StringToolOutpu
             repository,
             f"{branch}:refs/heads/{branch}",
         ]
-        proc = await asyncio.create_subprocess_exec(
-            command[0],
-            *command[1:],
-            cwd=clone_path,
-            env=git_env,
-        )
-        if await proc.wait():
+        returncode, _, _ = await run_subprocess(command, cwd=clone_path, env=git_env)
+        if returncode:
             raise ToolError(f"Failed to fetch branch {branch} from {repository}")
         return StringToolOutput(result=f"Successfully fetched branch {branch} from {repository}")
 

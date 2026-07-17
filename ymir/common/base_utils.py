@@ -448,7 +448,12 @@ async def run_subprocess(
         if isinstance(cmd, str):
             cmd = shlex.split(cmd)
         proc = await asyncio.create_subprocess_exec(cmd[0], *cmd[1:], **kwargs)
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await proc.communicate()
+    except BaseException:
+        proc.kill()
+        await proc.wait()
+        raise
     return (
         proc.returncode,
         stdout.decode() if stdout else None,

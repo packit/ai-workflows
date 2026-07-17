@@ -424,6 +424,53 @@ class TestCloneUpstreamRepositoryTool:
                 )
             ).middleware(GlobalTrajectoryMiddleware(pretty=True))
 
+        assert not (tmp_path / "mypackage-upstream").exists()
+
+    @pytest.mark.asyncio
+    async def test_clone_passes_blobless_filter(self, tool, tmp_path):
+        clone_dir = tmp_path / "mypackage"
+        expected_path = tmp_path / "mypackage-upstream"
+        captured_cmd = []
+
+        async def mock_run_subprocess(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            expected_path.mkdir(parents=True, exist_ok=True)
+            (expected_path / ".git").mkdir(exist_ok=True)
+            return (0, "", "")
+
+        flexmock(upstream_tools_mod).should_receive("run_subprocess").replace_with(mock_run_subprocess).once()
+
+        await tool.run(
+            input=CloneUpstreamRepositoryToolInput(
+                repo_url="https://github.com/owner/repo.git",
+                clone_directory=str(clone_dir),
+            )
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert "--filter=blob:none" in captured_cmd
+
+    @pytest.mark.asyncio
+    async def test_clone_timeout_removes_partial_directory(self, tool, tmp_path, monkeypatch):
+        clone_dir = tmp_path / "mypackage"
+        expected_path = tmp_path / "mypackage-upstream"
+
+        async def mock_wait_for(coro, timeout):
+            expected_path.mkdir(parents=True, exist_ok=True)
+            coro.close()
+            raise TimeoutError
+
+        monkeypatch.setattr(upstream_tools_mod.asyncio, "wait_for", mock_wait_for)
+
+        with pytest.raises(ToolError, match="Clone timed out"):
+            await tool.run(
+                input=CloneUpstreamRepositoryToolInput(
+                    repo_url="https://github.com/owner/repo.git",
+                    clone_directory=str(clone_dir),
+                )
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert not expected_path.exists()
+
 
 # ---------------------------------------------------------------------------
 # FindBaseCommitTool

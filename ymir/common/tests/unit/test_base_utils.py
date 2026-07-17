@@ -355,3 +355,15 @@ class TestInstallShutdownHandler:
 
         assert {sig for sig, _ in registered} == {signal.SIGTERM, signal.SIGINT}
         assert all(callback == shutdown_event.set for _, callback in registered)
+
+
+class TestRunSubprocessKillOnCancel:
+    @pytest.mark.asyncio
+    async def test_kills_process_on_cancellation(self):
+        from ymir.common.base_utils import run_subprocess
+
+        task = asyncio.create_task(run_subprocess(["sleep", "60"]))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task

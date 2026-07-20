@@ -277,10 +277,10 @@ async def test_clone_repository(mock_git_repo_basepath):
         else:
             pytest.fail(f"Unexpected git command: {args}")
 
-        async def wait():
-            return 0
+        async def communicate():
+            return (b"", b"")
 
-        return flexmock(wait=wait)
+        return flexmock(communicate=communicate, returncode=0)
 
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
 
@@ -333,10 +333,10 @@ async def test_clone_repository_accepts_path_inside_basepath(mock_git_repo_basep
     valid_path = mock_git_repo_basepath / "RHEL-12345" / "bash"
 
     async def create_subprocess_exec(cmd, *args, **kwargs):
-        async def wait():
-            return 0
+        async def communicate():
+            return (b"", b"")
 
-        return flexmock(wait=wait)
+        return flexmock(communicate=communicate, returncode=0)
 
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
 
@@ -361,10 +361,10 @@ async def test_push_to_remote_repository():
         assert args[2] == branch
         assert kwargs.get("cwd") == clone_path
 
-        async def wait():
-            return 0
+        async def communicate():
+            return (b"", b"")
 
-        return flexmock(wait=wait)
+        return flexmock(communicate=communicate, returncode=0)
 
     flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
     result = (

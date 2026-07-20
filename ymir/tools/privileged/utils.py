@@ -17,20 +17,28 @@ def cleanup_stale_directories(git_repos_path: Path, cutoff_time: datetime) -> in
     Ignores all exceptions that could occur during cleanup.
     Return the number of deleted directories.
     """
-    deleted_count = 0
-    for item_path in git_repos_path.iterdir():
-        try:
-            if not item_path.is_dir() or not item_path.name.lower().startswith("rhel-"):
-                continue
+    stale_dirs: list[Path] = []
+    try:
+        for item_path in git_repos_path.iterdir():
+            try:
+                if not item_path.is_dir():
+                    continue
+                mod_time = datetime.fromtimestamp(item_path.stat().st_mtime)
+                if mod_time < cutoff_time:
+                    stale_dirs.append(item_path)
+            except Exception as ex:
+                logger.warning(f"Failed to inspect directory {item_path}: {ex}")
+    except Exception as ex:
+        logger.warning(f"Failed to list directory {git_repos_path}: {ex}")
 
-            mod_time = datetime.fromtimestamp(item_path.stat().st_mtime)
-            if mod_time < cutoff_time:
-                logger.info(f"Deleting old directory: {item_path}")
-                shutil.rmtree(item_path, ignore_errors=False)
-                deleted_count += 1
+    deleted_count = 0
+    for item_path in stale_dirs:
+        try:
+            logger.info(f"Deleting old directory: {item_path}")
+            shutil.rmtree(item_path, ignore_errors=False)
+            deleted_count += 1
         except Exception as ex:
             logger.warning(f"Failed to delete directory {item_path}: {ex}")
-            continue
 
     return deleted_count
 

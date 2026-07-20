@@ -10,16 +10,27 @@ logger = logging.getLogger(__name__)
 
 REPO_CLEANUP_DAYS = 7
 
+APPLICABILITY_DIR = "applicability"
+MERGE_REQUESTS_DIR = "merge_requests"
+NESTED_WORK_DIRS = {APPLICABILITY_DIR, MERGE_REQUESTS_DIR}
 
-_NESTED_WORK_DIRS = {"applicability", "merge_requests"}
+
+def _remove_if_stale(path: Path, cutoff_time: datetime) -> bool:
+    """Delete *path* if its mtime predates *cutoff_time*. Return True on deletion."""
+    mod_time = datetime.fromtimestamp(path.stat().st_mtime)
+    if mod_time < cutoff_time:
+        logger.info(f"Deleting old directory: {path}")
+        shutil.rmtree(path, ignore_errors=False)
+        return True
+    return False
 
 
 def cleanup_stale_directories(git_repos_path: Path, cutoff_time: datetime) -> int:
     """
     Finds and deletes stale directories in the specified path.
     Top-level directories are checked directly; known container directories
-    (applicability/, merge_requests/) are stepped into and their children
-    are checked individually.
+    (see NESTED_WORK_DIRS) are stepped into and their children are checked
+    individually.
     Ignores all exceptions that could occur during cleanup.
     Return the number of deleted directories.
     """
@@ -29,38 +40,22 @@ def cleanup_stale_directories(git_repos_path: Path, cutoff_time: datetime) -> in
             if not item_path.is_dir():
                 continue
 
-            if item_path.name in _NESTED_WORK_DIRS:
-                deleted_count += _cleanup_children(item_path, cutoff_time)
+            if item_path.name in NESTED_WORK_DIRS:
+                for child in item_path.iterdir():
+                    try:
+                        if child.is_dir() and _remove_if_stale(child, cutoff_time):
+                            deleted_count += 1
+                    except Exception as ex:
+                        logger.warning(f"Failed to delete directory {child}: {ex}")
                 continue
 
-            mod_time = datetime.fromtimestamp(item_path.stat().st_mtime)
-            if mod_time < cutoff_time:
-                logger.info(f"Deleting old directory: {item_path}")
-                shutil.rmtree(item_path, ignore_errors=False)
+            if _remove_if_stale(item_path, cutoff_time):
                 deleted_count += 1
         except Exception as ex:
-            logger.warning(f"Failed to delete directory {item_path}: {ex}")
+            logger.warning(f"Failed to process directory {item_path}: {ex}")
             continue
 
     return deleted_count
-
-
-def _cleanup_children(container: Path, cutoff_time: datetime) -> int:
-    """Remove stale subdirectories inside a container directory."""
-    deleted = 0
-    for child in container.iterdir():
-        try:
-            if not child.is_dir():
-                continue
-            mod_time = datetime.fromtimestamp(child.stat().st_mtime)
-            if mod_time < cutoff_time:
-                logger.info(f"Deleting old directory: {child}")
-                shutil.rmtree(child, ignore_errors=False)
-                deleted += 1
-        except Exception as ex:
-            logger.warning(f"Failed to delete directory {child}: {ex}")
-            continue
-    return deleted
 
 
 async def clean_stale_repositories() -> int:

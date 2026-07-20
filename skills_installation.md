@@ -120,7 +120,7 @@ directory that contains this file.
 | `JIRA_URL` | **Yes** | Base URL of the Jira instance (e.g. `https://issues.redhat.com/`). |
 | `JIRA_EMAIL` | **Yes** | Email address for Jira Basic Auth. |
 | `JIRA_TOKEN` | **Yes** | Jira API token for Basic Auth. |
-| `GIT_REPO_BASEPATH` | No | Absolute path to a directory for git repository housekeeping. Only required if you use `CloneRepositoryTool` (it cleans up stale clones older than 14 days from this directory on every clone). |
+| `GIT_REPO_BASEPATH` | No | Absolute path to a directory for git repository housekeeping. Only required if you use `CloneRepositoryTool` (it cleans up stale clones older than 7 days from this directory on every clone). |
 | `KRB5CCNAME` | **Yes** | Kerberos credential cache location (e.g. `FILE:/tmp/krb5cc_1000`). |
 | `KEYTAB_FILE` | No | Path to a Kerberos keytab for automated `kinit`. When unset, an existing ticket must be present. |
 | `DRY_RUN` | No | Set to `true` to skip mutating Jira and lookaside operations. |

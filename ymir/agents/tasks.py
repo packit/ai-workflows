@@ -37,6 +37,7 @@ from ymir.common.version_utils import (
     parse_rhel_version,
     parse_zstream_branch_name,
 )
+from ymir.tools.privileged.utils import APPLICABILITY_DIR, MERGE_REQUESTS_DIR
 from ymir.tools.unprivileged.specfile import UpdateReleaseTool
 from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
 
@@ -182,7 +183,7 @@ async def prepare_dist_git_from_merge_request(
     available_tools: list[Tool],
     with_fedora: bool = False,
 ) -> tuple[Path, MergeRequestDetails, Path | None]:
-    working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "merge_requests"
+    working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / MERGE_REQUESTS_DIR
     working_dir.mkdir(parents=True, exist_ok=True)
     local_clone = working_dir / urlparse(merge_request_url).path.replace("/", "_")
     shutil.rmtree(local_clone, ignore_errors=True)
@@ -655,7 +656,7 @@ async def clone_and_prep_sources(
     """
     if not jira_issue or Path(jira_issue).is_absolute() or ".." in jira_issue:
         raise ValueError(f"Invalid jira_issue: {jira_issue}")
-    working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "applicability" / jira_issue
+    working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / APPLICABILITY_DIR / jira_issue
     if working_dir.is_dir():
         _force_rmtree(working_dir)
     working_dir.mkdir(parents=True, exist_ok=True)

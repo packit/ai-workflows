@@ -69,6 +69,7 @@ from ymir.common.version_utils import (
     normalize_fix_version,
     parse_rhel_version,
 )
+from ymir.tools.privileged.utils import APPLICABILITY_DIR
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 
 ## UpstreamSearchTool is currently unmaintained and disabled.
@@ -807,7 +808,7 @@ async def run_workflow(
             return "comment_in_jira"
 
         async def comment_in_jira(state):
-            applicability_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "applicability" / state.jira_issue
+            applicability_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / APPLICABILITY_DIR / state.jira_issue
             if applicability_dir.exists():
                 shutil.rmtree(applicability_dir, ignore_errors=True)
                 state.applicability_local_clone = None

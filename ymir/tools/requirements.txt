@@ -11,4 +11,4 @@ requests-gssapi>=1.3.0
 rpm>=0.4.0
 rpkg>=1.65
 specfile>=0.36.0
-logdetective-mcp>=0.1.0
+logdetective-mcp>=0.2.0

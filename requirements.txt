@@ -8,7 +8,7 @@ beautifulsoup4>=4.13.4
 beeai-framework[duckduckgo]==0.1.80
 copr>=1.129
 fastmcp>=2.11.3
-logdetective-mcp>=0.1.0
+logdetective-mcp>=0.2.0
 ogr>=0.55.0
 openinference-instrumentation-beeai>=0.1.8
 redis>=6.4.0

@@ -238,8 +238,8 @@ build-mr-cleanup:
 	$(COMPOSE) --profile manual build mr-cleanup
 
 # Usage:
-#   make run-mr-cleanup-dry-run    # dry run, lists what would be closed
-#   make run-mr-cleanup            # live run, closes MRs
+#   make run-mr-cleanup-dry-run    # dry run, lists what would be changed
+#   make run-mr-cleanup            # live run
 #   TARGET_MR=<url> make run-mr-cleanup-dry-run   # dry run on single MR
 #   TARGET_MR=<url> make run-mr-cleanup           # live run on single MR
 define mr-cleanup-check-env

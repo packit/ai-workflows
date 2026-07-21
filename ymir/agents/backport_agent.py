@@ -30,7 +30,7 @@ from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState
 from ymir.agents.reasoning_agent import ReasoningAgent
-from ymir.agents.tasks import InvalidConsolidationConfigError, fetch_consolidation_config, submit_merge_job
+from ymir.agents.tasks import InvalidConsolidationConfigError
 from ymir.agents.utils import (
     check_subprocess,
     format_mr_triage_details,
@@ -729,7 +729,12 @@ async def run_workflow(
                 return "comment_in_jira"
 
             try:
-                config = await fetch_consolidation_config(state.package, gateway_tools)
+                await tasks.try_submit_consolidation_job(
+                    state.package,
+                    state.dist_git_branch,
+                    gateway_tools,
+                    redis_conn,
+                )
             except InvalidConsolidationConfigError as e:
                 logger.warning("Invalid consolidation config for %s: %s", state.package, e)
                 await tasks.comment_in_jira(
@@ -744,37 +749,6 @@ async def run_workflow(
                     available_tools=gateway_tools,
                     user_triggered=user_triggered,
                 )
-                return "comment_in_jira"
-
-            try:
-                if not config.merge_mrs:
-                    logger.info(
-                        "MR consolidation not enabled for %s, skipping",
-                        state.package,
-                    )
-                    return "comment_in_jira"
-
-                if redis_conn is not None:
-                    submitted = await submit_merge_job(
-                        redis_conn,
-                        state.package,
-                        state.dist_git_branch,
-                        release_strategy=config.release_strategy.value,
-                    )
-                    if submitted:
-                        logger.info(
-                            "Submitted consolidation job for %s/%s",
-                            state.package,
-                            state.dist_git_branch,
-                        )
-                    else:
-                        logger.info(
-                            "Consolidation job already queued for %s/%s",
-                            state.package,
-                            state.dist_git_branch,
-                        )
-                else:
-                    logger.info("No Redis connection (direct mode), skipping consolidation job submission")
             except Exception as e:
                 logger.warning("Failed to submit consolidation job: %s", e)
 

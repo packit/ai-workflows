@@ -766,3 +766,40 @@ async def fetch_consolidation_config(
         raise InvalidConsolidationConfigError(
             f"ymir.yaml consolidation section for {package} is malformed: {e}"
         ) from e
+
+
+async def try_submit_consolidation_job(
+    package: str,
+    dist_git_branch: str,
+    gateway_tools: list,
+    redis_conn,
+) -> None:
+    """Fetch consolidation config and submit a job if enabled.
+
+    Shared logic used by both the backport and rebuild agents after
+    creating an MR.
+
+    Raises:
+        InvalidConsolidationConfigError: When ymir.yaml exists but the
+            consolidation section is malformed.
+    """
+    config = await fetch_consolidation_config(package, gateway_tools)
+
+    if not config.merge_mrs:
+        logger.info("MR consolidation not enabled for %s, skipping", package)
+        return
+
+    if redis_conn is None:
+        logger.info("No Redis connection (direct mode), skipping consolidation job submission")
+        return
+
+    submitted = await submit_merge_job(
+        redis_conn,
+        package,
+        dist_git_branch,
+        release_strategy=config.release_strategy.value,
+    )
+    if submitted:
+        logger.info("Submitted consolidation job for %s/%s", package, dist_git_branch)
+    else:
+        logger.info("Consolidation job already queued for %s/%s", package, dist_git_branch)

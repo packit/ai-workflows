@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import random
-import re
 import shutil
 import tempfile
 import time
@@ -20,6 +19,7 @@ from ymir.common.base_utils import KerberosError, init_kerberos_ticket
 from ymir.common.utils import get_latest_candidate_build, get_latest_z_pending_build
 from ymir.common.version_utils import is_older_zstream, parse_zstream_branch_name
 from ymir.tools.base import CloneableTool as Tool
+from ymir.tools.privileged.utils import sanitize_url as _sanitize_url
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +40,6 @@ _TRANSIENT_STDERR_PATTERNS = (
 )
 
 _T = TypeVar("_T")
-
-
-def _sanitize_url(text: str) -> str:
-    """Remove oauth2:{token}@ credentials from URLs in error messages."""
-    return re.sub(r"oauth2:[^@\s]+@", "oauth2:***@", text)
 
 
 def _is_transient_git_error(exc: Exception) -> bool:

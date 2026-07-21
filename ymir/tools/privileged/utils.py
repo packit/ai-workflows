@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -9,6 +10,12 @@ logger = logging.getLogger(__name__)
 
 
 REPO_CLEANUP_DAYS = 7
+
+
+def sanitize_url(text: str) -> str:
+    """Remove oauth2:{token}@ credentials from URLs in error messages."""
+    return re.sub(r"oauth2:[^@\s]+@", "oauth2:***@", text)
+
 
 APPLICABILITY_DIR = "applicability"
 MERGE_REQUESTS_DIR = "merge_requests"

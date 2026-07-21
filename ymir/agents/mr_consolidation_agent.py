@@ -182,6 +182,8 @@ def _extract_cves_from_text(text: str) -> list[str]:
 
 _CONSOLIDATION_MR_LABELS = ["ymir_backport", "ymir_rebuild"]
 
+_MR_TYPE_PRIORITY = {"backport": 0, "rebuild": 1}
+
 
 def _mr_type_from_labels(mr: dict) -> str:
     """Determine if an MR is a backport or rebuild from its GitLab labels."""
@@ -521,28 +523,27 @@ async def run_workflow(
                     )
                     return Workflow.END
 
-                # Selection priority: backport+backport first; backport+rebuild
-                # only when fewer than 2 backport MRs exist.
-                backport_mrs = [mr for mr in current_mrs if _mr_type_from_labels(mr) == "backport"]
-                rebuild_mrs = [mr for mr in current_mrs if _mr_type_from_labels(mr) == "rebuild"]
+                # Sort by type priority (backport first, then rebuild)
+                # and select the two highest-priority MRs.
+                sorted_mrs = sorted(
+                    current_mrs,
+                    key=lambda mr: _MR_TYPE_PRIORITY.get(_mr_type_from_labels(mr), 99),
+                )
 
-                if len(backport_mrs) >= 2:
-                    selected = backport_mrs[:2]
-                elif backport_mrs and rebuild_mrs:
-                    selected = [backport_mrs[0], rebuild_mrs[0]]
-                elif not backport_mrs:
+                if _mr_type_from_labels(sorted_mrs[0]) != "backport":
                     logger.info(
-                        "No backport MRs on current HEAD for %s/%s, cannot consolidate rebuild-only",
+                        "No backport MRs on current HEAD for %s/%s, cannot consolidate without a backport",
                         package,
                         dist_git_branch,
                     )
                     state.consolidation_result = MRConsolidationOutputSchema(
                         success=True,
-                        status="No backport MR on current HEAD; rebuild-only consolidation not supported.",
+                        status="No backport MR on current HEAD; "
+                        "consolidation without a backport is not supported.",
                     )
                     return Workflow.END
-                else:
-                    selected = current_mrs[:2]
+
+                selected = sorted_mrs[:2]
 
                 state.mr_urls = [mr["url"] for mr in selected]
                 state.mr_branches = [mr["source_branch"] for mr in selected]

@@ -17,6 +17,7 @@ rpm>=0.4.0
 specfile>=0.36.0
 typer>=0.16.0
 backoff>=2.2.1
+python-dotenv>=1.0.0
 tomli-w>=1.2.0
 flexmock>=0.12.2
 nitrate>=1.9.0

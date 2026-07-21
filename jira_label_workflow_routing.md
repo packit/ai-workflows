@@ -98,6 +98,7 @@ flowchart TD
 | `ymir_todo` | Maintainer-facing trigger for an e2e run | Fetcher swaps it for `ymir_triage_in_progress` on enqueue; only honored when the changelog shows the label was added by a member of the `Red Hat Employee` Jira group (verified per-issue, not via JQL). The triage run posts an ack comment and a result comment so the requester gets feedback. Default is silent — without `ymir_todo`, no comments are posted. |
 | `ymir_consolidate_base` | Mark a backport MR for consolidation (base) | Paired with `ymir_consolidate_next` on another issue for the same package/branch. The fetcher matches the pair, submits a targeted consolidation job, removes both labels, and posts comments. |
 | `ymir_consolidate_next` | Mark a backport MR for consolidation (next) | Must be on a different issue than `ymir_consolidate_base`, for the same package/branch. |
+| `ymir_cli_triage` | Usage-tracking marker for CLI runs | Set at the start of a user-triggered CLI triage run. Prevents the fetcher from picking up the same issue in parallel. Persists on success as a usage-tracking marker; removed on failure so the fetcher can re-process the issue. Covered by the fetcher's stale-label recovery (IN_FLIGHT_LABELS) to handle SIGKILL/OOM. |
 
 ### GitLab MR Labels
 

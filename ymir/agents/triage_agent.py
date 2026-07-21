@@ -996,21 +996,100 @@ async def main() -> None:
     force_cve_triage = os.getenv("FORCE_CVE_TRIAGE", "false").lower() == "true"
 
     if jira_issue := os.getenv("JIRA_ISSUE", None):
+        user_triggered = os.getenv("USER_TRIGGERED", "false").lower() == "true"
         logger.info("Running in direct mode with environment variable")
+        # Direct-mode label lifecycle (user_triggered only):
+        #   Start:   add ymir_cli_triage to prevent concurrent service runs.
+        #   Crash:   remove ymir_cli_triage so the fetcher can re-process.
+        #   Success: keep ymir_cli_triage — it doubles as a usage-tracking
+        #            marker for CLI-triggered triage runs.
+        if user_triggered and not dry_run:
+            try:
+                await tasks.set_jira_labels(
+                    jira_issue=jira_issue,
+                    labels_to_add=[JiraLabels.CLI_TRIAGE.value],
+                    user_triggered=True,
+                    dry_run=dry_run,
+                )
+            except Exception:
+                logger.error(
+                    "Failed to set manual-trigger label on %s — aborting to avoid unprotected run", jira_issue
+                )
+                raise
         with span_processor.start_transaction(jira_issue, workflow="TriageWorkflow"):
             agent_factory = build_agent_factory_with_mock_repos(create_triage_agent, jira_issue)
-            state = await run_workflow(
-                jira_issue,
-                dry_run,
-                agent_factory,
-                auto_chain=auto_chain,
-                force_cve_triage=force_cve_triage,
-            )
-            logger.info(f"Direct run completed: {state.triage_result.model_dump_json(indent=4)}")
+            try:
+                state = await run_workflow(
+                    jira_issue,
+                    dry_run,
+                    agent_factory,
+                    auto_chain=auto_chain,
+                    force_cve_triage=force_cve_triage,
+                    user_triggered=user_triggered,
+                )
+            except Exception:
+                if user_triggered and not dry_run:
+                    try:
+                        await tasks.set_jira_labels(
+                            jira_issue=jira_issue,
+                            labels_to_remove=[JiraLabels.CLI_TRIAGE.value],
+                            user_triggered=True,
+                            dry_run=dry_run,
+                        )
+                    except Exception as label_err:
+                        logger.warning(
+                            "Failed to remove manual-trigger label from %s on error: %s",
+                            jira_issue,
+                            label_err,
+                        )
+                raise
+            output = state.triage_result
+            logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")
             if state.cve_eligibility_result:
                 logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
             if state.target_branch:
                 logger.info(f"Target branch: {state.target_branch}")
+
+            result_dir = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / jira_issue
+            result_dir.mkdir(parents=True, exist_ok=True)
+            (result_dir / "triage_result.json").write_text(output.model_dump_json(indent=2), encoding="utf-8")
+
+            if user_triggered and not dry_run:
+                resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
+                if resolution_label and output.resolution != Resolution.ERROR:
+                    try:
+                        await tasks.set_jira_labels(
+                            jira_issue=jira_issue,
+                            labels_to_add=[resolution_label.value],
+                            user_triggered=True,
+                            dry_run=dry_run,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to set resolution label on %s: %s",
+                            jira_issue,
+                            e,
+                        )
+                    if output.resolution == Resolution.REBUILD:
+                        for consolidated in output.data.consolidated_issues:
+                            try:
+                                await tasks.set_jira_labels(
+                                    jira_issue=consolidated.issue_key,
+                                    labels_to_add=[JiraLabels.TRIAGED_REBUILD.value],
+                                    labels_to_remove=[
+                                        JiraLabels.TRIAGE_IN_PROGRESS.value,
+                                        JiraLabels.REBUILT.value,
+                                    ],
+                                    dry_run=dry_run,
+                                    user_triggered=True,
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    "Failed to set labels on consolidated issue %s: %s",
+                                    consolidated.issue_key,
+                                    e,
+                                )
+
             return
 
     logger.info(f"Starting triage agent in queue mode (AUTO_CHAIN={'enabled' if auto_chain else 'disabled'})")

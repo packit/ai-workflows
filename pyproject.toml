@@ -29,6 +29,9 @@ test = [
     "unidiff>=0.7.0",
 ]
 
+[project.scripts]
+ymir = "ymir.cli.main:app"
+
 [tool.hatch.build.targets.wheel]
 packages = ["ymir"]
 exclude = ["ymir/common", "ymir/tools"]

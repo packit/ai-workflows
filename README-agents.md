@@ -126,6 +126,7 @@ make trigger-pipeline JIRA_ISSUE=RHEL-12345 FORCE_CVE_TRIAGE=true
 | `MOCK_JIRA` | `false` | Use mock Jira API instead of real Jira |
 | `JIRA_DRY_RUN` | `false` | Skip all Jira write operations (status, comments, labels, fields) while keeping reads working |
 | `FORCE_CVE_TRIAGE` | `false` | Force triage of CVE issues that would normally be skipped (e.g. Y-stream CVEs) |
+| `RHEL_CONFIG_PATH` | `rhel-config.json` | Path to `rhel-config.json` with RHEL version stream mappings. Set automatically by the CLI from `--secrets`; only needed when running agents directly. |
 
 ### Individual Agents Runs
 ```bash
@@ -144,9 +145,101 @@ make JIRA_ISSUE=RHEL-12345 FORCE_CVE_TRIAGE=true run-triage-agent-standalone
 
 Use commas to delimit multiple patch/commit URLs in `UPSTREAM_PATCHES`.
 
+### CLI
+
+The `ymir` CLI runs the triage workflow inside a container, orchestrated via
+`compose.yaml`. Three infrastructure containers are started automatically
+before the triage agent runs:
+
+- **mcp-gateway-cli** (port 8000) — provides Jira, GitLab, and dist-git tools via
+  MCP over SSE. Uses `keep-id` UID mapping for host filesystem access.
+- **trace-server** (port 8082) — collects OpenTelemetry spans and serves a
+  trace viewer UI.
+
+Both are defined in `compose.yaml` under the `cli` profile. The compose
+file exposes their ports on `127.0.0.1`.
+
+#### First-time setup
+
+1. Create secrets from templates (see [Setup](#setup) above for details on
+   filling in credentials and generating a keytab):
+
+   ```bash
+   cp -r templates .secrets
+   # Edit .secrets/beeai-agent.env  — set CHAT_MODEL and API credentials
+   # Edit .secrets/mcp-gateway.env  — set GITLAB_TOKEN, JIRA_EMAIL, JIRA_TOKEN
+   # Edit .secrets/rhel-config.json — configure RHEL version stream mappings
+   # Place keytab in .secrets/keytab
+   ```
+
+2. When using Vertex AI models (`vertexai:` prefix in `CHAT_MODEL`), place the
+   service account key in `.secrets/jotnar-vertex-dev.json`.
+
+3. Install the CLI into a virtual environment:
+
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   uv pip install -e .
+   ```
+
+#### Usage
+
+```bash
+# Run triage (always start with --dry-run)
+ymir triage RHEL-12345 --dry-run
+```
+
+Infrastructure containers are started automatically before the triage workflow.
+When it finishes, mcp-gateway-cli is stopped but the trace-server is left
+running so you can inspect collected traces.
+
+The `--compose-file` option defaults to `compose.yaml` in the current
+directory. Pass a different path if running from elsewhere:
+
+```bash
+ymir triage RHEL-12345 --dry-run --compose-file /path/to/compose.yaml
+```
+
+##### Triage options
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Skip Jira writes and downstream queues. **Always use for initial testing.** |
+| `--force-cve-triage` | Force triage even when CVE eligibility check says to skip. |
+| `--no-auto-chain` | Do not push results to downstream agent queues. |
+| `--secrets PATH` | Path to secrets directory (default: `.secrets`). |
+| `--compose-file PATH` | Path to compose.yaml for infrastructure containers (default: `compose.yaml`). |
+| `--work-dir PATH` | Directory for working files (git clones, triage results). A temporary directory is created if not specified. |
+| `--mock-jira PATH` | Path to mock Jira data directory. Sets `MOCK_JIRA=true` and configures the mock data path for the gateway container. |
+
+`--dry-run` and `--force-cve-triage` override any existing `DRY_RUN` /
+`FORCE_CVE_TRIAGE` environment variables when set.
+
+`GOOGLE_APPLICATION_CREDENTIALS` is only needed for `vertexai:` models. For
+`anthropic:` or `gemini:` models, the API key from `beeai-agent.env` is
+sufficient.
+
+Issues processed through the CLI are tagged with the `ymir_cli_triage` Jira
+label at the start of the run. The label persists on success as a
+usage-tracking marker and is removed on failure so the service fetcher
+can re-process the issue. In `--dry-run` mode no labels are written.
+
+#### Testing with mock Jiras
+
+To test against mock Jira data from the
+[testing-jiras](https://gitlab.com/redhat/ymir/testing-jiras) repository, use
+the `--mock-jira` flag with the path to the mock data directory:
+
+```bash
+ymir triage RHEL-112546 --dry-run --mock-jira ../testing-jiras/jiras
+```
+
+This sets `MOCK_JIRA=true` and `JIRA_MOCK_FILES_HOST` automatically for the
+mcp-gateway container. To switch back to real Jira, simply omit the flag.
+
 **Monitoring:**
-- Phoenix tracing: http://localhost:6006/
-- Redis queue monitoring: http://localhost:8081/
+- Trace viewer: http://localhost:8082/
 
 ## How It Works
 

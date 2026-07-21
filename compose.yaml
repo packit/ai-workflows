@@ -87,7 +87,7 @@ x-supervisor: &supervisor
   restart: unless-stopped
 
 services:
-  mcp-gateway:
+  mcp-gateway: &mcp-gateway
     image: mcp-gateway
     build:
       context: .
@@ -108,10 +108,10 @@ services:
       - DRY_RUN=${DRY_RUN:-false}
       - MOCK_JIRA=${MOCK_JIRA:-false}
       - JIRA_DRY_RUN=${JIRA_DRY_RUN:-false}
-      - GIT_REPO_BASEPATH=/git-repos
+      - GIT_REPO_BASEPATH=${GIT_REPO_BASEPATH:-/git-repos}
       - JIRA_MOCK_FILES=ymir/tools/privileged/tests/data
       # e2e tests write insteadOf rewrites here; ignored when the file is absent
-      - GIT_CONFIG_GLOBAL=/git-repos/.mock_gitconfig
+      - GIT_CONFIG_GLOBAL=${GIT_REPO_BASEPATH:-/git-repos}/.mock_gitconfig
     env_file:
       - .secrets/mcp-gateway.env
     volumes:
@@ -119,11 +119,25 @@ services:
       - ${JIRA_MOCK_FILES_HOST:-./ymir/tools/privileged/tests/data}:/home/mcp/ymir/tools/privileged/tests/data:rw,z
       - ./ymir/common:/home/mcp/ymir/common:ro,z
       - .secrets/keytab:/home/mcp/keytab:ro,z,U
-      - git-repos:/git-repos
+      - ${GIT_REPOS_HOST:-git-repos}:${GIT_REPO_BASEPATH:-/git-repos}:z
       - .secrets/rhel-config.json:/home/mcp/rhel-config.json:ro,z,U
     command: ["python", "-m", "ymir.tools.privileged.gateway"]
     restart: unless-stopped
     profiles: ["agents", "supervisor", "e2e-test"]
+
+  mcp-gateway-cli:
+    <<: *mcp-gateway
+    # keep-id maps the host UID into the container so git clones written to
+    # the bind-mounted GIT_REPOS_HOST directory are owned by the calling user.
+    userns_mode: keep-id
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: "no"
+    profiles: ["cli"]
+    networks:
+      default:
+        aliases:
+          - mcp-gateway
 
   valkey:
     image: docker.io/valkey/valkey:8
@@ -179,7 +193,7 @@ services:
       - ./trace_server:/app:ro,z
       - trace-server-data:/data:U
     restart: unless-stopped
-    profiles: ["agents", "supervisor", "e2e-test"]
+    profiles: ["agents", "supervisor", "e2e-test", "cli"]
 
   otel-collector:
     image: docker.io/otel/opentelemetry-collector-contrib
@@ -212,6 +226,23 @@ services:
       <<: *beeai-env
     command: ["python", "-m", "ymir.agents.triage_agent"]
     profiles: ["agents"]
+
+  triage-cli:
+    <<: *beeai-agent-c10s
+    depends_on: []
+    userns_mode: keep-id
+    environment:
+      <<: *beeai-env
+      COLLECTOR_ENDPOINT: http://trace-server:8080/v1/traces
+      GOOGLE_APPLICATION_CREDENTIALS: /home/beeai/jotnar-vertex-dev.json
+    volumes:
+      - ./ymir:/home/beeai/ymir:ro,z
+      - ${GIT_REPOS_HOST:-git-repos}:${GIT_REPO_BASEPATH:-/git-repos}:rw,z
+      - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z
+      - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z
+    command: ["python", "-m", "ymir.agents.triage_agent"]
+    restart: "no"
+    profiles: ["cli"]
 
   preliminary-testing-agent:
     <<: *beeai-agent-c10s

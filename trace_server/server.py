@@ -56,7 +56,6 @@ TRACE_SERVER_PORT   Port to listen on (default: 8080).
 TRACE_LOG_LEVEL     Log level: DEBUG, INFO, WARNING, ERROR (default: INFO).
 """
 
-
 import base64
 import contextlib
 import gzip
@@ -790,8 +789,8 @@ class TraceHandler(BaseHTTPRequestHandler):
                     # Base64 can contain '/' which breaks the UI's #/trace/<issue>/<traceId>
                     # URL routing. Convert to hex to match the OTLP JSON format.
                     _normalize_protobuf_ids(data)
-                except Exception as e:
-                    logger.warning(f"POST /v1/traces rejected: invalid protobuf: {e}")
+                except Exception:
+                    logger.error("POST /v1/traces rejected: invalid protobuf", exc_info=True)
                     self._send_json(400, {"error": "invalid protobuf"})
                     return
             elif content_type == "application/json":

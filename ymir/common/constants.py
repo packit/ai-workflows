@@ -171,6 +171,9 @@ class JiraLabels(Enum):
     CONSOLIDATE_BASE = "ymir_consolidate_base"
     CONSOLIDATE_NEXT = "ymir_consolidate_next"
 
+    # Applied by the CLI when a developer triggers triage manually.
+    CLI_TRIAGE = "ymir_cli_triage"
+
     # Maintainer-facing trigger: when a Red Hat Employee adds this label to a CVE
     # issue, the fetcher enqueues it for an e2e run and swaps the label for
     # TRIAGE_IN_PROGRESS on enqueue.

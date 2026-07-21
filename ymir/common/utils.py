@@ -114,7 +114,7 @@ def _unpack_tool_result(result: Any) -> Any:
 def _is_connection_error(exc: Exception) -> bool:
     if isinstance(exc, ExceptionGroup):
         return any(_is_connection_error(e) for e in exc.exceptions)
-    return isinstance(exc, (httpx.ConnectError, ConnectionError, OSError))
+    return isinstance(exc, (httpx.ConnectError, httpx.ReadError, ConnectionError, OSError))
 
 
 @asynccontextmanager

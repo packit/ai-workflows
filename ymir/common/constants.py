@@ -164,6 +164,8 @@ class JiraLabels(Enum):
 
     RETRY_NEEDED = "ymir_retry_needed"
 
+    MR_CLOSED = "ymir_mr_closed"
+
     MR_CONSOLIDATED = "ymir_consolidated"
 
     CONSOLIDATE_BASE = "ymir_consolidate_base"

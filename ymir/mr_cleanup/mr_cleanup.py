@@ -2,11 +2,17 @@
 """
 MR Cleanup Script
 
-Scans open GitLab merge requests authored by Ymir bots and closes those
-whose referenced Jira issues have all been closed.
+Phase 1 — Stale MR cleanup:
+  Scans open GitLab merge requests authored by Ymir bots and closes those
+  whose referenced Jira issues have all been closed.  No Jira labels are
+  modified — metrics dashboards depend on those labels remaining in place.
 
-No Jira labels are modified — metrics dashboards depend on those labels
-remaining in place.
+Phase 2 — Closed-MR Jira reset:
+  Scans closed (not merged) bot MRs and resets the corresponding
+  Jira labels so the issues accurately reflect that no active MR exists.
+  Removes automation outcome labels (ymir_backported, ymir_triaged_backport,
+  etc.) and adds ymir_mr_closed for tracking.  Does NOT add ymir_retry_needed
+  — re-processing requires manual intervention (ymir_todo).
 """
 
 import base64
@@ -16,6 +22,7 @@ import os
 import re
 import sys
 import time
+import typing
 from urllib.parse import quote as urlquote
 
 import backoff
@@ -31,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 GITLAB_API_URL = "https://gitlab.com/api/v4"
 GITLAB_GROUPS = ["redhat/rhel/rpms", "redhat/centos-stream/rpms"]
-GITLAB_BOT_AUTHORS = ["jotnar-bot", "redhat-ymir-agent"]
+DEFAULT_BOT_AUTHORS = "jotnar-bot,redhat-ymir-agent"
 PER_PAGE = 100
 
 JIRA_CLOSED_STATUS = "Closed"
@@ -42,6 +49,9 @@ REQUEST_TIMEOUT = 90
 
 CLOSE_NOTE_MARKER = "Closing this merge request"
 
+JIRA_MR_CLOSED_LABEL = "ymir_mr_closed"
+JIRA_RESET_MR_LABEL = "ymir_jiras_cleaned_up"
+
 
 class Action(enum.Enum):
     CLOSED = "closed"
@@ -49,6 +59,9 @@ class Action(enum.Enum):
     SKIPPED_OPEN_JIRAS = "skipped_open_jiras"
     SKIPPED_ALREADY_CLEANED = "skipped_already_cleaned"
     ERRORED = "errored"
+
+    JIRA_RESET = "jira_reset"
+    SKIPPED_ALREADY_RESET = "skipped_already_reset"
 
 
 def _giveup_on_permanent(e):
@@ -74,6 +87,11 @@ class MRCleanup:
         self.jira_url = os.environ["JIRA_URL"].rstrip("/")
         self.dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
         self.target_mr = os.getenv("TARGET_MR", "")
+        self.close_stale_mrs = os.getenv("CLOSE_STALE_MRS", "true").lower() == "true"
+        self.reset_closed_mr_jiras = os.getenv("RESET_CLOSED_MR_JIRAS", "true").lower() == "true"
+        self.bot_authors = [
+            a.strip() for a in os.getenv("GITLAB_BOT_AUTHORS", DEFAULT_BOT_AUTHORS).split(",")
+        ]
 
         self.gitlab_session = requests.Session()
         self.gitlab_session.headers.update(
@@ -97,7 +115,7 @@ class MRCleanup:
         self.last_request_time = 0.0
 
         if self.dry_run:
-            logger.info("DRY_RUN=true — no MRs will be closed or commented on")
+            logger.info("DRY_RUN=true — no changes will be made")
 
     def _rate_limit(self):
         current_time = time.time()
@@ -138,10 +156,17 @@ class MRCleanup:
         resp.raise_for_status()
         return resp.json()
 
+    @_backoff_retry
+    def _jira_put(self, path: str, json: dict):
+        self._rate_limit()
+        url = f"{self.jira_url}/rest/api/3/{path}"
+        resp = self.jira_session.put(url, json=json, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+
     def fetch_open_mrs(self) -> list[dict]:
         all_mrs = []
         for group in GITLAB_GROUPS:
-            for author in GITLAB_BOT_AUTHORS:
+            for author in self.bot_authors:
                 logger.info("Fetching open MRs in %s by %s", group, author)
                 encoded_group = urlquote(group, safe="")
                 page = 1
@@ -223,7 +248,7 @@ class MRCleanup:
         return [
             note.get("body", "")
             for note in notes
-            if note.get("author") and note["author"].get("username", "") in GITLAB_BOT_AUTHORS
+            if note.get("author") and note["author"].get("username", "") in self.bot_authors
         ]
 
     def _mr_has_existing_close_note(self, bot_notes: list[str]) -> bool:
@@ -303,21 +328,174 @@ class MRCleanup:
         self._add_label(mr, "ymir_cleaned_up")
         return Action.CLOSED
 
+    def fetch_closed_mrs(self) -> list[dict]:
+        all_mrs = []
+        for group in GITLAB_GROUPS:
+            for author in self.bot_authors:
+                logger.info("Fetching closed MRs in %s by %s", group, author)
+                encoded_group = urlquote(group, safe="")
+                page = 1
+                while True:
+                    mrs = self._gitlab_get(
+                        f"groups/{encoded_group}/merge_requests",
+                        params={
+                            "state": "closed",
+                            "author_username": author,
+                            "per_page": PER_PAGE,
+                            "page": page,
+                            "include_subgroups": "true",
+                            "not[labels]": JIRA_RESET_MR_LABEL,
+                        },
+                    )
+                    if not mrs:
+                        break
+                    all_mrs.extend(mrs)
+                    page += 1
+
+        if self.target_mr:
+            all_mrs = [mr for mr in all_mrs if mr["web_url"] == self.target_mr]
+            if not all_mrs:
+                logger.warning("TARGET_MR %s not found among closed bot MRs", self.target_mr)
+
+        logger.info("Found %d closed MRs to check for Jira reset", len(all_mrs))
+        return all_mrs
+
+    def fetch_jira_labels(self, issue_keys: set[str]) -> dict[str, list[str]]:
+        if not issue_keys:
+            return {}
+
+        labels: dict[str, list[str]] = {}
+        keys_list = sorted(issue_keys)
+
+        for i in range(0, len(keys_list), JIRA_BATCH_SIZE):
+            batch = keys_list[i : i + JIRA_BATCH_SIZE]
+            jql = f"key in ({','.join(batch)})"
+            try:
+                data = self._jira_post(
+                    "search/jql",
+                    json={"jql": jql, "maxResults": len(batch), "fields": ["labels"]},
+                )
+                for issue in data.get("issues", []):
+                    key = issue["key"]
+                    labels[key] = issue["fields"].get("labels", [])
+            except Exception:
+                logger.exception("Failed to fetch Jira labels for batch starting at %d", i)
+
+        missing = issue_keys - labels.keys()
+        if missing:
+            logger.warning("Could not fetch labels for Jira issues: %s", ", ".join(sorted(missing)))
+
+        return labels
+
+    JIRA_LABELS_TO_PRESERVE: typing.ClassVar[set[str]] = {
+        JIRA_MR_CLOSED_LABEL,
+        "ymir_todo",
+        "ymir_retry_needed",
+    }
+
+    def _reset_jira_labels(self, issue_key: str, current_labels: list[str]):
+        ymir_labels_to_remove = [
+            label
+            for label in current_labels
+            if label.startswith("ymir_") and label not in self.JIRA_LABELS_TO_PRESERVE
+        ]
+        already_has_closed = JIRA_MR_CLOSED_LABEL in current_labels
+
+        if not ymir_labels_to_remove and already_has_closed:
+            return False
+
+        update_ops = [{"remove": label} for label in ymir_labels_to_remove]
+        if not already_has_closed:
+            update_ops.append({"add": JIRA_MR_CLOSED_LABEL})
+
+        if self.dry_run:
+            logger.info(
+                "DRY_RUN: would update Jira %s — remove %s, add %s",
+                issue_key,
+                ymir_labels_to_remove,
+                [] if already_has_closed else [JIRA_MR_CLOSED_LABEL],
+            )
+            return True
+
+        self._jira_put(f"issue/{issue_key}", json={"update": {"labels": update_ops}})
+        logger.info(
+            "Reset Jira %s — removed %s, added %s",
+            issue_key,
+            ymir_labels_to_remove,
+            [] if already_has_closed else [JIRA_MR_CLOSED_LABEL],
+        )
+        return True
+
+    def process_rejected_mr(
+        self,
+        mr: dict,
+        jira_keys: set[str],
+        jira_labels: dict[str, list[str]],
+        skip_jira_keys: set[str],
+    ) -> tuple[Action, set[str]]:
+        mr_url = mr["web_url"]
+        reset_keys: set[str] = set()
+
+        if not jira_keys:
+            logger.info("No Jira keys found in closed MR %s — marking as processed", mr_url)
+            self._add_label(mr, JIRA_RESET_MR_LABEL)
+            return Action.SKIPPED_NO_JIRA, reset_keys
+
+        for key in sorted(jira_keys):
+            if key in skip_jira_keys:
+                logger.info("Skipping %s — still referenced by an open MR or already reset", key)
+                continue
+            current_labels = jira_labels.get(key)
+            if current_labels is None:
+                logger.warning("Could not fetch labels for %s (MR %s) — skipping issue", key, mr_url)
+                continue
+            try:
+                if self._reset_jira_labels(key, current_labels):
+                    reset_keys.add(key)
+            except Exception:
+                logger.exception("Failed to reset labels for %s (MR %s)", key, mr_url)
+
+        self._add_label(mr, JIRA_RESET_MR_LABEL)
+
+        if reset_keys:
+            return Action.JIRA_RESET, reset_keys
+
+        return Action.SKIPPED_ALREADY_RESET, reset_keys
+
     def run(self):
         logger.info("Starting MR cleanup")
 
-        mrs = self.fetch_open_mrs()
-        if not mrs:
-            logger.info("No open MRs found — nothing to do")
-            return
+        active_jira_keys: set[str] = set()
+        if self.close_stale_mrs:
+            mrs = self.fetch_open_mrs()
+            if mrs:
+                active_jira_keys = self._run_stale_mr_cleanup(mrs)
+            else:
+                logger.info("No open MRs found — skipping phase 1")
+        else:
+            logger.info("CLOSE_STALE_MRS=false — skipping phase 1")
+            if self.reset_closed_mr_jiras:
+                active_jira_keys = self._collect_open_mr_jira_keys()
 
-        # Collect all Jira keys referenced across all MRs
-        logger.info("Extracting Jira keys from %d MRs", len(mrs))
+        if self.reset_closed_mr_jiras:
+            closed_mrs = self.fetch_closed_mrs()
+            if closed_mrs:
+                self._run_rejected_mr_cleanup(closed_mrs, active_jira_keys)
+            else:
+                logger.info("No closed MRs to process — skipping phase 2")
+        else:
+            logger.info("RESET_CLOSED_MR_JIRAS=false — skipping phase 2")
+
+    def _extract_all_jira_keys(
+        self, mrs: list[dict], label: str = ""
+    ) -> tuple[dict[int, set[str]], set[str]]:
+        prefix = f"{label} " if label else ""
+        logger.info("Extracting Jira keys from %d %sMRs", len(mrs), prefix)
         mr_jira_keys: dict[int, set[str]] = {}
         all_keys: set[str] = set()
         for i, mr in enumerate(mrs, 1):
             if i % 25 == 0 or i == len(mrs):
-                logger.info("  Processing MR %d/%d", i, len(mrs))
+                logger.info("  Processing %sMR %d/%d", prefix, i, len(mrs))
             try:
                 keys = self.extract_jira_keys_from_mr(mr)
             except Exception:
@@ -325,30 +503,65 @@ class MRCleanup:
                 continue
             mr_jira_keys[mr["id"]] = keys
             all_keys.update(keys)
+        logger.info("Found %d unique Jira keys across %sMRs", len(all_keys), prefix)
+        return mr_jira_keys, all_keys
 
-        logger.info("Found %d unique Jira keys across all MRs", len(all_keys))
+    def _collect_open_mr_jira_keys(self) -> set[str]:
+        mrs = self.fetch_open_mrs()
+        if not mrs:
+            return set()
+        _, all_keys = self._extract_all_jira_keys(mrs, label="open")
+        return all_keys
+
+    def _run_stale_mr_cleanup(self, mrs: list[dict]) -> set[str]:
+        """Returns the set of Jira keys still referenced by open (not-closed) MRs."""
+        mr_jira_keys, all_keys = self._extract_all_jira_keys(mrs)
 
         # Batch-query Jira statuses
         jira_statuses = self.fetch_jira_statuses(all_keys)
         logger.info("Fetched statuses for %d Jira issues", len(jira_statuses))
 
         # Process each MR
+        closed_keys: set[str] = set()
         results: dict[Action, list[str]] = {}
         for mr in mrs:
             try:
                 keys = mr_jira_keys.get(mr["id"])
                 action = Action.ERRORED if keys is None else self.process_mr(mr, keys, jira_statuses)
+                if action == Action.CLOSED and keys:
+                    closed_keys.update(keys)
             except Exception:
                 logger.exception("Failed to process MR %s", mr.get("web_url", mr.get("id")))
                 action = Action.ERRORED
             results.setdefault(action, []).append(mr["web_url"])
 
         summary = {action.value: len(urls) for action, urls in results.items()}
-        logger.info("MR cleanup complete: %s", summary)
-        if self.dry_run and (urls := results.get(Action.CLOSED)):
-            logger.info("DRY_RUN — would close %d MRs:", len(urls))
-            for url in urls:
-                logger.info("  %s", url)
+        logger.info("Stale MR cleanup complete: %s", summary)
+        return all_keys - closed_keys
+
+    def _run_rejected_mr_cleanup(self, closed_mrs: list[dict], active_jira_keys: set[str]):
+        mr_jira_keys, all_keys = self._extract_all_jira_keys(closed_mrs, label="closed")
+
+        jira_labels = self.fetch_jira_labels(all_keys)
+        logger.info("Fetched labels for %d Jira issues", len(jira_labels))
+
+        skip_jira_keys = set(active_jira_keys)
+        results: dict[Action, list[str]] = {}
+        for mr in closed_mrs:
+            try:
+                keys = mr_jira_keys.get(mr["id"])
+                if keys is None:
+                    action = Action.ERRORED
+                else:
+                    action, reset_keys = self.process_rejected_mr(mr, keys, jira_labels, skip_jira_keys)
+                    skip_jira_keys.update(reset_keys)
+            except Exception:
+                logger.exception("Failed to process closed MR %s", mr.get("web_url", mr.get("id")))
+                action = Action.ERRORED
+            results.setdefault(action, []).append(mr["web_url"])
+
+        summary = {action.value: len(urls) for action, urls in results.items()}
+        logger.info("Rejected MR cleanup complete: %s", summary)
 
 
 def main():

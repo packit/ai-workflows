@@ -12,16 +12,16 @@ TAC := $(shell command -v tac 2>/dev/null || echo "tail -r")
 # agents' BRPOP), oldest-first to match pop order.
 define show_queue
 @echo "=== $(1)_todo (ymir_todo, priority — popped first) ==="
-@oc exec deployment/valkey -- valkey-cli --raw LRANGE $(1)_todo 0 -1 | jq -r '.metadata.issue // empty' | $(TAC)
+@oc exec deployment/valkey -- valkey-cli --raw LRANGE $(1)_todo 0 -1 | jq -r '.metadata.jira_issue // .metadata.issue // empty' | $(TAC)
 @echo
 @echo "=== $(1) (normal) ==="
-@oc exec deployment/valkey -- valkey-cli --raw LRANGE $(1) 0 -1 | jq -r '.metadata.issue // empty' | $(TAC)
+@oc exec deployment/valkey -- valkey-cli --raw LRANGE $(1) 0 -1 | jq -r '.metadata.jira_issue // .metadata.issue // empty' | $(TAC)
 endef
 
 # Dump a single input queue (one with no priority twin), oldest-first.
 define show_single_queue
 @echo "=== $(1) ==="
-@oc exec deployment/valkey -- valkey-cli --raw LRANGE $(1) 0 -1 | jq -r '.metadata.issue // empty' | $(TAC)
+@oc exec deployment/valkey -- valkey-cli --raw LRANGE $(1) 0 -1 | jq -r '.metadata.jira_issue // .metadata.issue // empty' | $(TAC)
 endef
 
 deploy:

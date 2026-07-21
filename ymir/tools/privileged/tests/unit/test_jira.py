@@ -554,6 +554,31 @@ async def test_check_zstream_clones_all_closed():
 
 
 @pytest.mark.asyncio
+async def test_check_zstream_clones_closed_done():
+    """Clone closed with resolution 'Done' (not 'Done-Errata') counts as shipped."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Done"},
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    any_shipped, pending = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    assert any_shipped is True
+    assert pending == []
+
+
+@pytest.mark.asyncio
 async def test_check_zstream_clones_one_shipped_one_open():
     """At least one Z-stream clone shipped — proceed even if others are still open."""
     search_result = [

@@ -16,6 +16,7 @@ from ymir.tools.privileged.gitlab import (
     AddMergeRequestCommentTool,
     AddMergeRequestLabelsTool,
     CloneRepositoryTool,
+    FetchBranchTool,
     ForkRepositoryTool,
     GetAuthorizedCommentsFromMergeRequestTool,
     GetFailedPipelineJobsFromMergeRequestTool,
@@ -24,6 +25,7 @@ from ymir.tools.privileged.gitlab import (
     RetryPipelineJobTool,
     _get_git_auth_args,
 )
+from ymir.tools.privileged.utils import sanitize_url
 
 
 @pytest.mark.parametrize(
@@ -897,3 +899,180 @@ async def test_get_authorized_comments_invalid_url():
             input={"merge_request_url": "https://github.com/user/repo/pull/123"}
         )
     assert "Could not parse merge request URL" in str(exc_info.value)
+
+
+# --- sanitize_url tests ---
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (
+            "https://oauth2:glpat-abc123@gitlab.com/redhat/rpms/vim",  # pragma: allowlist secret
+            "https://oauth2:***@gitlab.com/redhat/rpms/vim",
+        ),
+        (
+            "clone failed: https://gitlab.com/redhat/rpms/vim",
+            "clone failed: https://gitlab.com/redhat/rpms/vim",
+        ),
+        ("no credentials here", "no credentials here"),
+        ("", ""),
+    ],
+)
+def test_sanitize_url(text, expected):
+    assert sanitize_url(text) == expected
+
+
+# --- clone / fetch / push failure logging tests ---
+
+
+def _make_failing_subprocess(stderr_text):
+    """Return an async mock that simulates a git command failure with stderr."""
+
+    async def create_subprocess_exec(cmd, *args, **kwargs):
+        async def communicate():
+            return (b"", stderr_text.encode())
+
+        return flexmock(communicate=communicate, returncode=128)
+
+    return create_subprocess_exec
+
+
+def _make_subprocess_sequence(results):
+    """Return an async mock that yields different results per call.
+
+    *results* is a list of (returncode, stderr) tuples, consumed in order.
+    """
+    call_iter = iter(results)
+
+    async def create_subprocess_exec(cmd, *args, **kwargs):
+        returncode, stderr_text = next(call_iter)
+
+        async def communicate():
+            return (b"", stderr_text.encode())
+
+        return flexmock(communicate=communicate, returncode=returncode)
+
+    return create_subprocess_exec
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_logs_stderr_on_failure(mock_git_repo_basepath, caplog):
+    """Clone failure surfaces git stderr in logs and ToolError."""
+    clone_path = mock_git_repo_basepath / "vim"
+    stderr_msg = "fatal: repository 'https://github.com/vim/vim' not found"
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(
+        _make_subprocess_sequence(
+            [
+                (0, ""),  # git init succeeds
+                (128, stderr_msg),  # git fetch fails
+            ]
+        )
+    )
+
+    with pytest.raises(ToolError, match="not found"):
+        await CloneRepositoryTool().run(
+            input={
+                "repository": "https://github.com/vim/vim",
+                "branch": "main",
+                "clone_path": clone_path,
+            }
+        )
+
+    assert "not found" in caplog.text
+    assert "git fetch failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_no_branch_logs_stderr_on_failure(mock_git_repo_basepath, caplog):
+    """Full clone (no branch) failure surfaces git stderr."""
+    clone_path = mock_git_repo_basepath / "vim"
+    stderr_msg = "fatal: unable to access: The requested URL returned error: 403"
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(
+        _make_failing_subprocess(stderr_msg)
+    )
+
+    with pytest.raises(ToolError, match="403"):
+        await CloneRepositoryTool().run(
+            input={
+                "repository": "https://github.com/vim/vim",
+                "clone_path": clone_path,
+            }
+        )
+
+    assert "403" in caplog.text
+    assert "git clone failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_sanitizes_stderr(mock_git_repo_basepath, caplog):
+    """Credentials in git stderr are sanitized before logging."""
+    clone_path = mock_git_repo_basepath / "vim"
+    token = "glpat-secret"  # pragma: allowlist secret
+    repo = f"https://oauth2:{token}@gitlab.com/redhat/rpms/vim"
+    stderr_msg = f"fatal: unable to access '{repo}/': 403"
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(
+        _make_failing_subprocess(stderr_msg)
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await CloneRepositoryTool().run(
+            input={
+                "repository": repo,
+                "clone_path": clone_path,
+            }
+        )
+
+    assert token not in caplog.text
+    assert "oauth2:***@" in caplog.text
+    assert token not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_fetch_branch_logs_stderr_on_failure(mock_git_repo_basepath, caplog):
+    """FetchBranchTool failure surfaces git stderr."""
+    clone_path = mock_git_repo_basepath / "vim"
+    clone_path.mkdir()
+    stderr_msg = "fatal: couldn't find remote ref main"
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(
+        _make_failing_subprocess(stderr_msg)
+    )
+
+    with pytest.raises(ToolError, match="remote ref"):
+        await FetchBranchTool().run(
+            input={
+                "repository": "https://github.com/vim/vim",
+                "branch": "main",
+                "clone_path": clone_path,
+            }
+        )
+
+    assert "remote ref" in caplog.text
+    assert "git fetch failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_push_logs_stderr_on_failure(caplog):
+    """PushToRemoteRepositoryTool failure surfaces git stderr."""
+    clone_path = Path("/git-repos/bash")
+    stderr_msg = "error: failed to push some refs to 'https://gitlab.com/ai-bot/bash.git'"
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(
+        _make_failing_subprocess(stderr_msg)
+    )
+
+    with pytest.raises(ToolError, match="failed to push"):
+        await PushToRemoteRepositoryTool().run(
+            input={
+                "repository": "https://gitlab.com/ai-bot/bash.git",
+                "clone_path": clone_path,
+                "branch": "my-branch",
+            }
+        )
+
+    assert "failed to push" in caplog.text
+    assert "git push failed" in caplog.text

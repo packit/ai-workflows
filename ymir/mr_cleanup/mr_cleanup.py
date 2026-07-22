@@ -430,6 +430,7 @@ class MRCleanup:
             self._add_label(mr, JIRA_RESET_MR_LABEL)
             return Action.SKIPPED_NO_JIRA, reset_keys
 
+        had_errors = False
         for key in sorted(jira_keys):
             if key in skip_jira_keys:
                 logger.info("Skipping %s — still referenced by an open MR or already reset", key)
@@ -437,14 +438,17 @@ class MRCleanup:
             current_labels = jira_labels.get(key)
             if current_labels is None:
                 logger.warning("Could not fetch labels for %s (MR %s) — skipping issue", key, mr_url)
+                had_errors = True
                 continue
             try:
                 if self._reset_jira_labels(key, current_labels):
                     reset_keys.add(key)
             except Exception:
                 logger.exception("Failed to reset labels for %s (MR %s)", key, mr_url)
+                had_errors = True
 
-        self._add_label(mr, JIRA_RESET_MR_LABEL)
+        if not had_errors:
+            self._add_label(mr, JIRA_RESET_MR_LABEL)
 
         if reset_keys:
             return Action.JIRA_RESET, reset_keys
@@ -511,22 +515,22 @@ class MRCleanup:
         logger.info("Fetched statuses for %d Jira issues", len(jira_statuses))
 
         # Process each MR
-        closed_keys: set[str] = set()
+        active_keys: set[str] = set()
         results: dict[Action, list[str]] = {}
         for mr in mrs:
+            keys = mr_jira_keys.get(mr["id"])
             try:
-                keys = mr_jira_keys.get(mr["id"])
                 action = Action.ERRORED if keys is None else self.process_mr(mr, keys, jira_statuses)
-                if action == Action.CLOSED and keys:
-                    closed_keys.update(keys)
             except Exception:
                 logger.exception("Failed to process MR %s", mr.get("web_url", mr.get("id")))
                 action = Action.ERRORED
+            if action != Action.CLOSED and keys:
+                active_keys.update(keys)
             results.setdefault(action, []).append(mr["web_url"])
 
         summary = {action.value: len(urls) for action, urls in results.items()}
         logger.info("Stale MR cleanup complete: %s", summary)
-        return all_keys - closed_keys
+        return active_keys
 
     def _run_rejected_mr_cleanup(self, closed_mrs: list[dict], active_jira_keys: set[str]):
         mr_jira_keys, all_keys = self._extract_all_jira_keys(closed_mrs, label="closed")

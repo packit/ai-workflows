@@ -108,11 +108,23 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
    Verify each patch filename matches the original name from the spec file.
    Do not rename patch files.
 
+   Criterion 6 — Changes match intent:
+   Review each hunk in the regenerated patch file(s). Every changed line must
+   be directly needed to fix the build error or to backport the upstream fix.
+   Changes that address pre-existing issues unrelated to your patch — such as
+   loosening or removing BuildRequires/Requires version constraints, fixing
+   unrelated compiler warnings, or reformatting code you did not touch — do
+   not pass. If the build failure is caused by something unrelated to the
+   patch (e.g. a dependency version not yet available in the buildroot),
+   report success=false and explain the issue instead of working around it.
+
    If ALL criteria pass, report success as normal.
 
    If ANY criterion fails, attempt to fix the problem before reporting failure:
-   - Criterion 1 or 3 (bad patch content or disabled tests): return to step 3
-     and re-fix the issue, then regenerate patches (step 4) and rebuild (step 5).
+   - Criterion 1, 3, or 6 (bad patch content, disabled tests, or unrelated
+     changes): return to step 3 and re-fix the issue, then regenerate patches
+     (step 4) and rebuild (step 5). For criterion 6, revert unrelated hunks
+     from {{ local_clone }}-upstream before regenerating.
    - Criterion 2 (spec modified): revert the spec with
      `git checkout HEAD -- *.spec` in {{ local_clone }}, verify the revert with
      `git diff HEAD -- *.spec`, then rebuild (step 5).

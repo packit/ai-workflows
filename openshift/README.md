@@ -62,16 +62,25 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   ```
   You can obtain the file from our bitwarden.
 
-- Verify the storage class works on the cluster before deploying. The default storage class shown by
-  `oc get storageclass` may be blocked by an admission webhook that isn't visible in its description.
-  Test with a throwaway PVC first:
+- Verify the storage classes work on the cluster before deploying. The deployment
+  uses **two** storage classes:
+
+  | Storage class | Used by | PVC |
+  |---|---|---|
+  | `netapp-nfs` | Phoenix runtime data, git-repos, valkey | `phoenix-data`, `git-repos`, `valkey-data` |
+  | `netapp-iscsi` | Phoenix PostgreSQL database | `phoenix-db-data` |
+
+  The default storage class shown by `oc get storageclass` may be blocked by an
+  admission webhook that isn't visible in its description. Test both with
+  throwaway PVCs first:
 
   ```bash
+  # Test NFS
   oc apply -f - <<EOF
   apiVersion: v1
   kind: PersistentVolumeClaim
   metadata:
-    name: test-pvc
+    name: test-nfs-pvc
   spec:
     storageClassName: netapp-nfs
     accessModes: [ReadWriteOnce]
@@ -79,10 +88,26 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
       requests:
         storage: 1Mi
   EOF
-  oc delete pvc test-pvc
+  oc delete pvc test-nfs-pvc
+
+  # Test iSCSI
+  oc apply -f - <<EOF
+  apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: test-iscsi-pvc
+  spec:
+    storageClassName: netapp-iscsi
+    accessModes: [ReadWriteOnce]
+    resources:
+      requests:
+        storage: 1Mi
+  EOF
+  oc delete pvc test-iscsi-pvc
   ```
 
-  If the webhook rejects it, try a different storage class.
+  If the webhook rejects either, try a different storage class (the cluster may
+  alias them, e.g. `rh-restricted-nfs` / `rh-restricted-iscsi`).
 
 - Run the deployment script:
 

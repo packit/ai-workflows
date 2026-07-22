@@ -5,8 +5,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ymir.agents.mr_consolidation_agent import (
+    _build_cve_to_jira_map,
     _extract_cves_from_text,
     _extract_jira_issues_from_description,
+    _fix_changelog_resolves,
     _mr_type_from_labels,
 )
 from ymir.agents.tasks import (
@@ -710,3 +712,270 @@ class TestMrSelectionPriority:
 
         assert _mr_type_from_labels(selected[0]) == "backport"
         assert _mr_type_from_labels(selected[1]) == "rebuild"
+
+
+# -- _build_cve_to_jira_map ---------------------------------------------------
+
+
+class TestBuildCveToJiraMap:
+    def test_maps_cve_from_title_to_jira_from_branch(self):
+        mrs = [
+            {
+                "title": "Fix CVE-2026-58014 in mingw-glib2",
+                "source_branch": "automated-package-update-RHEL-190609",
+            },
+            {
+                "title": "Fix CVE-2026-58016 in mingw-glib2",
+                "source_branch": "automated-package-update-RHEL-190617",
+            },
+        ]
+        result = _build_cve_to_jira_map(mrs)
+        assert result == {
+            "CVE-2026-58014": "RHEL-190609",
+            "CVE-2026-58016": "RHEL-190617",
+        }
+
+    def test_skips_mr_without_jira_in_branch(self):
+        mrs = [
+            {
+                "title": "Fix CVE-2026-58014",
+                "source_branch": "some-other-branch",
+            },
+        ]
+        assert _build_cve_to_jira_map(mrs) == {}
+
+    def test_skips_mr_without_cve_in_title(self):
+        mrs = [
+            {
+                "title": "Backport patch for mingw-glib2",
+                "source_branch": "automated-package-update-RHEL-190609",
+            },
+        ]
+        assert _build_cve_to_jira_map(mrs) == {}
+
+    def test_multiple_cves_in_title(self):
+        mrs = [
+            {
+                "title": "Fix CVE-2026-1111 and CVE-2026-2222",
+                "source_branch": "automated-package-update-RHEL-99999",
+            },
+        ]
+        result = _build_cve_to_jira_map(mrs)
+        assert result == {
+            "CVE-2026-1111": "RHEL-99999",
+            "CVE-2026-2222": "RHEL-99999",
+        }
+
+    def test_empty_list(self):
+        assert _build_cve_to_jira_map([]) == {}
+
+    def test_missing_fields_handled(self):
+        mrs = [
+            {},
+            {"title": "Fix CVE-2026-1111"},
+            {"source_branch": "automated-package-update-RHEL-100"},
+        ]
+        assert _build_cve_to_jira_map(mrs) == {}
+
+    def test_lowercase_branch_and_title(self):
+        mrs = [
+            {
+                "title": "Fix cve-2026-58014 in mingw-glib2",
+                "source_branch": "automated-package-update-rhel-190609",
+            },
+        ]
+        result = _build_cve_to_jira_map(mrs)
+        assert result == {"CVE-2026-58014": "RHEL-190609"}
+
+    def test_conflicting_cve_keeps_first(self):
+        """When two MRs map the same CVE to different Jira keys,
+        the first mapping wins and the conflict is logged."""
+        mrs = [
+            {
+                "title": "Fix CVE-2026-58014 in mingw-glib2",
+                "source_branch": "automated-package-update-RHEL-190609",
+            },
+            {
+                "title": "Fix CVE-2026-58014 in mingw-glib2",
+                "source_branch": "automated-package-update-RHEL-999999",
+            },
+        ]
+        result = _build_cve_to_jira_map(mrs)
+        assert result == {"CVE-2026-58014": "RHEL-190609"}
+
+
+# -- _fix_changelog_resolves --------------------------------------------------
+
+
+class TestFixChangelogResolves:
+    def _write_spec(self, tmp_path, changelog_lines):
+        spec = tmp_path / "test.spec"
+        content = "Name: test\nVersion: 1.0\nRelease: 1\n\n%changelog\n" + "\n".join(changelog_lines) + "\n"
+        spec.write_text(content)
+        return spec
+
+    def test_corrects_mismatched_resolves(self, tmp_path):
+        spec = self._write_spec(
+            tmp_path,
+            [
+                "* Mon Jul 21 2026 Ymir <ymir@redhat.com> - 1.0-3",
+                "- Fix CVE-2026-58014",
+                "- Resolves: RHEL-154707",
+                "",
+                "* Mon Jul 21 2026 Ymir <ymir@redhat.com> - 1.0-2",
+                "- Fix CVE-2026-58016",
+                "- Resolves: RHEL-154707",
+            ],
+        )
+        cve_to_jira = {
+            "CVE-2026-58014": "RHEL-190609",
+            "CVE-2026-58016": "RHEL-190617",
+        }
+        assert _fix_changelog_resolves(spec, cve_to_jira) is True
+
+        content = spec.read_text()
+        assert "Resolves: RHEL-190609" in content
+        assert "Resolves: RHEL-190617" in content
+        assert "RHEL-154707" not in content
+
+    def test_leaves_correct_resolves_unchanged(self, tmp_path):
+        spec = self._write_spec(
+            tmp_path,
+            [
+                "* Mon Jul 21 2026 Ymir <ymir@redhat.com> - 1.0-2",
+                "- Fix CVE-2026-58014",
+                "- Resolves: RHEL-190609",
+            ],
+        )
+        cve_to_jira = {"CVE-2026-58014": "RHEL-190609"}
+        assert _fix_changelog_resolves(spec, cve_to_jira) is False
+
+    def test_no_op_with_empty_map(self, tmp_path):
+        spec = self._write_spec(
+            tmp_path,
+            [
+                "* Mon Jul 21 2026 Ymir <ymir@redhat.com> - 1.0-2",
+                "- Fix CVE-2026-58014",
+                "- Resolves: RHEL-154707",
+            ],
+        )
+        assert _fix_changelog_resolves(spec, {}) is False
+
+    def test_no_op_when_cve_not_in_map(self, tmp_path):
+        spec = self._write_spec(
+            tmp_path,
+            [
+                "* Mon Jul 21 2026 Ymir <ymir@redhat.com> - 1.0-2",
+                "- Fix CVE-2026-99999",
+                "- Resolves: RHEL-154707",
+            ],
+        )
+        cve_to_jira = {"CVE-2026-58014": "RHEL-190609"}
+        assert _fix_changelog_resolves(spec, cve_to_jira) is False
+
+    def test_handles_entry_without_cve(self, tmp_path):
+        spec = self._write_spec(
+            tmp_path,
+            [
+                "* Mon Jul 21 2026 Ymir <ymir@redhat.com> - 1.0-2",
+                "- General bugfix",
+                "- Resolves: RHEL-154707",
+            ],
+        )
+        cve_to_jira = {"CVE-2026-58014": "RHEL-190609"}
+        assert _fix_changelog_resolves(spec, cve_to_jira) is False
+
+    def test_resets_cve_tracking_at_new_entry_header(self, tmp_path):
+        spec = self._write_spec(
+            tmp_path,
+            [
+                "* Mon Jul 21 2026 Ymir <ymir@redhat.com> - 1.0-3",
+                "- Fix CVE-2026-58014",
+                "- Resolves: RHEL-154707",
+                "",
+                "* Mon Jul 14 2026 Someone <someone@redhat.com> - 1.0-2",
+                "- Resolves: RHEL-154707",
+            ],
+        )
+        cve_to_jira = {"CVE-2026-58014": "RHEL-190609"}
+        result = _fix_changelog_resolves(spec, cve_to_jira)
+        assert result is True
+
+        content = spec.read_text()
+        lines = content.splitlines()
+        changelog_start = lines.index("%changelog")
+        assert "Resolves: RHEL-190609" in lines[changelog_start + 3]
+        assert "Resolves: RHEL-154707" in lines[changelog_start + 6]
+
+    def test_replaces_only_first_jira_key_on_resolves_line(self, tmp_path):
+        """A Resolves line with multiple Jira keys should only have
+        the first key (the one from the Resolves: field) replaced."""
+        spec = self._write_spec(
+            tmp_path,
+            [
+                "* Mon Jul 21 2026 Ymir <ymir@redhat.com> - 1.0-2",
+                "- Fix CVE-2026-58014",
+                "- Resolves: RHEL-154707, RHEL-999999",
+            ],
+        )
+        cve_to_jira = {"CVE-2026-58014": "RHEL-190609"}
+        assert _fix_changelog_resolves(spec, cve_to_jira) is True
+
+        content = spec.read_text()
+        assert "Resolves: RHEL-190609, RHEL-999999" in content
+
+    def test_multiple_cves_same_mapping_applies(self, tmp_path):
+        """When multiple CVEs in one entry all map to the same Jira key,
+        the rewrite should proceed."""
+        spec = self._write_spec(
+            tmp_path,
+            [
+                "* Mon Jul 21 2026 Ymir <ymir@redhat.com> - 1.0-2",
+                "- Fix CVE-2026-1111 and CVE-2026-2222",
+                "- Resolves: RHEL-154707",
+            ],
+        )
+        cve_to_jira = {
+            "CVE-2026-1111": "RHEL-190609",
+            "CVE-2026-2222": "RHEL-190609",
+        }
+        assert _fix_changelog_resolves(spec, cve_to_jira) is True
+
+        content = spec.read_text()
+        assert "Resolves: RHEL-190609" in content
+
+    def test_multiple_cves_disagreeing_mappings_skips(self, tmp_path):
+        """When multiple CVEs in one entry map to different Jira keys,
+        the Resolves line should NOT be rewritten (ambiguous)."""
+        spec = self._write_spec(
+            tmp_path,
+            [
+                "* Mon Jul 21 2026 Ymir <ymir@redhat.com> - 1.0-2",
+                "- Fix CVE-2026-1111 and CVE-2026-2222",
+                "- Resolves: RHEL-154707",
+            ],
+        )
+        cve_to_jira = {
+            "CVE-2026-1111": "RHEL-190609",
+            "CVE-2026-2222": "RHEL-190617",
+        }
+        assert _fix_changelog_resolves(spec, cve_to_jira) is False
+
+        content = spec.read_text()
+        assert "Resolves: RHEL-154707" in content
+
+    def test_corrects_indented_resolves_line(self, tmp_path):
+        spec = self._write_spec(
+            tmp_path,
+            [
+                "* Mon Jul 21 2026 Ymir <ymir@redhat.com> - 1.0-2",
+                "- Fix CVE-2026-58014",
+                "  - Resolves: RHEL-154707",
+            ],
+        )
+        cve_to_jira = {"CVE-2026-58014": "RHEL-190609"}
+        assert _fix_changelog_resolves(spec, cve_to_jira) is True
+
+        content = spec.read_text()
+        assert "Resolves: RHEL-190609" in content
+        assert "RHEL-154707" not in content

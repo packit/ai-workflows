@@ -41,6 +41,8 @@ GET /traces/<issue>
                 (e.g. TriageAgent,think,final_answer).
     last        Return only the N most recent traces (by earliest span
                 start time).
+    since       Only return spans with start_time >= this value
+                (nanosecond timestamp). Useful for incremental polling.
 
     Examples:
         curl https://trace-server.example.com/traces/RHEL-12345
@@ -64,9 +66,8 @@ import sqlite3
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
-
-from renderer import render_issues_html, render_spans_html
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,18 @@ PORT = int(os.environ.get("TRACE_SERVER_PORT", "8080"))
 LOG_LEVEL = os.environ.get("TRACE_LOG_LEVEL", "INFO").upper()
 MAX_PAYLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_LAST_TRACES = 900
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+_MIME_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+}
 _STATUS_CODE_NAMES = {"STATUS_CODE_UNSET": 0, "STATUS_CODE_OK": 1, "STATUS_CODE_ERROR": 2}
+_SQL_VAR_LIMIT = 500
 
 _local = threading.local()
 
@@ -98,7 +110,7 @@ def configure_logging() -> None:
 
 
 def init_db() -> None:
-    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     logger.debug("Initializing database at %s", DB_PATH)
     db = sqlite3.connect(DB_PATH)
     db.execute("""
@@ -348,6 +360,59 @@ def ingest_spans(otlp_data: dict) -> int:
             "INSERT OR IGNORE INTO span_issues (trace_id, span_id, jira_issue) VALUES (?, ?, ?)",
             issue_rows,
         )
+    # Propagate agent_type to spans missing it in affected traces
+    trace_ids = list({s.trace_id for s in spans})
+    agent_rows: list = []
+    null_rows: list = []
+    for i in range(0, len(trace_ids), _SQL_VAR_LIMIT):
+        chunk = trace_ids[i : i + _SQL_VAR_LIMIT]
+        ph = ",".join("?" * len(chunk))
+        agent_rows.extend(
+            db.execute(
+                f"SELECT trace_id, span_id, agent_type FROM spans "  # noqa: S608
+                f"WHERE trace_id IN ({ph}) AND agent_type IS NOT NULL",
+                chunk,
+            ).fetchall()
+        )
+        null_rows.extend(
+            db.execute(
+                f"SELECT trace_id, span_id, parent_span_id FROM spans "  # noqa: S608
+                f"WHERE trace_id IN ({ph}) AND agent_type IS NULL",
+                chunk,
+            ).fetchall()
+        )
+    if agent_rows and null_rows:
+        children: dict[tuple[str, str], list[dict]] = {}
+        for row in null_rows:
+            if row["parent_span_id"]:
+                children.setdefault((row["trace_id"], row["parent_span_id"]), []).append(row)
+        updates = []
+        for ar in agent_rows:
+            stack = list(children.get((ar["trace_id"], ar["span_id"]), []))
+            while stack:
+                child = stack.pop()
+                updates.append((ar["agent_type"], child["trace_id"], child["span_id"]))
+                stack.extend(children.get((child["trace_id"], child["span_id"]), []))
+        if updates:
+            db.executemany(
+                "UPDATE spans SET agent_type = ? WHERE trace_id = ? AND span_id = ?",
+                updates,
+            )
+
+    # Propagate jira_issues to previously-stored spans in the same traces
+    all_issues_by_trace: dict[str, set[str]] = {}
+    for s in spans:
+        if s.jira_issues:
+            all_issues_by_trace.setdefault(s.trace_id, set()).update(s.jira_issues)
+    if all_issues_by_trace:
+        for trace_id, new_issues in all_issues_by_trace.items():
+            for issue in new_issues:
+                db.execute(
+                    "INSERT OR IGNORE INTO span_issues (trace_id, span_id, jira_issue) "
+                    "SELECT trace_id, span_id, ? FROM spans WHERE trace_id = ?",
+                    (issue, trace_id),
+                )
+
     db.commit()
     all_issues = {issue for s in spans for issue in s.jira_issues}
     logger.debug(
@@ -366,6 +431,47 @@ def query_issues() -> list[str]:
 
 def query_spans(issue: str, params: dict) -> list[dict]:
     db = get_db()
+
+    # When issue is '_', query by trace_id directly (no issue association)
+    if issue == "_":
+        trace_id = params.get("trace_id")
+        if not trace_id:
+            return []
+        query_bindings: list = [trace_id]
+        subquery = "SELECT ? AS trace_id"
+
+        since_filter = ""
+        if since_ns := params.get("since"):
+            try:
+                since_filter = " AND start_time >= ?"
+                query_bindings.append(int(since_ns))
+            except (ValueError, TypeError):
+                pass
+
+        rows = db.execute(
+            f"""SELECT trace_id, span_id, parent_span_id, name, start_time,
+                       end_time, status_code, jira_issue, agent_type, attributes
+                FROM spans
+                WHERE trace_id IN ({subquery}){since_filter}
+                ORDER BY start_time""",  # noqa: S608
+            query_bindings,
+        ).fetchall()
+
+        return [
+            {
+                "trace_id": r["trace_id"],
+                "span_id": r["span_id"],
+                "parent_span_id": r["parent_span_id"],
+                "name": r["name"],
+                "start_time": r["start_time"],
+                "end_time": r["end_time"],
+                "status_code": r["status_code"],
+                "jira_issue": r["jira_issue"],
+                "agent_type": r["agent_type"],
+                "attributes": json.loads(r["attributes"]),
+            }
+            for r in rows
+        ]
 
     # Find trace IDs via the span_issues junction table, then apply filters on spans
     issue_conditions = ["si.jira_issue = ?"]
@@ -420,12 +526,20 @@ def query_spans(issue: str, params: dict) -> list[dict]:
             subquery = f"SELECT DISTINCT trace_id FROM span_issues si WHERE {join_where}"  # noqa: S608
         query_bindings = bindings
 
+    since_filter = ""
+    if since_ns := params.get("since"):
+        try:
+            since_filter = " AND start_time >= ?"
+            query_bindings.append(int(since_ns))
+        except (ValueError, TypeError):
+            pass
+
     # Fetch ALL spans from matching traces
     rows = db.execute(
         f"""SELECT trace_id, span_id, parent_span_id, name, start_time,
                    end_time, status_code, jira_issue, agent_type, attributes
             FROM spans
-            WHERE trace_id IN ({subquery})
+            WHERE trace_id IN ({subquery}){since_filter}
             ORDER BY start_time""",  # noqa: S608
         query_bindings,
     ).fetchall()
@@ -454,37 +568,63 @@ def query_spans(issue: str, params: dict) -> list[dict]:
 
 
 def query_recent_traces(since_ns: int, workflow: str | None, limit: int) -> list[dict]:
-    """Return recent root workflow spans, optionally filtered by workflow name."""
+    """Return recent traces, including in-progress ones whose root span hasn't arrived yet."""
     db = get_db()
-    conditions = ["parent_span_id = ''", "name LIKE '%Workflow'", "start_time >= ?"]
-    bindings: list = [since_ns]
+    effective_limit = min(limit, MAX_LAST_TRACES)
 
+    # Completed traces: root workflow span exists
+    root_conditions = ["parent_span_id = ''", "name LIKE '%Workflow'", "start_time >= ?"]
+    root_bindings: list = [since_ns]
     if workflow:
-        conditions.append("name = ?")
-        bindings.append(workflow)
+        root_conditions.append("name = ?")
+        root_bindings.append(workflow)
+    root_where = " AND ".join(root_conditions)
 
-    where = " AND ".join(conditions)
-    bindings.append(min(limit, MAX_LAST_TRACES))
-
-    rows = db.execute(
+    root_rows = db.execute(
         f"""SELECT s.trace_id, s.name, s.start_time, s.end_time, s.status_code
             FROM spans s
-            WHERE {where}
+            WHERE {root_where}
             ORDER BY s.start_time DESC
             LIMIT ?""",  # noqa: S608
-        bindings,
+        [*root_bindings, effective_limit],
     ).fetchall()
 
-    if not rows:
+    root_trace_ids = {r["trace_id"] for r in root_rows}
+
+    # In-progress traces: have spans linked to jira issues in the time window
+    # but no root Workflow span yet
+    inprog_filter = ""
+    inprog_bindings: list = [since_ns]
+    if workflow:
+        wf_base = workflow.removesuffix("Workflow").lower()
+        inprog_filter = " AND json_extract(s.attributes, '$.\"workflow.name\".stringValue') = ?"
+        inprog_bindings.append(wf_base)
+    inprog_rows = db.execute(
+        f"""SELECT s.trace_id, MIN(s.start_time) as first_start,
+                  MAX(json_extract(s.attributes, '$."workflow.name".stringValue')) as workflow_name
+            FROM spans s
+            JOIN span_issues si ON s.trace_id = si.trace_id AND s.span_id = si.span_id
+            WHERE s.start_time >= ?{inprog_filter}
+            GROUP BY s.trace_id
+            HAVING s.trace_id NOT IN (
+                SELECT trace_id FROM spans
+                WHERE parent_span_id = '' AND name LIKE '%Workflow'
+            )
+            ORDER BY first_start DESC
+            LIMIT ?""",  # noqa: S608
+        [*inprog_bindings, effective_limit],
+    ).fetchall()
+
+    all_trace_ids = list(root_trace_ids | {r["trace_id"] for r in inprog_rows})
+    if not all_trace_ids:
         return []
 
-    trace_ids = [r["trace_id"] for r in rows]
-    ph = ",".join("?" * len(trace_ids))
+    ph = ",".join("?" * len(all_trace_ids))
 
     issue_rows = db.execute(
         f"SELECT trace_id, jira_issue FROM span_issues WHERE trace_id IN ({ph}) "  # noqa: S608
         "GROUP BY trace_id, jira_issue",
-        trace_ids,
+        all_trace_ids,
     ).fetchall()
     issues_by_trace: dict[str, list[str]] = {}
     for ir in issue_rows:
@@ -494,12 +634,12 @@ def query_recent_traces(since_ns: int, workflow: str | None, limit: int) -> list
         f"SELECT trace_id, COUNT(*) as cnt, "  # noqa: S608
         "SUM(CASE WHEN status_code = 2 THEN 1 ELSE 0 END) as errors "
         f"FROM spans WHERE trace_id IN ({ph}) GROUP BY trace_id",
-        trace_ids,
+        all_trace_ids,
     ).fetchall()
     counts_by_trace = {cr["trace_id"]: cr for cr in count_rows}
 
     results = []
-    for r in rows:
+    for r in root_rows:
         tid = r["trace_id"]
         counts = counts_by_trace.get(tid)
         results.append(
@@ -515,7 +655,29 @@ def query_recent_traces(since_ns: int, workflow: str | None, limit: int) -> list
             }
         )
 
-    return results
+    for r in inprog_rows:
+        tid = r["trace_id"]
+        if tid in root_trace_ids:
+            continue
+        counts = counts_by_trace.get(tid)
+        wf_name = r["workflow_name"]
+        if wf_name:
+            wf_name = wf_name[0].upper() + wf_name[1:] + "Workflow"
+        results.append(
+            {
+                "trace_id": tid,
+                "workflow": wf_name or "(in progress)",
+                "issues": sorted(issues_by_trace.get(tid, [])),
+                "start_time": r["first_start"],
+                "end_time": None,
+                "status_code": 0,
+                "num_spans": counts["cnt"] if counts else 0,
+                "error_count": counts["errors"] if counts else 0,
+            }
+        )
+
+    results.sort(key=lambda x: x["start_time"] or 0, reverse=True)
+    return results[:effective_limit]
 
 
 class TraceHandler(BaseHTTPRequestHandler):
@@ -580,10 +742,6 @@ class TraceHandler(BaseHTTPRequestHandler):
             logger.debug("POST %s not found", self.path)
             self._send_json(404, {"error": "not found"})
 
-    def _wants_html(self) -> bool:
-        accept = self.headers.get("Accept", "")
-        return "text/html" in accept
-
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
@@ -591,7 +749,16 @@ class TraceHandler(BaseHTTPRequestHandler):
 
         logger.debug("GET %s params=%r", self.path, params)
 
-        if path == "/health":
+        if path == "" or path == "/index.html":
+            self._send_file(STATIC_DIR / "index.html")
+        elif path.startswith("/static/"):
+            rel = path[len("/static/") :]
+            filepath = (STATIC_DIR / rel).resolve()
+            if not filepath.is_relative_to(STATIC_DIR.resolve()):
+                self._send_json(404, {"error": "not found"})
+                return
+            self._send_file(filepath)
+        elif path == "/health":
             self._send_json(200, {"status": "ok"})
         elif path == "/traces/recent":
             try:
@@ -612,7 +779,7 @@ class TraceHandler(BaseHTTPRequestHandler):
                 return
             logger.debug("recent_traces returned %d traces", len(traces))
             self._send_json(200, {"traces": traces, "count": len(traces)})
-        elif path == "/traces" or path == "":
+        elif path == "/traces":
             try:
                 issues = query_issues()
             except Exception as e:
@@ -620,10 +787,7 @@ class TraceHandler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": f"failed to query issues: {e}"})
                 return
             logger.debug("Listed %d issues", len(issues))
-            if self._wants_html():
-                self._send_html(200, render_issues_html(issues))
-            else:
-                self._send_json(200, {"issues": issues})
+            self._send_json(200, {"issues": issues})
         elif path.startswith("/traces/"):
             issue = path[len("/traces/") :]
             try:
@@ -632,10 +796,7 @@ class TraceHandler(BaseHTTPRequestHandler):
                 logger.exception("Failed to query spans for %s", issue)
                 self._send_json(500, {"error": f"failed to query spans: {e}"})
                 return
-            if self._wants_html():
-                self._send_html(200, render_spans_html(issue, spans, params))
-            else:
-                self._send_json(200, {"spans": spans, "count": len(spans)})
+            self._send_json(200, {"spans": spans, "count": len(spans)})
         else:
             logger.debug("GET %s not found", self.path)
             self._send_json(404, {"error": "not found"})
@@ -648,10 +809,19 @@ class TraceHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_html(self, code: int, html: str):
-        body = html.encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+    def _send_file(self, filepath: Path):
+        if not filepath.is_file():
+            self._send_json(404, {"error": "not found"})
+            return
+        try:
+            body = filepath.read_bytes()
+        except OSError:
+            self._send_json(404, {"error": "not found"})
+            return
+        ext = filepath.suffix.lower()
+        content_type = _MIME_TYPES.get(ext, "application/octet-stream")
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

@@ -1,5 +1,6 @@
 import atexit
 import contextlib
+import threading
 
 import sentry_sdk
 from openinference.instrumentation.beeai import BeeAIInstrumentor
@@ -11,10 +12,14 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from ymir.common.logging_setup import current_jira_issue
+from ymir.common.logging_setup import current_jira_issue, current_workflow
 
 
 class AgentSpanProcessor(SpanProcessor):
+    def __init__(self) -> None:
+        self._agent_by_span: dict[int, str] = {}
+        self._lock = threading.Lock()
+
     def set_jira_issue(self, jira_issue: str | None) -> None:
         current_jira_issue.set(jira_issue)
 
@@ -39,20 +44,38 @@ class AgentSpanProcessor(SpanProcessor):
             transaction.set_data("workflow", workflow)
             transaction.set_data("jira_issue", jira_issue)
 
-            token = current_jira_issue.set(jira_issue)
+            issue_token = current_jira_issue.set(jira_issue)
+            workflow_token = current_workflow.set(workflow)
             try:
                 yield
             finally:
-                current_jira_issue.reset(token)
+                current_jira_issue.reset(issue_token)
+                current_workflow.reset(workflow_token)
 
     def on_start(self, span: Span, parent_context: Context | None = None) -> None:
         if span.is_recording():
             jira_issue = current_jira_issue.get()
             if jira_issue:
                 span.set_attribute("jira.issue", jira_issue)
+            workflow = current_workflow.get()
+            if workflow:
+                span.set_attribute("workflow.name", workflow)
+            agent = None
+            if span.name.endswith(("Agent", "Analyst")):
+                agent = span.name
+            if not agent and parent_context:
+                parent = trace_api.get_current_span(parent_context)
+                if parent and parent.context.span_id:
+                    with self._lock:
+                        agent = self._agent_by_span.get(parent.context.span_id)
+            if agent:
+                span.set_attribute("agent.name", agent)
+                with self._lock:
+                    self._agent_by_span[span.context.span_id] = agent
 
     def on_end(self, span: ReadableSpan) -> None:
-        pass
+        with self._lock:
+            self._agent_by_span.pop(getattr(span.context, "span_id", None), None)
 
     def shutdown(self) -> None:
         pass

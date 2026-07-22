@@ -1,0 +1,167 @@
+diff --git a/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/__init__.py b/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/__init__.py
+index d3f3adc6..5497ff77 100644
+--- a/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/__init__.py
++++ b/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/__init__.py
+@@ -1,18 +1,15 @@
+-import contextlib
+ import logging
+ from importlib.metadata import PackageNotFoundError, version
+-from typing import TYPE_CHECKING, Any, Callable, Collection, Generator
++from typing import TYPE_CHECKING, Any, Callable, Collection
+ 
++from opentelemetry import context as context_api
++from opentelemetry import trace as trace_api
++from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
+ from opentelemetry.trace import StatusCode
+ 
+-from openinference.instrumentation._spans import OpenInferenceSpan
+-
+ if TYPE_CHECKING:
+     from beeai_framework.emitter import EventMeta
+ 
+-from opentelemetry import trace as trace_api
+-from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
+-
+ from openinference.instrumentation import (
+     OITracer,
+     TraceConfig,
+@@ -32,13 +29,14 @@ except PackageNotFoundError:
+ 
+ 
+ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
+-    __slots__ = ("_tracer", "_cleanup", "_processes", "_processes_deps")
++    __slots__ = ("_tracer", "_cleanup", "_processes", "_otel_spans", "_otel_contexts")
+ 
+     def __init__(self, *args: Any, **kwargs: Any) -> None:
+         super().__init__(*args, **kwargs)
+         self._cleanup: Callable[[], None] = lambda: None
+         self._processes: dict[str, Processor] = {}
+-        self._processes_deps: dict[str, list[Processor]] = {}
++        self._otel_spans: dict[str, trace_api.Span] = {}
++        self._otel_contexts: dict[str, context_api.Context] = {}
+ 
+     def instrumentation_dependencies(self) -> Collection[str]:
+         return _instruments
+@@ -70,39 +68,76 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
+     def _uninstrument(self, **kwargs: Any) -> None:
+         self._cleanup()
+         self._processes.clear()
+-        self._processes_deps.clear()
++        self._otel_spans.clear()
++        self._otel_contexts.clear()
++
++    def _start_otel_span(self, processor: Processor, parent_run_id: str | None) -> None:
++        parent_ctx = None
++        if parent_run_id and parent_run_id in self._otel_contexts:
++            parent_ctx = self._otel_contexts[parent_run_id]
++
++        span = self._tracer.start_span(
++            name=processor.span.name,
++            openinference_span_kind=processor.span.kind,
++            attributes=dict(processor.span.attributes),
++            start_time=_datetime_to_span_time(processor.span.started_at) if processor.span.started_at else None,
++            context=parent_ctx,
++        )
++
++        ctx = trace_api.set_span_in_context(span, parent_ctx or context_api.get_current())
++        self._otel_spans[processor.run_id] = span
++        self._otel_contexts[processor.run_id] = ctx
++
++    def _end_otel_span(self, processor: Processor) -> None:
++        span = self._otel_spans.pop(processor.run_id, None)
++        if span is None:
++            self._otel_contexts.pop(processor.run_id, None)
++            return
+ 
+-    def _build_tree(self, processor: Processor) -> None:
+-        with self._build_tree_for_span(processor.span):
+-            for child in self._processes_deps.pop(processor.run_id):
+-                self._build_tree(child)
+-        self._processes.pop(processor.run_id)
++        node = processor.span
++        for key, value in node.attributes.items():
++            span.set_attribute(key, value)
+ 
+-    @contextlib.contextmanager
+-    def _build_tree_for_span(self, node: SpanWrapper) -> Generator[OpenInferenceSpan, None, None]:
+-        with self._tracer.start_as_current_span(
++        for event in node.events:
++            span.add_event(
++                name=event.name, attributes=event.attributes, timestamp=event.timestamp
++            )
++
++        parent_ctx = self._otel_contexts.get(processor.run_id)
++        for child in node.children:
++            self._build_inline_child(child, parent_ctx)
++
++        self._otel_contexts.pop(processor.run_id, None)
++
++        span.set_status(node.status)
++        if node.error is not None and node.status == StatusCode.ERROR:
++            span.record_exception(node.error)
++
++        span.end(_datetime_to_span_time(node.ended_at) if node.ended_at else None)
++
++    def _build_inline_child(self, node: SpanWrapper, parent_ctx: context_api.Context | None) -> None:
++        child_span = self._tracer.start_span(
+             name=node.name,
+             openinference_span_kind=node.kind,
+             attributes=node.attributes,
+             start_time=_datetime_to_span_time(node.started_at) if node.started_at else None,
+-            end_on_exit=False,  # we do it manually
+-        ) as current_span:
+-            yield current_span
++            context=parent_ctx,
++        )
+ 
+-            for event in node.events:
+-                current_span.add_event(
+-                    name=event.name, attributes=event.attributes, timestamp=event.timestamp
+-                )
++        for event in node.events:
++            child_span.add_event(
++                name=event.name, attributes=event.attributes, timestamp=event.timestamp
++            )
+ 
+-            for children in node.children:
+-                with self._build_tree_for_span(children):
+-                    pass
++        child_ctx = trace_api.set_span_in_context(child_span, parent_ctx or context_api.get_current())
++        for descendant in node.children:
++            self._build_inline_child(descendant, child_ctx)
+ 
+-            current_span.set_status(node.status)
+-            if node.error is not None and node.status == StatusCode.ERROR:
+-                current_span.record_exception(node.error)
++        child_span.set_status(node.status)
++        if node.error is not None and node.status == StatusCode.ERROR:
++            child_span.record_exception(node.error)
+ 
+-            current_span.end(_datetime_to_span_time(node.ended_at) if node.ended_at else None)
++        child_span.end(_datetime_to_span_time(node.ended_at) if node.ended_at else None)
+ 
+     @exception_handler
+     async def _handler(self, data: Any, event: "EventMeta") -> None:
+@@ -118,10 +153,8 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
+             if event.trace.parent_run_id and not parent:
+                 raise ValueError(f"Parent run with ID {event.trace.parent_run_id} was not found!")
+ 
+-            self._processes_deps[event.trace.run_id] = []
+             node = self._processes[event.trace.run_id] = ProcessorLocator.locate(data, event)
+-            if parent is not None:
+-                self._processes_deps[parent.run_id].append(node)
++            self._start_otel_span(node, event.trace.parent_run_id)
+         else:
+             node = self._processes[event.trace.run_id]
+ 
+@@ -129,8 +162,8 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
+ 
+         if isinstance(data, RunContextFinishEvent):
+             await node.end(data, event)
+-            if event.trace.parent_run_id is None:
+-                self._build_tree(node)
++            self._end_otel_span(node)
++            self._processes.pop(event.trace.run_id, None)
+         else:
+             if event.context.get("internal"):
+                 return

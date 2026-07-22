@@ -86,7 +86,6 @@ class MRCleanup:
         self.gitlab_token = os.environ["GITLAB_TOKEN"]
         self.jira_url = os.environ["JIRA_URL"].rstrip("/")
         self.dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
-        self.target_mr = os.getenv("TARGET_MR", "")
         self.close_stale_mrs = os.getenv("CLOSE_STALE_MRS", "true").lower() == "true"
         self.reset_closed_mr_jiras = os.getenv("RESET_CLOSED_MR_JIRAS", "true").lower() == "true"
         self.bot_authors = [
@@ -185,11 +184,6 @@ class MRCleanup:
                         break
                     all_mrs.extend(mrs)
                     page += 1
-
-        if self.target_mr:
-            all_mrs = [mr for mr in all_mrs if mr["web_url"] == self.target_mr]
-            if not all_mrs:
-                logger.warning("TARGET_MR %s not found among open bot MRs", self.target_mr)
 
         logger.info("Found %d open MRs total", len(all_mrs))
         return all_mrs
@@ -351,11 +345,6 @@ class MRCleanup:
                         break
                     all_mrs.extend(mrs)
                     page += 1
-
-        if self.target_mr:
-            all_mrs = [mr for mr in all_mrs if mr["web_url"] == self.target_mr]
-            if not all_mrs:
-                logger.warning("TARGET_MR %s not found among closed bot MRs", self.target_mr)
 
         logger.info("Found %d closed MRs to check for Jira reset", len(all_mrs))
         return all_mrs

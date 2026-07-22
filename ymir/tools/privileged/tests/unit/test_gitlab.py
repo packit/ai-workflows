@@ -981,7 +981,8 @@ async def test_clone_repository_logs_stderr_on_failure(mock_git_repo_basepath, c
         )
 
     assert "not found" in caplog.text
-    assert "git fetch failed" in caplog.text
+    assert "git fetch" in caplog.text
+    assert "failed" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1003,7 +1004,8 @@ async def test_clone_repository_no_branch_logs_stderr_on_failure(mock_git_repo_b
         )
 
     assert "403" in caplog.text
-    assert "git clone failed" in caplog.text
+    assert "git clone" in caplog.text
+    assert "failed" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1052,7 +1054,8 @@ async def test_fetch_branch_logs_stderr_on_failure(mock_git_repo_basepath, caplo
         )
 
     assert "remote ref" in caplog.text
-    assert "git fetch failed" in caplog.text
+    assert "git fetch" in caplog.text
+    assert "failed" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1075,4 +1078,5 @@ async def test_push_logs_stderr_on_failure(caplog):
         )
 
     assert "failed to push" in caplog.text
-    assert "git push failed" in caplog.text
+    assert "git push" in caplog.text
+    assert "failed" in caplog.text

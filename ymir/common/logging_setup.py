@@ -10,6 +10,7 @@ LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s:%(jira_issue)s %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 current_jira_issue: ContextVar[str | None] = ContextVar("current_jira_issue", default=None)
+current_workflow: ContextVar[str | None] = ContextVar("current_workflow", default=None)
 
 _buffered_handler: "BufferedTaskHandler | None" = None
 

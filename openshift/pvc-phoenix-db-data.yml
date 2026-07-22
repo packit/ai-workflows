@@ -13,5 +13,5 @@ spec:
   resources:
     requests:
       storage: 20Gi
-  storageClassName: rh-internal-iscsi
+  storageClassName: netapp-iscsi
   volumeMode: Filesystem

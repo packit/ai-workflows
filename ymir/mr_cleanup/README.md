@@ -32,9 +32,6 @@ make run-mr-cleanup-dry-run
 # Live run
 make run-mr-cleanup
 
-# Target a single MR (dry run)
-TARGET_MR=https://gitlab.com/redhat/rhel/rpms/foo/-/merge_requests/1 make run-mr-cleanup-dry-run
-
 # Phase 2 only with a different bot account (e.g. sustaining engineering)
 CLOSE_STALE_MRS=false GITLAB_BOT_AUTHORS=rhel-se-jotnar-admin make run-mr-cleanup-dry-run
 ```
@@ -48,7 +45,6 @@ CLOSE_STALE_MRS=false GITLAB_BOT_AUTHORS=rhel-se-jotnar-admin make run-mr-cleanu
 | `JIRA_EMAIL` | (required) | Jira account email |
 | `JIRA_TOKEN` | (required) | Jira API token |
 | `DRY_RUN` | `false` | Log what would change without making changes |
-| `TARGET_MR` | | Process only this MR URL |
 | `CLOSE_STALE_MRS` | `true` | Enable phase 1 |
 | `RESET_CLOSED_MR_JIRAS` | `true` | Enable phase 2 |
 | `GITLAB_BOT_AUTHORS` | `jotnar-bot,redhat-ymir-agent` | Comma-separated bot usernames to scan |

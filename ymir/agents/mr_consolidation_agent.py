@@ -141,6 +141,7 @@ class ConsolidationState(PackageUpdateState):
     current_mrs_count: int = Field(default=0)
     mr_types: dict[str, str] = Field(default_factory=dict)
     cves_collected: list[str] = Field(default_factory=list)
+    cve_to_jira_map: dict[str, str] = Field(default_factory=dict)
 
 
 def _extract_jira_issues_from_description(description: str) -> list[str]:
@@ -178,6 +179,104 @@ def _extract_jira_issues_from_description(description: str) -> list[str]:
 def _extract_cves_from_text(text: str) -> list[str]:
     """Extract CVE IDs (e.g. CVE-2024-12345) from arbitrary text."""
     return sorted(set(re.findall(r"CVE-\d{4}-\d+", text)))
+
+
+def _build_cve_to_jira_map(mrs: list[dict]) -> dict[str, str]:
+    """Map CVE IDs to individual Jira keys from MR titles and branch names.
+
+    When multiple backport MRs exist for the same package, each MR's title
+    contains the CVE ID and its branch name contains the Jira key.  This
+    mapping lets us correct changelog Resolves lines after cherry-picking
+    base-branch commits that carry the wrong (multi-CVE tracker) key.
+    """
+    cve_to_jira: dict[str, str] = {}
+    for mr in mrs:
+        branch = mr.get("source_branch", "")
+        jira_match = re.search(r"(RHEL-\d+)", branch, re.IGNORECASE)
+        if not jira_match:
+            continue
+        jira_key = jira_match.group(1).upper()
+        title = mr.get("title", "")
+        for cve_id in re.findall(r"CVE-\d{4}-\d+", title, re.IGNORECASE):
+            cve_id = cve_id.upper()
+            existing = cve_to_jira.get(cve_id)
+            if existing and existing != jira_key:
+                logger.warning(
+                    "CVE %s maps to both %s and %s; keeping first",
+                    cve_id,
+                    existing,
+                    jira_key,
+                )
+                continue
+            cve_to_jira[cve_id] = jira_key
+    return cve_to_jira
+
+
+def _fix_changelog_resolves(spec_path, cve_to_jira: dict[str, str]) -> bool:
+    """Correct Resolves lines in %changelog using the CVE-to-Jira mapping.
+
+    Walks changelog entries looking for CVE IDs in descriptions and
+    mismatched Resolves lines.  Returns True if the file was modified.
+
+    Tracks all CVEs seen in the current entry (between ``*`` headers).
+    When a ``- Resolves:`` line is hit:
+    - If exactly one mapped CVE is present, replace only the first Jira
+      key on the Resolves line (preserving any trailing keys/text).
+    - If multiple CVEs map to different Jira keys, skip the line to
+      avoid an ambiguous rewrite.
+    """
+    if not cve_to_jira:
+        return False
+
+    content = spec_path.read_text()
+    lines = content.splitlines(keepends=True)
+
+    in_changelog = False
+    modified = False
+    cves_in_current_entry: list[str] = []
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == "%changelog":
+            in_changelog = True
+            continue
+        if not in_changelog:
+            continue
+
+        if stripped.startswith("*"):
+            cves_in_current_entry = []
+            continue
+
+        cves_found = re.findall(r"CVE-\d{4}-\d+", stripped)
+        if cves_found:
+            cves_in_current_entry.extend(c for c in cves_found if c not in cves_in_current_entry)
+
+        resolves_match = re.match(r"^(\s*-\s*Resolves:\s*)(RHEL-\d+)", line)
+        if cves_in_current_entry and resolves_match:
+            mapped_keys = {cve_to_jira[c] for c in cves_in_current_entry if c in cve_to_jira}
+            if len(mapped_keys) == 1:
+                correct_jira = mapped_keys.pop()
+                current_jira = resolves_match.group(2)
+                if current_jira != correct_jira:
+                    new_line = re.sub(
+                        r"^(\s*-\s*Resolves:\s*)(RHEL-\d+)",
+                        rf"\g<1>{correct_jira}",
+                        line,
+                    )
+                    if new_line != line:
+                        lines[i] = new_line
+                        modified = True
+            elif len(mapped_keys) > 1:
+                logger.warning(
+                    "Skipping ambiguous Resolves rewrite: CVEs %s map to different keys %s",
+                    cves_in_current_entry,
+                    mapped_keys,
+                )
+            cves_in_current_entry = []
+
+    if modified:
+        spec_path.write_text("".join(lines))
+    return modified
 
 
 _CONSOLIDATION_MR_LABELS = ["ymir_backport", "ymir_rebuild"]
@@ -288,6 +387,7 @@ async def _resolve_source_issues(
     state.jira_issues_collected = sorted(set(all_jira))
     state.cves_collected = sorted(set(all_cves))
     state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
+    state.cve_to_jira_map = _build_cve_to_jira_map(matched_mrs)
 
     logger.info(
         "Label-triggered consolidation: resolved %s to MRs %s",
@@ -559,6 +659,7 @@ async def run_workflow(
                 state.jira_issues_collected = sorted(set(all_jira))
                 state.cves_collected = sorted(set(all_cves))
                 state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
+                state.cve_to_jira_map = _build_cve_to_jira_map(current_mrs)
                 if state.jira_issues_collected:
                     current_jira_issue.set(",".join(state.jira_issues_collected))
 
@@ -808,6 +909,20 @@ async def run_workflow(
                     _NFS_CACHE_WAIT,
                 )
                 await asyncio.sleep(_NFS_CACHE_WAIT)
+
+                if base_commits and state.cve_to_jira_map:
+                    spec_path = state.local_clone / spec_name
+                    if _fix_changelog_resolves(spec_path, state.cve_to_jira_map):
+                        logger.info("Fixed changelog Resolves lines using CVE-to-Jira mapping")
+                        await tasks.stage_changes(
+                            local_clone=state.local_clone,
+                            files_to_commit=[spec_name],
+                        )
+                        await check_subprocess(
+                            ["git", "commit", "--amend", "--no-edit"],
+                            cwd=state.local_clone,
+                            env=git_env,
+                        )
 
                 # --- Step 2: process each commit from other branches ---
                 for other_branch in other_branches:
@@ -1258,7 +1373,9 @@ async def run_workflow(
             log_prompt = render_template(
                 get_log_prompt(),
                 LogInputSchema(
-                    jira_issue=state.jira_issue,
+                    jira_issue=(
+                        ", ".join(state.jira_issues_collected) if state.jira_issues_collected else None
+                    ),
                     changes_summary=changes_summary,
                 ),
             )

@@ -131,12 +131,18 @@ async def _fetch_mr_commits(mr_url: str) -> list[str]:
     try:
         async with (
             aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
-            aiohttp_get_with_retries(session, api_url, headers=headers) as response,
+            aiohttp_get_with_retries(
+                # 100 is the GitLab API maximum per_page, should be enough.
+                session,
+                api_url,
+                headers=headers,
+                params={"per_page": "100"},
+            ) as response,
         ):
             response.raise_for_status()
             commits = await response.json()
     except Exception as e:
-        logger.debug(f"Failed to fetch commits for MR {mr_url}: {e}")
+        logger.warning(f"Failed to fetch commits for MR {mr_url}: {e}")
         return []
 
     urls = []

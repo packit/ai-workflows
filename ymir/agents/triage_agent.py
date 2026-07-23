@@ -143,7 +143,7 @@ def _parse_module_summary(summary: str) -> tuple[str, str] | None:
     return module, stream
 
 
-async def _map_version_to_module_branch(
+def _map_version_to_module_branch(
     version: str, summary: str, cve_needs_internal_fix: bool, package: str | None = None
 ) -> str | None:
     """Map version string to a modular target branch.
@@ -188,7 +188,7 @@ async def determine_target_branch(
     jira_summary = triage_data.summary if hasattr(triage_data, "summary") else None
 
     if _is_modular(jira_summary):
-        branch = await _map_version_to_module_branch(
+        branch = _map_version_to_module_branch(
             triage_data.fix_version, jira_summary, cve_needs_internal_fix, package
         )
         jira_issue = getattr(triage_data, "jira_issue", "unknown")

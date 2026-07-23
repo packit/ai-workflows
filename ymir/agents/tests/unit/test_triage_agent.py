@@ -183,7 +183,12 @@ async def test_process_task_proceeds_for_open_issues():
         ("ruby:3.1-beta/ruby:Ruby: CVE fix", True),
         ("python3.11:3.11/python3.11:Python: CVE fix", True),
         ("gcc-c++:10/gcc-c++:GCC: CVE fix", True),
+        (
+            "CVE-2026-32748 squid:4/squid: Squid: Denial of Service via crafted ICP traffic [rhel-8.10.z]",
+            True,
+        ),
         ("postgresql:PostgreSQL: Arbitrary code execution", False),
+        ("CVE-2025-9900 libtiff: Libtiff Write-What-Where [rhel-9.2.0.z]", False),
         ("some plain summary without colons", False),
         ("", False),
         (None, False),
@@ -205,6 +210,11 @@ def test_is_modular(summary, expected):
         ("ruby:3.1-beta/ruby:Ruby: CVE", "ruby", "3.1-beta"),
         ("python3.11:3.11/python3.11:Python: CVE", "python3.11", "3.11"),
         ("gcc-c++:10/gcc-c++:GCC: CVE", "gcc-c++", "10"),
+        (
+            "CVE-2026-32748 squid:4/squid: Squid: Denial of Service [rhel-8.10.z]",
+            "squid",
+            "4",
+        ),
     ],
 )
 def test_parse_module_summary(summary, expected_module, expected_stream):
@@ -222,7 +232,6 @@ def test_parse_module_summary_non_modular():
 # --- Modular branch mapping tests ---
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "version, summary, expected_branch",
     [
@@ -246,16 +255,20 @@ def test_parse_module_summary_non_modular():
             "postgresql:12/postgresql:PostgreSQL: vuln",
             "stream-postgresql-12-rhel-9.8.0",
         ),
+        (
+            "rhel-8.10.z",
+            "CVE-2026-32748 squid:4/squid: Squid: Denial of Service [rhel-8.10.z]",
+            "stream-squid-4-rhel-8.10.0",
+        ),
     ],
 )
-async def test_map_version_to_module_branch(version, summary, expected_branch):
-    branch = await _map_version_to_module_branch(version, summary, cve_needs_internal_fix=False)
+def test_map_version_to_module_branch(version, summary, expected_branch):
+    branch = _map_version_to_module_branch(version, summary, cve_needs_internal_fix=False)
     assert branch == expected_branch
 
 
-@pytest.mark.asyncio
-async def test_map_version_to_module_branch_invalid_version():
-    branch = await _map_version_to_module_branch(
+def test_map_version_to_module_branch_invalid_version():
+    branch = _map_version_to_module_branch(
         "not-a-version", "postgresql:12/postgresql:vuln", cve_needs_internal_fix=False
     )
     assert branch is None

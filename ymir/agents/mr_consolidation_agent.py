@@ -6,6 +6,7 @@ import re
 import time
 import traceback
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from beeai_framework.errors import FrameworkError
@@ -143,36 +144,28 @@ class ConsolidationState(PackageUpdateState):
     cves_collected: list[str] = Field(default_factory=list)
 
 
-def _extract_jira_issues_from_description(description: str) -> list[str]:
-    """Extract RHEL-NNNNN Jira issue keys from structured lines in MR descriptions.
+def _files_to_stage_for_patches(
+    local_clone: Path,
+    package: str,
+    original_patches: list[str] | None = None,
+) -> list[str]:
+    """Return paths to stage after patch adaptation.
 
-    Only extracts from:
-    - ``Resolves: RHEL-NNNNN, ...`` lines (backport agent format)
-    - Bullet items under ``### Resolved Jira Issues`` (consolidated MR format)
-
-    Ignores RHEL-NNNNN references in triage detail prose, ``<details>``
-    blocks, and other free-text context to prevent spurious issue collection.
+    Uses the current spec's Patch tags (post-LLM renames) and also includes
+    ``original_patches`` so renames/deletes of pre-adaptation filenames are
+    staged. Raises if the spec references a patch file that is missing on disk.
     """
-    issues: list[str] = []
-
-    for line in description.splitlines():
-        stripped = line.strip()
-        if stripped.startswith(("Resolves:", "Related:")):
-            issues.extend(re.findall(r"RHEL-\d+", stripped))
-
-    in_resolved_section = False
-    for line in description.splitlines():
-        stripped = line.strip()
-        if re.match(r"^#{1,4}\s+Resolved Jira Issues", stripped):
-            in_resolved_section = True
-            continue
-        if in_resolved_section:
-            if stripped.startswith("#") or (stripped and not stripped.startswith("-")):
-                in_resolved_section = False
-                continue
-            issues.extend(re.findall(r"RHEL-\d+", stripped))
-
-    return list(set(issues))
+    spec_name = f"{package}.spec"
+    with Specfile(local_clone / spec_name) as spec:
+        patch_files = [p.expanded_location for p in get_all_patches(spec) if p.expanded_location]
+    missing = [p for p in patch_files if not (local_clone / p).is_file()]
+    if missing:
+        raise RuntimeError(f"Spec references patch file(s) that do not exist: {missing}")
+    files = [spec_name, *patch_files]
+    for old in original_patches or []:
+        if old not in files:
+            files.append(old)
+    return files
 
 
 def _extract_cves_from_cve_footer_lines(text: str) -> list[str]:
@@ -212,23 +205,50 @@ async def _collect_footers_from_branches(
     """Collect CVE and Jira footers from all commits on the given branches.
 
     Returns ``(cves, jira_issues)`` sorted and deduplicated.
+
+    Raises:
+        RuntimeError: If ``git rev-list`` or ``git log`` fails for any branch.
     """
     all_cves: list[str] = []
     all_jira: list[str] = []
     for branch in branches:
-        _, commits_raw, _ = await run_subprocess(
+        exit_code, commits_raw, stderr = await run_subprocess(
             ["git", "rev-list", "--reverse", f"{target}..{branch}"],
             cwd=clone,
             env=env,
         )
+        if exit_code != 0:
+            err_msg = (stderr or "").strip()
+            logger.error(
+                "git rev-list failed for %s..%s (exit %d): %s",
+                target,
+                branch,
+                exit_code,
+                err_msg,
+            )
+            raise RuntimeError(
+                f"git rev-list {target}..{branch} failed (exit {exit_code}): {err_msg}",
+            )
         for sha in (commits_raw or "").strip().splitlines():
             if not sha:
                 continue
-            _, msg, _ = await run_subprocess(
+            exit_code, msg, stderr = await run_subprocess(
                 ["git", "log", "-1", "--format=%B", sha],
                 cwd=clone,
                 env=env,
             )
+            if exit_code != 0:
+                err_msg = (stderr or "").strip()
+                logger.error(
+                    "git log failed for %s on %s (exit %d): %s",
+                    sha[:12],
+                    branch,
+                    exit_code,
+                    err_msg,
+                )
+                raise RuntimeError(
+                    f"git log -1 {sha} failed for branch {branch} (exit {exit_code}): {err_msg}",
+                )
             all_cves.extend(_extract_cves_from_cve_footer_lines(msg or ""))
             all_jira.extend(_extract_jira_issues_from_resolves_footer_lines(msg or ""))
     return sorted(set(all_cves)), sorted(set(all_jira))
@@ -664,12 +684,21 @@ async def run_workflow(
 
             # Collect CVE / Jira from commit footers on all selected branches.
             # This overwrites any seed values and ignores MR descriptions.
-            state.cves_collected, state.jira_issues_collected = await _collect_footers_from_branches(
-                state.local_clone,
-                git_env,
-                dist_git_branch,
-                state.mr_branches,
-            )
+            try:
+                state.cves_collected, state.jira_issues_collected = await _collect_footers_from_branches(
+                    state.local_clone,
+                    git_env,
+                    dist_git_branch,
+                    state.mr_branches,
+                )
+            except RuntimeError as e:
+                logger.error("Failed to collect commit footers: %s", e)
+                state.consolidation_result = MRConsolidationOutputSchema(
+                    success=False,
+                    status="Failed to collect commit footers",
+                    error=str(e),
+                )
+                return "handle_failure"
             state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
             if state.jira_issues_collected:
                 current_jira_issue.set(",".join(state.jira_issues_collected))
@@ -1003,8 +1032,12 @@ async def run_workflow(
                             rebase=False,
                         )
 
-                        mr_patches = state.patches_per_mr.get(other_branch, [])
-                        files_to_stage = [spec_name, *mr_patches]
+                        files_to_stage = _files_to_stage_for_patches(
+                            state.local_clone,
+                            package,
+                            original_patches=state.patches_per_mr.get(other_branch, []),
+                        )
+                        logger.info("Staging files: %s", files_to_stage)
                         await tasks.stage_changes(
                             local_clone=state.local_clone,
                             files_to_commit=files_to_stage,
@@ -1300,11 +1333,7 @@ async def run_workflow(
 
         async def stage_changes(state):
             try:
-                spec_path = state.local_clone / f"{package}.spec"
-                with Specfile(spec_path) as spec:
-                    patch_files = [p.expanded_location for p in get_all_patches(spec) if p.expanded_location]
-
-                files_to_stage = [f"{package}.spec", *patch_files]
+                files_to_stage = _files_to_stage_for_patches(state.local_clone, package)
                 logger.info("Staging files: %s", files_to_stage)
                 await tasks.stage_changes(
                     local_clone=state.local_clone,
@@ -1369,7 +1398,8 @@ async def run_workflow(
                 commit_message += f"\n\nResolves: {resolves}"
 
             if state.cves_collected:
-                commit_message += f"\nCVE: {', '.join(state.cves_collected)}"
+                sep = "\n" if state.jira_issues_collected else "\n\n"
+                commit_message += f"{sep}CVE: {', '.join(state.cves_collected)}"
 
             try:
                 exit_code, _, _ = await run_subprocess(

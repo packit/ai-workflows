@@ -5,10 +5,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ymir.agents.mr_consolidation_agent import (
+    _collect_footers_from_branches,
     _extract_cves_from_cve_footer_lines,
-    _extract_jira_issues_from_description,
     _extract_jira_issues_from_resolves_footer_lines,
     _extract_resolves_from_commit,
+    _files_to_stage_for_patches,
     _mr_type_from_labels,
 )
 from ymir.agents.tasks import (
@@ -290,111 +291,6 @@ async def test_fetch_config_returns_default_when_no_consolidation_key():
 
     assert config.merge_mrs is True
     assert config.release_strategy.value == "per_commit"
-
-
-# -- _extract_jira_issues_from_description ------------------------------------
-
-
-def test_extract_from_resolves_line():
-    desc = "Some backport description.\n\nResolves: RHEL-154342\n"
-    assert _extract_jira_issues_from_description(desc) == ["RHEL-154342"]
-
-
-def test_extract_from_resolves_line_multiple():
-    desc = "Description.\n\nResolves: RHEL-100, RHEL-200, RHEL-300\n"
-    result = _extract_jira_issues_from_description(desc)
-    assert sorted(result) == ["RHEL-100", "RHEL-200", "RHEL-300"]
-
-
-def test_extract_from_resolved_jira_issues_section():
-    desc = (
-        "## Consolidated Backport MR\n\n"
-        "### Resolved Jira Issues\n\n"
-        "- [RHEL-159051](https://issues.redhat.com/browse/RHEL-159051)\n"
-        "- [RHEL-159070](https://issues.redhat.com/browse/RHEL-159070)\n\n"
-        "### Source Merge Requests\n\n"
-        "Some other text mentioning RHEL-999999\n"
-    )
-    result = _extract_jira_issues_from_description(desc)
-    assert sorted(result) == ["RHEL-159051", "RHEL-159070"]
-
-
-def test_ignores_issues_in_triage_details():
-    desc = (
-        "Backport fix for CVE-2026-3833.\n\n"
-        "<details>\n"
-        "<summary>Triage Details</summary>\n\n"
-        "The gnutls RHEL 8 package (RHEL-154320, version 3.6.16) "
-        "already shipped this fix.\n"
-        "Verified that RHEL-159046 was already closed.\n"
-        "</details>\n\n"
-        "Resolves: RHEL-154342\n"
-    )
-    result = _extract_jira_issues_from_description(desc)
-    assert result == ["RHEL-154342"]
-
-
-def test_ignores_issues_in_prose_text():
-    desc = (
-        "This is related to RHEL-99999 which was fixed upstream.\n"
-        "See also RHEL-88888 for context.\n\n"
-        "Resolves: RHEL-11111\n"
-    )
-    result = _extract_jira_issues_from_description(desc)
-    assert result == ["RHEL-11111"]
-
-
-def test_consolidated_mr_with_nested_triage_details():
-    """The exact scenario from the production bug: a consolidated MR whose
-    sub-MR descriptions contain triage details referencing other issues."""
-    desc = (
-        "## Consolidated Backport MR\n\n"
-        "### Resolved Jira Issues\n\n"
-        "- [RHEL-159051](https://issues.redhat.com/browse/RHEL-159051)\n"
-        "- [RHEL-159075](https://issues.redhat.com/browse/RHEL-159075)\n\n"
-        "### Source Merge Requests\n\n"
-        "#### MR 1: [Fix CVE-2026-33845](https://gitlab.com/example/-/merge_requests/1)\n\n"
-        "<details><summary>Original description</summary>\n\n"
-        "Backport fix for CVE-2026-33845.\n"
-        "Verified that the gnutls package (RHEL-159046) was already closed.\n\n"
-        "Resolves: RHEL-159051\n"
-        "</details>\n\n"
-        "#### MR 2: [Fix CVE-2026-3833](https://gitlab.com/example/-/merge_requests/2)\n\n"
-        "<details><summary>Original description</summary>\n\n"
-        "The gnutls RHEL 8 package (RHEL-154320) already shipped this.\n\n"
-        "Resolves: RHEL-159075\n"
-        "</details>\n"
-    )
-    result = _extract_jira_issues_from_description(desc)
-    assert sorted(result) == ["RHEL-159051", "RHEL-159075"]
-
-
-def test_extract_from_related_line():
-    desc = "Some description.\n\nRelated: RHEL-12345\n"
-    assert _extract_jira_issues_from_description(desc) == ["RHEL-12345"]
-
-
-def test_empty_description():
-    assert _extract_jira_issues_from_description("") == []
-
-
-def test_no_structured_issues():
-    desc = "Just a plain description with no Resolves line."
-    assert _extract_jira_issues_from_description(desc) == []
-
-
-def test_deduplicates_issues():
-    desc = (
-        "## Consolidated Backport MR\n\n"
-        "### Resolved Jira Issues\n\n"
-        "- [RHEL-100](https://issues.redhat.com/browse/RHEL-100)\n\n"
-        "### Source Merge Requests\n\n"
-        "<details><summary>Original description</summary>\n\n"
-        "Resolves: RHEL-100\n"
-        "</details>\n"
-    )
-    result = _extract_jira_issues_from_description(desc)
-    assert result == ["RHEL-100"]
 
 
 # -- process_task cancellation behavior ----------------------------------------
@@ -692,6 +588,77 @@ class TestExtractJiraFromResolvesFooterLines:
         assert _extract_jira_issues_from_resolves_footer_lines(text) == ["RHEL-213450"]
 
 
+# -- _collect_footers_from_branches --------------------------------------------
+
+
+class TestCollectFootersFromBranches:
+    """Failure handling when git commands fail during footer collection."""
+
+    @pytest.mark.asyncio
+    async def test_raises_when_rev_list_fails(self, tmp_path):
+        async def fake_run(cmd, **kwargs):
+            return 128, None, "fatal: bad revision 'missing'"
+
+        with (
+            patch(
+                "ymir.agents.mr_consolidation_agent.run_subprocess",
+                new=AsyncMock(side_effect=fake_run),
+            ),
+            pytest.raises(RuntimeError, match=r"git rev-list.*failed"),
+        ):
+            await _collect_footers_from_branches(
+                tmp_path,
+                None,
+                "rhel-9.8.0",
+                ["mr-branch"],
+            )
+
+    @pytest.mark.asyncio
+    async def test_raises_when_git_log_fails(self, tmp_path):
+        async def fake_run(cmd, **kwargs):
+            if cmd[1] == "rev-list":
+                return 0, "abc123def456\n", None
+            return 128, None, "fatal: bad object abc123def456"
+
+        with (
+            patch(
+                "ymir.agents.mr_consolidation_agent.run_subprocess",
+                new=AsyncMock(side_effect=fake_run),
+            ),
+            pytest.raises(RuntimeError, match=r"git log -1.*failed"),
+        ):
+            await _collect_footers_from_branches(
+                tmp_path,
+                None,
+                "rhel-9.8.0",
+                ["mr-branch"],
+            )
+
+    @pytest.mark.asyncio
+    async def test_collects_footers_from_commit_messages(self, tmp_path):
+        async def fake_run(cmd, **kwargs):
+            if cmd[1] == "rev-list":
+                return 0, "abc123\n", None
+            return (
+                0,
+                "Fix something\n\nCVE: CVE-2026-11111\nResolves: RHEL-12345\n",
+                None,
+            )
+
+        with patch(
+            "ymir.agents.mr_consolidation_agent.run_subprocess",
+            new=AsyncMock(side_effect=fake_run),
+        ):
+            cves, jira = await _collect_footers_from_branches(
+                tmp_path,
+                None,
+                "rhel-9.8.0",
+                ["mr-branch"],
+            )
+        assert cves == ["CVE-2026-11111"]
+        assert jira == ["RHEL-12345"]
+
+
 # -- _mr_type_from_labels ------------------------------------------------------
 
 
@@ -911,3 +878,56 @@ class TestExtractResolvesFromCommit:
         )
         result = await _extract_resolves_from_commit(sha, "test.spec", git_repo)
         assert result == "RHEL-190609"
+
+
+# -- _files_to_stage_for_patches -----------------------------------------------
+
+
+class TestFilesToStageForPatches:
+    """Tests for staging patch files after LLM renumber/rename."""
+
+    def _write_spec_with_patches(self, repo, patch_filenames: list[str]):
+        patch_tags = "\n".join(
+            f"Patch{i}:          {name}" for i, name in enumerate(patch_filenames, start=1)
+        )
+        (repo / "test.spec").write_text(
+            "Name: test\nVersion: 1.0\nRelease: 1\n"
+            "Summary: Test package\nLicense: MIT\n"
+            f"{patch_tags}\n\n"
+            "%description\nTest package.\n\n"
+            "%changelog\n"
+            "* Thu Dec 23 2021 Dev <dev@redhat.com> - 1.0-1\n"
+            "- Initial build\n"
+        )
+
+    def test_includes_renamed_and_original_patch_names(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "0018-foo.patch").write_text("diff --git a/x b/x\n")
+        self._write_spec_with_patches(repo, ["0018-foo.patch"])
+
+        result = _files_to_stage_for_patches(
+            repo,
+            "test",
+            original_patches=["0017-foo.patch"],
+        )
+
+        assert result == ["test.spec", "0018-foo.patch", "0017-foo.patch"]
+
+    def test_raises_when_spec_patch_file_missing(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._write_spec_with_patches(repo, ["0018-foo.patch"])
+
+        with pytest.raises(RuntimeError, match="do not exist"):
+            _files_to_stage_for_patches(repo, "test")
+
+    def test_stages_spec_and_current_patches_without_originals(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "0017-bar.patch").write_text("diff --git a/x b/x\n")
+        self._write_spec_with_patches(repo, ["0017-bar.patch"])
+
+        result = _files_to_stage_for_patches(repo, "test")
+
+        assert result == ["test.spec", "0017-bar.patch"]

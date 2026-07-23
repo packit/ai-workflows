@@ -175,9 +175,63 @@ def _extract_jira_issues_from_description(description: str) -> list[str]:
     return list(set(issues))
 
 
-def _extract_cves_from_text(text: str) -> list[str]:
-    """Extract CVE IDs (e.g. CVE-2024-12345) from arbitrary text."""
-    return sorted(set(re.findall(r"CVE-\d{4}-\d+", text)))
+def _extract_cves_from_cve_footer_lines(text: str) -> list[str]:
+    """Extract CVE IDs only from lines that start with ``CVE:``.
+
+    Ignores CVE mentions in titles, triage prose, and patch filenames.
+    Supports multi-value footers such as ``CVE: CVE-A, CVE-B``.
+    """
+    cves: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("CVE:"):
+            cves.extend(re.findall(r"CVE-\d{4}-\d+", stripped))
+    return sorted(set(cves))
+
+
+def _extract_jira_issues_from_resolves_footer_lines(text: str) -> list[str]:
+    """Extract RHEL keys only from ``Resolves:`` / ``Related:`` lines.
+
+    Ignores RHEL-* mentions in titles, triage prose, and other free text.
+    Supports multi-value footers such as ``Resolves: RHEL-1, RHEL-2``.
+    """
+    issues: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("Resolves:", "Related:")):
+            issues.extend(re.findall(r"RHEL-\d+", stripped))
+    return sorted(set(issues))
+
+
+async def _collect_footers_from_branches(
+    clone,
+    env,
+    target: str,
+    branches: list[str],
+) -> tuple[list[str], list[str]]:
+    """Collect CVE and Jira footers from all commits on the given branches.
+
+    Returns ``(cves, jira_issues)`` sorted and deduplicated.
+    """
+    all_cves: list[str] = []
+    all_jira: list[str] = []
+    for branch in branches:
+        _, commits_raw, _ = await run_subprocess(
+            ["git", "rev-list", "--reverse", f"{target}..{branch}"],
+            cwd=clone,
+            env=env,
+        )
+        for sha in (commits_raw or "").strip().splitlines():
+            if not sha:
+                continue
+            _, msg, _ = await run_subprocess(
+                ["git", "log", "-1", "--format=%B", sha],
+                cwd=clone,
+                env=env,
+            )
+            all_cves.extend(_extract_cves_from_cve_footer_lines(msg or ""))
+            all_jira.extend(_extract_jira_issues_from_resolves_footer_lines(msg or ""))
+    return sorted(set(all_cves)), sorted(set(all_jira))
 
 
 async def _extract_resolves_from_commit(
@@ -305,15 +359,11 @@ async def _resolve_source_issues(
     state.mr_titles = [mr["title"] for mr in matched_mrs]
     state.mr_descriptions = [mr.get("description", "") for mr in matched_mrs]
     state.mr_types = {mr["source_branch"]: _mr_type_from_labels(mr) for mr in matched_mrs}
-
-    all_jira: list[str] = list(issue_keys)
-    all_cves: list[str] = []
-    for mr in matched_mrs:
-        all_jira.extend(_extract_jira_issues_from_description(mr.get("description", "")))
-        all_cves.extend(_extract_cves_from_text(mr.get("description", "")))
-    state.jira_issues_collected = sorted(set(all_jira))
-    state.cves_collected = sorted(set(all_cves))
-    state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
+    # CVE / Jira lists are collected from commit footers after branches are
+    # fetched in fork_and_prepare_dist_git — not from MR descriptions.
+    state.jira_issues_collected = []
+    state.cves_collected = []
+    state.jira_issue = None
 
     logger.info(
         "Label-triggered consolidation: resolved %s to MRs %s",
@@ -577,17 +627,6 @@ async def run_workflow(
                 state.mr_descriptions = [mr.get("description", "") for mr in selected]
                 state.mr_types = {mr["source_branch"]: _mr_type_from_labels(mr) for mr in selected}
 
-                all_jira: list[str] = []
-                all_cves: list[str] = []
-                for mr in selected:
-                    all_jira.extend(_extract_jira_issues_from_description(mr.get("description", "")))
-                    all_cves.extend(_extract_cves_from_text(mr.get("description", "")))
-                state.jira_issues_collected = sorted(set(all_jira))
-                state.cves_collected = sorted(set(all_cves))
-                state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
-                if state.jira_issues_collected:
-                    current_jira_issue.set(",".join(state.jira_issues_collected))
-
                 state.current_mrs_count = len(current_mrs)
 
                 logger.info(
@@ -622,6 +661,23 @@ async def run_workflow(
                 if new_patches:
                     state.patches_per_mr[branch_name] = new_patches
             logger.info("Per-MR patch mapping: %s", state.patches_per_mr)
+
+            # Collect CVE / Jira from commit footers on all selected branches.
+            # This overwrites any seed values and ignores MR descriptions.
+            state.cves_collected, state.jira_issues_collected = await _collect_footers_from_branches(
+                state.local_clone,
+                git_env,
+                dist_git_branch,
+                state.mr_branches,
+            )
+            state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
+            if state.jira_issues_collected:
+                current_jira_issue.set(",".join(state.jira_issues_collected))
+            logger.info(
+                "Collected from commit footers: CVEs=%s Jira=%s",
+                state.cves_collected,
+                state.jira_issues_collected,
+            )
 
             # If all non-base branches are rebuild MRs, use the simplified
             # append-only flow (no cherry-pick, no Release bump for rebuilds).
@@ -792,11 +848,6 @@ async def run_workflow(
                     env=git_env,
                 )
 
-                base_idx = state.mr_branches.index(base_branch)
-                base_jira_issues = _extract_jira_issues_from_description(
-                    state.mr_descriptions[base_idx] if base_idx < len(state.mr_descriptions) else "",
-                )
-
                 # --- Step 1: cherry-pick all commits from the base branch ---
                 _, base_commits_raw, _ = await run_subprocess(
                     ["git", "rev-list", "--reverse", f"{dist_git_branch}..{base_branch}"],
@@ -837,14 +888,6 @@ async def run_workflow(
 
                 # --- Step 2: process each commit from other branches ---
                 for other_branch in other_branches:
-                    other_idx = state.mr_branches.index(other_branch)
-                    other_jira = _extract_jira_issues_from_description(
-                        state.mr_descriptions[other_idx] if other_idx < len(state.mr_descriptions) else "",
-                    )
-                    if not other_jira and state.jira_issues_collected:
-                        remaining = [j for j in state.jira_issues_collected if j not in base_jira_issues]
-                        other_jira = remaining or [state.jira_issues_collected[-1]]
-
                     _, other_commits_raw, _ = await run_subprocess(
                         ["git", "rev-list", "--reverse", f"{dist_git_branch}..{other_branch}"],
                         cwd=state.local_clone,
@@ -971,18 +1014,17 @@ async def run_workflow(
                         # summary so the log agent produces a matching entry.
                         summary = original_msg.split("\n")[0]
 
-                        # Extract the Jira key from the commit's own
-                        # changelog Resolves line so re-consolidated MRs
-                        # keep their per-CVE keys instead of inheriting
-                        # a single key from the MR description.
-                        commit_jira = await _extract_resolves_from_commit(
-                            commit_sha,
-                            spec_name,
-                            state.local_clone,
-                            env=git_env,
-                        )
+                        # Prefer Resolves:/Related: from the commit message;
+                        # fall back to the spec changelog diff for older commits.
+                        msg_jira = _extract_jira_issues_from_resolves_footer_lines(original_msg)
+                        commit_jira = msg_jira[0] if msg_jira else None
                         if not commit_jira:
-                            commit_jira = other_jira[0] if other_jira else None
+                            commit_jira = await _extract_resolves_from_commit(
+                                commit_sha,
+                                spec_name,
+                                state.local_clone,
+                                env=git_env,
+                            )
 
                         log_prompt = render_template(
                             get_log_prompt(),
@@ -1114,30 +1156,28 @@ async def run_workflow(
                 )
                 await asyncio.sleep(_NFS_CACHE_WAIT)
 
-                # Collect Jira issues and CVEs from rebuild branches
+                # Collect Jira issues and CVEs from rebuild branch commit footers
                 rebuild_jira: list[str] = []
                 rebuild_cves: list[str] = []
                 for rb_branch in rebuild_branches:
-                    idx = state.mr_branches.index(rb_branch)
-                    desc = state.mr_descriptions[idx] if idx < len(state.mr_descriptions) else ""
-                    rebuild_jira.extend(_extract_jira_issues_from_description(desc))
-                    rebuild_cves.extend(_extract_cves_from_text(desc))
-
-                # Also extract CVEs from the base backport commit messages
-                for commit_sha in base_commits:
-                    _, msg, _ = await run_subprocess(
-                        ["git", "log", "-1", "--format=%B", commit_sha],
-                        cwd=state.local_clone,
-                        env=git_env,
+                    rb_cves, rb_jira = await _collect_footers_from_branches(
+                        state.local_clone,
+                        git_env,
+                        dist_git_branch,
+                        [rb_branch],
                     )
-                    state.cves_collected = sorted(
-                        set(state.cves_collected + _extract_cves_from_text(msg or ""))
-                    )
+                    rebuild_cves.extend(rb_cves)
+                    rebuild_jira.extend(rb_jira)
+                rebuild_jira = sorted(set(rebuild_jira))
+                rebuild_cves = sorted(set(rebuild_cves))
 
+                # Ensure state lists include rebuild footers (already collected
+                # in fork_and_prepare_dist_git, but rebuild-only amend needs them).
                 state.cves_collected = sorted(set(state.cves_collected + rebuild_cves))
+                state.jira_issues_collected = sorted(set(state.jira_issues_collected + rebuild_jira))
 
                 # Update changelog with the rebuild ticket reference
-                rebuild_issues_str = ", ".join(sorted(set(rebuild_jira))) or "rebuild"
+                rebuild_issues_str = ", ".join(rebuild_jira) or "rebuild"
                 log_prompt = render_template(
                     get_log_prompt(),
                     LogInputSchema(
@@ -1174,14 +1214,12 @@ async def run_workflow(
                 # Append rebuild Resolves: compare against what the commit
                 # message already contains, not state.jira_issues_collected
                 # (which includes rebuild tickets from discovery).
-                already_in_commit = set(re.findall(r"RHEL-\d+", last_msg))
+                already_in_commit = set(_extract_jira_issues_from_resolves_footer_lines(last_msg))
                 extra_resolves = sorted(set(rebuild_jira) - already_in_commit)
-                if extra_resolves:
-                    state.jira_issues_collected = sorted(set(state.jira_issues_collected + extra_resolves))
 
                 # Add rebuild CVEs to commit message only if original already had CVE line
                 if rebuild_cves and re.search(r"^CVE:", last_msg, re.MULTILINE):
-                    existing_cves = _extract_cves_from_text(last_msg)
+                    existing_cves = _extract_cves_from_cve_footer_lines(last_msg)
                     all_cves = sorted(set(existing_cves + rebuild_cves))
                     last_msg = re.sub(
                         r"^CVE:.*$",
@@ -1329,6 +1367,9 @@ async def run_workflow(
             if state.jira_issues_collected:
                 resolves = ", ".join(state.jira_issues_collected)
                 commit_message += f"\n\nResolves: {resolves}"
+
+            if state.cves_collected:
+                commit_message += f"\nCVE: {', '.join(state.cves_collected)}"
 
             try:
                 exit_code, _, _ = await run_subprocess(
@@ -1576,12 +1617,8 @@ async def run_workflow(
             initial_state.mr_branches = [b["branch"] for b in backport_branches]
             initial_state.mr_titles = [b.get("title", "") for b in backport_branches]
             initial_state.mr_descriptions = [b.get("description", "") for b in backport_branches]
-            all_jira = []
-            for b in backport_branches:
-                all_jira.extend(b.get("jira_issues", []))
-            initial_state.jira_issues_collected = sorted(set(all_jira))
-            if initial_state.jira_issues_collected:
-                initial_state.jira_issue = initial_state.jira_issues_collected[0]
+            # CVE / Jira lists are collected from commit footers after branches
+            # are fetched — do not seed from branch metadata.
 
         response = await workflow.run(initial_state)
         return response.state

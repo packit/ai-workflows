@@ -13,6 +13,16 @@ of changes performed, do the following:
 3. Add a new changelog entry to the spec file. Use the `add_changelog_entry` tool.
    Examine the previous changelog entries and try to use the same style.
 
+   JIRA REFERENCE LINE RULE (overrides the default guidance below):
+   Find the last changelog entry that was NOT authored by Ymir (skip entries
+   by "RHEL Packaging Agent" or "redhat-ymir-agent"). Check whether it
+   contains a Resolves or Related line — look for "Resolves:" or "Related:"
+   regardless of leading whitespace or bullet marker (e.g. "- Resolves:",
+   "  Resolves:", "Resolves:"). If the entry contains such a line, include
+   one in your entry using the same tag (Resolves or Related) and the same
+   formatting (indentation, bullet prefix). If the entry does not contain
+   any Resolves/Related line, do NOT add one.
+
    If a source changelog message is provided in the prompt, use those lines as the
    exact changelog message content. Keep the descriptive lines exactly as-is — do not
    rephrase, summarize, or add to them. If the source changelog message contains
@@ -21,10 +31,10 @@ of changes performed, do the following:
    Match the format and style of the target spec file's changelog for Jira references.
 
    Otherwise, if no source changelog message is provided, write a new entry. In general,
-   the entry should contain a short summary of the changes, ideally fitting on a single line,
-   and a single line referencing all Jira issues. Use
-   "- Resolves: <JIRA_ISSUES>" (comma-separated on one line) unless
-   the spec file has historically used a different style.
+   the entry should contain a short summary of the changes, ideally fitting on a single
+   line. If the Jira reference line rule above says to include one, add a
+   Resolves/Related line matching the historical style. If the rule says to omit it,
+   do not add any Jira reference line to the changelog entry.
 
    IMPORTANT: The changelog entry should focus on user-facing changes only. Do not mention
    technical packaging details such as added/removed patches, changed BuildRequires,

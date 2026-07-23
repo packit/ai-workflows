@@ -191,8 +191,9 @@ async def determine_target_branch(
         branch = await _map_version_to_module_branch(
             triage_data.fix_version, jira_summary, cve_needs_internal_fix, package
         )
+        jira_issue = getattr(triage_data, "jira_issue", "unknown")
         logger.info(
-            f"Modular package detected for {triage_data.jira_issue} "
+            f"Modular package detected for {jira_issue} "
             f"(summary={jira_summary!r}, would map to branch={branch}) — "
             f"skipping automated processing (not yet supported)"
         )
@@ -1199,8 +1200,16 @@ async def main() -> None:
                         if output.resolution == Resolution.OPEN_ENDED_ANALYSIS:
                             queue = RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value
                             downstream_payload = output.data.model_dump_json()
+                        elif output.resolution == Resolution.CLARIFICATION_NEEDED:
+                            # Clarification does not require a target branch.
+                            task = Task(metadata=state.model_dump(), user_triggered=user_triggered)
+                            queue = RedisQueues.CLARIFICATION_NEEDED_QUEUE.value
+                            downstream_payload = task.model_dump_json()
                         elif not state.target_branch:
+                            # Modular packages (and other unmapped tickets) return
+                            # None; skip branch-based queues to avoid runtime errors.
                             logger.info(f"No target branch for {input.issue} — skipping downstream dispatch")
+                            queue = None
                         else:
                             task = Task(metadata=state.model_dump(), user_triggered=user_triggered)
                             downstream_payload = task.model_dump_json()
@@ -1212,12 +1221,11 @@ async def main() -> None:
                                 queue = RedisQueues.get_backport_queue_for_branch(
                                     state.target_branch, task.user_triggered
                                 )
-                            elif output.resolution == Resolution.REBUILD:
+                            else:
                                 queue = RedisQueues.get_rebuild_queue_for_branch(
                                     state.target_branch, task.user_triggered
                                 )
-                            else:
-                                queue = RedisQueues.CLARIFICATION_NEEDED_QUEUE.value
+                        if queue is not None:
                             await fix_await(redis.lpush(queue, downstream_payload))
                             logger.info(f"Pushed {input.issue} to {queue}")
                     else:

@@ -45,6 +45,7 @@ from ymir.tools.privileged.gitlab import (
     PushToRemoteRepositoryTool,
     RetryPipelineJobTool,
     SearchGitlabProjectMrsTool,
+    SetMergeRequestReviewersTool,
 )
 from ymir.tools.privileged.jira import (
     AddJiraAttachmentsTool,
@@ -164,6 +165,7 @@ async def _async_main():
             RetryPipelineJobTool(options=tool_options),
             FetchGitlabMrNotesTool(options=tool_options),
             SearchGitlabProjectMrsTool(options=tool_options),
+            SetMergeRequestReviewersTool(options=tool_options),
             GetErratumTool(options=tool_options),
             GetErratumBuildNvrTool(options=tool_options),
             GetErratumTransitionRulesTool(options=tool_options),

@@ -23,6 +23,7 @@ import re
 import sys
 import time
 import typing
+from datetime import UTC, datetime, timedelta
 from urllib.parse import quote as urlquote
 
 import backoff
@@ -44,13 +45,14 @@ PER_PAGE = 100
 JIRA_CLOSED_STATUS = "Closed"
 JIRA_BATCH_SIZE = 100
 
-RATE_LIMIT_DELAY = 0.2
+RATE_LIMIT_DELAY = 0.5
 REQUEST_TIMEOUT = 90
+MERGED_MR_LOOKBACK_DAYS = 180
 
 CLOSE_NOTE_MARKER = "Closing this merge request"
 
 JIRA_MR_CLOSED_LABEL = "ymir_mr_closed"
-JIRA_RESET_MR_LABEL = "ymir_jiras_cleaned_up"
+JIRA_RESET_MR_LABEL = "ymir_jira_cleanup_processed"
 
 
 class Action(enum.Enum):
@@ -123,11 +125,19 @@ class MRCleanup:
             time.sleep(RATE_LIMIT_DELAY - elapsed)
         self.last_request_time = time.time()
 
+    @staticmethod
+    def _handle_rate_limit(resp: requests.Response):
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", 60))
+            logger.warning("Rate limited (429) — sleeping %ds", retry_after)
+            time.sleep(retry_after)
+
     @_backoff_retry
     def _gitlab_get(self, path: str, params: dict | None = None) -> list | dict:
         self._rate_limit()
         url = f"{GITLAB_API_URL}/{path}"
         resp = self.gitlab_session.get(url, params=params, timeout=REQUEST_TIMEOUT)
+        self._handle_rate_limit(resp)
         resp.raise_for_status()
         return resp.json()
 
@@ -136,6 +146,7 @@ class MRCleanup:
         self._rate_limit()
         url = f"{GITLAB_API_URL}/{path}"
         resp = self.gitlab_session.post(url, json=json, timeout=REQUEST_TIMEOUT)
+        self._handle_rate_limit(resp)
         resp.raise_for_status()
         return resp.json()
 
@@ -144,6 +155,7 @@ class MRCleanup:
         self._rate_limit()
         url = f"{GITLAB_API_URL}/{path}"
         resp = self.gitlab_session.put(url, json=json, timeout=REQUEST_TIMEOUT)
+        self._handle_rate_limit(resp)
         resp.raise_for_status()
         return resp.json()
 
@@ -349,6 +361,42 @@ class MRCleanup:
         logger.info("Found %d closed MRs to check for Jira reset", len(all_mrs))
         return all_mrs
 
+    def fetch_merged_mrs(self) -> list[dict]:
+        cutoff = datetime.now(UTC) - timedelta(days=MERGED_MR_LOOKBACK_DAYS)
+        created_after = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+        all_mrs = []
+        for group in GITLAB_GROUPS:
+            for author in self.bot_authors:
+                logger.info("Fetching merged MRs in %s by %s (since %s)", group, author, created_after)
+                encoded_group = urlquote(group, safe="")
+                page = 1
+                while True:
+                    mrs = self._gitlab_get(
+                        f"groups/{encoded_group}/merge_requests",
+                        params={
+                            "state": "merged",
+                            "author_username": author,
+                            "per_page": PER_PAGE,
+                            "page": page,
+                            "include_subgroups": "true",
+                            "created_after": created_after,
+                        },
+                    )
+                    if not mrs:
+                        break
+                    all_mrs.extend(mrs)
+                    page += 1
+
+        logger.info("Found %d merged MRs in lookback window", len(all_mrs))
+        return all_mrs
+
+    def _collect_merged_mr_jira_keys(self) -> set[str]:
+        mrs = self.fetch_merged_mrs()
+        if not mrs:
+            return set()
+        _, all_keys = self._extract_all_jira_keys(mrs, label="merged")
+        return all_keys
+
     def fetch_jira_labels(self, issue_keys: set[str]) -> dict[str, list[str]]:
         if not issue_keys:
             return {}
@@ -380,6 +428,8 @@ class MRCleanup:
         JIRA_MR_CLOSED_LABEL,
         "ymir_todo",
         "ymir_retry_needed",
+        "ymir_merged",
+        "ymir_cant_do",
     }
 
     def _reset_jira_labels(self, issue_key: str, current_labels: list[str]):
@@ -433,9 +483,12 @@ class MRCleanup:
         had_errors = False
         for key in sorted(jira_keys):
             if key in skip_jira_keys:
-                logger.info("Skipping %s — still referenced by an open MR or already reset", key)
+                logger.info("Skipping %s — referenced by an open/merged MR or already reset", key)
                 continue
             current_labels = jira_labels.get(key)
+            if current_labels is not None and "ymir_merged" in current_labels:
+                logger.info("Skipping %s — has ymir_merged label", key)
+                continue
             if current_labels is None:
                 logger.warning("Could not fetch labels for %s (MR %s) — skipping issue", key, mr_url)
                 had_errors = True
@@ -471,9 +524,11 @@ class MRCleanup:
                 active_jira_keys = self._collect_open_mr_jira_keys()
 
         if self.reset_closed_mr_jiras:
+            merged_jira_keys = self._collect_merged_mr_jira_keys()
+            skip_jira_keys = active_jira_keys | merged_jira_keys
             closed_mrs = self.fetch_closed_mrs()
             if closed_mrs:
-                self._run_rejected_mr_cleanup(closed_mrs, active_jira_keys)
+                self._run_rejected_mr_cleanup(closed_mrs, skip_jira_keys)
             else:
                 logger.info("No closed MRs to process — skipping phase 2")
         else:
@@ -532,13 +587,13 @@ class MRCleanup:
         logger.info("Stale MR cleanup complete: %s", summary)
         return active_keys
 
-    def _run_rejected_mr_cleanup(self, closed_mrs: list[dict], active_jira_keys: set[str]):
+    def _run_rejected_mr_cleanup(self, closed_mrs: list[dict], skip_jira_keys: set[str]):
         mr_jira_keys, all_keys = self._extract_all_jira_keys(closed_mrs, label="closed")
 
         jira_labels = self.fetch_jira_labels(all_keys)
         logger.info("Fetched labels for %d Jira issues", len(jira_labels))
 
-        skip_jira_keys = set(active_jira_keys)
+        skip_jira_keys = set(skip_jira_keys)
         results: dict[Action, list[str]] = {}
         for mr in closed_mrs:
             try:

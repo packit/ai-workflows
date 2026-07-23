@@ -10,8 +10,9 @@ Posts a closing comment, adds `ymir_cleaned_up` label. No Jira labels modified.
 
 **Phase 2 -- Reset Jira labels** (`RESET_CLOSED_MR_JIRAS=true`, default):
 For closed (not merged) bot MRs, removes `ymir_*` automation outcome
-labels from the referenced Jiras and adds `ymir_mr_closed`. Skips Jiras still
-referenced by an open MR.
+labels from the referenced Jiras and adds `ymir_mr_closed`. Skips Jiras
+referenced by an open MR or a merged MR (within a 180-day lookback window)
+to avoid resetting labels set by a successful fix (e.g. after MR consolidation).
 
 ## Setup
 

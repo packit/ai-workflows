@@ -114,7 +114,8 @@ _RESOLUTION_TO_LABEL: dict[Resolution, JiraLabels] = {
 }
 
 
-_MODULAR_SUMMARY_RE = re.compile(r"^[\w.+-]+:[^/]+/[\w.+-]+:")
+# Optional CVE-YYYY-NNNNN prefix, then module:stream/component:
+_MODULAR_SUMMARY_RE = re.compile(r"^(?:CVE-\d{4}-\d+\s+)?([\w.+-]+):([^/\s]+)/([\w.+-]+):")
 
 
 def _is_modular(jira_summary: str | None) -> bool:
@@ -122,7 +123,9 @@ def _is_modular(jira_summary: str | None) -> bool:
 
     Modular summaries follow the pattern ``module:stream/component:Title``
     (e.g. ``postgresql:12/postgresql:PostgreSQL: some vulnerability``),
-    while non-modular ones are ``component:Title``.
+    optionally prefixed with a CVE id
+    (``CVE-2026-32748 squid:4/squid: ...``). Non-modular ones are
+    ``component:Title`` or ``CVE-... component:Title``.
     """
     if not jira_summary:
         return False
@@ -133,14 +136,12 @@ def _parse_module_summary(summary: str) -> tuple[str, str] | None:
     """Extract module name and stream from a modular Jira summary.
 
     E.g. ``postgresql:12/postgresql:...`` → ``("postgresql", "12")``.
+    E.g. ``CVE-2026-32748 squid:4/squid:...`` → ``("squid", "4")``.
     """
     m = _MODULAR_SUMMARY_RE.match(summary)
     if not m:
         return None
-    prefix = summary[: m.end() - 1]  # "postgresql:12/postgresql"
-    module_stream, _, _ = prefix.partition("/")
-    module, _, stream = module_stream.partition(":")
-    return module, stream
+    return m.group(1), m.group(2)
 
 
 def _map_version_to_module_branch(

@@ -1,11 +1,9 @@
 import json
 import logging
-import os
 import re
 from enum import Enum
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
-import aiohttp
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, ToolError, ToolRunOptions
@@ -14,8 +12,7 @@ from pydantic import BaseModel, Field
 from ymir.common.utils import run_tool
 from ymir.common.version_utils import is_older_zstream, parse_rhel_version
 from ymir.tools.base import CloneableTool as Tool
-from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
-from ymir.tools.http import aiohttp_get_with_retries
+from ymir.tools.privileged.gitlab import _get_merge_request_from_url
 from ymir.tools.privileged.jira import (
     GetJiraDevStatusTool,
     GetJiraPullRequestsTool,
@@ -110,49 +107,17 @@ async def _fetch_mr_commits(mr_url: str) -> list[str]:
     if not mr_url:
         return []
 
-    match = re.search(
-        r"gitlab\.com/(.+?)/-/merge_requests/(\d+)",
-        mr_url,
-    )
-    if not match:
-        logger.debug(f"Could not parse MR URL: {mr_url}")
-        return []
-
-    project_path = match.group(1)
-    mr_iid = match.group(2)
-    encoded_project = quote(project_path, safe="")
-
-    api_url = f"https://gitlab.com/api/v4/projects/{encoded_project}/merge_requests/{mr_iid}/commits"
-
-    headers: dict[str, str] = {"User-Agent": YMIR_USER_AGENT}
-    if token := os.getenv("GITLAB_TOKEN"):
-        headers["PRIVATE-TOKEN"] = token
-
     try:
-        async with (
-            aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
-            aiohttp_get_with_retries(
-                # 100 is the GitLab API maximum per_page, should be enough.
-                session,
-                api_url,
-                headers=headers,
-                params={"per_page": "100"},
-            ) as response,
-        ):
-            response.raise_for_status()
-            commits = await response.json()
+        mr = await _get_merge_request_from_url(mr_url)
+    except ValueError:
+        logger.warning(f"Could not parse MR URL: {mr_url}")
+        return []
     except Exception as e:
         logger.warning(f"Failed to fetch commits for MR {mr_url}: {e}")
         return []
 
-    urls = []
-    for commit in commits:
-        sha = commit.get("id", "")
-        if sha:
-            commit_url = f"https://gitlab.com/{project_path}/-/commit/{sha}"
-            urls.append(_get_patch_url(commit_url))
-
-    return urls
+    project_url = mr.target_project.get_web_url()
+    return [_get_patch_url(f"{project_url}/-/commit/{sha}") for sha in mr.get_all_commits()]
 
 
 async def _get_merged_commits(issue_key: str) -> list[str]:

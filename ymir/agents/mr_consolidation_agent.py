@@ -233,6 +233,7 @@ async def _resolve_source_issues(
             mr["source_branch"],
         )
 
+    state.all_open_mrs = matched_mrs
     state.mr_urls = [mr["url"] for mr in matched_mrs]
     state.mr_branches = [mr["source_branch"] for mr in matched_mrs]
     state.mr_titles = [mr["title"] for mr in matched_mrs]

@@ -262,7 +262,7 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
        </details>
      >
 
-     Resolves: {{jira_issue}}
+     Jira: [{{jira_issue}}](https://issues.redhat.com/browse/{{jira_issue}})
 
      <details>
      <summary>Backporting steps</summary>

@@ -24,7 +24,12 @@ from specfile import Specfile
 import ymir.agents.tasks as tasks
 from ymir.agents.build_agent import create_build_agent
 from ymir.agents.build_agent import get_prompt as get_build_prompt
-from ymir.agents.constants import I_AM_YMIR, ZSTREAM_TARGET_LABEL, mr_description_footer
+from ymir.agents.constants import (
+    I_AM_YMIR,
+    ZSTREAM_TARGET_LABEL,
+    format_jira_links_for_mr,
+    mr_description_footer,
+)
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
@@ -699,7 +704,7 @@ async def run_workflow(
                         f"{state.log_result.description}\n\n"
                         f"Upstream patches:\n{formatted_patches}\n\n"
                         f"{triage_details_text}"
-                        f"Resolves: {state.jira_issue}\n\n"
+                        f"{format_jira_links_for_mr(state.jira_issue)}\n"
                         f"{wrap_details('Backporting steps', state.backport_log[-1])}"
                         f"\n\n{mr_description_footer(state.package)}"
                     ),

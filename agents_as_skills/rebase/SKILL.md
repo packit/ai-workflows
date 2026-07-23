@@ -202,7 +202,7 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
        - "Reasoning:" section with triage_summary (if set)
        - "Justification:" section with justification (if set)>
 
-     Resolves: {{jira_issue}}
+     Jira: [{{jira_issue}}](https://issues.redhat.com/browse/{{jira_issue}})
 
      <rebase_status from Step 3, wrapped in a collapsible <details> block titled "Rebase status">
 

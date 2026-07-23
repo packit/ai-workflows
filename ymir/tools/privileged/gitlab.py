@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -37,9 +38,60 @@ from ymir.common.validators import AbsolutePath
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.tools.http import aiohttp_get_with_retries
-from ymir.tools.privileged.utils import clean_stale_repositories
+from ymir.tools.privileged.utils import clean_stale_repositories, sanitize_url
 
 logger = logging.getLogger(__name__)
+
+_STDERR_HINT_MAX = 500
+
+
+def _git_subprocess_error(stderr: str | None, message: str) -> ToolError:
+    """Log a git subprocess failure at ERROR level and return a ToolError with a stderr hint."""
+    safe_stderr = sanitize_url(stderr or "")
+    hint = safe_stderr.strip()[-_STDERR_HINT_MAX:]
+    logger.error("%s\nstderr (last %d chars): %s", message, len(hint), hint)
+    return ToolError(f"{message}: {hint}" if hint else message)
+
+
+async def _run_git_cmd(
+    command: list[str],
+    *,
+    label: str,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout: float | None = 3600,
+) -> None:
+    """Run a git subprocess with structured logging, timing, and error handling.
+
+    Args:
+        command: The git command to execute as a list of arguments.
+        label: Human-readable description for log messages (e.g. "git fetch <url> branch=main").
+        cwd: Working directory for the subprocess.
+        env: Environment variables to pass to the subprocess.
+        timeout: Timeout in seconds, or None for no timeout.
+
+    Raises:
+        ToolError: If the command fails or times out.
+    """
+    logger.info("%s", label)
+    t0 = time.monotonic()
+    try:
+        coro = run_subprocess(command, cwd=cwd, env=env)
+        if timeout is not None:
+            returncode, _, stderr = await asyncio.wait_for(coro, timeout=timeout)
+        else:
+            returncode, _, stderr = await coro
+    except TimeoutError:
+        elapsed = time.monotonic() - t0
+        logger.error("%s timed out after %.1fs", label, elapsed)
+        raise ToolError(f"{label} timed out after {int(timeout)}s") from None
+    elapsed = time.monotonic() - t0
+    if returncode:
+        raise _git_subprocess_error(
+            stderr, f"{label} failed (exit_code={returncode}, elapsed={elapsed:.1f}s)"
+        )
+    logger.info("%s completed in %.1fs", label, elapsed)
+
 
 # GitLab access levels: Guest (10), Reporter (20), Developer (30),
 # Maintainer (40), Owner (50)
@@ -502,32 +554,37 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
 
         clone_path.mkdir(parents=True, exist_ok=True)
 
+        safe_url = sanitize_url(repository)
+
         if branch:
-            returncode, _, _ = await run_subprocess(["git", "init"], cwd=clone_path, env=git_env)
-            if returncode:
-                raise ToolError(f"Failed to initialize git repo at {clone_path}")
+            await _run_git_cmd(
+                ["git", "init"],
+                label=f"git init {clone_path}",
+                cwd=clone_path,
+                env=git_env,
+                timeout=None,
+            )
 
-            command = ["git", *auth_args, "fetch", repository, f"{branch}:refs/heads/{branch}"]
-            try:
-                returncode, _, _ = await asyncio.wait_for(
-                    run_subprocess(command, cwd=clone_path, env=git_env), timeout=3600
-                )
-            except TimeoutError:
-                raise ToolError(f"Fetch of {branch} timed out after 60 minutes") from None
-            if returncode:
-                raise ToolError(f"Failed to fetch {branch} from {repository}")
+            await _run_git_cmd(
+                ["git", *auth_args, "fetch", repository, f"{branch}:refs/heads/{branch}"],
+                label=f"git fetch {safe_url} branch={branch}",
+                cwd=clone_path,
+                env=git_env,
+            )
 
-            returncode, _, _ = await run_subprocess(["git", "checkout", branch], cwd=clone_path, env=git_env)
-            if returncode:
-                raise ToolError(f"Failed to checkout branch {branch}")
+            await _run_git_cmd(
+                ["git", "checkout", branch],
+                label=f"git checkout branch={branch}",
+                cwd=clone_path,
+                env=git_env,
+                timeout=None,
+            )
         else:
-            command = ["git", *auth_args, "clone", repository, str(clone_path)]
-            try:
-                returncode, _, _ = await asyncio.wait_for(run_subprocess(command, env=git_env), timeout=3600)
-            except TimeoutError:
-                raise ToolError(f"Clone of {repository} timed out after 60 minutes") from None
-            if returncode:
-                raise ToolError(f"Failed to clone {repository}")
+            await _run_git_cmd(
+                ["git", *auth_args, "clone", repository, str(clone_path)],
+                label=f"git clone {safe_url}",
+                env=git_env,
+            )
 
         return StringToolOutput(result=f"Successfully cloned the specified repository to {clone_path}")
 
@@ -562,14 +619,18 @@ class PushToRemoteRepositoryTool(Tool[PushToRemoteRepositoryToolInput, ToolRunOp
         clone_path = tool_input.clone_path
         branch = tool_input.branch
         force = tool_input.force
+        safe_url = sanitize_url(repository)
         auth_args = _get_git_auth_args(repository)
         command = ["git", *auth_args, "push", repository, branch]
         if force:
             command.append("--force")
-        returncode, _, _ = await run_subprocess(command, cwd=clone_path)
-        if returncode:
-            raise ToolError("Failed to push to the specified repository")
-        return StringToolOutput(result=f"Successfully pushed the specified branch to {repository}")
+        await _run_git_cmd(
+            command,
+            label=f"git push {safe_url} branch={branch} force={force}",
+            cwd=clone_path,
+            timeout=None,
+        )
+        return StringToolOutput(result=f"Successfully pushed the specified branch to {safe_url}")
 
 
 class FetchBranchToolInput(BaseModel):
@@ -601,19 +662,17 @@ class FetchBranchTool(Tool[FetchBranchToolInput, ToolRunOptions, StringToolOutpu
         repository = tool_input.repository
         branch = tool_input.branch
         clone_path = tool_input.clone_path
+        safe_url = sanitize_url(repository)
         auth_args = _get_git_auth_args(repository)
         git_env = _get_mock_git_env()
-        command = [
-            "git",
-            *auth_args,
-            "fetch",
-            repository,
-            f"{branch}:refs/heads/{branch}",
-        ]
-        returncode, _, _ = await run_subprocess(command, cwd=clone_path, env=git_env)
-        if returncode:
-            raise ToolError(f"Failed to fetch branch {branch} from {repository}")
-        return StringToolOutput(result=f"Successfully fetched branch {branch} from {repository}")
+        await _run_git_cmd(
+            ["git", *auth_args, "fetch", repository, f"{branch}:refs/heads/{branch}"],
+            label=f"git fetch {safe_url} branch={branch}",
+            cwd=clone_path,
+            env=git_env,
+            timeout=None,
+        )
+        return StringToolOutput(result=f"Successfully fetched branch {branch} from {safe_url}")
 
 
 class AddMergeRequestLabelsToolInput(BaseModel):

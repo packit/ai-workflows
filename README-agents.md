@@ -166,7 +166,7 @@ Issues can be re-triggered through the workflow in two ways:
 
 ### Phoenix: Alembic migration failure after version rollback
 
-When Phoenix is rolled back to an older version (e.g. v16 → v15), the SQLite database
+When Phoenix is rolled back to an older version (e.g. v16 → v15), the database
 contains an Alembic revision from the newer version that the older code doesn't
 recognize. Phoenix crashes on startup with:
 
@@ -190,32 +190,17 @@ expects. For the v16 → v15 rollback, the known revisions are:
    podman-compose stop phoenix
    ```
 
-2. Find the volume mount path:
+2. Stamp the database via `psql` on the phoenix-db container:
 
    ```bash
-   podman volume inspect ai-workflows_phoenix-data --format '{{.Mountpoint}}'
+   podman-compose exec phoenix-db psql -U phoenix -d phoenix -c \
+     "SELECT version_num FROM alembic_version;"
+
+   podman-compose exec phoenix-db psql -U phoenix -d phoenix -c \
+     "UPDATE alembic_version SET version_num = '575aa27302ee' WHERE version_num = '0ff41b5b118f';"
    ```
 
-3. Stamp the database:
-
-   ```bash
-   python3 -c "
-   import sqlite3, sys
-   db = '$(podman volume inspect ai-workflows_phoenix-data --format '{{.Mountpoint}}')/phoenix.db'
-   conn = sqlite3.connect(db)
-   cur = conn.cursor()
-   cur.execute('SELECT version_num FROM alembic_version')
-   print('Current:', cur.fetchall())
-   cur.execute(\"UPDATE alembic_version SET version_num = '575aa27302ee' WHERE version_num = '0ff41b5b118f'\")
-   print('Rows updated:', cur.rowcount)
-   conn.commit()
-   cur.execute('SELECT version_num FROM alembic_version')
-   print('Updated:', cur.fetchall())
-   conn.close()
-   "
-   ```
-
-4. Start Phoenix again:
+3. Start Phoenix again:
 
    ```bash
    podman-compose start phoenix
@@ -223,7 +208,7 @@ expects. For the v16 → v15 rollback, the known revisions are:
 
 #### Fix in OpenShift
 
-1. Scale down Phoenix to release the PVC:
+1. Scale down Phoenix:
 
    ```bash
    oc scale deployment phoenix --replicas=0
@@ -242,24 +227,16 @@ expects. For the v16 → v15 rollback, the known revisions are:
    "
    ```
 
-3. Update the `alembic_version` in the SQLite database (replace `OLD_REV` and
+3. Update the `alembic_version` in PostgreSQL (replace `OLD_REV` and
    `NEW_REV` with the values from the table above, or use step 2 output for a
    different version pair):
 
    ```bash
-   oc debug deployment/phoenix --container=phoenix -- python3 -c "
-   import sqlite3
-   conn = sqlite3.connect('/mnt/data/phoenix.db')
-   cur = conn.cursor()
-   cur.execute('SELECT version_num FROM alembic_version')
-   print('Current:', cur.fetchall())
-   cur.execute(\"UPDATE alembic_version SET version_num = 'NEW_REV' WHERE version_num = 'OLD_REV'\")
-   print('Rows updated:', cur.rowcount)
-   conn.commit()
-   cur.execute('SELECT version_num FROM alembic_version')
-   print('Updated:', cur.fetchall())
-   conn.close()
-   "
+   oc exec deployment/phoenix-db -- psql -U phoenix -d phoenix -c \
+     "SELECT version_num FROM alembic_version;"
+
+   oc exec deployment/phoenix-db -- psql -U phoenix -d phoenix -c \
+     "UPDATE alembic_version SET version_num = 'NEW_REV' WHERE version_num = 'OLD_REV';"
    ```
 
 4. Scale Phoenix back up:
@@ -269,7 +246,7 @@ expects. For the v16 → v15 rollback, the known revisions are:
    ```
 
 The stamp only updates Alembic's tracking metadata — any extra columns or indexes
-added by the newer version's migrations remain in the database. SQLite tolerates
+added by the newer version's migrations remain in the database. PostgreSQL tolerates
 unused columns, so this is generally safe.
 
 ## Advanced Usage

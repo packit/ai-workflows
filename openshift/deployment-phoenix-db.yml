@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phoenix-db
+  annotations:
+    image.openshift.io/triggers: |
+      [
+        {
+          "from": {
+            "kind": "ImageStreamTag",
+            "name": "phoenix-db:prod"
+          },
+          "fieldPath": "spec.template.spec.containers[?(@.name==\"phoenix-db\")].image"
+        }
+      ]
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: phoenix-db
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: phoenix-db
+        deployment: phoenix-db
+    spec:
+      containers:
+      - envFrom:
+        - secretRef:
+            name: phoenix-db-env
+        image: phoenix-db:prod
+        imagePullPolicy: IfNotPresent
+        name: phoenix-db
+        ports:
+        - containerPort: 5432
+          protocol: TCP
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U $POSTGRESQL_USER -d $POSTGRESQL_DATABASE
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U $POSTGRESQL_USER -d $POSTGRESQL_DATABASE
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        resources:
+          limits:
+            cpu: "500m"
+            memory: 1Gi
+          requests:
+            cpu: "25m"
+            memory: 256Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /var/lib/pgsql/data
+          name: phoenix-db-data
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: phoenix-db-data
+        persistentVolumeClaim:
+          claimName: phoenix-db-data

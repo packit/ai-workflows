@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -8,28 +9,57 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-REPO_CLEANUP_DAYS = 14
+REPO_CLEANUP_DAYS = 7
+
+
+def sanitize_url(text: str) -> str:
+    """Remove oauth2:{token}@ credentials from URLs in error messages."""
+    return re.sub(r"oauth2:[^@\s]+@", "oauth2:***@", text)
+
+
+APPLICABILITY_DIR = "applicability"
+MERGE_REQUESTS_DIR = "merge_requests"
+NESTED_WORK_DIRS = {APPLICABILITY_DIR, MERGE_REQUESTS_DIR}
+
+
+def _remove_if_stale(path: Path, cutoff_time: datetime) -> bool:
+    """Delete *path* if its mtime predates *cutoff_time*. Return True on deletion."""
+    mod_time = datetime.fromtimestamp(path.stat().st_mtime)
+    if mod_time < cutoff_time:
+        logger.info(f"Deleting old directory: {path}")
+        shutil.rmtree(path, ignore_errors=False)
+        return True
+    return False
 
 
 def cleanup_stale_directories(git_repos_path: Path, cutoff_time: datetime) -> int:
     """
     Finds and deletes stale directories in the specified path.
+    Top-level directories are checked directly; known container directories
+    (see NESTED_WORK_DIRS) are stepped into and their children are checked
+    individually.
     Ignores all exceptions that could occur during cleanup.
     Return the number of deleted directories.
     """
     deleted_count = 0
     for item_path in git_repos_path.iterdir():
         try:
-            if not item_path.is_dir() or not item_path.name.lower().startswith("rhel-"):
+            if not item_path.is_dir():
                 continue
 
-            mod_time = datetime.fromtimestamp(item_path.stat().st_mtime)
-            if mod_time < cutoff_time:
-                logger.info(f"Deleting old directory: {item_path}")
-                shutil.rmtree(item_path, ignore_errors=False)
+            if item_path.name in NESTED_WORK_DIRS:
+                for child in item_path.iterdir():
+                    try:
+                        if child.is_dir() and _remove_if_stale(child, cutoff_time):
+                            deleted_count += 1
+                    except Exception as ex:
+                        logger.warning(f"Failed to delete directory {child}: {ex}")
+                continue
+
+            if _remove_if_stale(item_path, cutoff_time):
                 deleted_count += 1
         except Exception as ex:
-            logger.warning(f"Failed to delete directory {item_path}: {ex}")
+            logger.warning(f"Failed to process directory {item_path}: {ex}")
             continue
 
     return deleted_count
@@ -37,7 +67,7 @@ def cleanup_stale_directories(git_repos_path: Path, cutoff_time: datetime) -> in
 
 async def clean_stale_repositories() -> int:
     """
-    Cleans up stale repositories (older than 14 days).
+    Cleans up stale repositories (older than REPO_CLEANUP_DAYS days).
 
     Don't raise an error if the cleanup fails.
     Return the number of deleted directories.

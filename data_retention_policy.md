@@ -8,8 +8,8 @@
 
 | Data Type | Retention | Status | Storage |
 |-----------|-----------|--------|---------|
-| **Git repository clones** | 14 days | ✅ Configured | `git-repos` volume |
-| **Phoenix observability traces** | Infinite (default) | ⚠️ Not configured | `phoenix-data` (10Gi) |
+| **Git repository clones** | 7 days | ✅ Configured | `git-repos` volume |
+| **Phoenix observability traces** | Infinite (default) | ⚠️ Not configured | PostgreSQL (`phoenix-db-data`, 20Gi) |
 | **Redis task queues** (Jira interaction history) | Indefinite | ⚠️ Not configured | `valkey-data` (2Gi) |
 | **Temporary build artifacts** | Agent execution only | ✅ Automatic | Within git clones |
 | **MR comments/history** | N/A | Stored in GitLab.com | External |
@@ -18,24 +18,27 @@
 
 ## Implementation Details
 
-### Git Repository Clones (14 Days) ✅
+### Git Repository Clones (7 Days) ✅
 
 **Configured in:** `ymir/tools/privileged/utils.py`
 ```python
-REPO_CLEANUP_DAYS = 14
+REPO_CLEANUP_DAYS = 7
 ```
 
 - Automatic cleanup on every `clone_repository` call
-- Deletes `RHEL-*` directories older than 14 days based on modification time
+- Deletes all stale working directories older than 7 days based on modification time
+- Steps into container directories (`applicability/`, `merge_requests/`) and cleans their children individually
 - Implemented in `clean_stale_repositories()` function
 
 ---
 
 ### Phoenix Observability Traces ⚠️
 
-**Current:** No retention policy configured (infinite retention)
+**Current:** No retention policy configured (infinite retention). Phoenix uses PostgreSQL
+as its database backend (migrated from SQLite). Data is stored in the `phoenix-db-data`
+PVC (20Gi).
 
-**Recommendation:** Add 14-day retention to align with git cleanup policy
+**Recommendation:** Add 7-day retention to align with git cleanup policy
 
 ```yaml
 # openshift/deployment-phoenix.yml
@@ -70,10 +73,10 @@ env:
 ## Summary
 
 **Configured Retention:**
-- ✅ Git clones: 14 days automatic cleanup
+- ✅ Git clones: 7 days automatic cleanup
 
 **Missing Retention:**
-- ⚠️ Phoenix traces: No policy (defaults to infinite, limited by 10Gi volume)
+- ⚠️ Phoenix traces: No policy (defaults to infinite, stored in PostgreSQL on 20Gi volume)
 - ⚠️ Redis queues (Jira interaction history): No policy (defaults to indefinite, limited by 2Gi volume)
 
 **Next Review:** 2027-03-04

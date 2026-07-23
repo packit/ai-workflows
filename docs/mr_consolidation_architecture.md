@@ -18,9 +18,15 @@ originals as consolidated.
 ┌──────────────┐       submit_merge_job()       ┌────────────────────┐
 │              │  ─────────────────────────────▶ │                    │
 │   Backport   │   (after filing an MR, if       │   Redis Queue      │
-│   Agent      │    ymir.yaml enables it          │   (Hash-based,     │
-│              │    it for the package)           │    per pkg/branch) │
+│   Agent      │    ymir.yaml enables it)        │   (Hash-based,     │
+│              │                                 │    per pkg/branch) │
 └──────────────┘                                 └────────┬───────────┘
+                                                          │
+┌──────────────┐       submit_merge_job()                 │
+│   Rebuild    │  ─────────────────────────────▶          │
+│   Agent      │   (after filing an MR, if                │
+│              │    ymir.yaml enables it)                  │
+└──────────────┘                                          │
                                                           │
 ┌──────────────┐       submit_merge_job()                 │
 │ Jira Issue   │  ─────────────────────────────▶          │
@@ -38,7 +44,7 @@ originals as consolidated.
                                                  │  1. list_open_mrs  │
                                                  │  2. fork & clone   │
                                                  │  3. filter by HEAD │
-                                                 │  4. LLM merges     │
+                                                 │  4. merge/append   │
                                                  │  5. build verify   │
                                                  │  6. log & commit   │
                                                  │  7. mark originals │
@@ -295,6 +301,34 @@ exactly those two MRs — it does **not** fall back to the "oldest two" heuristi
 `ymir_consolidate_next` for the same package/branch (or vice versa), the fetcher logs
 a warning and leaves the labels untouched for the next sweep.
 
+## Rebuild + Backport Consolidation
+
+When a package has both an open backport MR (`ymir_backport`) and a rebuild MR
+(`ymir_rebuild`) for the same branch, the consolidation agent can fold the rebuild
+into the backport. This avoids a double Release bump since the backport already
+bumps Release.
+
+### How it works
+
+1. **Discovery**: `list_open_mrs` searches for both `ymir_backport` and `ymir_rebuild`
+   labeled MRs. At least one backport MR must be present.
+2. **Selection priority**: backport+backport pairs are consolidated first. Only when
+   fewer than 2 backport MRs exist does the agent pick a backport+rebuild pair.
+3. **Append-only flow**: The backport branch is cherry-picked as the base. The rebuild
+   branch is NOT cherry-picked (its Release bump + changelog are redundant). Instead,
+   only the rebuild's Jira ticket(s) and CVE(s) are appended to the commit message.
+4. **CVE propagation**: CVE IDs from both MRs are collected. The `CVE:` line in the
+   commit message is updated only if the base backport already had one (respecting
+   per-package maintainer rules that may omit it).
+5. **Output**: The consolidated MR is labeled `ymir_backport`. The original rebuild MR
+   is labeled `ymir_consolidated`.
+
+### Triggering
+
+Both the backport agent and the rebuild agent submit consolidation jobs after
+creating their MRs (when `ymir.yaml` enables consolidation). The consolidation
+agent discovers eligible pairs regardless of which agent triggered the job.
+
 ## Safety Invariants
 
 | Invariant | Mechanism |
@@ -321,6 +355,7 @@ a warning and leaves the labels untouched for the next sweep.
 | `ymir/common/constants.py` | `MERGE_CONSOLIDATION_QUEUE` Redis key name |
 | `ymir/tools/privileged/gitlab.py` | `ListProjectMergeRequestsTool`, `AddMergeRequestLabelsTool` |
 | `ymir/agents/backport_agent.py` | `submit_consolidation_job` step (triggers consolidation) |
+| `ymir/agents/rebuild_agent.py` | `submit_consolidation_job` step (triggers consolidation for rebuild+backport) |
 | `ymir/jira_issue_fetcher/jira_issue_fetcher.py` | Label-triggered consolidation scanning (`_process_consolidation_labels`) |
 | `ymir/agents/tests/unit/test_mr_consolidation.py` | Unit tests for Redis queue logic |
 | `ymir/agents/tests/e2e/mr_consolidation/` | E2E test suite with LLM judge evaluation |

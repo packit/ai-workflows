@@ -433,7 +433,7 @@ async def _check_zstream_clones_shipped(
             logger.info(f"  {key}: fixVersions={fv_names} — not a relevant Z-stream, skipping")
             continue
 
-        if status_name == "Closed" and resolution_name == "Done-Errata":
+        if status_name == "Closed" and resolution_name in ("Done-Errata", "Done"):
             logger.info(f"  {key}: fixVersions={fv_names}, resolution={resolution_name} — shipped")
             any_shipped = True
         elif status_name == "Closed":

@@ -132,15 +132,35 @@ services:
     restart: unless-stopped
     profiles: ["agents", "supervisor", "e2e-test"]
 
+  phoenix-db:
+    image: quay.io/sclorg/postgresql-16-c9s
+    environment:
+      - POSTGRESQL_USER=phoenix
+      - POSTGRESQL_PASSWORD=phoenix
+      - POSTGRESQL_DATABASE=phoenix
+    volumes:
+      - phoenix-db-data:/var/lib/pgsql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phoenix -d phoenix"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    profiles: ["agents", "supervisor", "e2e-test"]
+
   phoenix:
     image: quay.io/jotnar/phoenix:latest
     build:
       context: .
       dockerfile: Containerfile.phoenix
+    depends_on:
+      phoenix-db:
+        condition: service_healthy
     ports:
       - "0.0.0.0:6006:6006"
     environment:
       - PHOENIX_WORKING_DIR=/mnt/data
+      - PHOENIX_SQL_DATABASE_URL=postgresql://phoenix:phoenix@phoenix-db/phoenix
     volumes:
       - phoenix-data:/mnt/data
     restart: unless-stopped
@@ -372,5 +392,6 @@ services:
 volumes:
   valkey-data:
   phoenix-data:
+  phoenix-db-data:
   trace-server-data:
   git-repos:

@@ -34,6 +34,25 @@ spec:
           value: /mnt/data
         - name: PHOENIX_PORT
           value: "6006"
+        - name: PHOENIX_POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: phoenix-db-env
+              key: POSTGRESQL_USER
+        - name: PHOENIX_POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: phoenix-db-env
+              key: POSTGRESQL_PASSWORD
+        - name: PHOENIX_POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: phoenix-db-env
+              key: POSTGRESQL_DATABASE
+        - name: PHOENIX_SQL_DATABASE_URL
+          value: postgresql://$(PHOENIX_POSTGRES_USER):$(PHOENIX_POSTGRES_PASSWORD)@phoenix-db/$(PHOENIX_POSTGRES_DB)
+        - name: PHOENIX_MIGRATE_INDEX_CONCURRENTLY
+          value: "true"
         image: phoenix:prod
         imagePullPolicy: IfNotPresent
         name: phoenix

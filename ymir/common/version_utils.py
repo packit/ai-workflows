@@ -8,6 +8,8 @@ strings in various formats (e.g., rhel-9.8, rhel-9.7.z, rhel-9.0.0.z).
 import contextvars
 import re
 
+_DIST_TAG_RE = re.compile(r"\.el(\d+)(_\d+)?")
+
 current_z_streams_override: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
     "current_z_streams_override", default=None
 )
@@ -123,6 +125,18 @@ def get_maintenance_majors(rhel_config: dict) -> set[str]:
     current_z_streams = rhel_config.get("current_z_streams", {})
     current_y_streams = rhel_config.get("current_y_streams", {})
     return set(current_z_streams.keys()) - set(current_y_streams.keys())
+
+
+def nvr_to_cs_nvr(nvr: str) -> str | None:
+    """Derive the CentOS Stream NVR from a Brew NVR by stripping the Z-stream suffix.
+
+    Brew Z-stream builds use dist tags like ``.el9_8``; the equivalent CentOS
+    Stream build uses ``.el9``.  Returns None if no dist tag is found.
+    """
+    match = _DIST_TAG_RE.search(nvr)
+    if not match:
+        return None
+    return nvr[: match.start()] + f".el{match.group(1)}" + nvr[match.end() :]
 
 
 def get_fix_version_variants(fix_version: str) -> list[str]:

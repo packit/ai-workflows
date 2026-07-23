@@ -14,6 +14,7 @@ from ymir.tools.privileged.jira import (
     ChangeJiraStatusTool,
     CheckCveTriageEligibilityTool,
     EditJiraLabelsTool,
+    FixApproach,
     GetJiraDetailsTool,
     SearchJiraIssuesTool,
     SetJiraFieldsTool,
@@ -883,7 +884,8 @@ async def test_eligibility_ystream_clones_pending():
 
 @pytest.mark.parametrize("severity", ["Low", "Moderate"])
 @pytest.mark.asyncio
-async def test_eligibility_ystream_low_moderate_skipped(severity):
+async def test_eligibility_ystream_low_moderate_pending(severity):
+    """Low/Moderate Y-stream, no Z-stream clone has Fixed in Build yet — PENDING_DEPENDENCIES."""
     issue = _make_jira_issue(
         labels=["SecurityTracking"],
         fix_versions=[{"name": "rhel-9.8"}],
@@ -898,10 +900,72 @@ async def test_eligibility_ystream_low_moderate_skipped(severity):
     flexmock(jira_tools).should_receive("_check_duplicate_tracker").and_return(
         _create_async_return((None, False))
     ).once()
+    flexmock(jira_tools).should_receive("_check_zstream_fix_approach").with_args(
+        "CVE-2025-12345", "curl", "RHEL-12345", "9"
+    ).and_return(_create_async_return((FixApproach.PENDING, ["RHEL-999"], ""))).once()
+
+    result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
+    assert result["eligibility"] == TriageEligibility.PENDING_DEPENDENCIES
+    assert result["pending_zstream_issues"] == ["RHEL-999"]
+    assert "waiting for RHEL-9 Z-stream clone Fixed in Build" in result["reason"]
+    assert "CentOS Stream first or RHEL first approach" in result["reason"]
+
+
+@pytest.mark.parametrize("severity", ["Low", "Moderate"])
+@pytest.mark.asyncio
+async def test_eligibility_ystream_low_moderate_cs_first(severity):
+    """Low/Moderate Y-stream, CS build found in Koji — NEVER (CentOS Stream first)."""
+    issue = _make_jira_issue(
+        labels=["SecurityTracking"],
+        fix_versions=[{"name": "rhel-9.8"}],
+        summary="CVE-2025-12345 buffer overflow in curl [rhel-9.8]",
+        severity=severity,
+        components=[{"name": "curl"}],
+    )
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+    flexmock(jira_tools).should_receive("_check_duplicate_tracker").and_return(
+        _create_async_return((None, False))
+    ).once()
+    flexmock(jira_tools).should_receive("_check_zstream_fix_approach").with_args(
+        "CVE-2025-12345", "curl", "RHEL-12345", "9"
+    ).and_return(
+        _create_async_return((FixApproach.CS_FIRST, [], "CS build curl-8.0-1.el9 found in CS Koji"))
+    ).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
     assert result["eligibility"] == TriageEligibility.NEVER
-    assert "CentOS Stream path" in result["reason"]
+    assert "CentOS Stream first approach" in result["reason"]
+
+
+@pytest.mark.parametrize("severity", ["Low", "Moderate"])
+@pytest.mark.asyncio
+async def test_eligibility_ystream_low_moderate_rhel_first(severity):
+    """Low/Moderate Y-stream, no CS build found — IMMEDIATELY (RHEL first)."""
+    issue = _make_jira_issue(
+        labels=["SecurityTracking"],
+        fix_versions=[{"name": "rhel-9.8"}],
+        summary="CVE-2025-12345 buffer overflow in curl [rhel-9.8]",
+        severity=severity,
+        components=[{"name": "curl"}],
+    )
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+    flexmock(jira_tools).should_receive("_check_duplicate_tracker").and_return(
+        _create_async_return((None, False))
+    ).once()
+    flexmock(jira_tools).should_receive("_check_zstream_fix_approach").with_args(
+        "CVE-2025-12345", "curl", "RHEL-12345", "9"
+    ).and_return(_create_async_return((FixApproach.RHEL_FIRST, [], "no matching CS build in CS Koji"))).once()
+
+    result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
+    assert result["eligibility"] == TriageEligibility.IMMEDIATELY
+    assert result["needs_internal_fix"] is False
+    assert "RHEL first approach" in result["reason"]
 
 
 @pytest.mark.asyncio

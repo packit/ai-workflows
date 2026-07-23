@@ -1514,6 +1514,13 @@ async def run_workflow(
                         )
                     except Exception as e:
                         logger.warning("Failed to label reused consolidated MR: %s", e)
+                if state.merge_request_newly_created and state.merge_request_url:
+                    await tasks.request_mr_reviews(
+                        package,
+                        dist_git_branch,
+                        state.merge_request_url,
+                        gateway_tools,
+                    )
             except Exception as e:
                 logger.error("Failed to create consolidated MR: %s", e)
                 state.consolidation_result = MRConsolidationOutputSchema(

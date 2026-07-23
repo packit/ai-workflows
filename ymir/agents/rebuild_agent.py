@@ -260,6 +260,7 @@ async def main() -> None:
                             )
                             else []
                         ),
+                        package=state.package,
                     )
                     state.rebuild_success = True
                 except Exception as e:

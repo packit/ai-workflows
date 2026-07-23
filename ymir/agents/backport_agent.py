@@ -711,6 +711,7 @@ async def run_workflow(
                         if await tasks.needs_zstream_target_label(state.dist_git_branch, state.fix_version)
                         else []
                     ),
+                    package=state.package,
                 )
             except Exception as e:
                 logger.warning(f"Error committing and opening MR: {e}")

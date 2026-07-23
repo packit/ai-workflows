@@ -712,6 +712,47 @@ class AddMergeRequestLabelsTool(Tool[AddMergeRequestLabelsToolInput, ToolRunOpti
             raise ToolError(f"Failed to add labels to merge request: {e}") from e
 
 
+class SetMergeRequestReviewersToolInput(BaseModel):
+    merge_request_url: str = Field(description="URL of the merge request")
+    reviewer_ids: list[int] = Field(description="List of GitLab user IDs to set as reviewers")
+
+
+class SetMergeRequestReviewersTool(Tool[SetMergeRequestReviewersToolInput, ToolRunOptions, StringToolOutput]):
+    name = "set_merge_request_reviewers"
+    description = """
+    Sets reviewers on an existing merge request.
+    """
+    input_schema = SetMergeRequestReviewersToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: SetMergeRequestReviewersToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        merge_request_url = tool_input.merge_request_url
+        reviewer_ids = tool_input.reviewer_ids
+        try:
+            mr = await _get_merge_request_from_url(merge_request_url)
+
+            def set_reviewers():
+                mr._raw_pr.reviewer_ids = reviewer_ids
+                mr._raw_pr.save()
+
+            await asyncio.to_thread(set_reviewers)
+            return StringToolOutput(
+                result=f"Successfully set reviewers {reviewer_ids} on merge request {merge_request_url}"
+            )
+        except Exception as e:
+            raise ToolError(f"Failed to set reviewers on merge request: {e}") from e
+
+
 class AddMergeRequestCommentToolInput(BaseModel):
     merge_request_url: str = Field(description="URL of the merge request")
     comment: str = Field(description="Comment text")

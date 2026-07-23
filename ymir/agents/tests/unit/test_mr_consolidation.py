@@ -5,8 +5,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ymir.agents.mr_consolidation_agent import (
-    _extract_cves_from_text,
+    _extract_cves_from_cve_footer_lines,
     _extract_jira_issues_from_description,
+    _extract_jira_issues_from_resolves_footer_lines,
     _extract_resolves_from_commit,
     _mr_type_from_labels,
 )
@@ -612,28 +613,83 @@ async def test_sweep_uses_activated_at_not_submitted_at(fake_redis):
     assert await fake_redis.hget(HASH_KEY, active_key) is not None
 
 
-# -- _extract_cves_from_text ---------------------------------------------------
+# -- _extract_cves_from_cve_footer_lines --------------------------------------
 
 
-class TestExtractCves:
-    def test_single_cve(self):
-        assert _extract_cves_from_text("Fixed CVE-2024-12345") == ["CVE-2024-12345"]
+class TestExtractCvesFromFooterLines:
+    def test_single_cve_footer(self):
+        assert _extract_cves_from_cve_footer_lines("CVE: CVE-2026-12617") == ["CVE-2026-12617"]
 
-    def test_multiple_cves(self):
-        text = "CVE: CVE-2024-1111, CVE-2024-2222\nAlso fixes CVE-2023-99999"
-        result = _extract_cves_from_text(text)
-        assert result == ["CVE-2023-99999", "CVE-2024-1111", "CVE-2024-2222"]
+    def test_multi_cve_footer(self):
+        text = "CVE: CVE-2026-11331, CVE-2026-13204"
+        assert _extract_cves_from_cve_footer_lines(text) == [
+            "CVE-2026-11331",
+            "CVE-2026-13204",
+        ]
 
-    def test_no_cves(self):
-        assert _extract_cves_from_text("No vulnerabilities here") == []
+    def test_ignores_cves_outside_footer(self):
+        text = (
+            "Fix named crash on CNAME/DNAME queries (CVE-2026-12617)\n\n"
+            "Backport CVE-2026-12617 fix from upstream.\n"
+            "pattern of backporting (e.g. bind-9.18-CVE-2024-4076.patch, "
+            "bind-9.18-CVE-2024-11187.patch).\n\n"
+            "CVE: CVE-2026-12617\n"
+            "Resolves: RHEL-213450\n"
+        )
+        assert _extract_cves_from_cve_footer_lines(text) == ["CVE-2026-12617"]
+
+    def test_no_footer_returns_empty(self):
+        assert _extract_cves_from_cve_footer_lines("No vulnerabilities here") == []
+        assert (
+            _extract_cves_from_cve_footer_lines(
+                "Added bind-9.18-CVE-2024-4076.patch",
+            )
+            == []
+        )
 
     def test_deduplication(self):
-        text = "CVE-2024-1111 and CVE-2024-1111 again"
-        assert _extract_cves_from_text(text) == ["CVE-2024-1111"]
+        text = "CVE: CVE-2024-1111\nCVE: CVE-2024-1111"
+        assert _extract_cves_from_cve_footer_lines(text) == ["CVE-2024-1111"]
 
     def test_cve_in_commit_message_format(self):
         text = "Rebuild gnutls\n\nCVE: CVE-2024-55555\nResolves: RHEL-12345"
-        assert _extract_cves_from_text(text) == ["CVE-2024-55555"]
+        assert _extract_cves_from_cve_footer_lines(text) == ["CVE-2024-55555"]
+
+
+# -- _extract_jira_issues_from_resolves_footer_lines ---------------------------
+
+
+class TestExtractJiraFromResolvesFooterLines:
+    def test_single_resolves(self):
+        assert _extract_jira_issues_from_resolves_footer_lines(
+            "Resolves: RHEL-213450",
+        ) == ["RHEL-213450"]
+
+    def test_multi_resolves(self):
+        assert _extract_jira_issues_from_resolves_footer_lines(
+            "Resolves: RHEL-1, RHEL-2",
+        ) == ["RHEL-1", "RHEL-2"]
+
+    def test_related_line(self):
+        assert _extract_jira_issues_from_resolves_footer_lines(
+            "Related: RHEL-99999",
+        ) == ["RHEL-99999"]
+
+    def test_ignores_prose_without_footer(self):
+        text = (
+            "Verified that RHEL-159046 was already closed.\n"
+            "The gnutls package (RHEL-154320) already shipped this.\n"
+        )
+        assert _extract_jira_issues_from_resolves_footer_lines(text) == []
+
+    def test_ignores_prose_keeps_footer(self):
+        text = (
+            "Fix CVE-2026-12617 for bind\n\n"
+            "Mentioning RHEL-99999 in triage only.\n\n"
+            "CVE: CVE-2026-12617\n"
+            "Resolves: RHEL-213450\n"
+        )
+        assert _extract_jira_issues_from_resolves_footer_lines(text) == ["RHEL-213450"]
 
 
 # -- _mr_type_from_labels ------------------------------------------------------

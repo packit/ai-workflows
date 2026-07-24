@@ -2,8 +2,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ymir.agents.triage_agent import _should_update_jira
-from ymir.common.models import Resolution, Task
+from ymir.agents.triage_agent import (
+    _is_modular,
+    _map_version_to_module_branch,
+    _parse_module_summary,
+    _should_update_jira,
+    determine_target_branch,
+)
+from ymir.common.models import BackportData, CVEEligibilityResult, Resolution, Task, TriageEligibility
 
 
 @pytest.mark.parametrize(
@@ -163,3 +169,201 @@ async def test_process_task_proceeds_for_open_issues():
         await process_task(_make_payload())
 
     mock_workflow.assert_awaited_once()
+
+
+# --- Modular detection tests ---
+
+
+@pytest.mark.parametrize(
+    "summary, expected",
+    [
+        ("postgresql:12/postgresql:PostgreSQL: Arbitrary code execution", True),
+        ("postgresql:12.0/postgresql:PostgreSQL: some vulnerability", True),
+        ("nodejs:18/nodejs:Node.js: buffer overflow", True),
+        ("perl-DBD-MySQL:8.0/perl-DBD-MySQL:Fix for crash", True),
+        ("ruby:3.1-beta/ruby:Ruby: CVE fix", True),
+        ("python3.11:3.11/python3.11:Python: CVE fix", True),
+        ("gcc-c++:10/gcc-c++:GCC: CVE fix", True),
+        (
+            "CVE-2026-32748 squid:4/squid: Squid: Denial of Service via crafted ICP traffic [rhel-8.10.z]",
+            True,
+        ),
+        ("postgresql:PostgreSQL: Arbitrary code execution", False),
+        ("CVE-2025-9900 libtiff: Libtiff Write-What-Where [rhel-9.2.0.z]", False),
+        ("some plain summary without colons", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_is_modular(summary, expected):
+    assert _is_modular(summary) is expected
+
+
+# --- Module summary parsing tests ---
+
+
+@pytest.mark.parametrize(
+    "summary, expected_module, expected_stream",
+    [
+        ("postgresql:12/postgresql:PostgreSQL: vuln", "postgresql", "12"),
+        ("nodejs:18/nodejs:Node.js: issue", "nodejs", "18"),
+        ("perl-DBD-MySQL:8.0/perl-DBD-MySQL:Fix", "perl-DBD-MySQL", "8.0"),
+        ("ruby:3.1-beta/ruby:Ruby: CVE", "ruby", "3.1-beta"),
+        ("python3.11:3.11/python3.11:Python: CVE", "python3.11", "3.11"),
+        ("gcc-c++:10/gcc-c++:GCC: CVE", "gcc-c++", "10"),
+        (
+            "CVE-2026-32748 squid:4/squid: Squid: Denial of Service [rhel-8.10.z]",
+            "squid",
+            "4",
+        ),
+    ],
+)
+def test_parse_module_summary(summary, expected_module, expected_stream):
+    result = _parse_module_summary(summary)
+    assert result is not None
+    module, stream = result
+    assert module == expected_module
+    assert stream == expected_stream
+
+
+def test_parse_module_summary_non_modular():
+    assert _parse_module_summary("postgresql:PostgreSQL: vuln") is None
+
+
+# --- Modular branch mapping tests ---
+
+
+@pytest.mark.parametrize(
+    "version, summary, expected_branch",
+    [
+        (
+            "rhel-9.8",
+            "postgresql:12/postgresql:PostgreSQL: vuln",
+            "stream-postgresql-12-rhel-9.8.0",
+        ),
+        (
+            "rhel-9.9",
+            "postgresql:12/postgresql:PostgreSQL: vuln",
+            "stream-postgresql-12-rhel-9.9.0",
+        ),
+        (
+            "rhel-10.2",
+            "nodejs:18/nodejs:Node.js: issue",
+            "stream-nodejs-18-rhel-10.2.0",
+        ),
+        (
+            "rhel-9.8.z",
+            "postgresql:12/postgresql:PostgreSQL: vuln",
+            "stream-postgresql-12-rhel-9.8.0",
+        ),
+        (
+            "rhel-8.10.z",
+            "CVE-2026-32748 squid:4/squid: Squid: Denial of Service [rhel-8.10.z]",
+            "stream-squid-4-rhel-8.10.0",
+        ),
+    ],
+)
+def test_map_version_to_module_branch(version, summary, expected_branch):
+    branch = _map_version_to_module_branch(version, summary)
+    assert branch == expected_branch
+
+
+def test_map_version_to_module_branch_invalid_version():
+    branch = _map_version_to_module_branch("not-a-version", "postgresql:12/postgresql:vuln")
+    assert branch is None
+
+
+# --- Modular target branch + namespace selection ---
+
+
+def _modular_backport_data(
+    summary: str = "CVE-2026-32748 squid:4/squid: Squid: Denial of Service [rhel-8.10.z]",
+    fix_version: str = "rhel-8.10.z",
+) -> BackportData:
+    return BackportData(
+        package="squid",
+        patch_urls=["https://example.com/fix.patch"],
+        justification="test",
+        jira_issue="RHEL-160675",
+        cve_id="CVE-2026-32748",
+        fix_version=fix_version,
+        summary=summary,
+    )
+
+
+def _cve_eligibility(*, needs_internal_fix: bool) -> CVEEligibilityResult:
+    return CVEEligibilityResult(
+        is_cve=True,
+        eligibility=TriageEligibility.IMMEDIATELY,
+        reason="test",
+        needs_internal_fix=needs_internal_fix,
+    )
+
+
+@pytest.mark.asyncio
+async def test_determine_target_branch_modular_internal_fix_uses_rhel():
+    with patch(
+        "ymir.agents.triage_agent.is_older_zstream",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
+        branch, namespace = await determine_target_branch(
+            _cve_eligibility(needs_internal_fix=True),
+            _modular_backport_data(),
+        )
+    assert branch == "stream-squid-4-rhel-8.10.0"
+    assert namespace == "rhel"
+
+
+@pytest.mark.asyncio
+async def test_determine_target_branch_modular_cs_eligible_uses_centos_stream():
+    with patch(
+        "ymir.agents.triage_agent.is_older_zstream",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
+        branch, namespace = await determine_target_branch(
+            _cve_eligibility(needs_internal_fix=False),
+            _modular_backport_data(),
+        )
+    assert branch == "stream-squid-4-rhel-8.10.0"
+    assert namespace == "centos-stream"
+
+
+@pytest.mark.asyncio
+async def test_determine_target_branch_modular_older_zstream_uses_rhel():
+    with patch(
+        "ymir.agents.triage_agent.is_older_zstream",
+        new_callable=AsyncMock,
+        return_value=True,
+    ):
+        branch, namespace = await determine_target_branch(
+            _cve_eligibility(needs_internal_fix=False),
+            _modular_backport_data(fix_version="rhel-8.6.z"),
+        )
+    assert branch == "stream-squid-4-rhel-8.6.0"
+    assert namespace == "rhel"
+
+
+@pytest.mark.asyncio
+async def test_determine_target_branch_non_modular_has_no_explicit_namespace():
+    data = BackportData(
+        package="nginx",
+        patch_urls=["https://example.com/fix.patch"],
+        justification="test",
+        jira_issue="RHEL-1",
+        cve_id="CVE-2026-1",
+        fix_version="rhel-10.2.z",
+        summary="CVE-2026-1 nginx: something [rhel-10.2.z]",
+    )
+    with patch(
+        "ymir.agents.triage_agent._map_version_to_branch",
+        new_callable=AsyncMock,
+        return_value="rhel-10.2",
+    ):
+        branch, namespace = await determine_target_branch(
+            _cve_eligibility(needs_internal_fix=True),
+            data,
+        )
+    assert branch == "rhel-10.2"
+    assert namespace is None

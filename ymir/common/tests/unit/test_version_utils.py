@@ -85,10 +85,17 @@ def test_parse_zstream_branch_name(branch, expected):
         ("c10s", ("10", None)),
         # RHEL main branches
         ("rhel-10-main", ("10", None)),
+        # Modular stream branches
+        ("stream-nginx-1.26-rhel-9.9.0", ("9", "9")),
+        ("stream-squid-4-rhel-8.10.0", ("8", "10")),
+        ("stream-postgresql-12-rhel-9.8.0", ("9", "8")),
+        ("stream-nodejs-18-rhel-10.2.0", ("10", "2")),
+        ("STREAM-nginx-1.26-rhel-9.9.0", ("9", "9")),
         # Not branch names
         ("rhel-9.7.z", None),  # version string, not branch
         ("invalid", None),
         ("", None),
+        ("stream-nginx-1.26", None),  # missing rhel version suffix
     ],
 )
 def test_parse_branch_name(branch, expected):

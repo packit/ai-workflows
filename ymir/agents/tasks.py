@@ -37,7 +37,6 @@ from ymir.common.version_utils import (
     parse_rhel_version,
     parse_zstream_branch_name,
 )
-from ymir.tools.privileged.reviewer_resolver import resolve_reviewers
 from ymir.tools.privileged.utils import APPLICABILITY_DIR, MERGE_REQUESTS_DIR
 from ymir.tools.unprivileged.specfile import UpdateReleaseTool
 from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
@@ -296,7 +295,12 @@ async def request_mr_reviews(
     if os.getenv("ASSIGN_MR_REVIEWERS", "false").lower() != "true":
         return
     try:
-        reviewer_ids = await resolve_reviewers(package, dist_git_branch)
+        reviewer_ids = await run_tool(
+            "resolve_reviewers",
+            package=package,
+            dist_git_branch=dist_git_branch,
+            available_tools=available_tools,
+        )
         if not reviewer_ids:
             logger.info("No reviewers resolved for %s (%s)", package, dist_git_branch)
             return

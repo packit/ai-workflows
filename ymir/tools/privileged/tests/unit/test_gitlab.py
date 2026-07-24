@@ -1,6 +1,7 @@
 import asyncio
 import os
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import gitlab
 import pytest
@@ -22,6 +23,7 @@ from ymir.tools.privileged.gitlab import (
     GetFailedPipelineJobsFromMergeRequestTool,
     OpenMergeRequestTool,
     PushToRemoteRepositoryTool,
+    ResolveReviewersTool,
     RetryPipelineJobTool,
     SetMergeRequestReviewersTool,
     _get_git_auth_args,
@@ -1105,3 +1107,14 @@ async def test_set_merge_request_reviewers():
     )
     assert "Successfully set reviewers" in result.result
     assert raw_mr.reviewer_ids == [42, 99]
+
+
+@pytest.mark.asyncio
+async def test_resolve_reviewers_tool():
+    with patch(
+        "ymir.tools.privileged.reviewer_resolver.resolve_reviewers",
+        new_callable=AsyncMock,
+        return_value=[42, 99],
+    ):
+        result = await ResolveReviewersTool().run(input={"package": "bash", "dist_git_branch": "c10s"})
+    assert result.result == [42, 99]

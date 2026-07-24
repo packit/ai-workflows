@@ -753,6 +753,36 @@ class SetMergeRequestReviewersTool(Tool[SetMergeRequestReviewersToolInput, ToolR
             raise ToolError(f"Failed to set reviewers on merge request: {e}") from e
 
 
+class ResolveReviewersToolInput(BaseModel):
+    package: str = Field(description="RPM package name")
+    dist_git_branch: str = Field(description="Target dist-git branch")
+
+
+class ResolveReviewersTool(Tool[ResolveReviewersToolInput, ToolRunOptions, JSONToolOutput[list[int]]]):
+    name = "resolve_reviewers"
+    description = """
+    Resolve reviewer GitLab user IDs for a package from bugzilla component contacts.
+    """
+    input_schema = ResolveReviewersToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: ResolveReviewersToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[list[int]]:
+        from ymir.tools.privileged.reviewer_resolver import resolve_reviewers
+
+        reviewer_ids = await resolve_reviewers(tool_input.package, tool_input.dist_git_branch)
+        return JSONToolOutput(result=reviewer_ids)
+
+
 class AddMergeRequestCommentToolInput(BaseModel):
     merge_request_url: str = Field(description="URL of the merge request")
     comment: str = Field(description="Comment text")

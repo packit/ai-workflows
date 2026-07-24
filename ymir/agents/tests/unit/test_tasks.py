@@ -284,16 +284,13 @@ async def test_commit_push_and_open_mr_assigns_reviewers(tmp_path, monkeypatch):
         tool_calls.append((name, kwargs))
         if name == "open_merge_request":
             return {"url": "https://gitlab.com/redhat/rpms/bash/-/merge_requests/1", "is_new_mr": True}
+        if name == "resolve_reviewers":
+            return [42, 99]
         return None
 
     with (
         patch("ymir.agents.tasks.commit_and_push", new_callable=AsyncMock, return_value=True),
         patch("ymir.agents.tasks.run_tool", side_effect=mock_run_tool),
-        patch(
-            "ymir.agents.tasks.resolve_reviewers",
-            new_callable=AsyncMock,
-            return_value=[42, 99],
-        ),
     ):
         url, is_new = await commit_push_and_open_mr(
             local_clone=tmp_path,
@@ -321,6 +318,8 @@ async def test_commit_push_and_open_mr_reviewer_failure_does_not_fail(tmp_path, 
     async def mock_run_tool(name, *, available_tools=None, **kwargs):
         if name == "open_merge_request":
             return {"url": "https://gitlab.com/redhat/rpms/bash/-/merge_requests/1", "is_new_mr": True}
+        if name == "resolve_reviewers":
+            return [42]
         if name == "set_merge_request_reviewers":
             raise RuntimeError("GitLab API down")
         return None
@@ -328,11 +327,6 @@ async def test_commit_push_and_open_mr_reviewer_failure_does_not_fail(tmp_path, 
     with (
         patch("ymir.agents.tasks.commit_and_push", new_callable=AsyncMock, return_value=True),
         patch("ymir.agents.tasks.run_tool", side_effect=mock_run_tool),
-        patch(
-            "ymir.agents.tasks.resolve_reviewers",
-            new_callable=AsyncMock,
-            return_value=[42],
-        ),
     ):
         url, is_new = await commit_push_and_open_mr(
             local_clone=tmp_path,

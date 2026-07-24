@@ -24,6 +24,8 @@ RUN dnf -y install \
       krb5-libs \
       krb5-workstation \
       krb5-devel \
+      openldap-clients \
+      cyrus-sasl-gssapi \
       git \
       gcc \
       libpq-devel \

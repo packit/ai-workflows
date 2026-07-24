@@ -1,15 +1,24 @@
+import asyncio
 import logging
 import os
+import re
 from urllib.parse import quote
 
 import aiohttp
 
+from ymir.common.base_utils import KerberosError, init_kerberos_ticket, run_subprocess
 from ymir.common.version_utils import parse_branch_name
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 
 logger = logging.getLogger(__name__)
 
 BUGZILLA_DATA_BASE_URL = "https://gitlab.cee.redhat.com/bugzilla-data/components/-/raw/main"
+LDAP_BASE_DN = "cn=users,cn=accounts,dc=ipa,dc=redhat,dc=com"
+LDAP_URI = "ldap:///dc%3Dipa%2Cdc%3Dredhat%2Cdc%3Dcom"
+LDAP_TIMEOUT = 30
+
+_GITLAB_URL_RE = re.compile(r"Gitlab->https://gitlab\.com/([^/\s]+)")
+_LDAP_ESCAPE_RE = re.compile(r"([\\*()\x00])")
 
 
 def parse_component_file(text: str) -> dict[str, str]:
@@ -68,8 +77,8 @@ async def fetch_bugzilla_component_data(
 async def resolve_gitlab_user_id(email: str) -> int | None:
     """Resolve an email address to a gitlab.com user ID.
 
-    Uses the GitLab users search API, then verifies via the single-user
-    endpoint's ``public_email`` field.
+    Tries ``public_email`` matching on gitlab.com first, then falls back
+    to LDAP lookup of ``rhatSocialURL`` for a gitlab.com profile URL.
     """
     token = os.getenv("GITLAB_TOKEN")
     if not token:
@@ -78,6 +87,9 @@ async def resolve_gitlab_user_id(email: str) -> int | None:
 
     headers = {"PRIVATE-TOKEN": token, "User-Agent": YMIR_USER_AGENT}
     user_id = await _search_gitlab_user(email, headers)
+
+    if user_id is None:
+        user_id = await _resolve_via_ldap(email, headers)
 
     if user_id is None:
         logger.warning("Could not resolve GitLab user for %s", email)
@@ -141,6 +153,107 @@ async def _search_gitlab_user(
     return None
 
 
+async def _resolve_via_ldap(
+    email: str,
+    headers: dict[str, str],
+) -> int | None:
+    """Fall back to LDAP to find a gitlab.com username via ``rhatSocialURL``.
+
+    Extracts the kerberos uid from the email, queries IPA LDAP for social
+    URLs, and looks for a ``Gitlab->https://gitlab.com/<username>`` entry.
+    """
+    if "@" not in email:
+        return None
+
+    uid = _LDAP_ESCAPE_RE.sub(lambda m: f"\\{ord(m.group(1)):02x}", email.split("@", 1)[0])
+
+    try:
+        await init_kerberos_ticket()
+    except KerberosError as e:
+        logger.warning("Kerberos init failed, skipping LDAP lookup for %s: %s", email, e)
+        return None
+
+    try:
+        returncode, stdout, stderr = await asyncio.wait_for(
+            run_subprocess(
+                [
+                    "ldapsearch",
+                    "-Q",
+                    "-Y",
+                    "GSSAPI",
+                    "-H",
+                    LDAP_URI,
+                    "-b",
+                    LDAP_BASE_DN,
+                    "-LLL",
+                    "-o",
+                    "ldif-wrap=no",
+                    f"(uid={uid})",
+                    "rhatSocialURL",
+                ]
+            ),
+            timeout=LDAP_TIMEOUT,
+        )
+    except FileNotFoundError:
+        logger.warning("ldapsearch not found — cannot resolve via LDAP")
+        return None
+    except TimeoutError:
+        logger.warning("ldapsearch timed out for %s", uid)
+        return None
+
+    if returncode != 0:
+        logger.warning(
+            "ldapsearch failed (rc=%d) for %s: %s",
+            returncode,
+            uid,
+            (stderr or "").strip(),
+        )
+        return None
+
+    match = _GITLAB_URL_RE.search(stdout or "")
+    if not match:
+        logger.debug("No gitlab.com social URL found in LDAP for %s", uid)
+        return None
+
+    gitlab_username = match.group(1)
+    logger.info("LDAP rhatSocialURL maps %s -> gitlab.com/%s", uid, gitlab_username)
+    return await _lookup_gitlab_user_by_username(gitlab_username, headers)
+
+
+async def _lookup_gitlab_user_by_username(
+    username: str,
+    headers: dict[str, str],
+) -> int | None:
+    """Look up a gitlab.com user ID by username."""
+    try:
+        async with (
+            aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
+            session.get(
+                "https://gitlab.com/api/v4/users",
+                headers=headers,
+                params={"username": username},
+            ) as response,
+        ):
+            if response.status != 200:
+                logger.warning(
+                    "GitLab username lookup returned HTTP %d for %r",
+                    response.status,
+                    username,
+                )
+                return None
+            users = await response.json()
+
+        if not users:
+            logger.debug("No GitLab user found for username %r", username)
+            return None
+
+        return users[0]["id"]
+
+    except (aiohttp.ClientError, TimeoutError) as e:
+        logger.warning("GitLab username lookup failed for %r: %s", username, e)
+        return None
+
+
 async def resolve_reviewers(package: str, dist_git_branch: str) -> list[int]:
     """Resolve reviewer GitLab user IDs for a package on a given branch.
 
@@ -160,7 +273,7 @@ async def resolve_reviewers(package: str, dist_git_branch: str) -> list[int]:
         emails: list[str] = []
         if assignee := component_data.get("Default Assignee"):
             emails.append(assignee)
-        if qa_contact := component_data.get("QA Contact"):
+        if (qa_contact := component_data.get("QA Contact")) and qa_contact not in emails:
             emails.append(qa_contact)
 
         if not emails:
@@ -186,7 +299,6 @@ async def resolve_reviewers(package: str, dist_git_branch: str) -> list[int]:
 
 
 if __name__ == "__main__":
-    import asyncio
     import sys
 
     logging.basicConfig(level=logging.DEBUG)

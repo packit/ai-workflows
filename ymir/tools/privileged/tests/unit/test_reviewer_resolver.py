@@ -4,7 +4,10 @@ import aiohttp
 import pytest
 from flexmock import flexmock
 
+import ymir.tools.privileged.reviewer_resolver
+from ymir.common.base_utils import KerberosError
 from ymir.tools.privileged.reviewer_resolver import (
+    _resolve_via_ldap,
     fetch_bugzilla_component_data,
     parse_component_file,
     resolve_gitlab_user_id,
@@ -106,6 +109,9 @@ async def test_resolve_gitlab_user_id_by_email(monkeypatch):
 async def test_resolve_gitlab_user_id_no_email_match(monkeypatch):
     """When the email search returns users but none match on public_email, return None."""
     monkeypatch.setenv("GITLAB_TOKEN", "test-token")
+    flexmock(ymir.tools.privileged.reviewer_resolver).should_receive("_resolve_via_ldap").replace_with(
+        _no_ldap_fallback
+    ).once()
 
     @asynccontextmanager
     async def get(url, headers=None, params=None):
@@ -131,6 +137,9 @@ async def test_resolve_gitlab_user_id_no_email_match(monkeypatch):
 @pytest.mark.asyncio
 async def test_resolve_gitlab_user_id_not_found(monkeypatch):
     monkeypatch.setenv("GITLAB_TOKEN", "test-token")
+    flexmock(ymir.tools.privileged.reviewer_resolver).should_receive("_resolve_via_ldap").replace_with(
+        _no_ldap_fallback
+    ).once()
 
     @asynccontextmanager
     async def get(url, headers=None, params=None):
@@ -202,6 +211,9 @@ async def test_resolve_reviewers_full_flow(monkeypatch):
 @pytest.mark.asyncio
 async def test_resolve_reviewers_partial_failure(monkeypatch):
     monkeypatch.setenv("GITLAB_TOKEN", "test-token")
+    flexmock(ymir.tools.privileged.reviewer_resolver).should_receive("_resolve_via_ldap").replace_with(
+        _no_ldap_fallback
+    )
 
     @asynccontextmanager
     async def get(url, headers=None, params=None):
@@ -334,3 +346,133 @@ async def test_resolve_reviewers_deduplicates(monkeypatch):
 
     result = await resolve_reviewers("bash", "c10s")
     assert result == [42]
+
+
+LDAP_OUTPUT_WITH_GITLAB = """\
+dn: uid=jdoe,cn=users,cn=accounts,dc=ipa,dc=redhat,dc=com
+rhatSocialURL: Gitlab->https://gitlab.com/jdoe
+rhatSocialURL: Github->https://github.com/jdoe
+"""
+
+LDAP_OUTPUT_NO_GITLAB = """\
+dn: uid=someone,cn=users,cn=accounts,dc=ipa,dc=redhat,dc=com
+rhatSocialURL: Github->https://github.com/someone
+"""
+
+LDAP_OUTPUT_EMPTY = """\
+dn: uid=nobody,cn=users,cn=accounts,dc=ipa,dc=redhat,dc=com
+"""
+
+LDAP_HEADERS = {"PRIVATE-TOKEN": "test-token", "User-Agent": "ymir"}
+
+
+async def _noop():
+    pass
+
+
+async def _no_ldap_fallback(*_args, **_kwargs):
+    return None
+
+
+def _mock_run_subprocess(stdout, returncode=0, stderr=""):
+    async def _fake(cmd, **kwargs):
+        return (returncode, stdout, stderr)
+
+    flexmock(ymir.tools.privileged.reviewer_resolver).should_receive("run_subprocess").replace_with(
+        _fake
+    ).once()
+
+
+@pytest.mark.asyncio
+async def test_resolve_via_ldap_finds_gitlab_username(monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "test-token")
+    flexmock(ymir.tools.privileged.reviewer_resolver).should_receive("init_kerberos_ticket").replace_with(
+        _noop
+    ).once()
+
+    _mock_run_subprocess(LDAP_OUTPUT_WITH_GITLAB)
+
+    @asynccontextmanager
+    async def get(url, headers=None, params=None):
+        assert params == {"username": "jdoe"}
+
+        async def json():
+            return [{"id": 77, "username": "jdoe"}]
+
+        yield flexmock(status=200, json=json)
+
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)
+
+    result = await _resolve_via_ldap("jdoe@redhat.com", LDAP_HEADERS)
+    assert result == 77
+
+
+@pytest.mark.asyncio
+async def test_resolve_via_ldap_no_social_url():
+    flexmock(ymir.tools.privileged.reviewer_resolver).should_receive("init_kerberos_ticket").replace_with(
+        _noop
+    ).once()
+
+    _mock_run_subprocess(LDAP_OUTPUT_EMPTY)
+
+    result = await _resolve_via_ldap("nobody@redhat.com", LDAP_HEADERS)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_via_ldap_no_gitlab_url():
+    flexmock(ymir.tools.privileged.reviewer_resolver).should_receive("init_kerberos_ticket").replace_with(
+        _noop
+    ).once()
+
+    _mock_run_subprocess(LDAP_OUTPUT_NO_GITLAB)
+
+    result = await _resolve_via_ldap("someone@redhat.com", LDAP_HEADERS)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_via_ldap_kerberos_failure():
+    flexmock(ymir.tools.privileged.reviewer_resolver).should_receive("init_kerberos_ticket").and_raise(
+        KerberosError("no ticket")
+    ).once()
+
+    result = await _resolve_via_ldap("user@redhat.com", LDAP_HEADERS)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_gitlab_user_id_falls_back_to_ldap(monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "test-token")
+    flexmock(ymir.tools.privileged.reviewer_resolver).should_receive("init_kerberos_ticket").replace_with(
+        _noop
+    ).once()
+
+    _mock_run_subprocess(LDAP_OUTPUT_WITH_GITLAB)
+
+    @asynccontextmanager
+    async def get(url, headers=None, params=None):
+        if params and "search" in params:
+
+            async def json():
+                return []
+
+            yield flexmock(status=200, json=json)
+        elif params and "username" in params:
+            assert params["username"] == "jdoe"
+
+            async def json():
+                return [{"id": 77, "username": "jdoe"}]
+
+            yield flexmock(status=200, json=json)
+        else:
+
+            async def json():
+                return []
+
+            yield flexmock(status=200, json=json)
+
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)
+
+    result = await resolve_gitlab_user_id("jdoe@redhat.com")
+    assert result == 77

@@ -11,7 +11,7 @@ import subprocess
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 import redis.asyncio as redis
 
@@ -305,9 +305,30 @@ def get_jira_auth_headers() -> dict[str, str]:
 
 CS_BRANCH_PATTERN = re.compile(r"^c\d+s$")
 
+DistGitNamespace = Literal["rhel", "centos-stream"]
+
 
 def is_cs_branch(dist_git_branch: str) -> bool:
     return CS_BRANCH_PATTERN.match(dist_git_branch) is not None
+
+
+def is_modular_branch(dist_git_branch: str) -> bool:
+    """Return True for modular stream branches (``stream-<module>-<stream>-rhel-…``)."""
+    return dist_git_branch.startswith("stream-")
+
+
+def resolve_dist_git_namespace(
+    dist_git_branch: str, dist_git_namespace: str | None = None
+) -> DistGitNamespace:
+    """Resolve GitLab rpms namespace for a dist-git branch.
+
+    When *dist_git_namespace* is explicitly ``rhel`` or ``centos-stream`` (e.g.
+    for modular packages whose branch name exists in both forges), that value
+    wins. Otherwise fall back to the legacy ``is_cs_branch`` heuristic.
+    """
+    if dist_git_namespace in ("rhel", "centos-stream"):
+        return dist_git_namespace  # type: ignore[return-value]
+    return "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
 
 
 class KerberosError(Exception):

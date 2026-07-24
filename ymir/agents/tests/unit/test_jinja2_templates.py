@@ -488,6 +488,20 @@ class TestTriageTemplate:
         assert "clone_path" in result
         assert "/git-repos/RHEL-189361/" in result
 
+    def test_renders_needs_internal_fix_modular_stream_branch(self):
+        result = render_template(
+            "triage/prompt.j2",
+            TriageInputSchema(
+                issue="RHEL-160675",
+                needs_internal_fix=True,
+                internal_target_branch="stream-squid-4-rhel-8.10.0",
+            ),
+        )
+        assert "clone_repository" in result
+        assert "redhat/rhel/rpms" in result
+        assert "stream-squid-4-rhel-8.10.0" in result
+        assert "/git-repos/RHEL-160675/" in result
+
     def test_renders_needs_internal_fix_without_branch_falls_back(self):
         result = render_template(
             "triage/prompt.j2",

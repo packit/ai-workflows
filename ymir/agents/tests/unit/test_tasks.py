@@ -66,6 +66,57 @@ async def test_fork_and_prepare_dist_git_wipes_stale_working_dir(git_repo_basepa
 
 
 @pytest.mark.asyncio
+async def test_fork_and_prepare_honors_explicit_centos_stream_namespace(git_repo_basepath):
+    """Modular stream-* branches must use the explicit namespace, not is_cs_branch."""
+    mock_tools = [AsyncMock()]
+    with (
+        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
+        patch("ymir.agents.tasks.check_subprocess", new_callable=AsyncMock),
+        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
+    ):
+        mock_run_tool.return_value = "https://fork.example.com"
+
+        await fork_and_prepare_dist_git(
+            jira_issue="RHEL-160675",
+            package="squid",
+            dist_git_branch="stream-squid-4-rhel-8.10.0",
+            available_tools=mock_tools,
+            dist_git_namespace="centos-stream",
+        )
+
+    fork_call = mock_run_tool.await_args_list[0]
+    assert fork_call.args[0] == "fork_repository"
+    assert fork_call.kwargs["repository"] == "https://gitlab.com/redhat/centos-stream/rpms/squid"
+
+    tool_names = [call.args[0] for call in mock_run_tool.await_args_list]
+    assert "create_zstream_branch" not in tool_names
+
+
+@pytest.mark.asyncio
+async def test_fork_and_prepare_modular_rhel_skips_create_zstream_branch(git_repo_basepath):
+    mock_tools = [AsyncMock()]
+    with (
+        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
+        patch("ymir.agents.tasks.check_subprocess", new_callable=AsyncMock),
+        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
+    ):
+        mock_run_tool.return_value = "https://fork.example.com"
+
+        await fork_and_prepare_dist_git(
+            jira_issue="RHEL-160675",
+            package="squid",
+            dist_git_branch="stream-squid-4-rhel-8.10.0",
+            available_tools=mock_tools,
+            dist_git_namespace="rhel",
+        )
+
+    fork_call = mock_run_tool.await_args_list[0]
+    assert fork_call.kwargs["repository"] == "https://gitlab.com/redhat/rhel/rpms/squid"
+    tool_names = [call.args[0] for call in mock_run_tool.await_args_list]
+    assert "create_zstream_branch" not in tool_names
+
+
+@pytest.mark.asyncio
 async def test_post_user_ack_once_posts_on_first_call():
     """User-triggered, not dry-run, never posted → posts and persists the flag."""
     task = _make_task()

@@ -79,6 +79,7 @@ async def main() -> None:
         side_tag=None,
         user_triggered=False,
         redis_conn=None,
+        dist_git_namespace=None,
     ):
         local_tool_options = {"working_directory": None}
         if mock_env := get_mock_local_tool_env(jira_issue):
@@ -102,6 +103,7 @@ async def main() -> None:
                     package=state.package,
                     dist_git_branch=state.dist_git_branch,
                     available_tools=gateway_tools,
+                    dist_git_namespace=state.dist_git_namespace,
                 )
                 local_tool_options["working_directory"] = state.local_clone
                 return "update_release"
@@ -333,6 +335,7 @@ async def main() -> None:
                 State(
                     package=package,
                     dist_git_branch=dist_git_branch,
+                    dist_git_namespace=dist_git_namespace,
                     jira_issue=jira_issue,
                     fix_version=fix_version,
                     justification=justification,
@@ -397,6 +400,7 @@ async def main() -> None:
                 rebuild_data = RebuildData.model_validate(triage_state["triage_result"]["data"])
                 current_jira_issue.set(rebuild_data.jira_issue)
                 dist_git_branch = triage_state["target_branch"]
+                dist_git_namespace = triage_state.get("dist_git_namespace")
                 user_triggered = task.user_triggered
             except Exception as e:
                 logger.error(f"Failed to parse task payload, skipping: {e}")
@@ -494,6 +498,7 @@ async def main() -> None:
                         side_tag=rebuild_data.side_tag,
                         user_triggered=user_triggered,
                         redis_conn=redis,
+                        dist_git_namespace=dist_git_namespace,
                     )
                     logger.info(
                         f"Rebuild processing completed for {rebuild_data.jira_issue}, "

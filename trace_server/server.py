@@ -131,6 +131,7 @@ def init_db() -> None:
     db.execute("CREATE INDEX IF NOT EXISTS idx_jira_issue ON spans(jira_issue)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_agent_type ON spans(agent_type)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_start_time ON spans(start_time)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_root_spans ON spans(parent_span_id, name)")
     db.execute("""
         CREATE TABLE IF NOT EXISTS span_issues (
             trace_id TEXT NOT NULL,

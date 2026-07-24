@@ -238,10 +238,8 @@ build-mr-cleanup:
 	$(COMPOSE) --profile manual build mr-cleanup
 
 # Usage:
-#   make run-mr-cleanup-dry-run    # dry run, lists what would be closed
-#   make run-mr-cleanup            # live run, closes MRs
-#   TARGET_MR=<url> make run-mr-cleanup-dry-run   # dry run on single MR
-#   TARGET_MR=<url> make run-mr-cleanup           # live run on single MR
+#   make run-mr-cleanup-dry-run    # dry run, lists what would be changed
+#   make run-mr-cleanup            # live run
 define mr-cleanup-check-env
 	@if [ ! -f .secrets/mr-cleanup.env ]; then \
 		echo "Error: .secrets/mr-cleanup.env not found"; \
@@ -257,7 +255,6 @@ run-mr-cleanup-dry-run:
 	@echo "Running MR Cleanup (dry run)..."
 	$(COMPOSE) -f $(COMPOSE_FILE) --profile manual run --rm \
 		-e DRY_RUN=true \
-		$(if $(TARGET_MR),-e TARGET_MR=$(TARGET_MR)) \
 		mr-cleanup
 
 .PHONY: run-mr-cleanup
@@ -266,7 +263,6 @@ run-mr-cleanup:
 	@echo "Running MR Cleanup (LIVE — will close MRs and post comments)..."
 	$(COMPOSE) -f $(COMPOSE_FILE) --profile manual run --rm \
 		-e DRY_RUN=false \
-		$(if $(TARGET_MR),-e TARGET_MR=$(TARGET_MR)) \
 		mr-cleanup
 
 

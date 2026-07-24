@@ -1,19 +1,18 @@
 # MR Cleanup
 
-Daily cronjob that closes stale GitLab merge requests created by Ymir bots
-(`jotnar-bot`, `redhat-ymir-agent`) when all referenced Jira issues have been closed.
+Daily cronjob with two phases for managing stale bot-authored GitLab MRs.
 
-## How it works
+## Phases
 
-1. Fetches all open bot-authored MRs in `redhat/rhel/rpms` and `redhat/centos-stream/rpms`
-2. Extracts Jira keys from commit messages (`Resolves: RHEL-NNNNN`)
-3. Batch-queries Jira for issue statuses
-4. For each MR:
-   - **All Jiras closed** -- posts a closing comment, closes the MR, adds `ymir_cleaned_up` label
-   - **Any Jiras still open** -- skips
-   - **Already has `ymir_cleaned_up` label** -- skips (prevents re-closing reopened MRs)
+**Phase 1 -- Close stale MRs** (`CLOSE_STALE_MRS=true`, default):
+Closes open bot MRs whose referenced Jira issues have all been closed.
+Posts a closing comment, adds `ymir_cleaned_up` label. No Jira labels modified.
 
-No Jira labels are modified -- metrics dashboards depend on them remaining in place.
+**Phase 2 -- Reset Jira labels** (`RESET_CLOSED_MR_JIRAS=true`, default):
+For closed (not merged) bot MRs, removes `ymir_*` automation outcome
+labels from the referenced Jiras and adds `ymir_mr_closed`. Skips Jiras
+referenced by an open MR or a merged MR (within a 180-day lookback window)
+to avoid resetting labels set by a successful fix (e.g. after MR consolidation).
 
 ## Setup
 
@@ -28,18 +27,28 @@ cp templates/mr-cleanup.env .secrets/mr-cleanup.env
 # Build the image
 make build-mr-cleanup
 
-# Dry run -- lists what would be closed without making changes
+# Dry run -- lists what would be changed without making changes
 make run-mr-cleanup-dry-run
 
-# Live run -- closes MRs and posts comments
+# Live run
 make run-mr-cleanup
 
-# Target a single MR (dry run)
-TARGET_MR=https://gitlab.com/redhat/rhel/rpms/foo/-/merge_requests/1 make run-mr-cleanup-dry-run
-
-# Target a single MR (live)
-TARGET_MR=https://gitlab.com/redhat/rhel/rpms/foo/-/merge_requests/1 make run-mr-cleanup
+# Phase 2 only with a different bot account (e.g. sustaining engineering)
+CLOSE_STALE_MRS=false GITLAB_BOT_AUTHORS=rhel-se-jotnar-admin make run-mr-cleanup-dry-run
 ```
+
+## Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GITLAB_TOKEN` | (required) | GitLab API token with `api` scope |
+| `JIRA_URL` | (required) | Jira instance URL |
+| `JIRA_EMAIL` | (required) | Jira account email |
+| `JIRA_TOKEN` | (required) | Jira API token |
+| `DRY_RUN` | `false` | Log what would change without making changes |
+| `CLOSE_STALE_MRS` | `true` | Enable phase 1 |
+| `RESET_CLOSED_MR_JIRAS` | `true` | Enable phase 2 |
+| `GITLAB_BOT_AUTHORS` | `jotnar-bot,redhat-ymir-agent` | Comma-separated bot usernames to scan |
 
 ## Deployment
 

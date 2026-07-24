@@ -615,7 +615,7 @@ def query_recent_traces(since_ns: int, workflow: str | None, limit: int) -> list
     inprog_rows = db.execute(
         f"""SELECT s.trace_id, MIN(s.start_time) as first_start,
                   MAX(json_extract(s.attributes, '$."workflow.name".stringValue')) as workflow_name
-            FROM spans s
+            FROM spans s INDEXED BY idx_start_time
             JOIN span_issues si ON s.trace_id = si.trace_id AND s.span_id = si.span_id
             WHERE s.start_time >= ?{inprog_filter}
               AND NOT EXISTS (

@@ -76,6 +76,7 @@ PORT = int(os.environ.get("TRACE_SERVER_PORT", "8080"))
 LOG_LEVEL = os.environ.get("TRACE_LOG_LEVEL", "INFO").upper()
 MAX_PAYLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_LAST_TRACES = 900
+RETENTION_DAYS = max(1, int(os.environ.get("TRACE_RETENTION_DAYS", "14")))
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 _MIME_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -158,6 +159,15 @@ def init_db() -> None:
                 "INSERT OR IGNORE INTO span_issues (trace_id, span_id, jira_issue) VALUES (?, ?, ?)",
                 batch,
             )
+    cutoff_ns = (int(time.time()) - RETENTION_DAYS * 86400) * 1_000_000_000
+    deleted = db.execute(
+        "DELETE FROM span_issues WHERE (trace_id, span_id) IN "
+        "(SELECT trace_id, span_id FROM spans WHERE start_time < ?)",
+        [cutoff_ns],
+    ).rowcount
+    deleted += db.execute("DELETE FROM spans WHERE start_time < ?", [cutoff_ns]).rowcount
+    if deleted:
+        logger.info("Retention cleanup: removed %d old rows (older than %d days)", deleted, RETENTION_DAYS)
     db.commit()
     db.close()
 

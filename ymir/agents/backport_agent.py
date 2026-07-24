@@ -313,6 +313,7 @@ async def run_workflow(
     max_build_attempts=10,
     max_incremental_fix_attempts=None,
     user_triggered=False,
+    dist_git_namespace=None,
 ):
     if max_incremental_fix_attempts is None:
         max_incremental_fix_attempts = max_build_attempts
@@ -365,6 +366,7 @@ async def run_workflow(
                 package=state.package,
                 dist_git_branch=state.dist_git_branch,
                 available_tools=gateway_tools,
+                dist_git_namespace=state.dist_git_namespace,
             )
             local_tool_options["working_directory"] = state.local_clone
             await run_tool(
@@ -792,6 +794,7 @@ async def run_workflow(
             BackportState(
                 package=package,
                 dist_git_branch=dist_git_branch,
+                dist_git_namespace=dist_git_namespace,
                 upstream_patches=upstream_patches,
                 jira_issue=jira_issue,
                 cve_id=cve_id,
@@ -866,6 +869,7 @@ async def main() -> None:
             backport_data = BackportData.model_validate(triage_state["triage_result"]["data"])
             current_jira_issue.set(backport_data.jira_issue)
             dist_git_branch = triage_state["target_branch"]
+            dist_git_namespace = triage_state.get("dist_git_namespace")
             user_triggered = task.user_triggered
             logger.info(
                 f"Processing backport for package: {backport_data.package}, "
@@ -941,6 +945,7 @@ async def main() -> None:
                         max_build_attempts=max_build_attempts,
                         max_incremental_fix_attempts=max_incremental_fix_attempts,
                         user_triggered=user_triggered,
+                        dist_git_namespace=dist_git_namespace,
                     )
                     logger.info(
                         f"Backport processing completed for {backport_data.jira_issue}, "

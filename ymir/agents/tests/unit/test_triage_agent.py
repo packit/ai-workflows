@@ -7,8 +7,9 @@ from ymir.agents.triage_agent import (
     _map_version_to_module_branch,
     _parse_module_summary,
     _should_update_jira,
+    determine_target_branch,
 )
-from ymir.common.models import Resolution, Task
+from ymir.common.models import BackportData, CVEEligibilityResult, Resolution, Task, TriageEligibility
 
 
 @pytest.mark.parametrize(
@@ -263,12 +264,106 @@ def test_parse_module_summary_non_modular():
     ],
 )
 def test_map_version_to_module_branch(version, summary, expected_branch):
-    branch = _map_version_to_module_branch(version, summary, cve_needs_internal_fix=False)
+    branch = _map_version_to_module_branch(version, summary)
     assert branch == expected_branch
 
 
 def test_map_version_to_module_branch_invalid_version():
-    branch = _map_version_to_module_branch(
-        "not-a-version", "postgresql:12/postgresql:vuln", cve_needs_internal_fix=False
-    )
+    branch = _map_version_to_module_branch("not-a-version", "postgresql:12/postgresql:vuln")
     assert branch is None
+
+
+# --- Modular target branch + namespace selection ---
+
+
+def _modular_backport_data(
+    summary: str = "CVE-2026-32748 squid:4/squid: Squid: Denial of Service [rhel-8.10.z]",
+    fix_version: str = "rhel-8.10.z",
+) -> BackportData:
+    return BackportData(
+        package="squid",
+        patch_urls=["https://example.com/fix.patch"],
+        justification="test",
+        jira_issue="RHEL-160675",
+        cve_id="CVE-2026-32748",
+        fix_version=fix_version,
+        summary=summary,
+    )
+
+
+def _cve_eligibility(*, needs_internal_fix: bool) -> CVEEligibilityResult:
+    return CVEEligibilityResult(
+        is_cve=True,
+        eligibility=TriageEligibility.IMMEDIATELY,
+        reason="test",
+        needs_internal_fix=needs_internal_fix,
+    )
+
+
+@pytest.mark.asyncio
+async def test_determine_target_branch_modular_internal_fix_uses_rhel():
+    with patch(
+        "ymir.agents.triage_agent.is_older_zstream",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
+        branch, namespace = await determine_target_branch(
+            _cve_eligibility(needs_internal_fix=True),
+            _modular_backport_data(),
+        )
+    assert branch == "stream-squid-4-rhel-8.10.0"
+    assert namespace == "rhel"
+
+
+@pytest.mark.asyncio
+async def test_determine_target_branch_modular_cs_eligible_uses_centos_stream():
+    with patch(
+        "ymir.agents.triage_agent.is_older_zstream",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
+        branch, namespace = await determine_target_branch(
+            _cve_eligibility(needs_internal_fix=False),
+            _modular_backport_data(),
+        )
+    assert branch == "stream-squid-4-rhel-8.10.0"
+    assert namespace == "centos-stream"
+
+
+@pytest.mark.asyncio
+async def test_determine_target_branch_modular_older_zstream_uses_rhel():
+    with patch(
+        "ymir.agents.triage_agent.is_older_zstream",
+        new_callable=AsyncMock,
+        return_value=True,
+    ):
+        branch, namespace = await determine_target_branch(
+            _cve_eligibility(needs_internal_fix=False),
+            _modular_backport_data(fix_version="rhel-8.6.z"),
+        )
+    assert branch == "stream-squid-4-rhel-8.6.0"
+    assert namespace == "rhel"
+
+
+@pytest.mark.asyncio
+async def test_determine_target_branch_non_modular_has_no_explicit_namespace():
+    data = BackportData(
+        package="nginx",
+        patch_urls=["https://example.com/fix.patch"],
+        justification="test",
+        jira_issue="RHEL-1",
+        cve_id="CVE-2026-1",
+        fix_version="rhel-10.2.z",
+        summary="CVE-2026-1 nginx: something [rhel-10.2.z]",
+    )
+    with patch(
+        "ymir.agents.triage_agent._map_version_to_branch",
+        new_callable=AsyncMock,
+        return_value="rhel-10.2",
+    ):
+        branch, namespace = await determine_target_branch(
+            _cve_eligibility(needs_internal_fix=True),
+            data,
+        )
+    assert branch == "rhel-10.2"
+    assert namespace is None

@@ -4,7 +4,14 @@ import signal
 import pytest
 from flexmock import flexmock
 
-from ymir.common.base_utils import _race_shutdown, install_shutdown_handler, run_task_loop
+from ymir.common.base_utils import (
+    _race_shutdown,
+    install_shutdown_handler,
+    is_cs_branch,
+    is_modular_branch,
+    resolve_dist_git_namespace,
+    run_task_loop,
+)
 
 _NO_DELAYED_RESULT = object()
 
@@ -367,3 +374,45 @@ class TestRunSubprocessKillOnCancel:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+@pytest.mark.parametrize(
+    "branch, expected",
+    [
+        ("c8s", True),
+        ("c9s", True),
+        ("c10s", True),
+        ("rhel-9.8.0", False),
+        ("stream-squid-4-rhel-8.10.0", False),
+    ],
+)
+def test_is_cs_branch(branch, expected):
+    assert is_cs_branch(branch) is expected
+
+
+@pytest.mark.parametrize(
+    "branch, expected",
+    [
+        ("stream-squid-4-rhel-8.10.0", True),
+        ("stream-postgresql-12-rhel-9.8.0", True),
+        ("rhel-8.10.0", False),
+        ("c9s", False),
+    ],
+)
+def test_is_modular_branch(branch, expected):
+    assert is_modular_branch(branch) is expected
+
+
+@pytest.mark.parametrize(
+    "branch, namespace, expected",
+    [
+        ("c9s", None, "centos-stream"),
+        ("rhel-10.2", None, "rhel"),
+        ("stream-squid-4-rhel-8.10.0", None, "rhel"),
+        ("stream-squid-4-rhel-8.10.0", "centos-stream", "centos-stream"),
+        ("stream-squid-4-rhel-8.10.0", "rhel", "rhel"),
+        ("c9s", "rhel", "rhel"),
+    ],
+)
+def test_resolve_dist_git_namespace(branch, namespace, expected):
+    assert resolve_dist_git_namespace(branch, namespace) == expected

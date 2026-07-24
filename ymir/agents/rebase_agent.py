@@ -150,6 +150,7 @@ async def main() -> None:
         triage_summary=None,
         redis_conn=None,
         user_triggered=False,
+        dist_git_namespace=None,
     ):
         local_tool_options: dict[str, Any] = {"working_directory": None}
         if mock_env := get_mock_local_tool_env(jira_issue):
@@ -191,6 +192,7 @@ async def main() -> None:
                     dist_git_branch=state.dist_git_branch,
                     available_tools=gateway_tools,
                     with_fedora=True,
+                    dist_git_namespace=state.dist_git_namespace,
                 )
                 local_tool_options["working_directory"] = state.local_clone
                 state.leading_zstream_branch = await tasks.find_leading_zstream_branch(state.dist_git_branch)
@@ -404,6 +406,7 @@ async def main() -> None:
                 State(
                     package=package,
                     dist_git_branch=dist_git_branch,
+                    dist_git_namespace=dist_git_namespace,
                     version=version,
                     jira_issue=jira_issue,
                     fix_version=fix_version,
@@ -458,6 +461,7 @@ async def main() -> None:
             rebase_data = RebaseData.model_validate(triage_state["triage_result"]["data"])
             current_jira_issue.set(rebase_data.jira_issue)
             dist_git_branch = triage_state["target_branch"]
+            dist_git_namespace = triage_state.get("dist_git_namespace")
             user_triggered = task.user_triggered
             logger.info(
                 f"Processing rebase for package: {rebase_data.package}, "
@@ -529,6 +533,7 @@ async def main() -> None:
                         triage_summary=rebase_data.triage_summary,
                         redis_conn=redis,
                         user_triggered=user_triggered,
+                        dist_git_namespace=dist_git_namespace,
                     )
                     logger.info(
                         f"Rebase processing completed for {rebase_data.jira_issue}, "

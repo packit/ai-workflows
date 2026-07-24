@@ -12,7 +12,7 @@ from specfile import Specfile
 
 from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
 from ymir.agents.utils import check_subprocess, mcp_tools, run_subprocess, run_tool
-from ymir.common.base_utils import is_cs_branch
+from ymir.common.base_utils import is_cs_branch, is_modular_branch, resolve_dist_git_namespace
 from ymir.common.config import load_rhel_config
 from ymir.common.merge_queue import (  # noqa: F401 — re-exported for agents and tests
     _CONSOLIDATION_HASH_KEY,
@@ -107,6 +107,7 @@ async def fork_and_prepare_dist_git(
     dist_git_branch: str,
     available_tools: list[Tool],
     with_fedora: bool = False,
+    dist_git_namespace: str | None = None,
 ) -> tuple[Path, str, str, Path | None]:
     if not jira_issue or Path(jira_issue).is_absolute() or ".." in jira_issue:
         raise ValueError(f"Invalid jira_issue: {jira_issue}")
@@ -114,11 +115,13 @@ async def fork_and_prepare_dist_git(
     if working_dir.is_dir():
         _force_rmtree(working_dir)
     working_dir.mkdir(parents=True, exist_ok=True)
-    namespace = "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
+    namespace = resolve_dist_git_namespace(dist_git_branch, dist_git_namespace)
     repository = f"https://gitlab.com/redhat/{namespace}/rpms/{package}"
     fork_url = await run_tool("fork_repository", repository=repository, available_tools=available_tools)
     local_clone = working_dir / package
-    if not is_cs_branch(dist_git_branch):
+    # create_zstream_branch only applies to plain internal rhel-X.Y[.0] branches;
+    # modular stream-* branches already exist in the rhel project.
+    if not is_cs_branch(dist_git_branch) and not is_modular_branch(dist_git_branch):
         await run_tool(
             "create_zstream_branch",
             package=package,
@@ -640,6 +643,7 @@ async def clone_and_prep_sources(
     available_tools: list[Tool],
     jira_issue: str,
     ref: str | None = None,
+    dist_git_namespace: str | None = None,
 ) -> tuple[Path, Path, bool]:
     """
     Clone dist-git repo and run centpkg/rhpkg sources + prep.
@@ -662,7 +666,7 @@ async def clone_and_prep_sources(
     working_dir.mkdir(parents=True, exist_ok=True)
     local_clone = working_dir / package
 
-    namespace = "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
+    namespace = resolve_dist_git_namespace(dist_git_branch, dist_git_namespace)
     repository = f"https://gitlab.com/redhat/{namespace}/rpms/{package}"
     if ref:
         await run_tool(

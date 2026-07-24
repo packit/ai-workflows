@@ -65,6 +65,8 @@ def parse_branch_name(branch: str) -> tuple[str, str | None] | None:
       - rhel-10.1      -> ("10", "1")
       - rhel-10-main   -> ("10", None)
       - c9s, c10s      -> ("9", None), ("10", None)
+      - stream-nginx-1.26-rhel-9.9.0 -> ("9", "9")
+      - stream-squid-4-rhel-8.10.0   -> ("8", "10")
 
     Args:
         branch: Branch name like 'rhel-9.7.0', 'c9s', or 'rhel-10-main'
@@ -76,6 +78,13 @@ def parse_branch_name(branch: str) -> tuple[str, str | None] | None:
     zstream = parse_zstream_branch_name(branch)
     if zstream:
         return zstream
+
+    # Modular stream branches embed the RHEL version as a suffix:
+    # stream-<module>-<stream>-rhel-<major>.<minor>[.0]
+    modular = re.match(r"^stream-.+-rhel-(\d+)\.(\d+)(?:\.0)?$", branch.lower())
+    if modular:
+        return modular.group(1), modular.group(2)
+
     m = re.match(r"^(?:c(\d+)s|rhel-(\d+)-main)$", branch.lower())
     if not m:
         return None

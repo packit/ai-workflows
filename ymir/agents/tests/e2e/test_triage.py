@@ -244,6 +244,22 @@ test_cases = [
             ),
         ),
     ),
+    TriageAgentTestCase(
+        input="RHEL-160675",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.BACKPORT,
+            data=BackportData(
+                package="squid",
+                patch_urls=[
+                    "https://github.com/squid-cache/squid/commit/703e07d25ca6fa11f52d20bf0bb879e22ab7481b.patch",
+                ],
+                justification="not-implemented",
+                jira_issue="RHEL-160675",
+                cve_id="CVE-2026-32748",
+                fix_version="rhel-8.10.z",
+            ),
+        ),
+    ),
 ]
 
 

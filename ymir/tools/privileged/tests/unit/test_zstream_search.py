@@ -111,6 +111,19 @@ def test_version_sort_key(issue_version, target_major, target_minor, expected):
 # ============================================================================
 
 
+def _patches(*mock_calls):
+    """Common patches for ZStreamSearchTool tests."""
+    return (
+        patch(
+            "ymir.tools.privileged.zstream_search.is_older_zstream",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch("ymir.tools.privileged.zstream_search.run_tool", AsyncMock(side_effect=mock_calls)),
+        patch("ymir.tools.privileged.zstream_search._fetch_mr_commits", new_callable=AsyncMock),
+    )
+
+
 @pytest.mark.asyncio
 async def test_not_applicable_y_stream():
     """Y-stream fixVersion should return NOT_APPLICABLE."""
@@ -163,7 +176,7 @@ async def test_not_applicable_invalid_version():
 
 @pytest.mark.asyncio
 async def test_found_in_closest_stream():
-    """Commits found in closest related issue (current z-stream)."""
+    """Commits found via merged MR in closest related issue."""
     search_result = [
         {
             "key": "RHEL-99999",
@@ -173,27 +186,21 @@ async def test_found_in_closest_stream():
             },
         },
     ]
-    dev_status_result = {
-        "commits": [
+    pr_result = {
+        "pull_requests": [
             {
-                "url": "https://gitlab.com/redhat/rhel/rpms/fence-agents/-/commit/abc123",
-                "message": "fix missing statuses",
-                "repository_url": "https://gitlab.com/redhat/rhel/rpms/fence-agents",
+                "url": "https://gitlab.com/redhat/rhel/rpms/fence-agents/-/merge_requests/42",
+                "status": "MERGED",
             },
         ]
     }
 
-    mock_run_tool = AsyncMock(side_effect=[search_result, dev_status_result])
-
-    tool = ZStreamSearchTool()
-    with (
-        patch(
-            "ymir.tools.privileged.zstream_search.is_older_zstream",
-            new_callable=AsyncMock,
-            return_value=True,
-        ),
-        patch("ymir.tools.privileged.zstream_search.run_tool", mock_run_tool),
-    ):
+    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result)
+    with p_older, p_run_tool, p_fetch as mock_fetch:
+        mock_fetch.return_value = [
+            "https://gitlab.com/redhat/rhel/rpms/fence-agents/-/commit/abc123.patch",
+        ]
+        tool = ZStreamSearchTool()
         output = await tool.run(
             input=ZStreamSearchToolInput(
                 component="fence-agents",
@@ -201,6 +208,7 @@ async def test_found_in_closest_stream():
                 fix_version="rhel-9.6.z",
             ),
         ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
     result = output.to_json_safe()
     assert result.result == ZStreamSearchResult.FOUND
     assert result.source_issue == "RHEL-99999"
@@ -211,7 +219,7 @@ async def test_found_in_closest_stream():
 
 @pytest.mark.asyncio
 async def test_cascade_to_further_version():
-    """Cascade to y-stream when z-stream has no commits."""
+    """Cascade to y-stream when z-stream has no merged MRs."""
     search_result = [
         {
             "key": "RHEL-11111",
@@ -228,28 +236,29 @@ async def test_cascade_to_further_version():
             },
         },
     ]
-    dev_status_empty = {"commits": []}
-    dev_status_with_commits = {
-        "commits": [
+    pr_result_open_only = {
+        "pull_requests": [
             {
-                "url": "https://gitlab.com/redhat/centos-stream/rpms/fence-agents/-/commit/def456",
-                "message": "fix issue",
-                "repository_url": "https://gitlab.com/redhat/centos-stream/rpms/fence-agents",
+                "url": "https://gitlab.com/redhat/rhel/rpms/fence-agents/-/merge_requests/99",
+                "status": "OPEN",
+            },
+        ]
+    }
+    pr_result_with_merged = {
+        "pull_requests": [
+            {
+                "url": "https://gitlab.com/redhat/centos-stream/rpms/fence-agents/-/merge_requests/10",
+                "status": "MERGED",
             },
         ]
     }
 
-    mock_run_tool = AsyncMock(side_effect=[search_result, dev_status_empty, dev_status_with_commits])
-
-    tool = ZStreamSearchTool()
-    with (
-        patch(
-            "ymir.tools.privileged.zstream_search.is_older_zstream",
-            new_callable=AsyncMock,
-            return_value=True,
-        ),
-        patch("ymir.tools.privileged.zstream_search.run_tool", mock_run_tool),
-    ):
+    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result_open_only, pr_result_with_merged)
+    with p_older, p_run_tool, p_fetch as mock_fetch:
+        mock_fetch.return_value = [
+            "https://gitlab.com/redhat/centos-stream/rpms/fence-agents/-/commit/def456.patch",
+        ]
+        tool = ZStreamSearchTool()
         output = await tool.run(
             input=ZStreamSearchToolInput(
                 component="fence-agents",
@@ -257,6 +266,7 @@ async def test_cascade_to_further_version():
                 fix_version="rhel-9.6.z",
             ),
         ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
     result = output.to_json_safe()
     assert result.result == ZStreamSearchResult.FOUND
     assert result.source_issue == "RHEL-22222"
@@ -265,7 +275,7 @@ async def test_cascade_to_further_version():
 
 @pytest.mark.asyncio
 async def test_not_found_anywhere():
-    """Returns NOT_FOUND when no related issues have commits."""
+    """Returns NOT_FOUND when all related issues have only open MRs."""
     search_result = [
         {
             "key": "RHEL-11111",
@@ -275,19 +285,18 @@ async def test_not_found_anywhere():
             },
         },
     ]
-    dev_status_empty = {"commits": []}
+    pr_result_open_only = {
+        "pull_requests": [
+            {
+                "url": "https://gitlab.com/redhat/rhel/rpms/fence-agents/-/merge_requests/99",
+                "status": "OPEN",
+            },
+        ]
+    }
 
-    mock_run_tool = AsyncMock(side_effect=[search_result, dev_status_empty])
-
-    tool = ZStreamSearchTool()
-    with (
-        patch(
-            "ymir.tools.privileged.zstream_search.is_older_zstream",
-            new_callable=AsyncMock,
-            return_value=True,
-        ),
-        patch("ymir.tools.privileged.zstream_search.run_tool", mock_run_tool),
-    ):
+    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result_open_only)
+    with p_older, p_run_tool, p_fetch:
+        tool = ZStreamSearchTool()
         output = await tool.run(
             input=ZStreamSearchToolInput(
                 component="fence-agents",
@@ -295,6 +304,7 @@ async def test_not_found_anywhere():
                 fix_version="rhel-9.6.z",
             ),
         ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
     result = output.to_json_safe()
     assert result.result == ZStreamSearchResult.NOT_FOUND
 
@@ -345,28 +355,22 @@ async def test_version_proximity_sorting():
             },
         },
     ]
-    # The closer issue (9.7.z) should be tried first and has commits
-    dev_status_with_commits = {
-        "commits": [
+    # The closer issue (9.7.z) should be tried first and has a merged MR
+    pr_result_with_merged = {
+        "pull_requests": [
             {
-                "url": "https://gitlab.com/repo/-/commit/abc",
-                "message": "fix",
-                "repository_url": "https://gitlab.com/repo",
+                "url": "https://gitlab.com/repo/-/merge_requests/1",
+                "status": "MERGED",
             },
         ]
     }
 
-    mock_run_tool = AsyncMock(side_effect=[search_result, dev_status_with_commits])
-
-    tool = ZStreamSearchTool()
-    with (
-        patch(
-            "ymir.tools.privileged.zstream_search.is_older_zstream",
-            new_callable=AsyncMock,
-            return_value=True,
-        ),
-        patch("ymir.tools.privileged.zstream_search.run_tool", mock_run_tool),
-    ):
+    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result_with_merged)
+    with p_older, p_run_tool, p_fetch as mock_fetch:
+        mock_fetch.return_value = [
+            "https://gitlab.com/repo/-/commit/abc.patch",
+        ]
+        tool = ZStreamSearchTool()
         output = await tool.run(
             input=ZStreamSearchToolInput(
                 component="fence-agents",
@@ -374,9 +378,9 @@ async def test_version_proximity_sorting():
                 fix_version="rhel-9.6.z",
             ),
         ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
     result = output.to_json_safe()
     assert result.result == ZStreamSearchResult.FOUND
-    # Should have found it in the closer issue (9.7.z), not the farther one (9.8)
     assert result.source_issue == "RHEL-CLOSE"
     assert result.source_version == "rhel-9.7.z"
 
@@ -422,3 +426,223 @@ async def test_older_issues_excluded():
     result = output.to_json_safe()
     # Both issues should be excluded (older and same version)
     assert result.result == ZStreamSearchResult.NOT_FOUND
+
+
+# ============================================================================
+# New tests for merged MR commit behavior
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_multiple_merged_mrs():
+    """Commits from all merged MRs are returned."""
+    search_result = [
+        {
+            "key": "RHEL-77777",
+            "id": "77777",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+            },
+        },
+    ]
+    pr_result = {
+        "pull_requests": [
+            {
+                "url": "https://gitlab.com/redhat/rhel/rpms/pkg/-/merge_requests/10",
+                "status": "MERGED",
+            },
+            {
+                "url": "https://gitlab.com/redhat/rhel/rpms/pkg/-/merge_requests/11",
+                "status": "MERGED",
+            },
+        ]
+    }
+
+    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result)
+    with p_older, p_run_tool, p_fetch as mock_fetch:
+        mock_fetch.side_effect = [
+            ["https://gitlab.com/redhat/rhel/rpms/pkg/-/commit/aaa.patch"],
+            [
+                "https://gitlab.com/redhat/rhel/rpms/pkg/-/commit/bbb.patch",
+                "https://gitlab.com/redhat/rhel/rpms/pkg/-/commit/ccc.patch",
+            ],
+        ]
+        tool = ZStreamSearchTool()
+        output = await tool.run(
+            input=ZStreamSearchToolInput(
+                component="pkg",
+                summary="fix issue [rhel-9.6.z]",
+                fix_version="rhel-9.6.z",
+            ),
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    result = output.to_json_safe()
+    assert result.result == ZStreamSearchResult.FOUND
+    assert len(result.related_commits) == 3
+
+
+@pytest.mark.asyncio
+async def test_open_mrs_only_returns_not_found():
+    """Only OPEN MRs with no merged MRs returns NOT_FOUND."""
+    search_result = [
+        {
+            "key": "RHEL-88888",
+            "id": "88888",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+            },
+        },
+    ]
+    pr_result = {
+        "pull_requests": [
+            {
+                "url": "https://gitlab.com/redhat/rhel/rpms/pkg/-/merge_requests/99",
+                "status": "OPEN",
+            },
+        ]
+    }
+
+    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result)
+    with p_older, p_run_tool, p_fetch:
+        tool = ZStreamSearchTool()
+        output = await tool.run(
+            input=ZStreamSearchToolInput(
+                component="pkg",
+                summary="fix issue [rhel-9.6.z]",
+                fix_version="rhel-9.6.z",
+            ),
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    result = output.to_json_safe()
+    assert result.result == ZStreamSearchResult.NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_mixed_merged_and_open_mrs():
+    """Only merged MR commits are returned when both merged and open MRs exist."""
+    search_result = [
+        {
+            "key": "RHEL-99000",
+            "id": "99000",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+            },
+        },
+    ]
+    pr_result = {
+        "pull_requests": [
+            {
+                "url": "https://gitlab.com/redhat/rhel/rpms/pkg/-/merge_requests/50",
+                "status": "MERGED",
+            },
+            {
+                "url": "https://gitlab.com/redhat/rhel/rpms/pkg/-/merge_requests/51",
+                "status": "OPEN",
+            },
+        ]
+    }
+
+    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result)
+    with p_older, p_run_tool, p_fetch as mock_fetch:
+        mock_fetch.return_value = [
+            "https://gitlab.com/redhat/rhel/rpms/pkg/-/commit/merged1.patch",
+        ]
+        tool = ZStreamSearchTool()
+        output = await tool.run(
+            input=ZStreamSearchToolInput(
+                component="pkg",
+                summary="fix issue [rhel-9.6.z]",
+                fix_version="rhel-9.6.z",
+            ),
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    result = output.to_json_safe()
+    assert result.result == ZStreamSearchResult.FOUND
+    assert len(result.related_commits) == 1
+    mock_fetch.assert_called_once_with("https://gitlab.com/redhat/rhel/rpms/pkg/-/merge_requests/50")
+
+
+@pytest.mark.asyncio
+async def test_fetch_mr_commits_error_handling():
+    """GitLab API error for one MR doesn't prevent finding commits from another."""
+    search_result = [
+        {
+            "key": "RHEL-99001",
+            "id": "99001",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+            },
+        },
+    ]
+    pr_result = {
+        "pull_requests": [
+            {
+                "url": "https://gitlab.com/redhat/rhel/rpms/pkg/-/merge_requests/60",
+                "status": "MERGED",
+            },
+            {
+                "url": "https://gitlab.com/redhat/rhel/rpms/pkg/-/merge_requests/61",
+                "status": "MERGED",
+            },
+        ]
+    }
+
+    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result)
+    with p_older, p_run_tool, p_fetch as mock_fetch:
+        # First MR fails, second succeeds
+        mock_fetch.side_effect = [
+            [],
+            ["https://gitlab.com/redhat/rhel/rpms/pkg/-/commit/ok.patch"],
+        ]
+        tool = ZStreamSearchTool()
+        output = await tool.run(
+            input=ZStreamSearchToolInput(
+                component="pkg",
+                summary="fix issue [rhel-9.6.z]",
+                fix_version="rhel-9.6.z",
+            ),
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    result = output.to_json_safe()
+    assert result.result == ZStreamSearchResult.FOUND
+    assert len(result.related_commits) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_mrs_falls_back_to_dev_status():
+    """No MRs at all triggers dev-status fallback for direct-push commits."""
+    search_result = [
+        {
+            "key": "RHEL-99002",
+            "id": "99002",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+            },
+        },
+    ]
+    pr_result_none = {"pull_requests": []}
+    dev_status_result = {
+        "commits": [
+            {
+                "url": "https://gitlab.com/redhat/rhel/rpms/pkg/-/commit/direct1",
+                "message": "direct push fix",
+            },
+        ]
+    }
+
+    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result_none, dev_status_result)
+    with p_older, p_run_tool, p_fetch:
+        tool = ZStreamSearchTool()
+        output = await tool.run(
+            input=ZStreamSearchToolInput(
+                component="pkg",
+                summary="fix issue [rhel-9.6.z]",
+                fix_version="rhel-9.6.z",
+            ),
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    result = output.to_json_safe()
+    assert result.result == ZStreamSearchResult.FOUND
+    assert result.source_issue == "RHEL-99002"
+    assert len(result.related_commits) == 1
+    assert result.related_commits[0].endswith(".patch")

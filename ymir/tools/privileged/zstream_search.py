@@ -12,8 +12,10 @@ from pydantic import BaseModel, Field
 from ymir.common.utils import run_tool
 from ymir.common.version_utils import is_older_zstream, parse_rhel_version
 from ymir.tools.base import CloneableTool as Tool
+from ymir.tools.privileged.gitlab import _get_merge_request_from_url
 from ymir.tools.privileged.jira import (
     GetJiraDevStatusTool,
+    GetJiraPullRequestsTool,
     SearchJiraIssuesTool,
 )
 
@@ -98,6 +100,75 @@ def _version_sort_key(
     if is_zstream:
         return (0, abs(minor - target_minor))
     return (1, abs(minor - target_minor))
+
+
+async def _fetch_mr_commits(mr_url: str) -> list[str]:
+    """Fetch commit patch URLs from a merged GitLab merge request."""
+    if not mr_url:
+        return []
+
+    try:
+        mr = await _get_merge_request_from_url(mr_url)
+    except ValueError:
+        logger.warning(f"Could not parse MR URL: {mr_url}")
+        return []
+    except Exception as e:
+        logger.warning(f"Failed to fetch commits for MR {mr_url}: {e}")
+        return []
+
+    project_url = mr.target_project.get_web_url()
+    return [_get_patch_url(f"{project_url}/-/commit/{sha}") for sha in mr.get_all_commits()]
+
+
+async def _get_merged_commits(issue_key: str) -> list[str]:
+    """Get commit patch URLs for merged commits linked to a Jira issue.
+
+    Strategy:
+    - If merged MRs exist: return commits from those MRs (via GitLab API)
+    - If no MRs exist at all: return dev-status commits (direct pushes)
+    - If only open/unmerged MRs exist: return nothing (bot branches)
+    """
+    try:
+        pr_result = await run_tool(
+            GetJiraPullRequestsTool(),
+            issue_key=issue_key,
+        )
+        pr_data = json.loads(pr_result) if isinstance(pr_result, str) else pr_result
+        pull_requests = pr_data.get("pull_requests", [])
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.warning(f"Failed to fetch MRs for {issue_key}: {e}")
+        return []
+
+    merged_mrs = [pr for pr in pull_requests if pr.get("status") == "MERGED"]
+
+    if merged_mrs:
+        logger.info(f"Found {len(merged_mrs)} merged MR(s) for {issue_key}")
+        commit_urls: list[str] = []
+        for mr in merged_mrs:
+            urls = await _fetch_mr_commits(mr.get("url", ""))
+            commit_urls.extend(urls)
+        return commit_urls
+
+    if pull_requests:
+        logger.info(f"Only unmerged MRs for {issue_key} ({len(pull_requests)} open), skipping")
+        return []
+
+    # No MRs at all — commits were pushed directly, use dev-status
+    logger.info(f"No MRs for {issue_key}, fetching direct-push commits from dev status")
+    try:
+        dev_status = await run_tool(
+            GetJiraDevStatusTool(),
+            issue_key=issue_key,
+        )
+        dev_status_data = json.loads(dev_status) if isinstance(dev_status, str) else dev_status
+        commits = dev_status_data.get("commits", [])
+    except Exception as e:
+        logger.debug(f"Dev status request error for {issue_key}: {e}")
+        return []
+
+    return [_get_patch_url(c["url"]) for c in commits if c.get("url")]
 
 
 class ZStreamSearchTool(Tool[ZStreamSearchToolInput, ToolRunOptions, ZStreamSearchToolOutput]):
@@ -225,27 +296,18 @@ class ZStreamSearchTool(Tool[ZStreamSearchToolInput, ToolRunOptions, ZStreamSear
 
             logger.info(f"Cascading through {len(candidates)} candidates: {[c[1] for c in candidates]}")
 
-            # 5. Cascade through candidates - check Development section for commits
+            # 5. Cascade through candidates - find commits from merged MRs
             for _, version_name, issue in candidates:
                 issue_key = issue.get("key", "")
                 if not issue_key:
                     continue
 
-                try:
-                    dev_status = await run_tool(
-                        GetJiraDevStatusTool(),
-                        issue_key=issue_key,
-                    )
-                    dev_status_data = json.loads(dev_status) if isinstance(dev_status, str) else dev_status
-                    commits = dev_status_data.get("commits", [])
-                except Exception as e:
-                    logger.debug(f"Dev status request error for {issue_key}: {e}")
-                    continue
-
-                commit_urls = [_get_patch_url(c["url"]) for c in commits if c.get("url")]
+                commit_urls = await _get_merged_commits(issue_key)
 
                 if commit_urls:
-                    logger.info(f"Found {len(commit_urls)} commits in {issue_key} (version {version_name})")
+                    logger.info(
+                        f"Found {len(commit_urls)} merged commit(s) in {issue_key} (version {version_name})"
+                    )
                     return ZStreamSearchToolOutput(
                         ZStreamSearchToolResult(
                             result=ZStreamSearchResult.FOUND,
@@ -255,10 +317,7 @@ class ZStreamSearchTool(Tool[ZStreamSearchToolInput, ToolRunOptions, ZStreamSear
                         )
                     )
 
-                logger.info(
-                    f"No commits in Development section for {issue_key} "
-                    f"(version {version_name}), cascading..."
-                )
+                logger.info(f"No merged commits for {issue_key} (version {version_name}), cascading...")
 
         except ToolError:
             raise
@@ -266,5 +325,5 @@ class ZStreamSearchTool(Tool[ZStreamSearchToolInput, ToolRunOptions, ZStreamSear
             raise ToolError(f"Error during Jira search: {e}") from e
 
         # 6. No commits found in any cascaded issue
-        logger.info("No commits found in any related issue's Development section")
+        logger.info("No merged commits found in any related issues")
         return _not_found()

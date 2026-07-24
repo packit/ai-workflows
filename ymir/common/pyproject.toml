@@ -23,16 +23,8 @@ test = [
 dev-mode-dirs = ["../.."]
 
 [tool.hatch.build.targets.wheel]
-packages = []
+include = ["**/*.py"]
+exclude = ["tests/**"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"__init__.py" = "ymir/common/__init__.py"
-"config.py" = "ymir/common/config.py"
-"constants.py" = "ymir/common/constants.py"
-"models.py" = "ymir/common/models.py"
-"utils.py" = "ymir/common/utils.py"
-"validators.py" = "ymir/common/validators.py"
-"version_utils.py" = "ymir/common/version_utils.py"
-"base_utils.py" = "ymir/common/base_utils.py"
-"mock_repos.py" = "ymir/common/mock_repos.py"
-"logging_setup.py" = "ymir/common/logging_setup.py"
+[tool.hatch.build.targets.wheel.sources]
+"" = "ymir/common"

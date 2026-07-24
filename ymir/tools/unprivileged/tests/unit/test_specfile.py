@@ -670,6 +670,69 @@ async def test_update_release_abandon_autorelease_increments_zstream(
     assert release_line == f"Release:        {base}%{{?dist}}.4"
 
 
+@pytest.mark.parametrize(
+    "rebase",
+    [False, True],
+)
+@pytest.mark.asyncio
+async def test_update_release_dotted_numeric_release(rebase, tmp_path):
+    """Test Z-stream release update when base release contains a dot (e.g. 0.22)."""
+    package = "bind9.16"
+    dist_git_branch = "c8s"
+
+    spec = tmp_path / "dotted_release.spec"
+    spec.write_text(
+        dedent(
+            """\
+            Name:           bind9.16
+            Version:        9.16.23
+            Release:        0.22%{?dist}.6
+            Summary:        Test package
+
+            License:        MIT
+
+            %description
+            Test package
+
+            %changelog
+            * Thu Jun 07 2018 Test User <test@redhat.com> - 9.16.23-0.22
+            - first version
+            """
+        )
+    )
+
+    async def mock_get_latest_candidate_build(package, dist_git_branch_arg):
+        return EVR(version="9.16.23", release="0.22.el8.6"), "dummy_ref"
+
+    flexmock(specfile_tools).should_receive("get_latest_candidate_build").replace_with(
+        mock_get_latest_candidate_build
+    )
+
+    async def mock_get_maintenance_rhel_branch(_):
+        return "rhel-8.10.0"
+
+    flexmock(specfile_tools).should_receive("get_maintenance_rhel_branch").replace_with(
+        mock_get_maintenance_rhel_branch
+    )
+
+    tool = UpdateReleaseTool()
+    output = await tool.run(
+        input=UpdateReleaseToolInput(
+            spec=spec,
+            package=package,
+            dist_git_branch=dist_git_branch,
+            rebase=rebase,
+        )
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    release_line = next(line for line in spec.read_text().splitlines() if line.startswith("Release:"))
+    if rebase:
+        assert release_line == "Release:        0%{?dist}.1"
+    else:
+        assert release_line == "Release:        0.22%{?dist}.7"
+
+
 @pytest.mark.asyncio
 async def test_update_release_abandon_autorelease_non_zstream(autorelease_spec):
     """Test that abandon_autorelease has no effect on non-Z-stream branches."""

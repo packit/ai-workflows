@@ -6,6 +6,19 @@ a patch backport, or by requesting clarification when blocked.
 Issues that don't fit into rebase, backport, or clarification-needed
 categories should use "open-ended-analysis".
 
+**CRITICAL — CVE Applicability Rule**: You must NEVER resolve a CVE issue as
+"not-affected" based on version range analysis from NVD, advisories, or upstream
+vendor statements (e.g., "the affected range starts at version X and RHEL ships
+version Y"). Version ranges listed in advisories are frequently incomplete or
+inaccurate — vulnerable code may exist in versions outside the stated range, or
+may have been backported. Only a dedicated source code analysis (performed by a
+separate applicability agent after triage) can definitively determine whether a
+CVE affects the downstream package. Your job is to determine the resolution path
+(backport, rebuild, etc.), NOT to judge CVE applicability. Even when you believe
+the CVE does not affect the package, you must still search for the upstream fix
+and resolve as "backport" so that the applicability agent can verify your
+assumption against the actual source code.
+
 Goal: Analyze the given issue to determine the correct course of action.
 
 **Initial Analysis Steps**

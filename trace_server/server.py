@@ -16,8 +16,8 @@ that the entire trace is discoverable from any associated issue.
 Endpoints
 ---------
 POST /v1/traces
-    OTLP HTTP receiver. Accepts OTLP JSON (application/json) trace data.
-    The OTel Collector is configured to export here.
+    OTLP HTTP receiver. Accepts both protobuf (application/x-protobuf)
+    and JSON (application/json) trace data.
 
 GET /traces/
     List all Jira issues that have recorded spans.
@@ -56,6 +56,8 @@ TRACE_SERVER_PORT   Port to listen on (default: 8080).
 TRACE_LOG_LEVEL     Log level: DEBUG, INFO, WARNING, ERROR (default: INFO).
 """
 
+
+import base64
 import contextlib
 import gzip
 import io
@@ -69,6 +71,11 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+from google.protobuf.json_format import MessageToDict
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+    ExportTraceServiceRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +260,24 @@ class SpanRow:
 
 
 _CAMEL_CASE_RE = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def _b64_to_hex(value: str) -> str:
+    """Convert a base64-encoded ID to lowercase hex."""
+    try:
+        return base64.b64decode(value).hex()
+    except Exception:
+        return value
+
+
+def _normalize_protobuf_ids(otlp_data: dict) -> None:
+    """Convert base64 trace/span IDs produced by MessageToDict to hex in-place."""
+    for rs in otlp_data.get("resourceSpans") or []:
+        for ss in rs.get("scopeSpans") or []:
+            for span in ss.get("spans") or []:
+                for key in ("traceId", "spanId", "parentSpanId"):
+                    if span.get(key):
+                        span[key] = _b64_to_hex(span[key])
 
 
 def _agent_type_from_name(name: str) -> str:
@@ -757,11 +782,28 @@ class TraceHandler(BaseHTTPRequestHandler):
                     self._send_json(413, {"error": "decompressed payload too large"})
                     return
                 logger.debug("Decompressed gzip payload to %d bytes", len(body))
-            try:
-                data = json.loads(body)
-            except ValueError:
-                logger.warning("POST /v1/traces rejected: invalid JSON")
-                self._send_json(400, {"error": "invalid JSON"})
+            content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip()
+            if content_type == "application/x-protobuf":
+                try:
+                    data = MessageToDict(ExportTraceServiceRequest.FromString(body))
+                    # MessageToDict base64-encodes bytes fields (traceId, spanId, …).
+                    # Base64 can contain '/' which breaks the UI's #/trace/<issue>/<traceId>
+                    # URL routing. Convert to hex to match the OTLP JSON format.
+                    _normalize_protobuf_ids(data)
+                except Exception as e:
+                    logger.warning(f"POST /v1/traces rejected: invalid protobuf: {e}")
+                    self._send_json(400, {"error": "invalid protobuf"})
+                    return
+            elif content_type == "application/json":
+                try:
+                    data = json.loads(body)
+                except ValueError:
+                    logger.warning("POST /v1/traces rejected: invalid JSON")
+                    self._send_json(400, {"error": "invalid JSON"})
+                    return
+            else:
+                logger.warning("POST /v1/traces rejected: unsupported content type %s", content_type)
+                self._send_json(415, {"error": f"unsupported content type: {content_type}"})
                 return
             try:
                 count = ingest_spans(data)

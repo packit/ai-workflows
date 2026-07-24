@@ -1,6 +1,7 @@
 import asyncio
 import os
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import gitlab
 import pytest
@@ -22,7 +23,9 @@ from ymir.tools.privileged.gitlab import (
     GetFailedPipelineJobsFromMergeRequestTool,
     OpenMergeRequestTool,
     PushToRemoteRepositoryTool,
+    ResolveReviewersTool,
     RetryPipelineJobTool,
+    SetMergeRequestReviewersTool,
     _get_git_auth_args,
 )
 from ymir.tools.privileged.utils import sanitize_url
@@ -1080,3 +1083,38 @@ async def test_push_logs_stderr_on_failure(caplog):
     assert "failed to push" in caplog.text
     assert "git push" in caplog.text
     assert "failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_set_merge_request_reviewers():
+    merge_request_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/1"
+    reviewer_ids = [42, 99]
+
+    raw_mr = flexmock(reviewer_ids=None)
+    raw_mr.should_receive("save").once()
+
+    mr_mock = flexmock(_raw_pr=raw_mr)
+
+    project = flexmock(gitlab_repo=flexmock())
+    (flexmock(GitlabService).should_receive("get_project_from_url").and_return(project))
+    project.should_receive("get_pr").with_args(1).and_return(mr_mock)
+
+    result = await SetMergeRequestReviewersTool().run(
+        input={
+            "merge_request_url": merge_request_url,
+            "reviewer_ids": reviewer_ids,
+        }
+    )
+    assert "Successfully set reviewers" in result.result
+    assert raw_mr.reviewer_ids == [42, 99]
+
+
+@pytest.mark.asyncio
+async def test_resolve_reviewers_tool():
+    with patch(
+        "ymir.tools.privileged.reviewer_resolver.resolve_reviewers",
+        new_callable=AsyncMock,
+        return_value=[42, 99],
+    ):
+        result = await ResolveReviewersTool().run(input={"package": "bash", "dist_git_branch": "c10s"})
+    assert result.result == [42, 99]

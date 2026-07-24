@@ -5,6 +5,7 @@ import pytest
 
 from ymir.agents.tasks import (
     change_jira_status,
+    commit_push_and_open_mr,
     fork_and_prepare_dist_git,
     get_jira_issue_metadata,
     needs_zstream_target_label,
@@ -272,3 +273,135 @@ async def test_needs_zstream_target_label(branch, fix_version, expected):
 
     with patch("ymir.agents.tasks.load_rhel_config", _mock_config):
         assert await needs_zstream_target_label(branch, fix_version) == expected
+
+
+@pytest.mark.asyncio
+async def test_commit_push_and_open_mr_assigns_reviewers(tmp_path, monkeypatch):
+    monkeypatch.setenv("ASSIGN_MR_REVIEWERS", "true")
+    tool_calls = []
+
+    async def mock_run_tool(name, *, available_tools=None, **kwargs):
+        tool_calls.append((name, kwargs))
+        if name == "open_merge_request":
+            return {"url": "https://gitlab.com/redhat/rpms/bash/-/merge_requests/1", "is_new_mr": True}
+        if name == "resolve_reviewers":
+            return [42, 99]
+        return None
+
+    with (
+        patch("ymir.agents.tasks.commit_and_push", new_callable=AsyncMock, return_value=True),
+        patch("ymir.agents.tasks.run_tool", side_effect=mock_run_tool),
+    ):
+        url, is_new = await commit_push_and_open_mr(
+            local_clone=tmp_path,
+            commit_message="test",
+            fork_url="https://gitlab.com/bot/bash.git",
+            dist_git_branch="c10s",
+            update_branch="automated-package-update-RHEL-1",
+            mr_title="Fix RHEL-1",
+            mr_description="desc",
+            available_tools=[],
+            package="bash",
+        )
+
+    assert url is not None
+    assert is_new is True
+    reviewer_calls = [(n, kw) for n, kw in tool_calls if n == "set_merge_request_reviewers"]
+    assert len(reviewer_calls) == 1
+    assert reviewer_calls[0][1]["reviewer_ids"] == [42, 99]
+
+
+@pytest.mark.asyncio
+async def test_commit_push_and_open_mr_reviewer_failure_does_not_fail(tmp_path, monkeypatch):
+    monkeypatch.setenv("ASSIGN_MR_REVIEWERS", "true")
+
+    async def mock_run_tool(name, *, available_tools=None, **kwargs):
+        if name == "open_merge_request":
+            return {"url": "https://gitlab.com/redhat/rpms/bash/-/merge_requests/1", "is_new_mr": True}
+        if name == "resolve_reviewers":
+            return [42]
+        if name == "set_merge_request_reviewers":
+            raise RuntimeError("GitLab API down")
+        return None
+
+    with (
+        patch("ymir.agents.tasks.commit_and_push", new_callable=AsyncMock, return_value=True),
+        patch("ymir.agents.tasks.run_tool", side_effect=mock_run_tool),
+    ):
+        url, is_new = await commit_push_and_open_mr(
+            local_clone=tmp_path,
+            commit_message="test",
+            fork_url="https://gitlab.com/bot/bash.git",
+            dist_git_branch="c10s",
+            update_branch="automated-package-update-RHEL-1",
+            mr_title="Fix RHEL-1",
+            mr_description="desc",
+            available_tools=[],
+            package="bash",
+        )
+
+    assert url is not None
+    assert is_new is True
+
+
+@pytest.mark.asyncio
+async def test_commit_push_and_open_mr_no_reviewers_on_reused_mr(tmp_path):
+    tool_calls = []
+
+    async def mock_run_tool(name, *, available_tools=None, **kwargs):
+        tool_calls.append((name, kwargs))
+        if name == "open_merge_request":
+            return {"url": "https://gitlab.com/redhat/rpms/bash/-/merge_requests/1", "is_new_mr": False}
+        return None
+
+    with (
+        patch("ymir.agents.tasks.commit_and_push", new_callable=AsyncMock, return_value=True),
+        patch("ymir.agents.tasks.run_tool", side_effect=mock_run_tool),
+    ):
+        url, is_new = await commit_push_and_open_mr(
+            local_clone=tmp_path,
+            commit_message="test",
+            fork_url="https://gitlab.com/bot/bash.git",
+            dist_git_branch="c10s",
+            update_branch="automated-package-update-RHEL-1",
+            mr_title="Fix RHEL-1",
+            mr_description="desc",
+            available_tools=[],
+            package="bash",
+        )
+
+    assert url is not None
+    assert is_new is False
+    reviewer_calls = [n for n, _ in tool_calls if n == "set_merge_request_reviewers"]
+    assert len(reviewer_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_commit_push_and_open_mr_no_reviewers_without_package(tmp_path):
+    tool_calls = []
+
+    async def mock_run_tool(name, *, available_tools=None, **kwargs):
+        tool_calls.append((name, kwargs))
+        if name == "open_merge_request":
+            return {"url": "https://gitlab.com/redhat/rpms/bash/-/merge_requests/1", "is_new_mr": True}
+        return None
+
+    with (
+        patch("ymir.agents.tasks.commit_and_push", new_callable=AsyncMock, return_value=True),
+        patch("ymir.agents.tasks.run_tool", side_effect=mock_run_tool),
+    ):
+        url, is_new = await commit_push_and_open_mr(
+            local_clone=tmp_path,
+            commit_message="test",
+            fork_url="https://gitlab.com/bot/bash.git",
+            dist_git_branch="c10s",
+            update_branch="automated-package-update-RHEL-1",
+            mr_title="Fix RHEL-1",
+            mr_description="desc",
+            available_tools=[],
+        )
+
+    assert url is not None
+    assert is_new is True
+    reviewer_calls = [n for n, _ in tool_calls if n == "set_merge_request_reviewers"]
+    assert len(reviewer_calls) == 0

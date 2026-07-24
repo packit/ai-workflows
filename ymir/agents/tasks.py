@@ -285,6 +285,36 @@ async def commit_and_push(
     return True
 
 
+async def request_mr_reviews(
+    package: str,
+    dist_git_branch: str,
+    mr_url: str,
+    available_tools: list[Tool],
+) -> None:
+    """Best-effort reviewer assignment — logs warnings but never raises."""
+    if os.getenv("ASSIGN_MR_REVIEWERS", "false").lower() != "true":
+        return
+    try:
+        reviewer_ids = await run_tool(
+            "resolve_reviewers",
+            package=package,
+            dist_git_branch=dist_git_branch,
+            available_tools=available_tools,
+        )
+        if not reviewer_ids:
+            logger.info("No reviewers resolved for %s (%s)", package, dist_git_branch)
+            return
+        await run_tool(
+            "set_merge_request_reviewers",
+            merge_request_url=mr_url,
+            reviewer_ids=reviewer_ids,
+            available_tools=available_tools,
+        )
+        logger.info("Assigned reviewers %s to MR %s", reviewer_ids, mr_url)
+    except Exception as e:
+        logger.warning("Failed to assign reviewers to MR %s: %s", mr_url, e)
+
+
 async def commit_push_and_open_mr(
     local_clone: Path,
     commit_message: str,
@@ -297,6 +327,7 @@ async def commit_push_and_open_mr(
     commit_only: bool = False,
     allow_empty: bool = False,
     labels: list[str] | None = None,
+    package: str | None = None,
 ) -> tuple[str | None, bool]:
     """
     Commits the changes to the local clone and opens a merge request.
@@ -340,6 +371,8 @@ async def commit_push_and_open_mr(
             )
         except Exception as e:
             logger.warning(f"Failed to add labels {labels} to MR {mr.url}: {e}")
+    if mr.url and mr.is_new_mr and package:
+        await request_mr_reviews(package, dist_git_branch, mr.url, available_tools)
     return mr.url, mr.is_new_mr
 
 

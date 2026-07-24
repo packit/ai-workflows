@@ -361,6 +361,7 @@ async def main() -> None:
                             )
                             else []
                         ),
+                        package=state.package,
                     )
                 except Exception as e:
                     logger.warning(f"Error committing and opening MR: {e}")

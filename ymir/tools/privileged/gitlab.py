@@ -712,6 +712,77 @@ class AddMergeRequestLabelsTool(Tool[AddMergeRequestLabelsToolInput, ToolRunOpti
             raise ToolError(f"Failed to add labels to merge request: {e}") from e
 
 
+class SetMergeRequestReviewersToolInput(BaseModel):
+    merge_request_url: str = Field(description="URL of the merge request")
+    reviewer_ids: list[int] = Field(description="List of GitLab user IDs to set as reviewers")
+
+
+class SetMergeRequestReviewersTool(Tool[SetMergeRequestReviewersToolInput, ToolRunOptions, StringToolOutput]):
+    name = "set_merge_request_reviewers"
+    description = """
+    Sets reviewers on an existing merge request.
+    """
+    input_schema = SetMergeRequestReviewersToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: SetMergeRequestReviewersToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        merge_request_url = tool_input.merge_request_url
+        reviewer_ids = tool_input.reviewer_ids
+        try:
+            mr = await _get_merge_request_from_url(merge_request_url)
+
+            def set_reviewers():
+                mr._raw_pr.reviewer_ids = reviewer_ids
+                mr._raw_pr.save()
+
+            await asyncio.to_thread(set_reviewers)
+            return StringToolOutput(
+                result=f"Successfully set reviewers {reviewer_ids} on merge request {merge_request_url}"
+            )
+        except Exception as e:
+            raise ToolError(f"Failed to set reviewers on merge request: {e}") from e
+
+
+class ResolveReviewersToolInput(BaseModel):
+    package: str = Field(description="RPM package name")
+    dist_git_branch: str = Field(description="Target dist-git branch")
+
+
+class ResolveReviewersTool(Tool[ResolveReviewersToolInput, ToolRunOptions, JSONToolOutput[list[int]]]):
+    name = "resolve_reviewers"
+    description = """
+    Resolve reviewer GitLab user IDs for a package from bugzilla component contacts.
+    """
+    input_schema = ResolveReviewersToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: ResolveReviewersToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[list[int]]:
+        from ymir.tools.privileged.reviewer_resolver import resolve_reviewers
+
+        reviewer_ids = await resolve_reviewers(tool_input.package, tool_input.dist_git_branch)
+        return JSONToolOutput(result=reviewer_ids)
+
+
 class AddMergeRequestCommentToolInput(BaseModel):
     merge_request_url: str = Field(description="URL of the merge request")
     comment: str = Field(description="Comment text")

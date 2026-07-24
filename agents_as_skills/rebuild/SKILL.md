@@ -136,7 +136,8 @@ If this fails, set `rebuild_success=false` with the error and skip to **Step 6: 
    <description>
 
    [Dependency: <dependency_components>]  ← only if all_dependency_components is non-empty
-   Resolves: <all_jira_issues_str>
+   Jira: [<issue>](https://issues.redhat.com/browse/<issue>)  ← single issue
+   ### Resolved Jira Issues               ← multiple issues (bullet browse links)
    [
    Sibling consolidation analysis:
    <consolidation_summary>
@@ -147,6 +148,7 @@ If this fails, set `rebuild_success=false` with the error and skip to **Step 6: 
 
    > **Warning: AI-Generated MR**: Created by Ymir AI assistant. AI may make mistakes...
    ```
+   Do NOT put `Resolves:` in the MR description (use browse links instead) — `Resolves:` belongs in the commit message only.
 
 8. Open a merge request using `open_merge_request` with:
    - `fork_url`: from Step 1

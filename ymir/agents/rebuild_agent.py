@@ -10,7 +10,12 @@ from beeai_framework.workflows import Workflow
 from pydantic import Field
 
 import ymir.agents.tasks as tasks
-from ymir.agents.constants import I_AM_YMIR, ZSTREAM_TARGET_LABEL, mr_description_footer
+from ymir.agents.constants import (
+    I_AM_YMIR,
+    ZSTREAM_TARGET_LABEL,
+    format_jira_links_for_mr,
+    mr_description_footer,
+)
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
@@ -211,6 +216,7 @@ async def main() -> None:
 
                     all_issues = [state.jira_issue] + [ci.issue_key for ci in state.consolidated_issues]
                     resolves_text = "Resolves: " + ", ".join(all_issues)
+                    jira_links_text = format_jira_links_for_mr(all_issues)
 
                     side_tag_text = f"\nside-tag: {state.side_tag}\n" if state.side_tag else ""
 
@@ -243,7 +249,7 @@ async def main() -> None:
                             f"{state.log_result.description}\n\n"
                             f"{dep_text}"
                             f"{dep_issues_text}"
-                            f"{resolves_text}\n"
+                            f"{jira_links_text}"
                             f"{side_tag_text}\n"
                             f"{triage_details_text}"
                             f"{consolidation_text}"

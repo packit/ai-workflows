@@ -21,7 +21,13 @@ from specfile import Specfile
 import ymir.agents.tasks as tasks
 from ymir.agents.build_agent import create_build_agent
 from ymir.agents.build_agent import get_prompt as get_build_prompt
-from ymir.agents.constants import I_AM_YMIR, ZSTREAM_TARGET_LABEL, mr_description_footer
+from ymir.agents.constants import (
+    I_AM_YMIR,
+    ZSTREAM_TARGET_LABEL,
+    format_jira_links_for_mr,
+    mr_description_footer,
+    strip_resolves_from_mr_text,
+)
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
@@ -1743,8 +1749,7 @@ def _build_consolidated_description(
         parts.append("")
 
     if jira_issues:
-        parts.append("### Resolved Jira Issues\n")
-        parts.extend(f"- [{issue}](https://issues.redhat.com/browse/{issue})" for issue in jira_issues)
+        parts.append(format_jira_links_for_mr(jira_issues).rstrip("\n"))
         parts.append("")
 
     parts.append("### Source Merge Requests\n")
@@ -1754,9 +1759,9 @@ def _build_consolidated_description(
         else:
             parts.append(f"#### MR {i}: {sub['title']}\n")
         if sub["description"]:
-            parts.append(
-                f"<details><summary>Original description</summary>\n\n{sub['description']}\n</details>\n"
-            )
+            sanitized = strip_resolves_from_mr_text(sub["description"])
+            if sanitized:
+                parts.append(f"<details><summary>Original description</summary>\n\n{sanitized}\n</details>\n")
 
     parts.append(mr_description_footer(package))
     return "\n".join(parts)

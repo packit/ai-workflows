@@ -103,9 +103,36 @@ def create_merge_request_agent(mcp_tools: list[Tool], local_tool_options: dict[s
 
 
 def extract_jira_issue(mr_description: str) -> str:
-    if not (m := re.search(r"Resolves:\s+(RHEL-\d+)", mr_description)):
-        raise RuntimeError("Failed to extract Jira issue from MR description")
-    return m.group(1)
+    """Extract the primary Jira issue key from an MR description.
+
+    Prefers the first key under ``### Resolved Jira Issues`` (consolidated /
+    multi-issue MRs). Otherwise searches legacy ``Resolves:`` / ``Related:``
+    and ``Jira: [RHEL-…](…)`` lines. Content inside ``<details>`` blocks is
+    ignored so embedded source descriptions cannot shadow the top-level issue.
+    """
+    # Strip embeds first so nested "Resolved Jira Issues" sections cannot win
+    text = re.sub(
+        r"<details\b[^>]*>.*?</details>",
+        "",
+        mr_description,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if m := re.search(
+        r"^#{1,4}\s+Resolved Jira Issues\s*\n+(?:-\s*\[?(RHEL-\d+)\]?)",
+        text,
+        re.MULTILINE,
+    ):
+        return m.group(1)
+
+    for pattern in (
+        r"Resolves:\s+(RHEL-\d+)",
+        r"Related:\s+(RHEL-\d+)",
+        r"Jira:\s+\[(RHEL-\d+)\]",
+        r"\[(RHEL-\d+)\]\(https://issues\.redhat\.com/browse/RHEL-\d+\)",
+    ):
+        if m := re.search(pattern, text):
+            return m.group(1)
+    raise RuntimeError("Failed to extract Jira issue from MR description")
 
 
 async def main() -> None:

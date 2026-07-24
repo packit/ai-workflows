@@ -301,9 +301,8 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         higher_stream_branch: str | None = None,
         abandon_autorelease: bool = False,
     ) -> None:
-        def extract_numeric_release(evr):
-            release = evr.release.rsplit(".el", maxsplit=1)[0]
-            return int(release)
+        def extract_release_without_dist(evr):
+            return evr.release.rsplit(".el", maxsplit=1)[0]
 
         def extract_zstream_suffix(evr):
             parts = evr.release.rsplit(".el", maxsplit=1)
@@ -330,14 +329,14 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
             ) == EVR(
                 epoch=latest_current_stream_build.epoch,
                 version=latest_current_stream_build.version,
-            ) and extract_numeric_release(latest_higher_stream_build) >= extract_numeric_release(
-                latest_current_stream_build
+            ) and EVR(version="0", release=extract_release_without_dist(latest_higher_stream_build)) >= EVR(
+                version="0", release=extract_release_without_dist(latest_current_stream_build)
             ):
                 base_build = latest_higher_stream_build
         else:
             latest_current_stream_build, _ = await get_latest_candidate_build(package, current_stream_branch)
             base_build = latest_current_stream_build
-        base_release = extract_numeric_release(base_build)
+        base_release = extract_release_without_dist(base_build)
         with Specfile(spec_path) as spec:
             current_release = spec.raw_release
             expanded_raw_release = spec.expanded_raw_release

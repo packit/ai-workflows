@@ -132,7 +132,9 @@ def init_db() -> None:
     db.execute("CREATE INDEX IF NOT EXISTS idx_jira_issue ON spans(jira_issue)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_agent_type ON spans(agent_type)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_start_time ON spans(start_time)")
-    db.execute("CREATE INDEX IF NOT EXISTS idx_root_spans ON spans(parent_span_id, name)")
+    db.execute("DROP INDEX IF EXISTS idx_root_spans")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_root_spans_v2 ON spans(trace_id, parent_span_id, name)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_parent_name ON spans(parent_span_id, name)")
     db.execute("""
         CREATE TABLE IF NOT EXISTS span_issues (
             trace_id TEXT NOT NULL,
@@ -603,7 +605,7 @@ def query_recent_traces(since_ns: int, workflow: str | None, limit: int) -> list
     root_trace_ids = {r["trace_id"] for r in root_rows}
 
     # In-progress traces: have spans linked to jira issues in the time window
-    # but no root Workflow span yet
+    # but no root Workflow span yet (NOT EXISTS uses idx_root_spans_v2).
     inprog_filter = ""
     inprog_bindings: list = [since_ns]
     if workflow:
@@ -616,11 +618,11 @@ def query_recent_traces(since_ns: int, workflow: str | None, limit: int) -> list
             FROM spans s
             JOIN span_issues si ON s.trace_id = si.trace_id AND s.span_id = si.span_id
             WHERE s.start_time >= ?{inprog_filter}
+              AND NOT EXISTS (
+                SELECT 1 FROM spans r
+                WHERE r.trace_id = s.trace_id AND r.parent_span_id = '' AND r.name LIKE '%Workflow'
+              )
             GROUP BY s.trace_id
-            HAVING s.trace_id NOT IN (
-                SELECT trace_id FROM spans
-                WHERE parent_span_id = '' AND name LIKE '%Workflow'
-            )
             ORDER BY first_start DESC
             LIMIT ?""",  # noqa: S608
         [*inprog_bindings, effective_limit],

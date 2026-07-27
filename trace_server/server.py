@@ -607,9 +607,10 @@ def query_recent_traces(since_ns: int, workflow: str | None, limit: int) -> list
         "EXISTS (SELECT 1 FROM span_issues si WHERE si.trace_id = s.trace_id)",
     ]
     root_bindings: list = [since_ns]
-    if workflow:
-        root_conditions.append("name = ?")
-        root_bindings.append(workflow)
+    wf_filter = workflow.removesuffix("Workflow").lower() if workflow else None
+    if wf_filter:
+        root_conditions.append("LOWER(name) LIKE ?")
+        root_bindings.append(f"%{wf_filter}%")
     root_where = " AND ".join(root_conditions)
 
     root_rows = db.execute(
@@ -627,9 +628,9 @@ def query_recent_traces(since_ns: int, workflow: str | None, limit: int) -> list
     # but no root Workflow span yet (NOT EXISTS uses idx_root_spans_v2).
     inprog_filter = ""
     inprog_bindings: list = [since_ns]
-    if workflow:
-        inprog_filter = " AND s.workflow_name = ?"
-        inprog_bindings.append(workflow.removesuffix("Workflow").lower())
+    if wf_filter:
+        inprog_filter = " AND LOWER(s.workflow_name) LIKE ?"
+        inprog_bindings.append(f"%{wf_filter}%")
     inprog_rows = db.execute(
         f"""SELECT s.trace_id, MIN(s.start_time) as first_start,
                   MAX(s.workflow_name) as workflow_name

@@ -175,51 +175,64 @@ async def test_process_task_proceeds_for_open_issues():
 
 
 @pytest.mark.parametrize(
-    "summary, expected",
+    "summary, downstream_component, expected",
     [
-        ("postgresql:12/postgresql:PostgreSQL: Arbitrary code execution", True),
-        ("postgresql:12.0/postgresql:PostgreSQL: some vulnerability", True),
-        ("nodejs:18/nodejs:Node.js: buffer overflow", True),
-        ("perl-DBD-MySQL:8.0/perl-DBD-MySQL:Fix for crash", True),
-        ("ruby:3.1-beta/ruby:Ruby: CVE fix", True),
-        ("python3.11:3.11/python3.11:Python: CVE fix", True),
-        ("gcc-c++:10/gcc-c++:GCC: CVE fix", True),
+        ("postgresql:12/postgresql:PostgreSQL: Arbitrary code execution", "postgresql", True),
+        ("postgresql:12.0/postgresql:PostgreSQL: some vulnerability", "postgresql", True),
+        ("nodejs:18/nodejs:Node.js: buffer overflow", "nodejs", True),
+        ("perl-DBD-MySQL:8.0/perl-DBD-MySQL:Fix for crash", "perl-DBD-MySQL", True),
+        ("ruby:3.1-beta/ruby:Ruby: CVE fix", "ruby", True),
+        ("python3.11:3.11/python3.11:Python: CVE fix", "python3.11", True),
+        ("gcc-c++:10/gcc-c++:GCC: CVE fix", "gcc-c++", True),
         (
             "CVE-2026-32748 squid:4/squid: Squid: Denial of Service via crafted ICP traffic [rhel-8.10.z]",
+            "squid",
             True,
         ),
-        ("postgresql:PostgreSQL: Arbitrary code execution", False),
-        ("CVE-2025-9900 libtiff: Libtiff Write-What-Where [rhel-9.2.0.z]", False),
-        ("some plain summary without colons", False),
-        ("", False),
-        (None, False),
+        # Package after slash must match Downstream Component Name
+        ("postgresql:12/postgresql:PostgreSQL: vuln", "nginx", False),
+        ("postgresql:PostgreSQL: Arbitrary code execution", "postgresql", False),
+        ("CVE-2025-9900 libtiff: Libtiff Write-What-Where [rhel-9.2.0.z]", "libtiff", False),
+        ("some plain summary without colons", "nginx", False),
+        ("postgresql:12/postgresql:vuln", None, False),
+        ("", "postgresql", False),
+        (None, "postgresql", False),
+        ("postgresql:12/postgresql:vuln", "", False),
     ],
 )
-def test_is_modular(summary, expected):
-    assert _is_modular(summary) is expected
+def test_is_modular(summary, downstream_component, expected):
+    assert _is_modular(summary, downstream_component) is expected
 
 
 # --- Module summary parsing tests ---
 
 
 @pytest.mark.parametrize(
-    "summary, expected_module, expected_stream",
+    "summary, downstream_component, expected_module, expected_stream",
     [
-        ("postgresql:12/postgresql:PostgreSQL: vuln", "postgresql", "12"),
-        ("nodejs:18/nodejs:Node.js: issue", "nodejs", "18"),
-        ("perl-DBD-MySQL:8.0/perl-DBD-MySQL:Fix", "perl-DBD-MySQL", "8.0"),
-        ("ruby:3.1-beta/ruby:Ruby: CVE", "ruby", "3.1-beta"),
-        ("python3.11:3.11/python3.11:Python: CVE", "python3.11", "3.11"),
-        ("gcc-c++:10/gcc-c++:GCC: CVE", "gcc-c++", "10"),
+        ("postgresql:12/postgresql:PostgreSQL: vuln", "postgresql", "postgresql", "12"),
+        ("nodejs:18/nodejs:Node.js: issue", "nodejs", "nodejs", "18"),
+        ("perl-DBD-MySQL:8.0/perl-DBD-MySQL:Fix", "perl-DBD-MySQL", "perl-DBD-MySQL", "8.0"),
+        ("ruby:3.1-beta/ruby:Ruby: CVE", "ruby", "ruby", "3.1-beta"),
+        ("python3.11:3.11/python3.11:Python: CVE", "python3.11", "python3.11", "3.11"),
+        ("gcc-c++:10/gcc-c++:GCC: CVE", "gcc-c++", "gcc-c++", "10"),
         (
             "CVE-2026-32748 squid:4/squid: Squid: Denial of Service [rhel-8.10.z]",
             "squid",
+            "squid",
             "4",
+        ),
+        # Component package differs from module name
+        (
+            "perl:5.32/perl-IO-Socket-SSL:Fix for crash",
+            "perl-IO-Socket-SSL",
+            "perl",
+            "5.32",
         ),
     ],
 )
-def test_parse_module_summary(summary, expected_module, expected_stream):
-    result = _parse_module_summary(summary)
+def test_parse_module_summary(summary, downstream_component, expected_module, expected_stream):
+    result = _parse_module_summary(summary, downstream_component)
     assert result is not None
     module, stream = result
     assert module == expected_module
@@ -227,49 +240,58 @@ def test_parse_module_summary(summary, expected_module, expected_stream):
 
 
 def test_parse_module_summary_non_modular():
-    assert _parse_module_summary("postgresql:PostgreSQL: vuln") is None
+    assert _parse_module_summary("postgresql:PostgreSQL: vuln", "postgresql") is None
+
+
+def test_parse_module_summary_package_mismatch():
+    assert _parse_module_summary("postgresql:12/postgresql:vuln", "nginx") is None
 
 
 # --- Modular branch mapping tests ---
 
 
 @pytest.mark.parametrize(
-    "version, summary, expected_branch",
+    "version, summary, downstream_component, expected_branch",
     [
         (
             "rhel-9.8",
             "postgresql:12/postgresql:PostgreSQL: vuln",
+            "postgresql",
             "stream-postgresql-12-rhel-9.8.0",
         ),
         (
             "rhel-9.9",
             "postgresql:12/postgresql:PostgreSQL: vuln",
+            "postgresql",
             "stream-postgresql-12-rhel-9.9.0",
         ),
         (
             "rhel-10.2",
             "nodejs:18/nodejs:Node.js: issue",
+            "nodejs",
             "stream-nodejs-18-rhel-10.2.0",
         ),
         (
             "rhel-9.8.z",
             "postgresql:12/postgresql:PostgreSQL: vuln",
+            "postgresql",
             "stream-postgresql-12-rhel-9.8.0",
         ),
         (
             "rhel-8.10.z",
             "CVE-2026-32748 squid:4/squid: Squid: Denial of Service [rhel-8.10.z]",
+            "squid",
             "stream-squid-4-rhel-8.10.0",
         ),
     ],
 )
-def test_map_version_to_module_branch(version, summary, expected_branch):
-    branch = _map_version_to_module_branch(version, summary)
+def test_map_version_to_module_branch(version, summary, downstream_component, expected_branch):
+    branch = _map_version_to_module_branch(version, summary, downstream_component)
     assert branch == expected_branch
 
 
 def test_map_version_to_module_branch_invalid_version():
-    branch = _map_version_to_module_branch("not-a-version", "postgresql:12/postgresql:vuln")
+    branch = _map_version_to_module_branch("not-a-version", "postgresql:12/postgresql:vuln", "postgresql")
     assert branch is None
 
 
@@ -310,6 +332,7 @@ async def test_determine_target_branch_modular_internal_fix_uses_rhel():
         branch, namespace = await determine_target_branch(
             _cve_eligibility(needs_internal_fix=True),
             _modular_backport_data(),
+            downstream_component="squid",
         )
     assert branch == "stream-squid-4-rhel-8.10.0"
     assert namespace == "rhel"
@@ -325,6 +348,7 @@ async def test_determine_target_branch_modular_cs_eligible_uses_centos_stream():
         branch, namespace = await determine_target_branch(
             _cve_eligibility(needs_internal_fix=False),
             _modular_backport_data(),
+            downstream_component="squid",
         )
     assert branch == "stream-squid-4-rhel-8.10.0"
     assert namespace == "centos-stream"
@@ -340,6 +364,7 @@ async def test_determine_target_branch_modular_older_zstream_uses_rhel():
         branch, namespace = await determine_target_branch(
             _cve_eligibility(needs_internal_fix=False),
             _modular_backport_data(fix_version="rhel-8.6.z"),
+            downstream_component="squid",
         )
     assert branch == "stream-squid-4-rhel-8.6.0"
     assert namespace == "rhel"
@@ -364,6 +389,7 @@ async def test_determine_target_branch_non_modular_has_no_explicit_namespace():
         branch, namespace = await determine_target_branch(
             _cve_eligibility(needs_internal_fix=True),
             data,
+            downstream_component="nginx",
         )
     assert branch == "rhel-10.2"
     assert namespace is None

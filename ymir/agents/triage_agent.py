@@ -61,6 +61,7 @@ from ymir.common.models import (
     TriageOutputSchema as OutputSchema,
 )
 from ymir.common.utils import (
+    DOWNSTREAM_COMPONENT_CUSTOM_FIELD,
     FIXED_IN_BUILD_CUSTOM_FIELD,
     check_build_in_buildroot,
     get_latest_candidate_build,
@@ -115,42 +116,49 @@ _RESOLUTION_TO_LABEL: dict[Resolution, JiraLabels] = {
 }
 
 
-# Optional CVE-YYYY-NNNNN prefix, then module:stream/component:
-_MODULAR_SUMMARY_RE = re.compile(r"^(?:CVE-\d{4}-\d+\s+)?([\w.+-]+):([^/\s]+)/([\w.+-]+):")
+# Optional CVE-YYYY-NNNNN prefix, then module:stream/<package>:
+# The package segment is the Downstream Component Name (not a free word match).
+_MODULAR_SUMMARY_PREFIX = r"^(?:CVE-\d{4}-\d+\s+)?([\w.+-]+):([^/\s]+)/"
 
 
-def _is_modular(jira_summary: str | None) -> bool:
+def _modular_summary_re(downstream_component: str) -> re.Pattern[str]:
+    """Build a modular-summary regex anchored on the Downstream Component Name."""
+    return re.compile(_MODULAR_SUMMARY_PREFIX + re.escape(downstream_component) + r":")
+
+
+def _is_modular(jira_summary: str | None, downstream_component: str | None) -> bool:
     """Detect whether the Jira ticket targets a modular package.
 
-    Modular summaries follow the pattern ``module:stream/component:Title``
-    (e.g. ``postgresql:12/postgresql:PostgreSQL: some vulnerability``),
-    optionally prefixed with a CVE id
-    (``CVE-2026-32748 squid:4/squid: ...``). Non-modular ones are
-    ``component:Title`` or ``CVE-... component:Title``.
+    Modular summaries follow ``module:stream/<package>:Title`` (optionally
+    CVE-prefixed), where ``<package>`` is the Downstream Component Name
+    (customfield_10669), e.g. summary ``postgresql:12/postgresql:…`` with
+    downstream component ``postgresql``. Non-modular summaries are
+    ``package:Title`` or ``CVE-... package:Title``.
     """
-    if not jira_summary:
+    if not jira_summary or not downstream_component:
         return False
-    return bool(_MODULAR_SUMMARY_RE.match(jira_summary))
+    return bool(_modular_summary_re(downstream_component).match(jira_summary))
 
 
-def _parse_module_summary(summary: str) -> tuple[str, str] | None:
+def _parse_module_summary(summary: str, downstream_component: str) -> tuple[str, str] | None:
     """Extract module name and stream from a modular Jira summary.
 
-    E.g. ``postgresql:12/postgresql:...`` → ``("postgresql", "12")``.
-    E.g. ``CVE-2026-32748 squid:4/squid:...`` → ``("squid", "4")``.
+    Requires the component segment to match *downstream_component*.
+    E.g. summary ``postgresql:12/postgresql:…`` + package ``postgresql``
+    → ``("postgresql", "12")``.
     """
-    m = _MODULAR_SUMMARY_RE.match(summary)
+    m = _modular_summary_re(downstream_component).match(summary)
     if not m:
         return None
     return m.group(1), m.group(2)
 
 
-def _map_version_to_module_branch(version: str, summary: str) -> str | None:
+def _map_version_to_module_branch(version: str, summary: str, downstream_component: str) -> str | None:
     """Map version string to a modular target branch.
 
     Branch format: ``stream-{module}-{stream}-rhel-{major}.{minor}.0``
-    E.g. version ``rhel-9.8`` + summary ``postgresql:12/...``
-    → ``stream-postgresql-12-rhel-9.8.0``
+    E.g. version ``rhel-9.8`` + summary ``postgresql:12/postgresql:…``
+    + package ``postgresql`` → ``stream-postgresql-12-rhel-9.8.0``
 
     The same branch name exists under both ``redhat/rhel/rpms`` and
     ``redhat/centos-stream/rpms``; callers must also resolve the GitLab
@@ -161,9 +169,12 @@ def _map_version_to_module_branch(version: str, summary: str) -> str | None:
         logger.warning(f"Failed to parse version for modular branch: {version}")
         return None
 
-    parsed_module = _parse_module_summary(summary)
+    parsed_module = _parse_module_summary(summary, downstream_component)
     if not parsed_module:
-        logger.warning(f"Failed to parse module/stream from summary: {summary!r}")
+        logger.warning(
+            f"Failed to parse module/stream from summary={summary!r} "
+            f"with downstream_component={downstream_component!r}"
+        )
         return None
 
     major, minor, _ = parsed_version
@@ -174,7 +185,9 @@ def _map_version_to_module_branch(version: str, summary: str) -> str | None:
 
 
 async def determine_target_branch(
-    cve_eligibility_result: CVEEligibilityResult | None, triage_data: BaseModel
+    cve_eligibility_result: CVEEligibilityResult | None,
+    triage_data: BaseModel,
+    downstream_component: str | None = None,
 ) -> tuple[str | None, str | None]:
     """
     Determine target branch and optional GitLab namespace from fix_version
@@ -198,8 +211,8 @@ async def determine_target_branch(
     package = triage_data.package if hasattr(triage_data, "package") else None
     jira_summary = triage_data.summary if hasattr(triage_data, "summary") else None
 
-    if _is_modular(jira_summary):
-        branch = _map_version_to_module_branch(triage_data.fix_version, jira_summary)
+    if _is_modular(jira_summary, downstream_component):
+        branch = _map_version_to_module_branch(triage_data.fix_version, jira_summary, downstream_component)
         if not branch:
             return None, None
 
@@ -210,7 +223,8 @@ async def determine_target_branch(
         jira_issue = getattr(triage_data, "jira_issue", "unknown")
         logger.info(
             f"Modular package detected for {jira_issue} "
-            f"(summary={jira_summary!r}) -> branch={branch}, namespace={namespace}"
+            f"(summary={jira_summary!r}, downstream_component={downstream_component!r}) -> "
+            f"branch={branch}, namespace={namespace}"
         )
         return branch, namespace
 
@@ -300,6 +314,7 @@ async def render_prompt(
     fix_version: str | None = None,
     cve_eligibility_result: CVEEligibilityResult | None = None,
     jira_summary: str | None = None,
+    downstream_component: str | None = None,
 ) -> str:
     older_zstream = bool(fix_version and await is_older_zstream(fix_version))
 
@@ -309,8 +324,8 @@ async def render_prompt(
         cve_eligibility_result and cve_eligibility_result.is_cve and cve_eligibility_result.needs_internal_fix
     )
     if cve_needs_internal_fix and fix_version:
-        if _is_modular(jira_summary):
-            internal_branch = _map_version_to_module_branch(fix_version, jira_summary)
+        if _is_modular(jira_summary, downstream_component):
+            internal_branch = _map_version_to_module_branch(fix_version, jira_summary, downstream_component)
             if internal_branch:
                 updates["needs_internal_fix"] = True
                 updates["internal_target_branch"] = internal_branch
@@ -336,6 +351,10 @@ class TriageState(BaseModel):
             "Explicit GitLab rpms namespace when the target branch name is ambiguous "
             "(modular stream-* branches exist under both rhel and centos-stream)."
         ),
+    )
+    downstream_component: str | None = Field(
+        default=None,
+        description="Jira Downstream Component Name (customfield_10669), used for modular detection.",
     )
     applicability_local_clone: Path | None = Field(default=None)
     applicability_unpacked_sources: Path | None = Field(default=None)
@@ -560,12 +579,14 @@ async def run_workflow(
 
             input_data = InputSchema(issue=state.jira_issue)
             jira_summary = jira_details.get("fields", {}).get("summary")
+            state.downstream_component = jira_details.get("fields", {}).get(DOWNSTREAM_COMPONENT_CUSTOM_FIELD)
             response = await triage_agent.run(
                 await render_prompt(
                     input_data,
                     fix_version=fix_version_name,
                     cve_eligibility_result=state.cve_eligibility_result,
                     jira_summary=jira_summary,
+                    downstream_component=state.downstream_component,
                 ),
                 expected_output=render_template("triage/output_format.j2"),
                 **get_agent_execution_config(),
@@ -583,10 +604,8 @@ async def run_workflow(
                 )
 
             # Propagate Jira summary to triage data for downstream agents
-            if hasattr(state.triage_result.data, "summary"):
-                jira_summary = jira_details.get("fields", {}).get("summary")
-                if jira_summary:
-                    state.triage_result.data.summary = jira_summary
+            if hasattr(state.triage_result.data, "summary") and jira_summary:
+                state.triage_result.data.summary = jira_summary
 
             if state.triage_result.resolution == Resolution.REBASE:
                 return "verify_rebase_author"
@@ -621,6 +640,7 @@ async def run_workflow(
             state.target_branch, state.dist_git_namespace = await determine_target_branch(
                 cve_eligibility_result=state.cve_eligibility_result,
                 triage_data=state.triage_result.data,
+                downstream_component=state.downstream_component,
             )
 
             if state.target_branch:

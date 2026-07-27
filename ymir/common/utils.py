@@ -36,6 +36,7 @@ from ymir.common.version_utils import (
 logger = logging.getLogger(__name__)
 
 FIXED_IN_BUILD_CUSTOM_FIELD = "customfield_10578"
+DOWNSTREAM_COMPONENT_CUSTOM_FIELD = "customfield_10669"  # Downstream Component Name
 
 
 class _MetaInjectingSession:

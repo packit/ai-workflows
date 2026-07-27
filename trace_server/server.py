@@ -586,7 +586,12 @@ def query_recent_traces(since_ns: int, workflow: str | None, limit: int) -> list
     effective_limit = min(limit, MAX_LAST_TRACES)
 
     # Completed traces: root workflow span exists
-    root_conditions = ["parent_span_id = ''", "name LIKE '%Workflow'", "start_time >= ?"]
+    root_conditions = [
+        "parent_span_id = ''",
+        "name LIKE '%Workflow'",
+        "start_time >= ?",
+        "EXISTS (SELECT 1 FROM span_issues si WHERE si.trace_id = s.trace_id)",
+    ]
     root_bindings: list = [since_ns]
     if workflow:
         root_conditions.append("name = ?")
@@ -623,6 +628,7 @@ def query_recent_traces(since_ns: int, workflow: str | None, limit: int) -> list
                 WHERE r.trace_id = s.trace_id AND r.parent_span_id = '' AND r.name LIKE '%Workflow'
               )
             GROUP BY s.trace_id
+            HAVING workflow_name IS NOT NULL
             ORDER BY first_start DESC
             LIMIT ?""",  # noqa: S608
         [*inprog_bindings, effective_limit],

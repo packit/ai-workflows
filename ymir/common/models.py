@@ -243,10 +243,6 @@ class RebaseData(BaseModel):
         default=None,
     )
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
-    summary: str | None = Field(
-        default=None,
-        description="Original Jira issue summary (title), propagated for downstream agent context.",
-    )
 
 
 class BackportData(BaseModel):
@@ -281,10 +277,6 @@ class BackportData(BaseModel):
         default=None,
     )
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
-    summary: str | None = Field(
-        default=None,
-        description="Original Jira issue summary (title), propagated for downstream agent context.",
-    )
 
 
 class ConsolidatedIssue(BaseModel):
@@ -320,10 +312,6 @@ class RebuildData(BaseModel):
         description="Investigation log and downstream-agent handoff: what was searched, "
         "what was ruled out, caveats, and operational guidance. "
         "Do NOT repeat the justification rationale here.",
-    )
-    summary: str | None = Field(
-        default=None,
-        description="Original Jira issue summary (title), propagated for downstream agent context.",
     )
     dependency_issue: str | None = Field(
         description="Key of the dependency Jira issue that triggered the rebuild",

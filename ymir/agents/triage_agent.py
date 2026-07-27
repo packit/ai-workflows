@@ -86,7 +86,7 @@ logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")
 
 
-def _should_update_jira(resolution: Resolution = None, user_triggered: bool = False) -> bool:
+def _should_update_jira(resolution: Resolution, user_triggered: bool = False) -> bool:
     """Whether to post a user-facing Jira comment for this run.
 
     Used only for comments — labels are dedup anchors and are written

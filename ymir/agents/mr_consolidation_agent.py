@@ -1777,7 +1777,7 @@ async def main() -> None:
     if (package := os.getenv("PACKAGE")) and (branch := os.getenv("BRANCH")):
         release_strategy = os.getenv("RELEASE_STRATEGY", "per_commit")
         logger.info("Running in direct mode for %s/%s", package, branch)
-        with span_processor.start_transaction(None, workflow="mr_consolidation"):
+        with span_processor.start_transaction(None, workflow="MRConsolidationWorkflow"):
             state = await run_workflow(
                 package=package,
                 dist_git_branch=branch,
@@ -1821,7 +1821,7 @@ async def main() -> None:
             try:
                 with span_processor.start_transaction(
                     jira_key,
-                    workflow="mr_consolidation",
+                    workflow="MRConsolidationWorkflow",
                 ):
                     job_strategy = job.release_strategy or os.getenv(
                         "RELEASE_STRATEGY",

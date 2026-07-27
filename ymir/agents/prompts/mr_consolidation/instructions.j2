@@ -72,9 +72,10 @@ Only combine the NEW patches added by the two source MRs.
 General instructions:
 - Never change anything in the spec file changelog. The changelog will be handled by
   a separate workflow step after your work is complete.
-- Never modify the Release field in the spec file. The Release field will be updated
-  by a separate deterministic workflow step — do not revert, bump, or modify it.
-  If both source MRs contain Release bumps, REVERT the Release to its base branch value.
+- NEVER modify the Release field in the spec file under ANY circumstances. The Release
+  field will be updated by a separate deterministic workflow step. Do not revert it,
+  bump it, reset it to the base branch value, or change it in any way — even if you
+  notice that both source MRs contain Release bumps. Leave it exactly as it is.
 - Never run `git fetch`, `git pull`, or `git clone`. All branches you need are already
   available locally. If a branch appears empty, work with what is available.
 - Preserve existing formatting and style conventions in spec files and patch headers.

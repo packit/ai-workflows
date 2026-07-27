@@ -56,6 +56,7 @@ TRACE_SERVER_PORT   Port to listen on (default: 8080).
 TRACE_LOG_LEVEL     Log level: DEBUG, INFO, WARNING, ERROR (default: INFO).
 """
 
+import contextlib
 import gzip
 import io
 import json
@@ -144,6 +145,14 @@ def init_db() -> None:
         )
     """)
     db.execute("CREATE INDEX IF NOT EXISTS idx_span_issues_issue ON span_issues(jira_issue)")
+    with contextlib.suppress(sqlite3.OperationalError):
+        db.execute("ALTER TABLE spans ADD COLUMN workflow_name TEXT")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_workflow_name ON spans(workflow_name)")
+    db.execute(
+        "UPDATE spans SET workflow_name = json_extract(attributes, '$.\"workflow.name\".stringValue') "
+        "WHERE workflow_name IS NULL "
+        "AND json_extract(attributes, '$.\"workflow.name\".stringValue') IS NOT NULL"
+    )
     # One-off backfill from spans.jira_issue into the new junction table
     if not db.execute("SELECT 1 FROM span_issues LIMIT 1").fetchone():
         cursor = db.execute("SELECT trace_id, span_id, jira_issue FROM spans WHERE jira_issue IS NOT NULL")
@@ -197,6 +206,7 @@ class SpanRow:
         "start_time",
         "status_code",
         "trace_id",
+        "workflow_name",
     )
 
     def __init__(
@@ -212,6 +222,7 @@ class SpanRow:
         jira_issues,
         agent_type,
         attributes,
+        workflow_name=None,
     ):
         self.trace_id = trace_id
         self.span_id = span_id
@@ -223,6 +234,7 @@ class SpanRow:
         self.jira_issues = jira_issues
         self.agent_type = agent_type
         self.attributes = attributes
+        self.workflow_name = workflow_name
 
     def as_tuple(self):
         return (
@@ -236,6 +248,7 @@ class SpanRow:
             ",".join(self.jira_issues) if self.jira_issues else None,
             self.agent_type,
             self.attributes,
+            self.workflow_name,
         )
 
 
@@ -341,6 +354,7 @@ def _extract_spans(otlp_data: dict) -> list[SpanRow]:
                         if name.endswith(("Agent", "Analyst"))
                         else None,
                         attributes=json.dumps(all_attrs),
+                        workflow_name=_get_val(all_attrs.get("workflow.name")),
                     )
                 )
 
@@ -358,8 +372,8 @@ def ingest_spans(otlp_data: dict) -> int:
     db.executemany(
         """INSERT OR REPLACE INTO spans
            (trace_id, span_id, parent_span_id, name, start_time, end_time,
-            status_code, jira_issue, agent_type, attributes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            status_code, jira_issue, agent_type, attributes, workflow_name)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         [s.as_tuple() for s in spans],
     )
     span_keys = [(s.trace_id, s.span_id) for s in spans]
@@ -614,12 +628,11 @@ def query_recent_traces(since_ns: int, workflow: str | None, limit: int) -> list
     inprog_filter = ""
     inprog_bindings: list = [since_ns]
     if workflow:
-        wf_base = workflow.removesuffix("Workflow").lower()
-        inprog_filter = " AND json_extract(s.attributes, '$.\"workflow.name\".stringValue') = ?"
-        inprog_bindings.append(wf_base)
+        inprog_filter = " AND s.workflow_name = ?"
+        inprog_bindings.append(workflow.removesuffix("Workflow").lower())
     inprog_rows = db.execute(
         f"""SELECT s.trace_id, MIN(s.start_time) as first_start,
-                  MAX(json_extract(s.attributes, '$."workflow.name".stringValue')) as workflow_name
+                  MAX(s.workflow_name) as workflow_name
             FROM spans s INDEXED BY idx_start_time
             JOIN span_issues si ON s.trace_id = si.trace_id AND s.span_id = si.span_id
             WHERE s.start_time >= ?{inprog_filter}

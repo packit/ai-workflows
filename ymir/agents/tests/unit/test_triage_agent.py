@@ -299,7 +299,6 @@ def test_map_version_to_module_branch_invalid_version():
 
 
 def _modular_backport_data(
-    summary: str = "CVE-2026-32748 squid:4/squid: Squid: Denial of Service [rhel-8.10.z]",
     fix_version: str = "rhel-8.10.z",
 ) -> BackportData:
     return BackportData(
@@ -309,8 +308,10 @@ def _modular_backport_data(
         jira_issue="RHEL-160675",
         cve_id="CVE-2026-32748",
         fix_version=fix_version,
-        summary=summary,
     )
+
+
+_MODULAR_SUMMARY = "CVE-2026-32748 squid:4/squid: Squid: Denial of Service [rhel-8.10.z]"
 
 
 def _cve_eligibility(*, needs_internal_fix: bool) -> CVEEligibilityResult:
@@ -332,6 +333,7 @@ async def test_determine_target_branch_modular_internal_fix_uses_rhel():
         branch, namespace = await determine_target_branch(
             _cve_eligibility(needs_internal_fix=True),
             _modular_backport_data(),
+            jira_summary=_MODULAR_SUMMARY,
             downstream_component="squid",
         )
     assert branch == "stream-squid-4-rhel-8.10.0"
@@ -348,6 +350,7 @@ async def test_determine_target_branch_modular_cs_eligible_uses_centos_stream():
         branch, namespace = await determine_target_branch(
             _cve_eligibility(needs_internal_fix=False),
             _modular_backport_data(),
+            jira_summary=_MODULAR_SUMMARY,
             downstream_component="squid",
         )
     assert branch == "stream-squid-4-rhel-8.10.0"
@@ -364,6 +367,7 @@ async def test_determine_target_branch_modular_older_zstream_uses_rhel():
         branch, namespace = await determine_target_branch(
             _cve_eligibility(needs_internal_fix=False),
             _modular_backport_data(fix_version="rhel-8.6.z"),
+            jira_summary=_MODULAR_SUMMARY,
             downstream_component="squid",
         )
     assert branch == "stream-squid-4-rhel-8.6.0"
@@ -379,7 +383,6 @@ async def test_determine_target_branch_non_modular_has_no_explicit_namespace():
         jira_issue="RHEL-1",
         cve_id="CVE-2026-1",
         fix_version="rhel-10.2.z",
-        summary="CVE-2026-1 nginx: something [rhel-10.2.z]",
     )
     with patch(
         "ymir.agents.triage_agent._map_version_to_branch",
@@ -389,6 +392,7 @@ async def test_determine_target_branch_non_modular_has_no_explicit_namespace():
         branch, namespace = await determine_target_branch(
             _cve_eligibility(needs_internal_fix=True),
             data,
+            jira_summary="CVE-2026-1 nginx: something [rhel-10.2.z]",
             downstream_component="nginx",
         )
     assert branch == "rhel-10.2"

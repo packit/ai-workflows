@@ -187,6 +187,7 @@ def _map_version_to_module_branch(version: str, summary: str, downstream_compone
 async def determine_target_branch(
     cve_eligibility_result: CVEEligibilityResult | None,
     triage_data: BaseModel,
+    jira_summary: str | None = None,
     downstream_component: str | None = None,
 ) -> tuple[str | None, str | None]:
     """
@@ -209,7 +210,6 @@ async def determine_target_branch(
     )
 
     package = triage_data.package if hasattr(triage_data, "package") else None
-    jira_summary = triage_data.summary if hasattr(triage_data, "summary") else None
 
     if _is_modular(jira_summary, downstream_component):
         branch = _map_version_to_module_branch(triage_data.fix_version, jira_summary, downstream_component)
@@ -355,6 +355,10 @@ class TriageState(BaseModel):
     downstream_component: str | None = Field(
         default=None,
         description="Jira Downstream Component Name (customfield_10669), used for modular detection.",
+    )
+    jira_summary: str | None = Field(
+        default=None,
+        description="Jira issue summary (title), used for modular detection.",
     )
     applicability_local_clone: Path | None = Field(default=None)
     applicability_unpacked_sources: Path | None = Field(default=None)
@@ -578,14 +582,14 @@ async def run_workflow(
                 logger.warning(f"Failed to pre-fetch Jira details for prompt selection: {e}")
 
             input_data = InputSchema(issue=state.jira_issue)
-            jira_summary = jira_details.get("fields", {}).get("summary")
+            state.jira_summary = jira_details.get("fields", {}).get("summary")
             state.downstream_component = jira_details.get("fields", {}).get(DOWNSTREAM_COMPONENT_CUSTOM_FIELD)
             response = await triage_agent.run(
                 await render_prompt(
                     input_data,
                     fix_version=fix_version_name,
                     cve_eligibility_result=state.cve_eligibility_result,
-                    jira_summary=jira_summary,
+                    jira_summary=state.jira_summary,
                     downstream_component=state.downstream_component,
                 ),
                 expected_output=render_template("triage/output_format.j2"),
@@ -602,11 +606,6 @@ async def run_workflow(
                 state.triage_result.data.fix_version = normalize_fix_version(
                     state.triage_result.data.fix_version, rhel_config
                 )
-
-            # Propagate Jira summary to triage data for downstream agents
-            if hasattr(state.triage_result.data, "summary") and jira_summary:
-                state.triage_result.data.summary = jira_summary
-
             if state.triage_result.resolution == Resolution.REBASE:
                 return "verify_rebase_author"
             if state.triage_result.resolution in [
@@ -640,6 +639,7 @@ async def run_workflow(
             state.target_branch, state.dist_git_namespace = await determine_target_branch(
                 cve_eligibility_result=state.cve_eligibility_result,
                 triage_data=state.triage_result.data,
+                jira_summary=state.jira_summary,
                 downstream_component=state.downstream_component,
             )
 

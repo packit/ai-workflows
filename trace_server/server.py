@@ -694,7 +694,7 @@ def query_recent_traces(since_ns: int, workflow: str | None, limit: int) -> list
             continue
         counts = counts_by_trace.get(tid)
         wf_name = r["workflow_name"]
-        if wf_name:
+        if wf_name and not wf_name.endswith("Workflow"):
             wf_name = wf_name[0].upper() + wf_name[1:] + "Workflow"
         results.append(
             {

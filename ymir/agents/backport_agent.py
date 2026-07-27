@@ -827,7 +827,7 @@ async def main() -> None:
     ):
         upstream_patches = upstream_patches_raw.split(",")
         logger.info("Running in direct mode with environment variables")
-        with span_processor.start_transaction(jira_issue, workflow="backport"):
+        with span_processor.start_transaction(jira_issue, workflow="BackportWorkflow"):
             state = await run_workflow(
                 package=package,
                 dist_git_branch=branch,
@@ -930,7 +930,7 @@ async def main() -> None:
 
             try:
                 logger.info(f"Starting backport processing for {backport_data.jira_issue}")
-                with span_processor.start_transaction(backport_data.jira_issue, workflow="backport"):
+                with span_processor.start_transaction(backport_data.jira_issue, workflow="BackportWorkflow"):
                     state = await run_workflow(
                         package=backport_data.package,
                         dist_git_branch=dist_git_branch,

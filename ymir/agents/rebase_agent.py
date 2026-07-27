@@ -423,7 +423,7 @@ async def main() -> None:
         and (branch := os.getenv("BRANCH", None))
     ):
         logger.info("Running in direct mode with environment variables")
-        with span_processor.start_transaction(jira_issue, workflow="rebase"):
+        with span_processor.start_transaction(jira_issue, workflow="RebaseWorkflow"):
             state = await run_workflow(
                 package=package,
                 dist_git_branch=branch,
@@ -522,7 +522,7 @@ async def main() -> None:
 
             try:
                 logger.info(f"Starting rebase processing for {rebase_data.jira_issue}")
-                with span_processor.start_transaction(rebase_data.jira_issue, workflow="rebase"):
+                with span_processor.start_transaction(rebase_data.jira_issue, workflow="RebaseWorkflow"):
                     state = await run_workflow(
                         package=rebase_data.package,
                         dist_git_branch=dist_git_branch,

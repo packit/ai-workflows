@@ -676,8 +676,8 @@ function buildSpanTree(spans) {
     if (isRoot) {
       const wfAttr = (missingParents.get(p.span_id) || [])
         .map(c => getVal((c.attributes || {})['workflow.name'])).find(Boolean);
-      if (wfAttr) {
-        node.name = wfAttr[0].toUpperCase() + wfAttr.slice(1) + 'Workflow';
+      if (typeof wfAttr === 'string') {
+        node.name = wfAttr.endsWith('Workflow') ? wfAttr : wfAttr[0].toUpperCase() + wfAttr.slice(1) + 'Workflow';
       } else if (!node.name) {
         node.name = '(in progress)';
       }
@@ -1297,7 +1297,7 @@ function traceWorkflowName(spans) {
   if (root) return root.name;
   for (const s of spans) {
     const wf = getVal((s.attributes || {})['workflow.name']);
-    if (wf) return wf[0].toUpperCase() + wf.slice(1) + 'Workflow';
+    if (typeof wf === 'string') return wf.endsWith('Workflow') ? wf : wf[0].toUpperCase() + wf.slice(1) + 'Workflow';
   }
   return spans[0]?.name || 'trace';
 }

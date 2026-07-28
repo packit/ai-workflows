@@ -67,7 +67,7 @@ Execute the following steps in order.
 
    1.4. If `{{ triage_summary }}` is provided, use it as the primary source of understanding for the bug throughout the workflow. It contains the triage agent's analysis of the issue and may include details about the root cause, affected code paths, and patch validation results.
 
-   1.5. If `{{ patch_urls }}` is provided, parse it into a list by splitting on commas. For each URL, call `get_patch_from_url` to fetch the patch content and study what the fix changes — this informs what the reproducer should test (the pre-fix behavior). By reading the fix backwards — from what was changed to what was there before — you can determine how to trigger the original bug.
+   1.5. If `{{ patch_urls }}` is provided, it is already a list of URLs. For each URL, call `get_patch_from_url` to fetch the patch content and study what the fix changes — this informs what the reproducer should test (the pre-fix behavior). By reading the fix backwards — from what was changed to what was there before — you can determine how to trigger the original bug.
 
    1.6. If neither `{{ triage_summary }}` nor `{{ patch_urls }}` are provided, design the test based solely on the Jira issue description, comments, and any reproducer steps or error messages described in the issue. In this case, the test may require more iteration in step 5.
 
@@ -79,7 +79,7 @@ Execute the following steps in order.
      - URL: `https://gitlab.com/redhat/rhel/tests/<package_name>`
      - Do NOT specify a `branch` parameter — omit it so the tool clones the default branch.
      - Use clone path `/git-repos/tests-<package_name>`.
-     - If the clone path already exists, delete it first with `run_shell_command("rm -rf /git-repos/tests-<package_name>")`.
+     - If the clone path already exists, `clone_repository` removes and re-clones it — do NOT delete it yourself with `rm -rf`.
    * Determine the expected test directory:
      - For CVEs (when `{{ cve_id }}` is set): check for `Security/{{ cve_id }}/`
      - For bugs (non-CVE): check for `Regression/{{ jira_issue }}/`
@@ -153,7 +153,7 @@ Execute the following steps in order.
 
 4. **Create tmt Test Structure Locally**
 
-   This step creates the tmt-compatible test directory structure locally. The test files will later be copied to the Testing Farm machine for verification (step 5) and committed to the tests repo for the MR (step 7).
+   This step creates the tmt-compatible test directory structure locally. The test files will later be copied to the Testing Farm machine for verification (step 5) and committed to the tests repo by the workflow after you return your output.
 
    Use the Jira issue description, triage summary, and patch URLs to understand the bug and design the test. The patch URLs show what the fix changes — by reading the fix you can determine what behavior to test (the pre-fix, buggy behavior).
 
@@ -427,7 +427,7 @@ Execute the following steps in order.
    * The detection method fires: crash detected, wrong output observed, timeout hit, memory leak found, etc.
    * This means the reproducer WORKS. The test correctly detects the bug on the unpatched system.
    * The reproducer is verified.
-   * Proceed to step 6 (return machine), then step 7 (create MR).
+   * Proceed to step 6 (return machine), then produce your final output JSON. The workflow creates the merge request from your output.
 
    *Case B: Bug is NOT reproduced (test PASSES — the bug is not triggered)*
    * The program does not crash, output is correct, no timeout, no leak, etc.

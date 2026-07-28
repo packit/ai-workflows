@@ -341,6 +341,7 @@ class ReasoningAgentRunner:
 
         try:
             messages, options = self._prepare_llm_request(evaluation)
+            # Hard kill if the provider ignores ChatModel.timeout (same CHAT_MODEL_TIMEOUT env).
             async with asyncio.timeout(llm_timeout):
                 response = await self._llm.run(messages, **options).middleware(stream_middleware)
 

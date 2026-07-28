@@ -33,6 +33,7 @@ from ymir.agents.utils import (
 )
 from ymir.common.base_utils import fix_await, redis_client, run_task_loop
 from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.delayed_queue import promote_due_tasks, schedule_task
 from ymir.common.logging_setup import configure_logging, current_jira_issue
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
@@ -153,6 +154,15 @@ def _determine_comment_resolution(result: OutputSchema) -> str:
         JiraLabels.REPRODUCER_ALREADY_EXISTS: "already-exists",
         JiraLabels.REPRODUCER_FAILED: "failed",
     }.get(label, "failed")
+
+
+def _should_finalize_jira(result: OutputSchema) -> bool:
+    """Whether handle_results should write terminal labels/comments.
+
+    Retryable infra errors (e.g. Testing Farm provisioning) keep
+    ``ymir_reproducer_in_progress`` and are scheduled for a later attempt.
+    """
+    return not result.retryable_error
 
 
 def _build_mr_description(result: OutputSchema, input_data: InputSchema) -> str:
@@ -336,11 +346,19 @@ async def run_workflow(
             result = state.result
             logger.info(
                 f"Reproducer result for {state.jira_issue}: "
-                f"success={result.success}, type={result.reproducer_type}"
+                f"success={result.success}, type={result.reproducer_type}, "
+                f"retryable_error={result.retryable_error}"
             )
 
             if dry_run:
                 logger.info(f"Dry run — skipping Jira updates for {state.jira_issue}")
+                return Workflow.END
+
+            if not _should_finalize_jira(result):
+                logger.info(
+                    f"Retryable infra error for {state.jira_issue} — "
+                    "leaving ymir_reproducer_in_progress for scheduled retry"
+                )
                 return Workflow.END
 
             # Build a human-readable comment
@@ -416,9 +434,39 @@ async def main() -> None:
 
     logger.info("Starting reproducer agent in queue mode")
     max_concurrent_tasks = int(os.getenv("MAX_CONCURRENT_TASKS", 1))
+    retry_delay_seconds = float(os.getenv("REPRODUCER_RETRY_DELAY_SECONDS", "1800"))
+    poll_timeout = int(os.getenv("REPRODUCER_POLL_TIMEOUT", "30"))
     async with redis_client(os.environ["REDIS_URL"]) as redis:
         max_retries = int(os.getenv("MAX_RETRIES", 3))
-        redis_logger.info(f"Connected to Redis, max retries set to {max_retries}")
+        redis_logger.info(
+            "Connected to Redis, max retries set to %s, retry delay %.0fs",
+            max_retries,
+            retry_delay_seconds,
+        )
+
+        def _target_queue_for_delayed_payload(payload: str) -> str:
+            try:
+                delayed_task = Task.model_validate_json(payload)
+            except Exception:
+                return RedisQueues.REPRODUCER_QUEUE.value
+            return (
+                RedisQueues.REPRODUCER_QUEUE_TODO.value
+                if delayed_task.user_triggered
+                else RedisQueues.REPRODUCER_QUEUE.value
+            )
+
+        async def poll_reproducer():
+            await promote_due_tasks(
+                redis,
+                RedisQueues.REPRODUCER_DELAYED_QUEUE.value,
+                _target_queue_for_delayed_payload,
+            )
+            return await fix_await(
+                redis.brpop(
+                    [RedisQueues.REPRODUCER_QUEUE_TODO.value, RedisQueues.REPRODUCER_QUEUE.value],
+                    timeout=poll_timeout,
+                )
+            )
 
         async def process_task(payload):
             task = Task.model_validate_json(payload)
@@ -452,19 +500,35 @@ async def main() -> None:
                 )
                 return
 
-            async def retry(task, error, input_data=input_data, user_triggered=user_triggered):
+            async def retry(
+                task,
+                error,
+                input_data=input_data,
+                user_triggered=user_triggered,
+                delay_seconds: float | None = None,
+            ):
                 task.attempts += 1
                 if task.attempts < max_retries:
                     logger.warning(
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {input_data.jira_issue}"
+                        + (f" (delay={delay_seconds:.0f}s)" if delay_seconds is not None else "")
                     )
-                    retry_queue = (
-                        RedisQueues.REPRODUCER_QUEUE_TODO.value
-                        if task.user_triggered
-                        else RedisQueues.REPRODUCER_QUEUE.value
-                    )
-                    await fix_await(redis.lpush(retry_queue, task.model_dump_json()))
+                    payload_json = task.model_dump_json()
+                    if delay_seconds is not None:
+                        await schedule_task(
+                            redis,
+                            RedisQueues.REPRODUCER_DELAYED_QUEUE.value,
+                            payload_json,
+                            delay_seconds,
+                        )
+                    else:
+                        retry_queue = (
+                            RedisQueues.REPRODUCER_QUEUE_TODO.value
+                            if task.user_triggered
+                            else RedisQueues.REPRODUCER_QUEUE.value
+                        )
+                        await fix_await(redis.lpush(retry_queue, payload_json))
                 else:
                     logger.error(
                         f"Task failed after {max_retries} attempts, "
@@ -539,7 +603,7 @@ async def main() -> None:
                     output = state.result
                     logger.info(
                         f"Reproducer processing completed for {input_data.jira_issue}, "
-                        f"success: {output.success}"
+                        f"success: {output.success}, retryable_error: {output.retryable_error}"
                     )
 
             except Exception as e:
@@ -550,24 +614,40 @@ async def main() -> None:
                     ErrorData(details=error, jira_issue=input_data.jira_issue).model_dump_json(),
                 )
             else:
-                logger.info(f"Reproducer resolved as success={output.success} for {input_data.jira_issue}")
-
-                # Push the completed result to the completed list
-                await fix_await(
-                    redis.lpush(
-                        RedisQueues.COMPLETED_REPRODUCER_LIST.value,
-                        output.model_dump_json(),
+                if output.retryable_error:
+                    logger.info(
+                        f"Reproducer retryable infra error for {input_data.jira_issue}; "
+                        f"scheduling retry in {retry_delay_seconds:.0f}s"
                     )
-                )
-                logger.info(
-                    f"Pushed {input_data.jira_issue} to {RedisQueues.COMPLETED_REPRODUCER_LIST.value}"
-                )
+                    await retry(
+                        task,
+                        ErrorData(
+                            details=output.summary or "Retryable reproducer infra error",
+                            jira_issue=input_data.jira_issue,
+                        ).model_dump_json(),
+                        delay_seconds=retry_delay_seconds,
+                    )
+                else:
+                    logger.info(
+                        f"Reproducer resolved as success={output.success} for {input_data.jira_issue}"
+                    )
+                    await fix_await(
+                        redis.lpush(
+                            RedisQueues.COMPLETED_REPRODUCER_LIST.value,
+                            output.model_dump_json(),
+                        )
+                    )
+                    logger.info(
+                        f"Pushed {input_data.jira_issue} to {RedisQueues.COMPLETED_REPRODUCER_LIST.value}"
+                    )
 
         await run_task_loop(
             redis,
             [RedisQueues.REPRODUCER_QUEUE_TODO.value, RedisQueues.REPRODUCER_QUEUE.value],
             process_task,
             max_concurrent=max_concurrent_tasks,
+            poll_timeout=poll_timeout,
+            poll_fn=poll_reproducer,
         )
 
 

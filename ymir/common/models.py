@@ -1299,3 +1299,10 @@ class ReproducerOutputSchema(BaseModel):
         default=False,
         description="Whether a test for this issue already exists in the tests repository",
     )
+    retryable_error: bool = Field(
+        default=False,
+        description=(
+            "True when the run failed due to transient infra (e.g. Testing Farm "
+            "provisioning) and should be scheduled for retry like triage Resolution.ERROR"
+        ),
+    )

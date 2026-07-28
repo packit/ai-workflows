@@ -59,6 +59,26 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_slow)
 
 
+def _e2e_case_id(test_case) -> str:
+    """Stable id for results.yaml name/log entries across e2e suites.
+
+    Triage uses a string ``input`` (jira key). Backport/reproducer use a dict
+    ``input`` plus ``jira_issue``. MR consolidation uses ``name`` only.
+    """
+    jira_issue = getattr(test_case, "jira_issue", None)
+    if jira_issue:
+        return str(jira_issue)
+    name = getattr(test_case, "name", None)
+    if name:
+        return str(name)
+    case_input = getattr(test_case, "input", None)
+    if isinstance(case_input, str):
+        return case_input
+    if isinstance(case_input, dict) and case_input.get("jira_issue"):
+        return str(case_input["jira_issue"])
+    return str(case_input)
+
+
 @pytest.hookimpl(wrapper=True, trylast=True)
 def pytest_runtest_makereport(item, call):
     # execute all other hooks to obtain the report object
@@ -66,36 +86,43 @@ def pytest_runtest_makereport(item, call):
     if rep.when != "call":
         return rep
 
-    test_case = item.callspec.params["test_case"]
+    # Only e2e suites that parametrize ``test_case`` write results.yaml.
+    callspec = getattr(item, "callspec", None)
+    if callspec is None or "test_case" not in callspec.params:
+        return rep
+
+    test_case = callspec.params["test_case"]
+    case_id = _e2e_case_id(test_case)
 
     mode = "a" if os.path.exists("/home/beeai/results.yaml") else "w"
     with open("/home/beeai/results.yaml", mode, encoding="utf-8") as f:
-        f.write(f'\n- name: "/{test_case.input}"\n')
+        f.write(f'\n- name: "/{case_id}"\n')
 
         result = "fail" if rep.failed else "pass" if rep.passed else "skip"
         f.write(f'  result: "{result}"\n')
 
         f.write("  note:\n")
-        if test_case.metrics is not None:
+        metrics = getattr(test_case, "metrics", None)
+        if metrics is not None:
             for note, value in (
-                ("Agent", test_case.metrics.get("agent_name", None)),
-                ("Tool Calls", test_case.metrics.get("tool_calls", None)),
-                ("Prompt Tokens", test_case.metrics.get("prompt_tokens", None)),
-                ("Completion Tokens", test_case.metrics.get("completion_tokens", None)),
+                ("Agent", metrics.get("agent_name", None)),
+                ("Tool Calls", metrics.get("tool_calls", None)),
+                ("Prompt Tokens", metrics.get("prompt_tokens", None)),
+                ("Completion Tokens", metrics.get("completion_tokens", None)),
             ):
                 if value is None:
                     continue
                 f.write(f'    - "{note}: {value}"\n')
 
-        # Add additional note, if the test was skipped
-        if test_case.skip_reason is not None:
-            f.write(f'    - "Skipped because {test_case.skip_reason}"\n')
+        skip_reason = getattr(test_case, "skip_reason", None)
+        if skip_reason is not None:
+            f.write(f'    - "Skipped because {skip_reason}"\n')
 
         f.write("  log:\n")
-        for log in (f"{test_case.input}.html", f"{test_case.input}.json"):
+        for log in (f"{case_id}.html", f"{case_id}.json"):
             f.write(f"    - {log}\n")
 
-        minutes, seconds = divmod(int((test_case.metrics or {}).get("duration", 0)), 60)
+        minutes, seconds = divmod(int((metrics or {}).get("duration", 0)), 60)
         hours, minutes = divmod(minutes, 60)
         f.write(f"  duration: {hours:02d}:{minutes:02d}:{seconds:02d}\n")
 

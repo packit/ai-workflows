@@ -48,7 +48,7 @@ _STDERR_HINT_MAX = 500
 
 def _git_subprocess_error(stderr: str | None, message: str) -> ToolError:
     """Log a git subprocess failure at ERROR level and return a ToolError with a stderr hint."""
-    safe_stderr = sanitize_url(stderr or "")
+    safe_stderr = sanitize_url(_sanitize_git_stderr(stderr or ""))
     hint = safe_stderr.strip()[-_STDERR_HINT_MAX:]
     logger.error("%s\nstderr (last %d chars): %s", message, len(hint), hint)
     return ToolError(f"{message}: {hint}" if hint else message)
@@ -193,6 +193,19 @@ _SENSITIVE_STDERR_RE = re.compile(
 def _sanitize_git_stderr(text: str) -> str:
     """Filter out lines from git stderr that may contain auth credentials."""
     return "\n".join(line for line in text.splitlines() if not _SENSITIVE_STDERR_RE.search(line))
+
+
+def _remove_existing_clone_path(clone_path: Path) -> None:
+    """Remove ``clone_path`` if it exists, only under allowed base directories."""
+    if not clone_path.exists():
+        return
+    allowed_parents = {
+        Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")),
+        Path("/tmp"),  # noqa: S108
+    }
+    if not any(clone_path.resolve().is_relative_to(p) for p in allowed_parents):
+        raise ToolError(f"Refusing to remove {clone_path}: not under an allowed base directory")
+    shutil.rmtree(clone_path)
 
 
 def _get_git_auth_args(repository_url: str) -> list[str]:
@@ -570,6 +583,8 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
 
         safe_url = sanitize_url(repository)
 
+        await asyncio.to_thread(_remove_existing_clone_path, clone_path)
+
         if branch:
             clone_path.mkdir(parents=True, exist_ok=True)
             await _run_git_cmd(
@@ -595,16 +610,7 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
                 timeout=None,
             )
         else:
-            if clone_path.exists():
-                allowed_parents = {
-                    Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")),
-                    Path("/tmp"),  # noqa: S108
-                }
-                if not any(clone_path.resolve().is_relative_to(p) for p in allowed_parents):
-                    raise ToolError(f"Refusing to remove {clone_path}: not under an allowed base directory")
-                await asyncio.to_thread(shutil.rmtree, clone_path)
             clone_path.parent.mkdir(parents=True, exist_ok=True)
-            
             await _run_git_cmd(
                 ["git", *auth_args, "clone", repository, str(clone_path)],
                 label=f"git clone {safe_url}",
@@ -648,11 +654,11 @@ class PushToRemoteRepositoryTool(Tool[PushToRemoteRepositoryToolInput, ToolRunOp
         safe_url = sanitize_url(repository)
         auth_args = _get_git_auth_args(repository)
         git_env = _get_mock_git_env()
-        
+
         command = ["git", *auth_args, "push", repository, branch]
         if force:
             command.append("--force")
-        
+
         await _run_git_cmd(
             command,
             label=f"git push {safe_url} branch={branch} force={force}",
@@ -660,7 +666,7 @@ class PushToRemoteRepositoryTool(Tool[PushToRemoteRepositoryToolInput, ToolRunOp
             env=git_env,
             timeout=None,
         )
-        
+
         return StringToolOutput(result=f"Successfully pushed the specified branch to {safe_url}")
 
 
@@ -697,7 +703,7 @@ class FetchBranchTool(Tool[FetchBranchToolInput, ToolRunOptions, StringToolOutpu
         safe_url = sanitize_url(repository)
         auth_args = _get_git_auth_args(repository)
         git_env = _get_mock_git_env()
-        
+
         await _run_git_cmd(
             ["git", *auth_args, "fetch", repository, f"{branch}:refs/heads/{branch}"],
             label=f"git fetch {safe_url} branch={branch}",
@@ -705,7 +711,7 @@ class FetchBranchTool(Tool[FetchBranchToolInput, ToolRunOptions, StringToolOutpu
             env=git_env,
             timeout=None,
         )
-        
+
         return StringToolOutput(result=f"Successfully fetched branch {branch} from {safe_url}")
 
 

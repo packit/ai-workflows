@@ -45,6 +45,9 @@ class ConsolidationTestCase:
         self.consolidation_state: ConsolidationState | None = None
         self.artifacts: ConsolidationArtifacts | None = None
         self.error: BaseException | None = None
+        # Used by e2e/conftest.py results.yaml reporting.
+        self.metrics: dict | None = None
+        self.skip_reason: str | None = None
 
     def __repr__(self) -> str:
         return f"ConsolidationTestCase({self.name})"

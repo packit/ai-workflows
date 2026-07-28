@@ -29,10 +29,7 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `get_patch_from_url` — Fetch patch/commit content from a URL and return the raw diff (used to read `patch_urls` provided by the caller, NOT for searching for new patches)
 - `get_maintainer_rules` — Get maintainer-specific rules and guidelines for a package
 - `clone_repository` — Clone a Git repository to a local path
-- `fork_repository` — Fork a Git repository (used for MR creation)
-- `push_to_remote_repository` — Push a branch to a remote repository
-- `open_merge_request` — Open a merge request from a fork against its original repository
-- `add_merge_request_labels` — Add labels to a merge request
+- `list_testing_farm_composes` — List available Testing Farm composes
 - `reserve_testing_farm_machine` — Reserve a Testing Farm machine with SSH access
 - `get_testing_farm_reservation_details` — Get status and SSH details of a TF reservation
 - `cancel_testing_farm_request` — Cancel/release a Testing Farm reservation
@@ -48,6 +45,8 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 
 **Other:**
 - Bash tool for shell commands (e.g., `git log`, `grep`)
+
+Do **not** fork, push, or open merge requests yourself. After you return verified output, the BeeAI workflow (or calling orchestration) creates the MR from the test files you wrote under the tests clone.
 
 ## Critical Rules
 
@@ -113,7 +112,7 @@ Execute the following steps in order. Track state across steps using these varia
 
 5. If `{{triage_summary}}` is provided, use it as the primary source of understanding for the bug throughout the workflow. It contains the triage agent's analysis of the issue and may include details about the root cause, affected code paths, and patch validation results.
 
-6. If `{{patch_urls}}` is provided, parse it into a list by splitting on commas. For each URL, call `get_patch_from_url` to fetch the patch content and study what the fix changes — this informs what the reproducer should test (the pre-fix behavior). By reading the fix backwards — from what was changed to what was there before — you can determine how to trigger the original bug.
+6. If `{{patch_urls}}` is provided, it is already a list of URLs. For each URL, call `get_patch_from_url` to fetch the patch content and study what the fix changes — this informs what the reproducer should test (the pre-fix behavior). By reading the fix backwards — from what was changed to what was there before — you can determine how to trigger the original bug.
 
 7. If neither `{{triage_summary}}` nor `{{patch_urls}}` are provided, design the test based solely on the Jira issue description, comments, and any reproducer steps or error messages described in the issue. In this case, the test may require more iteration in step 5.
 
@@ -169,7 +168,7 @@ This step provisions a real RHEL machine via Testing Farm for verifying the repr
 
 ### Step 4: Create tmt Test Structure Locally
 
-This step creates the tmt-compatible test directory structure locally. The test files will later be copied to the Testing Farm machine for verification (step 5) and committed to the tests repo for the MR (step 7).
+This step creates the tmt-compatible test directory structure locally. The test files will later be copied to the Testing Farm machine for verification (step 5) and committed to the tests repo by the workflow after you return your output.
 
 Use the Jira issue description, `triage_summary`, and `patch_urls` to understand the bug and design the test. The patch URLs show what the fix changes — by reading the fix you can determine what behavior to test (the pre-fix, buggy behavior).
 
@@ -179,7 +178,7 @@ Use the Jira issue description, `triage_summary`, and `patch_urls` to understand
    - URL: `https://gitlab.com/redhat/rhel/tests/<package_name>`
    - Do NOT specify a `branch` parameter — omit it so the tool clones the default branch (it may not be `main`).
    - Use a clone path under `/git-repos/` (the shared volume), e.g. `/git-repos/tests-<package_name>`.
-   - If the clone path already exists from a previous failed attempt, delete it first with `run_shell_command("rm -rf /git-repos/tests-<package_name>")` before retrying.
+   - If the clone path already exists from a previous failed attempt, `clone_repository` removes and re-clones it — do NOT delete it yourself with `rm -rf`.
    - Save the clone path as `tests_clone`.
 
 2. Create the test directory:
@@ -457,7 +456,7 @@ Compare the output and exit code against the expected detection behavior:
 - The detection method fires: crash detected, wrong output observed, timeout hit, memory leak found, etc.
 - This means the reproducer WORKS. The test correctly detects the bug on the unpatched system.
 - Set `reproducer_verified` = true.
-- Proceed to step 6 (return machine), then step 7 (create MR).
+- Proceed to step 6 (return machine), then produce your final output JSON. The workflow creates the merge request from your output.
 
 **Case B: Bug is NOT reproduced (test PASSES — the bug is not triggered)**
 - The program does not crash, output is correct, no timeout, no leak, etc.
@@ -553,129 +552,13 @@ If the bug could not be reproduced after the maximum number of iterations:
 
 Even if the reproducer verification succeeded, the machine must be returned. Even if an unrelated error occurred, the machine must be returned. Even if the agent is about to report an error, the machine must be returned. There are no exceptions.
 
-### Step 7: Create Merge Request (only if reproducer works)
+### After Step 6: Produce Output (MR is orchestration-owned)
 
-This step publishes the verified reproducer test as a merge request to the RHEL tests repository. Only execute this step if `reproducer_verified` is true AND `{{dry_run}}` is not true.
+Do **NOT** create a merge request yourself. Do **NOT** fork, push, or open an MR.
 
-If `reproducer_verified` is false, skip this step entirely.
-If `{{dry_run}}` is true, skip this step but log what would have been created.
+After returning the TF machine (step 6), produce your final output JSON. When `success` is true and dry-run is false, the BeeAI workflow (or calling orchestration) commits the test files from the tests clone, forks/pushes, and opens the MR with label `ymir_reproducer`. Leave `test_mr_url` out of your agent output — orchestration sets it.
 
-#### 7.1. Prepare the Branch
-
-1. In the `tests_clone` directory, create a working branch:
-   ```
-   git -C <tests_clone> checkout -B reproducer/<jira_issue>
-   ```
-
-2. Make shell scripts executable before staging (git tracks file mode):
-   ```
-   chmod +x <tests_clone>/<test_dir>/runtest.sh <tests_clone>/<test_dir>/*.sh <tests_clone>/<test_dir>/*.ksh
-   ```
-
-3. Stage all test files:
-   ```
-   git -C <tests_clone> add <test_dir>/
-   ```
-
-4. Commit with a descriptive message:
-   ```
-   <package_name>: add <reproducer_type> reproducer for <jira_issue>
-
-   <If CVE: "Add security test for <cve_id> in <package_name>.">
-   <If bug: "Add regression test for <jira_issue> in <package_name>.">
-
-   <One-sentence summary of what the test verifies.>
-
-   Resolves: <jira_issue>
-
-   This test was created by Ymir, a Red Hat Enterprise Linux software maintenance AI agent.
-
-   Assisted-by: Ymir
-   ```
-
-#### 7.2. Fork, Push, and Create MR
-
-1. Fork the tests repository by calling `fork_repository` with:
-   - `repository`: `https://gitlab.com/redhat/rhel/tests/<package_name>`
-   - Save the returned `fork_url`.
-   - If `fork_repository` fails (the tool returns an error), set `merge_request_url` to null, include the error message in the output `summary`, and skip the rest of step 7 entirely. Proceed directly to producing the output JSON. The reproducer test files are still valid in `test_dir` — only the MR creation is skipped.
-
-2. Push the branch by calling `push_to_remote_repository` with:
-   - `repository`: the fork URL from above
-   - `clone_path`: `tests_clone`
-   - `branch`: `reproducer/<jira_issue>`
-   - If push fails, set `merge_request_url` to null, include the error in the output `summary`, and skip the rest of step 7. Proceed to producing the output JSON.
-
-3. Create the merge request by calling `open_merge_request` with:
-   - `fork_url`: from above
-   - `title`: `<package_name>: add <reproducer_type> reproducer for <jira_issue>`
-   - `source`: `reproducer/<jira_issue>`
-   - `target`: the default branch of the tests repository (check with `run_shell_command("git -C <tests_clone> symbolic-ref refs/remotes/origin/HEAD --short")` and strip the `origin/` prefix)
-   - `description`:
-     ```
-     ## Summary
-
-     <If CVE: "Security test for <cve_id> in <package_name>.">
-     <If bug: "Regression test for <jira_issue> in <package_name>.">
-
-     <One paragraph from the Jira issue and triage summary explaining the bug and how the test triggers it.>
-
-     ## Pass/Fail Criteria
-
-     - **PASS**: <what happens when the fix IS applied>
-     - **FAIL**: <what happens when the fix is NOT applied>
-
-     ## Verification
-
-     Verified on Testing Farm (request ID: <tf_request_id>).
-     The reproducer successfully <detected the bug / demonstrated the vulnerability> on <compose> (<arch>).
-
-     ## Test Structure
-
-     - `ai-test-description` — issue analysis and test specification
-     - `runtest.sh` — BeakerLib test harness
-     - `main.fmf` — FMF metadata
-     - `test_*` — standalone reproducer script(s)
-
-     Resolves: <jira_issue>
-
-     ---
-
-     > **Warning: AI-Generated MR**: Created by Ymir AI assistant. AI may make mistakes
-     or produce incorrect test logic. **Carefully review the test before merging.
-     Human RHEL QE needs to approve this contribution before merging.**
-     >
-     > <ins>By merging this MR, you agree to follow the Guidelines on Use of AI Generated Content
-     and Guidelines for Responsible Use of AI Code Assistants.</ins>
-
-     ## Want to make changes to this MR?
-
-     You can check out the source branch from the fork and push your changes directly.
-
-     ## Customize Ymir's behavior for your package
-
-     If there is anything that could be adjusted regarding Ymir's behavior
-     and is specific to your package, you can submit an MR to
-     gitlab.com/redhat/centos-stream/rules/<package_name>.
-     See the customization docs for details.
-
-     ## Questions or Issues?
-
-     **Contact:** redhat-ymir-agent@redhat.com | **Slack:** #forum-ymir-package-automation |
-     **Report AI Issues:** Jira (project: Packit, component: jotnar) or GitHub
-     ```
-   - If MR creation fails, set `merge_request_url` to null, include the error in the output `summary`, and skip the rest of step 7. Proceed to producing the output JSON.
-
-4. Save the returned MR URL as `merge_request_url`.
-
-5. Add the reproducer label by calling `add_merge_request_labels` with:
-   - `merge_request_url`: the MR URL from above
-   - `labels`: `["ymir_reproducer"]`
-
----
-
-**Note:** Do NOT post a Jira comment yourself. The workflow handles Jira commenting
-automatically after you return your output. Focus on producing accurate output fields.
+Do NOT post a Jira comment yourself. The workflow handles Jira commenting automatically after you return your output. Focus on producing accurate output fields.
 
 ---
 
@@ -688,11 +571,14 @@ The final output must be a JSON object:
   "jira_issue": "RHEL-12345",
   "success": true,
   "reproducer_type": "cve",
-  "test_mr_url": "https://gitlab.com/redhat/rhel/tests/ksh/-/merge_requests/123",
+  "package": "libfoo",
+  "compose": "RHEL-9.8.0-Nightly",
+  "arch": "x86_64",
   "testing_farm_request_id": "tf-request-abc123",
   "pass_fail_criteria": "PASS: program exits 0 (fix applied, no crash). FAIL: program exits with SIGSEGV (bug present, buffer overflow triggered).",
   "summary": "Created reproducer for CVE-2025-12345 in libfoo. The vulnerability is a heap buffer overflow in parse_header() triggered by a malformed PNG with chunk length > 0x7fffffff. Test sends crafted input and checks for crash via exit code.",
-  "not_reproducible_reason": null
+  "not_reproducible_reason": null,
+  "test_already_exists": false
 }
 ```
 
@@ -703,11 +589,14 @@ On failure or non-reproducible result:
   "jira_issue": "RHEL-12345",
   "success": false,
   "reproducer_type": "bug",
-  "test_mr_url": null,
+  "package": "libbar",
+  "compose": "RHEL-10.1.0-Nightly",
+  "arch": "x86_64",
   "testing_farm_request_id": "tf-request-xyz789",
   "pass_fail_criteria": "PASS: command completes within 10s. FAIL: command hangs (timeout after 10s).",
   "summary": "Attempted to reproduce RHEL-12345 (infinite loop in parser). The bug requires a specific interleaving of concurrent requests that could not be reliably reproduced in 5 attempts on a single-core TF machine.",
-  "not_reproducible_reason": "Race condition requires multi-threaded workload with specific timing. Attempted with stress-ng and taskset but could not trigger the hang reliably."
+  "not_reproducible_reason": "Race condition requires multi-threaded workload with specific timing. Attempted with stress-ng and taskset but could not trigger the hang reliably.",
+  "test_already_exists": false
 }
 ```
 

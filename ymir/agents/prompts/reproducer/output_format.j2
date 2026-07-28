@@ -3,7 +3,7 @@
 Your final answer MUST be a JSON object with the following keys:
 `jira_issue`, `success`, `reproducer_type`, `package`, `compose`, `arch`,
 `testing_farm_request_id`, `pass_fail_criteria`, `summary`,
-`not_reproducible_reason`, `test_already_exists`.
+`not_reproducible_reason`, `test_already_exists`, `retryable_error`.
 
 All string fields must be actual strings, not nested objects.
 The `test_mr_url` field is NOT part of your output — the merge request is
@@ -24,7 +24,8 @@ Successful reproducer:
     "pass_fail_criteria": "PASS: program exits 0 (fix applied, no crash). FAIL: program exits with SIGSEGV (bug present, buffer overflow triggered).",
     "summary": "Created reproducer for CVE-2025-12345 in libfoo. The vulnerability is a heap buffer overflow in parse_header() triggered by a malformed PNG with chunk length > 0x7fffffff. Test sends crafted input and checks for crash via exit code.",
     "not_reproducible_reason": null,
-    "test_already_exists": false
+    "test_already_exists": false,
+    "retryable_error": false
 }
 ```
 
@@ -41,7 +42,8 @@ Non-reproducible result:
     "pass_fail_criteria": "PASS: command completes within 10s. FAIL: command hangs (timeout after 10s).",
     "summary": "Attempted to reproduce RHEL-12345 (infinite loop in parser). The bug requires a specific interleaving of concurrent requests that could not be reliably reproduced in 5 attempts on a single-core TF machine.",
     "not_reproducible_reason": "Race condition requires multi-threaded workload with specific timing. Attempted with stress-ng and taskset but could not trigger the hang reliably.",
-    "test_already_exists": false
+    "test_already_exists": false,
+    "retryable_error": false
 }
 ```
 
@@ -58,6 +60,25 @@ Test already exists:
     "pass_fail_criteria": "N/A — existing test found, no new reproducer needed.",
     "summary": "Test already exists in the tests repository at Regression/RHEL-12345/. Skipping reproducer creation to avoid duplication.",
     "not_reproducible_reason": null,
-    "test_already_exists": true
+    "test_already_exists": true,
+    "retryable_error": false
+}
+```
+
+Testing Farm provisioning failure (retryable infra error):
+```json
+{
+    "jira_issue": "RHEL-12345",
+    "success": false,
+    "reproducer_type": "cve",
+    "package": "libfoo",
+    "compose": "RHEL-10.1-Nightly",
+    "arch": "x86_64",
+    "testing_farm_request_id": "tf-request-deadbeef",
+    "pass_fail_criteria": "N/A — Testing Farm provisioning failed.",
+    "summary": "Testing Farm reservation did not become SSH-ready (ssh_connection=not-yet-available). Cancelled the request and stopping for a scheduled retry.",
+    "not_reproducible_reason": null,
+    "test_already_exists": false,
+    "retryable_error": true
 }
 ```

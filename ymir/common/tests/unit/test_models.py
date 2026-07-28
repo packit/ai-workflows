@@ -592,3 +592,25 @@ def test_reproducer_output_roundtrip():
     assert restored.summary == original.summary
     assert restored.not_reproducible_reason is None
     assert restored.test_already_exists is False
+    assert restored.retryable_error is False
+
+
+def test_reproducer_output_retryable_error():
+    """TF/infra failure sets retryable_error without marking not-reproducible."""
+    data = ReproducerOutputSchema(
+        jira_issue="RHEL-55555",
+        success=False,
+        reproducer_type="cve",
+        package="expat",
+        compose="RHEL-10.1-Nightly",
+        arch="x86_64",
+        pass_fail_criteria="N/A — Testing Farm provisioning failed.",
+        summary="Testing Farm reservation timed out; ssh_connection never became available.",
+        retryable_error=True,
+    )
+    assert data.success is False
+    assert data.retryable_error is True
+    assert data.not_reproducible_reason is None
+    assert data.test_already_exists is False
+    restored = ReproducerOutputSchema.model_validate_json(data.model_dump_json())
+    assert restored.retryable_error is True

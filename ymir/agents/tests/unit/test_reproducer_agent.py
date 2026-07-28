@@ -2,7 +2,11 @@
 
 import pytest
 
-from ymir.agents.reproducer_agent import _determine_comment_resolution, _determine_result_label
+from ymir.agents.reproducer_agent import (
+    _determine_comment_resolution,
+    _determine_result_label,
+    _should_finalize_jira,
+)
 from ymir.common.constants import JiraLabels
 from ymir.common.models import ReproducerOutputSchema
 
@@ -47,3 +51,9 @@ def test_already_exists_takes_precedence_over_success():
     result = _output(success=True, test_already_exists=True)
     assert _determine_result_label(result) == JiraLabels.REPRODUCER_ALREADY_EXISTS
     assert _determine_comment_resolution(result) == "already-exists"
+
+
+def test_should_finalize_jira_false_for_retryable_error():
+    assert _should_finalize_jira(_output(success=False, retryable_error=True)) is False
+    assert _should_finalize_jira(_output(success=False)) is True
+    assert _should_finalize_jira(_output(success=True)) is True

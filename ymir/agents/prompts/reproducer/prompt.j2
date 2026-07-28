@@ -144,7 +144,17 @@ Execute the following steps in order.
    * You MUST call this tool EXACTLY ONCE. Never call it a second time. The tool already retries internally.
    * Check the result:
      - If `ssh_connection` is present and is NOT `"not-yet-available"`: the machine is ready. Save it.
-     - If `state` is `"error"`, `"canceled"`, or `ssh_connection` is `"not-yet-available"`: the reservation failed or timed out. You MUST immediately jump to step 6 (cancel the reservation) and then report the error. Do NOT continue to step 4 or step 5. Do NOT retry `get_testing_farm_reservation_details`.
+     - If `state` is `"error"`, `"canceled"`, or `ssh_connection` is `"not-yet-available"`: the reservation failed or timed out. You MUST immediately jump to step 6 (cancel the reservation) and then produce your final output JSON with:
+       - `success`: `false`
+       - `retryable_error`: `true`
+       - `not_reproducible_reason`: null
+       - `test_already_exists`: `false`
+       - `pass_fail_criteria`: `"N/A — Testing Farm provisioning failed."`
+       - `summary`: briefly describe the provisioning failure (include request id / state / ssh status)
+       - Fill in `package`, `jira_issue`, `reproducer_type`, and `compose`/`arch` if known
+       Do NOT continue to step 4 or step 5. Do NOT retry `get_testing_farm_reservation_details`. Do NOT treat this as not-reproducible.
+
+   If `reserve_testing_farm_machine` itself fails (tool error) before returning a request ID, produce the same retryable_error output after attempting step 6 if a request ID was obtained.
 
    3.5. Verify SSH connectivity:
    * Call `run_remote_command` with the SSH host and `command` = `"cat /etc/redhat-release"`.

@@ -376,6 +376,22 @@ async def test_cancel_request_returns_confirmation(monkeypatch):
     assert out.result == {"cancelled": True, "request_id": "req-600"}
 
 
+def test_cancel_testing_farm_request_id_dry_run(monkeypatch):
+    """Public helper is a no-op under dry-run."""
+    monkeypatch.setenv("DRY_RUN", "true")
+    flexmock(tf_module).should_receive("_testing_farm_api_delete").never()
+    tf_module.cancel_testing_farm_request_id("req-dry")
+
+
+def test_cancel_testing_farm_request_id_calls_delete(monkeypatch):
+    """Public helper deletes the request when not dry-run."""
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.delenv("TESTING_FARM_DRY_RUN", raising=False)
+    tf_module._testing_farm_headers.cache_clear()
+    flexmock(tf_module).should_receive("_testing_farm_api_delete").with_args("requests/req-700").once()
+    tf_module.cancel_testing_farm_request_id("req-700")
+
+
 # -- RunRemoteCommandTool tests --
 
 

@@ -117,6 +117,18 @@ def _testing_farm_api_delete(path: str) -> None:
     response.raise_for_status()
 
 
+def cancel_testing_farm_request_id(request_id: str) -> None:
+    """Cancel a Testing Farm request by ID.
+
+    No-op when Testing Farm dry-run is enabled. Intended for orchestration
+    cleanup (e.g. leak recovery) outside of the MCP tool path.
+    """
+    if _tf_dry_run():
+        logger.info("Dry run: would cancel Testing Farm request %s", request_id)
+        return
+    _testing_farm_api_delete(f"requests/{request_id}")
+
+
 def _parse_tf_request(response: dict[str, Any]) -> TestingFarmRequest:
     result_data = response.get("result")
     result = result_data["overall"] if result_data else TestingFarmRequestResult.UNKNOWN

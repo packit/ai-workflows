@@ -100,6 +100,10 @@ services:
       - KEYTAB_FILE=/home/mcp/keytab
       # default cache location is a keyring
       - KRB5CCNAME=FILE:/tmp/krb5cc
+      # Point requests at the system CA bundle (includes RH IT Root CAs from
+      # files/Current-IT-Root-CAs.pem via update-ca-trust in Containerfile.mcp).
+      # Without this, requests uses certifi and fails on internal HTTPS (e.g. artifacts.osci).
+      - REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt
       # SAFETY: These default to false for production agents, but MUST be true for E2E tests.
       # The E2E Makefile targets set them in the environment before invoking compose
       # (e.g., MOCK_JIRA=true DRY_RUN=true make run-triage-agent-e2e-tests) so the

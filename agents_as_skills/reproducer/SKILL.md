@@ -159,7 +159,9 @@ This step provisions a real RHEL machine via Testing Farm for verifying the repr
    - You MUST call this tool EXACTLY ONCE. Never call it a second time. The tool already retries internally.
    - Check the result:
      * If `ssh_connection` is present and is NOT `"not-yet-available"`: the machine is ready. Save `ssh_connection`.
-     * If `state` is `"error"`, `"canceled"`, or `ssh_connection` is `"not-yet-available"`: the reservation failed or timed out. You MUST immediately jump to step 6 (cancel the reservation) and then report the error. Do NOT continue to step 4 or step 5. Do NOT retry `get_testing_farm_reservation_details`.
+     * If `state` is `"error"`, `"canceled"`, or `ssh_connection` is `"not-yet-available"`: the reservation failed or timed out. You MUST immediately jump to step 6 (cancel the reservation) and then produce final output with `success: false`, `retryable_error: true`, `not_reproducible_reason: null`, `test_already_exists: false`, and a summary of the provisioning failure. Do NOT continue to step 4 or step 5. Do NOT retry `get_testing_farm_reservation_details`. Do NOT treat this as not-reproducible.
+
+   If `reserve_testing_farm_machine` itself fails (tool error), produce the same `retryable_error: true` output after cancelling any obtained request ID.
 
 5. Verify SSH connectivity:
    - Call `run_remote_command` with `ssh_host` = `ssh_connection` and `command` = `"cat /etc/redhat-release"`.
@@ -578,7 +580,8 @@ The final output must be a JSON object:
   "pass_fail_criteria": "PASS: program exits 0 (fix applied, no crash). FAIL: program exits with SIGSEGV (bug present, buffer overflow triggered).",
   "summary": "Created reproducer for CVE-2025-12345 in libfoo. The vulnerability is a heap buffer overflow in parse_header() triggered by a malformed PNG with chunk length > 0x7fffffff. Test sends crafted input and checks for crash via exit code.",
   "not_reproducible_reason": null,
-  "test_already_exists": false
+  "test_already_exists": false,
+  "retryable_error": false
 }
 ```
 
@@ -596,7 +599,27 @@ On failure or non-reproducible result:
   "pass_fail_criteria": "PASS: command completes within 10s. FAIL: command hangs (timeout after 10s).",
   "summary": "Attempted to reproduce RHEL-12345 (infinite loop in parser). The bug requires a specific interleaving of concurrent requests that could not be reliably reproduced in 5 attempts on a single-core TF machine.",
   "not_reproducible_reason": "Race condition requires multi-threaded workload with specific timing. Attempted with stress-ng and taskset but could not trigger the hang reliably.",
-  "test_already_exists": false
+  "test_already_exists": false,
+  "retryable_error": false
+}
+```
+
+On Testing Farm provisioning failure (scheduled for retry by the workflow):
+
+```json
+{
+  "jira_issue": "RHEL-12345",
+  "success": false,
+  "reproducer_type": "cve",
+  "package": "libfoo",
+  "compose": "RHEL-10.1-Nightly",
+  "arch": "x86_64",
+  "testing_farm_request_id": "tf-request-deadbeef",
+  "pass_fail_criteria": "N/A — Testing Farm provisioning failed.",
+  "summary": "Testing Farm reservation did not become SSH-ready. Cancelled the request for a scheduled retry.",
+  "not_reproducible_reason": null,
+  "test_already_exists": false,
+  "retryable_error": true
 }
 ```
 
@@ -604,8 +627,10 @@ The output fields:
 - `jira_issue` (string) — the Jira issue key (upper-case)
 - `success` (bool) — whether a working reproducer was created and verified
 - `reproducer_type` (string) — `"cve"` or `"bug"`
-- `test_mr_url` (string or null) — URL of the merge request in the tests repository (null if not created)
+- `test_mr_url` (string or null) — URL of the merge request in the tests repository (null if not created; set by orchestration)
 - `testing_farm_request_id` (string or null) — Testing Farm request ID used for verification
 - `pass_fail_criteria` (string) — human-readable description of what PASS and FAIL mean
 - `summary` (string) — concise description of the reproducer
 - `not_reproducible_reason` (string or null) — explanation if the bug could not be reproduced (null on success)
+- `test_already_exists` (bool) — true when an existing test was found and creation was skipped
+- `retryable_error` (bool) — true for transient infra failures (e.g. TF provisioning) that should be retried later

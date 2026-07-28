@@ -53,11 +53,22 @@ class RedisQueues(Enum):
     REPRODUCER_QUEUE = "reproducer_queue"
     REPRODUCER_QUEUE_TODO = "reproducer_queue_todo"
     COMPLETED_REPRODUCER_LIST = "completed_reproducer_list"
+    # Redis ZSET (score = unix ready-time) for delayed reproducer retries.
+    # Not a BRPOP list — excluded from all_queues().
+    REPRODUCER_DELAYED_QUEUE = "reproducer_queue_delayed"
 
     @classmethod
     def all_queues(cls) -> set[str]:
-        """Return all Redis list queue names (excludes Hash-based keys like the consolidation queue)."""
-        return {q.value for q in cls if q is not cls.MERGE_CONSOLIDATION_QUEUE}
+        """Return all Redis list queue names (excludes Hash/ZSET keys)."""
+        return {
+            q.value
+            for q in cls
+            if q
+            not in (
+                cls.MERGE_CONSOLIDATION_QUEUE,
+                cls.REPRODUCER_DELAYED_QUEUE,
+            )
+        }
 
     @classmethod
     def input_queues(cls) -> set[str]:

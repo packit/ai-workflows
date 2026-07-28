@@ -1039,6 +1039,68 @@ async def test_clone_repository_sanitizes_stderr(mock_git_repo_basepath, caplog)
 
 
 @pytest.mark.asyncio
+async def test_clone_repository_strips_auth_header_lines_from_stderr(mock_git_repo_basepath, caplog):
+    """Authorization header lines in git stderr are dropped before logging."""
+    clone_path = mock_git_repo_basepath / "vim"
+    stderr_msg = (
+        "fatal: Authentication failed\n"
+        "Authorization: Basic dG9rZW46c2VjcmV0\n"  # pragma: allowlist secret
+        "remote: HTTP Basic: Access denied"
+    )
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(
+        _make_failing_subprocess(stderr_msg)
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await CloneRepositoryTool().run(
+            input={
+                "repository": "https://gitlab.com/redhat/rpms/vim",
+                "clone_path": clone_path,
+            }
+        )
+
+    assert "Authorization: Basic" not in caplog.text
+    assert "dG9rZW46c2VjcmV0" not in caplog.text
+    assert "Authentication failed" in caplog.text
+    assert "Authorization: Basic" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_removes_existing_dir_with_branch(mock_git_repo_basepath):
+    """Branch-based clone removes an existing non-empty target directory first."""
+    clone_path = mock_git_repo_basepath / "bash"
+    clone_path.mkdir()
+    (clone_path / "stale").write_text("old", encoding="utf-8")
+    (clone_path / ".git").mkdir()
+
+    commands: list[list[str]] = []
+
+    async def create_subprocess_exec(cmd, *args, **kwargs):
+        commands.append([cmd, *args])
+
+        async def communicate():
+            return (b"", b"")
+
+        process = flexmock(returncode=0)
+        process.should_receive("communicate").replace_with(communicate)
+        return process
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+
+    await CloneRepositoryTool().run(
+        input={
+            "repository": "https://gitlab.com/centos-stream/rpms/bash",
+            "branch": "rhel-8.10.0",
+            "clone_path": clone_path,
+        }
+    )
+
+    assert not (clone_path / "stale").exists()
+    assert any(cmd[:2] == ["git", "init"] for cmd in commands)
+
+
+@pytest.mark.asyncio
 async def test_fetch_branch_logs_stderr_on_failure(mock_git_repo_basepath, caplog):
     """FetchBranchTool failure surfaces git stderr."""
     clone_path = mock_git_repo_basepath / "vim"

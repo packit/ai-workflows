@@ -41,6 +41,8 @@ class BackportAgentTestCase:
         self.artifacts: CapturedArtifacts | None = None
         self.error: BaseException | None = None
         self.zstream_override: dict[str, str] | None = None
+        # Used by e2e/conftest.py results.yaml reporting (optional skip note).
+        self.skip_reason: str | None = None
 
     def __repr__(self) -> str:
         return f"BackportTestCase({self.jira_issue})"

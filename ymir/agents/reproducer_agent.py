@@ -144,6 +144,17 @@ def _determine_result_label(result: OutputSchema) -> JiraLabels:
     return JiraLabels.REPRODUCER_FAILED
 
 
+def _determine_comment_resolution(result: OutputSchema) -> str:
+    """Human-readable resolution string for the Jira comment."""
+    label = _determine_result_label(result)
+    return {
+        JiraLabels.REPRODUCER_CREATED: "reproduced",
+        JiraLabels.REPRODUCER_NOT_REPRODUCIBLE: "not-reproducible",
+        JiraLabels.REPRODUCER_ALREADY_EXISTS: "already-exists",
+        JiraLabels.REPRODUCER_FAILED: "failed",
+    }.get(label, "failed")
+
+
 def _build_mr_description(result: OutputSchema, input_data: InputSchema) -> str:
     """Assemble the MR description from the reproducer output."""
     if result.reproducer_type == "cve":
@@ -245,6 +256,7 @@ async def run_workflow(
 
             if not tests_clone.is_dir():
                 logger.warning(f"Tests clone not found at {tests_clone}, skipping MR creation")
+                result.success = False
                 result.summary += " (MR creation skipped: tests clone directory not found)"
                 return "handle_results"
 
@@ -256,6 +268,7 @@ async def run_workflow(
 
             if not test_dir.is_dir():
                 logger.warning(f"Test dir not found at {test_dir}, skipping MR creation")
+                result.success = False
                 result.summary += " (MR creation skipped: test directory not found)"
                 return "handle_results"
 
@@ -307,11 +320,13 @@ async def run_workflow(
                     logger.info(f"Created reproducer MR: {mr_url}")
                 else:
                     logger.warning(f"MR creation returned no URL for {state.jira_issue}")
+                    result.success = False
                     result.summary += " (MR creation did not return a URL)"
 
             except Exception as e:
                 logger.warning(f"Error creating reproducer MR for {state.jira_issue}: {e}")
                 result.test_mr_url = None
+                result.success = False
                 result.summary += f" (MR creation failed: {e})"
 
             return "handle_results"
@@ -329,15 +344,10 @@ async def run_workflow(
                 return Workflow.END
 
             # Build a human-readable comment
-            comment_parts = []
-            if result.success:
-                comment_parts.append("*Resolution*: reproduced")
-            elif result.not_reproducible_reason:
-                comment_parts.append("*Resolution*: not-reproducible")
-            else:
-                comment_parts.append("*Resolution*: error")
-
-            comment_parts.append(f"*Reproducer Type*: {result.reproducer_type}")
+            comment_parts = [
+                f"*Resolution*: {_determine_comment_resolution(result)}",
+                f"*Reproducer Type*: {result.reproducer_type}",
+            ]
 
             if result.testing_farm_request_id:
                 comment_parts.append(f"*Testing Farm Request*: {result.testing_farm_request_id}")

@@ -52,6 +52,7 @@ from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     BuildInputSchema,
     BuildOutputSchema,
+    ConsolidatedIssue,
     ErrorData,
     LogInputSchema,
     LogOutputSchema,
@@ -138,6 +139,8 @@ async def main() -> None:
         fix_version: str | None = Field(default=None)
         justification: str | None = Field(default=None)
         triage_summary: str | None = Field(default=None)
+        consolidated_issues: list[ConsolidatedIssue] = Field(default_factory=list)
+        consolidation_summary: str | None = Field(default=None)
         fedora_clone: Path | None = Field(default=None)
         leading_zstream_branch: str | None = Field(default=None)
         rebase_log: list[str] = Field(default_factory=list)
@@ -154,6 +157,8 @@ async def main() -> None:
         fix_version=None,
         justification=None,
         triage_summary=None,
+        consolidated_issues=None,
+        consolidation_summary=None,
         redis_conn=None,
         user_triggered=False,
         dist_git_namespace=None,
@@ -336,7 +341,13 @@ async def main() -> None:
 
             async def commit_push_and_open_mr(state):
                 try:
+                    all_issues = [state.jira_issue] + [item.issue_key for item in state.consolidated_issues]
                     triage_details_text = format_mr_triage_details(state.justification, state.triage_summary)
+                    consolidation_text = (
+                        f"\n\n{wrap_details('Consolidated issues', state.consolidation_summary)}"
+                        if state.consolidation_summary
+                        else ""
+                    )
                     (
                         state.merge_request_url,
                         state.merge_request_newly_created,
@@ -356,8 +367,9 @@ async def main() -> None:
                         mr_description=(
                             f"{state.log_result.description}\n\n"
                             f"{triage_details_text}"
-                            f"{format_jira_links_for_mr(state.jira_issue)}\n"
+                            f"{format_jira_links_for_mr(*all_issues)}\n"
                             f"{wrap_details('Rebase status', state.rebase_log[-1])}"
+                            f"{consolidation_text}"
                             f"\n\n{mr_description_footer(state.package)}"
                         ),
                         available_tools=gateway_tools,
@@ -390,14 +402,17 @@ async def main() -> None:
                 else:
                     comment_text = f"Agent failed to perform a rebase: {state.rebase_result.error}"
                     is_error = True
-                await tasks.comment_in_jira(
-                    jira_issue=state.jira_issue,
-                    agent_type="Rebase",
-                    comment_text=comment_text,
-                    is_error=is_error,
-                    available_tools=gateway_tools,
-                    user_triggered=user_triggered,
-                )
+
+                all_issues = [state.jira_issue] + [item.issue_key for item in state.consolidated_issues]
+                for issue in all_issues:
+                    await tasks.comment_in_jira(
+                        jira_issue=issue,
+                        agent_type="Rebase",
+                        comment_text=comment_text,
+                        is_error=is_error,
+                        available_tools=gateway_tools,
+                        user_triggered=user_triggered,
+                    )
                 return Workflow.END
 
             workflow.add_step("change_jira_status", change_jira_status)
@@ -420,6 +435,8 @@ async def main() -> None:
                     fix_version=fix_version,
                     justification=justification,
                     triage_summary=triage_summary,
+                    consolidated_issues=consolidated_issues or [],
+                    consolidation_summary=consolidation_summary,
                 ),
             )
             return response.state
@@ -549,6 +566,8 @@ async def main() -> None:
                         fix_version=rebase_data.fix_version,
                         justification=rebase_data.justification,
                         triage_summary=rebase_data.triage_summary,
+                        consolidated_issues=rebase_data.consolidated_issues,
+                        consolidation_summary=rebase_data.consolidation_summary,
                         redis_conn=redis,
                         user_triggered=user_triggered,
                         dist_git_namespace=dist_git_namespace,
@@ -582,17 +601,21 @@ async def main() -> None:
             else:
                 if state.rebase_result.success:
                     logger.info(f"Rebase successful for {rebase_data.jira_issue}, adding to completed list")
-                    await tasks.set_jira_labels(
-                        jira_issue=rebase_data.jira_issue,
-                        labels_to_add=[JiraLabels.REBASED.value],
-                        labels_to_remove=[
-                            JiraLabels.TRIAGED_REBASE.value,
-                            JiraLabels.REBASE_ERRORED.value,
-                            JiraLabels.REBASE_FAILED.value,
-                        ],
-                        dry_run=dry_run,
-                        user_triggered=user_triggered,
-                    )
+                    all_issues = [rebase_data.jira_issue] + [
+                        item.issue_key for item in rebase_data.consolidated_issues
+                    ]
+                    for issue in all_issues:
+                        await tasks.set_jira_labels(
+                            jira_issue=issue,
+                            labels_to_add=[JiraLabels.REBASED.value],
+                            labels_to_remove=[
+                                JiraLabels.TRIAGED_REBASE.value,
+                                JiraLabels.REBASE_ERRORED.value,
+                                JiraLabels.REBASE_FAILED.value,
+                            ],
+                            dry_run=dry_run,
+                            user_triggered=user_triggered,
+                        )
                     await fix_await(
                         redis.lpush(
                             RedisQueues.COMPLETED_REBASE_LIST.value,

@@ -458,6 +458,9 @@ class ReserveTestingFarmMachineTool(
                             "TF_RESERVATION_AUTHORIZED_KEYS_BASE64": ssh_key_b64,
                         },
                         "settings": {
+                            "pipeline": {
+                                "skip_guest_setup": True,
+                            },
                             "provisioning": {
                                 "security_group_rules_ingress": [
                                     {
@@ -469,15 +472,10 @@ class ReserveTestingFarmMachineTool(
                                     }
                                 ],
                                 "security_group_rules_egress": [],
-                            }
+                            },
                         },
                     }
                 ],
-                "settings": {
-                    "pipeline": {
-                        "timeout": max(_RESERVATION_DURATION_MINUTES, 720),
-                    }
-                },
             }
 
             response = await asyncio.to_thread(_testing_farm_api_post, "requests", json=body)

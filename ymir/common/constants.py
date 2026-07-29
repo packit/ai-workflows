@@ -144,6 +144,11 @@ class RedisQueues(Enum):
         return cls.priority_twin(base) if user_triggered else base
 
     @classmethod
+    def get_reproducer_queue(cls, user_triggered: bool = False) -> str:
+        """Return reproducer queue; the priority twin if user-triggered."""
+        return cls.REPRODUCER_QUEUE_TODO.value if user_triggered else cls.REPRODUCER_QUEUE.value
+
+    @classmethod
     def _use_c9s_branch(cls, branch: str) -> bool:
         """Check if branch should use c9s container"""
         branch_lower = branch.lower()

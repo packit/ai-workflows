@@ -70,9 +70,16 @@ flowchart TD
 |-------|------------|--------------|------------|
 | `ymir_triaged_rebase` | Triage resolves as rebase | On retry (all labels cleared) | `ymir_rebased` or `ymir_rebase_failed` |
 | `ymir_triaged_backport` | Triage resolves as backport | On retry (all labels cleared) | `ymir_backported` or `ymir_backport_failed` |
+| `ymir_triaged_rebuild` | Triage resolves as rebuild | On retry (all labels cleared) | `ymir_rebuilt` or `ymir_rebuild_failed` |
+| `ymir_triaged_not_affected` | Triage resolves as not-affected | On retry (all labels cleared) | Terminal; also enqueues reproducer under AUTO_CHAIN |
 | `ymir_triaged` | Triage resolves as open-ended-analysis | On retry (all labels cleared) | Terminal state |
 | `ymir_rebased` | Rebase success | Never | `ymir_merged` |
 | `ymir_backported` | Backport success | Never | `ymir_merged` |
+| `ymir_reproducer_in_progress` | Reproducer agent starts | Terminal reproducer label | `ymir_reproducer_*` |
+| `ymir_reproducer_created` | New/adapted test MR opened | Never | Terminal |
+| `ymir_reproducer_already_exists` | Existing test verified on this stream | Never | Terminal |
+| `ymir_reproducer_not_reproducible` | Could not reproduce after iterations | Never | Terminal |
+| `ymir_reproducer_failed` / `_errored` | Reproducer failure / exhausted retries | Never | Terminal |
 | `ymir_merged` | MR merged | Never | Final state |
 
 ### Error Labels
@@ -104,6 +111,7 @@ These labels are applied to GitLab merge requests (not Jira issues):
 |-------|---------|--------|
 | `ymir_backport` | Marks an MR as a backport | Used by the consolidation agent to discover candidate MRs |
 | `ymir_rebuild` | Marks an MR as a rebuild | Used by the consolidation agent to discover rebuild MRs for backport+rebuild consolidation |
+| `ymir_reproducer` | Marks a tests-repo MR as a Ymir reproducer | Used to find existing open test MRs for cross-stream reuse/adapt |
 | `ymir_consolidated` | Marks an MR that has been folded into a consolidated MR | The MR stays open but is excluded from future consolidation searches |
 
 ## Queue Types Summary
@@ -123,8 +131,12 @@ These labels are applied to GitLab merge requests (not Jira issues):
 | `clarification_needed_queue` | Input | Resolution=CLARIFICATION | `ymir_needs_attention` | Active (AUTO_CHAIN only) |
 | `error_list` | Output | Any error | `ymir_*_errored` | Active |
 | `open_ended_analysis_list` | Output | Resolution=OPEN_ENDED_ANALYSIS | `ymir_triaged` | Active (AUTO_CHAIN only) |
+| `reproducer_queue` | Input | Resolution=REBASE/BACKPORT/REBUILD/NOT_AFFECTED (parallel with fix agent) | `ymir_reproducer_in_progress` → terminal `ymir_reproducer_*` | Active (AUTO_CHAIN only) |
+| `reproducer_queue_todo` | Input (priority) | Same as `reproducer_queue` when user-triggered | Same as `reproducer_queue` | Active (AUTO_CHAIN only) |
+| `reproducer_queue_delayed` | Delayed (ZSET) | Retryable TF infra or create/adapt lock contention | Keeps `ymir_reproducer_in_progress` until retry completes | Active |
 | `completed_rebase_list` | Output | Rebase success | `ymir_rebased` | Active |
 | `completed_backport_list` | Output | Backport success | `ymir_backported` | Active |
+| `completed_reproducer_list` | Output | Reproducer success/failure (non-retry) | `ymir_reproducer_*` | Active |
 
 ## Deduplication Logic
 

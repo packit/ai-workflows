@@ -1,0 +1,17 @@
+diff --git a/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/processors/tool.py b/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/processors/tool.py
+index d0ee59f3..a30a5987 100644
+--- a/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/processors/tool.py
++++ b/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/processors/tool.py
+@@ -68,6 +68,12 @@ class ToolProcessor(Processor):
+                 span = self.span.child(meta.name, event=(event, meta))
+                 span.record_exception(event.error)
+                 self.span.record_exception(event.error)
++                additional_context = getattr(event.error, "additional_context", None)
++                if additional_context:
++                    for key, value in additional_context.items():
++                        self.span.set_attribute(
++                            f"{SpanAttributes.METADATA}.{key}", stringify(value)
++                        )
+             case ToolRetryEvent():
+                 self.span.child(meta.name, event=(event, meta))
+             case _:

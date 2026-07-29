@@ -101,6 +101,8 @@ For detailed deployment info: see [openshift/README.md](openshift/README.md)
 | Update OpenShift | `openshift/overlays/{dev,staging,prod}/` |
 | Add skill | `agents_as_skills/{skill_name}/SKILL.md` |
 | Change queue routing | [jira_label_workflow_routing.md](jira_label_workflow_routing.md) |
+| Reproducer design | [docs/reproducer_architecture.md](docs/reproducer_architecture.md) |
+| MR consolidation design | [docs/mr_consolidation_architecture.md](docs/mr_consolidation_architecture.md) |
 
 ## Documentation to Understand Workflows
 
@@ -110,6 +112,8 @@ For detailed deployment info: see [openshift/README.md](openshift/README.md)
 - **[brew_konflux_data_flow.md](brew_konflux_data_flow.md)** — Build system integration
 - **[ai_providers_data_flow.md](ai_providers_data_flow.md)** — Vertex AI integration
 - **[monitoring.md](monitoring.md)** — Observability and performance review
+- **[docs/reproducer_architecture.md](docs/reproducer_architecture.md)** — Reproducer agent, cross-stream reuse, create/adapt lock
+- **[docs/mr_consolidation_architecture.md](docs/mr_consolidation_architecture.md)** — MR consolidation agent and Redis queue
 
 ## Code Changes Checklist
 

@@ -50,7 +50,7 @@ async def test_reserve_machine_dry_run(monkeypatch):
     assert "Dry run" in result["message"]
     assert "RHEL-9.8.0-Nightly" in result["message"]
     assert "x86_64" in result["message"]
-    assert "60m" in result["message"]
+    assert "30m" in result["message"]
 
 
 @pytest.mark.asyncio
@@ -113,8 +113,9 @@ async def test_reserve_machine_request_body(monkeypatch):
     assert ingress[0]["port_max"] == 22
     assert ingress[0]["cidr"] == "0.0.0.0/0"
 
-    # Pipeline timeout must be set
-    assert body["settings"]["pipeline"]["timeout"] == 720
+    # Pipeline settings must be attached to the environment, per TF API schema
+    assert env["settings"]["pipeline"] == {"skip_guest_setup": True}
+    assert "settings" not in body
 
 
 @pytest.mark.asyncio

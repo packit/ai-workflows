@@ -54,6 +54,11 @@ def setup_logging():
         error = getattr(data, "error", None)
         if error is not None:
             logger.error(f"Tool {meta.creator} traceback:", exc_info=error)
+            additional_context = getattr(error, "additional_context", None)
+            if additional_context:
+                logger.error(
+                    f"Tool {meta.creator} additional context: {redact_credentials(str(additional_context))}"
+                )
 
     Emitter.root().on(re.compile(r"^tool\..+\.start$"), on_tool_start)
     Emitter.root().on(re.compile(r"^tool\..+\.success$"), on_tool_success)

@@ -1,8 +1,12 @@
 import atexit
 import contextlib
+import logging
+import re
 import threading
+from typing import Any
 
 import sentry_sdk
+from beeai_framework.emitter import Emitter
 from openinference.instrumentation.beeai import BeeAIInstrumentor
 from opentelemetry import trace as trace_api
 from opentelemetry.context import Context
@@ -13,6 +17,8 @@ from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from ymir.common.logging_setup import current_jira_issue, current_workflow
+
+logger = logging.getLogger(__name__)
 
 
 class AgentSpanProcessor(SpanProcessor):
@@ -84,6 +90,18 @@ class AgentSpanProcessor(SpanProcessor):
         return True
 
 
+def _setup_tool_error_logging() -> None:
+    def on_tool_error(data: Any, meta: Any) -> None:
+        error = getattr(data, "error", None)
+        if error is None:
+            return
+        additional_context = getattr(error, "additional_context", None)
+        if additional_context:
+            logger.error(f"Tool {meta.creator} additional context: {additional_context}")
+
+    Emitter.root().on(re.compile(r"^tool\..+\.error$"), on_tool_error)
+
+
 def setup_observability(endpoint: str) -> AgentSpanProcessor:
     resource = Resource(attributes={})
     tracer_provider = trace_sdk.TracerProvider(resource=resource)
@@ -93,4 +111,5 @@ def setup_observability(endpoint: str) -> AgentSpanProcessor:
     trace_api.set_tracer_provider(tracer_provider)
     atexit.register(tracer_provider.shutdown)
     BeeAIInstrumentor().instrument()
+    _setup_tool_error_logging()
     return processor

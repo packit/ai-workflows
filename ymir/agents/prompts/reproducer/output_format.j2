@@ -3,15 +3,18 @@
 Your final answer MUST be a JSON object with the following keys:
 `jira_issue`, `success`, `reproducer_type`, `package`, `compose`, `arch`,
 `testing_farm_request_id`, `pass_fail_criteria`, `summary`,
-`not_reproducible_reason`, `test_already_exists`, `retryable_error`.
+`not_reproducible_reason`, `test_already_exists`, `existing_mr_url`,
+`adapted_existing`, `retryable_error`.
+
+Do NOT set `lock_deferred` or `test_mr_url` — orchestration owns those.
 
 All string fields must be actual strings, not nested objects.
 The `test_mr_url` field is NOT part of your output — the merge request is
-created automatically by the workflow after you return.
+created or updated automatically by the workflow after you return.
 
 Examples:
 
-Successful reproducer:
+Successful new reproducer:
 ```json
 {
     "jira_issue": "RHEL-12345",
@@ -25,6 +28,8 @@ Successful reproducer:
     "summary": "Created reproducer for CVE-2025-12345 in libfoo. The vulnerability is a heap buffer overflow in parse_header() triggered by a malformed PNG with chunk length > 0x7fffffff. Test sends crafted input and checks for crash via exit code.",
     "not_reproducible_reason": null,
     "test_already_exists": false,
+    "existing_mr_url": null,
+    "adapted_existing": false,
     "retryable_error": false
 }
 ```
@@ -43,24 +48,48 @@ Non-reproducible result:
     "summary": "Attempted to reproduce RHEL-12345 (infinite loop in parser). The bug requires a specific interleaving of concurrent requests that could not be reliably reproduced in 5 attempts on a single-core TF machine.",
     "not_reproducible_reason": "Race condition requires multi-threaded workload with specific timing. Attempted with stress-ng and taskset but could not trigger the hang reliably.",
     "test_already_exists": false,
+    "existing_mr_url": null,
+    "adapted_existing": false,
     "retryable_error": false
 }
 ```
 
-Test already exists:
+Existing test verified on this stream (no changes needed):
 ```json
 {
     "jira_issue": "RHEL-12345",
-    "success": false,
-    "reproducer_type": "bug",
-    "package": "libbar",
-    "compose": null,
-    "arch": null,
-    "testing_farm_request_id": null,
-    "pass_fail_criteria": "N/A — existing test found, no new reproducer needed.",
-    "summary": "Test already exists in the tests repository at Regression/RHEL-12345/. Skipping reproducer creation to avoid duplication.",
+    "success": true,
+    "reproducer_type": "cve",
+    "package": "libfoo",
+    "compose": "RHEL-9.8.0-Nightly",
+    "arch": "x86_64",
+    "testing_farm_request_id": "tf-request-reuse1",
+    "pass_fail_criteria": "PASS: program exits 0 (fix applied). FAIL: SIGSEGV (bug present).",
+    "summary": "Existing test at Security/CVE-2025-12345/ correctly detects the bug on this stream's compose. No adaptation needed.",
     "not_reproducible_reason": null,
     "test_already_exists": true,
+    "existing_mr_url": "https://gitlab.com/redhat/rhel/tests/libfoo/-/merge_requests/12",
+    "adapted_existing": false,
+    "retryable_error": false
+}
+```
+
+Existing test adapted for this stream:
+```json
+{
+    "jira_issue": "RHEL-12345",
+    "success": true,
+    "reproducer_type": "cve",
+    "package": "libfoo",
+    "compose": "RHEL-9.8.0-Nightly",
+    "arch": "x86_64",
+    "testing_farm_request_id": "tf-request-adapt1",
+    "pass_fail_criteria": "PASS: program exits 0 (fix applied). FAIL: SIGSEGV (bug present).",
+    "summary": "Existing Security/CVE-2025-12345/ test failed on RHEL 9; adapted package names and assertions so the same test works on RHEL 9 and RHEL 10. Files updated in the clone for orchestration to push to the open MR.",
+    "not_reproducible_reason": null,
+    "test_already_exists": true,
+    "existing_mr_url": "https://gitlab.com/redhat/rhel/tests/libfoo/-/merge_requests/12",
+    "adapted_existing": true,
     "retryable_error": false
 }
 ```
@@ -79,6 +108,8 @@ Testing Farm provisioning failure (retryable infra error):
     "summary": "Testing Farm reservation did not become SSH-ready (ssh_connection=not-yet-available). Cancelled the request and stopping for a scheduled retry.",
     "not_reproducible_reason": null,
     "test_already_exists": false,
+    "existing_mr_url": null,
+    "adapted_existing": false,
     "retryable_error": true
 }
 ```

@@ -71,9 +71,12 @@ Execute the following steps in order.
 
    1.6. If neither `{{ triage_summary }}` nor `{{ patch_urls }}` are provided, design the test based solely on the Jira issue description, comments, and any reproducer steps or error messages described in the issue. In this case, the test may require more iteration in step 5.
 
-   1.7. **Check for Existing Test in the Tests Repository**
+   1.7. **Check for Existing Test or Open Reproducer MR**
 
-   Before proceeding further, check whether the tests repository already contains a test for this issue. This avoids duplicating work.
+   Before creating a new test, check whether the tests repository already has a
+   test for this issue/CVE (possibly written for another RHEL stream), and whether
+   an open MR already carries that test. Do **not** skip verification — reuse and
+   adapt instead of duplicating.
 
    * Clone the RHEL tests repository using `clone_repository`:
      - URL: `https://gitlab.com/redhat/rhel/tests/<package_name>`
@@ -93,13 +96,45 @@ Execute the following steps in order.
      run_shell_command("grep -rl '{{ cve_id }}' /git-repos/tests-<package_name>/ --include='*.fmf' --include='*.sh' || true")
      ```
      {% endif %}
-   * **If the test directory already exists OR a matching test is found**, STOP immediately. Do NOT reserve a Testing Farm machine or create any test files. Produce your final output JSON with:
-     - `success`: `false`
-     - `test_already_exists`: `true`
-     - `summary`: "Test already exists in the tests repository at <path>. Skipping reproducer creation to avoid duplication."
-     - `not_reproducible_reason`: null
-     - `pass_fail_criteria`: "N/A — existing test found, no new reproducer needed."
-     - Fill in `package`, `jira_issue`, and `reproducer_type` as normal. Leave `compose`, `arch`, and `testing_farm_request_id` as null.
+   * List open reproducer MRs with `list_project_merge_requests`:
+     - `project`: `redhat/rhel/tests/<package_name>`
+     - `state`: `opened`
+     - `labels`: `["ymir_reproducer"]`
+     Match MRs whose title/description mention `{{ jira_issue }}`{% if cve_id %} or `{{ cve_id }}`{% endif %}.
+     If an open MR matches, note its URL as `existing_mr_url`. If the MR source
+     branch has the test but the default branch does not yet, fetch/checkout that
+     branch into the clone (or re-clone and check out the source branch) so you
+     can run the MR's test files.
+
+   * **If an existing test directory / matching test / open MR is found:**
+     1. Continue to steps 3–6 to reserve a Testing Farm machine for **this**
+        stream's compose and run the existing test (copy from the found path).
+     2. If the existing test correctly detects the bug on this stream (FAIL on
+        unpatched / expected behavior for a working reproducer):
+        - Produce final output with `success`: `true`, `test_already_exists`: `true`,
+          `adapted_existing`: `false`, `existing_mr_url` set when an open MR was found.
+          Do **not** create new test files or a new MR.
+     3. If the existing test does **not** work on this stream:
+        - **Adapt** the test so it works for both the original stream and this one
+          (avoid stream-hardcoded paths/versions; use portable assertions /
+          conditionals where needed).
+        - Re-verify on this compose (still within the iteration limit).
+        - Leave the adapted files in the clone under the same test directory path.
+        - Produce final output with `success`: `true`, `test_already_exists`: `true`,
+          `adapted_existing`: `true`, and `existing_mr_url` when updating an open MR.
+          Orchestration will push to the existing MR branch (or open a follow-up).
+     4. Always cancel the TF reservation (step 6) before returning output.
+
+   * **If no existing test or open MR is found:** proceed to create a new test (steps 2–6).
+
+   {% if triage_summary %}
+   **Not-affected context:** If the triage summary indicates the issue is not
+   affected / not applicable, still attempt a reproducer that would detect the
+   issue *if present*. If the bug is detected on this compose, report that clearly
+   in `summary` (it contradicts not-affected). If the bug cannot be reproduced
+   after the iteration limit, that supports not-affected — set
+   `not_reproducible_reason` accordingly.
+   {% endif %}
 
 2. **Get Maintainer Rules**
 
@@ -149,6 +184,8 @@ Execute the following steps in order.
        - `retryable_error`: `true`
        - `not_reproducible_reason`: null
        - `test_already_exists`: `false`
+       - `existing_mr_url`: null
+       - `adapted_existing`: `false`
        - `pass_fail_criteria`: `"N/A — Testing Farm provisioning failed."`
        - `summary`: briefly describe the provisioning failure (include request id / state / ssh status)
        - Fill in `package`, `jira_issue`, `reproducer_type`, and `compose`/`arch` if known

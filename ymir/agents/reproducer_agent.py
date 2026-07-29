@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -46,6 +47,12 @@ from ymir.common.models import (
 from ymir.common.models import (
     ReproducerOutputSchema as OutputSchema,
 )
+from ymir.common.reproducer_lock import (
+    release_reproducer_lock,
+    reproducer_lock_id,
+    sweep_stale_reproducer_locks,
+    try_acquire_reproducer_lock,
+)
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.text import CreateTool, SearchTextTool, ViewTool
 from ymir.tools.unprivileged.version_mapper import VersionMapperTool
@@ -70,6 +77,7 @@ _REPRODUCER_MCP_TOOLS = [
     "get_patch_from_url",
     "get_maintainer_rules",
     "clone_repository",
+    "list_project_merge_requests",
     "list_testing_farm_composes",
     "reserve_testing_farm_machine",
     "get_testing_farm_reservation_details",
@@ -136,6 +144,8 @@ def _render_prompt(input_data: InputSchema, dry_run: bool = False) -> str:
 
 def _determine_result_label(result: OutputSchema) -> JiraLabels:
     """Map reproducer output to the appropriate Jira label."""
+    if result.adapted_existing and result.success:
+        return JiraLabels.REPRODUCER_CREATED
     if result.test_already_exists:
         return JiraLabels.REPRODUCER_ALREADY_EXISTS
     if result.success:
@@ -147,6 +157,8 @@ def _determine_result_label(result: OutputSchema) -> JiraLabels:
 
 def _determine_comment_resolution(result: OutputSchema) -> str:
     """Human-readable resolution string for the Jira comment."""
+    if result.adapted_existing and result.success:
+        return "adapted-existing"
     label = _determine_result_label(result)
     return {
         JiraLabels.REPRODUCER_CREATED: "reproduced",
@@ -159,10 +171,21 @@ def _determine_comment_resolution(result: OutputSchema) -> str:
 def _should_finalize_jira(result: OutputSchema) -> bool:
     """Whether handle_results should write terminal labels/comments.
 
-    Retryable infra errors (e.g. Testing Farm provisioning) keep
+    Retryable infra errors and lock contention keep
     ``ymir_reproducer_in_progress`` and are scheduled for a later attempt.
     """
-    return not result.retryable_error
+    return not result.retryable_error and not result.lock_deferred
+
+
+def _needs_merge_request(result: OutputSchema) -> bool:
+    """Whether orchestration should commit/push an MR for this result."""
+    if result.lock_deferred or result.retryable_error:
+        return False
+    if result.adapted_existing and result.success:
+        return True
+    if result.test_already_exists and not result.adapted_existing:
+        return False
+    return result.success
 
 
 def _build_mr_description(result: OutputSchema, input_data: InputSchema) -> str:
@@ -218,6 +241,7 @@ async def run_workflow(
     reproducer_agent_factory,
     input_data: InputSchema | None = None,
     user_triggered: bool = False,
+    redis_conn=None,
 ):
     local_tool_options = None
     if mock_env := get_mock_local_tool_env(jira_issue):
@@ -249,12 +273,57 @@ async def run_workflow(
 
             return "create_merge_request"
 
+        async def _resolve_update_branch(result: OutputSchema, package: str) -> str:
+            """Prefer the existing open MR source branch when adapting."""
+            fallback = f"reproducer/{result.jira_issue}"
+            if not result.adapted_existing:
+                return fallback
+
+            try:
+                listed = await run_tool(
+                    "list_project_merge_requests",
+                    project=f"redhat/rhel/tests/{package}",
+                    state="opened",
+                    labels=["ymir_reproducer"],
+                    available_tools=gateway_tools,
+                )
+            except Exception as e:
+                logger.warning("Failed to list open reproducer MRs for %s: %s", package, e)
+                return fallback
+
+            mrs = json.loads(listed) if isinstance(listed, str) else listed
+            if not isinstance(mrs, list):
+                return fallback
+
+            needles = []
+            if input_data and input_data.cve_id:
+                needles.extend(p.strip() for p in input_data.cve_id.replace(";", ",").split(",") if p.strip())
+            needles.append(result.jira_issue)
+
+            for mr in mrs:
+                blob = f"{mr.get('title', '')}\n{mr.get('description', '')}\n{mr.get('url', '')}"
+                if result.existing_mr_url and mr.get("url") == result.existing_mr_url:
+                    return mr.get("source_branch") or fallback
+                if any(n and n in blob for n in needles):
+                    result.existing_mr_url = result.existing_mr_url or mr.get("url")
+                    return mr.get("source_branch") or fallback
+
+            return fallback
+
         async def create_merge_request(state):
-            """Fork, push, and open a merge request for verified reproducers."""
+            """Fork, push, and open or update a merge request for verified reproducers."""
             result = state.result
 
-            if not result.success:
-                logger.info(f"Reproducer not successful for {state.jira_issue}, skipping MR creation")
+            if not _needs_merge_request(result):
+                logger.info(
+                    "Skipping MR creation for %s "
+                    "(success=%s, test_already_exists=%s, adapted=%s, lock_deferred=%s)",
+                    state.jira_issue,
+                    result.success,
+                    result.test_already_exists,
+                    result.adapted_existing,
+                    result.lock_deferred,
+                )
                 return "handle_results"
 
             if dry_run:
@@ -262,28 +331,56 @@ async def run_workflow(
                 return "handle_results"
 
             package = result.package
-            tests_clone = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / f"tests-{package}"
+            agent_input = InputSchema(jira_issue=state.jira_issue) if input_data is None else input_data
+            lock_id = reproducer_lock_id(agent_input.cve_id, state.jira_issue)
+            lock_held = False
 
-            if not tests_clone.is_dir():
-                logger.warning(f"Tests clone not found at {tests_clone}, skipping MR creation")
-                result.success = False
-                result.summary += " (MR creation skipped: tests clone directory not found)"
-                return "handle_results"
+            if redis_conn is not None:
+                acquired = await try_acquire_reproducer_lock(
+                    redis_conn,
+                    package,
+                    lock_id,
+                    jira_issue=state.jira_issue,
+                )
+                if not acquired:
+                    result.lock_deferred = True
+                    result.summary = (
+                        (result.summary or "")
+                        + " (Deferred: another worker holds the reproducer create/adapt lock)"
+                    ).strip()
+                    logger.info(
+                        "Reproducer lock busy for %s/%s — deferring %s",
+                        package,
+                        lock_id,
+                        state.jira_issue,
+                    )
+                    return "handle_results"
+                lock_held = True
 
-            # Determine test directory path within the clone
-            if result.reproducer_type == "cve" and input_data and input_data.cve_id:
-                test_dir = tests_clone / "Security" / input_data.cve_id
-            else:
-                test_dir = tests_clone / "Regression" / state.jira_issue
-
-            if not test_dir.is_dir():
-                logger.warning(f"Test dir not found at {test_dir}, skipping MR creation")
-                result.success = False
-                result.summary += " (MR creation skipped: test directory not found)"
-                return "handle_results"
-
-            update_branch = f"reproducer/{state.jira_issue}"
             try:
+                tests_clone = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / f"tests-{package}"
+
+                if not tests_clone.is_dir():
+                    logger.warning(f"Tests clone not found at {tests_clone}, skipping MR creation")
+                    result.success = False
+                    result.summary += " (MR creation skipped: tests clone directory not found)"
+                    return "handle_results"
+
+                # Determine test directory path within the clone
+                if result.reproducer_type == "cve" and agent_input.cve_id:
+                    # Use first CVE id segment for directory when multiple are present
+                    cve_dir = agent_input.cve_id.replace(";", ",").split(",")[0].strip()
+                    test_dir = tests_clone / "Security" / cve_dir
+                else:
+                    test_dir = tests_clone / "Regression" / state.jira_issue
+
+                if not test_dir.is_dir():
+                    logger.warning(f"Test dir not found at {test_dir}, skipping MR creation")
+                    result.success = False
+                    result.summary += " (MR creation skipped: test directory not found)"
+                    return "handle_results"
+
+                update_branch = await _resolve_update_branch(result, package)
                 await check_subprocess(["git", "checkout", "-B", update_branch], cwd=tests_clone)
 
                 # Make shell scripts executable before staging
@@ -309,8 +406,10 @@ async def run_workflow(
                     "fork_repository", repository=repository, available_tools=gateway_tools
                 )
 
-                agent_input = InputSchema(jira_issue=state.jira_issue) if input_data is None else input_data
-                mr_title = f"{package}: add {result.reproducer_type} reproducer for {state.jira_issue}"
+                if result.adapted_existing:
+                    mr_title = f"{package}: adapt {result.reproducer_type} reproducer for {state.jira_issue}"
+                else:
+                    mr_title = f"{package}: add {result.reproducer_type} reproducer for {state.jira_issue}"
                 mr_description = _build_mr_description(result, agent_input)
                 commit_message = _build_commit_message(result, agent_input)
 
@@ -327,7 +426,9 @@ async def run_workflow(
                 )
                 result.test_mr_url = mr_url
                 if mr_url:
-                    logger.info(f"Created reproducer MR: {mr_url}")
+                    logger.info(f"Created/updated reproducer MR: {mr_url}")
+                    if result.adapted_existing:
+                        result.existing_mr_url = result.existing_mr_url or mr_url
                 else:
                     logger.warning(f"MR creation returned no URL for {state.jira_issue}")
                     result.success = False
@@ -338,6 +439,17 @@ async def run_workflow(
                 result.test_mr_url = None
                 result.success = False
                 result.summary += f" (MR creation failed: {e})"
+            finally:
+                if lock_held and redis_conn is not None:
+                    try:
+                        await release_reproducer_lock(redis_conn, package, lock_id)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to release reproducer lock for %s/%s: %s",
+                            package,
+                            lock_id,
+                            e,
+                        )
 
             return "handle_results"
 
@@ -347,7 +459,8 @@ async def run_workflow(
             logger.info(
                 f"Reproducer result for {state.jira_issue}: "
                 f"success={result.success}, type={result.reproducer_type}, "
-                f"retryable_error={result.retryable_error}"
+                f"retryable_error={result.retryable_error}, "
+                f"lock_deferred={result.lock_deferred}"
             )
 
             if dry_run:
@@ -356,7 +469,7 @@ async def run_workflow(
 
             if not _should_finalize_jira(result):
                 logger.info(
-                    f"Retryable infra error for {state.jira_issue} — "
+                    f"Deferring Jira finalization for {state.jira_issue} — "
                     "leaving ymir_reproducer_in_progress for scheduled retry"
                 )
                 return Workflow.END
@@ -372,6 +485,8 @@ async def run_workflow(
 
             if result.test_mr_url:
                 comment_parts.append(f"*Test MR*: {result.test_mr_url}")
+            elif result.existing_mr_url:
+                comment_parts.append(f"*Existing Test MR*: {result.existing_mr_url}")
 
             comment_parts.append(f"\n*Pass/Fail Criteria*:\n{result.pass_fail_criteria}")
             comment_parts.append(f"\n*Summary*:\n{result.summary}")
@@ -456,6 +571,7 @@ async def main() -> None:
             )
 
         async def poll_reproducer():
+            await sweep_stale_reproducer_locks(redis)
             await promote_due_tasks(
                 redis,
                 RedisQueues.REPRODUCER_DELAYED_QUEUE.value,
@@ -599,11 +715,13 @@ async def main() -> None:
                         create_reproducer_agent,
                         input_data=input_data,
                         user_triggered=user_triggered,
+                        redis_conn=redis,
                     )
                     output = state.result
                     logger.info(
                         f"Reproducer processing completed for {input_data.jira_issue}, "
-                        f"success: {output.success}, retryable_error: {output.retryable_error}"
+                        f"success: {output.success}, retryable_error: {output.retryable_error}, "
+                        f"lock_deferred: {output.lock_deferred}"
                     )
 
             except Exception as e:
@@ -614,15 +732,16 @@ async def main() -> None:
                     ErrorData(details=error, jira_issue=input_data.jira_issue).model_dump_json(),
                 )
             else:
-                if output.retryable_error:
+                if output.retryable_error or output.lock_deferred:
+                    reason = "lock contention" if output.lock_deferred else "retryable infra error"
                     logger.info(
-                        f"Reproducer retryable infra error for {input_data.jira_issue}; "
+                        f"Reproducer {reason} for {input_data.jira_issue}; "
                         f"scheduling retry in {retry_delay_seconds:.0f}s"
                     )
                     await retry(
                         task,
                         ErrorData(
-                            details=output.summary or "Retryable reproducer infra error",
+                            details=output.summary or f"Reproducer deferred: {reason}",
                             jira_issue=input_data.jira_issue,
                         ).model_dump_json(),
                         delay_seconds=retry_delay_seconds,

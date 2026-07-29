@@ -424,6 +424,37 @@ def test_rebase_formatting_with_triage_summary():
     assert "*Justification*: Update to upstream version 2.4.55" in comment
 
 
+def test_rebase_data_all_jira_issues():
+    """Test RebaseData.all_jira_issues property with consolidated issues."""
+    data = RebaseData(
+        package="dotnet10.0",
+        version="10.0.5",
+        jira_issue="RHEL-100",
+        fix_version="rhel-10.2",
+        consolidated_issues=[
+            ConsolidatedIssue(issue_key="RHEL-101"),
+            ConsolidatedIssue(issue_key="RHEL-102"),
+            ConsolidatedIssue(issue_key="RHEL-103"),
+        ],
+    )
+    all_issues = data.all_jira_issues
+    assert all_issues == ["RHEL-100", "RHEL-101", "RHEL-102", "RHEL-103"]
+    assert data.jira_issue == "RHEL-100"
+    assert len(data.consolidated_issues) == 3
+
+
+def test_rebase_data_all_jira_issues_no_consolidation():
+    """Test RebaseData.all_jira_issues property without consolidated issues."""
+    data = RebaseData(
+        package="dotnet10.0",
+        version="10.0.5",
+        jira_issue="RHEL-100",
+        fix_version="rhel-10.2",
+    )
+    all_issues = data.all_jira_issues
+    assert all_issues == ["RHEL-100"]
+
+
 def test_rebuild_formatting_with_triage_summary():
     data = RebuildData(
         package="git-lfs",

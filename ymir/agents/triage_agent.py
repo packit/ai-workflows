@@ -23,6 +23,7 @@ import ymir.agents.tasks as tasks
 from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_applicability_agent
 from ymir.agents.observability import setup_observability
 from ymir.agents.reasoning_agent import ReasoningAgent
+from ymir.agents.rebase_consolidation import find_rebase_siblings
 from ymir.agents.rebuild_consolidation import find_rebuild_siblings
 from ymir.agents.utils import (
     build_agent_factory_with_mock_repos,
@@ -757,6 +758,8 @@ async def run_workflow(
                                 state.applicability_check_skipped = True
                                 if state.triage_result.resolution == Resolution.REBUILD:
                                     return "consolidate_rebuild_siblings"
+                                if state.triage_result.resolution == Resolution.REBASE:
+                                    return "consolidate_rebase_siblings"
                                 return "comment_in_jira"
                         else:
                             clone_branch = f"c{major_version}s"
@@ -781,6 +784,8 @@ async def run_workflow(
                 state.applicability_check_skipped = True
                 if state.triage_result.resolution == Resolution.REBUILD:
                     return "verify_rebuild_buildroot"
+                if state.triage_result.resolution == Resolution.REBASE:
+                    return "consolidate_rebase_siblings"
                 return "comment_in_jira"
 
             if not prep_ok:
@@ -865,6 +870,8 @@ async def run_workflow(
 
             if state.triage_result.resolution == Resolution.REBUILD:
                 return "verify_rebuild_buildroot"
+            if state.triage_result.resolution == Resolution.REBASE:
+                return "consolidate_rebase_siblings"
             return "comment_in_jira"
 
         async def verify_rebuild_buildroot(state):
@@ -941,6 +948,18 @@ async def run_workflow(
             rebuild_data.consolidation_summary = summary or None
             return "comment_in_jira"
 
+        async def consolidate_rebase_siblings(state):
+            """Find and analyze sibling issues that can share a single rebase MR."""
+            rebase_data = state.triage_result.data
+            included, summary = await find_rebase_siblings(
+                jira_issue=state.jira_issue,
+                rebase_data=rebase_data,
+                available_tools=gateway_tools,
+            )
+            rebase_data.consolidated_issues = included
+            rebase_data.consolidation_summary = summary or None
+            return "comment_in_jira"
+
         async def comment_in_jira(state):
             applicability_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / APPLICABILITY_DIR / state.jira_issue
             if applicability_dir.exists():
@@ -978,6 +997,7 @@ async def run_workflow(
         workflow.add_step("check_cve_applicability", check_cve_applicability)
         workflow.add_step("verify_rebuild_buildroot", verify_rebuild_buildroot)
         workflow.add_step("consolidate_rebuild_siblings", consolidate_rebuild_siblings)
+        workflow.add_step("consolidate_rebase_siblings", consolidate_rebase_siblings)
         workflow.add_step("comment_in_jira", comment_in_jira)
 
         response = await workflow.run(TriageState(jira_issue=jira_issue))

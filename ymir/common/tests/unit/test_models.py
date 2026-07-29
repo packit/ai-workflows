@@ -542,6 +542,25 @@ def test_reproducer_output_not_reproducible():
     assert data.not_reproducible_reason == (
         "The vulnerable code path is not reachable with the shipped configuration."
     )
+    assert data.adapted_existing is False
+    assert data.lock_deferred is False
+    assert data.existing_mr_url is None
+
+
+def test_not_affected_data_preserves_handoff_fields():
+    data = NotAffectedData(
+        justification_category="Vulnerable Code not Present",
+        explanation="Not in tree",
+        jira_issue="RHEL-1",
+        package="bind",
+        cve_id="CVE-2025-1",
+        fix_version="rhel-10.1",
+        triage_summary="checked",
+        patch_urls=["https://example.com/a.patch"],
+    )
+    assert data.package == "bind"
+    assert data.cve_id == "CVE-2025-1"
+    assert data.patch_urls == ["https://example.com/a.patch"]
 
 
 def test_reproducer_output_test_already_exists():

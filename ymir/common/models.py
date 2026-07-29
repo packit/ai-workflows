@@ -408,6 +408,20 @@ class NotAffectedData(BaseModel):
     )
     explanation: str = Field(description="Detailed explanation of why the CVE does not affect this package")
     jira_issue: str = Field(description="Jira issue identifier")
+    package: str | None = Field(default=None, description="Package name (for reproducer handoff)")
+    cve_id: str | None = Field(
+        default=None,
+        description="CVE identifier(s); include ALL CVE IDs when the issue covers multiple CVEs",
+    )
+    fix_version: str | None = Field(default=None, description="Fix version in Jira (e.g., 'rhel-9.8')")
+    triage_summary: str | None = Field(
+        default=None,
+        description="Investigation log and downstream-agent handoff for the reproducer",
+    )
+    patch_urls: list[str] | None = Field(
+        default=None,
+        description="Upstream patch URLs when known (e.g. from a prior backport resolution)",
+    )
 
 
 class ApplicabilityResult(BaseModel):
@@ -1298,6 +1312,21 @@ class ReproducerOutputSchema(BaseModel):
     test_already_exists: bool = Field(
         default=False,
         description="Whether a test for this issue already exists in the tests repository",
+    )
+    existing_mr_url: str | None = Field(
+        default=None,
+        description="URL of an existing open reproducer MR that was reused or adapted",
+    )
+    adapted_existing: bool = Field(
+        default=False,
+        description="True when an existing test/MR was adapted to work on this stream",
+    )
+    lock_deferred: bool = Field(
+        default=False,
+        description=(
+            "True when create/adapt could not proceed because another worker holds "
+            "the reproducer lock; the task should be scheduled for delayed retry"
+        ),
     )
     retryable_error: bool = Field(
         default=False,

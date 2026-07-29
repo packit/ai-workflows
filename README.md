@@ -73,6 +73,7 @@ For installation instructions (skill setup and MCP tool configuration), see the 
 - [AI Providers Data Flow](ai_providers_data_flow.md) - Google Vertex AI integration and model usage
 - [Agent Monitoring and Performance Review](monitoring.md) - Monitoring processes, anomaly detection, and continuous improvement
 - [MR Consolidation Architecture](docs/mr_consolidation_architecture.md) - Merging multiple backport MRs into a single MR
+- [Reproducer Architecture](docs/reproducer_architecture.md) - Automated test reproducers, cross-stream reuse, and create/adapt locking
 
 **Data management:**
 

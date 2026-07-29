@@ -5,6 +5,7 @@ import pytest
 from ymir.agents.reproducer_agent import (
     _determine_comment_resolution,
     _determine_result_label,
+    _needs_merge_request,
     _should_finalize_jira,
 )
 from ymir.common.constants import JiraLabels
@@ -53,7 +54,24 @@ def test_already_exists_takes_precedence_over_success():
     assert _determine_comment_resolution(result) == "already-exists"
 
 
+def test_adapted_existing_uses_created_label():
+    result = _output(success=True, test_already_exists=True, adapted_existing=True)
+    assert _determine_result_label(result) == JiraLabels.REPRODUCER_CREATED
+    assert _determine_comment_resolution(result) == "adapted-existing"
+
+
 def test_should_finalize_jira_false_for_retryable_error():
     assert _should_finalize_jira(_output(success=False, retryable_error=True)) is False
+    assert _should_finalize_jira(_output(success=False, lock_deferred=True)) is False
     assert _should_finalize_jira(_output(success=False)) is True
     assert _should_finalize_jira(_output(success=True)) is True
+
+
+def test_needs_merge_request():
+    assert _needs_merge_request(_output(success=True)) is True
+    assert _needs_merge_request(_output(success=True, test_already_exists=True)) is False
+    assert (
+        _needs_merge_request(_output(success=True, test_already_exists=True, adapted_existing=True)) is True
+    )
+    assert _needs_merge_request(_output(success=False)) is False
+    assert _needs_merge_request(_output(success=True, lock_deferred=True)) is False

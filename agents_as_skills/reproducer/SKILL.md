@@ -116,6 +116,15 @@ Execute the following steps in order. Track state across steps using these varia
 
 7. If neither `{{triage_summary}}` nor `{{patch_urls}}` are provided, design the test based solely on the Jira issue description, comments, and any reproducer steps or error messages described in the issue. In this case, the test may require more iteration in step 5.
 
+8. **Check for existing test or open reproducer MR** before creating a new one:
+   - Clone `https://gitlab.com/redhat/rhel/tests/<package_name>` to `/git-repos/tests-<package_name>` (omit branch).
+   - Look for `Security/<cve_id>/` (CVE) or `Regression/<jira_issue>/` (bug), and grep for the issue/CVE ids.
+   - Call `list_project_merge_requests` on `redhat/rhel/tests/<package_name>` with `state=opened` and label `ymir_reproducer`; match title/description to this issue/CVE.
+   - If found: reserve TF for **this** stream and verify the existing test.
+     - Works → `success=true`, `test_already_exists=true`, `adapted_existing=false` (no new MR).
+     - Fails on this stream → adapt the test to be portable across streams, re-verify, set `adapted_existing=true` and `existing_mr_url` so orchestration updates the open MR.
+   - If triage says not-affected: still build/verify a test that would catch the issue if present; detection contradicts N/A, non-reproducible supports N/A.
+
 ### Step 2: Get Maintainer Rules
 
 1. Call `get_maintainer_rules` with the `package_name`.
@@ -581,6 +590,8 @@ The final output must be a JSON object:
   "summary": "Created reproducer for CVE-2025-12345 in libfoo. The vulnerability is a heap buffer overflow in parse_header() triggered by a malformed PNG with chunk length > 0x7fffffff. Test sends crafted input and checks for crash via exit code.",
   "not_reproducible_reason": null,
   "test_already_exists": false,
+  "existing_mr_url": null,
+  "adapted_existing": false,
   "retryable_error": false
 }
 ```
@@ -600,6 +611,8 @@ On failure or non-reproducible result:
   "summary": "Attempted to reproduce RHEL-12345 (infinite loop in parser). The bug requires a specific interleaving of concurrent requests that could not be reliably reproduced in 5 attempts on a single-core TF machine.",
   "not_reproducible_reason": "Race condition requires multi-threaded workload with specific timing. Attempted with stress-ng and taskset but could not trigger the hang reliably.",
   "test_already_exists": false,
+  "existing_mr_url": null,
+  "adapted_existing": false,
   "retryable_error": false
 }
 ```
@@ -619,18 +632,22 @@ On Testing Farm provisioning failure (scheduled for retry by the workflow):
   "summary": "Testing Farm reservation did not become SSH-ready. Cancelled the request for a scheduled retry.",
   "not_reproducible_reason": null,
   "test_already_exists": false,
+  "existing_mr_url": null,
+  "adapted_existing": false,
   "retryable_error": true
 }
 ```
 
 The output fields:
 - `jira_issue` (string) — the Jira issue key (upper-case)
-- `success` (bool) — whether a working reproducer was created and verified
+- `success` (bool) — whether a working reproducer was created/verified (or an existing one reused/adapted)
 - `reproducer_type` (string) — `"cve"` or `"bug"`
 - `test_mr_url` (string or null) — URL of the merge request in the tests repository (null if not created; set by orchestration)
 - `testing_farm_request_id` (string or null) — Testing Farm request ID used for verification
 - `pass_fail_criteria` (string) — human-readable description of what PASS and FAIL mean
 - `summary` (string) — concise description of the reproducer
 - `not_reproducible_reason` (string or null) — explanation if the bug could not be reproduced (null on success)
-- `test_already_exists` (bool) — true when an existing test was found and creation was skipped
+- `test_already_exists` (bool) — true when an existing test/MR was found and reused or adapted
+- `existing_mr_url` (string or null) — open reproducer MR that was reused or adapted
+- `adapted_existing` (bool) — true when an existing test was modified to work on this stream
 - `retryable_error` (bool) — true for transient infra failures (e.g. TF provisioning) that should be retried later

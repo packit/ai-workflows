@@ -5,6 +5,7 @@ from beeai_framework.adapters.mcp.serve.server import (
     MCPServerConfig,
     MCPSettings,
 )
+from mcp.server.streamable_http_manager import DEFAULT_MAX_REQUEST_BODY_SIZE
 
 from ymir.common.mock_repos import apply_zstream_override_from_env
 from ymir.tools.gateway_utils import setup_logging
@@ -57,6 +58,8 @@ def main():
         config_kwargs["settings"] = MCPSettings(
             host="0.0.0.0",  # noqa: S104
             port=int(os.getenv("SSE_PORT", "8000")),
+            # Required by newer mcp Settings; FastMCP still defaults to 4 MiB.
+            max_request_body_size=DEFAULT_MAX_REQUEST_BODY_SIZE,
         )
     config = MCPServerConfig(**config_kwargs)
 

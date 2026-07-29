@@ -407,7 +407,7 @@ async def run_workflow(
             response = await workflow.run(ReproducerState(jira_issue=jira_issue))
             return response.state
         finally:
-            await tf_cleanup.cleanup()
+            await tf_cleanup.cleanup(gateway_tools)
 
 
 async def main() -> None:

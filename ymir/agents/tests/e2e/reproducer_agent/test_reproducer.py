@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import shlex
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,6 +59,7 @@ async def _verify_on_compose(
     compose: str,
     test_dir: Path,
     jira_issue: str,
+    package: str,
 ) -> VerificationResult:
     """Reserve a TF machine, copy the agent-created test, run it via tmt, and return the result."""
     vr = VerificationResult(compose=compose)
@@ -78,14 +80,55 @@ async def _verify_on_compose(
             available_tools=gateway_tools,
         )
         ssh_host = details["ssh_connection"]
+        if not ssh_host or ssh_host == "not-yet-available":
+            raise RuntimeError(
+                f"TF reservation {request_id} on {compose} has no SSH host "
+                f"(ssh_connection={ssh_host!r}, state={details.get('state')!r})"
+            )
 
-        await run_tool(
+        # CTC composes often lack tmt in base repos; enable CRB+EPEL (or Copr) then install.
+        # Package under test must be present for the beakerlib steps inside tmt.
+        pkg = shlex.quote(package)
+        install_tmt = f"""
+set -euo pipefail
+dnf install -y {pkg}
+if command -v tmt >/dev/null 2>&1; then
+  exit 0
+fi
+dnf install -y dnf-plugins-core || true
+if ! dnf install -y tmt 'tmt+all'; then
+  major="$(rpm -E %rhel 2>/dev/null || true)"
+  if [ -z "$major" ] || [ "$major" = "%rhel" ]; then
+    major="$(. /etc/os-release && echo "${{VERSION_ID%%.*}}")"
+  fi
+  dnf config-manager --set-enabled crb 2>/dev/null \\
+    || dnf config-manager --set-enabled CRB 2>/dev/null \\
+    || dnf config-manager --set-enabled rhel-CRB 2>/dev/null \\
+    || true
+  dnf install -y "https://dl.fedoraproject.org/pub/epel/epel-release-latest-${{major}}.noarch.rpm" || true
+  if ! dnf install -y tmt 'tmt+all'; then
+    dnf copr enable -y @teemtee/stable || dnf copr enable -y @teemtee/tmt || true
+    dnf install -y tmt 'tmt+all'
+  fi
+fi
+command -v tmt
+tmt --version
+""".strip()
+
+        install = await run_tool(
             "run_remote_command",
             ssh_host=ssh_host,
-            command="dnf install -y tmt tmt+all",
-            timeout=300,
+            command=install_tmt,
+            timeout=600,
             available_tools=gateway_tools,
         )
+        if install.get("exit_code", 1) != 0:
+            raise RuntimeError(
+                f"Failed to install tmt (and {package}) on {compose} "
+                f"(exit_code={install.get('exit_code')}):\n"
+                f"stdout:\n{install.get('stdout', '')[:2000]}\n"
+                f"stderr:\n{install.get('stderr', '')[:2000]}"
+            )
 
         local_paths = [str(p) for p in test_dir.rglob("*") if p.is_file()]
         await run_tool(
@@ -96,7 +139,7 @@ async def _verify_on_compose(
             available_tools=gateway_tools,
         )
 
-        await run_tool(
+        prepare = await run_tool(
             "run_remote_command",
             ssh_host=ssh_host,
             command=(
@@ -106,11 +149,17 @@ async def _verify_on_compose(
             timeout=30,
             available_tools=gateway_tools,
         )
+        if prepare.get("exit_code", 1) != 0:
+            raise RuntimeError(
+                f"Failed to prepare tmt metadata on {compose}:\n"
+                f"stdout:\n{prepare.get('stdout', '')[:1500]}\n"
+                f"stderr:\n{prepare.get('stderr', '')[:1500]}"
+            )
 
         run_result = await run_tool(
             "run_remote_command",
             ssh_host=ssh_host,
-            command="cd /tmp/reproducer && tmt run --all provision --how local",
+            command="cd /tmp/reproducer && tmt --feeling-safe run --all provision --how local",
             timeout=900,
             available_tools=gateway_tools,
         )
@@ -219,11 +268,13 @@ class ReproducerAgentTestCase:
                     self.jira_issue,
                     compose,
                 )
+                package = result.package or self.input.package
                 self.verification_results[phase] = await _verify_on_compose(
                     tools,
                     compose,
                     test_dir,
                     self.jira_issue,
+                    package,
                 )
 
 

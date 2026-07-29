@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import re
 from typing import Any
@@ -7,7 +6,7 @@ from beeai_framework.context import RunContext, RunMiddlewareProtocol
 from beeai_framework.emitter import EventMeta
 from beeai_framework.tools.events import ToolSuccessEvent
 
-from ymir.tools.privileged.testing_farm import cancel_testing_farm_request_id
+from ymir.common.utils import run_tool
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +52,11 @@ def _extract_request_id_from_input(tool_input: Any) -> str | None:
 
 
 class TFReservationCleanupMiddleware(RunMiddlewareProtocol):
-    """Track Testing Farm reservations and cancel leaked ones on agent crash."""
+    """Track Testing Farm reservations and cancel leaked ones on agent crash.
+
+    Cancellation goes through the MCP gateway tool (same path as the agent),
+    because ``TESTING_FARM_API_TOKEN`` lives on the gateway, not the agent.
+    """
 
     def __init__(self) -> None:
         self._reserved: set[str] = set()
@@ -75,13 +78,17 @@ class TFReservationCleanupMiddleware(RunMiddlewareProtocol):
             self._cancelled.add(request_id)
             logger.debug("Tracked TF cancellation %s", request_id)
 
-    async def cleanup(self) -> None:
+    async def cleanup(self, available_tools: list) -> None:
         """Cancel any reserved machines that were not explicitly cancelled."""
         leaked = self._reserved - self._cancelled
         for request_id in leaked:
             logger.warning("Cleaning up leaked TF reservation %s", request_id)
             try:
-                await asyncio.to_thread(cancel_testing_farm_request_id, request_id)
+                await run_tool(
+                    "cancel_testing_farm_request",
+                    request_id=request_id,
+                    available_tools=available_tools,
+                )
                 logger.info("Successfully cancelled leaked TF reservation %s", request_id)
             except Exception:
                 logger.exception("Failed to cancel leaked TF reservation %s", request_id)

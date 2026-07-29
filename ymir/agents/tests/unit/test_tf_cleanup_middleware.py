@@ -89,8 +89,8 @@ async def test_middleware_tracks_mcp_reserve_and_cancel():
     )
     assert mw._cancelled == {"req-100"}
 
-    with patch("ymir.agents.tf_cleanup_middleware.cancel_testing_farm_request_id") as cancel:
-        await mw.cleanup()
+    with patch("ymir.agents.tf_cleanup_middleware.run_tool") as cancel:
+        await mw.cleanup(available_tools=[])
         cancel.assert_not_called()
 
 
@@ -98,10 +98,15 @@ async def test_middleware_tracks_mcp_reserve_and_cancel():
 async def test_middleware_cleanup_cancels_leaked_reservations():
     mw = TFReservationCleanupMiddleware()
     mw._reserved.add("req-leak")
+    tools = [object()]
 
-    with patch("ymir.agents.tf_cleanup_middleware.cancel_testing_farm_request_id") as cancel:
-        await mw.cleanup()
-        cancel.assert_called_once_with("req-leak")
+    with patch("ymir.agents.tf_cleanup_middleware.run_tool") as cancel:
+        await mw.cleanup(available_tools=tools)
+        cancel.assert_called_once_with(
+            "cancel_testing_farm_request",
+            request_id="req-leak",
+            available_tools=tools,
+        )
 
 
 @pytest.mark.asyncio

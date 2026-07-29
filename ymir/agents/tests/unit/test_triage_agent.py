@@ -4,12 +4,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ymir.agents.triage_agent import (
+    TriageState,
+    _build_reproducer_input,
+    _is_modular,
     _map_version_to_module_branch,
     _parse_module_summary,
     _should_update_jira,
     determine_target_branch,
 )
-from ymir.common.models import BackportData, CVEEligibilityResult, Resolution, Task, TriageEligibility
+from ymir.common.models import (
+    BackportData,
+    CVEEligibilityResult,
+    NotAffectedData,
+    PostponedData,
+    RebaseData,
+    RebuildData,
+    Resolution,
+    Task,
+    TriageEligibility,
+    TriageOutputSchema,
+)
 from ymir.common.version_utils import is_modular
 
 
@@ -458,3 +472,118 @@ async def test_process_task_acquires_lock_and_proceeds():
         await process_task(_make_payload())
 
     mock_workflow.assert_awaited_once()
+
+
+def test_build_reproducer_input_from_backport():
+    state = TriageState(
+        jira_issue="RHEL-100",
+        target_branch="c10s",
+        triage_result=TriageOutputSchema(
+            resolution=Resolution.BACKPORT,
+            data=BackportData(
+                package="bind",
+                patch_urls=["https://example.com/a.patch"],
+                justification="fixes overflow",
+                triage_summary="Looked at upstream commit.",
+                jira_issue="RHEL-100",
+                cve_id="CVE-2025-1",
+                fix_version="rhel-10.1",
+            ),
+        ),
+    )
+    payload = _build_reproducer_input(state)
+    assert payload is not None
+    assert payload.package == "bind"
+    assert payload.cve_id == "CVE-2025-1"
+    assert payload.patch_urls == ["https://example.com/a.patch"]
+    assert payload.triage_summary == "Looked at upstream commit."
+    assert payload.target_branch == "c10s"
+
+
+def test_build_reproducer_input_from_rebase_and_rebuild():
+    rebase_state = TriageState(
+        jira_issue="RHEL-101",
+        target_branch="c9s",
+        triage_result=TriageOutputSchema(
+            resolution=Resolution.REBASE,
+            data=RebaseData(
+                package="httpd",
+                version="2.4.62",
+                jira_issue="RHEL-101",
+                cve_id="CVE-2025-2",
+                fix_version="rhel-9.6",
+            ),
+        ),
+    )
+    rebuild_state = TriageState(
+        jira_issue="RHEL-102",
+        target_branch="c10s",
+        triage_result=TriageOutputSchema(
+            resolution=Resolution.REBUILD,
+            data=RebuildData(
+                package="podman",
+                jira_issue="RHEL-102",
+                cve_id="CVE-2025-3",
+                fix_version="rhel-10.1",
+            ),
+        ),
+    )
+    assert _build_reproducer_input(rebase_state).package == "httpd"
+    assert _build_reproducer_input(rebuild_state).package == "podman"
+
+
+def test_build_reproducer_input_from_not_affected_includes_explanation():
+    state = TriageState(
+        jira_issue="RHEL-103",
+        target_branch="c10s",
+        triage_result=TriageOutputSchema(
+            resolution=Resolution.NOT_AFFECTED,
+            data=NotAffectedData(
+                justification_category="Vulnerable Code not Present",
+                explanation="Function parse_header is not in this build.",
+                jira_issue="RHEL-103",
+                package="libfoo",
+                cve_id="CVE-2025-4",
+                fix_version="rhel-10.1",
+                triage_summary="Checked sources.",
+            ),
+        ),
+    )
+    payload = _build_reproducer_input(state)
+    assert payload is not None
+    assert payload.package == "libfoo"
+    assert "not-affected" in payload.triage_summary
+    assert "Vulnerable Code not Present" in payload.triage_summary
+    assert "Function parse_header" in payload.triage_summary
+
+
+def test_build_reproducer_input_skips_without_package():
+    state = TriageState(
+        jira_issue="RHEL-104",
+        triage_result=TriageOutputSchema(
+            resolution=Resolution.NOT_AFFECTED,
+            data=NotAffectedData(
+                explanation="no package",
+                jira_issue="RHEL-104",
+            ),
+        ),
+    )
+    assert _build_reproducer_input(state) is None
+
+
+def test_build_reproducer_input_skips_postponed():
+    """Helper itself does not filter resolution; enqueue gate does. Still builds if package set."""
+    state = TriageState(
+        jira_issue="RHEL-105",
+        triage_result=TriageOutputSchema(
+            resolution=Resolution.POSTPONED,
+            data=PostponedData(
+                summary="waiting",
+                pending_issues=["RHEL-1"],
+                jira_issue="RHEL-105",
+                package="golang",
+            ),
+        ),
+    )
+    # Builder returns a payload when package exists; eligibility is checked by enqueue.
+    assert _build_reproducer_input(state).package == "golang"

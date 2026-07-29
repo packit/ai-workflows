@@ -51,6 +51,7 @@ from ymir.common.models import (
     NotAffectedData,
     OpenEndedAnalysisData,
     PostponedData,
+    ReproducerInputSchema,
     Resolution,
     Task,
     TriageEligibility,
@@ -117,6 +118,73 @@ _RESOLUTION_TO_LABEL: dict[Resolution, JiraLabels] = {
     Resolution.NOT_AFFECTED: JiraLabels.TRIAGED_NOT_AFFECTED,
     Resolution.ERROR: JiraLabels.TRIAGE_ERRORED,
 }
+
+_REPRODUCER_ELIGIBLE_RESOLUTIONS = frozenset(
+    {
+        Resolution.REBASE,
+        Resolution.BACKPORT,
+        Resolution.REBUILD,
+        Resolution.NOT_AFFECTED,
+    }
+)
+
+
+def _build_reproducer_input(state) -> ReproducerInputSchema | None:
+    """Build a flat reproducer task payload from triage state.
+
+    Returns None when package cannot be resolved — the reproducer needs a
+    package to clone ``redhat/rhel/tests/<package>``.
+    """
+    if state.triage_result is None:
+        return None
+    data = state.triage_result.data
+    package = getattr(data, "package", None)
+    if not package:
+        return None
+
+    triage_summary = getattr(data, "triage_summary", None)
+    if state.triage_result.resolution == Resolution.NOT_AFFECTED:
+        explanation = getattr(data, "explanation", None) or ""
+        category = getattr(data, "justification_category", None)
+        na_parts = []
+        if category:
+            na_parts.append(f"Triage resolved not-affected ({category}).")
+        else:
+            na_parts.append("Triage resolved not-affected.")
+        if explanation:
+            na_parts.append(explanation)
+        if triage_summary:
+            na_parts.append(triage_summary)
+        triage_summary = "\n\n".join(na_parts)
+
+    return ReproducerInputSchema(
+        jira_issue=state.jira_issue,
+        package=package,
+        cve_id=getattr(data, "cve_id", None),
+        patch_urls=getattr(data, "patch_urls", None),
+        triage_summary=triage_summary,
+        fix_version=getattr(data, "fix_version", None),
+        target_branch=state.target_branch,
+    )
+
+
+async def _enqueue_reproducer(redis, state, user_triggered: bool) -> None:
+    """Push a reproducer job when triage resolution is eligible."""
+    if state.triage_result is None:
+        return
+    if state.triage_result.resolution not in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
+        return
+    reproducer_input = _build_reproducer_input(state)
+    if reproducer_input is None:
+        logger.info(
+            "Skipping reproducer enqueue for %s — package not available on resolution data",
+            state.jira_issue,
+        )
+        return
+    queue = RedisQueues.get_reproducer_queue(user_triggered)
+    task = Task(metadata=reproducer_input.model_dump(), user_triggered=user_triggered)
+    await fix_await(redis.lpush(queue, task.model_dump_json()))
+    logger.info("Pushed %s to %s", state.jira_issue, queue)
 
 
 def _modular_summary_re(downstream_component: str) -> re.Pattern[str]:
@@ -829,12 +897,18 @@ async def run_workflow(
                             "\n\n_Note: Analysis was performed on fully prepared "
                             "sources (with downstream patches applied)._"
                         )
+                    prior = state.triage_result.data
                     state.triage_result = OutputSchema(
                         resolution=Resolution.NOT_AFFECTED,
                         data=NotAffectedData(
                             justification_category=applicability.justification_category,
                             explanation=explanation,
                             jira_issue=state.jira_issue,
+                            package=getattr(prior, "package", None),
+                            cve_id=getattr(prior, "cve_id", None),
+                            fix_version=getattr(prior, "fix_version", None),
+                            triage_summary=getattr(prior, "triage_summary", None),
+                            patch_urls=getattr(prior, "patch_urls", None),
                         ),
                     )
                     return "comment_in_jira"
@@ -1356,6 +1430,15 @@ async def main() -> None:
                             logger.info(f"Pushed {input.issue} to {queue}")
                     else:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
+
+                # Reproducer runs in parallel with the fix agent (and for not-affected).
+                if auto_chain and output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
+                    await _enqueue_reproducer(redis, state, user_triggered)
+                elif not auto_chain and output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
+                    logger.info(
+                        "AUTO_CHAIN disabled, skipping reproducer queue for %s",
+                        input.issue,
+                    )
 
         shutdown_event = asyncio.Event()
         install_shutdown_handler(asyncio.get_running_loop(), shutdown_event)

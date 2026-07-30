@@ -708,12 +708,14 @@ async def run_workflow(
                 state.cve_eligibility_result
                 and state.cve_eligibility_result.is_cve
                 and state.triage_result.resolution
-                in (Resolution.BACKPORT, Resolution.REBUILD, Resolution.POSTPONED)
+                in (Resolution.BACKPORT, Resolution.REBUILD, Resolution.REBASE, Resolution.POSTPONED)
             ):
                 return "check_cve_applicability"
 
             if state.triage_result.resolution == Resolution.REBUILD:
                 return "consolidate_rebuild_siblings"
+            if state.triage_result.resolution == Resolution.REBASE:
+                return "consolidate_rebase_siblings"
             return "comment_in_jira"
 
         async def verify_rebase_author(state):
@@ -1394,6 +1396,30 @@ async def main() -> None:
                                     ],
                                     dry_run=dry_run,
                                     user_triggered=user_triggered,
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to set labels on consolidated issue "
+                                    f"{consolidated.issue_key}: {e}"
+                                )
+                    elif output.resolution == Resolution.REBASE:
+                        # Label consolidated siblings so they skip re-triage
+                        # (The rebase agent will comment on all issues when MR is created)
+                        for consolidated in output.data.consolidated_issues:
+                            try:
+                                await tasks.set_jira_labels(
+                                    jira_issue=consolidated.issue_key,
+                                    labels_to_add=[JiraLabels.TRIAGED_REBASE.value],
+                                    labels_to_remove=[
+                                        JiraLabels.TRIAGE_IN_PROGRESS.value,
+                                        JiraLabels.REBASED.value,
+                                    ],
+                                    dry_run=dry_run,
+                                    user_triggered=user_triggered,
+                                )
+                                logger.info(
+                                    f"Labeled consolidated sibling {consolidated.issue_key} "
+                                    f"for group rebase with {input.issue}"
                                 )
                             except Exception as e:
                                 logger.warning(

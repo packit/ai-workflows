@@ -42,11 +42,18 @@ class VerificationResult:
 
 
 def _resolve_test_dir(test_case_input: dict, result: Any) -> Path | None:
-    """Derive the test directory the agent should have created inside the tests clone."""
+    """Locate the test directory the agent created inside the tests clone."""
     package = result.package
     tests_clone = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / f"tests-{package}"
     if not tests_clone.is_dir():
         return None
+
+    if getattr(result, "test_directory", None):
+        relative = str(result.test_directory).strip().lstrip("/")
+        if relative and ".." not in Path(relative).parts:
+            candidate = tests_clone / relative
+            if candidate.is_dir():
+                return candidate
 
     cve_id = test_case_input.get("cve_id")
     if result.reproducer_type == "cve" and cve_id:

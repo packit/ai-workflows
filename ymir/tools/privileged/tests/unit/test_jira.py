@@ -22,6 +22,7 @@ from ymir.tools.privileged.jira import (
     VerifyIssueAuthorTool,
     _check_duplicate_tracker,
     _check_zstream_clones_shipped,
+    _check_zstream_fix_approach,
     extract_cve_id,
 )
 
@@ -775,6 +776,235 @@ async def test_check_zstream_clones_stale_ystream_fixversion():
     any_shipped, pending = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
     assert any_shipped is False
     assert pending == ["RHEL-333"]
+
+
+# --- Z-stream fix approach tests (Low/Moderate Y-stream path) ---
+
+
+@pytest.mark.asyncio
+async def test_fix_approach_clone_shipped_no_nvr():
+    """Z-stream clone Closed/Done-Errata with no Fixed in Build — RHEL_FIRST (not PENDING)."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.6.z"}],
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Done-Errata"},
+                "customfield_10578": None,
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    approach, pending, _detail = await _check_zstream_fix_approach("CVE-2025-12345", "curl", "RHEL-999", "9")
+    assert approach is FixApproach.RHEL_FIRST
+    assert pending == []
+    assert "Closed/Done-Errata" in _detail
+
+
+@pytest.mark.asyncio
+async def test_fix_approach_clone_shipped_done_no_nvr():
+    """Z-stream clone Closed/Done with no Fixed in Build — RHEL_FIRST."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.6.z"}],
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Done"},
+                "customfield_10578": None,
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    approach, pending, _ = await _check_zstream_fix_approach("CVE-2025-12345", "curl", "RHEL-999", "9")
+    assert approach is FixApproach.RHEL_FIRST
+    assert pending == []
+
+
+@pytest.mark.asyncio
+async def test_fix_approach_clone_shipped_with_nvr_cs_build():
+    """Z-stream clone Closed/Done-Errata WITH Fixed in Build and CS Koji match — CS_FIRST."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.6.z"}],
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Done-Errata"},
+                "customfield_10578": "curl-8.0-2.el9_6",
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+    flexmock(jira_tools).should_receive("nvr_to_cs_nvr").with_args("curl-8.0-2.el9_6").and_return(
+        "curl-8.0-2.el9"
+    ).once()
+    flexmock(jira_tools).should_receive("_get_koji_build").and_return({"id": 123}).once()
+
+    approach, pending, _detail = await _check_zstream_fix_approach("CVE-2025-12345", "curl", "RHEL-999", "9")
+    assert approach is FixApproach.CS_FIRST
+    assert pending == []
+    assert "CentOS Stream build" in _detail
+
+
+@pytest.mark.asyncio
+async def test_fix_approach_clone_rejected():
+    """Z-stream clone Closed/WONTFIX — skipped, no other clones → NO_ZSTREAM_CLONES."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.6.z"}],
+                "status": {"name": "Closed"},
+                "resolution": {"name": "WONTFIX"},
+                "customfield_10578": None,
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    approach, pending, _ = await _check_zstream_fix_approach("CVE-2025-12345", "curl", "RHEL-999", "9")
+    assert approach is FixApproach.NO_ZSTREAM_CLONES
+    assert pending == []
+
+
+@pytest.mark.asyncio
+async def test_fix_approach_clone_not_closed_no_nvr():
+    """Z-stream clone In Progress, no Fixed in Build — PENDING."""
+    search_result = [
+        {
+            "key": "RHEL-222",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.6.z"}],
+                "status": {"name": "In Progress"},
+                "resolution": None,
+                "customfield_10578": None,
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    approach, pending, _ = await _check_zstream_fix_approach("CVE-2025-12345", "curl", "RHEL-999", "9")
+    assert approach is FixApproach.PENDING
+    assert pending == ["RHEL-222"]
+
+
+@pytest.mark.asyncio
+async def test_fix_approach_shipped_clone_plus_pending_clone():
+    """One clone shipped (no NVR), another still pending — shipped one wins."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Done-Errata"},
+                "customfield_10578": None,
+            },
+        },
+        {
+            "key": "RHEL-222",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.6.z"}],
+                "status": {"name": "In Progress"},
+                "resolution": None,
+                "customfield_10578": None,
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    approach, pending, _ = await _check_zstream_fix_approach("CVE-2025-12345", "curl", "RHEL-999", "9")
+    assert approach is FixApproach.RHEL_FIRST
+    assert pending == []
+
+
+@pytest.mark.asyncio
+async def test_fix_approach_shipped_no_nvr_then_cs_first():
+    """First clone shipped without NVR, second has CS build — CS_FIRST wins (not early RHEL_FIRST)."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Done-Errata"},
+                "customfield_10578": None,  # No NVR
+            },
+        },
+        {
+            "key": "RHEL-222",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.6.z"}],
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Done-Errata"},
+                "customfield_10578": "curl-8.0-2.el9_6",  # Has NVR with CS build
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+    flexmock(jira_tools).should_receive("nvr_to_cs_nvr").with_args("curl-8.0-2.el9_6").and_return(
+        "curl-8.0-2.el9"
+    ).once()
+    flexmock(jira_tools).should_receive("_get_koji_build").and_return({"id": 456}).once()
+
+    approach, pending, _detail = await _check_zstream_fix_approach("CVE-2025-12345", "curl", "RHEL-999", "9")
+    assert approach is FixApproach.CS_FIRST  # Not RHEL_FIRST from first clone
+    assert pending == []
+    assert "CentOS Stream build" in _detail
+
+
+@pytest.mark.asyncio
+async def test_fix_approach_no_clones():
+    """No Z-stream clones at all — NO_ZSTREAM_CLONES."""
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=[]))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    approach, pending, _ = await _check_zstream_fix_approach("CVE-2025-12345", "curl", "RHEL-999", "9")
+    assert approach is FixApproach.NO_ZSTREAM_CLONES
+    assert pending == []
 
 
 # --- CVE triage eligibility tests ---

@@ -593,7 +593,7 @@ async def _check_zstream_fix_approach(
     output = await tool.run(
         input={
             "jql": jql,
-            "fields": ["fixVersions", FIXED_IN_BUILD_CUSTOM_FIELD],
+            "fields": ["fixVersions", FIXED_IN_BUILD_CUSTOM_FIELD, "status", "resolution"],
             "max_results": 50,
         }
     )
@@ -612,13 +612,46 @@ async def _check_zstream_fix_approach(
         for variant in get_fix_version_variants(v)
     }
 
+    def _build_rhel_first_result(clone_key: str, detail: str) -> tuple[FixApproach, list, str]:
+        """Helper to construct RHEL_FIRST result tuple consistently."""
+        return (FixApproach.RHEL_FIRST, [], f"{clone_key} {detail}")
+
     pending_keys = []
+    rhel_first_fallback = None  # Track RHEL_FIRST result if found, but keep checking for CS_FIRST
+
     for issue in issues:
         key = issue.get("key", "")
         fix_versions = issue.get("fields", {}).get("fixVersions", [])
         fv_names = [fv.get("name", "") for fv in fix_versions]
         if not any(fv.lower() in relevant_z_streams for fv in fv_names):
             continue
+
+        status_name = issue.get("fields", {}).get("status", {}).get("name", "")
+        resolution_raw = issue.get("fields", {}).get("resolution", {})
+        resolution_name = resolution_raw.get("name", "") if resolution_raw else ""
+
+        if status_name.upper() == "CLOSED":
+            if resolution_name.upper() in _REJECTED_RESOLUTIONS:
+                logger.info(f"  {key}: Closed/{resolution_name} — rejected, skipping")
+                continue
+            if resolution_name in ("Done-Errata", "Done"):
+                fixed_in_build = issue.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
+                if fixed_in_build:
+                    pass  # fall through to existing Koji check below
+                else:
+                    logger.info(
+                        f"  {key}: Closed/{resolution_name} but no Fixed in Build NVR, "
+                        "would assume RHEL first but checking remaining clones for CS builds"
+                    )
+                    if not rhel_first_fallback:
+                        rhel_first_fallback = _build_rhel_first_result(
+                            key, f"is Closed/{resolution_name} (no Fixed in Build NVR to check CS Koji)"
+                        )
+                    continue  # Keep checking other clones for CS_FIRST
+            else:
+                # Closed with a resolution that's not Done/Done-Errata/rejected - skip it
+                logger.info(f"  {key}: Closed/{resolution_name} (not a shipping resolution) — skipping")
+                continue
 
         fixed_in_build = issue.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
         if not fixed_in_build:
@@ -628,12 +661,15 @@ async def _check_zstream_fix_approach(
 
         cs_nvr = nvr_to_cs_nvr(fixed_in_build)
         if not cs_nvr:
-            logger.warning(f"  {key}: cannot derive CS NVR from {fixed_in_build}, assuming RHEL first")
-            return (
-                FixApproach.RHEL_FIRST,
-                [],
-                f"{key} has Fixed in Build {fixed_in_build} (could not derive CentOS Stream NVR)",
+            logger.warning(
+                f"  {key}: cannot derive CS NVR from {fixed_in_build}, "
+                "would assume RHEL first but checking remaining clones"
             )
+            if not rhel_first_fallback:
+                rhel_first_fallback = _build_rhel_first_result(
+                    key, f"has Fixed in Build {fixed_in_build} (could not derive CentOS Stream NVR)"
+                )
+            continue  # Keep checking for CS_FIRST
 
         logger.info(f"  {key}: Fixed in Build={fixed_in_build}, checking CS NVR={cs_nvr}")
         cs_build = await asyncio.to_thread(_get_koji_build, CENTOS_STREAM_KOJIHUB_URL, cs_nvr)
@@ -645,13 +681,20 @@ async def _check_zstream_fix_approach(
                 f"{key} has Fixed in Build {fixed_in_build}, "
                 f"matching CentOS Stream build {cs_nvr} found in CS Koji",
             )
-        logger.info(f"  {key}: CS build {cs_nvr} not found — RHEL first approach")
-        return (
-            FixApproach.RHEL_FIRST,
-            [],
-            f"{key} has Fixed in Build {fixed_in_build}, no matching CentOS Stream build {cs_nvr} in CS Koji",
-        )
+        logger.info(f"  {key}: CS build {cs_nvr} not found — RHEL first approach for this clone")
+        if not rhel_first_fallback:
+            rhel_first_fallback = _build_rhel_first_result(
+                key,
+                f"has Fixed in Build {fixed_in_build}, no matching CentOS Stream build {cs_nvr} in CS Koji",
+            )
+        # Continue checking remaining clones for CS_FIRST
 
+    # If we found any RHEL_FIRST evidence, return it (shipped clone wins over pending)
+    if rhel_first_fallback:
+        logger.info("No CS build found across all clones, using RHEL first approach")
+        return rhel_first_fallback
+
+    # If all we found were pending clones, wait for them
     if pending_keys:
         logger.info(f"No Z-stream clone has Fixed in Build yet for {cve_id}, waiting: {pending_keys}")
         return (FixApproach.PENDING, pending_keys, "")

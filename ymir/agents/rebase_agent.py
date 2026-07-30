@@ -367,7 +367,7 @@ async def main() -> None:
                         mr_description=(
                             f"{state.log_result.description}\n\n"
                             f"{triage_details_text}"
-                            f"{format_jira_links_for_mr(*all_issues)}\n"
+                            f"{format_jira_links_for_mr(all_issues)}\n"
                             f"{wrap_details('Rebase status', state.rebase_log[-1])}"
                             f"{consolidation_text}"
                             f"\n\n{mr_description_footer(state.package)}"

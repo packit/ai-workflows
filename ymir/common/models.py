@@ -1300,6 +1300,15 @@ class ReproducerOutputSchema(BaseModel):
     package: str = Field(description="Resolved package name")
     compose: str | None = Field(default=None, description="RHEL compose used for TF verification")
     arch: str | None = Field(default=None, description="Architecture used for TF verification")
+    test_directory: str | None = Field(
+        default=None,
+        description=(
+            "Path of the test directory relative to the tests repo clone root "
+            "(e.g. 'Security/CVE-2025-12345' or 'Regression/RHEL-12345'). "
+            "Required when success is true and files must be committed to an MR. "
+            "Orchestration uses this path as-is; do not invent alternate locations."
+        ),
+    )
     test_mr_url: str | None = Field(default=None, description="URL of the test merge request")
     testing_farm_request_id: str | None = Field(
         default=None, description="Testing Farm request ID for the submitted test run"

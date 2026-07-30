@@ -192,10 +192,12 @@ Use the Jira issue description, `triage_summary`, and `patch_urls` to understand
    - If the clone path already exists from a previous failed attempt, `clone_repository` removes and re-clones it — do NOT delete it yourself with `rm -rf`.
    - Save the clone path as `tests_clone`.
 
-2. Create the test directory:
-   - For CVEs: `<tests_clone>/Security/<cve_id>/`
-   - For bugs (non-CVE): `<tests_clone>/Regression/<jira_issue>/`
-   - Save the directory path as `test_dir`.
+2. Create the test directory under the tests clone. Prefer package convention:
+   - CVEs: often `<tests_clone>/Security/<cve_id>/`
+   - Bugs: often `<tests_clone>/Regression/<jira_issue>/`
+   If the package already uses a different parent or leaf name for similar
+   tests, match that layout instead. Save the absolute path as `test_dir` and
+   the path relative to `tests_clone` for the `test_directory` output field.
 
 3. Create the `.fmf/version` file if it does not already exist at the tests repo root:
    ```
@@ -585,6 +587,7 @@ The final output must be a JSON object:
   "package": "libfoo",
   "compose": "RHEL-9.8.0-Nightly",
   "arch": "x86_64",
+  "test_directory": "Security/CVE-2025-12345",
   "testing_farm_request_id": "tf-request-abc123",
   "pass_fail_criteria": "PASS: program exits 0 (fix applied, no crash). FAIL: program exits with SIGSEGV (bug present, buffer overflow triggered).",
   "summary": "Created reproducer for CVE-2025-12345 in libfoo. The vulnerability is a heap buffer overflow in parse_header() triggered by a malformed PNG with chunk length > 0x7fffffff. Test sends crafted input and checks for crash via exit code.",
@@ -606,6 +609,7 @@ On failure or non-reproducible result:
   "package": "libbar",
   "compose": "RHEL-10.1.0-Nightly",
   "arch": "x86_64",
+  "test_directory": "Regression/RHEL-12345",
   "testing_farm_request_id": "tf-request-xyz789",
   "pass_fail_criteria": "PASS: command completes within 10s. FAIL: command hangs (timeout after 10s).",
   "summary": "Attempted to reproduce RHEL-12345 (infinite loop in parser). The bug requires a specific interleaving of concurrent requests that could not be reliably reproduced in 5 attempts on a single-core TF machine.",
@@ -627,6 +631,7 @@ On Testing Farm provisioning failure (scheduled for retry by the workflow):
   "package": "libfoo",
   "compose": "RHEL-10.1-Nightly",
   "arch": "x86_64",
+  "test_directory": null,
   "testing_farm_request_id": "tf-request-deadbeef",
   "pass_fail_criteria": "N/A — Testing Farm provisioning failed.",
   "summary": "Testing Farm reservation did not become SSH-ready. Cancelled the request for a scheduled retry.",
@@ -642,6 +647,7 @@ The output fields:
 - `jira_issue` (string) — the Jira issue key (upper-case)
 - `success` (bool) — whether a working reproducer was created/verified (or an existing one reused/adapted)
 - `reproducer_type` (string) — `"cve"` or `"bug"`
+- `test_directory` (string or null) — path of the test directory relative to the tests repo clone root (e.g. `Security/CVE-2025-12345`). Required when the workflow must commit files; null only if no local test dir was written
 - `test_mr_url` (string or null) — URL of the merge request in the tests repository (null if not created; set by orchestration)
 - `testing_farm_request_id` (string or null) — Testing Farm request ID used for verification
 - `pass_fail_criteria` (string) — human-readable description of what PASS and FAIL mean

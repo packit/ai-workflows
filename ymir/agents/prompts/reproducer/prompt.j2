@@ -83,9 +83,12 @@ Execute the following steps in order.
      - Do NOT specify a `branch` parameter — omit it so the tool clones the default branch.
      - Use clone path `/git-repos/tests-<package_name>`.
      - If the clone path already exists, `clone_repository` removes and re-clones it — do NOT delete it yourself with `rm -rf`.
-   * Determine the expected test directory:
-     - For CVEs (when `{{ cve_id }}` is set): check for `Security/{{ cve_id }}/`
-     - For bugs (non-CVE): check for `Regression/{{ jira_issue }}/`
+   * Determine the expected test directory by inspecting the tests repo layout
+     for this package (names are package-specific; do not assume a fixed scheme):
+     - For CVEs: typically under `Security/` (often `Security/<cve_id>/`, but
+       follow existing package convention if different)
+     - For bugs (non-CVE): typically under `Regression/` (often
+       `Regression/<jira_issue>/`, but follow existing package convention)
    * Run `run_shell_command("ls /git-repos/tests-<package_name>/<expected_test_dir>/")` to check if it exists.
    * Additionally, search for any existing test referencing this issue:
      ```
@@ -112,8 +115,9 @@ Execute the following steps in order.
      2. If the existing test correctly detects the bug on this stream (FAIL on
         unpatched / expected behavior for a working reproducer):
         - Produce final output with `success`: `true`, `test_already_exists`: `true`,
-          `adapted_existing`: `false`, `existing_mr_url` set when an open MR was found.
-          Do **not** create new test files or a new MR.
+          `adapted_existing`: `false`, `existing_mr_url` set when an open MR was found,
+          and `test_directory` set to the relative path of the existing test
+          (e.g. `Security/CVE-2025-12345`). Do **not** create new test files or a new MR.
      3. If the existing test does **not** work on this stream:
         - **Adapt** the test so it works for both the original stream and this one
           (avoid stream-hardcoded paths/versions; use portable assertions /
@@ -121,7 +125,8 @@ Execute the following steps in order.
         - Re-verify on this compose (still within the iteration limit).
         - Leave the adapted files in the clone under the same test directory path.
         - Produce final output with `success`: `true`, `test_already_exists`: `true`,
-          `adapted_existing`: `true`, and `existing_mr_url` when updating an open MR.
+          `adapted_existing`: `true`, `existing_mr_url` when updating an open MR,
+          and `test_directory` set to that relative path.
           Orchestration will push to the existing MR branch (or open a follow-up).
      4. Always cancel the TF reservation (step 6) before returning output.
 
@@ -186,6 +191,7 @@ Execute the following steps in order.
        - `test_already_exists`: `false`
        - `existing_mr_url`: null
        - `adapted_existing`: `false`
+       - `test_directory`: null
        - `pass_fail_criteria`: `"N/A — Testing Farm provisioning failed."`
        - `summary`: briefly describe the provisioning failure (include request id / state / ssh status)
        - Fill in `package`, `jira_issue`, `reproducer_type`, and `compose`/`arch` if known
@@ -208,9 +214,13 @@ Execute the following steps in order.
 
    The tests repository was already cloned in step 1.7 at `/git-repos/tests-<package_name>`. If for any reason the clone is missing, re-clone it using `clone_repository` with URL `https://gitlab.com/redhat/rhel/tests/<package_name>` (no `branch` parameter) to `/git-repos/tests-<package_name>`.
 
-   * Create the test directory:
-     - For CVEs: `<tests_clone>/Security/<cve_id>/`
-     - For bugs (non-CVE): `<tests_clone>/Regression/<jira_issue>/`
+   * Create the test directory under the tests clone. Prefer package convention:
+     - CVEs: often `<tests_clone>/Security/<cve_id>/`
+     - Bugs: often `<tests_clone>/Regression/<jira_issue>/`
+     If the package already uses a different parent or leaf name for similar
+     tests, match that layout instead. Remember the relative path from the
+     clone root (e.g. `Security/CVE-2025-12345`) — you MUST return it as
+     `test_directory` in your final output so the workflow can open the MR.
    * Create the `.fmf/version` file if it does not already exist at the tests repo root:
      ```
      mkdir -p <tests_clone>/.fmf
@@ -567,8 +577,10 @@ Execute the following steps in order.
    Even if the reproducer verification succeeded, the machine must be returned. Even if an unrelated error occurred, the machine must be returned. Even if the agent is about to report an error, the machine must be returned. There are no exceptions.
 
 Note: Do NOT create a merge request yourself. Do NOT fork, push, or open an MR.
-After returning the TF machine (step 6), produce your final output JSON. The merge
-request will be created automatically by the workflow from your output fields.
+After returning the TF machine (step 6), produce your final output JSON. Include
+`test_directory` (relative to the tests clone root) whenever you created or
+adapted test files — the workflow commits that path as-is when opening/updating
+the MR. Do not leave `test_directory` null if an MR is needed.
 
 Do NOT post a Jira comment yourself. The workflow handles Jira commenting
 automatically after you return your output. Focus on producing accurate output fields.

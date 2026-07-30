@@ -188,6 +188,37 @@ def _needs_merge_request(result: OutputSchema) -> bool:
     return result.success
 
 
+def _resolve_test_dir(tests_clone: Path, test_directory: str | None) -> Path | None:
+    """Resolve the agent-reported relative test path under the tests clone.
+
+    The agent owns naming (``Security/<CVE>``, ``Regression/<JIRA>``, or any
+    other relative path it created). Orchestration never invents the location.
+    Absolute paths and ``..`` segments are rejected.
+    """
+    if not test_directory or not test_directory.strip():
+        return None
+
+    relative = test_directory.strip().lstrip("/")
+    if Path(relative).is_absolute() or ".." in Path(relative).parts:
+        logger.warning("Rejecting unsafe test_directory from agent: %r", test_directory)
+        return None
+
+    resolved = (tests_clone / relative).resolve()
+    try:
+        resolved.relative_to(tests_clone.resolve())
+    except ValueError:
+        logger.warning(
+            "test_directory %r resolves outside tests clone %s",
+            test_directory,
+            tests_clone,
+        )
+        return None
+
+    if resolved.is_dir() and any(resolved.iterdir()):
+        return resolved
+    return None
+
+
 def _build_mr_description(result: OutputSchema, input_data: InputSchema) -> str:
     """Assemble the MR description from the reproducer output."""
     if result.reproducer_type == "cve":
@@ -366,19 +397,17 @@ async def run_workflow(
                     result.summary += " (MR creation skipped: tests clone directory not found)"
                     return "handle_results"
 
-                # Determine test directory path within the clone
-                if result.reproducer_type == "cve" and agent_input.cve_id:
-                    # Use first CVE id segment for directory when multiple are present
-                    cve_dir = agent_input.cve_id.replace(";", ",").split(",")[0].strip()
-                    test_dir = tests_clone / "Security" / cve_dir
-                else:
-                    test_dir = tests_clone / "Regression" / state.jira_issue
-
-                if not test_dir.is_dir():
-                    logger.warning(f"Test dir not found at {test_dir}, skipping MR creation")
+                test_dir = _resolve_test_dir(tests_clone, result.test_directory)
+                if test_dir is None:
+                    logger.warning(
+                        "Test dir not found for %s (test_directory=%r), skipping MR creation",
+                        state.jira_issue,
+                        result.test_directory,
+                    )
                     result.success = False
                     result.summary += " (MR creation skipped: test directory not found)"
                     return "handle_results"
+                logger.info("Using test directory %s for MR creation", test_dir)
 
                 update_branch = await _resolve_update_branch(result, package)
                 await check_subprocess(["git", "checkout", "-B", update_branch], cwd=tests_clone)

@@ -18,6 +18,9 @@ data:
   # status-change comment produced by issue-verification is suppressed
   # alongside the transition.
   JIRA_ALLOW_STATUS_CHANGES: "false"
+  # When "true", agents assign reviewers to newly created MRs based on
+  # the package's bugzilla component contacts (Default Assignee + QA Contact).
+  ASSIGN_MR_REVIEWERS: "true"
 immutable: false
 kind: ConfigMap
 metadata:

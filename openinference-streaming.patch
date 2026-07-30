@@ -42,7 +42,7 @@ index d3f3adc6..5497ff77 100644
  
      def instrumentation_dependencies(self) -> Collection[str]:
          return _instruments
-@@ -70,39 +68,76 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
+@@ -70,39 +68,81 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
      def _uninstrument(self, **kwargs: Any) -> None:
          self._cleanup()
          self._processes.clear()
@@ -79,7 +79,12 @@ index d3f3adc6..5497ff77 100644
 -                self._build_tree(child)
 -        self._processes.pop(processor.run_id)
 +        node = processor.span
++        _OTEL_TYPES = (bool, str, bytes, int, float)
 +        for key, value in node.attributes.items():
++            if not isinstance(value, _OTEL_TYPES) and not (
++                isinstance(value, (list, tuple)) and all(isinstance(v, _OTEL_TYPES) for v in value)
++            ):
++                value = str(value)
 +            span.set_attribute(key, value)
  
 -    @contextlib.contextmanager
@@ -142,7 +147,7 @@ index d3f3adc6..5497ff77 100644
  
      @exception_handler
      async def _handler(self, data: Any, event: "EventMeta") -> None:
-@@ -118,10 +153,8 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
+@@ -118,10 +158,8 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
              if event.trace.parent_run_id and not parent:
                  raise ValueError(f"Parent run with ID {event.trace.parent_run_id} was not found!")
  
@@ -154,7 +159,7 @@ index d3f3adc6..5497ff77 100644
          else:
              node = self._processes[event.trace.run_id]
  
-@@ -129,8 +162,8 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
+@@ -129,8 +167,8 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
  
          if isinstance(data, RunContextFinishEvent):
              await node.end(data, event)

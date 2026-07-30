@@ -149,6 +149,23 @@ async def main() -> None:
         all_files_git_to_add: set[str] = Field(default_factory=set)
         abandon_autorelease: bool = Field(default=False)
 
+    async def post_failure_comments_to_consolidated_siblings(
+        primary_issue: str,
+        consolidated_issues: list[ConsolidatedIssue],
+        available_tools: list[Tool],
+        user_triggered: bool,
+    ) -> None:
+        """Post link comments to consolidated siblings pointing to primary issue with error details."""
+        for consolidated in consolidated_issues:
+            await tasks.comment_in_jira(
+                jira_issue=consolidated.issue_key,
+                agent_type="Rebase",
+                comment_text=f"Consolidated rebase failed. See {primary_issue} for error details.",
+                available_tools=available_tools,
+                is_error=True,
+                user_triggered=user_triggered,
+            )
+
     async def run_workflow(
         package,
         dist_git_branch,
@@ -420,17 +437,12 @@ async def main() -> None:
                         user_triggered=user_triggered,
                     )
                     # Link consolidated siblings to primary issue
-                    for consolidated in state.consolidated_issues:
-                        await tasks.comment_in_jira(
-                            jira_issue=consolidated.issue_key,
-                            agent_type="Rebase",
-                            comment_text=(
-                                f"Consolidated rebase failed. See {state.jira_issue} for error details."
-                            ),
-                            is_error=True,
-                            available_tools=gateway_tools,
-                            user_triggered=user_triggered,
-                        )
+                    await post_failure_comments_to_consolidated_siblings(
+                        primary_issue=state.jira_issue,
+                        consolidated_issues=state.consolidated_issues,
+                        available_tools=gateway_tools,
+                        user_triggered=user_triggered,
+                    )
                 return Workflow.END
 
             workflow.add_step("change_jira_status", change_jira_status)
@@ -574,18 +586,12 @@ async def main() -> None:
                                         user_triggered=user_triggered,
                                     )
                                 # Link consolidated siblings to primary issue
-                                for consolidated in rebase_data.consolidated_issues:
-                                    await tasks.comment_in_jira(
-                                        jira_issue=consolidated.issue_key,
-                                        agent_type="Rebase",
-                                        comment_text=(
-                                            f"Consolidated rebase failed. "
-                                            f"See {rebase_data.jira_issue} for error details."
-                                        ),
-                                        available_tools=gateway_tools,
-                                        is_error=True,
-                                        user_triggered=user_triggered,
-                                    )
+                                await post_failure_comments_to_consolidated_siblings(
+                                    primary_issue=rebase_data.jira_issue,
+                                    consolidated_issues=rebase_data.consolidated_issues,
+                                    available_tools=gateway_tools,
+                                    user_triggered=user_triggered,
+                                )
                         except Exception as comment_error:
                             logger.warning(
                                 f"Failed to post final rebase failure comment for "

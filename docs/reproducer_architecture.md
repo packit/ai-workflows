@@ -121,8 +121,11 @@ Default delay: `REPRODUCER_RETRY_DELAY_SECONDS` (1800s).
 
 ## Cross-Stream Reuse and Adapt
 
-The tests repository is **shared across streams**. CVE tests live under
-`Security/<CVE>/`; bug tests under `Regression/<JIRA>/`.
+The tests repository is **shared across streams**. Package conventions vary;
+CVE tests are often under `Security/<CVE>/` and bug tests under
+`Regression/<JIRA>/`, but the agent may use a different relative path. The
+agent MUST return that path as `test_directory` in its output; orchestration
+never invents or guesses the location.
 
 ### Agent behavior (prompt)
 
@@ -133,19 +136,26 @@ The tests repository is **shared across streams**. CVE tests live under
 4. **If found:** reserve Testing Farm for **this** stream’s compose and run
    the existing test.
    - Works → `success=true`, `test_already_exists=true`,
-     `adapted_existing=false` (no new MR).
+     `adapted_existing=false` (no new MR); still set `test_directory`.
    - Fails on this stream → adapt the test to be portable across streams,
-     re-verify, set `adapted_existing=true` and `existing_mr_url`.
-5. **If not found:** create a new test as usual.
+     re-verify, set `adapted_existing=true`, `existing_mr_url`, and
+     `test_directory` to the adapted path.
+5. **If not found:** create a new test and set `test_directory` to its
+   relative path under the clone.
 
 ### Orchestration (`create_merge_request`)
+
+Uses `result.test_directory` (relative to the tests clone) as the sole
+source of truth for which files to `git add`. Rejects absolute paths and
+`..` segments.
 
 | Result flags | Action |
 |--------------|--------|
 | `test_already_exists` and not `adapted_existing` | Skip MR |
 | `adapted_existing` and success | Acquire lock; push to existing MR source branch (or `reproducer/<jira>` fallback) |
-| New success | Acquire lock; commit, fork, open MR with label `ymir_reproducer` |
+| New success | Acquire lock; commit `test_directory`, fork, open MR with label `ymir_reproducer` |
 | `lock_deferred` / `retryable_error` | Skip MR; do not write terminal Jira labels |
+| Missing/invalid `test_directory` when MR needed | Fail; skip MR |
 
 Branch resolution for adapt: list open `ymir_reproducer` MRs and match by
 `existing_mr_url` or CVE/issue text in title/description.

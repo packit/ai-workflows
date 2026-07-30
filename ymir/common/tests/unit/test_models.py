@@ -504,6 +504,7 @@ def test_reproducer_output_success():
         package="openssl",
         compose="RHEL-9.8.0-Nightly",
         arch="x86_64",
+        test_directory="Security/CVE-2025-11111",
         test_mr_url="https://gitlab.com/tests/openssl/-/merge_requests/42",
         testing_farm_request_id="tf-req-abc123",
         pass_fail_criteria=(
@@ -516,6 +517,7 @@ def test_reproducer_output_success():
     assert data.package == "openssl"
     assert data.compose == "RHEL-9.8.0-Nightly"
     assert data.arch == "x86_64"
+    assert data.test_directory == "Security/CVE-2025-11111"
     assert data.test_mr_url == "https://gitlab.com/tests/openssl/-/merge_requests/42"
     assert data.testing_farm_request_id == "tf-req-abc123"
     assert data.not_reproducible_reason is None
@@ -530,6 +532,7 @@ def test_reproducer_output_not_reproducible():
         package="libfoo",
         compose="RHEL-10.1.0-Nightly",
         arch="x86_64",
+        test_directory="Regression/RHEL-22222",
         pass_fail_criteria="Expected segfault when processing crafted input.",
         summary="Could not reproduce the reported crash.",
         not_reproducible_reason="The vulnerable code path is not reachable with the shipped configuration.",
@@ -537,6 +540,7 @@ def test_reproducer_output_not_reproducible():
     assert data.success is False
     assert data.reproducer_type == "bug"
     assert data.package == "libfoo"
+    assert data.test_directory == "Regression/RHEL-22222"
     assert data.test_mr_url is None
     assert data.testing_farm_request_id is None
     assert data.not_reproducible_reason == (
@@ -591,6 +595,7 @@ def test_reproducer_output_roundtrip():
         package="curl",
         compose="RHEL-9.8.0-Nightly",
         arch="x86_64",
+        test_directory="Security/CVE-2025-33333",
         test_mr_url="https://gitlab.com/tests/curl/-/merge_requests/7",
         testing_farm_request_id="tf-req-xyz789",
         pass_fail_criteria="Exploit PoC returns exit code 1 on vulnerable build, 0 on fixed.",
@@ -605,6 +610,7 @@ def test_reproducer_output_roundtrip():
     assert restored.package == original.package
     assert restored.compose == original.compose
     assert restored.arch == original.arch
+    assert restored.test_directory == original.test_directory
     assert restored.test_mr_url == original.test_mr_url
     assert restored.testing_farm_request_id == original.testing_farm_request_id
     assert restored.pass_fail_criteria == original.pass_fail_criteria

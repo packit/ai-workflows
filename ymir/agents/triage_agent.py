@@ -1346,8 +1346,7 @@ async def main() -> None:
                                     f"{consolidated.issue_key}: {e}"
                                 )
                     elif output.resolution == Resolution.REBASE:
-                        # Label consolidated siblings so they skip re-triage
-                        # (The rebase agent will comment on all issues when MR is created)
+                        # Label and link consolidated siblings so they skip re-triage
                         for consolidated in output.data.consolidated_issues:
                             try:
                                 await tasks.set_jira_labels(
@@ -1369,6 +1368,27 @@ async def main() -> None:
                                     f"Failed to set labels on consolidated issue "
                                     f"{consolidated.issue_key}: {e}"
                                 )
+                        # Post consolidation link comments after all labels are set
+                        if not dry_run and output.data.consolidated_issues:
+                            try:
+                                async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+                                    for consolidated in output.data.consolidated_issues:
+                                        await tasks.comment_in_jira(
+                                            jira_issue=consolidated.issue_key,
+                                            agent_type="Triage",
+                                            comment_text=(
+                                                f"Consolidated for rebase with {input.issue}. "
+                                                f"See {input.issue} for rebase status and results."
+                                            ),
+                                            available_tools=gateway_tools,
+                                            user_triggered=user_triggered,
+                                        )
+                                    logger.info(
+                                        f"Linked {len(output.data.consolidated_issues)} "
+                                        f"consolidated siblings to primary issue {input.issue}"
+                                    )
+                            except Exception as e:
+                                logger.warning(f"Failed to post consolidation link comments: {e}")
 
                 if output.resolution == Resolution.ERROR:
                     await retry(task, output.data.model_dump_json())

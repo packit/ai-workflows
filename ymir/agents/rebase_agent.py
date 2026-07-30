@@ -521,13 +521,18 @@ async def main() -> None:
                         f"Task failed after {max_retries} attempts, "
                         f"moving to error list: {rebase_data.jira_issue}"
                     )
-                    await tasks.set_jira_labels(
-                        jira_issue=rebase_data.jira_issue,
-                        labels_to_add=[JiraLabels.REBASE_ERRORED.value],
-                        labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
-                        dry_run=dry_run,
-                        user_triggered=user_triggered,
-                    )
+                    # Label all consolidated issues with error status so they can be re-triaged
+                    all_issues = [rebase_data.jira_issue] + [
+                        item.issue_key for item in rebase_data.consolidated_issues
+                    ]
+                    for issue in all_issues:
+                        await tasks.set_jira_labels(
+                            jira_issue=issue,
+                            labels_to_add=[JiraLabels.REBASE_ERRORED.value],
+                            labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
+                            dry_run=dry_run,
+                            user_triggered=user_triggered,
+                        )
                     # Post failure feedback to Jira once, here on the final attempt
                     # only — never for intermediate retries. Restricted to
                     # user-triggered (ymir_todo) runs: a maintainer who didn't ask
@@ -611,13 +616,18 @@ async def main() -> None:
                     )
                 else:
                     logger.warning(f"Rebase failed for {rebase_data.jira_issue}: {state.rebase_result.error}")
-                    await tasks.set_jira_labels(
-                        jira_issue=rebase_data.jira_issue,
-                        labels_to_add=[JiraLabels.REBASE_FAILED.value],
-                        labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
-                        dry_run=dry_run,
-                        user_triggered=user_triggered,
-                    )
+                    # Label all consolidated issues with failure status so they can be re-triaged
+                    all_issues = [rebase_data.jira_issue] + [
+                        item.issue_key for item in rebase_data.consolidated_issues
+                    ]
+                    for issue in all_issues:
+                        await tasks.set_jira_labels(
+                            jira_issue=issue,
+                            labels_to_add=[JiraLabels.REBASE_FAILED.value],
+                            labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
+                            dry_run=dry_run,
+                            user_triggered=user_triggered,
+                        )
                     # No comment_text here: the in-workflow comment_in_jira step has
                     # already posted the failure feedback for this graceful path.
                     # Only the crash path (which never reaches that step) passes

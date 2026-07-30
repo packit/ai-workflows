@@ -41,7 +41,8 @@ def build_rebase_siblings_jql(
         f'AND key != "{issue_key}" '
         f'AND labels = "SecurityTracking" '
         f"AND labels not in "
-        f'("ymir_triaged_not_affected", "ymir_triaged_backport", "ymir_triaged_rebuild") '
+        f'("ymir_triaged_not_affected", "ymir_triaged_backport", "ymir_triaged_rebuild", '
+        f'"ymir_triaged_rebase") '
         f'AND status in ("New", "Planning")'
     )
 

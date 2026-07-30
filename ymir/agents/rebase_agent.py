@@ -399,20 +399,39 @@ async def main() -> None:
                         state.merge_request_url if state.merge_request_url else state.rebase_result.status
                     )
                     is_error = False
+                    # Post same success message to all issues
+                    all_issues = [state.jira_issue] + [item.issue_key for item in state.consolidated_issues]
+                    for issue in all_issues:
+                        await tasks.comment_in_jira(
+                            jira_issue=issue,
+                            agent_type="Rebase",
+                            comment_text=comment_text,
+                            is_error=is_error,
+                            available_tools=gateway_tools,
+                            user_triggered=user_triggered,
+                        )
                 else:
-                    comment_text = f"Agent failed to perform a rebase: {state.rebase_result.error}"
-                    is_error = True
-
-                all_issues = [state.jira_issue] + [item.issue_key for item in state.consolidated_issues]
-                for issue in all_issues:
+                    # Post detailed error to primary issue
                     await tasks.comment_in_jira(
-                        jira_issue=issue,
+                        jira_issue=state.jira_issue,
                         agent_type="Rebase",
-                        comment_text=comment_text,
-                        is_error=is_error,
+                        comment_text=f"Agent failed to perform a rebase: {state.rebase_result.error}",
+                        is_error=True,
                         available_tools=gateway_tools,
                         user_triggered=user_triggered,
                     )
+                    # Link consolidated siblings to primary issue
+                    for consolidated in state.consolidated_issues:
+                        await tasks.comment_in_jira(
+                            jira_issue=consolidated.issue_key,
+                            agent_type="Rebase",
+                            comment_text=(
+                                f"Consolidated rebase failed. See {state.jira_issue} for error details."
+                            ),
+                            is_error=True,
+                            available_tools=gateway_tools,
+                            user_triggered=user_triggered,
+                        )
                 return Workflow.END
 
             workflow.add_step("change_jira_status", change_jira_status)
@@ -539,20 +558,35 @@ async def main() -> None:
                     # user-triggered (ymir_todo) runs: a maintainer who didn't ask
                     # for processing shouldn't be notified, so skip the gateway
                     # connection entirely otherwise.
-                    if user_triggered and comment_text and not dry_run:
+                    if user_triggered and not dry_run:
                         try:
                             async with mcp_tools(
                                 os.environ["MCP_GATEWAY_URL"],
                                 call_meta={"jira_issue": rebase_data.jira_issue},
                             ) as gateway_tools:
-                                await tasks.comment_in_jira(
-                                    jira_issue=rebase_data.jira_issue,
-                                    agent_type="Rebase",
-                                    comment_text=comment_text,
-                                    available_tools=gateway_tools,
-                                    is_error=True,
-                                    user_triggered=user_triggered,
-                                )
+                                # Post detailed error to primary issue
+                                if comment_text:
+                                    await tasks.comment_in_jira(
+                                        jira_issue=rebase_data.jira_issue,
+                                        agent_type="Rebase",
+                                        comment_text=comment_text,
+                                        available_tools=gateway_tools,
+                                        is_error=True,
+                                        user_triggered=user_triggered,
+                                    )
+                                # Link consolidated siblings to primary issue
+                                for consolidated in rebase_data.consolidated_issues:
+                                    await tasks.comment_in_jira(
+                                        jira_issue=consolidated.issue_key,
+                                        agent_type="Rebase",
+                                        comment_text=(
+                                            f"Consolidated rebase failed. "
+                                            f"See {rebase_data.jira_issue} for error details."
+                                        ),
+                                        available_tools=gateway_tools,
+                                        is_error=True,
+                                        user_triggered=user_triggered,
+                                    )
                         except Exception as comment_error:
                             logger.warning(
                                 f"Failed to post final rebase failure comment for "

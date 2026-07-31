@@ -211,6 +211,9 @@ async def main() -> None:
         """
         Post link comments to consolidated siblings pointing to primary issue with error details.
 
+        Uses is_error=False so these informational links are always posted, even on automatic runs.
+        Only the detailed error on the primary issue is gated by user_triggered.
+
         Isolates errors per-sibling so a single Jira failure doesn't abort posting to other siblings.
         """
 
@@ -221,7 +224,7 @@ async def main() -> None:
                     agent_type="Rebase",
                     comment_text=f"Consolidated rebase failed. See {primary_issue} for error details.",
                     available_tools=available_tools,
-                    is_error=True,
+                    is_error=False,  # Informational link, not a noisy error notification
                     user_triggered=user_triggered,
                 )
             except Exception as e:

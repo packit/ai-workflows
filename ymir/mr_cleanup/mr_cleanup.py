@@ -7,12 +7,10 @@ Phase 1 — Stale MR cleanup:
   whose referenced Jira issues have all been closed.  No Jira labels are
   modified — metrics dashboards depend on those labels remaining in place.
 
-Phase 2 — Closed-MR Jira reset:
-  Scans closed (not merged) bot MRs and resets the corresponding
-  Jira labels so the issues accurately reflect that no active MR exists.
-  Removes automation outcome labels (ymir_backported, ymir_triaged_backport,
-  etc.) and adds ymir_mr_closed for tracking.  Does NOT add ymir_retry_needed
-  — re-processing requires manual intervention (ymir_todo).
+Phase 2 — Closed-MR Jira labelling:
+  Scans closed (not merged) bot MRs and adds ymir_mr_closed to the
+  referenced Jiras.  Existing automation labels (ymir_backported, etc.)
+  are preserved to maintain the historical trace for coverage metrics.
 """
 
 import base64
@@ -22,7 +20,6 @@ import os
 import re
 import sys
 import time
-import typing
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote as urlquote
 
@@ -52,7 +49,7 @@ MERGED_MR_LOOKBACK_DAYS = 180
 CLOSE_NOTE_MARKER = "Closing this merge request"
 
 JIRA_MR_CLOSED_LABEL = "ymir_mr_closed"
-JIRA_RESET_MR_LABEL = "ymir_jira_cleanup_processed"
+CLOSURE_HANDLED_MR_LABEL = "ymir_mr_closure_handled"
 
 
 class Action(enum.Enum):
@@ -62,8 +59,8 @@ class Action(enum.Enum):
     SKIPPED_ALREADY_CLEANED = "skipped_already_cleaned"
     ERRORED = "errored"
 
-    JIRA_RESET = "jira_reset"
-    SKIPPED_ALREADY_RESET = "skipped_already_reset"
+    JIRA_LABELED = "jira_labeled"
+    SKIPPED_ALREADY_LABELED = "skipped_already_labeled"
 
 
 def _giveup_on_permanent(e):
@@ -350,7 +347,7 @@ class MRCleanup:
                             "per_page": PER_PAGE,
                             "page": page,
                             "include_subgroups": "true",
-                            "not[labels]": JIRA_RESET_MR_LABEL,
+                            "not[labels]": CLOSURE_HANDLED_MR_LABEL,
                         },
                     )
                     if not mrs:
@@ -358,7 +355,7 @@ class MRCleanup:
                     all_mrs.extend(mrs)
                     page += 1
 
-        logger.info("Found %d closed MRs to check for Jira reset", len(all_mrs))
+        logger.info("Found %d closed MRs to check for Jira labelling", len(all_mrs))
         return all_mrs
 
     def fetch_merged_mrs(self) -> list[dict]:
@@ -424,45 +421,19 @@ class MRCleanup:
 
         return labels
 
-    JIRA_LABELS_TO_PRESERVE: typing.ClassVar[set[str]] = {
-        JIRA_MR_CLOSED_LABEL,
-        "ymir_todo",
-        "ymir_retry_needed",
-        "ymir_merged",
-        "ymir_cant_do",
-    }
-
-    def _reset_jira_labels(self, issue_key: str, current_labels: list[str]):
-        ymir_labels_to_remove = [
-            label
-            for label in current_labels
-            if label.startswith("ymir_") and label not in self.JIRA_LABELS_TO_PRESERVE
-        ]
-        already_has_closed = JIRA_MR_CLOSED_LABEL in current_labels
-
-        if not ymir_labels_to_remove and already_has_closed:
+    def _mark_jira_mr_closed(self, issue_key: str, current_labels: list[str]):
+        if JIRA_MR_CLOSED_LABEL in current_labels:
             return False
 
-        update_ops = [{"remove": label} for label in ymir_labels_to_remove]
-        if not already_has_closed:
-            update_ops.append({"add": JIRA_MR_CLOSED_LABEL})
-
         if self.dry_run:
-            logger.info(
-                "DRY_RUN: would update Jira %s — remove %s, add %s",
-                issue_key,
-                ymir_labels_to_remove,
-                [] if already_has_closed else [JIRA_MR_CLOSED_LABEL],
-            )
+            logger.info("DRY_RUN: would add %s to %s", JIRA_MR_CLOSED_LABEL, issue_key)
             return True
 
-        self._jira_put(f"issue/{issue_key}", json={"update": {"labels": update_ops}})
-        logger.info(
-            "Reset Jira %s — removed %s, added %s",
-            issue_key,
-            ymir_labels_to_remove,
-            [] if already_has_closed else [JIRA_MR_CLOSED_LABEL],
+        self._jira_put(
+            f"issue/{issue_key}",
+            json={"update": {"labels": [{"add": JIRA_MR_CLOSED_LABEL}]}},
         )
+        logger.info("Added %s to %s", JIRA_MR_CLOSED_LABEL, issue_key)
         return True
 
     def process_rejected_mr(
@@ -473,17 +444,17 @@ class MRCleanup:
         skip_jira_keys: set[str],
     ) -> tuple[Action, set[str]]:
         mr_url = mr["web_url"]
-        reset_keys: set[str] = set()
+        labeled_keys: set[str] = set()
 
         if not jira_keys:
             logger.info("No Jira keys found in closed MR %s — marking as processed", mr_url)
-            self._add_label(mr, JIRA_RESET_MR_LABEL)
-            return Action.SKIPPED_NO_JIRA, reset_keys
+            self._add_label(mr, CLOSURE_HANDLED_MR_LABEL)
+            return Action.SKIPPED_NO_JIRA, labeled_keys
 
         had_errors = False
         for key in sorted(jira_keys):
             if key in skip_jira_keys:
-                logger.info("Skipping %s — referenced by an open/merged MR or already reset", key)
+                logger.info("Skipping %s — referenced by an open/merged MR or already labeled", key)
                 continue
             current_labels = jira_labels.get(key)
             if current_labels is not None and "ymir_merged" in current_labels:
@@ -494,19 +465,19 @@ class MRCleanup:
                 had_errors = True
                 continue
             try:
-                if self._reset_jira_labels(key, current_labels):
-                    reset_keys.add(key)
+                if self._mark_jira_mr_closed(key, current_labels):
+                    labeled_keys.add(key)
             except Exception:
-                logger.exception("Failed to reset labels for %s (MR %s)", key, mr_url)
+                logger.exception("Failed to label %s (MR %s)", key, mr_url)
                 had_errors = True
 
         if not had_errors:
-            self._add_label(mr, JIRA_RESET_MR_LABEL)
+            self._add_label(mr, CLOSURE_HANDLED_MR_LABEL)
 
-        if reset_keys:
-            return Action.JIRA_RESET, reset_keys
+        if labeled_keys:
+            return Action.JIRA_LABELED, labeled_keys
 
-        return Action.SKIPPED_ALREADY_RESET, reset_keys
+        return Action.SKIPPED_ALREADY_LABELED, labeled_keys
 
     def run(self):
         logger.info("Starting MR cleanup")
@@ -601,8 +572,8 @@ class MRCleanup:
                 if keys is None:
                     action = Action.ERRORED
                 else:
-                    action, reset_keys = self.process_rejected_mr(mr, keys, jira_labels, skip_jira_keys)
-                    skip_jira_keys.update(reset_keys)
+                    action, labeled_keys = self.process_rejected_mr(mr, keys, jira_labels, skip_jira_keys)
+                    skip_jira_keys.update(labeled_keys)
             except Exception:
                 logger.exception("Failed to process closed MR %s", mr.get("web_url", mr.get("id")))
                 action = Action.ERRORED

@@ -73,10 +73,10 @@ flowchart TD
 | `ymir_triaged_rebase` | Triage resolves as rebase | On retry (all labels cleared) | `ymir_rebased` or `ymir_rebase_failed` |
 | `ymir_triaged_backport` | Triage resolves as backport | On retry (all labels cleared) | `ymir_backported` or `ymir_backport_failed` |
 | `ymir_triaged` | Triage resolves as open-ended-analysis | On retry (all labels cleared) | Terminal state |
-| `ymir_rebased` | Rebase success | MR closed (→ `ymir_mr_closed`) or on retry | `ymir_merged` |
-| `ymir_backported` | Backport success | MR closed (→ `ymir_mr_closed`) or on retry | `ymir_merged` |
+| `ymir_rebased` | Rebase success | On retry (all labels cleared) | `ymir_merged` |
+| `ymir_backported` | Backport success | On retry (all labels cleared) | `ymir_merged` |
 | `ymir_merged` | MR merged | Never | Final state |
-| `ymir_mr_closed` | MR closed without merge | On retry (all labels cleared) | Dormant — human adds `ymir_todo` to re-trigger |
+| `ymir_mr_closed` | MR closed without merge (additive, existing labels preserved) | On retry (all labels cleared) | Dormant — human adds `ymir_todo` to re-trigger |
 
 ### Error Labels
 
@@ -108,7 +108,7 @@ These labels are applied to GitLab merge requests (not Jira issues):
 | `ymir_backport` | Marks an MR as a backport | Used by the consolidation agent to discover candidate MRs |
 | `ymir_rebuild` | Marks an MR as a rebuild | Used by the consolidation agent to discover rebuild MRs for backport+rebuild consolidation |
 | `ymir_consolidated` | Marks an MR that has been folded into a consolidated MR | The MR stays open but is excluded from future consolidation searches |
-| `ymir_jira_cleanup_processed` | Marks a closed MR that Phase 2 has processed | Prevents the mr-cleanup script from re-processing the same MR |
+| `ymir_mr_closure_handled` | Marks a closed MR that Phase 2 has processed | Prevents the mr-cleanup script from re-processing the same MR |
 
 ## Queue Types Summary
 

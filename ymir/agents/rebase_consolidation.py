@@ -19,7 +19,7 @@ from ymir.common.models import (
     RebaseData,
     TriageEligibility,
 )
-from ymir.common.version_utils import get_fix_version_variants
+from ymir.common.version_utils import compare_versions, get_fix_version_variants
 
 logger = logging.getLogger(__name__)
 
@@ -150,30 +150,32 @@ async def find_rebase_siblings(
             )
             analysis = SiblingRebaseAnalysis.model_validate_json(response.last_message.text)
 
-            if analysis.requires_same_rebase and analysis.target_version == rebase_data.version:
-                logger.info(
-                    f"Sibling {candidate_key} confirmed as requiring rebase to {analysis.target_version}"
-                )
-                cve_id = analysis.cve_id
-                cve_info = f" [{cve_id}]" if cve_id else ""
-                summary_lines.append(
-                    f"* {candidate_key}{cve_info} — included (target: {analysis.target_version})"
-                )
-                consolidated.append(
-                    ConsolidatedIssue(
-                        issue_key=candidate_key,
-                        dependency_issue=None,
-                        dependency_component=None,
+            if analysis.requires_same_rebase:
+                cmp_result = compare_versions(analysis.target_version, rebase_data.version)
+                if cmp_result == 0:
+                    logger.info(
+                        f"Sibling {candidate_key} confirmed as requiring rebase to {analysis.target_version}"
                     )
-                )
-            elif analysis.requires_same_rebase and analysis.target_version != rebase_data.version:
-                logger.info(
-                    f"Sibling {candidate_key} requires different version: "
-                    f"{analysis.target_version} != {rebase_data.version}"
-                )
-                summary_lines.append(
-                    f"* {candidate_key} — excluded (different target version: {analysis.target_version})"
-                )
+                    cve_id = analysis.cve_id
+                    cve_info = f" [{cve_id}]" if cve_id else ""
+                    summary_lines.append(
+                        f"* {candidate_key}{cve_info} — included (target: {analysis.target_version})"
+                    )
+                    consolidated.append(
+                        ConsolidatedIssue(
+                            issue_key=candidate_key,
+                            dependency_issue=None,
+                            dependency_component=None,
+                        )
+                    )
+                else:
+                    logger.info(
+                        f"Sibling {candidate_key} requires different version: "
+                        f"{analysis.target_version} != {rebase_data.version}"
+                    )
+                    summary_lines.append(
+                        f"* {candidate_key} — excluded (different target version: {analysis.target_version})"
+                    )
             else:
                 logger.info(f"Sibling {candidate_key} does not require a rebase")
                 summary_lines.append(f"* {candidate_key} — excluded (not a rebase)")

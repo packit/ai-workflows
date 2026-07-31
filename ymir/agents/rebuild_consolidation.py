@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_applicability_agent
 from ymir.agents.reasoning_agent import ReasoningAgent
+from ymir.agents.rebase_consolidation import build_siblings_jql
 from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
@@ -15,6 +16,7 @@ from ymir.agents.utils import (
     is_reasoning_enabled,
     run_tool,
 )
+from ymir.common.constants import JiraLabels
 from ymir.common.models import (
     ApplicabilityResult,
     ConsolidatedIssue,
@@ -24,7 +26,6 @@ from ymir.common.models import (
     TriageEligibility,
 )
 from ymir.common.utils import FIXED_IN_BUILD_CUSTOM_FIELD, check_build_in_buildroot
-from ymir.common.version_utils import get_fix_version_variants
 
 logger = logging.getLogger(__name__)
 
@@ -34,20 +35,16 @@ def build_rebuild_siblings_jql(
     component: str,
     fix_version: str,
 ) -> str:
-    escaped_component = component.replace('"', '\\"')
-
-    variants = get_fix_version_variants(fix_version)
-    quoted = ", ".join(f'"{v}"' for v in variants)
-    version_clause = f"fixVersion in ({quoted})"
-
-    return (
-        f'project = RHEL AND component = "{escaped_component}" '
-        f"AND {version_clause} "
-        f'AND key != "{issue_key}" '
-        f'AND labels = "SecurityTracking" '
-        f"AND labels not in "
-        f'("ymir_triaged_not_affected", "ymir_triaged_backport", "ymir_triaged_rebase") '
-        f'AND status in ("New", "Planning")'
+    """Build JQL query to find rebuild sibling candidates."""
+    return build_siblings_jql(
+        issue_key=issue_key,
+        component=component,
+        fix_version=fix_version,
+        excluded_labels=[
+            JiraLabels.TRIAGED_NOT_AFFECTED.value,
+            JiraLabels.TRIAGED_BACKPORT.value,
+            JiraLabels.TRIAGED_REBASE.value,
+        ],
     )
 
 

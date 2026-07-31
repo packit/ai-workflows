@@ -14,6 +14,7 @@ from ymir.agents.utils import (
     is_reasoning_enabled,
     run_tool,
 )
+from ymir.common.constants import JiraLabels
 from ymir.common.models import (
     ConsolidatedIssue,
     CVEEligibilityResult,
@@ -25,26 +26,59 @@ from ymir.common.version_utils import compare_versions, get_fix_version_variants
 logger = logging.getLogger(__name__)
 
 
-def build_rebase_siblings_jql(
+def build_siblings_jql(
     issue_key: str,
     component: str,
     fix_version: str,
+    excluded_labels: list[str],
 ) -> str:
+    """
+    Build JQL query to find sibling issues for consolidation.
+
+    Args:
+        issue_key: Primary issue key to exclude from results
+        component: Package component name
+        fix_version: Fix version to match (supports variants)
+        excluded_labels: Jira labels to exclude (e.g., terminal triage labels)
+
+    Returns:
+        JQL query string
+    """
     escaped_component = component.replace('"', '\\"')
 
     variants = get_fix_version_variants(fix_version)
     quoted = ", ".join(f'"{v}"' for v in variants)
     version_clause = f"fixVersion in ({quoted})"
 
+    excluded = ", ".join(f'"{label}"' for label in excluded_labels)
+
     return (
         f'project = RHEL AND component = "{escaped_component}" '
         f"AND {version_clause} "
         f'AND key != "{issue_key}" '
         f'AND labels = "SecurityTracking" '
-        f"AND labels not in "
-        f'("ymir_triaged_not_affected", "ymir_triaged_backport", "ymir_triaged_rebuild", '
-        f'"ymir_triaged_rebase", "ymir_triaged_postponed") '
+        f"AND labels not in ({excluded}) "
         f'AND status in ("New", "Planning")'
+    )
+
+
+def build_rebase_siblings_jql(
+    issue_key: str,
+    component: str,
+    fix_version: str,
+) -> str:
+    """Build JQL query to find rebase sibling candidates."""
+    return build_siblings_jql(
+        issue_key=issue_key,
+        component=component,
+        fix_version=fix_version,
+        excluded_labels=[
+            JiraLabels.TRIAGED_NOT_AFFECTED.value,
+            JiraLabels.TRIAGED_BACKPORT.value,
+            JiraLabels.TRIAGED_REBUILD.value,
+            JiraLabels.TRIAGED_REBASE.value,
+            JiraLabels.TRIAGED_POSTPONED.value,
+        ],
     )
 
 

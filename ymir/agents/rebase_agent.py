@@ -149,6 +149,29 @@ async def main() -> None:
         all_files_git_to_add: set[str] = Field(default_factory=set)
         abandon_autorelease: bool = Field(default=False)
 
+    async def update_labels_for_all_issues(
+        primary_issue: str,
+        consolidated_issues: list[ConsolidatedIssue],
+        labels_to_add: list[str],
+        labels_to_remove: list[str],
+        dry_run: bool,
+        user_triggered: bool,
+    ) -> None:
+        """Update Jira labels for primary issue and all consolidated siblings in parallel."""
+        all_issues = [primary_issue] + [item.issue_key for item in consolidated_issues]
+        await asyncio.gather(
+            *[
+                tasks.set_jira_labels(
+                    jira_issue=issue,
+                    labels_to_add=labels_to_add,
+                    labels_to_remove=labels_to_remove,
+                    dry_run=dry_run,
+                    user_triggered=user_triggered,
+                )
+                for issue in all_issues
+            ]
+        )
+
     async def post_failure_comments_to_consolidated_siblings(
         primary_issue: str,
         consolidated_issues: list[ConsolidatedIssue],
@@ -557,21 +580,14 @@ async def main() -> None:
                         f"Task failed after {max_retries} attempts, "
                         f"moving to error list: {rebase_data.jira_issue}"
                     )
-                    # Label all consolidated issues with error status in parallel
-                    all_issues = [rebase_data.jira_issue] + [
-                        item.issue_key for item in rebase_data.consolidated_issues
-                    ]
-                    await asyncio.gather(
-                        *[
-                            tasks.set_jira_labels(
-                                jira_issue=issue,
-                                labels_to_add=[JiraLabels.REBASE_ERRORED.value],
-                                labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
-                                dry_run=dry_run,
-                                user_triggered=user_triggered,
-                            )
-                            for issue in all_issues
-                        ]
+                    # Label all consolidated issues with error status
+                    await update_labels_for_all_issues(
+                        primary_issue=rebase_data.jira_issue,
+                        consolidated_issues=rebase_data.consolidated_issues,
+                        labels_to_add=[JiraLabels.REBASE_ERRORED.value],
+                        labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
+                        dry_run=dry_run,
+                        user_triggered=user_triggered,
                     )
                     # Post failure feedback to Jira once, here on the final attempt
                     # only — never for intermediate retries. Restricted to
@@ -654,24 +670,17 @@ async def main() -> None:
             else:
                 if state.rebase_result.success:
                     logger.info(f"Rebase successful for {rebase_data.jira_issue}, adding to completed list")
-                    all_issues = [rebase_data.jira_issue] + [
-                        item.issue_key for item in rebase_data.consolidated_issues
-                    ]
-                    await asyncio.gather(
-                        *[
-                            tasks.set_jira_labels(
-                                jira_issue=issue,
-                                labels_to_add=[JiraLabels.REBASED.value],
-                                labels_to_remove=[
-                                    JiraLabels.TRIAGED_REBASE.value,
-                                    JiraLabels.REBASE_ERRORED.value,
-                                    JiraLabels.REBASE_FAILED.value,
-                                ],
-                                dry_run=dry_run,
-                                user_triggered=user_triggered,
-                            )
-                            for issue in all_issues
-                        ]
+                    await update_labels_for_all_issues(
+                        primary_issue=rebase_data.jira_issue,
+                        consolidated_issues=rebase_data.consolidated_issues,
+                        labels_to_add=[JiraLabels.REBASED.value],
+                        labels_to_remove=[
+                            JiraLabels.TRIAGED_REBASE.value,
+                            JiraLabels.REBASE_ERRORED.value,
+                            JiraLabels.REBASE_FAILED.value,
+                        ],
+                        dry_run=dry_run,
+                        user_triggered=user_triggered,
                     )
                     await fix_await(
                         redis.lpush(
@@ -681,21 +690,14 @@ async def main() -> None:
                     )
                 else:
                     logger.warning(f"Rebase failed for {rebase_data.jira_issue}: {state.rebase_result.error}")
-                    # Label all consolidated issues with failure status in parallel
-                    all_issues = [rebase_data.jira_issue] + [
-                        item.issue_key for item in rebase_data.consolidated_issues
-                    ]
-                    await asyncio.gather(
-                        *[
-                            tasks.set_jira_labels(
-                                jira_issue=issue,
-                                labels_to_add=[JiraLabels.REBASE_FAILED.value],
-                                labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
-                                dry_run=dry_run,
-                                user_triggered=user_triggered,
-                            )
-                            for issue in all_issues
-                        ]
+                    # Label all consolidated issues with failure status
+                    await update_labels_for_all_issues(
+                        primary_issue=rebase_data.jira_issue,
+                        consolidated_issues=rebase_data.consolidated_issues,
+                        labels_to_add=[JiraLabels.REBASE_FAILED.value],
+                        labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
+                        dry_run=dry_run,
+                        user_triggered=user_triggered,
                     )
                     # No comment_text here: the in-workflow comment_in_jira step has
                     # already posted the failure feedback for this graceful path.

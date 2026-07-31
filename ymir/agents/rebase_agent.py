@@ -415,17 +415,21 @@ async def main() -> None:
                         state.merge_request_url if state.merge_request_url else state.rebase_result.status
                     )
                     is_error = False
-                    # Post same success message to all issues
+                    # Post same success message to all issues in parallel
                     all_issues = [state.jira_issue] + [item.issue_key for item in state.consolidated_issues]
-                    for issue in all_issues:
-                        await tasks.comment_in_jira(
-                            jira_issue=issue,
-                            agent_type="Rebase",
-                            comment_text=comment_text,
-                            is_error=is_error,
-                            available_tools=gateway_tools,
-                            user_triggered=user_triggered,
-                        )
+                    await asyncio.gather(
+                        *[
+                            tasks.comment_in_jira(
+                                jira_issue=issue,
+                                agent_type="Rebase",
+                                comment_text=comment_text,
+                                is_error=is_error,
+                                available_tools=gateway_tools,
+                                user_triggered=user_triggered,
+                            )
+                            for issue in all_issues
+                        ]
+                    )
                 else:
                     # Post detailed error to primary issue
                     await tasks.comment_in_jira(
@@ -552,18 +556,22 @@ async def main() -> None:
                         f"Task failed after {max_retries} attempts, "
                         f"moving to error list: {rebase_data.jira_issue}"
                     )
-                    # Label all consolidated issues with error status so they can be re-triaged
+                    # Label all consolidated issues with error status in parallel
                     all_issues = [rebase_data.jira_issue] + [
                         item.issue_key for item in rebase_data.consolidated_issues
                     ]
-                    for issue in all_issues:
-                        await tasks.set_jira_labels(
-                            jira_issue=issue,
-                            labels_to_add=[JiraLabels.REBASE_ERRORED.value],
-                            labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
-                            dry_run=dry_run,
-                            user_triggered=user_triggered,
-                        )
+                    await asyncio.gather(
+                        *[
+                            tasks.set_jira_labels(
+                                jira_issue=issue,
+                                labels_to_add=[JiraLabels.REBASE_ERRORED.value],
+                                labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
+                                dry_run=dry_run,
+                                user_triggered=user_triggered,
+                            )
+                            for issue in all_issues
+                        ]
+                    )
                     # Post failure feedback to Jira once, here on the final attempt
                     # only — never for intermediate retries. Restricted to
                     # user-triggered (ymir_todo) runs: a maintainer who didn't ask
@@ -636,18 +644,22 @@ async def main() -> None:
                     all_issues = [rebase_data.jira_issue] + [
                         item.issue_key for item in rebase_data.consolidated_issues
                     ]
-                    for issue in all_issues:
-                        await tasks.set_jira_labels(
-                            jira_issue=issue,
-                            labels_to_add=[JiraLabels.REBASED.value],
-                            labels_to_remove=[
-                                JiraLabels.TRIAGED_REBASE.value,
-                                JiraLabels.REBASE_ERRORED.value,
-                                JiraLabels.REBASE_FAILED.value,
-                            ],
-                            dry_run=dry_run,
-                            user_triggered=user_triggered,
-                        )
+                    await asyncio.gather(
+                        *[
+                            tasks.set_jira_labels(
+                                jira_issue=issue,
+                                labels_to_add=[JiraLabels.REBASED.value],
+                                labels_to_remove=[
+                                    JiraLabels.TRIAGED_REBASE.value,
+                                    JiraLabels.REBASE_ERRORED.value,
+                                    JiraLabels.REBASE_FAILED.value,
+                                ],
+                                dry_run=dry_run,
+                                user_triggered=user_triggered,
+                            )
+                            for issue in all_issues
+                        ]
+                    )
                     await fix_await(
                         redis.lpush(
                             RedisQueues.COMPLETED_REBASE_LIST.value,
@@ -656,18 +668,22 @@ async def main() -> None:
                     )
                 else:
                     logger.warning(f"Rebase failed for {rebase_data.jira_issue}: {state.rebase_result.error}")
-                    # Label all consolidated issues with failure status so they can be re-triaged
+                    # Label all consolidated issues with failure status in parallel
                     all_issues = [rebase_data.jira_issue] + [
                         item.issue_key for item in rebase_data.consolidated_issues
                     ]
-                    for issue in all_issues:
-                        await tasks.set_jira_labels(
-                            jira_issue=issue,
-                            labels_to_add=[JiraLabels.REBASE_FAILED.value],
-                            labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
-                            dry_run=dry_run,
-                            user_triggered=user_triggered,
-                        )
+                    await asyncio.gather(
+                        *[
+                            tasks.set_jira_labels(
+                                jira_issue=issue,
+                                labels_to_add=[JiraLabels.REBASE_FAILED.value],
+                                labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
+                                dry_run=dry_run,
+                                user_triggered=user_triggered,
+                            )
+                            for issue in all_issues
+                        ]
+                    )
                     # No comment_text here: the in-workflow comment_in_jira step has
                     # already posted the failure feedback for this graceful path.
                     # Only the crash path (which never reaches that step) passes

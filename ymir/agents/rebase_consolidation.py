@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from textwrap import dedent
 
@@ -104,10 +105,9 @@ async def find_rebase_siblings(
     logger.info(f"Analyzing {len(candidates)} sibling candidates for {jira_issue}")
 
     analysis_tools = [t for t in available_tools if t.name in ["get_jira_details", "search_jira_issues"]]
-    consolidated: list[ConsolidatedIssue] = []
-    summary_lines: list[str] = []
 
-    for candidate in candidates:
+    async def analyze_candidate(candidate: dict) -> tuple[ConsolidatedIssue | None, str]:
+        """Analyze a single candidate sibling for consolidation eligibility."""
         candidate_key = candidate.get("key", "")
         try:
             eligibility_result = CVEEligibilityResult.model_validate(
@@ -119,14 +119,10 @@ async def find_rebase_siblings(
             )
             if eligibility_result.eligibility != TriageEligibility.IMMEDIATELY:
                 logger.info(f"Sibling {candidate_key} not eligible: {eligibility_result.reason}")
-                summary_lines.append(
-                    f"* {candidate_key} — excluded (not eligible: {eligibility_result.reason})"
-                )
-                continue
+                return None, f"* {candidate_key} — excluded (not eligible: {eligibility_result.reason})"
         except Exception as e:
             logger.warning(f"Failed to check eligibility for sibling {candidate_key}: {e}")
-            summary_lines.append(f"* {candidate_key} — excluded (eligibility check failed)")
-            continue
+            return None, f"* {candidate_key} — excluded (eligibility check failed)"
 
         try:
             analysis_agent = ReasoningAgent(
@@ -158,30 +154,39 @@ async def find_rebase_siblings(
                     )
                     cve_id = analysis.cve_id
                     cve_info = f" [{cve_id}]" if cve_id else ""
-                    summary_lines.append(
-                        f"* {candidate_key}{cve_info} — included (target: {analysis.target_version})"
+                    consolidated_issue = ConsolidatedIssue(
+                        issue_key=candidate_key,
+                        dependency_issue=None,
+                        dependency_component=None,
                     )
-                    consolidated.append(
-                        ConsolidatedIssue(
-                            issue_key=candidate_key,
-                            dependency_issue=None,
-                            dependency_component=None,
-                        )
+                    return (
+                        consolidated_issue,
+                        f"* {candidate_key}{cve_info} — included (target: {analysis.target_version})",
                     )
-                else:
-                    logger.info(
-                        f"Sibling {candidate_key} requires different version: "
-                        f"{analysis.target_version} != {rebase_data.version}"
-                    )
-                    summary_lines.append(
-                        f"* {candidate_key} — excluded (different target version: {analysis.target_version})"
-                    )
-            else:
-                logger.info(f"Sibling {candidate_key} does not require a rebase")
-                summary_lines.append(f"* {candidate_key} — excluded (not a rebase)")
+                logger.info(
+                    f"Sibling {candidate_key} requires different version: "
+                    f"{analysis.target_version} != {rebase_data.version}"
+                )
+                return (
+                    None,
+                    f"* {candidate_key} — excluded (different target version: {analysis.target_version})",
+                )
+            logger.info(f"Sibling {candidate_key} does not require a rebase")
+            return None, f"* {candidate_key} — excluded (not a rebase)"
         except Exception as e:
             logger.warning(f"Failed to analyze sibling {candidate_key}: {e}")
-            summary_lines.append(f"* {candidate_key} — excluded (analysis failed)")
+            return None, f"* {candidate_key} — excluded (analysis failed)"
+
+    # Analyze all candidates in parallel
+    results = await asyncio.gather(*[analyze_candidate(c) for c in candidates])
+
+    # Collect consolidated issues and summary lines
+    consolidated: list[ConsolidatedIssue] = []
+    summary_lines: list[str] = []
+    for issue, summary_line in results:
+        if issue:
+            consolidated.append(issue)
+        summary_lines.append(summary_line)
 
     if consolidated:
         logger.info(f"Consolidated {len(consolidated)} sibling(s) into rebase for {jira_issue}")

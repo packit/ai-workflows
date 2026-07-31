@@ -50,11 +50,25 @@ class RedisQueues(Enum):
     # Redis Hash for MR consolidation queue (not a list — uses hash fields
     # with at-most-one-active/one-pending semantics per package-branch pair).
     MERGE_CONSOLIDATION_QUEUE = "merge_consolidation_queue"
+    REPRODUCER_QUEUE = "reproducer_queue"
+    REPRODUCER_QUEUE_TODO = "reproducer_queue_todo"
+    COMPLETED_REPRODUCER_LIST = "completed_reproducer_list"
+    # Redis ZSET (score = unix ready-time) for delayed reproducer retries.
+    # Not a BRPOP list — excluded from all_queues().
+    REPRODUCER_DELAYED_QUEUE = "reproducer_queue_delayed"
 
     @classmethod
     def all_queues(cls) -> set[str]:
-        """Return all Redis list queue names (excludes Hash-based keys like the consolidation queue)."""
-        return {q.value for q in cls if q is not cls.MERGE_CONSOLIDATION_QUEUE}
+        """Return all Redis list queue names (excludes Hash/ZSET keys)."""
+        return {
+            q.value
+            for q in cls
+            if q
+            not in (
+                cls.MERGE_CONSOLIDATION_QUEUE,
+                cls.REPRODUCER_DELAYED_QUEUE,
+            )
+        }
 
     @classmethod
     def input_queues(cls) -> set[str]:
@@ -77,6 +91,8 @@ class RedisQueues(Enum):
             cls.CLARIFICATION_NEEDED_QUEUE.value,
             cls.REBASE_QUEUE.value,
             cls.BACKPORT_QUEUE.value,
+            cls.REPRODUCER_QUEUE.value,
+            cls.REPRODUCER_QUEUE_TODO.value,
         }
 
     @classmethod
@@ -88,6 +104,7 @@ class RedisQueues(Enum):
             cls.COMPLETED_REBASE_LIST.value,
             cls.COMPLETED_BACKPORT_LIST.value,
             cls.COMPLETED_REBUILD_LIST.value,
+            cls.COMPLETED_REPRODUCER_LIST.value,
             cls.POSTPONED_LIST.value,
         }
 
@@ -127,6 +144,11 @@ class RedisQueues(Enum):
         return cls.priority_twin(base) if user_triggered else base
 
     @classmethod
+    def get_reproducer_queue(cls, user_triggered: bool = False) -> str:
+        """Return reproducer queue; the priority twin if user-triggered."""
+        return cls.REPRODUCER_QUEUE_TODO.value if user_triggered else cls.REPRODUCER_QUEUE.value
+
+    @classmethod
     def _use_c9s_branch(cls, branch: str) -> bool:
         """Check if branch should use c9s container"""
         branch_lower = branch.lower()
@@ -158,6 +180,12 @@ class JiraLabels(Enum):
     REBASE_FAILED = "ymir_rebase_failed"
     BACKPORT_FAILED = "ymir_backport_failed"
     REBUILD_FAILED = "ymir_rebuild_failed"
+    REPRODUCER_IN_PROGRESS = "ymir_reproducer_in_progress"
+    REPRODUCER_CREATED = "ymir_reproducer_created"
+    REPRODUCER_FAILED = "ymir_reproducer_failed"
+    REPRODUCER_ERRORED = "ymir_reproducer_errored"
+    REPRODUCER_NOT_REPRODUCIBLE = "ymir_reproducer_not_reproducible"
+    REPRODUCER_ALREADY_EXISTS = "ymir_reproducer_already_exists"
 
     TRIAGED_POSTPONED = "ymir_triaged_postponed"
     TRIAGED_NOT_AFFECTED = "ymir_triaged_not_affected"

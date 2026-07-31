@@ -11,6 +11,8 @@ from ymir.common.models import (
     PostponedData,
     RebaseData,
     RebuildData,
+    ReproducerInputSchema,
+    ReproducerOutputSchema,
     Resolution,
     TriageOutputSchema,
 )
@@ -450,3 +452,190 @@ def test_backport_formatting_without_triage_summary():
     comment = result.format_for_comment()
     assert "*Triage Reasoning*" not in comment
     assert "*Justification*: Fixes the bug in bind.c" in comment
+
+
+# --- ReproducerInputSchema / ReproducerOutputSchema tests ---
+
+
+def test_reproducer_input_minimal():
+    """Create with only required field (jira_issue), verify optional fields default to None."""
+    data = ReproducerInputSchema(jira_issue="RHEL-99999")
+    assert data.jira_issue == "RHEL-99999"
+    assert data.package is None
+    assert data.cve_id is None
+    assert data.patch_urls is None
+    assert data.triage_summary is None
+    assert data.fix_version is None
+    assert data.target_branch is None
+
+
+def test_reproducer_input_full():
+    """Create with all fields populated, verify values."""
+    data = ReproducerInputSchema(
+        jira_issue="RHEL-11111",
+        package="openssl",
+        cve_id="CVE-2025-9999",
+        patch_urls=[
+            "https://github.com/openssl/openssl/commit/abc123.patch",
+            "https://github.com/openssl/openssl/commit/def456.patch",
+        ],
+        triage_summary="Buffer overflow in TLS handshake parsing.",
+        fix_version="rhel-9.8",
+        target_branch="rhel-9.8.0",
+    )
+    assert data.jira_issue == "RHEL-11111"
+    assert data.package == "openssl"
+    assert data.cve_id == "CVE-2025-9999"
+    assert data.patch_urls == [
+        "https://github.com/openssl/openssl/commit/abc123.patch",
+        "https://github.com/openssl/openssl/commit/def456.patch",
+    ]
+    assert data.triage_summary == "Buffer overflow in TLS handshake parsing."
+    assert data.fix_version == "rhel-9.8"
+    assert data.target_branch == "rhel-9.8.0"
+
+
+def test_reproducer_output_success():
+    """Create a successful reproducer output with test_mr_url set."""
+    data = ReproducerOutputSchema(
+        jira_issue="RHEL-11111",
+        success=True,
+        reproducer_type="cve",
+        package="openssl",
+        compose="RHEL-9.8.0-Nightly",
+        arch="x86_64",
+        test_directory="Security/CVE-2025-11111",
+        test_mr_url="https://gitlab.com/tests/openssl/-/merge_requests/42",
+        testing_farm_request_id="tf-req-abc123",
+        pass_fail_criteria=(
+            "Test triggers the buffer overflow on unpatched build and passes on patched build."
+        ),
+        summary="Reproducer created and submitted to Testing Farm.",
+    )
+    assert data.success is True
+    assert data.reproducer_type == "cve"
+    assert data.package == "openssl"
+    assert data.compose == "RHEL-9.8.0-Nightly"
+    assert data.arch == "x86_64"
+    assert data.test_directory == "Security/CVE-2025-11111"
+    assert data.test_mr_url == "https://gitlab.com/tests/openssl/-/merge_requests/42"
+    assert data.testing_farm_request_id == "tf-req-abc123"
+    assert data.not_reproducible_reason is None
+
+
+def test_reproducer_output_not_reproducible():
+    """Create with success=False and not_reproducible_reason set."""
+    data = ReproducerOutputSchema(
+        jira_issue="RHEL-22222",
+        success=False,
+        reproducer_type="bug",
+        package="libfoo",
+        compose="RHEL-10.1.0-Nightly",
+        arch="x86_64",
+        test_directory="Regression/RHEL-22222",
+        pass_fail_criteria="Expected segfault when processing crafted input.",
+        summary="Could not reproduce the reported crash.",
+        not_reproducible_reason="The vulnerable code path is not reachable with the shipped configuration.",
+    )
+    assert data.success is False
+    assert data.reproducer_type == "bug"
+    assert data.package == "libfoo"
+    assert data.test_directory == "Regression/RHEL-22222"
+    assert data.test_mr_url is None
+    assert data.testing_farm_request_id is None
+    assert data.not_reproducible_reason == (
+        "The vulnerable code path is not reachable with the shipped configuration."
+    )
+    assert data.adapted_existing is False
+    assert data.lock_deferred is False
+    assert data.existing_mr_url is None
+
+
+def test_not_affected_data_preserves_handoff_fields():
+    data = NotAffectedData(
+        justification_category="Vulnerable Code not Present",
+        explanation="Not in tree",
+        jira_issue="RHEL-1",
+        package="bind",
+        cve_id="CVE-2025-1",
+        fix_version="rhel-10.1",
+        triage_summary="checked",
+        patch_urls=["https://example.com/a.patch"],
+    )
+    assert data.package == "bind"
+    assert data.cve_id == "CVE-2025-1"
+    assert data.patch_urls == ["https://example.com/a.patch"]
+
+
+def test_reproducer_output_test_already_exists():
+    """Create output indicating a test already exists in the repo."""
+    data = ReproducerOutputSchema(
+        jira_issue="RHEL-44444",
+        success=False,
+        reproducer_type="bug",
+        package="libxml2",
+        pass_fail_criteria="N/A — existing test found, no new reproducer needed.",
+        summary="Test already exists in the tests repository at Regression/RHEL-44444/.",
+        test_already_exists=True,
+    )
+    assert data.success is False
+    assert data.test_already_exists is True
+    assert data.compose is None
+    assert data.arch is None
+    assert data.testing_farm_request_id is None
+    assert data.not_reproducible_reason is None
+
+
+def test_reproducer_output_roundtrip():
+    """Serialize to JSON and back, verify all fields survive."""
+    original = ReproducerOutputSchema(
+        jira_issue="RHEL-33333",
+        success=True,
+        reproducer_type="cve",
+        package="curl",
+        compose="RHEL-9.8.0-Nightly",
+        arch="x86_64",
+        test_directory="Security/CVE-2025-33333",
+        test_mr_url="https://gitlab.com/tests/curl/-/merge_requests/7",
+        testing_farm_request_id="tf-req-xyz789",
+        pass_fail_criteria="Exploit PoC returns exit code 1 on vulnerable build, 0 on fixed.",
+        summary="CVE reproducer submitted successfully.",
+        not_reproducible_reason=None,
+    )
+    json_str = original.model_dump_json()
+    restored = ReproducerOutputSchema.model_validate_json(json_str)
+    assert restored.jira_issue == original.jira_issue
+    assert restored.success == original.success
+    assert restored.reproducer_type == original.reproducer_type
+    assert restored.package == original.package
+    assert restored.compose == original.compose
+    assert restored.arch == original.arch
+    assert restored.test_directory == original.test_directory
+    assert restored.test_mr_url == original.test_mr_url
+    assert restored.testing_farm_request_id == original.testing_farm_request_id
+    assert restored.pass_fail_criteria == original.pass_fail_criteria
+    assert restored.summary == original.summary
+    assert restored.not_reproducible_reason is None
+    assert restored.test_already_exists is False
+    assert restored.retryable_error is False
+
+
+def test_reproducer_output_retryable_error():
+    """TF/infra failure sets retryable_error without marking not-reproducible."""
+    data = ReproducerOutputSchema(
+        jira_issue="RHEL-55555",
+        success=False,
+        reproducer_type="cve",
+        package="expat",
+        compose="RHEL-10.1-Nightly",
+        arch="x86_64",
+        pass_fail_criteria="N/A — Testing Farm provisioning failed.",
+        summary="Testing Farm reservation timed out; ssh_connection never became available.",
+        retryable_error=True,
+    )
+    assert data.success is False
+    assert data.retryable_error is True
+    assert data.not_reproducible_reason is None
+    assert data.test_already_exists is False
+    restored = ReproducerOutputSchema.model_validate_json(data.model_dump_json())
+    assert restored.retryable_error is True

@@ -1,4 +1,7 @@
+import asyncio
 import json
+import logging
+import os
 import uuid
 from collections.abc import Sequence
 from typing import Any, Self
@@ -334,15 +337,25 @@ class ReasoningAgentRunner:
 
     async def _run_llm(self, evaluation: RequirementEvaluation) -> ChatModelOutput:
         stream_middleware = self._create_final_answer_stream()
+        llm_timeout = int(os.getenv("CHAT_MODEL_TIMEOUT", 1200))
 
         try:
             messages, options = self._prepare_llm_request(evaluation)
-            response = await self._llm.run(messages, **options).middleware(stream_middleware)
+            # Hard kill if the provider ignores ChatModel.timeout (same CHAT_MODEL_TIMEOUT env).
+            async with asyncio.timeout(llm_timeout):
+                response = await self._llm.run(messages, **options).middleware(stream_middleware)
 
             self._state.usage.merge(response.usage)
             self._state.cost.merge(response.cost)
 
             return response
+        except TimeoutError:
+            logging.getLogger(__name__).error(
+                "LLM call timed out after %ds (iteration %d)",
+                llm_timeout,
+                self._state.iteration,
+            )
+            raise AgentError(f"LLM call timed out after {llm_timeout}s") from None
         except ChatModelToolCallError as e:
             generated_content = e.generated_content or (e.response.get_text_content() if e.response else "")
             if not generated_content:

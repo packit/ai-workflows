@@ -408,6 +408,20 @@ class NotAffectedData(BaseModel):
     )
     explanation: str = Field(description="Detailed explanation of why the CVE does not affect this package")
     jira_issue: str = Field(description="Jira issue identifier")
+    package: str | None = Field(default=None, description="Package name (for reproducer handoff)")
+    cve_id: str | None = Field(
+        default=None,
+        description="CVE identifier(s); include ALL CVE IDs when the issue covers multiple CVEs",
+    )
+    fix_version: str | None = Field(default=None, description="Fix version in Jira (e.g., 'rhel-9.8')")
+    triage_summary: str | None = Field(
+        default=None,
+        description="Investigation log and downstream-agent handoff for the reproducer",
+    )
+    patch_urls: list[str] | None = Field(
+        default=None,
+        description="Upstream patch URLs when known (e.g. from a prior backport resolution)",
+    )
 
 
 class ApplicabilityResult(BaseModel):
@@ -1254,4 +1268,79 @@ class WorkflowResult(BaseModel):
     status: str = Field(description="A message describing what happened during the workflow run and why")
     reschedule_in: float = Field(
         description="Delay in seconds to reschedule the work item. Negative value means don't reschedule"
+    )
+
+
+# ============================================================================
+# Reproducer Agent Schemas
+# ============================================================================
+
+
+class ReproducerInputSchema(BaseModel):
+    """Input schema for the reproducer agent."""
+
+    jira_issue: str = Field(description="Jira issue identifier")
+    package: str | None = Field(default=None, description="Package name")
+    cve_id: str | None = Field(default=None, description="CVE identifier")
+    patch_urls: list[str] | None = Field(default=None, description="List of URLs to upstream patches")
+    triage_summary: str | None = Field(
+        default=None,
+        description="Triage context: what was investigated and guidance on how the reproducer should be done",
+    )
+    fix_version: str | None = Field(default=None, description="Fix version in Jira (e.g., 'rhel-9.8')")
+    target_branch: str | None = Field(default=None, description="Target dist-git branch")
+
+
+class ReproducerOutputSchema(BaseModel):
+    """Output schema for the reproducer agent."""
+
+    jira_issue: str = Field(description="Jira issue identifier")
+    success: bool = Field(description="Whether the reproducer was successfully completed")
+    reproducer_type: Literal["cve", "bug"] = Field(description="Type of reproducer: 'cve' or 'bug'")
+    package: str = Field(description="Resolved package name")
+    compose: str | None = Field(default=None, description="RHEL compose used for TF verification")
+    arch: str | None = Field(default=None, description="Architecture used for TF verification")
+    test_directory: str | None = Field(
+        default=None,
+        description=(
+            "Path of the test directory relative to the tests repo clone root "
+            "(e.g. 'Security/CVE-2025-12345' or 'Regression/RHEL-12345'). "
+            "Required when success is true and files must be committed to an MR. "
+            "Orchestration uses this path as-is; do not invent alternate locations."
+        ),
+    )
+    test_mr_url: str | None = Field(default=None, description="URL of the test merge request")
+    testing_farm_request_id: str | None = Field(
+        default=None, description="Testing Farm request ID for the submitted test run"
+    )
+    pass_fail_criteria: str = Field(description="Criteria used to determine pass or fail")
+    summary: str = Field(description="Summary of the reproducer result")
+    not_reproducible_reason: str | None = Field(
+        default=None, description="Reason the issue could not be reproduced, if applicable"
+    )
+    test_already_exists: bool = Field(
+        default=False,
+        description="Whether a test for this issue already exists in the tests repository",
+    )
+    existing_mr_url: str | None = Field(
+        default=None,
+        description="URL of an existing open reproducer MR that was reused or adapted",
+    )
+    adapted_existing: bool = Field(
+        default=False,
+        description="True when an existing test/MR was adapted to work on this stream",
+    )
+    lock_deferred: bool = Field(
+        default=False,
+        description=(
+            "True when create/adapt could not proceed because another worker holds "
+            "the reproducer lock; the task should be scheduled for delayed retry"
+        ),
+    )
+    retryable_error: bool = Field(
+        default=False,
+        description=(
+            "True when the run failed due to transient infra (e.g. Testing Farm "
+            "provisioning) and should be scheduled for retry like triage Resolution.ERROR"
+        ),
     )

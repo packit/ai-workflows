@@ -1,15 +1,22 @@
+import asyncio
+import base64
 import logging
 import os
+import re
+import subprocess
+import threading
 from datetime import datetime
 from functools import cache
 from json import dumps as json_dumps
+from pathlib import Path
 from typing import Any
 
 import requests
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, Tool, ToolError, ToolRunOptions
-from pydantic import BaseModel, Field
+from mcp.server.lowlevel.server import request_ctx
+from pydantic import BaseModel, Field, field_validator
 
 from ymir.common.models import (
     TestingFarmRequest,
@@ -18,7 +25,33 @@ from ymir.common.models import (
 
 logger = logging.getLogger(__name__)
 
-TESTING_FARM_URL = "https://api.testing-farm.io/v0.1"
+_REDACTED_KEYS = frozenset({"secrets", "api_key", "token", "password"})
+
+
+def _redact_secrets(obj: Any) -> Any:
+    """Recursively redact sensitive keys from a nested dict/list structure."""
+    if isinstance(obj, dict):
+        return {k: ("***" if k in _REDACTED_KEYS else _redact_secrets(v)) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_redact_secrets(item) for item in obj]
+    return obj
+
+
+def _tf_dry_run() -> bool:
+    """Check if Testing Farm operations should be dry-run.
+
+    ``TESTING_FARM_DRY_RUN`` takes precedence when set explicitly.
+    Falls back to ``DRY_RUN`` for backward compatibility.
+    """
+    tf_override = os.getenv("TESTING_FARM_DRY_RUN")
+    if tf_override is not None:
+        return tf_override.lower() == "true"
+    return os.getenv("DRY_RUN", "False").lower() == "true"
+
+
+@cache
+def _testing_farm_url() -> str:
+    return os.environ.get("TESTING_FARM_API_URL", "https://api.testing-farm.io/v0.1")
 
 
 @cache
@@ -30,8 +63,28 @@ def _testing_farm_headers() -> dict[str, str]:
     }
 
 
+_SSH_KEY_PATH = Path.home() / ".ssh" / "id_ed25519"
+_ssh_key_lock = threading.Lock()
+
+
+def _ensure_gateway_ssh_key() -> str:
+    """Ensure the gateway has an SSH key pair and return the public key content."""
+    pub_path = _SSH_KEY_PATH.with_suffix(".pub")
+    with _ssh_key_lock:
+        if not _SSH_KEY_PATH.exists() or not pub_path.exists():
+            _SSH_KEY_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            _SSH_KEY_PATH.unlink(missing_ok=True)
+            pub_path.unlink(missing_ok=True)
+            subprocess.run(  # noqa: S603
+                ["ssh-keygen", "-t", "ed25519", "-f", str(_SSH_KEY_PATH), "-N", "", "-q"],  # noqa: S607
+                check=True,
+            )
+            logger.info("Generated gateway SSH key pair at %s", _SSH_KEY_PATH)
+    return pub_path.read_text().strip()
+
+
 def _testing_farm_api_get(path: str, *, params: dict | None = None) -> Any:
-    url = f"{TESTING_FARM_URL}/{path}"
+    url = f"{_testing_farm_url()}/{path}"
     response = requests.get(url, headers=_testing_farm_headers(), params=params, timeout=30)
     if not response.ok:
         logger.error(
@@ -42,14 +95,37 @@ def _testing_farm_api_get(path: str, *, params: dict | None = None) -> Any:
 
 
 def _testing_farm_api_post(path: str, json: dict[str, Any]) -> Any:
-    url = f"{TESTING_FARM_URL}/{path}"
+    url = f"{_testing_farm_url()}/{path}"
     response = requests.post(url, headers=_testing_farm_headers(), json=json, timeout=30)
     if not response.ok:
         logger.error(
-            "POST to %s failed\nbody:\n%s\nerror:\n%s", url, json_dumps(json, indent=2), response.text
+            "POST to %s failed\nbody:\n%s\nerror:\n%s",
+            url,
+            json_dumps(_redact_secrets(json), indent=2),
+            response.text,
         )
     response.raise_for_status()
     return response.json()
+
+
+def _testing_farm_api_delete(path: str) -> None:
+    url = f"{_testing_farm_url()}/{path}"
+    response = requests.delete(url, headers=_testing_farm_headers(), timeout=30)
+    if not response.ok:
+        logger.error("DELETE %s failed.\nerror:\n%s", url, response.text)
+    response.raise_for_status()
+
+
+def cancel_testing_farm_request_id(request_id: str) -> None:
+    """Cancel a Testing Farm request by ID.
+
+    No-op when Testing Farm dry-run is enabled. Intended for orchestration
+    cleanup (e.g. leak recovery) outside of the MCP tool path.
+    """
+    if _tf_dry_run():
+        logger.info("Dry run: would cancel Testing Farm request %s", request_id)
+        return
+    _testing_farm_api_delete(f"requests/{request_id}")
 
 
 def _parse_tf_request(response: dict[str, Any]) -> TestingFarmRequest:
@@ -59,7 +135,7 @@ def _parse_tf_request(response: dict[str, Any]) -> TestingFarmRequest:
 
     return TestingFarmRequest(
         id=response["id"],
-        url=f"{TESTING_FARM_URL}/requests/{response['id']}",
+        url=f"{_testing_farm_url()}/requests/{response['id']}",
         state=response["state"],
         result=result,
         error_reason=error_reason,
@@ -101,7 +177,7 @@ class GetTestingFarmRequestTool(
     ) -> JSONToolOutput[dict[str, Any]]:
         logger.info("Getting Testing Farm request %s", tool_input.request_id)
         try:
-            response = _testing_farm_api_get(f"requests/{tool_input.request_id}")
+            response = await asyncio.to_thread(_testing_farm_api_get, f"requests/{tool_input.request_id}")
             tf_request = _parse_tf_request(response)
         except Exception as e:
             raise ToolError(f"Failed to get Testing Farm request {tool_input.request_id}: {e}") from e
@@ -139,7 +215,7 @@ class ReproduceTestingFarmRequestTool(
         build_nvr = tool_input.build_nvr
         logger.info("Reproducing Testing Farm request %s with build %s", request_id, build_nvr)
 
-        if os.getenv("DRY_RUN", "False").lower() == "true":
+        if _tf_dry_run():
             return JSONToolOutput(
                 result={
                     "id": f"dry-run-{request_id}",
@@ -149,7 +225,7 @@ class ReproduceTestingFarmRequestTool(
 
         try:
             # Fetch the original request
-            original_response = _testing_farm_api_get(f"requests/{request_id}")
+            original_response = await asyncio.to_thread(_testing_farm_api_get, f"requests/{request_id}")
             original = _parse_tf_request(original_response)
 
             # Build new environments with the replacement build
@@ -186,10 +262,592 @@ class ReproduceTestingFarmRequestTool(
                 "environments": [create_new_environment(env) for env in original.environments_data],
             }
 
-            response = _testing_farm_api_post("requests", json=body)
+            response = await asyncio.to_thread(_testing_farm_api_post, "requests", json=body)
             new_request = _parse_tf_request(response)
 
+        except ToolError:
+            raise
         except Exception as e:
             raise ToolError(f"Failed to reproduce Testing Farm request {request_id}: {e}") from e
 
         return JSONToolOutput(result=new_request.model_dump(mode="json"))
+
+
+_RESERVATION_DURATION_MINUTES = 30
+
+
+def _get_compose_filter() -> str | None:
+    """Return the compose filter for the current MCP request, if any.
+
+    Checks for a per-issue ``.compose_filter_<ISSUE>`` file written by
+    the e2e test fixture, scoped via the ``jira_issue`` field in the MCP
+    request ``_meta`` — same pattern as ``_get_mock_git_env`` in
+    ``gitlab.py``.  Falls back to the ``TESTING_FARM_COMPOSE_FILTER``
+    env var for non-per-issue filtering.
+    """
+    try:
+        ctx = request_ctx.get()
+        meta = ctx.meta
+    except LookupError:
+        meta = None
+
+    if meta is not None:
+        issue_key = getattr(meta, "jira_issue", None)
+        if not issue_key:
+            extra = getattr(meta, "__pydantic_extra__", None) or {}
+            issue_key = extra.get("jira_issue")
+        if issue_key:
+            base = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos"))
+            per_issue = base / f".compose_filter_{issue_key}"
+            if per_issue.is_file():
+                return per_issue.read_text().strip()
+
+    return os.getenv("TESTING_FARM_COMPOSE_FILTER") or None
+
+
+class ListTestingFarmComposesToolInput(BaseModel):
+    ranch: str = Field(
+        default="redhat",
+        description="Testing Farm ranch to query. "
+        "Use 'redhat' for RHEL composes, 'public' for Fedora/CentOS.",
+    )
+    arch: str = Field(
+        default="x86_64",
+        description="Filter composes to those available for this architecture.",
+    )
+
+
+class ListTestingFarmComposesTool(
+    Tool[ListTestingFarmComposesToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
+):
+    name = "list_testing_farm_composes"
+    description = """List available composes on Testing Farm.
+    Call this BEFORE reserve_testing_farm_machine to discover valid compose names.
+    Returns a list of compose names that can be passed to reserve_testing_farm_machine.
+    """
+    input_schema = ListTestingFarmComposesToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "testing_farm", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: ListTestingFarmComposesToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[dict[str, Any]]:
+        logger.info("Listing Testing Farm composes: ranch=%s arch=%s", tool_input.ranch, tool_input.arch)
+
+        if _tf_dry_run():
+            return JSONToolOutput(
+                result={
+                    "composes": ["RHEL-10.1-Nightly", "RHEL-10.2-Nightly", "RHEL-9.6.0-Nightly"],
+                    "message": "Dry run: returning sample compose list",
+                }
+            )
+
+        try:
+            base_url = _testing_farm_url().rsplit("/v0", 1)[0]
+            url = f"{base_url}/v0.2/composes/{tool_input.ranch}"
+            response = await asyncio.to_thread(requests.get, url, headers=_testing_farm_headers(), timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            composes = [c["name"] for c in data.get("composes", [])]
+
+            if tool_input.arch:
+                arch_suffix = f"-{tool_input.arch}"
+                composes = [
+                    c
+                    for c in composes
+                    if not any(c.endswith(f"-{a}") for a in ("aarch64", "ppc64le", "s390x"))
+                    or c.endswith(arch_suffix)
+                ]
+
+            compose_filter = _get_compose_filter()
+            if compose_filter:
+                allowed = {name.strip() for name in compose_filter.split(",")}
+                composes = [c for c in composes if c in allowed]
+
+            return JSONToolOutput(result={"composes": composes})
+
+        except Exception as e:
+            raise ToolError(f"Failed to list Testing Farm composes: {e}") from e
+
+
+class ReserveTestingFarmMachineToolInput(BaseModel):
+    compose: str = Field(description="Compose to reserve, e.g. RHEL-9.8.0-Nightly")
+    arch: str = Field(default="x86_64", description="Architecture of the machine")
+    ssh_public_key: str | None = Field(
+        default=None,
+        description="SSH public key content. If omitted, the gateway's own key is used (recommended).",
+    )
+
+
+class ReserveTestingFarmMachineTool(
+    Tool[ReserveTestingFarmMachineToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
+):
+    name = "reserve_testing_farm_machine"
+    description = """
+    Reserve a Testing Farm machine for SSH access.
+    """
+    input_schema = ReserveTestingFarmMachineToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "testing_farm", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: ReserveTestingFarmMachineToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[dict[str, Any]]:
+        logger.info(
+            "Reserving Testing Farm machine: compose=%s arch=%s duration=%dm",
+            tool_input.compose,
+            tool_input.arch,
+            _RESERVATION_DURATION_MINUTES,
+        )
+
+        if _tf_dry_run():
+            return JSONToolOutput(
+                result={
+                    "id": "dry-run-reservation",
+                    "message": (
+                        f"Dry run: would reserve {tool_input.compose} {tool_input.arch} "
+                        f"for {_RESERVATION_DURATION_MINUTES}m"
+                    ),
+                }
+            )
+
+        try:
+            # Always use the gateway's own SSH key so run_remote_command can authenticate
+            ssh_public_key = await asyncio.to_thread(_ensure_gateway_ssh_key)
+            if tool_input.ssh_public_key and tool_input.ssh_public_key != ssh_public_key:
+                logger.info(
+                    "Ignoring agent-provided SSH key; using gateway's own key for TF reservation "
+                    "(run_remote_command runs in the gateway container)"
+                )
+            ssh_key_b64 = base64.b64encode(ssh_public_key.encode()).decode()
+
+            body = {
+                "test": {
+                    "fmf": {
+                        "url": "https://gitlab.com/testing-farm/tests",
+                        "ref": "main",
+                        "name": "/testing-farm/reserve",
+                    }
+                },
+                "environments": [
+                    {
+                        "arch": tool_input.arch,
+                        "os": {"compose": tool_input.compose},
+                        "variables": {
+                            "TF_RESERVATION_DURATION": str(_RESERVATION_DURATION_MINUTES),
+                        },
+                        "secrets": {
+                            "TF_RESERVATION_AUTHORIZED_KEYS_BASE64": ssh_key_b64,
+                        },
+                        "settings": {
+                            "pipeline": {
+                                "skip_guest_setup": True,
+                            },
+                            "provisioning": {
+                                "security_group_rules_ingress": [
+                                    {
+                                        "type": "ingress",
+                                        "protocol": "tcp",
+                                        "cidr": "0.0.0.0/0",
+                                        "port_min": 22,
+                                        "port_max": 22,
+                                    }
+                                ],
+                                "security_group_rules_egress": [],
+                            },
+                        },
+                    }
+                ],
+            }
+
+            response = await asyncio.to_thread(_testing_farm_api_post, "requests", json=body)
+        except Exception as e:
+            raise ToolError(f"Failed to reserve Testing Farm machine: {e}") from e
+
+        return JSONToolOutput(result={"id": response["id"]})
+
+
+class GetTestingFarmReservationDetailsToolInput(BaseModel):
+    request_id: str = Field(description="Testing Farm reservation request ID", pattern=r"^[a-zA-Z0-9_-]+$")
+
+
+class GetTestingFarmReservationDetailsTool(
+    Tool[GetTestingFarmReservationDetailsToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
+):
+    name = "get_testing_farm_reservation_details"
+    description = """
+    Get the status and SSH details of a Testing Farm reservation.
+    Polls internally for up to 10 minutes until SSH is available or a terminal state is reached.
+    Do NOT wrap this tool in a retry loop — it handles waiting internally.
+    """
+    input_schema = GetTestingFarmReservationDetailsToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "testing_farm", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: GetTestingFarmReservationDetailsToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[dict[str, Any]]:
+        logger.info("Getting Testing Farm reservation details for %s", tool_input.request_id)
+
+        if _tf_dry_run():
+            return JSONToolOutput(result={"state": "complete", "ssh_connection": "root@dry-run-host"})
+
+        max_attempts = 120
+        poll_interval = 30
+        state = "unknown"
+
+        _TRANSIENT_HTTP_CODES = (502, 503, 504)
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = await asyncio.to_thread(_testing_farm_api_get, f"requests/{tool_input.request_id}")
+            except requests.RequestException as e:
+                is_transient = False
+                if isinstance(e, requests.HTTPError) and e.response is not None:
+                    if e.response.status_code in _TRANSIENT_HTTP_CODES:
+                        is_transient = True
+                elif isinstance(e, (requests.ConnectionError, requests.Timeout)):
+                    is_transient = True
+
+                if is_transient:
+                    logger.warning(
+                        "Transient error %s polling TF %s (attempt %d/%d)",
+                        e,
+                        tool_input.request_id,
+                        attempt,
+                        max_attempts,
+                    )
+                    if attempt < max_attempts:
+                        await asyncio.sleep(poll_interval)
+                    continue
+                raise ToolError(
+                    f"Failed to get Testing Farm reservation details {tool_input.request_id}: {e}"
+                ) from e
+            except Exception as e:
+                raise ToolError(
+                    f"Failed to get Testing Farm reservation details {tool_input.request_id}: {e}"
+                ) from e
+
+            state = response.get("state", "unknown")
+
+            if state in ("complete", "canceled", "cancel-requested", "error"):
+                return JSONToolOutput(result={"state": state, "ssh_connection": "not-yet-available"})
+
+            if state == "running":
+                artifacts_url = (response.get("run") or {}).get("artifacts")
+                if not artifacts_url:
+                    logger.warning(
+                        "No artifacts URL in TF response for %s (attempt %d)",
+                        tool_input.request_id,
+                        attempt,
+                    )
+                else:
+                    try:
+                        log_url = f"{artifacts_url}/pipeline.log"
+                        log_resp = await asyncio.to_thread(requests.get, log_url, timeout=30)
+                        if log_resp.ok:
+                            log_text = log_resp.text
+                            guest_match = re.search(r"Guest is ready.*root@([\d\w.\-]+)", log_text)
+                            if not guest_match:
+                                guest_match = re.search(
+                                    r"\[.*?\]\s+primary address:\s+([\d\w.\-]+)", log_text
+                                )
+                            ready = "execute task #1" in log_text
+                            if guest_match and ready:
+                                ssh_connection = f"root@{guest_match.group(1)}"
+                                logger.info(
+                                    "SSH available for %s: %s (attempt %d)",
+                                    tool_input.request_id,
+                                    ssh_connection,
+                                    attempt,
+                                )
+                                return JSONToolOutput(
+                                    result={"state": state, "ssh_connection": ssh_connection}
+                                )
+                            logger.info(
+                                "pipeline.log fetched for %s but not ready yet "
+                                "(guest_match=%s, ready=%s, attempt %d)",
+                                tool_input.request_id,
+                                bool(guest_match),
+                                ready,
+                                attempt,
+                            )
+                        else:
+                            logger.warning(
+                                "pipeline.log fetch failed for %s: HTTP %d (attempt %d)",
+                                tool_input.request_id,
+                                log_resp.status_code,
+                                attempt,
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "Could not fetch pipeline.log for %s: %s (attempt %d)",
+                            tool_input.request_id,
+                            exc,
+                            attempt,
+                        )
+
+            if attempt < max_attempts:
+                logger.info(
+                    "SSH not yet available for %s, polling again in %ds (attempt %d/%d)",
+                    tool_input.request_id,
+                    poll_interval,
+                    attempt,
+                    max_attempts,
+                )
+                await asyncio.sleep(poll_interval)
+
+        return JSONToolOutput(result={"state": state, "ssh_connection": "not-yet-available"})
+
+
+class CancelTestingFarmRequestToolInput(BaseModel):
+    request_id: str = Field(description="Testing Farm request ID to cancel", pattern=r"^[a-zA-Z0-9_-]+$")
+
+
+class CancelTestingFarmRequestTool(
+    Tool[CancelTestingFarmRequestToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
+):
+    name = "cancel_testing_farm_request"
+    description = """
+    Cancel a Testing Farm request and release the reserved machine.
+    """
+    input_schema = CancelTestingFarmRequestToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "testing_farm", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: CancelTestingFarmRequestToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[dict[str, Any]]:
+        request_id = tool_input.request_id
+        logger.info("Cancelling Testing Farm request %s", request_id)
+
+        if _tf_dry_run():
+            return JSONToolOutput(
+                result={
+                    "cancelled": True,
+                    "request_id": request_id,
+                    "message": f"Dry run: would cancel request {request_id}",
+                }
+            )
+
+        try:
+            await asyncio.to_thread(_testing_farm_api_delete, f"requests/{request_id}")
+        except Exception as e:
+            raise ToolError(f"Failed to cancel Testing Farm request {request_id}: {e}") from e
+
+        return JSONToolOutput(result={"cancelled": True, "request_id": request_id})
+
+
+class RunRemoteCommandToolInput(BaseModel):
+    ssh_host: str = Field(description="SSH target in user@ip format", pattern=r"^[a-zA-Z0-9_]+@[\w.\-]+$")
+    command: str = Field(description="Command to run on the remote machine")
+    timeout: int = Field(default=300, description="Timeout in seconds for the command to finish")
+
+
+class RunRemoteCommandTool(Tool[RunRemoteCommandToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]):
+    name = "run_remote_command"
+    description = """
+    Run a command on a remote machine via SSH.
+    """
+    input_schema = RunRemoteCommandToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "testing_farm", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: RunRemoteCommandToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[dict[str, Any]]:
+        ssh_host = tool_input.ssh_host
+        command = tool_input.command
+        timeout = tool_input.timeout
+        logger.info("Running remote command on %s: %s", ssh_host, command)
+
+        if _tf_dry_run():
+            return JSONToolOutput(
+                result={
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 0,
+                    "message": f"Dry run: would run '{command}' on {ssh_host}",
+                }
+            )
+
+        try:
+            await asyncio.to_thread(_ensure_gateway_ssh_key)
+            proc = await asyncio.create_subprocess_exec(
+                "ssh",
+                "-i",
+                str(_SSH_KEY_PATH),
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                ssh_host,
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except TimeoutError as e:
+            proc.kill()
+            await proc.wait()
+            raise ToolError(f"Command timed out after {timeout}s on {ssh_host}: {command}") from e
+        except Exception as e:
+            raise ToolError(f"Failed to run command on {ssh_host}: {e}") from e
+
+        return JSONToolOutput(
+            result={
+                "stdout": stdout.decode() if stdout else "",
+                "stderr": stderr.decode() if stderr else "",
+                "exit_code": proc.returncode,
+            }
+        )
+
+
+_ALLOWED_COPY_BASES = (Path("/git-repos"), Path("/tmp"))  # noqa: S108
+
+
+class CopyFilesToRemoteToolInput(BaseModel):
+    ssh_host: str = Field(description="SSH host in user@ip format", pattern=r"^[a-zA-Z0-9_]+@[\w.\-]+$")
+    local_paths: list[str] = Field(description="Local file paths to copy")
+    remote_dir: str = Field(
+        default="/tmp/reproducer",  # noqa: S108
+        description="Remote directory to copy files to",
+        pattern=r"^[a-zA-Z0-9/_.\-]+$",
+    )
+    timeout: int = Field(default=120, description="Timeout in seconds for the copy operation")
+
+    @field_validator("local_paths")
+    @classmethod
+    def validate_local_paths(cls, v: list[str]) -> list[str]:
+        for p in v:
+            resolved = Path(p).resolve()
+            if not any(resolved.is_relative_to(base) for base in _ALLOWED_COPY_BASES):
+                raise ValueError(
+                    f"Path {p} is not under an allowed directory"
+                    f" ({', '.join(str(b) for b in _ALLOWED_COPY_BASES)})"
+                )
+        return v
+
+
+class CopyFilesToRemoteTool(Tool[CopyFilesToRemoteToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]):
+    name = "copy_files_to_remote"
+    description = """
+    Copy files to a remote machine via SCP.
+    """
+    input_schema = CopyFilesToRemoteToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "testing_farm", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: CopyFilesToRemoteToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[dict[str, Any]]:
+        ssh_host = tool_input.ssh_host
+        local_paths = tool_input.local_paths
+        remote_dir = tool_input.remote_dir
+        timeout = tool_input.timeout
+        logger.info("Copying %s to %s:%s", local_paths, ssh_host, remote_dir)
+
+        if _tf_dry_run():
+            return JSONToolOutput(
+                result={
+                    "copied": True,
+                    "remote_dir": remote_dir,
+                    "files": local_paths,
+                    "message": f"Dry run: would copy {local_paths} to {ssh_host}:{remote_dir}",
+                }
+            )
+
+        await asyncio.to_thread(_ensure_gateway_ssh_key)
+        ssh_opts = [
+            "-i",
+            str(_SSH_KEY_PATH),
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+        ]
+
+        active_proc = None
+        try:
+            # Create the remote directory
+            active_proc = await asyncio.create_subprocess_exec(
+                "ssh",
+                *ssh_opts,
+                ssh_host,
+                "mkdir",
+                "-p",
+                remote_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(active_proc.communicate(), timeout=timeout)
+            if active_proc.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to create remote directory {remote_dir}: {stderr.decode().strip()}"
+                )
+
+            # Copy files via scp
+            active_proc = await asyncio.create_subprocess_exec(
+                "scp",
+                *ssh_opts,
+                "-r",
+                *local_paths,
+                f"{ssh_host}:{remote_dir}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(active_proc.communicate(), timeout=timeout)
+            if active_proc.returncode != 0:
+                raise RuntimeError(f"SCP failed: {stderr.decode().strip()}")
+        except TimeoutError as e:
+            if active_proc:
+                active_proc.kill()
+                await active_proc.wait()
+            raise ToolError(f"Copy operation timed out after {timeout}s to {ssh_host}:{remote_dir}") from e
+        except Exception as e:
+            raise ToolError(f"Failed to copy files to {ssh_host}:{remote_dir}: {e}") from e
+
+        return JSONToolOutput(result={"copied": True, "remote_dir": remote_dir, "files": local_paths})

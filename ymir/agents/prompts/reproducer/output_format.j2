@@ -1,0 +1,129 @@
+**Output Format**
+
+Your final answer MUST be a JSON object with the following keys:
+`jira_issue`, `success`, `reproducer_type`, `package`, `compose`, `arch`,
+`test_directory`, `testing_farm_request_id`, `pass_fail_criteria`, `summary`,
+`not_reproducible_reason`, `test_already_exists`, `existing_mr_url`,
+`adapted_existing`, `retryable_error`.
+
+Do NOT set `lock_deferred` or `test_mr_url` — orchestration owns those.
+
+All string fields must be actual strings, not nested objects.
+The `test_mr_url` field is NOT part of your output — the merge request is
+created or updated automatically by the workflow after you return.
+
+`test_directory` is the path of the test directory **relative to the tests
+repo clone root** (for example `Security/CVE-2025-12345` or
+`Regression/RHEL-12345`). Set it to whatever directory you actually created
+or adapted — parent and leaf names may vary by package convention. The
+workflow commits that path as-is; do not leave it null when `success` is
+true and files need to be pushed to an MR. Use `null` only when no local
+test directory was written (e.g. reuse-only with no file changes, or
+retryable infra failure before creating files).
+
+Examples:
+
+Successful new reproducer:
+```json
+{
+    "jira_issue": "RHEL-12345",
+    "success": true,
+    "reproducer_type": "cve",
+    "package": "libfoo",
+    "compose": "RHEL-9.8.0-Nightly",
+    "arch": "x86_64",
+    "test_directory": "Security/CVE-2025-12345",
+    "testing_farm_request_id": "tf-request-abc123",
+    "pass_fail_criteria": "PASS: program exits 0 (fix applied, no crash). FAIL: program exits with SIGSEGV (bug present, buffer overflow triggered).",
+    "summary": "Created reproducer for CVE-2025-12345 in libfoo. The vulnerability is a heap buffer overflow in parse_header() triggered by a malformed PNG with chunk length > 0x7fffffff. Test sends crafted input and checks for crash via exit code.",
+    "not_reproducible_reason": null,
+    "test_already_exists": false,
+    "existing_mr_url": null,
+    "adapted_existing": false,
+    "retryable_error": false
+}
+```
+
+Non-reproducible result:
+```json
+{
+    "jira_issue": "RHEL-12345",
+    "success": false,
+    "reproducer_type": "bug",
+    "package": "libbar",
+    "compose": "RHEL-10.1.0-Nightly",
+    "arch": "x86_64",
+    "test_directory": "Regression/RHEL-12345",
+    "testing_farm_request_id": "tf-request-xyz789",
+    "pass_fail_criteria": "PASS: command completes within 10s. FAIL: command hangs (timeout after 10s).",
+    "summary": "Attempted to reproduce RHEL-12345 (infinite loop in parser). The bug requires a specific interleaving of concurrent requests that could not be reliably reproduced in 5 attempts on a single-core TF machine.",
+    "not_reproducible_reason": "Race condition requires multi-threaded workload with specific timing. Attempted with stress-ng and taskset but could not trigger the hang reliably.",
+    "test_already_exists": false,
+    "existing_mr_url": null,
+    "adapted_existing": false,
+    "retryable_error": false
+}
+```
+
+Existing test verified on this stream (no changes needed):
+```json
+{
+    "jira_issue": "RHEL-12345",
+    "success": true,
+    "reproducer_type": "cve",
+    "package": "libfoo",
+    "compose": "RHEL-9.8.0-Nightly",
+    "arch": "x86_64",
+    "test_directory": "Security/CVE-2025-12345",
+    "testing_farm_request_id": "tf-request-reuse1",
+    "pass_fail_criteria": "PASS: program exits 0 (fix applied). FAIL: SIGSEGV (bug present).",
+    "summary": "Existing test at Security/CVE-2025-12345/ correctly detects the bug on this stream's compose. No adaptation needed.",
+    "not_reproducible_reason": null,
+    "test_already_exists": true,
+    "existing_mr_url": "https://gitlab.com/redhat/rhel/tests/libfoo/-/merge_requests/12",
+    "adapted_existing": false,
+    "retryable_error": false
+}
+```
+
+Existing test adapted for this stream:
+```json
+{
+    "jira_issue": "RHEL-12345",
+    "success": true,
+    "reproducer_type": "cve",
+    "package": "libfoo",
+    "compose": "RHEL-9.8.0-Nightly",
+    "arch": "x86_64",
+    "test_directory": "Security/CVE-2025-12345",
+    "testing_farm_request_id": "tf-request-adapt1",
+    "pass_fail_criteria": "PASS: program exits 0 (fix applied). FAIL: SIGSEGV (bug present).",
+    "summary": "Existing Security/CVE-2025-12345/ test failed on RHEL 9; adapted package names and assertions so the same test works on RHEL 9 and RHEL 10. Files updated in the clone for orchestration to push to the open MR.",
+    "not_reproducible_reason": null,
+    "test_already_exists": true,
+    "existing_mr_url": "https://gitlab.com/redhat/rhel/tests/libfoo/-/merge_requests/12",
+    "adapted_existing": true,
+    "retryable_error": false
+}
+```
+
+Testing Farm provisioning failure (retryable infra error):
+```json
+{
+    "jira_issue": "RHEL-12345",
+    "success": false,
+    "reproducer_type": "cve",
+    "package": "libfoo",
+    "compose": "RHEL-10.1-Nightly",
+    "arch": "x86_64",
+    "test_directory": null,
+    "testing_farm_request_id": "tf-request-deadbeef",
+    "pass_fail_criteria": "N/A — Testing Farm provisioning failed.",
+    "summary": "Testing Farm reservation did not become SSH-ready (ssh_connection=not-yet-available). Cancelled the request and stopping for a scheduled retry.",
+    "not_reproducible_reason": null,
+    "test_already_exists": false,
+    "existing_mr_url": null,
+    "adapted_existing": false,
+    "retryable_error": true
+}
+```

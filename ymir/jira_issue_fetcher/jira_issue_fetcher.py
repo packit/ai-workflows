@@ -74,6 +74,7 @@ class JiraIssueFetcher:
         JiraLabels.TRIAGED_BACKPORT.value,
         JiraLabels.TRIAGED_REBASE.value,
         JiraLabels.TRIAGED_REBUILD.value,
+        JiraLabels.REPRODUCER_IN_PROGRESS.value,
     )
 
     def __init__(self):

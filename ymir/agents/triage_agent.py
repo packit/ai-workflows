@@ -23,7 +23,10 @@ import ymir.agents.tasks as tasks
 from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_applicability_agent
 from ymir.agents.observability import setup_observability
 from ymir.agents.reasoning_agent import ReasoningAgent
-from ymir.agents.rebase_consolidation import find_rebase_siblings
+from ymir.agents.rebase_consolidation import (
+    check_and_queue_primary_if_ready,
+    queue_siblings_for_triage,
+)
 from ymir.agents.rebuild_consolidation import find_rebuild_siblings
 from ymir.agents.utils import (
     build_agent_factory_with_mock_repos,
@@ -1008,15 +1011,31 @@ async def run_workflow(
             return "comment_in_jira"
 
         async def consolidate_rebase_siblings(state):
-            """Find and analyze sibling issues that can share a single rebase MR."""
+            """Queue sibling issues for triage and decide whether to queue primary for rebase."""
             rebase_data = state.triage_result.data
-            included, summary = await find_rebase_siblings(
-                jira_issue=state.jira_issue,
+
+            # Queue siblings for triage
+            sibling_count = await queue_siblings_for_triage(
+                primary_issue=state.jira_issue,
                 rebase_data=rebase_data,
                 available_tools=gateway_tools,
             )
-            rebase_data.consolidated_issues = included
-            rebase_data.consolidation_summary = summary or None
+
+            # If siblings were queued, don't queue primary yet (wait for siblings)
+            if sibling_count > 0:
+                logger.info(
+                    f"Queued {sibling_count} siblings for {state.jira_issue}, "
+                    "primary will be queued after siblings finish triaging"
+                )
+                # Clear consolidated issues - found during rebase via find_triaged_rebase_siblings()
+                rebase_data.consolidated_issues = []
+                rebase_data.consolidation_summary = None
+            else:
+                # No siblings found, queue primary for rebase immediately
+                logger.info(f"No siblings found for {state.jira_issue}, will queue for rebase now")
+                rebase_data.consolidated_issues = []
+                rebase_data.consolidation_summary = None
+
             return "comment_in_jira"
 
         async def comment_in_jira(state):
@@ -1377,10 +1396,16 @@ async def main() -> None:
                     # Terminal resolution label is the dedup anchor that replaces
                     # ymir_triage_in_progress — must be written unconditionally so
                     # the next fetcher sweep skips this issue.
+                    # Also remove ymir_rebase_sibling if present (sibling finished triaging)
+                    labels_to_remove = [JiraLabels.TRIAGE_IN_PROGRESS.value]
+                    if JiraLabels.REBASE_SIBLING.value in current_labels:
+                        labels_to_remove.append(JiraLabels.REBASE_SIBLING.value)
+                        logger.info(f"{input.issue} is a sibling, will check if primary is ready to queue")
+
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[resolution_label.value],
-                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                        labels_to_remove=labels_to_remove,
                         dry_run=dry_run,
                         user_triggered=user_triggered,
                     )
@@ -1447,6 +1472,19 @@ async def main() -> None:
                             except Exception as e:
                                 logger.warning(f"Failed to post consolidation link comments: {e}")
 
+                # If this was a sibling issue, check if primary is ready to be queued
+                if JiraLabels.REBASE_SIBLING.value in current_labels:
+                    logger.info(f"Sibling {input.issue} finished triaging, checking if primary is ready")
+                    try:
+                        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+                            await check_and_queue_primary_if_ready(
+                                sibling_issue=input.issue,
+                                available_tools=gateway_tools,
+                            )
+                    except Exception as e:
+                        logger.warning(f"Failed to check/queue primary for sibling {input.issue}: {e}")
+
+                # Dispatch to downstream queues
                 if output.resolution == Resolution.ERROR:
                     await retry(task, output.data.model_dump_json())
                 elif output.resolution == Resolution.POSTPONED:
@@ -1480,9 +1518,17 @@ async def main() -> None:
                             task = Task(metadata=state.model_dump(), user_triggered=user_triggered)
                             downstream_payload = task.model_dump_json()
                             if output.resolution == Resolution.REBASE:
-                                queue = RedisQueues.get_rebase_queue_for_branch(
-                                    state.target_branch, task.user_triggered
-                                )
+                                # Skip queueing if issue is waiting for siblings to finish triaging
+                                if JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels:
+                                    logger.info(
+                                        f"Issue {input.issue} is waiting for siblings to finish triaging, "
+                                        "skipping rebase queue (will be queued when siblings are done)"
+                                    )
+                                    queue = None
+                                else:
+                                    queue = RedisQueues.get_rebase_queue_for_branch(
+                                        state.target_branch, task.user_triggered
+                                    )
                             elif output.resolution == Resolution.BACKPORT:
                                 queue = RedisQueues.get_backport_queue_for_branch(
                                     state.target_branch, task.user_triggered

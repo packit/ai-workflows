@@ -172,22 +172,62 @@ async def main() -> None:
             ]
         )
 
+    async def post_comments_to_all_issues(
+        primary_issue: str,
+        consolidated_issues: list[ConsolidatedIssue],
+        comment_text: str,
+        available_tools: list[Tool],
+        is_error: bool,
+        user_triggered: bool,
+    ) -> None:
+        """
+        Post comment to primary issue and all consolidated siblings in parallel.
+
+        Isolates errors per-issue so a single Jira failure doesn't abort the entire step.
+        """
+        all_issues = [primary_issue] + [item.issue_key for item in consolidated_issues]
+
+        async def post_with_error_handling(issue: str) -> None:
+            try:
+                await tasks.comment_in_jira(
+                    jira_issue=issue,
+                    agent_type="Rebase",
+                    comment_text=comment_text,
+                    is_error=is_error,
+                    available_tools=available_tools,
+                    user_triggered=user_triggered,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to post comment to {issue}: {e}")
+
+        await asyncio.gather(*[post_with_error_handling(issue) for issue in all_issues])
+
     async def post_failure_comments_to_consolidated_siblings(
         primary_issue: str,
         consolidated_issues: list[ConsolidatedIssue],
         available_tools: list[Tool],
         user_triggered: bool,
     ) -> None:
-        """Post link comments to consolidated siblings pointing to primary issue with error details."""
-        for consolidated in consolidated_issues:
-            await tasks.comment_in_jira(
-                jira_issue=consolidated.issue_key,
-                agent_type="Rebase",
-                comment_text=f"Consolidated rebase failed. See {primary_issue} for error details.",
-                available_tools=available_tools,
-                is_error=True,
-                user_triggered=user_triggered,
-            )
+        """
+        Post link comments to consolidated siblings pointing to primary issue with error details.
+
+        Isolates errors per-sibling so a single Jira failure doesn't abort posting to other siblings.
+        """
+
+        async def post_with_error_handling(consolidated: ConsolidatedIssue) -> None:
+            try:
+                await tasks.comment_in_jira(
+                    jira_issue=consolidated.issue_key,
+                    agent_type="Rebase",
+                    comment_text=f"Consolidated rebase failed. See {primary_issue} for error details.",
+                    available_tools=available_tools,
+                    is_error=True,
+                    user_triggered=user_triggered,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to post failure comment to {consolidated.issue_key}: {e}")
+
+        await asyncio.gather(*[post_with_error_handling(c) for c in consolidated_issues])
 
     async def run_workflow(
         package,
@@ -438,33 +478,31 @@ async def main() -> None:
                     comment_text = (
                         state.merge_request_url if state.merge_request_url else state.rebase_result.status
                     )
-                    is_error = False
-                    # Post same success message to all issues in parallel
-                    all_issues = [state.jira_issue] + [item.issue_key for item in state.consolidated_issues]
-                    await asyncio.gather(
-                        *[
-                            tasks.comment_in_jira(
-                                jira_issue=issue,
-                                agent_type="Rebase",
-                                comment_text=comment_text,
-                                is_error=is_error,
-                                available_tools=gateway_tools,
-                                user_triggered=user_triggered,
-                            )
-                            for issue in all_issues
-                        ]
-                    )
-                else:
-                    # Post detailed error to primary issue
-                    await tasks.comment_in_jira(
-                        jira_issue=state.jira_issue,
-                        agent_type="Rebase",
-                        comment_text=f"Agent failed to perform a rebase: {state.rebase_result.error}",
-                        is_error=True,
+                    # Post same success message to all issues in parallel with per-issue error handling
+                    await post_comments_to_all_issues(
+                        primary_issue=state.jira_issue,
+                        consolidated_issues=state.consolidated_issues,
+                        comment_text=comment_text,
                         available_tools=gateway_tools,
+                        is_error=False,
                         user_triggered=user_triggered,
                     )
-                    # Link consolidated siblings to primary issue
+                else:
+                    # Post detailed error to primary issue (with error handling)
+                    try:
+                        await tasks.comment_in_jira(
+                            jira_issue=state.jira_issue,
+                            agent_type="Rebase",
+                            comment_text=f"Agent failed to perform a rebase: {state.rebase_result.error}",
+                            is_error=True,
+                            available_tools=gateway_tools,
+                            user_triggered=user_triggered,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to post error comment to primary issue {state.jira_issue}: {e}"
+                        )
+                    # Link consolidated siblings to primary issue (with per-sibling error handling)
                     await post_failure_comments_to_consolidated_siblings(
                         primary_issue=state.jira_issue,
                         consolidated_issues=state.consolidated_issues,
@@ -600,17 +638,24 @@ async def main() -> None:
                                 os.environ["MCP_GATEWAY_URL"],
                                 call_meta={"jira_issue": rebase_data.jira_issue},
                             ) as gateway_tools:
-                                # Post detailed error to primary issue
+                                # Post detailed error to primary issue (with error handling)
                                 if comment_text:
-                                    await tasks.comment_in_jira(
-                                        jira_issue=rebase_data.jira_issue,
-                                        agent_type="Rebase",
-                                        comment_text=comment_text,
-                                        available_tools=gateway_tools,
-                                        is_error=True,
-                                        user_triggered=user_triggered,
-                                    )
+                                    try:
+                                        await tasks.comment_in_jira(
+                                            jira_issue=rebase_data.jira_issue,
+                                            agent_type="Rebase",
+                                            comment_text=comment_text,
+                                            available_tools=gateway_tools,
+                                            is_error=True,
+                                            user_triggered=user_triggered,
+                                        )
+                                    except Exception as e:
+                                        logger.warning(
+                                            f"Failed to post error comment to primary issue "
+                                            f"{rebase_data.jira_issue}: {e}"
+                                        )
                                 # Link consolidated siblings to primary issue
+                                # (with per-sibling error handling)
                                 await post_failure_comments_to_consolidated_siblings(
                                     primary_issue=rebase_data.jira_issue,
                                     consolidated_issues=rebase_data.consolidated_issues,

@@ -32,6 +32,7 @@ from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState
 from ymir.agents.reasoning_agent import ReasoningAgent
+from ymir.agents.rebase_consolidation import find_triaged_rebase_siblings
 from ymir.agents.utils import (
     format_mr_triage_details,
     get_agent_execution_config,
@@ -267,7 +268,7 @@ async def main() -> None:
             async def change_jira_status(state):
                 if dry_run:
                     logger.info(f"Dry run: skipping Jira status change of {state.jira_issue} to In Progress")
-                    return "fork_and_prepare_dist_git"
+                    return "find_consolidated_siblings"
                 # tasks.change_jira_status further gates the write on
                 # JIRA_ALLOW_STATUS_CHANGES; nothing else to check here.
                 try:
@@ -278,6 +279,39 @@ async def main() -> None:
                     )
                 except Exception as status_error:
                     logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
+                return "find_consolidated_siblings"
+
+            async def find_consolidated_siblings(state):
+                """Find siblings that have been triaged as REBASE to the same version."""
+                if not state.consolidated_issues:
+                    # consolidated_issues is empty when using wait-for-siblings approach
+                    # Find siblings that triaged as REBASE
+                    rebase_data = RebaseData(
+                        jira_issue=state.jira_issue,
+                        package=state.package,
+                        version=state.version,
+                        fix_version=state.fix_version,
+                    )
+                    logger.info(f"Finding triaged siblings for {state.jira_issue}")
+                    try:
+                        included, summary = await find_triaged_rebase_siblings(
+                            jira_issue=state.jira_issue,
+                            rebase_data=rebase_data,
+                            available_tools=gateway_tools,
+                        )
+                        state.consolidated_issues = included
+                        state.consolidation_summary = summary or None
+                        if included:
+                            logger.info(
+                                f"Found {len(included)} triaged siblings for consolidation "
+                                f"with {state.jira_issue}"
+                            )
+                    except Exception as e:
+                        logger.warning(f"Failed to find triaged siblings for {state.jira_issue}: {e}")
+                else:
+                    logger.info(
+                        f"Using {len(state.consolidated_issues)} consolidated siblings from triage result"
+                    )
                 return "fork_and_prepare_dist_git"
 
             async def fork_and_prepare_dist_git(state):
@@ -521,6 +555,7 @@ async def main() -> None:
                 return Workflow.END
 
             workflow.add_step("change_jira_status", change_jira_status)
+            workflow.add_step("find_consolidated_siblings", find_consolidated_siblings)
             workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
             workflow.add_step("run_rebase_agent", run_rebase_agent)
             workflow.add_step("run_build_agent", run_build_agent)

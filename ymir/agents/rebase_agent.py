@@ -158,7 +158,8 @@ async def main() -> None:
         user_triggered: bool,
     ) -> None:
         """Update Jira labels for primary issue and all consolidated siblings in parallel."""
-        all_issues = [primary_issue] + [item.issue_key for item in consolidated_issues]
+        # Deduplicate in case consolidated_issues contains duplicates or the primary issue
+        all_issues = list(dict.fromkeys([primary_issue] + [item.issue_key for item in consolidated_issues]))
         await asyncio.gather(
             *[
                 tasks.set_jira_labels(
@@ -184,8 +185,10 @@ async def main() -> None:
         Post comment to primary issue and all consolidated siblings in parallel.
 
         Isolates errors per-issue so a single Jira failure doesn't abort the entire step.
+        Deduplicates issue list to prevent multiple identical comments.
         """
-        all_issues = [primary_issue] + [item.issue_key for item in consolidated_issues]
+        # Deduplicate in case consolidated_issues contains duplicates or the primary issue
+        all_issues = list(dict.fromkeys([primary_issue] + [item.issue_key for item in consolidated_issues]))
 
         async def post_with_error_handling(issue: str) -> None:
             try:
@@ -215,7 +218,10 @@ async def main() -> None:
         Only the detailed error on the primary issue is gated by user_triggered.
 
         Isolates errors per-sibling so a single Jira failure doesn't abort posting to other siblings.
+        Deduplicates issue keys to prevent multiple identical comments.
         """
+        # Deduplicate by issue_key in case consolidated_issues contains duplicates
+        unique_siblings = {c.issue_key: c for c in consolidated_issues}.values()
 
         async def post_with_error_handling(consolidated: ConsolidatedIssue) -> None:
             try:
@@ -230,7 +236,7 @@ async def main() -> None:
             except Exception as e:
                 logger.warning(f"Failed to post failure comment to {consolidated.issue_key}: {e}")
 
-        await asyncio.gather(*[post_with_error_handling(c) for c in consolidated_issues])
+        await asyncio.gather(*[post_with_error_handling(c) for c in unique_siblings])
 
     async def run_workflow(
         package,

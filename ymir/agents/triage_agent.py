@@ -1341,7 +1341,8 @@ async def main() -> None:
                     # the next fetcher sweep skips this issue.
                     # Also remove ymir_rebase_sibling if present (sibling finished triaging)
                     labels_to_remove = [JiraLabels.TRIAGE_IN_PROGRESS.value]
-                    if JiraLabels.REBASE_SIBLING.value in current_labels:
+                    is_sibling = JiraLabels.REBASE_SIBLING.value in current_labels
+                    if is_sibling:
                         labels_to_remove.append(JiraLabels.REBASE_SIBLING.value)
                         logger.info(f"{input.issue} is a sibling, will check if primary is ready to queue")
 
@@ -1352,6 +1353,10 @@ async def main() -> None:
                         dry_run=dry_run,
                         user_triggered=user_triggered,
                     )
+
+                    # Update current_labels to reflect the changes we just made
+                    if is_sibling:
+                        current_labels.remove(JiraLabels.REBASE_SIBLING.value)
                     if output.resolution == Resolution.REBUILD:
                         for consolidated in output.data.consolidated_issues:
                             try:
@@ -1416,7 +1421,7 @@ async def main() -> None:
                                 logger.warning(f"Failed to post consolidation link comments: {e}")
 
                 # If this was a sibling issue, check if primary is ready to be queued
-                if JiraLabels.REBASE_SIBLING.value in current_labels:
+                if is_sibling:
                     logger.info(f"Sibling {input.issue} finished triaging, checking if primary is ready")
                     try:
                         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:

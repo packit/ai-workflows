@@ -511,8 +511,8 @@ async def find_triaged_rebase_siblings(
     Find siblings that have already been triaged as REBASE to the same version.
 
     This function is called when the primary issue's rebase workflow starts.
-    It searches for siblings with ymir_triaged_rebase label, fetches their RebaseData,
-    and consolidates those with matching target version.
+    It searches for siblings with ymir_triaged_rebase label, then checks their
+    comments for the reference to the primary issue.
 
     Returns (consolidated_issues, summary_text).
     """
@@ -549,23 +549,26 @@ async def find_triaged_rebase_siblings(
     logger.info(f"Found {len(candidates)} triaged sibling candidates for {jira_issue}")
 
     async def check_candidate(candidate: dict) -> tuple[ConsolidatedIssue | None, str]:
-        """Check if a triaged sibling has matching target version."""
+        """Check if a triaged sibling has comment referencing the primary issue."""
         candidate_key = candidate.get("key", "")
         try:
-            sibling_rebase_data = RebaseData.model_validate(
-                await run_tool(
-                    "fetch_rebase_data",
-                    available_tools=available_tools,
-                    jira_issue=candidate_key,
-                )
+            # Get sibling's comments to check for primary issue reference
+            comments = await run_tool(
+                "get_jira_comments",
+                available_tools=available_tools,
+                issue_key=candidate_key,
             )
 
-            # Compare target versions
-            cmp_result = compare_versions(sibling_rebase_data.version, rebase_data.version)
-            if cmp_result == 0:
-                logger.info(
-                    f"Sibling {candidate_key} confirmed with matching version {sibling_rebase_data.version}"
-                )
+            # Look for comment matching "Queued for triage as potential sibling of {jira_issue}"
+            has_primary_reference = False
+            for comment in comments:
+                body = comment.get("body", "")
+                if f"Queued for triage as potential sibling of {jira_issue}" in body:
+                    has_primary_reference = True
+                    break
+
+            if has_primary_reference:
+                logger.info(f"Sibling {candidate_key} confirmed as sibling of {jira_issue}")
                 consolidated_issue = ConsolidatedIssue(
                     issue_key=candidate_key,
                     dependency_issue=None,
@@ -573,15 +576,12 @@ async def find_triaged_rebase_siblings(
                 )
                 return (
                     consolidated_issue,
-                    f"* {candidate_key} — included (target: {sibling_rebase_data.version})",
+                    f"* {candidate_key} — included (sibling of {jira_issue})",
                 )
-            logger.info(
-                f"Sibling {candidate_key} has different version: "
-                f"{sibling_rebase_data.version} != {rebase_data.version}"
-            )
+            logger.info(f"Sibling {candidate_key} does not reference {jira_issue} in comments")
             return (
                 None,
-                f"* {candidate_key} — excluded (different target: {sibling_rebase_data.version})",
+                f"* {candidate_key} — excluded (not a sibling of {jira_issue})",
             )
         except Exception as e:
             logger.warning(f"Failed to check sibling {candidate_key}: {e}")

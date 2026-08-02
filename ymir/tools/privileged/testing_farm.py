@@ -15,6 +15,7 @@ from ymir.common.models import (
     TestingFarmRequest,
     TestingFarmRequestResult,
 )
+from ymir.tools.base import tool_error_context
 
 logger = logging.getLogger(__name__)
 
@@ -100,11 +101,9 @@ class GetTestingFarmRequestTool(
         context: RunContext,
     ) -> JSONToolOutput[dict[str, Any]]:
         logger.info("Getting Testing Farm request %s", tool_input.request_id)
-        try:
+        with tool_error_context(f"Failed to get Testing Farm request {tool_input.request_id}"):
             response = _testing_farm_api_get(f"requests/{tool_input.request_id}")
             tf_request = _parse_tf_request(response)
-        except Exception as e:
-            raise ToolError(f"Failed to get Testing Farm request {tool_input.request_id}: {e}") from e
 
         return JSONToolOutput(result=tf_request.model_dump(mode="json"))
 
@@ -147,7 +146,9 @@ class ReproduceTestingFarmRequestTool(
                 }
             )
 
-        try:
+        with tool_error_context(
+            f"Failed to reproduce Testing Farm request {request_id}", build_nvr=build_nvr
+        ):
             # Fetch the original request
             original_response = _testing_farm_api_get(f"requests/{request_id}")
             original = _parse_tf_request(original_response)
@@ -188,8 +189,5 @@ class ReproduceTestingFarmRequestTool(
 
             response = _testing_farm_api_post("requests", json=body)
             new_request = _parse_tf_request(response)
-
-        except Exception as e:
-            raise ToolError(f"Failed to reproduce Testing Farm request {request_id}: {e}") from e
 
         return JSONToolOutput(result=new_request.model_dump(mode="json"))

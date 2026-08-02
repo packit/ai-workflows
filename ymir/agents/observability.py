@@ -95,9 +95,19 @@ def _setup_tool_error_logging() -> None:
         error = getattr(data, "error", None)
         if error is None:
             return
+        # Unprivileged tools: error is ToolErrorWithContext with .additional_context
         additional_context = getattr(error, "additional_context", None)
+        if not additional_context:
+            # Privileged tools: error crossed MCP, context is in ToolError.context dict
+            error_context = getattr(error, "context", None)
+            if isinstance(error_context, dict):
+                additional_context = error_context.get("additional_context")
         if additional_context:
             logger.error(f"Tool {meta.creator} additional context: {additional_context}")
+            span = trace_api.get_current_span()
+            if span.is_recording():
+                for key, value in additional_context.items():
+                    span.set_attribute(f"metadata.{key}", str(value))
 
     Emitter.root().on(re.compile(r"^tool\..+\.error$"), on_tool_error)
 

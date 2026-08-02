@@ -8,6 +8,7 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
+from ymir.tools.base import tool_error_context
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.tools.http import aiohttp_get_with_retries
 
@@ -58,23 +59,24 @@ class MaintainerRulesTool(Tool[MaintainerRulesInput, ToolRunOptions, StringToolO
         if token := os.getenv("GITLAB_TOKEN"):
             headers["PRIVATE-TOKEN"] = token
 
-        try:
-            async with (
-                aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
-                aiohttp_get_with_retries(session, url, headers=headers) as response,
-            ):
-                if response.status == 200:
-                    return StringToolOutput(result=await response.text())
-                if response.status == 404:
+        with tool_error_context(
+            f"Failed to fetch maintainer rules for {tool_input.package}", file_path=tool_input.file_path
+        ):
+            try:
+                async with (
+                    aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
+                    aiohttp_get_with_retries(session, url, headers=headers) as response,
+                ):
+                    if response.status == 200:
+                        return StringToolOutput(result=await response.text())
+                    if response.status == 404:
+                        return StringToolOutput(
+                            result=f"No maintainer rules found for package '{tool_input.package}' "
+                            f"(file '{tool_input.file_path}' not found in rules repository)."
+                        )
+                    text = await response.text()
                     return StringToolOutput(
-                        result=f"No maintainer rules found for package '{tool_input.package}' "
-                        f"(file '{tool_input.file_path}' not found in rules repository)."
+                        result=f"Failed to fetch maintainer rules (HTTP {response.status}): {text}"
                     )
-                text = await response.text()
-                return StringToolOutput(
-                    result=f"Failed to fetch maintainer rules (HTTP {response.status}): {text}"
-                )
-        except TimeoutError as e:
-            raise ToolError("Timeout while fetching maintainer rules") from e
-        except Exception as e:
-            raise ToolError(f"Error fetching maintainer rules: {e}") from e
+            except TimeoutError as e:
+                raise ToolError(f"Timeout while fetching maintainer rules for {tool_input.package}") from e

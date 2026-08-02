@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from ymir.common.utils import run_tool
 from ymir.common.version_utils import is_older_zstream, parse_rhel_version
 from ymir.tools.base import CloneableTool as Tool
+from ymir.tools.base import tool_error_context
 from ymir.tools.privileged.gitlab import _get_merge_request_from_url
 from ymir.tools.privileged.jira import (
     GetJiraDevStatusTool,
@@ -234,10 +235,10 @@ class ZStreamSearchTool(Tool[ZStreamSearchToolInput, ToolRunOptions, ZStreamSear
 
         target_minor = int(target_minor_str)
 
-        try:
+        with tool_error_context(
+            f"Failed to check z-stream status for {tool_input.component}/{tool_input.fix_version}",
+        ):
             older = await is_older_zstream(tool_input.fix_version)
-        except Exception as e:
-            raise ToolError(f"Failed to check z-stream status: {e}") from e
 
         if not older:
             logger.info(f"fix_version {tool_input.fix_version} is not an older z-stream")
@@ -259,7 +260,11 @@ class ZStreamSearchTool(Tool[ZStreamSearchToolInput, ToolRunOptions, ZStreamSear
         )
         logger.info(f"Searching Jira with JQL: {jql}")
 
-        try:
+        with tool_error_context(
+            f"Failed to search Jira for related z-stream issues"
+            f" for {tool_input.component}/{tool_input.fix_version}",
+            jql=jql,
+        ):
             search_result = await run_tool(
                 SearchJiraIssuesTool(),
                 jql=jql,
@@ -319,11 +324,6 @@ class ZStreamSearchTool(Tool[ZStreamSearchToolInput, ToolRunOptions, ZStreamSear
                     )
 
                 logger.info(f"No merged commits for {issue_key} (version {version_name}), cascading...")
-
-        except ToolError:
-            raise
-        except Exception as e:
-            raise ToolError(f"Error during Jira search: {e}") from e
 
         # 6. No commits found in any cascaded issue
         logger.info("No merged commits found in any related issues")

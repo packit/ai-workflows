@@ -19,6 +19,7 @@ from ymir.common.base_utils import KerberosError, init_kerberos_ticket
 from ymir.common.utils import get_latest_candidate_build, get_latest_z_pending_build
 from ymir.common.version_utils import is_older_zstream, parse_zstream_branch_name
 from ymir.tools.base import CloneableTool as Tool
+from ymir.tools.base import tool_error_context
 from ymir.tools.privileged.utils import sanitize_url
 
 logger = logging.getLogger(__name__)
@@ -185,11 +186,12 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
         try:
             principal = await init_kerberos_ticket()
         except KerberosError as e:
-            raise ToolError(f"Failed to initialize Kerberos ticket: {e}") from e
+            logger.error("Kerberos initialization failed: %s", e)
+            raise ToolError("Failed to initialize Kerberos ticket") from e
         username = principal.split("@", maxsplit=1)[0]
         token = os.environ["GITLAB_TOKEN"]
         gitlab_repo_url = f"https://oauth2:{token}@gitlab.com/redhat/rhel/rpms/{package}"
-        try:
+        with tool_error_context("Failed to check GitLab remote", package=package, branch=branch):
             if await _retry_transient(
                 lambda: asyncio.to_thread(git.cmd.Git().ls_remote, gitlab_repo_url, branch, branches=True),
                 f"ls_remote GitLab {package}/{branch}",
@@ -197,67 +199,81 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                 return StringToolOutput(
                     result=f"Z-Stream branch {branch} already exists, no need to create it"
                 )
-        except Exception as e:
-            raise ToolError(f"Failed to check GitLab remote: {sanitize_url(str(e))}") from e
-        try:
-            with tempfile.TemporaryDirectory() as path:
-                # Username is taken from the Kerberos principal and embedded in
-                # the URL explicitly — do not rely on the SSH config User setting.
-                clone_url = f"ssh://{username}@pkgs.devel.redhat.com/rpms/{package}"
-                clone_dest = os.path.join(path, package)
+        with (
+            tool_error_context("Failed to create Z-Stream branch", package=package, branch=branch),
+            tempfile.TemporaryDirectory() as path,
+        ):
+            # Username is taken from the Kerberos principal and embedded in
+            # the URL explicitly — do not rely on the SSH config User setting.
+            clone_url = f"ssh://{username}@pkgs.devel.redhat.com/rpms/{package}"
+            clone_dest = os.path.join(path, package)
 
-                async def _clone():
-                    if os.path.exists(clone_dest):
-                        shutil.rmtree(clone_dest)
-                    return await asyncio.to_thread(git.Repo.clone_from, clone_url, clone_dest)
+            async def _clone():
+                if os.path.exists(clone_dest):
+                    shutil.rmtree(clone_dest)
+                return await asyncio.to_thread(git.Repo.clone_from, clone_url, clone_dest)
 
+            with tool_error_context("Failed to clone dist-git repo", package=package, clone_url=clone_url):
                 repo = await _retry_transient(_clone, f"clone {package} from dist-git")
-                if branch in [ref.name.split("/")[-1] for ref in repo.remotes.origin.refs]:
-                    # Branch already exists in dist-git but not yet mirrored to GitLab.
-                    # This happens when a previous push succeeded server-side but the SSH
-                    # connection dropped before the client received the ACK. Skip the push
-                    # and fall through to poll GitLab for the sync.
-                    logger.warning(
-                        f"Branch {branch} already exists in dist-git but not yet on GitLab; "
-                        "skipping push and waiting for mirror sync"
-                    )
-                else:
+            if branch in [ref.name.split("/")[-1] for ref in repo.remotes.origin.refs]:
+                # Branch already exists in dist-git but not yet mirrored to GitLab.
+                # This happens when a previous push succeeded server-side but the SSH
+                # connection dropped before the client received the ACK. Skip the push
+                # and fall through to poll GitLab for the sync.
+                logger.warning(
+                    f"Branch {branch} already exists in dist-git but not yet on GitLab; "
+                    "skipping push and waiting for mirror sync"
+                )
+            else:
+                with tool_error_context("Failed to find candidate build", package=package, branch=branch):
                     if await is_older_zstream(branch):
                         _, ref = await get_latest_z_pending_build(package, branch)
                     else:
                         _, ref = await get_latest_candidate_build(package, branch)
-                    if source_branch := self._find_source_branch(repo, branch):
-                        ref = await self._find_latest_same_nvr_ref(
-                            repo,
-                            package,
-                            ref,
-                            source_branch,
-                        )
+                if source_branch := self._find_source_branch(repo, branch):
+                    ref = await self._find_latest_same_nvr_ref(
+                        repo,
+                        package,
+                        ref,
+                        source_branch,
+                    )
+                with tool_error_context(
+                    "Failed to push branch to dist-git", package=package, branch=branch, ref=ref
+                ):
                     push_infos = await _retry_transient(
                         lambda: asyncio.to_thread(repo.remotes.origin.push, f"{ref}:refs/heads/{branch}"),
                         f"push {branch} to dist-git",
                     )
+                    if getattr(push_infos, "error", None):
+                        logger.error("git push stderr: %s", sanitize_url(str(push_infos.error)))
                     for info in push_infos:
                         if info.flags & git.remote.PushInfo.ERROR:
-                            raise RuntimeError(f"Push rejected: {info.summary.strip()}")
-                start_time = time.monotonic()
-                while time.monotonic() - start_time < SYNC_TIMEOUT:
-                    try:
-                        if await asyncio.to_thread(
-                            repo.git.ls_remote, gitlab_repo_url, branch, branches=True
-                        ):
-                            return StringToolOutput(result=f"Successfully created Z-Stream branch {branch}")
-                    except git.exc.GitCommandError as e:
-                        if not _is_transient_git_error(e):
-                            raise
-                        logger.warning(f"Transient error polling GitLab mirror sync: {sanitize_url(str(e))}")
-                    elapsed = int(time.monotonic() - start_time)
-                    logger.info(
-                        f"Waiting for GitLab mirror sync of {package} branch {branch} ({elapsed}s elapsed)"
-                    )
-                    await asyncio.sleep(30)
-                raise RuntimeError(
-                    f"The {branch} branch wasn't synced to GitLab after {SYNC_TIMEOUT} seconds"
+                            logger.error("Push to dist-git rejected: %s", info.summary.strip())
+                            raise ToolError("Push to dist-git was rejected")
+            start_time = time.monotonic()
+            while time.monotonic() - start_time < SYNC_TIMEOUT:
+                try:
+                    if await asyncio.to_thread(repo.git.ls_remote, gitlab_repo_url, branch, branches=True):
+                        return StringToolOutput(result=f"Successfully created Z-Stream branch {branch}")
+                except git.exc.GitCommandError as e:
+                    if not _is_transient_git_error(e):
+                        logger.error(
+                            "Failed to poll GitLab mirror for %s/%s: %s",
+                            package,
+                            branch,
+                            sanitize_url(str(e)),
+                        )
+                        raise ToolError("Failed to poll GitLab mirror") from e
+                    logger.warning(f"Transient error polling GitLab mirror sync: {sanitize_url(str(e))}")
+                elapsed = int(time.monotonic() - start_time)
+                logger.info(
+                    f"Waiting for GitLab mirror sync of {package} branch {branch} ({elapsed}s elapsed)"
                 )
-        except Exception as e:
-            raise ToolError(f"Failed to create Z-Stream branch: {sanitize_url(str(e))}") from e
+                await asyncio.sleep(30)
+            logger.error(
+                "GitLab mirror sync timed out for %s branch %s after %ds",
+                package,
+                branch,
+                SYNC_TIMEOUT,
+            )
+            raise ToolError("GitLab mirror sync timed out")

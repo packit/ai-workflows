@@ -1,10 +1,31 @@
 import copy
+import logging
+from contextlib import contextmanager
 from typing import Any, ClassVar, Self
 
 from beeai_framework.context import Run
 from beeai_framework.tools.tool import TInput, Tool, TOutput, TRunOptions
 from beeai_framework.tools.types import ToolRunOptions
 from beeai_framework.utils.cancellation import AbortController, AbortSignal, register_signals
+
+from ymir.tools.errors import ToolErrorWithContext
+from ymir.tools.gateway_utils import redact_credentials
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def tool_error_context(error_message: str, **additional_context):
+    try:
+        yield
+    except ToolErrorWithContext:
+        raise
+    except Exception as e:
+        additional_context["exception"] = f"{type(e).__name__}: {e}"
+        redacted_additional_context = {k: redact_credentials(str(v)) for k, v in additional_context.items()}
+        raise ToolErrorWithContext(
+            error_message, cause=e, additional_context=redacted_additional_context
+        ) from e
 
 
 class CloneableTool(Tool[TInput, TRunOptions, TOutput]):

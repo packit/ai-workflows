@@ -19,5 +19,9 @@ class ToolErrorWithContext(ToolError):
         context: dict[str, Any] | None = None,
         additional_context: dict[str, Any] | None = None,
     ) -> None:
-        super().__init__(message, cause=cause, context=context)
-        self.additional_context = additional_context or {}
+        # Merge additional_context into context under special key for observability
+        merged_context = context.copy() if context else {}
+        if additional_context:
+            merged_context["additional_context"] = additional_context
+
+        super().__init__(message, cause=cause, context=merged_context)

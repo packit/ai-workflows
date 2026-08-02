@@ -92,12 +92,15 @@ class AgentSpanProcessor(SpanProcessor):
 
 def _setup_tool_error_logging() -> None:
     def on_tool_error(data: Any, meta: Any) -> None:
-        error = getattr(data, "error", None)
-        if error is None:
+        if (error := getattr(data, "error", None)) is None:
             return
-        additional_context = getattr(error, "additional_context", None)
-        if additional_context:
-            logger.error(f"Tool {meta.creator} additional context: {additional_context}")
+        if not (additional_context := (getattr(error, "context", None) or {}).get("additional_context")):
+            return
+        logger.error(f"Tool {meta.creator} additional context: {additional_context}")
+        span = trace_api.get_current_span()
+        if span.is_recording():
+            for key, value in additional_context.items():
+                span.set_attribute(f"metadata.{key}", str(value))
 
     Emitter.root().on(re.compile(r"^tool\..+\.error$"), on_tool_error)
 

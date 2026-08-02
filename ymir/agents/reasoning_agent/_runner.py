@@ -500,9 +500,17 @@ class ReasoningAgentRunner:
             )
 
             if tool_call.error is not None:
-                result = self._templates.tool_error.render(
-                    ReasoningAgentToolErrorPromptInput(reason=tool_call.error.explain())
-                )
+                original_context = getattr(tool_call.error, "context", None)
+                try:
+                    if original_context and "additional_context" in original_context:
+                        tool_call.error.context = {
+                            k: v for k, v in original_context.items() if k != "additional_context"
+                        }
+                    reason = tool_call.error.explain()
+                finally:
+                    tool_call.error.context = original_context
+
+                result = self._templates.tool_error.render(ReasoningAgentToolErrorPromptInput(reason=reason))
             else:
                 result = (
                     tool_call.output.get_text_content()

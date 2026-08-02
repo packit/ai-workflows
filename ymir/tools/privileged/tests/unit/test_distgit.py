@@ -151,7 +151,7 @@ async def test_create_zstream_branch_push_rejected(monkeypatch):
 
     monkeypatch.setenv("GITLAB_TOKEN", "<TOKEN>")
 
-    with pytest.raises(ToolError, match="Push rejected"):
+    with pytest.raises(ToolError, match="Failed to push branch to dist-git"):
         await CreateZstreamBranchTool().run(input={"package": package, "branch": branch})
 
 

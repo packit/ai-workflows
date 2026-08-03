@@ -136,7 +136,7 @@ async def run_task_loop(
     queues: list[str],
     process_fn: Callable[[bytes], Coroutine],
     max_concurrent: int = 1,
-    poll_timeout: int = 30,
+    poll_timeout: int = 5,
     poll_fn: Callable[[], Coroutine] | None = None,
     shutdown_event: asyncio.Event | None = None,
 ) -> None:

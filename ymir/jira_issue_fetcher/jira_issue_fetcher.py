@@ -33,6 +33,7 @@ import requests
 
 from ymir.common.base_utils import fix_await, get_jira_auth_headers, redis_client
 from ymir.common.constants import JIRA_SEARCH_PATH, JiraLabels, RedisQueues
+from ymir.common.issue_lock import LOCK_KEY_PREFIX
 from ymir.common.logging_setup import configure_logging
 from ymir.common.merge_queue import submit_merge_job
 from ymir.common.models import (
@@ -524,6 +525,18 @@ class JiraIssueFetcher:
             logger.error(f"Error checking existing queue items: {e}")
             return set()
 
+    async def _get_locked_issue_keys(self, redis_conn: redis.Redis) -> set[str]:
+        """Return issue keys that currently have an active triage lock.
+
+        Scans Redis for lock:triage:* keys, indicating an issue is being
+        actively processed by a triage agent pod.
+        """
+        locked_keys: set[str] = set()
+        async for key in redis_conn.scan_iter(match=f"{LOCK_KEY_PREFIX}*", count=100):
+            issue_key = key.decode().removeprefix(LOCK_KEY_PREFIX)
+            locked_keys.add(issue_key)
+        return locked_keys
+
     async def push_issues_to_queue(self, issues: list[dict[str, Any]]) -> int:
         """
         Push each issue to the Redis triage_queue, but only if it doesn't already exist
@@ -535,6 +548,10 @@ class JiraIssueFetcher:
         async with redis_client(self.redis_url) as redis_conn:
             # Get existing issue keys to avoid duplicates
             existing_keys = await self._get_existing_issue_keys(redis_conn)
+            locked_keys = await self._get_locked_issue_keys(redis_conn)
+            existing_keys |= locked_keys
+            if locked_keys:
+                logger.info("Found %d locked issues, will skip them", len(locked_keys))
 
             remove_issues_for_retry = set()
             user_triggered_keys = set()

@@ -533,7 +533,7 @@ class JiraIssueFetcher:
         """
         locked_keys: set[str] = set()
         async for key in redis_conn.scan_iter(match=f"{LOCK_KEY_PREFIX}*", count=100):
-            issue_key = key.decode().removeprefix(LOCK_KEY_PREFIX)
+            issue_key = key.decode().removeprefix(LOCK_KEY_PREFIX).upper()
             locked_keys.add(issue_key)
         return locked_keys
 
@@ -549,9 +549,8 @@ class JiraIssueFetcher:
             # Get existing issue keys to avoid duplicates
             existing_keys = await self._get_existing_issue_keys(redis_conn)
             locked_keys = await self._get_locked_issue_keys(redis_conn)
-            existing_keys |= locked_keys
             if locked_keys:
-                logger.info("Found %d locked issues, will skip them", len(locked_keys))
+                logger.info("Found %d locked issues, will skip enqueue for them", len(locked_keys))
 
             remove_issues_for_retry = set()
             user_triggered_keys = set()
@@ -742,6 +741,14 @@ class JiraIssueFetcher:
                                     f"after retries; skipping enqueue to avoid duplicate processing: {e}"
                                 )
                                 continue
+
+                    if issue_key in locked_keys:
+                        logger.info(
+                            "Issue %s is currently locked - trigger label consumed but skipping enqueue",
+                            issue_key,
+                        )
+                        skipped_count += 1
+                        continue
 
                     # Create task using shared Pydantic model
                     task = Task.from_issue(issue_key, user_triggered=user_triggered)

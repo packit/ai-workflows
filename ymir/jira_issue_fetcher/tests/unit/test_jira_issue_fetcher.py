@@ -11,6 +11,7 @@ from flexmock import flexmock
 
 import ymir.jira_issue_fetcher.jira_issue_fetcher as jira_issue_fetcher_impl
 from ymir.common.constants import JIRA_SEARCH_PATH, JiraLabels, RedisQueues
+from ymir.common.issue_lock import LOCK_KEY_PREFIX
 from ymir.common.models import (
     BackportData,
     ClarificationNeededData,
@@ -38,11 +39,25 @@ def fetcher(mock_env_vars):
     return JiraIssueFetcher()
 
 
+async def _empty_async_iter(*_args, **_kwargs):
+    return
+    yield
+
+
+def _lock_keys_async_iter(*issue_keys):
+    async def _iter(*_args, **_kwargs):
+        for key in issue_keys:
+            yield f"{LOCK_KEY_PREFIX}{key}".encode()
+
+    return _iter
+
+
 @pytest.fixture
 def mock_redis_context():
     """Create a mock Redis context manager for testing."""
     # Create mock Redis object
     mock_redis = flexmock()
+    mock_redis.should_receive("scan_iter").and_return(_empty_async_iter())
 
     @asynccontextmanager
     async def mock_context_manager(*_, **__):
@@ -1302,6 +1317,7 @@ async def test_push_stale_reenqueue_dry_run_skips_flip_but_still_pushes(monkeypa
     fetcher = JiraIssueFetcher()
 
     mock_redis = flexmock()
+    mock_redis.should_receive("scan_iter").and_return(_empty_async_iter())
 
     @asynccontextmanager
     async def mock_context_manager(*_, **__):
@@ -1329,6 +1345,57 @@ async def test_push_stale_reenqueue_dry_run_skips_flip_but_still_pushes(monkeypa
     result = await fetcher.push_issues_to_queue(issues)
 
     assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_locked_todo_consumes_label_but_skips_enqueue(fetcher, mock_redis_context):
+    """ymir_todo on a locked issue: flip the label but do not push to Redis."""
+    mock_redis, _ = mock_redis_context
+    mock_redis.should_receive("scan_iter").and_return(_lock_keys_async_iter("TODO-LOCKED")())
+
+    issues = [{"key": "TODO-LOCKED", "fields": {"labels": [JiraLabels.TODO.value]}}]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args("TODO-LOCKED").and_return(
+        True
+    ).once()
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "TODO-LOCKED",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+        remove=[JiraLabels.TODO.value],
+    ).once()
+
+    mock_redis.should_receive("lpush").never()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_locked_retry_needed_consumes_label_but_skips_enqueue(fetcher, mock_redis_context):
+    """ymir_retry_needed on a locked issue: flip the label but do not push to Redis."""
+    mock_redis, _ = mock_redis_context
+    mock_redis.should_receive("scan_iter").and_return(_lock_keys_async_iter("RETRY-LOCKED")())
+
+    issues = [{"key": "RETRY-LOCKED", "fields": {"labels": [JiraLabels.RETRY_NEEDED.value]}}]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "RETRY-LOCKED",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+        remove=[JiraLabels.RETRY_NEEDED.value],
+    ).once()
+
+    mock_redis.should_receive("lpush").never()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 0
 
 
 def test_label_added_by_rh_employee_walks_paginated_changelog(fetcher):

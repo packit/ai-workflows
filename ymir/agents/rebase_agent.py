@@ -158,10 +158,14 @@ async def main() -> None:
         dry_run: bool,
         user_triggered: bool,
     ) -> None:
-        """Update Jira labels for primary issue and all consolidated siblings in parallel."""
+        """Update Jira labels for primary issue and all consolidated siblings in parallel.
+
+        Uses return_exceptions=True to ensure partial Jira failures don't disrupt
+        the entire workflow or leave inconsistent labels across issues.
+        """
         # Deduplicate in case consolidated_issues contains duplicates or the primary issue
         all_issues = list(dict.fromkeys([primary_issue] + [item.issue_key for item in consolidated_issues]))
-        await asyncio.gather(
+        results = await asyncio.gather(
             *[
                 tasks.set_jira_labels(
                     jira_issue=issue,
@@ -171,8 +175,13 @@ async def main() -> None:
                     user_triggered=user_triggered,
                 )
                 for issue in all_issues
-            ]
+            ],
+            return_exceptions=True,
         )
+        # Log any failures but continue (label updates are best-effort)
+        for issue, result in zip(all_issues, results, strict=True):
+            if isinstance(result, Exception):
+                logger.warning(f"Failed to update labels for {issue}: {result}")
 
     async def post_comments_to_all_issues(
         primary_issue: str,

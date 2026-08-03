@@ -44,7 +44,7 @@ JIRA_BATCH_SIZE = 100
 
 RATE_LIMIT_DELAY = 0.5
 REQUEST_TIMEOUT = 90
-MERGED_MR_LOOKBACK_DAYS = 180
+MR_LOOKBACK_DAYS = 180
 
 CLOSE_NOTE_MARKER = "Closing this merge request"
 
@@ -332,10 +332,14 @@ class MRCleanup:
         return Action.CLOSED
 
     def fetch_closed_mrs(self) -> list[dict]:
+        cutoff = datetime.now(UTC) - timedelta(days=MR_LOOKBACK_DAYS)
+        created_after = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
         all_mrs = []
         for group in GITLAB_GROUPS:
             for author in self.bot_authors:
-                logger.info("Fetching closed MRs in %s by %s", group, author)
+                logger.info(
+                    "Fetching closed MRs in %s by %s (created after %s)", group, author, created_after
+                )
                 encoded_group = urlquote(group, safe="")
                 page = 1
                 while True:
@@ -348,6 +352,7 @@ class MRCleanup:
                             "page": page,
                             "include_subgroups": "true",
                             "not[labels]": CLOSURE_HANDLED_MR_LABEL,
+                            "created_after": created_after,
                         },
                     )
                     if not mrs:
@@ -359,7 +364,7 @@ class MRCleanup:
         return all_mrs
 
     def fetch_merged_mrs(self) -> list[dict]:
-        cutoff = datetime.now(UTC) - timedelta(days=MERGED_MR_LOOKBACK_DAYS)
+        cutoff = datetime.now(UTC) - timedelta(days=MR_LOOKBACK_DAYS)
         created_after = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
         all_mrs = []
         for group in GITLAB_GROUPS:

@@ -5,7 +5,7 @@ from textwrap import dedent
 
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.tools import Tool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 import ymir.agents.tasks as tasks
 from ymir.agents.reasoning_agent import ReasoningAgent
@@ -102,6 +102,13 @@ class SiblingRebaseAnalysis(BaseModel):
         "include ALL CVE IDs when the issue covers multiple CVEs",
     )
 
+    @model_validator(mode="after")
+    def validate_target_version(self):
+        """Validate that target_version is present when requires_same_rebase is True."""
+        if self.requires_same_rebase and not self.target_version:
+            raise ValueError("target_version must be provided when requires_same_rebase is True")
+        return self
+
 
 async def find_rebase_siblings(
     jira_issue: str,
@@ -185,6 +192,15 @@ async def find_rebase_siblings(
             analysis = SiblingRebaseAnalysis.model_validate_json(response.last_message.text)
 
             if analysis.requires_same_rebase:
+                # Guard: target_version must be present when requires_same_rebase is True
+                if not analysis.target_version:
+                    logger.warning(
+                        f"Sibling {candidate_key} marked as requires_same_rebase but missing target_version"
+                    )
+                    return (
+                        None,
+                        f"* {candidate_key} — excluded (missing target version)",
+                    )
                 cmp_result = compare_versions(analysis.target_version, rebase_data.version)
                 if cmp_result == 0:
                     logger.info(

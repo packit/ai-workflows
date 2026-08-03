@@ -96,12 +96,16 @@ spec:
     - type: Allow
       to:
         dnsName: googleapis.com
-    # GNU project hosting (gnu.org, ftp.gnu.org, savannah.gnu.org, savannah.nongnu.org,
-    # git.savannah.nongnu.org). All resolve to 209.51.188.0/24; dnsName selector picks
-    # AAAA records which don't match this cluster's IPv4-only egress, so use CIDR instead.
+    # GNU project hosting. Most hosts (gnu.org, ftp.gnu.org, savannah.gnu.org,
+    # git.savannah.nongnu.org) resolve to 209.51.188.0/24; dnsName selector picks
+    # AAAA records which don't match this cluster's IPv4-only egress, so use CIDR.
+    # cgit.git.savannah.gnu.org is CDN-backed and resolves outside that CIDR.
     - type: Allow
       to:
         cidrSelector: 209.51.188.0/24
+    - type: Allow
+      to:
+        dnsName: cgit.git.savannah.gnu.org
     # sourceware.org — upstream git for glibc, binutils, elfutils, newlib, etc.
     # Resolves to 38.145.34.32 (Cogent); not covered by existing CIDRs.
     - type: Allow

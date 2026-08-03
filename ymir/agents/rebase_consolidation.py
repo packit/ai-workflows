@@ -6,6 +6,7 @@ from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.tools import Tool
 from pydantic import BaseModel, Field
 
+import ymir.agents.tasks as tasks
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import (
     get_agent_execution_config,
@@ -14,11 +15,13 @@ from ymir.agents.utils import (
     is_reasoning_enabled,
     run_tool,
 )
-from ymir.common.constants import JiraLabels
+from ymir.common.base_utils import fix_await, redis_client
+from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import (
     ConsolidatedIssue,
     CVEEligibilityResult,
     RebaseData,
+    Task,
     TriageEligibility,
 )
 from ymir.common.version_utils import compare_versions, get_fix_version_variants
@@ -324,26 +327,24 @@ async def queue_siblings_for_triage(
                 continue
 
             # Queue for triage
-            await run_tool(
-                "enqueue_issue_for_cve_triage",
-                available_tools=available_tools,
-                issue_key=candidate_key,
-            )
+            task = Task.from_issue(candidate_key)
+            async with redis_client() as redis:
+                await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
 
             # Add label
-            await run_tool(
-                "add_labels_to_jira_issue",
-                available_tools=available_tools,
-                issue_key=candidate_key,
-                labels=[JiraLabels.REBASE_SIBLING.value],
+            await tasks.set_jira_labels(
+                jira_issue=candidate_key,
+                labels_to_add=[JiraLabels.REBASE_SIBLING.value],
+                dry_run=False,
+                user_triggered=False,
             )
 
             # Post comment on sibling
-            await run_tool(
-                "comment_in_jira",
+            await tasks.comment_in_jira(
+                jira_issue=candidate_key,
+                agent_type="Triage",
+                comment_text=f"Queued for triage as potential sibling of {primary_issue}",
                 available_tools=available_tools,
-                issue_key=candidate_key,
-                comment=f"Queued for triage as potential sibling of {primary_issue}",
                 is_error=False,
                 user_triggered=False,
             )
@@ -362,22 +363,23 @@ async def queue_siblings_for_triage(
     if queued_count > 0:
         # Add label to primary
         try:
-            await run_tool(
-                "add_labels_to_jira_issue",
-                available_tools=available_tools,
-                issue_key=primary_issue,
-                labels=[JiraLabels.WAITING_FOR_SIBLINGS.value],
+            await tasks.set_jira_labels(
+                jira_issue=primary_issue,
+                labels_to_add=[JiraLabels.WAITING_FOR_SIBLINGS.value],
+                dry_run=False,
+                user_triggered=False,
             )
         except Exception as e:
             logger.warning(f"Failed to label primary {primary_issue} as waiting: {e}")
 
         # Post comment on primary
         try:
-            await run_tool(
-                "comment_in_jira",
+            comment_text = f"Waiting for {queued_count} sibling(s) to finish triaging before starting rebase"
+            await tasks.comment_in_jira(
+                jira_issue=primary_issue,
+                agent_type="Triage",
+                comment_text=comment_text,
                 available_tools=available_tools,
-                issue_key=primary_issue,
-                comment=f"Waiting for {queued_count} sibling(s) to finish triaging before starting rebase",
                 is_error=False,
                 user_triggered=False,
             )
@@ -476,26 +478,36 @@ async def check_and_queue_primary_if_ready(
         logger.info(f"All siblings done for {primary_issue}, queueing for rebase")
 
         # Remove waiting label
-        await run_tool(
-            "remove_labels_from_jira_issue",
-            available_tools=available_tools,
-            issue_key=primary_issue,
-            labels=[JiraLabels.WAITING_FOR_SIBLINGS.value],
+        await tasks.set_jira_labels(
+            jira_issue=primary_issue,
+            labels_to_remove=[JiraLabels.WAITING_FOR_SIBLINGS.value],
+            dry_run=False,
+            user_triggered=False,
         )
 
         # Queue for rebase
-        await run_tool(
-            "enqueue_issue_for_rebase",
+        # Get target_branch and state from primary issue metadata to queue correctly
+        primary_state_data = await run_tool(
+            "fetch_state_from_jira",
             available_tools=available_tools,
-            issue_key=primary_issue,
+            jira_issue=primary_issue,
         )
+        target_branch = primary_state_data.get("target_branch")
+        if target_branch:
+            task = Task(metadata=primary_state_data, user_triggered=False)
+            queue = RedisQueues.get_rebase_queue_for_branch(target_branch, False)
+            async with redis_client() as redis:
+                await fix_await(redis.lpush(queue, task.model_dump_json()))
+            logger.info(f"Queued {primary_issue} to {queue}")
+        else:
+            logger.warning(f"No target branch found for {primary_issue}, cannot queue for rebase")
 
         # Post comment
-        await run_tool(
-            "comment_in_jira",
+        await tasks.comment_in_jira(
+            jira_issue=primary_issue,
+            agent_type="Triage",
+            comment_text="All siblings have finished triaging, starting rebase",
             available_tools=available_tools,
-            issue_key=primary_issue,
-            comment="All siblings have finished triaging, starting rebase",
             is_error=False,
             user_triggered=False,
         )

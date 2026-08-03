@@ -32,6 +32,7 @@ from ymir.agents.utils import (
 )
 from ymir.common.base_utils import fix_await, install_shutdown_handler, redis_client, run_task_loop
 from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.issue_lock import issue_lock
 from ymir.common.logging_setup import configure_logging, current_jira_issue
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
@@ -406,9 +407,6 @@ async def main() -> None:
                 triage_state = task.metadata
                 rebuild_data = RebuildData.model_validate(triage_state["triage_result"]["data"])
                 current_jira_issue.set(rebuild_data.jira_issue)
-                dist_git_branch = triage_state["target_branch"]
-                dist_git_namespace = triage_state.get("dist_git_namespace")
-                user_triggered = task.user_triggered
             except Exception as e:
                 logger.error(f"Failed to parse task payload, skipping: {e}")
                 await fix_await(
@@ -420,6 +418,20 @@ async def main() -> None:
                     )
                 )
                 return
+
+            async with issue_lock(redis, rebuild_data.jira_issue, prefix="lock:rebuild:") as lock_token:
+                if lock_token is None:
+                    logger.info(
+                        "Issue %s is already locked by another worker; dropping duplicate",
+                        rebuild_data.jira_issue,
+                    )
+                    return
+                await _process_rebuild_locked(task, triage_state, rebuild_data)
+
+        async def _process_rebuild_locked(task, triage_state, rebuild_data):
+            dist_git_branch = triage_state["target_branch"]
+            dist_git_namespace = triage_state.get("dist_git_namespace")
+            user_triggered = task.user_triggered
 
             logger.info(
                 f"Processing rebuild for package: {rebuild_data.package}, "

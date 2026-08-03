@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from textwrap import dedent
 
 from beeai_framework.memory import UnconstrainedMemory
@@ -328,7 +329,7 @@ async def queue_siblings_for_triage(
 
             # Queue for triage
             task = Task.from_issue(candidate_key)
-            async with redis_client() as redis:
+            async with redis_client(os.environ["REDIS_URL"]) as redis:
                 await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
 
             # Add label
@@ -496,7 +497,7 @@ async def check_and_queue_primary_if_ready(
         if target_branch:
             task = Task(metadata=primary_state_data, user_triggered=False)
             queue = RedisQueues.get_rebase_queue_for_branch(target_branch, False)
-            async with redis_client() as redis:
+            async with redis_client(os.environ["REDIS_URL"]) as redis:
                 await fix_await(redis.lpush(queue, task.model_dump_json()))
             logger.info(f"Queued {primary_issue} to {queue}")
         else:

@@ -25,7 +25,7 @@ from ymir.common.models import (
     Task,
     TriageEligibility,
 )
-from ymir.common.version_utils import compare_versions, get_fix_version_variants
+from ymir.common.version_utils import compare_versions_async, get_fix_version_variants
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +206,7 @@ async def find_rebase_siblings(
                             None,
                             f"* {candidate_key} — excluded (missing target version)",
                         )
-                    cmp_result = compare_versions(analysis.target_version, rebase_data.version)
+                    cmp_result = await compare_versions_async(analysis.target_version, rebase_data.version)
                     if cmp_result == 0:
                         logger.info(
                             f"Sibling {candidate_key} confirmed as requiring rebase "

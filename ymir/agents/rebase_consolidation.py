@@ -352,7 +352,11 @@ async def queue_siblings_for_triage(
             logger.info(f"Queued sibling {candidate_key} for triage")
 
         except Exception as e:
-            logger.warning(f"Failed to queue sibling {candidate_key}: {e}")
+            import traceback
+
+            logger.warning(
+                f"Failed to queue sibling {candidate_key}: {e}\nTraceback: {traceback.format_exc()}"
+            )
             continue
 
     if queued_count > 0:

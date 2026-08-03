@@ -151,85 +151,91 @@ async def find_rebase_siblings(
 
     analysis_tools = [t for t in available_tools if t.name in ["get_jira_details", "search_jira_issues"]]
 
+    # Limit concurrent sibling analyses to avoid overwhelming downstream services
+    semaphore = asyncio.Semaphore(10)
+
     async def analyze_candidate(candidate: dict) -> tuple[ConsolidatedIssue | None, str]:
         """Analyze a single candidate sibling for consolidation eligibility."""
-        candidate_key = candidate.get("key", "")
-        try:
-            eligibility_result = CVEEligibilityResult.model_validate(
-                await run_tool(
-                    "check_cve_triage_eligibility",
-                    available_tools=available_tools,
-                    issue_key=candidate_key,
+        async with semaphore:
+            candidate_key = candidate.get("key", "")
+            try:
+                eligibility_result = CVEEligibilityResult.model_validate(
+                    await run_tool(
+                        "check_cve_triage_eligibility",
+                        available_tools=available_tools,
+                        issue_key=candidate_key,
+                    )
                 )
-            )
-            if eligibility_result.eligibility != TriageEligibility.IMMEDIATELY:
-                logger.info(f"Sibling {candidate_key} not eligible: {eligibility_result.reason}")
-                return None, f"* {candidate_key} — excluded (not eligible: {eligibility_result.reason})"
-        except Exception as e:
-            logger.warning(f"Failed to check eligibility for sibling {candidate_key}: {e}")
-            return None, f"* {candidate_key} — excluded (eligibility check failed)"
+                if eligibility_result.eligibility != TriageEligibility.IMMEDIATELY:
+                    logger.info(f"Sibling {candidate_key} not eligible: {eligibility_result.reason}")
+                    return None, f"* {candidate_key} — excluded (not eligible: {eligibility_result.reason})"
+            except Exception as e:
+                logger.warning(f"Failed to check eligibility for sibling {candidate_key}: {e}")
+                return None, f"* {candidate_key} — excluded (eligibility check failed)"
 
-        try:
-            analysis_agent = ReasoningAgent(
-                name="SiblingRebaseAnalyzer",
-                llm=get_chat_model(),
-                unconstrained=is_reasoning_enabled(),
-                tool_call_checker=get_tool_call_checker_config(),
-                tools=analysis_tools,
-                memory=UnconstrainedMemory(),
-            )
-            prompt = _build_sibling_analysis_prompt(
-                candidate_key=candidate_key,
-                jira_issue=jira_issue,
-                package=rebase_data.package,
-                target_version=rebase_data.version,
-            )
-            response = await analysis_agent.run(
-                prompt,
-                expected_output=SiblingRebaseAnalysis,
-                **get_agent_execution_config(),
-            )
-            analysis = SiblingRebaseAnalysis.model_validate_json(response.last_message.text)
+            try:
+                analysis_agent = ReasoningAgent(
+                    name="SiblingRebaseAnalyzer",
+                    llm=get_chat_model(),
+                    unconstrained=is_reasoning_enabled(),
+                    tool_call_checker=get_tool_call_checker_config(),
+                    tools=analysis_tools,
+                    memory=UnconstrainedMemory(),
+                )
+                prompt = _build_sibling_analysis_prompt(
+                    candidate_key=candidate_key,
+                    jira_issue=jira_issue,
+                    package=rebase_data.package,
+                    target_version=rebase_data.version,
+                )
+                response = await analysis_agent.run(
+                    prompt,
+                    expected_output=SiblingRebaseAnalysis,
+                    **get_agent_execution_config(),
+                )
+                analysis = SiblingRebaseAnalysis.model_validate_json(response.last_message.text)
 
-            if analysis.requires_same_rebase:
-                # Guard: target_version must be present when requires_same_rebase is True
-                if not analysis.target_version:
-                    logger.warning(
-                        f"Sibling {candidate_key} marked as requires_same_rebase but missing target_version"
+                if analysis.requires_same_rebase:
+                    # Guard: target_version must be present when requires_same_rebase is True
+                    if not analysis.target_version:
+                        logger.warning(
+                            f"Sibling {candidate_key} marked as requires_same_rebase "
+                            "but missing target_version"
+                        )
+                        return (
+                            None,
+                            f"* {candidate_key} — excluded (missing target version)",
+                        )
+                    cmp_result = compare_versions(analysis.target_version, rebase_data.version)
+                    if cmp_result == 0:
+                        logger.info(
+                            f"Sibling {candidate_key} confirmed as requiring rebase "
+                            f"to {analysis.target_version}"
+                        )
+                        cve_id = analysis.cve_id
+                        cve_info = f" [{cve_id}]" if cve_id else ""
+                        consolidated_issue = ConsolidatedIssue(
+                            issue_key=candidate_key,
+                            dependency_issue=None,
+                            dependency_component=None,
+                        )
+                        return (
+                            consolidated_issue,
+                            f"* {candidate_key}{cve_info} — included (target: {analysis.target_version})",
+                        )
+                    logger.info(
+                        f"Sibling {candidate_key} requires different version: "
+                        f"{analysis.target_version} != {rebase_data.version}"
                     )
                     return (
                         None,
-                        f"* {candidate_key} — excluded (missing target version)",
+                        f"* {candidate_key} — excluded (different target version: {analysis.target_version})",
                     )
-                cmp_result = compare_versions(analysis.target_version, rebase_data.version)
-                if cmp_result == 0:
-                    logger.info(
-                        f"Sibling {candidate_key} confirmed as requiring rebase to {analysis.target_version}"
-                    )
-                    cve_id = analysis.cve_id
-                    cve_info = f" [{cve_id}]" if cve_id else ""
-                    consolidated_issue = ConsolidatedIssue(
-                        issue_key=candidate_key,
-                        dependency_issue=None,
-                        dependency_component=None,
-                    )
-                    return (
-                        consolidated_issue,
-                        f"* {candidate_key}{cve_info} — included (target: {analysis.target_version})",
-                    )
-                logger.info(
-                    f"Sibling {candidate_key} requires different version: "
-                    f"{analysis.target_version} != {rebase_data.version}"
-                )
-                return (
-                    None,
-                    f"* {candidate_key} — excluded (different target version: {analysis.target_version})",
-                )
-            logger.info(f"Sibling {candidate_key} does not require a rebase")
-            return None, f"* {candidate_key} — excluded (not a rebase)"
-        except Exception as e:
-            logger.warning(f"Failed to analyze sibling {candidate_key}: {e}")
-            return None, f"* {candidate_key} — excluded (analysis failed)"
+                logger.info(f"Sibling {candidate_key} does not require a rebase")
+                return None, f"* {candidate_key} — excluded (not a rebase)"
+            except Exception as e:
+                logger.warning(f"Failed to analyze sibling {candidate_key}: {e}")
+                return None, f"* {candidate_key} — excluded (analysis failed)"
 
     # Analyze all candidates in parallel
     results = await asyncio.gather(*[analyze_candidate(c) for c in candidates])
@@ -581,44 +587,48 @@ async def find_triaged_rebase_siblings(
 
     logger.info(f"Found {len(candidates)} triaged sibling candidates for {jira_issue}")
 
+    # Limit concurrent sibling checks to avoid overwhelming downstream services
+    semaphore = asyncio.Semaphore(10)
+
     async def check_candidate(candidate: dict) -> tuple[ConsolidatedIssue | None, str]:
         """Check if a triaged sibling has comment referencing the primary issue."""
-        candidate_key = candidate.get("key", "")
-        try:
-            # Get sibling's comments to check for primary issue reference
-            comments = await run_tool(
-                "get_jira_comments",
-                available_tools=available_tools,
-                issue_key=candidate_key,
-            )
-
-            # Look for comment matching "Queued for triage as potential sibling of {jira_issue}"
-            has_primary_reference = False
-            for comment in comments:
-                body = comment.get("body", "")
-                if f"Queued for triage as potential sibling of {jira_issue}" in body:
-                    has_primary_reference = True
-                    break
-
-            if has_primary_reference:
-                logger.info(f"Sibling {candidate_key} confirmed as sibling of {jira_issue}")
-                consolidated_issue = ConsolidatedIssue(
+        async with semaphore:
+            candidate_key = candidate.get("key", "")
+            try:
+                # Get sibling's comments to check for primary issue reference
+                comments = await run_tool(
+                    "get_jira_comments",
+                    available_tools=available_tools,
                     issue_key=candidate_key,
-                    dependency_issue=None,
-                    dependency_component=None,
                 )
+
+                # Look for comment matching "Queued for triage as potential sibling of {jira_issue}"
+                has_primary_reference = False
+                for comment in comments:
+                    body = comment.get("body", "")
+                    if f"Queued for triage as potential sibling of {jira_issue}" in body:
+                        has_primary_reference = True
+                        break
+
+                if has_primary_reference:
+                    logger.info(f"Sibling {candidate_key} confirmed as sibling of {jira_issue}")
+                    consolidated_issue = ConsolidatedIssue(
+                        issue_key=candidate_key,
+                        dependency_issue=None,
+                        dependency_component=None,
+                    )
+                    return (
+                        consolidated_issue,
+                        f"* {candidate_key} — included (sibling of {jira_issue})",
+                    )
+                logger.info(f"Sibling {candidate_key} does not reference {jira_issue} in comments")
                 return (
-                    consolidated_issue,
-                    f"* {candidate_key} — included (sibling of {jira_issue})",
+                    None,
+                    f"* {candidate_key} — excluded (not a sibling of {jira_issue})",
                 )
-            logger.info(f"Sibling {candidate_key} does not reference {jira_issue} in comments")
-            return (
-                None,
-                f"* {candidate_key} — excluded (not a sibling of {jira_issue})",
-            )
-        except Exception as e:
-            logger.warning(f"Failed to check sibling {candidate_key}: {e}")
-            return None, f"* {candidate_key} — excluded (check failed)"
+            except Exception as e:
+                logger.warning(f"Failed to check sibling {candidate_key}: {e}")
+                return None, f"* {candidate_key} — excluded (check failed)"
 
     # Check all candidates in parallel
     results = await asyncio.gather(*[check_candidate(c) for c in candidates])

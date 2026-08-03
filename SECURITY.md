@@ -19,5 +19,10 @@ scan staged files for potential secrets before each commit.
 
 Our secrets management procedures are described in this document: https://github.com/packit/jotnar/blob/main/access_control.md
 
+## Threat Model
+
+For a detailed threat model of this system (assets, trust boundaries, entry points, threats, and
+mitigations), see [THREAT_MODEL.md](THREAT_MODEL.md).
+
 To report a security vulnerability in this project, open a private security advisory on GitHub or
 contact the maintainers directly.

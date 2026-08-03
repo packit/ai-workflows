@@ -115,6 +115,10 @@ For detailed deployment info: see [openshift/README.md](openshift/README.md)
 - **[docs/reproducer_architecture.md](docs/reproducer_architecture.md)** — Reproducer agent, cross-stream reuse, create/adapt lock
 - **[docs/mr_consolidation_architecture.md](docs/mr_consolidation_architecture.md)** — MR consolidation agent and Redis queue
 
+## Security
+
+If you introduce a new service as a dependency to our agents, make sure to read [THREAT_MODEL.md](THREAT_MODEL.md) document and capture the newly added dependency in it.
+
 ## Code Changes Checklist
 
 - [ ] Write tests first (especially for tools/git operations)

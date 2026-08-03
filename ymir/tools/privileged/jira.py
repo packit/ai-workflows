@@ -626,9 +626,8 @@ async def _check_zstream_fix_approach(
         if not any(fv.lower() in relevant_z_streams for fv in fv_names):
             continue
 
-        status_name = issue.get("fields", {}).get("status", {}).get("name", "")
-        resolution_raw = issue.get("fields", {}).get("resolution", {})
-        resolution_name = resolution_raw.get("name", "") if resolution_raw else ""
+        status_name = (issue.get("fields", {}).get("status") or {}).get("name", "")
+        resolution_name = (issue.get("fields", {}).get("resolution") or {}).get("name", "")
 
         if status_name.upper() == "CLOSED":
             if resolution_name.upper() in _REJECTED_RESOLUTIONS:

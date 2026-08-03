@@ -1007,6 +1007,32 @@ async def test_fix_approach_no_clones():
     assert pending == []
 
 
+@pytest.mark.asyncio
+async def test_fix_approach_none_status_field():
+    """Z-stream clone with status=None and resolution=None — should handle gracefully."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.6.z"}],
+                "status": None,  # Field present but None
+                "resolution": None,
+                "customfield_10578": None,
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    approach, pending, _ = await _check_zstream_fix_approach("CVE-2025-12345", "curl", "RHEL-999", "9")
+    assert approach is FixApproach.PENDING
+    assert pending == ["RHEL-111"]
+
+
 # --- CVE triage eligibility tests ---
 
 

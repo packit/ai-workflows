@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -69,6 +70,11 @@ def _make_payload(issue: str = "RHEL-99999", user_triggered: bool = False) -> by
     return task.model_dump_json().encode()
 
 
+@asynccontextmanager
+async def _always_acquired_lock(*_args, **_kwargs):
+    yield "test-lock-token"
+
+
 async def _capture_process_task(main_fn):
     """Run main() in queue mode, capture the process_task closure it registers."""
     captured = {}
@@ -110,6 +116,7 @@ async def test_process_task_skips_closed_issues(status):
     process_task = await _capture_process_task(main)
 
     with (
+        patch("ymir.agents.triage_agent.issue_lock", side_effect=_always_acquired_lock),
         patch(
             "ymir.agents.tasks.get_jira_issue_metadata",
             new_callable=AsyncMock,
@@ -130,6 +137,7 @@ async def test_process_task_skips_closed_user_triggered_with_cleanup():
     process_task = await _capture_process_task(main)
 
     with (
+        patch("ymir.agents.triage_agent.issue_lock", side_effect=_always_acquired_lock),
         patch(
             "ymir.agents.tasks.get_jira_issue_metadata",
             new_callable=AsyncMock,
@@ -157,6 +165,7 @@ async def test_process_task_proceeds_for_open_issues():
     process_task = await _capture_process_task(main)
 
     with (
+        patch("ymir.agents.triage_agent.issue_lock", side_effect=_always_acquired_lock),
         patch(
             "ymir.agents.tasks.get_jira_issue_metadata",
             new_callable=AsyncMock,
@@ -397,3 +406,55 @@ async def test_determine_target_branch_non_modular_has_no_explicit_namespace():
         )
     assert branch == "rhel-10.2"
     assert namespace is None
+
+
+# --- Per-issue lock tests ---
+
+
+@asynccontextmanager
+async def _lock_already_held(*_args, **_kwargs):
+    yield None
+
+
+@pytest.mark.asyncio
+async def test_process_task_drops_duplicate_when_locked():
+    """When the per-issue lock is already held, process_task silently drops the task."""
+    from ymir.agents.triage_agent import main
+
+    process_task = await _capture_process_task(main)
+
+    with (
+        patch("ymir.agents.triage_agent.issue_lock", side_effect=_lock_already_held),
+        patch(
+            "ymir.agents.tasks.get_jira_issue_metadata",
+            new_callable=AsyncMock,
+        ) as mock_metadata,
+        patch("ymir.agents.triage_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+    ):
+        await process_task(_make_payload())
+
+    mock_metadata.assert_not_awaited()
+    mock_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_task_acquires_lock_and_proceeds():
+    """When the lock is available, process_task proceeds to call run_workflow."""
+    from ymir.agents.triage_agent import main
+
+    process_task = await _capture_process_task(main)
+
+    with (
+        patch("ymir.agents.triage_agent.issue_lock", side_effect=_always_acquired_lock),
+        patch(
+            "ymir.agents.tasks.get_jira_issue_metadata",
+            new_callable=AsyncMock,
+            return_value=([], "New"),
+        ),
+        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
+        patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
+        patch("ymir.agents.triage_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+    ):
+        await process_task(_make_payload())
+
+    mock_workflow.assert_awaited_once()

@@ -39,6 +39,7 @@ from ymir.agents.utils import (
 from ymir.common.base_utils import fix_await, install_shutdown_handler, redis_client, run_task_loop
 from ymir.common.config import load_rhel_config
 from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.issue_lock import issue_lock
 from ymir.common.logging_setup import configure_logging, current_jira_issue, get_trajectory_writeable
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
@@ -1102,6 +1103,16 @@ async def main() -> None:
             task = Task.model_validate_json(payload)
             input = InputSchema.model_validate(task.metadata)
             current_jira_issue.set(input.issue)
+            async with issue_lock(redis, input.issue) as lock_token:
+                if lock_token is None:
+                    logger.info(
+                        "Issue %s is already locked by another worker; dropping duplicate",
+                        input.issue,
+                    )
+                    return
+                await _process_triage_locked(task, input)
+
+        async def _process_triage_locked(task, input):
             user_triggered = task.user_triggered
             logger.info(
                 f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}"
@@ -1313,7 +1324,6 @@ async def main() -> None:
                                     f"{consolidated.issue_key}: {e}"
                                 )
 
-                # Dispatch to downstream queues
                 if output.resolution == Resolution.ERROR:
                     await retry(task, output.data.model_dump_json())
                 elif output.resolution == Resolution.POSTPONED:
@@ -1341,7 +1351,6 @@ async def main() -> None:
                             queue = RedisQueues.CLARIFICATION_NEEDED_QUEUE.value
                             downstream_payload = task.model_dump_json()
                         elif not state.target_branch:
-                            # Unmapped tickets return None; skip branch-based queues.
                             logger.info(f"No target branch for {input.issue} — skipping downstream dispatch")
                             queue = None
                         else:

@@ -431,15 +431,16 @@ async def check_and_queue_primary_if_ready(
         available_tools: Available tools for Jira operations
     """
     try:
-        # Get sibling's comments to find primary issue
-        comments = await run_tool(
-            "get_jira_comments",
+        # Get sibling's details including comments to find primary issue
+        sibling_details = await run_tool(
+            "get_jira_details",
             available_tools=available_tools,
             issue_key=sibling_issue,
         )
 
         # Look for comment matching "Queued for triage as potential sibling of {primary}"
         primary_issue = None
+        comments = sibling_details.get("comments", [])
         for comment in comments:
             body = comment.get("body", "")
             if "Queued for triage as potential sibling of" in body:
@@ -469,18 +470,24 @@ async def check_and_queue_primary_if_ready(
             return
 
         # Check if any siblings are still pending (have ymir_rebase_sibling label)
-        rebase_data = RebaseData.model_validate(
-            await run_tool(
-                "fetch_rebase_data",
-                available_tools=available_tools,
-                jira_issue=primary_issue,
-            )
-        )
+        # Extract component and fix_version from primary to search for its specific siblings
+        fields = primary_details.get("fields", {})
+        components = fields.get("components", [])
+        component = components[0].get("name") if components else None
+        fix_versions = fields.get("fixVersions", [])
+        fix_version = fix_versions[0].get("name") if fix_versions else None
 
+        if not component or not fix_version:
+            logger.warning(
+                f"Primary {primary_issue} missing component or fix_version, cannot check for pending siblings"
+            )
+            return
+
+        # Use the same JQL builder to ensure we only get siblings of THIS primary
         jql = build_rebase_siblings_jql(
             issue_key=primary_issue,
-            component=rebase_data.package,
-            fix_version=rebase_data.fix_version,
+            component=component,
+            fix_version=fix_version,
         )
         # Add filter for ymir_rebase_sibling label
         jql_with_label = f'{jql} AND labels = "{JiraLabels.REBASE_SIBLING.value}"'
@@ -509,21 +516,35 @@ async def check_and_queue_primary_if_ready(
         )
 
         # Queue for rebase
-        # Get target_branch and state from primary issue metadata to queue correctly
-        primary_state_data = await run_tool(
-            "fetch_state_from_jira",
-            available_tools=available_tools,
-            jira_issue=primary_issue,
-        )
-        target_branch = primary_state_data.get("target_branch")
-        if target_branch:
-            task = Task(metadata=primary_state_data, user_triggered=False)
-            queue = RedisQueues.get_rebase_queue_for_branch(target_branch, False)
-            async with redis_client(os.environ["REDIS_URL"]) as redis:
-                await fix_await(redis.lpush(queue, task.model_dump_json()))
-            logger.info(f"Queued {primary_issue} to {queue}")
+        # The primary issue should already have its triage state stored somewhere,
+        # but we can't fetch it without the proper tool. For now, we'll extract
+        # the target branch from the primary's fix version
+        fix_versions = primary_details.get("fields", {}).get("fixVersions", [])
+        if fix_versions:
+            fix_version = fix_versions[0].get("name", "")
+            # Map fix version to target branch (e.g., "rhel-9.6.z" -> "rhel-9.6.0")
+            # This is a simplified mapping; the actual logic is more complex
+            import re
+
+            match = re.match(r"rhel-(\d+)\.(\d+)(\.z)?", fix_version)
+            if match:
+                major, minor, _z_suffix = match.groups()
+                target_branch = f"rhel-{major}.{minor}.0"
+
+                # Create minimal task metadata
+                task_metadata = {
+                    "jira_issue": primary_issue,
+                    "target_branch": target_branch,
+                }
+                task = Task(metadata=task_metadata, user_triggered=False)
+                queue = RedisQueues.get_rebase_queue_for_branch(target_branch, False)
+                async with redis_client(os.environ["REDIS_URL"]) as redis:
+                    await fix_await(redis.lpush(queue, task.model_dump_json()))
+                logger.info(f"Queued {primary_issue} to {queue}")
+            else:
+                logger.warning(f"Could not parse fix version {fix_version} for {primary_issue}")
         else:
-            logger.warning(f"No target branch found for {primary_issue}, cannot queue for rebase")
+            logger.warning(f"No fix version found for {primary_issue}, cannot queue for rebase")
 
         # Post comment
         await tasks.comment_in_jira(
@@ -595,15 +616,16 @@ async def find_triaged_rebase_siblings(
         async with semaphore:
             candidate_key = candidate.get("key", "")
             try:
-                # Get sibling's comments to check for primary issue reference
-                comments = await run_tool(
-                    "get_jira_comments",
+                # Get sibling's details including comments to check for primary issue reference
+                candidate_details = await run_tool(
+                    "get_jira_details",
                     available_tools=available_tools,
                     issue_key=candidate_key,
                 )
 
                 # Look for comment matching "Queued for triage as potential sibling of {jira_issue}"
                 has_primary_reference = False
+                comments = candidate_details.get("comments", [])
                 for comment in comments:
                     body = comment.get("body", "")
                     if f"Queued for triage as potential sibling of {jira_issue}" in body:

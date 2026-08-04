@@ -3,9 +3,10 @@ import logging
 import aiohttp
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
+from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT
 from ymir.tools.http import aiohttp_get_with_retries
 
@@ -18,6 +19,7 @@ class ReadLogfileInput(BaseModel):
 
 class ReadLogfileTool(Tool[ReadLogfileInput, ToolRunOptions, StringToolOutput]):
     name = "read_logfile"
+    timeout = 120
     description = "Read logfile from URL"
     input_schema = ReadLogfileInput
 

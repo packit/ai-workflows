@@ -16,6 +16,7 @@ class GetCWDToolInput(BaseModel):
 
 class GetCWDTool(Tool[GetCWDToolInput, ToolRunOptions, StringToolOutput]):
     name = "get_cwd"
+    timeout = 30
     description = """
     Returns absolute path of the current working directory.
     """
@@ -42,6 +43,7 @@ class RemoveToolInput(BaseModel):
 
 class RemoveTool(Tool[RemoveToolInput, ToolRunOptions, StringToolOutput]):
     name = "remove"
+    timeout = 30
     description = """
     Removes the specified file.
     """

@@ -294,6 +294,7 @@ class ForkRepositoryToolInput(BaseModel):
 
 class ForkRepositoryTool(Tool[ForkRepositoryToolInput, ToolRunOptions, StringToolOutput]):
     name = "fork_repository"
+    timeout = 120
     description = """
     Creates a new fork of the specified repository if it doesn't exist yet,
     otherwise gets the existing fork. Returns a clonable git URL of the fork.
@@ -389,6 +390,7 @@ class OpenMergeRequestTool(
     ]
 ):
     name = "open_merge_request"
+    timeout = 120
     description = """
     Opens a new merge request from the specified fork against its original repository.
 
@@ -469,6 +471,7 @@ class GetInternalRhelBranchesTool(
     Tool[GetInternalRhelBranchesToolInput, ToolRunOptions, JSONToolOutput[list[str]]]
 ):
     name = "get_internal_rhel_branches"
+    timeout = 120
     description = """
     Gets the list of branches in the internal RHEL dist-git repository for the specified package.
     Returns a list of branch names.
@@ -517,6 +520,7 @@ class CloneRepositoryToolInput(BaseModel):
 
 class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringToolOutput]):
     name = "clone_repository"
+    timeout = 3600
     description = """
     Clones the specified repository to the given local path.
     If branch is specified, only that branch is fetched and checked out.
@@ -598,6 +602,7 @@ class PushToRemoteRepositoryToolInput(BaseModel):
 
 class PushToRemoteRepositoryTool(Tool[PushToRemoteRepositoryToolInput, ToolRunOptions, StringToolOutput]):
     name = "push_to_remote_repository"
+    timeout = 3600
     description = """
     Pushes the specified branch from a local clone to the specified remote repository.
     """
@@ -641,6 +646,7 @@ class FetchBranchToolInput(BaseModel):
 
 class FetchBranchTool(Tool[FetchBranchToolInput, ToolRunOptions, StringToolOutput]):
     name = "fetch_branch"
+    timeout = 3600
     description = """
     Fetches a single branch from a remote repository into a local clone.
     The branch is created as a local ref.
@@ -682,6 +688,7 @@ class AddMergeRequestLabelsToolInput(BaseModel):
 
 class AddMergeRequestLabelsTool(Tool[AddMergeRequestLabelsToolInput, ToolRunOptions, StringToolOutput]):
     name = "add_merge_request_labels"
+    timeout = 120
     description = """
     Adds labels to an existing merge request.
     """
@@ -719,6 +726,7 @@ class SetMergeRequestReviewersToolInput(BaseModel):
 
 class SetMergeRequestReviewersTool(Tool[SetMergeRequestReviewersToolInput, ToolRunOptions, StringToolOutput]):
     name = "set_merge_request_reviewers"
+    timeout = 120
     description = """
     Sets reviewers on an existing merge request.
     """
@@ -760,6 +768,7 @@ class ResolveReviewersToolInput(BaseModel):
 
 class ResolveReviewersTool(Tool[ResolveReviewersToolInput, ToolRunOptions, JSONToolOutput[list[int]]]):
     name = "resolve_reviewers"
+    timeout = 120
     description = """
     Resolve reviewer GitLab user IDs for a package from bugzilla component contacts.
     """
@@ -790,6 +799,7 @@ class AddMergeRequestCommentToolInput(BaseModel):
 
 class AddMergeRequestCommentTool(Tool[AddMergeRequestCommentToolInput, ToolRunOptions, StringToolOutput]):
     name = "add_merge_request_comment"
+    timeout = 120
     description = """
     Adds a comment to an existing merge request.
     """
@@ -826,6 +836,7 @@ class AddBlockingMergeRequestCommentTool(
     Tool[AddBlockingMergeRequestCommentToolInput, ToolRunOptions, StringToolOutput]
 ):
     name = "add_blocking_merge_request_comment"
+    timeout = 120
     description = """
     Adds a blocking (unresolved) comment/discussion to an existing merge request.
     This will block the MR from being merged until the discussion is resolved.
@@ -888,6 +899,7 @@ class RetryPipelineJobToolInput(BaseModel):
 
 class RetryPipelineJobTool(Tool[RetryPipelineJobToolInput, ToolRunOptions, StringToolOutput]):
     name = "retry_pipeline_job"
+    timeout = 120
     description = """
     Retries a specific job in a GitLab pipeline.
     """
@@ -938,6 +950,7 @@ class GetFailedPipelineJobsFromMergeRequestTool(
     ]
 ):
     name = "get_failed_pipeline_jobs_from_merge_request"
+    timeout = 120
     description = """
     Gets the failed pipeline jobs from the latest pipeline of a merge request.
     Returns a list of failed pipeline jobs with their details.
@@ -1063,6 +1076,7 @@ class GetAuthorizedCommentsFromMergeRequestTool(
     ]
 ):
     name = "get_authorized_comments_from_merge_request"
+    timeout = 120
     description = """
     Gets all comments from a merge request, filtered to only include
     comments from authorized members with Developer role or higher.
@@ -1101,6 +1115,7 @@ class GetMergeRequestDetailsTool(
     ]
 ):
     name = "get_merge_request_details"
+    timeout = 120
     description = """
     Retrieves details about the specified merge request.
     """
@@ -1148,6 +1163,7 @@ class GetPatchFromUrlToolInput(BaseModel):
 
 class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringToolOutput]):
     name = "get_patch_from_url"
+    timeout = 120
     description = """
     Fetches a patch/diff from a URL.
     Returns the patch content as text (truncated to the first 2000 characters for large patches).
@@ -1228,6 +1244,7 @@ class FetchGitlabMrNotesTool(Tool[FetchGitlabMrNotesInput, ToolRunOptions, Strin
     """
 
     name = "fetch_gitlab_mr_notes"  # type: ignore
+    timeout = 120
     description = (  # type: ignore
         "Fetch comments/notes from a GitLab merge request. "
         "Returns JSON with a list of notes including author, body, and creation date. "
@@ -1318,6 +1335,7 @@ class SearchGitlabProjectMrsTool(
     ]
 ):
     name = "search_gitlab_project_mrs"
+    timeout = 120
     description = """
     Searches for merge requests in a GitLab project matching a search string
     (typically a JIRA issue key). Returns a list of matching MRs with their
@@ -1414,6 +1432,7 @@ class ListProjectMergeRequestsTool(
     ]
 ):
     name = "list_project_merge_requests"
+    timeout = 120
     description = """
     Lists merge requests for a GitLab project with filtering by state,
     target branch, labels, and author. Returns MRs sorted by creation date

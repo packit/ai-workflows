@@ -173,6 +173,7 @@ async def _get_merged_commits(issue_key: str) -> list[str]:
 
 class ZStreamSearchTool(Tool[ZStreamSearchToolInput, ToolRunOptions, ZStreamSearchToolOutput]):
     name = "zstream_search"
+    timeout = 120
     description = """
         Search for commits related to an older z-stream backport by finding
         related Jira issues in closer/newer streams and extracting their

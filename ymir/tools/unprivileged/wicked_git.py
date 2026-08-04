@@ -25,6 +25,7 @@ class GitPreparePackageSourcesInput(BaseModel):
 
 class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOptions, StringToolOutput]):
     name = "git_prepare_package_sources"
+    timeout = 300
     description = """
     Prepares the package sources for application of the upstream fix.
     """
@@ -153,6 +154,7 @@ class RunPackagePrepInput(BaseModel):
 
 class RunPackagePrepTool(Tool[RunPackagePrepInput, ToolRunOptions, StringToolOutput]):
     name = "run_package_prep"
+    timeout = 300
     description = """
     Runs the package prep step (source extraction + patch application) to verify
     that all patches apply cleanly. If prep fails, the build subdirectory is
@@ -208,6 +210,7 @@ class BuildSrpmInput(BaseModel):
 
 class BuildSrpmTool(Tool[BuildSrpmInput, ToolRunOptions, StringToolOutput]):
     name = "build_srpm"
+    timeout = 300
     description = """
     Builds a source RPM (SRPM) from the dist-git repository.
     Returns the absolute path to the generated SRPM file.
@@ -326,6 +329,7 @@ class GitPatchApplyToolInput(BaseModel):
 
 class GitPatchApplyTool(Tool[GitPatchApplyToolInput, ToolRunOptions, StringToolOutput]):
     name = "git_patch_apply"
+    timeout = 300
     description = "Applies provided patch file to the specified git repository using git-am."
     input_schema = GitPatchApplyToolInput
 
@@ -368,6 +372,7 @@ class GitPatchApplyFinishToolInput(BaseModel):
 
 class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions, StringToolOutput]):
     name = "git_apply_finish"
+    timeout = 300
     description = """
     Before calling this tool, you must resolve all merge conflicts and delete all `*.rej` files.
     The tool continues a `git am` session that was paused due to conflicts.
@@ -494,6 +499,7 @@ class GitPatchApplyFinishTool(Tool[GitPatchApplyFinishToolInput, ToolRunOptions,
 
 class GitPatchCreationTool(Tool[GitPatchCreationToolInput, ToolRunOptions, StringToolOutput]):
     name = "git_patch_create"
+    timeout = 300
     description = """
     Creates a combined patch file from all commits made on top of the base HEAD commit.
     The base commit is determined automatically from a previous tool invocation
@@ -551,6 +557,7 @@ class GitLogSearchToolInput(BaseModel):
 
 class GitLogSearchTool(Tool[GitLogSearchToolInput, ToolRunOptions, StringToolOutput]):
     name = "git_log_search"
+    timeout = 300
     description = """
     Searches the git history for references to the provided CVE ID(s) and/or jira_issue.
     Reports found/not found for each search term individually.

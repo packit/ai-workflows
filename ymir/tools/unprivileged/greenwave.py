@@ -31,6 +31,7 @@ class FetchGreenWaveTool(Tool[FetchGreenWaveInput, ToolRunOptions, StringToolOut
     """
 
     name = "fetch_greenwave"  # type: ignore
+    timeout = 120
     description = (  # type: ignore
         "Fetch the OSCI gating status page from GreenWave Monitor for a given build NVR. "
         "Returns the HTML content of the gating status page which contains test results "
@@ -98,6 +99,7 @@ class FetchTestingFarmResultsTool(Tool[FetchTestingFarmResultsInput, ToolRunOpti
     """
 
     name = "fetch_testing_farm_results"  # type: ignore
+    timeout = 120
     description = (  # type: ignore
         "Fetch individual test results from a Testing Farm artifact URL. "
         "Given a base artifact URL (e.g. from a GreenWave NEEDS_INSPECTION/FAILED/WAIVED result "

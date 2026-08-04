@@ -102,6 +102,8 @@ class BuildPackageToolOutput(JSONToolOutput[BuildResult]):
 
 class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageToolOutput]):
     name = "build_package"
+    # Must exceed the polling loop budget (COPR_BUILD_TIMEOUT + COPR_TIMEOUT_GRACE_PERIOD)
+    timeout = COPR_BUILD_TIMEOUT + 2 * COPR_TIMEOUT_GRACE_PERIOD
     description = """
     Builds the specified SRPM in Copr.
     """
@@ -339,6 +341,7 @@ class DownloadArtifactsToolOutput(JSONToolOutput[DownloadArtifactsResult]):
 
 class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, DownloadArtifactsToolOutput]):
     name = "download_artifacts"
+    timeout = 120
     description = """
     Downloads build artifacts to a temporary location.
     Any gzipped log files will be automatically decompressed,

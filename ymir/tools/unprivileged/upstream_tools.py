@@ -59,6 +59,7 @@ class ExtractUpstreamRepositoryTool(
     Tool[ExtractUpstreamRepositoryInput, ToolRunOptions, ExtractUpstreamRepositoryOutput]
 ):
     name = "extract_upstream_repository"
+    timeout = 120
     description = """
     Extract upstream repository URL and commit information from a commit, pull request, or compare URL.
 
@@ -286,6 +287,7 @@ class CloneUpstreamRepositoryToolInput(BaseModel):
 
 class CloneUpstreamRepositoryTool(Tool[CloneUpstreamRepositoryToolInput, ToolRunOptions, StringToolOutput]):
     name = "clone_upstream_repository"
+    timeout = 3600
     description = """
     Clone an upstream git repository to a specified directory.
 
@@ -369,6 +371,7 @@ class FindBaseCommitToolInput(BaseModel):
 
 class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToolOutput]):
     name = "find_base_commit"
+    timeout = 30
     description = """
     Find and checkout the base version commit in an upstream repository.
 
@@ -566,6 +569,7 @@ class ApplyDownstreamPatchesToolInput(BaseModel):
 
 class ApplyDownstreamPatchesTool(Tool[ApplyDownstreamPatchesToolInput, ToolRunOptions, StringToolOutput]):
     name = "apply_downstream_patches"
+    timeout = 300
     description = """
     Apply existing patches from the dist-git spec file to the upstream repository.
 
@@ -684,6 +688,7 @@ class CherryPickCommitToolInput(BaseModel):
 
 class CherryPickCommitTool(Tool[CherryPickCommitToolInput, ToolRunOptions, StringToolOutput]):
     name = "cherry_pick_commit"
+    timeout = 300
     description = """
     Cherry-pick a specific commit in the upstream repository.
 
@@ -797,6 +802,7 @@ class CherryPickContinueToolInput(BaseModel):
 
 class CherryPickContinueTool(Tool[CherryPickContinueToolInput, ToolRunOptions, StringToolOutput]):
     name = "cherry_pick_continue"
+    timeout = 300
     description = """
     Continue a cherry-pick operation after conflicts have been resolved.
 

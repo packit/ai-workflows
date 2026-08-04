@@ -10,7 +10,7 @@ from typing import Any
 import requests
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, StringToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import JSONToolOutput, StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 from requests_gssapi import HTTPSPNEGOAuth
 
@@ -30,6 +30,7 @@ from ymir.common.models import (
     TransitionRuleOutcome,
     TransitionRuleSet,
 )
+from ymir.tools.base import CloneableTool as Tool
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,7 @@ class GetErratumToolInput(BaseModel):
 
 class GetErratumTool(Tool[GetErratumToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]):
     name = "get_erratum"
+    timeout = 120
     description = """
     Get erratum details (basic or full with comments) by ID or link.
     """
@@ -175,6 +177,7 @@ class GetErratumBuildNvrToolInput(BaseModel):
 
 class GetErratumBuildNvrTool(Tool[GetErratumBuildNvrToolInput, ToolRunOptions, JSONToolOutput[str | None]]):
     name = "get_erratum_build_nvr"
+    timeout = 120
     description = """
     Get the build NVR for a package in an erratum.
     """
@@ -498,6 +501,7 @@ class GetErratumTransitionRulesTool(
     Tool[GetErratumTransitionRulesToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
 ):
     name = "get_erratum_transition_rules"
+    timeout = 120
     description = """
     Get state transition guard rules for an erratum.
     Returns the from/to status and list of blocking rules with their outcomes.
@@ -530,6 +534,7 @@ class GetErratumBuildMapTool(
     Tool[GetErratumBuildMapToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
 ):
     name = "get_erratum_build_map"
+    timeout = 120
     description = """
     Get the build map for an erratum: maps package names to NVR + package file lists.
     """
@@ -562,6 +567,7 @@ class GetPreviousErratumTool(
     Tool[GetPreviousErratumToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
 ):
     name = "get_previous_erratum"
+    timeout = 120
     description = """
     Search backwards through RHEL release versions to find the previous erratum
     for a given package, following the RHEL version inheritance chain.
@@ -596,6 +602,7 @@ class GetErratumStagePushDetailsTool(
     Tool[GetErratumStagePushDetailsToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
 ):
     name = "get_erratum_stage_push_details"
+    timeout = 120
     description = """
     Get the latest stage push status and timestamp for an erratum.
     """
@@ -625,6 +632,7 @@ class ErratumPushToStageToolInput(BaseModel):
 
 class ErratumPushToStageTool(Tool[ErratumPushToStageToolInput, ToolRunOptions, StringToolOutput]):
     name = "erratum_push_to_stage"
+    timeout = 120
     description = """
     Push an erratum to the CDN stage environment. Respects DRY_RUN.
     """
@@ -659,6 +667,7 @@ class ErratumChangeStateToolInput(BaseModel):
 
 class ErratumChangeStateTool(Tool[ErratumChangeStateToolInput, ToolRunOptions, StringToolOutput]):
     name = "erratum_change_state"
+    timeout = 120
     description = """
     Change the state of an erratum. Respects DRY_RUN.
     """
@@ -699,6 +708,7 @@ class ErratumAddCommentToolInput(BaseModel):
 
 class ErratumAddCommentTool(Tool[ErratumAddCommentToolInput, ToolRunOptions, StringToolOutput]):
     name = "erratum_add_comment"
+    timeout = 120
     description = """
     Add a comment to an erratum. Respects DRY_RUN.
     """
@@ -739,6 +749,7 @@ class ErratumRefreshSecurityAlertsTool(
     Tool[ErratumRefreshSecurityAlertsToolInput, ToolRunOptions, StringToolOutput]
 ):
     name = "erratum_refresh_security_alerts"
+    timeout = 120
     description = """
     Refresh security alerts for an erratum. Respects DRY_RUN.
     """

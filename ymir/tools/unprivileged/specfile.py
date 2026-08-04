@@ -84,6 +84,7 @@ def _extract_strip_levels(spec: Specfile, number_to_filename: dict[int, str]) ->
 
 class GetPackageInfoTool(Tool[GetPackageInfoToolInput, ToolRunOptions, GetPackageInfoToolOutput]):
     name = "get_package_info"
+    timeout = 30
     description = """
     Extract package version, patch files, and patch strip levels from a spec file.
 
@@ -145,6 +146,7 @@ class AddChangelogEntryToolInput(BaseModel):
 
 class AddChangelogEntryTool(Tool[AddChangelogEntryToolInput, ToolRunOptions, StringToolOutput]):
     name = "add_changelog_entry"
+    timeout = 30
     description = """
     Adds a new changelog entry to the specified spec file.
     """
@@ -190,6 +192,7 @@ class UpdateReleaseToolInput(BaseModel):
 
 class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolOutput]):
     name = "update_release"
+    timeout = 30
     description = """
     Updates the value of the `Release` field in the specified spec file.
 

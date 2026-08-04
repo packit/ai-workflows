@@ -54,16 +54,21 @@ def build_siblings_jql(
     quoted = ", ".join(f'"{v}"' for v in variants)
     version_clause = f"fixVersion in ({quoted})"
 
-    excluded = ", ".join(f'"{label}"' for label in excluded_labels)
-
-    return (
+    # Build base query
+    jql = (
         f'project = RHEL AND component = "{escaped_component}" '
         f"AND {version_clause} "
         f'AND key != "{issue_key}" '
         f'AND labels = "SecurityTracking" '
-        f"AND labels not in ({excluded}) "
-        f'AND status in ("New", "Planning")'
     )
+
+    # Only add label exclusion clause if there are labels to exclude
+    if excluded_labels:
+        excluded = ", ".join(f'"{label}"' for label in excluded_labels)
+        jql += f"AND labels not in ({excluded}) "
+
+    jql += 'AND status in ("New", "Planning")'
+    return jql
 
 
 def build_rebase_siblings_jql(

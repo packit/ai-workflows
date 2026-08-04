@@ -557,6 +557,18 @@ async def main() -> None:
                         f"success: {state.rebase_result.success}"
                     )
 
+            except tasks.ZStreamBranchStaleError as e:
+                await tasks.handle_zstream_branch_stale_error(
+                    e,
+                    jira_issues=[rebase_data.jira_issue],
+                    primary_jira_issue=rebase_data.jira_issue,
+                    agent_type="Rebase",
+                    errored_label=JiraLabels.REBASE_ERRORED.value,
+                    triaged_label=JiraLabels.TRIAGED_REBASE.value,
+                    dry_run=dry_run,
+                    user_triggered=user_triggered,
+                    redis_conn=redis,
+                )
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during rebase processing for {rebase_data.jira_issue}: {error}")

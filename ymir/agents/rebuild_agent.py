@@ -524,6 +524,18 @@ async def main() -> None:
                         f"success: {state.rebuild_success}"
                     )
 
+            except tasks.ZStreamBranchStaleError as e:
+                await tasks.handle_zstream_branch_stale_error(
+                    e,
+                    jira_issues=list(rebuild_data.all_jira_issues),
+                    primary_jira_issue=rebuild_data.jira_issue,
+                    agent_type="Rebuild",
+                    errored_label=JiraLabels.REBUILD_ERRORED.value,
+                    triaged_label=JiraLabels.TRIAGED_REBUILD.value,
+                    dry_run=dry_run,
+                    user_triggered=user_triggered,
+                    redis_conn=redis,
+                )
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during rebuild processing for {rebuild_data.jira_issue}: {error}")

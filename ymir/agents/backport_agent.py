@@ -969,6 +969,18 @@ async def main() -> None:
                         f"success: {state.backport_result.success}"
                     )
 
+            except tasks.ZStreamBranchStaleError as e:
+                await tasks.handle_zstream_branch_stale_error(
+                    e,
+                    jira_issues=[backport_data.jira_issue],
+                    primary_jira_issue=backport_data.jira_issue,
+                    agent_type="Backport",
+                    errored_label=JiraLabels.BACKPORT_ERRORED.value,
+                    triaged_label=JiraLabels.TRIAGED_BACKPORT.value,
+                    dry_run=dry_run,
+                    user_triggered=user_triggered,
+                    redis_conn=redis,
+                )
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during backport processing for {backport_data.jira_issue}: {error}")

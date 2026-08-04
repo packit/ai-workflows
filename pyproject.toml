@@ -36,6 +36,14 @@ ymir = "ymir.cli.main:app"
 packages = ["ymir"]
 exclude = ["ymir/common", "ymir/tools"]
 
+[tool.uv]
+cache-keys = [
+    { file = "requirements-global.txt" },
+    { file = "requirements.txt" },
+    { file = "./ymir/common/requirements.txt" },
+    { file = "./ymir/tools/requirements.txt" }
+]
+
 [tool.uv.workspace]
 members = ["ymir/common", "ymir/tools"]
 

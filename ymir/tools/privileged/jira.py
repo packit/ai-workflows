@@ -633,7 +633,7 @@ async def _check_zstream_fix_approach(
             if resolution_name.upper() in _REJECTED_RESOLUTIONS:
                 logger.info(f"  {key}: Closed/{resolution_name} — rejected, skipping")
                 continue
-            if resolution_name in ("Done-Errata", "Done"):
+            if resolution_name.upper() in ("DONE-ERRATA", "DONE"):
                 fixed_in_build = issue.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
                 if fixed_in_build:
                     pass  # fall through to existing Koji check below

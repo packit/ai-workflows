@@ -293,6 +293,8 @@ async def queue_siblings_for_triage(
     primary_issue: str,
     rebase_data: RebaseData,
     available_tools: list[Tool],
+    dry_run: bool = False,
+    user_triggered: bool = False,
 ) -> int:
     """
     Queue sibling issues for triage and mark primary as waiting.
@@ -304,9 +306,11 @@ async def queue_siblings_for_triage(
         primary_issue: Primary issue key
         rebase_data: Rebase data containing package and fix_version
         available_tools: Available tools for Jira operations
+        dry_run: If True, skip all mutations (Redis, Jira labels, comments)
+        user_triggered: Whether this was triggered by user action
 
     Returns:
-        Number of siblings queued for triage
+        Number of siblings queued for triage (or would be queued in dry-run)
     """
     if not rebase_data.fix_version:
         logger.info(f"No fix_version for {primary_issue}, skipping sibling queue")
@@ -354,31 +358,34 @@ async def queue_siblings_for_triage(
                 logger.info(f"Sibling {candidate_key} not eligible: {eligibility_result.reason}")
                 continue
 
-            # Queue for triage
-            task = Task.from_issue(candidate_key)
-            async with redis_client(os.environ["REDIS_URL"]) as redis:
-                await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
+            # Queue for triage (skip in dry-run)
+            if not dry_run:
+                task = Task.from_issue(candidate_key)
+                async with redis_client(os.environ["REDIS_URL"]) as redis:
+                    await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
 
-            # Add label
-            await tasks.set_jira_labels(
-                jira_issue=candidate_key,
-                labels_to_add=[JiraLabels.REBASE_SIBLING.value],
-                dry_run=False,
-                user_triggered=False,
-            )
+                # Add label
+                await tasks.set_jira_labels(
+                    jira_issue=candidate_key,
+                    labels_to_add=[JiraLabels.REBASE_SIBLING.value],
+                    dry_run=False,
+                    user_triggered=user_triggered,
+                )
 
-            # Post comment on sibling
-            await tasks.comment_in_jira(
-                jira_issue=candidate_key,
-                agent_type="Triage",
-                comment_text=f"Queued for triage as potential sibling of {primary_issue}",
-                available_tools=available_tools,
-                is_error=False,
-                user_triggered=False,
-            )
+                # Post comment on sibling
+                await tasks.comment_in_jira(
+                    jira_issue=candidate_key,
+                    agent_type="Triage",
+                    comment_text=f"Queued for triage as potential sibling of {primary_issue}",
+                    available_tools=available_tools,
+                    is_error=False,
+                    user_triggered=user_triggered,
+                )
 
             queued_count += 1
-            logger.info(f"Queued sibling {candidate_key} for triage")
+            logger.info(
+                f"{'[DRY-RUN] Would queue' if dry_run else 'Queued'} sibling {candidate_key} for triage"
+            )
 
         except Exception as e:
             import traceback
@@ -388,14 +395,14 @@ async def queue_siblings_for_triage(
             )
             continue
 
-    if queued_count > 0:
+    if queued_count > 0 and not dry_run:
         # Add label to primary
         try:
             await tasks.set_jira_labels(
                 jira_issue=primary_issue,
                 labels_to_add=[JiraLabels.WAITING_FOR_SIBLINGS.value],
                 dry_run=False,
-                user_triggered=False,
+                user_triggered=user_triggered,
             )
         except Exception as e:
             logger.warning(f"Failed to label primary {primary_issue} as waiting: {e}")
@@ -409,7 +416,7 @@ async def queue_siblings_for_triage(
                 comment_text=comment_text,
                 available_tools=available_tools,
                 is_error=False,
-                user_triggered=False,
+                user_triggered=user_triggered,
             )
         except Exception as e:
             logger.warning(f"Failed to comment on primary {primary_issue}: {e}")
@@ -422,6 +429,8 @@ async def queue_siblings_for_triage(
 async def check_and_queue_primary_if_ready(
     sibling_issue: str,
     available_tools: list[Tool],
+    dry_run: bool = False,
+    user_triggered: bool = False,
 ) -> None:
     """
     Check if all siblings are done triaging and queue primary if ready.
@@ -434,6 +443,8 @@ async def check_and_queue_primary_if_ready(
     Args:
         sibling_issue: Sibling issue that just finished triaging
         available_tools: Available tools for Jira operations
+        dry_run: If True, skip all mutations (Redis, Jira labels)
+        user_triggered: Whether this was triggered by user action
     """
     try:
         # Get sibling's details including comments to find primary issue
@@ -510,46 +521,50 @@ async def check_and_queue_primary_if_ready(
             return
 
         # All siblings are done! Queue primary for rebase
-        logger.info(f"All siblings done for {primary_issue}, queueing for rebase")
-
-        # Remove waiting label
-        await tasks.set_jira_labels(
-            jira_issue=primary_issue,
-            labels_to_remove=[JiraLabels.WAITING_FOR_SIBLINGS.value],
-            dry_run=False,
-            user_triggered=False,
+        logger.info(
+            f"All siblings done for {primary_issue}, "
+            f"{'[DRY-RUN] would queue' if dry_run else 'queueing'} for rebase"
         )
 
-        # Queue for rebase
-        # The primary issue should already have its triage state stored somewhere,
-        # but we can't fetch it without the proper tool. For now, we'll extract
-        # the target branch from the primary's fix version
-        fix_versions = primary_details.get("fields", {}).get("fixVersions", [])
-        if fix_versions:
-            fix_version = fix_versions[0].get("name", "")
-            # Map fix version to target branch (e.g., "rhel-9.6.z" -> "rhel-9.6.0")
-            # This is a simplified mapping; the actual logic is more complex
-            import re
+        if not dry_run:
+            # Remove waiting label
+            await tasks.set_jira_labels(
+                jira_issue=primary_issue,
+                labels_to_remove=[JiraLabels.WAITING_FOR_SIBLINGS.value],
+                dry_run=False,
+                user_triggered=user_triggered,
+            )
 
-            match = re.match(r"rhel-(\d+)\.(\d+)(\.z)?", fix_version)
-            if match:
-                major, minor, _z_suffix = match.groups()
-                target_branch = f"rhel-{major}.{minor}.0"
+            # Queue for rebase
+            # The primary issue should already have its triage state stored somewhere,
+            # but we can't fetch it without the proper tool. For now, we'll extract
+            # the target branch from the primary's fix version
+            fix_versions = primary_details.get("fields", {}).get("fixVersions", [])
+            if fix_versions:
+                fix_version = fix_versions[0].get("name", "")
+                # Map fix version to target branch (e.g., "rhel-9.6.z" -> "rhel-9.6.0")
+                # This is a simplified mapping; the actual logic is more complex
+                import re
 
-                # Create minimal task metadata
-                task_metadata = {
-                    "jira_issue": primary_issue,
-                    "target_branch": target_branch,
-                }
-                task = Task(metadata=task_metadata, user_triggered=False)
-                queue = RedisQueues.get_rebase_queue_for_branch(target_branch, False)
-                async with redis_client(os.environ["REDIS_URL"]) as redis:
-                    await fix_await(redis.lpush(queue, task.model_dump_json()))
-                logger.info(f"Queued {primary_issue} to {queue}")
+                match = re.match(r"rhel-(\d+)\.(\d+)(\.z)?", fix_version)
+                if match:
+                    major, minor, _z_suffix = match.groups()
+                    target_branch = f"rhel-{major}.{minor}.0"
+
+                    # Create minimal task metadata
+                    task_metadata = {
+                        "jira_issue": primary_issue,
+                        "target_branch": target_branch,
+                    }
+                    task = Task(metadata=task_metadata, user_triggered=user_triggered)
+                    queue = RedisQueues.get_rebase_queue_for_branch(target_branch, user_triggered)
+                    async with redis_client(os.environ["REDIS_URL"]) as redis:
+                        await fix_await(redis.lpush(queue, task.model_dump_json()))
+                    logger.info(f"Queued {primary_issue} to {queue}")
+                else:
+                    logger.warning(f"Could not parse fix version {fix_version} for {primary_issue}")
             else:
-                logger.warning(f"Could not parse fix version {fix_version} for {primary_issue}")
-        else:
-            logger.warning(f"No fix version found for {primary_issue}, cannot queue for rebase")
+                logger.warning(f"No fix version found for {primary_issue}, cannot queue for rebase")
 
         # Post comment
         await tasks.comment_in_jira(

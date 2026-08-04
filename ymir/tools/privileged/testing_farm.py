@@ -8,13 +8,14 @@ from typing import Any
 import requests
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import JSONToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.common.models import (
     TestingFarmRequest,
     TestingFarmRequestResult,
 )
+from ymir.tools.base import CloneableTool as Tool
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ class GetTestingFarmRequestTool(
     Tool[GetTestingFarmRequestToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
 ):
     name = "get_testing_farm_request"
+    timeout = 120
     description = """
     Get a Testing Farm request by ID.
     """
@@ -118,6 +120,7 @@ class ReproduceTestingFarmRequestTool(
     Tool[ReproduceTestingFarmRequestToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
 ):
     name = "reproduce_testing_farm_request"
+    timeout = 120
     description = """
     Reproduce a Testing Farm request with a different build NVR.
     """

@@ -85,6 +85,8 @@ class RunShellCommandToolOutput(JSONToolOutput[RunShellCommandToolResult]):
 
 class RunShellCommandTool(Tool[RunShellCommandToolInput, ToolRunOptions, RunShellCommandToolOutput]):
     name = "run_shell_command"
+    # Outer backstop; inner asyncio.wait_for(timeout=TIMEOUT) should fire first
+    timeout = TIMEOUT + 60
     description = """
         Runs the specified command in a shell. Returns a dictionary with exit code
         and captured stdout and stderr.

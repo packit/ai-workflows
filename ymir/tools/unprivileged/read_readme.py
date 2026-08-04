@@ -3,9 +3,10 @@ import logging
 import aiohttp
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
+from beeai_framework.tools import StringToolOutput, ToolRunOptions
 from pydantic import BaseModel, Field
 
+from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.tools.http import aiohttp_get_with_retries
 
@@ -27,6 +28,7 @@ class ReadReadmeInput(BaseModel):
 
 class ReadReadmeTool(Tool[ReadReadmeInput, ToolRunOptions, StringToolOutput]):
     name = "read_readme"
+    timeout = 120
     description = "Read README file from git repository"
     input_schema = ReadReadmeInput
 

@@ -34,6 +34,7 @@ class VersionMapperTool(Tool[VersionMapperInput, ToolRunOptions, VersionMapperOu
     """Tool to map RHEL major versions to current development fix versions."""
 
     name = "map_version"
+    timeout = 30
     description = (
         "Map RHEL major version to current Y-stream and Z-stream versions. "
         "Returns both streams for LLM to decide based on criticality."

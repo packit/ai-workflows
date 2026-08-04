@@ -94,6 +94,7 @@ class DownloadSourcesToolInput(BaseModel):
 
 class DownloadSourcesTool(Tool[DownloadSourcesToolInput, ToolRunOptions, StringToolOutput]):
     name = "download_sources"
+    timeout = 300
     description = """
     Downloads sources from lookaside cache.
     """
@@ -169,6 +170,7 @@ class UploadSourcesToolInput(BaseModel):
 
 class UploadSourcesTool(Tool[UploadSourcesToolInput, ToolRunOptions, StringToolOutput]):
     name = "upload_sources"
+    timeout = 300
     description = """
     Uploads the specified sources to lookaside cache. Replaces the contents of the `sources` file
     with the new sources and updates `.gitignore` accordingly.

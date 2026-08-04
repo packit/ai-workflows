@@ -24,6 +24,7 @@ class DistgitDetectorOutput(JSONToolOutput[DistgitDetectorResult]):
 
 class DistgitDetectorTool(Tool[DistgitDetectorInput, ToolRunOptions, DistgitDetectorOutput]):
     name = "detect_distgit_source"
+    timeout = 30
     description = """
     Detects if a URL is from a dist-git source (Fedora, RHEL, or CentOS Stream).
 

@@ -125,6 +125,7 @@ class GetJiraDetailsToolInput(BaseModel):
 
 class GetJiraDetailsTool(Tool[GetJiraDetailsToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]):
     name = "get_jira_details"
+    timeout = 120
     description = """
     Gets details about the specified Jira issue, including all comments and remote links.
     Returns a dictionary with issue details and comments.
@@ -237,6 +238,7 @@ class SetJiraFieldsToolInput(BaseModel):
 
 class SetJiraFieldsTool(Tool[SetJiraFieldsToolInput, ToolRunOptions, StringToolOutput]):
     name = "set_jira_fields"
+    timeout = 120
     description = """
     Updates the specified Jira issue, setting only the fields that are currently empty/unset.
     """
@@ -330,6 +332,7 @@ class AddJiraCommentToolInput(BaseModel):
 
 class AddJiraCommentTool(Tool[AddJiraCommentToolInput, ToolRunOptions, StringToolOutput]):
     name = "add_jira_comment"
+    timeout = 120
     description = """
     Adds a comment to the specified Jira issue.
     """
@@ -718,6 +721,7 @@ class CheckCveTriageEligibilityTool(
     ]
 ):
     name = "check_cve_triage_eligibility"
+    timeout = 120
     description = """
     Analyzes if a Jira issue represents a CVE and determines when it should be processed by triage agent.
 
@@ -1132,6 +1136,7 @@ class ChangeJiraStatusToolInput(BaseModel):
 
 class ChangeJiraStatusTool(Tool[ChangeJiraStatusToolInput, ToolRunOptions, StringToolOutput]):
     name = "change_jira_status"
+    timeout = 120
     description = """
     Transitions a Jira issue to the requested status when available.
     """
@@ -1226,6 +1231,7 @@ class EditJiraLabelsToolInput(BaseModel):
 
 class EditJiraLabelsTool(Tool[EditJiraLabelsToolInput, ToolRunOptions, StringToolOutput]):
     name = "edit_jira_labels"
+    timeout = 120
     description = """
     Edits labels on a Jira issue by adding and/or removing specified labels.
     """
@@ -1291,6 +1297,7 @@ class VerifyIssueAuthorToolInput(BaseModel):
 
 class VerifyIssueAuthorTool(Tool[VerifyIssueAuthorToolInput, ToolRunOptions, JSONToolOutput[bool]]):
     name = "verify_issue_author"
+    timeout = 120
     description = """
     Verifies if the author of the Jira issue is a Red Hat employee by checking their group membership.
     Supports both Jira Server (using 'key') and Jira Cloud (using 'accountId').
@@ -1379,6 +1386,7 @@ class SearchJiraIssuesTool(
     Tool[SearchJiraIssuesToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]
 ):
     name = "search_jira_issues"
+    timeout = 120
     description = """
     Searches Jira using the provided JQL query and returns matching issues
     with the specified fields.
@@ -1501,6 +1509,7 @@ class GetJiraDevStatusTool(
     Tool[GetJiraDevStatusToolInput, ToolRunOptions, JSONToolOutput[dict[str, list[dict[str, Any]]]]]
 ):
     name = "get_jira_dev_status"
+    timeout = 120
     description = """
     Gets development status (linked commits) for a Jira issue using the
     Jira Dev-Status API. Returns a dictionary with a 'commits' key containing
@@ -1562,6 +1571,7 @@ class GetJiraPullRequestsTool(
     ]
 ):
     name = "get_jira_pull_requests"
+    timeout = 120
     description = """
     Gets pull/merge requests linked to a Jira issue via the dev-status API.
     Returns a dictionary with a 'pull_requests' key containing a list of pull
@@ -1613,6 +1623,7 @@ class SetPreliminaryTestingToolInput(BaseModel):
 
 class SetPreliminaryTestingTool(Tool[SetPreliminaryTestingToolInput, ToolRunOptions, StringToolOutput]):
     name = "set_preliminary_testing"
+    timeout = 120
     description = """
     Updates the Preliminary Testing custom field on a Jira issue.
     Optionally adds a comment at the same time.
@@ -1686,6 +1697,7 @@ class UpdateJiraCommentToolInput(BaseModel):
 
 class UpdateJiraCommentTool(Tool[UpdateJiraCommentToolInput, ToolRunOptions, StringToolOutput]):
     name = "update_jira_comment"
+    timeout = 120
     description = """
     Updates an existing comment on a Jira issue.
     """
@@ -1744,6 +1756,7 @@ class AddJiraAttachmentsToolInput(BaseModel):
 
 class AddJiraAttachmentsTool(Tool[AddJiraAttachmentsToolInput, ToolRunOptions, StringToolOutput]):
     name = "add_jira_attachments"
+    timeout = 120
     description = """
     Adds attachments to a Jira issue.
     """
@@ -1819,6 +1832,7 @@ class GetJiraAttachmentToolInput(BaseModel):
 
 class GetJiraAttachmentTool(Tool[GetJiraAttachmentToolInput, ToolRunOptions, StringToolOutput]):
     name = "get_jira_attachment"
+    timeout = 120
     description = """
     Downloads an attachment from a Jira issue by filename and returns its text content.
     """
@@ -1918,6 +1932,7 @@ class CreateJiraIssueToolInput(BaseModel):
 
 class CreateJiraIssueTool(Tool[CreateJiraIssueToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]):
     name = "create_jira_issue"
+    timeout = 120
     description = """
     Creates a new Jira issue. Respects DRY_RUN and JIRA_DRY_RUN.
     Returns a dict with 'key' (e.g. 'RHELMISC-12345').

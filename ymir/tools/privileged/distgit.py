@@ -78,6 +78,7 @@ class CreateZstreamBranchToolInput(BaseModel):
 
 class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions, StringToolOutput]):
     name = "create_zstream_branch"
+    timeout = 10800
     description = """
     Creates a new Z-Stream branch for the specified package in internal dist-git.
     """

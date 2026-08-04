@@ -40,6 +40,7 @@ class UpstreamSearchToolOutput(JSONToolOutput[UpstreamSearchToolResult]):
 
 class UpstreamSearchTool(Tool[UpstreamSearchToolInput, ToolRunOptions, UpstreamSearchToolOutput]):
     name = "upstream_search"
+    timeout = 300
     description = """
         Search through upstream project's git repository and finds commits related to
         provided description and optionally allows to filter commits made after provided date.

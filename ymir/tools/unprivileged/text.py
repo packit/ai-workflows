@@ -19,6 +19,7 @@ class CreateToolInput(BaseModel):
 
 class CreateTool(Tool[CreateToolInput, ToolRunOptions, StringToolOutput]):
     name = "create"
+    timeout = 30
     description = """
     Creates a new file with the specified content.
     """
@@ -65,6 +66,7 @@ class ViewToolInput(BaseModel):
 
 class ViewTool(Tool[ViewToolInput, ToolRunOptions, StringToolOutput]):
     name = "view"
+    timeout = 30
     description = """
     Outputs the contents of a file or lists the contents of a directory.
     For text files, returns up to 1000 lines. Use `offset` and `limit` to paginate large text files.
@@ -106,6 +108,7 @@ class InsertToolInput(BaseModel):
 
 class InsertTool(Tool[InsertToolInput, ToolRunOptions, StringToolOutput]):
     name = "insert"
+    timeout = 30
     description = "Inserts the specified text at a specific location in a file."
     input_schema = InsertToolInput
 
@@ -139,6 +142,7 @@ class InsertAfterSubstringToolInput(BaseModel):
 
 class InsertAfterSubstringTool(Tool[InsertAfterSubstringToolInput, ToolRunOptions, StringToolOutput]):
     name = "insert_after_substring"
+    timeout = 30
     description = """
     Inserts the provided text `new_string` on a new line after the first
     occurrence of the specified substring `insert_after_substring`. The insertion
@@ -186,6 +190,7 @@ class StrReplaceToolInput(BaseModel):
 
 class StrReplaceTool(Tool[StrReplaceToolInput, ToolRunOptions, StringToolOutput]):
     name = "str_replace"
+    timeout = 30
     description = """
     Replaces a specific string in the specified file with a new string.
 
@@ -237,6 +242,7 @@ class SearchTextToolInput(BaseModel):
 
 class SearchTextTool(Tool[SearchTextToolInput, ToolRunOptions, StringToolOutput]):
     name = "search_text"
+    timeout = 30
     description = """
     Search for a specific regex pattern in the specified file. Returns lines matching the pattern
     along with their line numbers. Line numbers are 1-indexed.

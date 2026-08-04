@@ -5,9 +5,10 @@ from urllib.parse import quote
 import aiohttp
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
+from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.tools.http import aiohttp_get_with_retries
 
@@ -29,6 +30,7 @@ class MaintainerRulesInput(BaseModel):
 
 class MaintainerRulesTool(Tool[MaintainerRulesInput, ToolRunOptions, StringToolOutput]):
     name = "get_maintainer_rules"
+    timeout = 120
     description = (
         "Fetch maintainer-defined rules and guidelines for a package from its rules repository. "
         "Returns the content of the requested file (default: AGENTS.md) from "

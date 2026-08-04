@@ -6,9 +6,10 @@ from urllib.parse import quote as urlquote
 import aiohttp
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import Tool, ToolError, ToolOutput, ToolRunOptions
+from beeai_framework.tools import ToolError, ToolOutput, ToolRunOptions
 from pydantic import BaseModel, Field
 
+from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.tools.http import aiohttp_get_with_retries
 
@@ -125,6 +126,7 @@ class SearchResultsdbTool(Tool[SearchResultsdbInput, ToolRunOptions, SearchResul
     """
 
     name = "search_resultsdb"
+    timeout = 120
     description = (
         "Search for results for a specific package build in resultsdb. "
         "Only use this tool if the maintainer rules indicate that "

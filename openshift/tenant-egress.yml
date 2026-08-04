@@ -36,6 +36,10 @@ spec:
     - type: Allow
       to:
         dnsName: redhat.atlassian.net
+    # Jira attachments
+    - type: Allow
+      to:
+        dnsName: api.media.atlassian.com
     # CentOS Stream / RHEL package repos and MR management
     - type: Allow
       to:

@@ -12,8 +12,9 @@ from specfile import Specfile
 
 from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
 from ymir.agents.utils import check_subprocess, mcp_tools, run_subprocess, run_tool
-from ymir.common.base_utils import is_cs_branch, is_modular_branch, resolve_dist_git_namespace
+from ymir.common.base_utils import fix_await, is_cs_branch, is_modular_branch, resolve_dist_git_namespace
 from ymir.common.config import load_rhel_config
+from ymir.common.constants import RedisQueues
 from ymir.common.merge_queue import (  # noqa: F401 — re-exported for agents and tests
     _CONSOLIDATION_HASH_KEY,
     _consolidation_field_key,
@@ -24,13 +25,14 @@ from ymir.common.merge_queue import (  # noqa: F401 — re-exported for agents a
 )
 from ymir.common.models import (
     CachedMRMetadata,
+    ErrorData,
     LogOutputSchema,
     MergeRequestDetails,
     OpenMergeRequestResult,
     PackageConsolidationConfig,
     Task,
 )
-from ymir.common.utils import get_all_sources
+from ymir.common.utils import get_all_sources, get_latest_candidate_build, get_latest_z_pending_build
 from ymir.common.version_utils import (
     construct_internal_branch_name,
     is_older_zstream,
@@ -42,6 +44,126 @@ from ymir.tools.unprivileged.specfile import UpdateReleaseTool
 from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
 
 logger = logging.getLogger(__name__)
+
+
+class ZStreamBranchStaleError(Exception):
+    """Raised when a z-stream branch is behind the latest Brew build."""
+
+    def __init__(self, package: str, branch: str, build_ref: str, branch_head: str):
+        self.package = package
+        self.branch = branch
+        self.build_ref = build_ref
+        self.branch_head = branch_head
+        super().__init__(
+            f"Z-stream branch {branch} for {package} is out of sync with compose. "
+            f"Branch HEAD ({branch_head[:12]}) does not contain the latest "
+            f"build ref ({build_ref[:12]}). "
+            f"The branch maintainer needs to update it before Ymir can proceed. "
+            f"Please fix the branch and re-trigger by removing all ymir_ labels "
+            f"and adding ymir_todo."
+        )
+
+
+async def _check_zstream_branch_consistency(package: str, dist_git_branch: str, local_clone: Path) -> None:
+    """Verify that a z-stream branch contains the latest Brew build's source commit.
+
+    Raises ZStreamBranchStaleError if the branch is behind.
+    Logs a warning and returns normally if the check cannot be performed
+    (e.g. Brew unreachable, no builds in tag).
+    """
+    if not parse_zstream_branch_name(dist_git_branch):
+        return
+
+    try:
+        if await is_older_zstream(dist_git_branch):
+            _, build_source_ref = await get_latest_z_pending_build(package, dist_git_branch)
+        else:
+            _, build_source_ref = await get_latest_candidate_build(package, dist_git_branch)
+    except Exception as e:
+        logger.warning(
+            f"Could not query Brew for z-stream branch consistency ({package}/{dist_git_branch}): {e}"
+        )
+        return
+
+    exit_code, _, stderr = await run_subprocess(
+        ["git", "merge-base", "--is-ancestor", build_source_ref, "HEAD"],
+        cwd=local_clone,
+    )
+    if exit_code == 0:
+        return
+
+    # exit 1 = not ancestor; exit 128 = "not a valid commit" (ref not in repo).
+    # Both mean the branch is stale. Any other non-zero is an unexpected git
+    # failure — soft-fail so we don't post a misleading maintainer message.
+    if exit_code not in (1, 128):
+        logger.warning(
+            f"Unexpected git merge-base exit {exit_code} checking z-stream "
+            f"consistency ({package}/{dist_git_branch}): {stderr}"
+        )
+        return
+
+    _, head_stdout, _ = await run_subprocess(["git", "rev-parse", "HEAD"], cwd=local_clone)
+    raise ZStreamBranchStaleError(package, dist_git_branch, build_source_ref, (head_stdout or "").strip())
+
+
+async def handle_zstream_branch_stale_error(
+    exc: ZStreamBranchStaleError,
+    *,
+    jira_issues: list[str],
+    primary_jira_issue: str,
+    agent_type: str,
+    errored_label: str,
+    triaged_label: str,
+    dry_run: bool,
+    user_triggered: bool,
+    redis_conn,
+) -> None:
+    """Terminal handling for a stale z-stream branch: label, comment, ERROR_LIST.
+
+    Does not re-queue. Always posts the Jira comment (unless dry_run) because
+    only the maintainer can fix the branch.
+    """
+    issues = list(dict.fromkeys(jira_issues))
+    logger.error(f"Stale z-stream branch for {primary_jira_issue}: {exc}")
+    for issue_key in issues:
+        try:
+            await set_jira_labels(
+                jira_issue=issue_key,
+                labels_to_add=[errored_label],
+                labels_to_remove=[triaged_label],
+                dry_run=dry_run,
+                user_triggered=user_triggered,
+            )
+        except Exception as label_error:
+            logger.warning(f"Failed to set labels on {issue_key}: {label_error}")
+    if not dry_run:
+        try:
+            async with mcp_tools(
+                os.environ["MCP_GATEWAY_URL"],
+                call_meta={"jira_issue": primary_jira_issue},
+            ) as gateway_tools:
+                for issue_key in issues:
+                    try:
+                        await comment_in_jira(
+                            jira_issue=issue_key,
+                            agent_type=agent_type,
+                            comment_text=str(exc),
+                            available_tools=gateway_tools,
+                            is_error=True,
+                            user_triggered=True,  # force-post regardless of actual trigger
+                        )
+                    except Exception as comment_error:
+                        logger.warning(
+                            f"Failed to post stale-branch comment for {issue_key}: {comment_error}"
+                        )
+        except Exception as gateway_error:
+            logger.warning(f"Failed to post stale-branch comment: {gateway_error}")
+    await fix_await(
+        redis_conn.lpush(
+            RedisQueues.ERROR_LIST.value,
+            ErrorData(details=str(exc), jira_issue=primary_jira_issue).model_dump_json(),
+        )
+    )
 
 
 async def needs_zstream_target_label(dist_git_branch: str, fix_version: str | None) -> bool:
@@ -144,6 +266,7 @@ async def fork_and_prepare_dist_git(
             clone_path=str(local_clone),
             available_tools=available_tools,
         )
+    await _check_zstream_branch_consistency(package, dist_git_branch, local_clone)
     update_branch = f"{BRANCH_PREFIX}-{jira_issue}"
     await check_subprocess(["git", "checkout", "-B", update_branch], cwd=local_clone)
     fedora_clone = None

@@ -4,18 +4,22 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ymir.agents.tasks import (
+    ZStreamBranchStaleError,
+    _check_zstream_branch_consistency,
     change_jira_status,
     commit_push_and_open_mr,
     fork_and_prepare_dist_git,
     get_jira_issue_metadata,
+    handle_zstream_branch_stale_error,
     needs_zstream_target_label,
     post_user_ack_once,
 )
+from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import Task
 
 
 @asynccontextmanager
-async def _fake_mcp_tools(_url):
+async def _fake_mcp_tools(_url, **_kwargs):
     yield []
 
 
@@ -52,6 +56,7 @@ async def test_fork_and_prepare_dist_git_wipes_stale_working_dir(git_repo_basepa
         patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
         patch("ymir.agents.tasks.check_subprocess", new_callable=AsyncMock),
         patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
+        patch("ymir.agents.tasks._check_zstream_branch_consistency", new_callable=AsyncMock),
     ):
         mock_run_tool.return_value = "https://fork.example.com"
 
@@ -456,3 +461,219 @@ async def test_commit_push_and_open_mr_no_reviewers_without_package(tmp_path):
     assert is_new is True
     reviewer_calls = [n for n, _ in tool_calls if n == "set_merge_request_reviewers"]
     assert len(reviewer_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_zstream_consistency_stale_not_ancestor(tmp_path):
+    """Branch HEAD does not contain the build ref (exit 1) -> stale."""
+    with (
+        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
+        patch(
+            "ymir.agents.tasks.get_latest_candidate_build",
+            new_callable=AsyncMock,
+            return_value=("1.0-1", "build-ref-sha"),
+        ),
+        patch(
+            "ymir.agents.tasks.run_subprocess",
+            new_callable=AsyncMock,
+            side_effect=[
+                (1, None, None),  # merge-base --is-ancestor
+                (0, "branch-head-sha\n", None),  # rev-parse HEAD
+            ],
+        ),
+        pytest.raises(ZStreamBranchStaleError) as exc_info,
+    ):
+        await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
+
+    assert exc_info.value.package == "golang"
+    assert exc_info.value.branch == "rhel-9.8.0"
+    assert exc_info.value.build_ref == "build-ref-sha"
+    assert exc_info.value.branch_head == "branch-head-sha"
+
+
+@pytest.mark.asyncio
+async def test_zstream_consistency_stale_ref_not_in_repo(tmp_path):
+    """Build ref missing from clone (exit 128) -> stale."""
+    with (
+        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
+        patch(
+            "ymir.agents.tasks.get_latest_candidate_build",
+            new_callable=AsyncMock,
+            return_value=("1.0-1", "missing-build-ref"),
+        ),
+        patch(
+            "ymir.agents.tasks.run_subprocess",
+            new_callable=AsyncMock,
+            side_effect=[
+                (128, None, "fatal: Not a valid commit name missing-build-ref"),
+                (0, "branch-head-sha\n", None),
+            ],
+        ),
+        pytest.raises(ZStreamBranchStaleError),
+    ):
+        await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_zstream_consistency_up_to_date(tmp_path):
+    """Build ref is ancestor of HEAD (exit 0) -> no error."""
+    with (
+        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
+        patch(
+            "ymir.agents.tasks.get_latest_candidate_build",
+            new_callable=AsyncMock,
+            return_value=("1.0-1", "build-ref-sha"),
+        ),
+        patch(
+            "ymir.agents.tasks.run_subprocess",
+            new_callable=AsyncMock,
+            return_value=(0, None, None),
+        ) as mock_run,
+    ):
+        await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
+
+    mock_run.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_zstream_consistency_skips_non_zstream(tmp_path):
+    """CentOS Stream branches skip the check entirely."""
+    with (
+        patch("ymir.agents.tasks.get_latest_candidate_build", new_callable=AsyncMock) as mock_brew,
+        patch("ymir.agents.tasks.get_latest_z_pending_build", new_callable=AsyncMock) as mock_pending,
+    ):
+        await _check_zstream_branch_consistency("bash", "c10s", tmp_path)
+
+    mock_brew.assert_not_awaited()
+    mock_pending.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_zstream_consistency_brew_unreachable_soft_fails(tmp_path, caplog):
+    """Brew query failure logs a warning and does not raise."""
+    with (
+        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
+        patch(
+            "ymir.agents.tasks.get_latest_candidate_build",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("Brew unreachable"),
+        ),
+        patch("ymir.agents.tasks.run_subprocess", new_callable=AsyncMock) as mock_run,
+    ):
+        await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
+
+    mock_run.assert_not_awaited()
+    assert "Could not query Brew" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_zstream_consistency_older_uses_z_pending(tmp_path):
+    """Older z-streams query z-pending, not candidate."""
+    with (
+        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=True),
+        patch(
+            "ymir.agents.tasks.get_latest_z_pending_build",
+            new_callable=AsyncMock,
+            return_value=("1.0-1", "build-ref-sha"),
+        ) as mock_pending,
+        patch(
+            "ymir.agents.tasks.get_latest_candidate_build",
+            new_callable=AsyncMock,
+        ) as mock_candidate,
+        patch(
+            "ymir.agents.tasks.run_subprocess",
+            new_callable=AsyncMock,
+            return_value=(0, None, None),
+        ),
+    ):
+        await _check_zstream_branch_consistency("bash", "rhel-9.6.0", tmp_path)
+
+    mock_pending.assert_awaited_once_with("bash", "rhel-9.6.0")
+    mock_candidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_zstream_consistency_unexpected_git_exit_soft_fails(tmp_path, caplog):
+    """Unexpected merge-base exit codes log a warning and do not raise."""
+    with (
+        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
+        patch(
+            "ymir.agents.tasks.get_latest_candidate_build",
+            new_callable=AsyncMock,
+            return_value=("1.0-1", "build-ref-sha"),
+        ),
+        patch(
+            "ymir.agents.tasks.run_subprocess",
+            new_callable=AsyncMock,
+            return_value=(2, None, "fatal: not a git repository"),
+        ) as mock_run,
+    ):
+        await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
+
+    mock_run.assert_awaited_once()
+    assert "Unexpected git merge-base exit 2" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_handle_zstream_branch_stale_error_labels_comments_and_error_list():
+    exc = ZStreamBranchStaleError("golang", "rhel-9.8.0", "build-ref-sha", "branch-head-sha")
+    redis = AsyncMock()
+    redis.lpush = AsyncMock()
+
+    with (
+        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock) as mock_labels,
+        patch("ymir.agents.tasks.comment_in_jira", new_callable=AsyncMock) as mock_comment,
+        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
+    ):
+        await handle_zstream_branch_stale_error(
+            exc,
+            jira_issues=["RHEL-1", "RHEL-2", "RHEL-1"],
+            primary_jira_issue="RHEL-1",
+            agent_type="Rebuild",
+            errored_label=JiraLabels.REBUILD_ERRORED.value,
+            triaged_label=JiraLabels.TRIAGED_REBUILD.value,
+            dry_run=False,
+            user_triggered=False,
+            redis_conn=redis,
+        )
+
+    assert mock_labels.await_count == 2
+    assert mock_comment.await_count == 2
+    mock_comment.assert_any_await(
+        jira_issue="RHEL-1",
+        agent_type="Rebuild",
+        comment_text=str(exc),
+        available_tools=[],
+        is_error=True,
+        user_triggered=True,
+    )
+    redis.lpush.assert_awaited_once()
+    assert redis.lpush.await_args.args[0] == RedisQueues.ERROR_LIST.value
+
+
+@pytest.mark.asyncio
+async def test_handle_zstream_branch_stale_error_skips_comment_on_dry_run():
+    exc = ZStreamBranchStaleError("golang", "rhel-9.8.0", "build-ref-sha", "branch-head-sha")
+    redis = AsyncMock()
+    redis.lpush = AsyncMock()
+
+    with (
+        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock) as mock_labels,
+        patch("ymir.agents.tasks.comment_in_jira", new_callable=AsyncMock) as mock_comment,
+        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
+    ):
+        await handle_zstream_branch_stale_error(
+            exc,
+            jira_issues=["RHEL-1"],
+            primary_jira_issue="RHEL-1",
+            agent_type="Rebase",
+            errored_label=JiraLabels.REBASE_ERRORED.value,
+            triaged_label=JiraLabels.TRIAGED_REBASE.value,
+            dry_run=True,
+            user_triggered=False,
+            redis_conn=redis,
+        )
+
+    mock_labels.assert_awaited_once()
+    mock_comment.assert_not_awaited()
+    redis.lpush.assert_awaited_once()

@@ -42,7 +42,7 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
        GitPython \
        nitrate \
        tomli-w \
-       "logdetective-mcp>=0.2.0" \
+       "logdetective-mcp>=0.5.0" \
        typer \
        python-dotenv
 

@@ -54,9 +54,15 @@ flowchart TD
     subgraph IVA["Issue Verification Agent"]
         direction TB
         IVA_Errata["Confirm erratum exists"]
+        IVA_Check{"Test results\navailable?"}
         IVA_Tests["Analyze test results"]
         IVA_Done["Advance to\nRelease Pending"]
-        IVA_Errata --> IVA_Tests --> IVA_Done
+        IVA_Fail["Flag attention\nin Jira"]
+        IVA_Errata --> IVA_Check
+        IVA_Check -->|"yes"| IVA_Tests
+        IVA_Check -->|"not yet"| IVA_Check
+        IVA_Tests -->|"passed"| IVA_Done
+        IVA_Tests -->|"failed"| IVA_Fail
     end
 
     subgraph EWA["Errata Workflow Agent"]
@@ -90,9 +96,10 @@ A few checks from the old Supervisor are not replicated in the standalone agents
 
 | Missing logic | Old location | Impact |
 |---|---|---|
-| Erratum ownership check and transfer | `erratum_handler.py:302-313` | Errata Workflow Agent doesn't verify bot ownership before acting |
 | NEW_FILES guard during issue verification | `issue_handler.py:278-281` | Issue Verification Agent may run LLM testing analysis prematurely (before QE testing begins) |
 | Team assignment pre-filter | `collect.py` JQL | Agents process any issue regardless of team assignment |
+
+Note: the old Supervisor's erratum ownership check (`erratum_handler.py:302-313`) is not needed — it was a Jotnar pilot artifact where the bot assigned issues to itself.
 
 ## Proposed Integration: `ymir_qe_todo` Label as Enabler
 
@@ -166,7 +173,6 @@ Add to `deploy.sh` and the CI image build workflow.
 
 ### Agent fixes (can be done in parallel)
 
-- **Errata Workflow Agent** — Add erratum ownership check and transfer before acting (replicated from old Supervisor `erratum_handler.py:302-313`).
 - **Issue Verification Agent** — Add NEW_FILES guard: skip LLM test analysis if the erratum is still in NEW_FILES state (QE testing hasn't begun yet). Replicated from old Supervisor `issue_handler.py:278-281`.
 
 ### Cleanup (after deployment is stable)

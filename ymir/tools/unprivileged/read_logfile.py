@@ -6,6 +6,7 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, Tool, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
+from ymir.tools.constants import AIOHTTP_TIMEOUT
 from ymir.tools.http import aiohttp_get_with_retries
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ class ReadLogfileTool(Tool[ReadLogfileInput, ToolRunOptions, StringToolOutput]):
         logger.info("Reading logfile from URL: %s", input.logfile_url)
         try:
             async with (
-                aiohttp.ClientSession() as session,
+                aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
                 aiohttp_get_with_retries(session, input.logfile_url) as response,
             ):
                 if response.status == 200:

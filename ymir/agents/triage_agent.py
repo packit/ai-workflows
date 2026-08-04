@@ -1534,8 +1534,15 @@ async def main() -> None:
                             task = Task(metadata=state.model_dump(), user_triggered=user_triggered)
                             downstream_payload = task.model_dump_json()
                             if output.resolution == Resolution.REBASE:
-                                # Skip queueing if issue is waiting for siblings to finish triaging
-                                if state.waiting_for_siblings:
+                                # Skip queueing if issue is waiting for siblings to finish triaging.
+                                # Check both state flag (set mid-workflow) and
+                                # Jira label (persisted across restarts).
+                                # After pod restart/re-triage, state.waiting_for_siblings defaults to False,
+                                # but the Jira label persists until siblings finish.
+                                if (
+                                    state.waiting_for_siblings
+                                    or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
+                                ):
                                     logger.info(
                                         f"Issue {input.issue} is waiting for siblings to finish triaging, "
                                         "skipping rebase queue (will be queued when siblings are done)"

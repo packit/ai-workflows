@@ -42,7 +42,7 @@ index d3f3adc6..5497ff77 100644
  
      def instrumentation_dependencies(self) -> Collection[str]:
          return _instruments
-@@ -70,39 +68,81 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
+@@ -70,39 +68,83 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
      def _uninstrument(self, **kwargs: Any) -> None:
          self._cleanup()
          self._processes.clear()
@@ -84,8 +84,10 @@ index d3f3adc6..5497ff77 100644
 +            if not isinstance(value, _OTEL_TYPES) and not (
 +                isinstance(value, (list, tuple)) and all(isinstance(v, _OTEL_TYPES) for v in value)
 +            ):
-+                value = str(value)
-+            span.set_attribute(key, value)
++                # Convert non-OTEL types to string for OpenTelemetry compatibility
++                span.set_attribute(key, str(value))
++            else:
++                span.set_attribute(key, value)
  
 -    @contextlib.contextmanager
 -    def _build_tree_for_span(self, node: SpanWrapper) -> Generator[OpenInferenceSpan, None, None]:
@@ -147,7 +149,7 @@ index d3f3adc6..5497ff77 100644
  
      @exception_handler
      async def _handler(self, data: Any, event: "EventMeta") -> None:
-@@ -118,10 +158,8 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
+@@ -118,10 +160,8 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
              if event.trace.parent_run_id and not parent:
                  raise ValueError(f"Parent run with ID {event.trace.parent_run_id} was not found!")
  
@@ -159,7 +161,7 @@ index d3f3adc6..5497ff77 100644
          else:
              node = self._processes[event.trace.run_id]
  
-@@ -129,8 +167,8 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
+@@ -129,8 +169,8 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
  
          if isinstance(data, RunContextFinishEvent):
              await node.end(data, event)

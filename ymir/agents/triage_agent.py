@@ -1025,6 +1025,8 @@ async def run_workflow(
                 primary_issue=state.jira_issue,
                 rebase_data=rebase_data,
                 available_tools=gateway_tools,
+                dry_run=dry_run,
+                user_triggered=user_triggered,
             )
 
             # If siblings were queued, don't queue primary yet (wait for siblings)
@@ -1496,6 +1498,8 @@ async def main() -> None:
                             await check_and_queue_primary_if_ready(
                                 sibling_issue=input.issue,
                                 available_tools=gateway_tools,
+                                dry_run=dry_run,
+                                user_triggered=user_triggered,
                             )
                     except Exception as e:
                         logger.warning(f"Failed to check/queue primary for sibling {input.issue}: {e}")

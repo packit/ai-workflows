@@ -30,6 +30,7 @@ from ymir.common.version_utils import (
     parse_rhel_version,
 )
 from ymir.tools.base import CloneableTool as Tool
+from ymir.tools.base import tool_error_context
 from ymir.tools.constants import AIOHTTP_TIMEOUT
 from ymir.tools.http import aiohttp_get_with_retries
 
@@ -195,7 +196,7 @@ class GetJiraDetailsTool(Tool[GetJiraDetailsToolInput, ToolRunOptions, JSONToolO
         logger.info(f"Connecting to JIRA API to get issue details: {jira_url}")
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-            try:
+            with tool_error_context(f"Failed to get details about issue {issue_key}", url=jira_url):
                 async with aiohttp_get_with_retries(
                     session,
                     jira_url,
@@ -204,8 +205,6 @@ class GetJiraDetailsTool(Tool[GetJiraDetailsToolInput, ToolRunOptions, JSONToolO
                 ) as response:
                     response.raise_for_status()
                     issue_data = await response.json()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to get details about the specified issue: {e}") from e
 
             try:
                 async with aiohttp_get_with_retries(
@@ -219,7 +218,8 @@ class GetJiraDetailsTool(Tool[GetJiraDetailsToolInput, ToolRunOptions, JSONToolO
                     remote_links_response.raise_for_status()
                     remote_links = await remote_links_response.json()
                     issue_data["remote_links"] = remote_links
-            except (aiohttp.ClientError, TimeoutError):
+            except (aiohttp.ClientError, TimeoutError) as e:
+                logger.debug("Remote links fetch failed for %s, defaulting to empty: %s", issue_key, e)
                 issue_data["remote_links"] = []
 
         return JSONToolOutput(result=self._postprocess_issue_data(issue_data))
@@ -276,7 +276,7 @@ class SetJiraFieldsTool(Tool[SetJiraFieldsToolInput, ToolRunOptions, StringToolO
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}")
             logger.info(f"Connecting to JIRA API to set fields for issue: {jira_url}")
-            try:
+            with tool_error_context(f"Failed to get current issue details for {issue_key}", url=jira_url):
                 async with aiohttp_get_with_retries(
                     session,
                     jira_url,
@@ -284,8 +284,6 @@ class SetJiraFieldsTool(Tool[SetJiraFieldsToolInput, ToolRunOptions, StringToolO
                 ) as response:
                     response.raise_for_status()
                     current_issue = await response.json()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to get current issue details: {e}") from e
 
             fields = {}
             current_fields = current_issue.get("fields", {})
@@ -309,15 +307,13 @@ class SetJiraFieldsTool(Tool[SetJiraFieldsToolInput, ToolRunOptions, StringToolO
                 return StringToolOutput(result=f"No fields needed updating in {issue_key}")
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-            try:
+            with tool_error_context(f"Failed to set fields on {issue_key}", fields=list(fields.keys())):
                 async with session.put(
                     urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}"),
                     json={"fields": fields},
                     headers=get_jira_auth_headers(),
                 ) as response:
                     response.raise_for_status()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to set the specified fields: {e}") from e
 
         return StringToolOutput(result=f"Successfully updated {issue_key}")
 
@@ -363,7 +359,7 @@ class AddJiraCommentTool(Tool[AddJiraCommentToolInput, ToolRunOptions, StringToo
         jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/2/issue/{issue_key}/comment")
         logger.info(f"Connecting to JIRA API to add comment: {jira_url}")
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-            try:
+            with tool_error_context(f"Failed to add comment to {issue_key}", private=private):
                 async with session.post(
                     jira_url,
                     json={
@@ -382,8 +378,6 @@ class AddJiraCommentTool(Tool[AddJiraCommentToolInput, ToolRunOptions, StringToo
                     headers=get_jira_auth_headers(),
                 ) as response:
                     response.raise_for_status()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to add the specified comment: {e}") from e
         return StringToolOutput(result=f"Successfully added the specified comment to {issue_key}")
 
 
@@ -746,7 +740,7 @@ class CheckCveTriageEligibilityTool(
         logger.info(f"Connecting to JIRA API to check CVE eligibility: {jira_url}")
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-            try:
+            with tool_error_context(f"Failed to get Jira data for {issue_key}"):
                 async with aiohttp_get_with_retries(
                     session,
                     jira_url,
@@ -754,8 +748,6 @@ class CheckCveTriageEligibilityTool(
                 ) as response:
                     response.raise_for_status()
                     jira_data = await response.json()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to get Jira data: {e}") from e
 
         fields = jira_data.get("fields", {})
         labels = fields.get("labels", [])
@@ -1187,12 +1179,12 @@ class ChangeJiraStatusTool(Tool[ChangeJiraStatusToolInput, ToolRunOptions, Strin
             except (aiohttp.ClientError, TimeoutError):
                 pass
 
-            try:
+            with tool_error_context(
+                f"Failed to get available transitions for {issue_key}", target_status=status
+            ):
                 async with aiohttp_get_with_retries(session, jira_url, headers=headers) as resp:
                     resp.raise_for_status()
                     transitions = (await resp.json()).get("transitions", [])
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to get available transitions for {issue_key}: {e}") from e
 
             transition = next(
                 (t for t in transitions if t.get("to", {}).get("name", "").lower() == status.lower()),
@@ -1203,15 +1195,13 @@ class ChangeJiraStatusTool(Tool[ChangeJiraStatusToolInput, ToolRunOptions, Strin
                 available = ", ".join(t.get("to", {}).get("name", "?") for t in transitions)
                 raise ToolError(f"Status '{status}' is not available for {issue_key}. Available: {available}")
 
-            try:
+            with tool_error_context(f"Failed to change status of {issue_key} to {status}"):
                 async with session.post(
                     jira_url,
                     json={"transition": {"id": transition["id"]}},
                     headers=headers,
                 ) as resp:
                     resp.raise_for_status()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to change status of {issue_key} to {status}: {e}") from e
 
         return StringToolOutput(result=f"Successfully changed status of {issue_key} to {status}")
 
@@ -1272,15 +1262,17 @@ class EditJiraLabelsTool(Tool[EditJiraLabelsToolInput, ToolRunOptions, StringToo
         payload = {"update": {"labels": update_payload}}
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-            try:
+            with tool_error_context(
+                f"Failed to edit labels on {issue_key}",
+                adding=labels_to_add,
+                removing=labels_to_remove,
+            ):
                 async with session.put(
                     jira_url,
                     json=payload,
                     headers=headers,
                 ) as response:
                     response.raise_for_status()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to edit labels on {issue_key}: {e}") from e
 
         return StringToolOutput(result=f"Successfully edited labels on {issue_key}.")
 
@@ -1315,7 +1307,7 @@ class VerifyIssueAuthorTool(Tool[VerifyIssueAuthorToolInput, ToolRunOptions, JSO
         logger.info(f"Connecting to JIRA API to verify issue author: {jira_url}")
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-            try:
+            with tool_error_context(f"Failed to get Jira data for {issue_key}"):
                 async with aiohttp_get_with_retries(
                     session,
                     jira_url,
@@ -1323,8 +1315,6 @@ class VerifyIssueAuthorTool(Tool[VerifyIssueAuthorToolInput, ToolRunOptions, JSO
                 ) as response:
                     response.raise_for_status()
                     issue_data = await response.json()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to get Jira data: {e}") from e
 
             reporter = issue_data.get("fields", {}).get("reporter", {})
 
@@ -1340,7 +1330,7 @@ class VerifyIssueAuthorTool(Tool[VerifyIssueAuthorToolInput, ToolRunOptions, JSO
             elif author_key:
                 params["key"] = author_key
 
-            try:
+            with tool_error_context(f"Failed to get user groups for issue {issue_key}"):
                 async with aiohttp_get_with_retries(
                     session,
                     urljoin(os.getenv("JIRA_URL"), "rest/api/3/user"),
@@ -1349,8 +1339,6 @@ class VerifyIssueAuthorTool(Tool[VerifyIssueAuthorToolInput, ToolRunOptions, JSO
                 ) as user_response:
                     user_response.raise_for_status()
                     user_data = await user_response.json()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to get user groups: {e}") from e
 
             ok = any(
                 group.get("name") == RH_EMPLOYEE_GROUP
@@ -1412,7 +1400,7 @@ class SearchJiraIssuesTool(
         }
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-            try:
+            with tool_error_context("Failed to search Jira issues", jql=jql):
                 async with session.post(
                     url,
                     json=json_payload,
@@ -1420,8 +1408,6 @@ class SearchJiraIssuesTool(
                 ) as response:
                     response.raise_for_status()
                     data = await response.json()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to search Jira issues: {e}") from e
 
         issues = data.get("issues", [])
         logger.info(f"Jira search returned {len(issues)} issues")
@@ -1449,23 +1435,21 @@ async def _fetch_dev_status_details(
     aggregated detail records for every application type found under
     *summary_category* (e.g. ``"repository"`` or ``"pullrequest"``)."""
     issue_url = urljoin(jira_base, f"rest/api/3/issue/{issue_key}")
-    try:
+    with tool_error_context(f"Failed to resolve issue ID for {issue_key}"):
         async with aiohttp_get_with_retries(
             session, issue_url, params={"fields": ""}, headers=headers
         ) as response:
             response.raise_for_status()
             issue_data = await response.json()
             issue_id = issue_data["id"]
-    except (aiohttp.ClientError, TimeoutError) as e:
-        raise ToolError(f"Failed to resolve issue ID for {issue_key}: {e}") from e
 
     summary_url = urljoin(jira_base, f"rest/dev-status/1.0/issue/summary?issueId={issue_id}")
-    try:
+    with tool_error_context(
+        f"Failed to get dev status summary for {issue_key}", issue_id=issue_id, summary_url=summary_url
+    ):
         async with aiohttp_get_with_retries(session, summary_url, headers=headers) as response:
             response.raise_for_status()
             summary_data = await response.json()
-    except (aiohttp.ClientError, TimeoutError) as e:
-        raise ToolError(f"Failed to get dev status summary for {issue_key}: {e}") from e
 
     app_types = list(
         summary_data.get("summary", {}).get(summary_category, {}).get("byInstanceType", {}).keys()
@@ -1667,11 +1651,13 @@ class SetPreliminaryTestingTool(Tool[SetPreliminaryTestingToolInput, ToolRunOpti
                 }
 
             url = urljoin(jira_base, f"rest/api/2/issue/{issue_key}")
-            try:
+            with tool_error_context(
+                f"Failed to set Preliminary Testing on {issue_key}",
+                preliminary_testing_field_id=field_id,
+                preliminary_testing_value=value.value,
+            ):
                 async with session.put(url, json=body, headers=headers) as response:
                     response.raise_for_status()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to set Preliminary Testing on {issue_key}: {e}") from e
 
         return StringToolOutput(
             result=f"Successfully set Preliminary Testing to {value.value} on {issue_key}"
@@ -1722,15 +1708,13 @@ class UpdateJiraCommentTool(Tool[UpdateJiraCommentToolInput, ToolRunOptions, Str
         logger.info("Updating comment %s on %s", comment_id, issue_key)
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-            try:
+            with tool_error_context(f"Failed to update comment {comment_id} on {issue_key}"):
                 async with session.put(
                     jira_url,
                     json={"body": comment},
                     headers=get_jira_auth_headers(),
                 ) as response:
                     response.raise_for_status()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to update comment {comment_id} on {issue_key}: {e}") from e
 
         return StringToolOutput(result=f"Successfully updated comment {comment_id} on {issue_key}")
 
@@ -1788,7 +1772,10 @@ class AddJiraAttachmentsTool(Tool[AddJiraAttachmentsToolInput, ToolRunOptions, S
         logger.info("Adding %d attachment(s) to %s", len(attachments), issue_key)
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-            try:
+            with tool_error_context(
+                f"Failed to add attachments to {issue_key}",
+                filenames=[a["filename"] for a in attachments],
+            ):
                 data = aiohttp.FormData()
                 for attachment in attachments:
                     content = attachment["content"].encode("utf-8")
@@ -1805,8 +1792,6 @@ class AddJiraAttachmentsTool(Tool[AddJiraAttachmentsToolInput, ToolRunOptions, S
                     headers=headers,
                 ) as response:
                     response.raise_for_status()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to add attachments to {issue_key}: {e}") from e
 
         filenames = ", ".join(a["filename"] for a in attachments)
         return StringToolOutput(result=f"Successfully added attachments ({filenames}) to {issue_key}")
@@ -1846,12 +1831,10 @@ class GetJiraAttachmentTool(Tool[GetJiraAttachmentToolInput, ToolRunOptions, Str
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             # Get issue attachments
             issue_url = urljoin(jira_base, f"rest/api/2/issue/{issue_key}?fields=attachment")
-            try:
+            with tool_error_context(f"Failed to get issue {issue_key}", attachment=filename):
                 async with aiohttp_get_with_retries(session, issue_url, headers=headers) as response:
                     response.raise_for_status()
                     issue_data = await response.json()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to get issue {issue_key}: {e}") from e
 
             attachments = issue_data.get("fields", {}).get("attachment", [])
             matching = [a for a in attachments if a.get("filename") == filename]
@@ -1862,12 +1845,10 @@ class GetJiraAttachmentTool(Tool[GetJiraAttachmentToolInput, ToolRunOptions, Str
                 raise ToolError(f"Issue {issue_key} has multiple attachments named {filename}")
 
             content_url = matching[0]["content"]
-            try:
+            with tool_error_context(f"Failed to download attachment {filename} from {issue_key}"):
                 async with aiohttp_get_with_retries(session, content_url, headers=headers) as response:
                     response.raise_for_status()
                     content = await response.read()
-            except (aiohttp.ClientError, TimeoutError) as e:
-                raise ToolError(f"Failed to download attachment {filename}: {e}") from e
 
         try:
             text = content.decode("utf-8")
@@ -1887,12 +1868,10 @@ async def _get_user_identifier(session: Any, headers: dict, email: str) -> tuple
     """
     jira_base = os.getenv("JIRA_URL")
     url = urljoin(jira_base, "rest/api/3/user/search")
-    try:
+    with tool_error_context(f"Failed to search for user {email}"):
         async with session.get(url, params={"query": email}, headers=headers) as response:
             response.raise_for_status()
             users = await response.json()
-    except aiohttp.ClientError as e:
-        raise ToolError(f"Failed to search for user {email}: {e}") from e
 
     matches = [u for u in users if u.get("emailAddress") == email]
     if len(matches) == 0:
@@ -1970,7 +1949,12 @@ class CreateJiraIssueTool(Tool[CreateJiraIssueToolInput, ToolRunOptions, JSONToo
 
             url = urljoin(jira_base, "rest/api/2/issue")
             logger.info("Creating Jira issue in project %s", tool_input.project)
-            try:
+            with tool_error_context(
+                f"Failed to create Jira issue in project {tool_input.project}",
+                summary=tool_input.summary,
+                components=tool_input.components,
+                labels=tool_input.labels,
+            ):
                 async with session.post(
                     url,
                     json={"fields": fields},
@@ -1978,8 +1962,6 @@ class CreateJiraIssueTool(Tool[CreateJiraIssueToolInput, ToolRunOptions, JSONToo
                 ) as response:
                     response.raise_for_status()
                     data = await response.json()
-            except aiohttp.ClientError as e:
-                raise ToolError(f"Failed to create Jira issue: {e}") from e
 
         key = data["key"]
         logger.info("Created Jira issue %s", key)

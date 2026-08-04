@@ -1391,6 +1391,9 @@ async def main() -> None:
             else:
                 logger.info(f"Triage resolved as {output.resolution.value} for {input.issue}")
 
+                # Check if this issue is a sibling (has ymir_rebase_sibling label)
+                is_sibling = JiraLabels.REBASE_SIBLING.value in current_labels
+
                 resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
                 if resolution_label and output.resolution != Resolution.ERROR:
                     # Terminal resolution label is the dedup anchor that replaces
@@ -1398,7 +1401,6 @@ async def main() -> None:
                     # the next fetcher sweep skips this issue.
                     # Also remove ymir_rebase_sibling if present (sibling finished triaging)
                     labels_to_remove = [JiraLabels.TRIAGE_IN_PROGRESS.value]
-                    is_sibling = JiraLabels.REBASE_SIBLING.value in current_labels
                     if is_sibling:
                         labels_to_remove.append(JiraLabels.REBASE_SIBLING.value)
                         logger.info(f"{input.issue} is a sibling, will check if primary is ready to queue")

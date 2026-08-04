@@ -420,6 +420,12 @@ class TriageState(BaseModel):
     applicability_unpacked_sources: Path | None = Field(default=None)
     applicability_used_fallback: bool = Field(default=False)
     applicability_check_skipped: bool = Field(default=False)
+    waiting_for_siblings: bool = Field(
+        default=False,
+        description=(
+            "Set to True when siblings are queued and this issue should wait for them to finish triaging."
+        ),
+    )
 
 
 def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgent:
@@ -1027,12 +1033,15 @@ async def run_workflow(
                     f"Queued {sibling_count} siblings for {state.jira_issue}, "
                     "primary will be queued after siblings finish triaging"
                 )
+                # Mark that this issue is waiting for siblings
+                state.waiting_for_siblings = True
                 # Clear consolidated issues - found during rebase via find_triaged_rebase_siblings()
                 rebase_data.consolidated_issues = []
                 rebase_data.consolidation_summary = None
             else:
                 # No siblings found, queue primary for rebase immediately
                 logger.info(f"No siblings found for {state.jira_issue}, will queue for rebase now")
+                state.waiting_for_siblings = False
                 rebase_data.consolidated_issues = []
                 rebase_data.consolidation_summary = None
 
@@ -1526,7 +1535,7 @@ async def main() -> None:
                             downstream_payload = task.model_dump_json()
                             if output.resolution == Resolution.REBASE:
                                 # Skip queueing if issue is waiting for siblings to finish triaging
-                                if JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels:
+                                if state.waiting_for_siblings:
                                     logger.info(
                                         f"Issue {input.issue} is waiting for siblings to finish triaging, "
                                         "skipping rebase queue (will be queued when siblings are done)"

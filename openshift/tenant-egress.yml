@@ -142,6 +142,10 @@ spec:
     - type: Allow
       to:
         dnsName: o490301.ingest.us.sentry.io
+    # LangFuse tracing
+    - type: Allow
+      to:
+        dnsName: us.cloud.langfuse.com
 
     # ==========================================================================
     # Remote sources referenced by RHEL and CentOS Stream spec files (generated)

@@ -465,7 +465,7 @@ async def check_and_queue_primary_if_ready(
 
         # Look for comment matching "Queued for triage as potential sibling of {primary}"
         primary_issue = None
-        comments = sibling_details.get("comments", [])
+        comments = sibling_details.get("fields", {}).get("comment", {}).get("comments", [])
         for comment in comments:
             body = comment.get("body", "")
             if "Queued for triage as potential sibling of" in body:
@@ -489,7 +489,7 @@ async def check_and_queue_primary_if_ready(
             available_tools=available_tools,
             issue_key=primary_issue,
         )
-        labels = primary_details.get("labels", [])
+        labels = primary_details.get("fields", {}).get("labels", [])
         if JiraLabels.WAITING_FOR_SIBLINGS.value not in labels:
             logger.info(f"Primary {primary_issue} is not waiting for siblings, skipping")
             return
@@ -631,7 +631,7 @@ async def find_triaged_rebase_siblings(
 
                 # Look for comment matching "Queued for triage as potential sibling of {jira_issue}"
                 has_primary_reference = False
-                comments = candidate_details.get("comments", [])
+                comments = candidate_details.get("fields", {}).get("comment", {}).get("comments", [])
                 for comment in comments:
                     body = comment.get("body", "")
                     if f"Queued for triage as potential sibling of {jira_issue}" in body:

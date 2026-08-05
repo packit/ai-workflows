@@ -1020,6 +1020,16 @@ async def run_workflow(
             """Queue sibling issues for triage and decide whether to queue primary for rebase."""
             rebase_data = state.triage_result.data
 
+            # Skip consolidation if this issue is already a sibling of another primary
+            current_labels, _ = await tasks.get_jira_issue_metadata(state.jira_issue)
+            if JiraLabels.REBASE_SIBLING.value in current_labels:
+                logger.info(f"Issue {state.jira_issue} is already a sibling, skipping consolidation")
+                # Don't search for siblings or set waiting flag
+                state.waiting_for_siblings = False
+                rebase_data.consolidated_issues = []
+                rebase_data.consolidation_summary = None
+                return "comment_in_jira"
+
             # Queue siblings for triage
             sibling_count = await queue_siblings_for_triage(
                 primary_issue=state.jira_issue,
@@ -1251,9 +1261,7 @@ async def main() -> None:
                 JiraLabels.TODO.value,
             }
             terminal_ymir_labels = [
-                label
-                for label in current_labels
-                if label in all_labels and label not in non_terminal_labels
+                label for label in current_labels if label in all_labels and label not in non_terminal_labels
             ]
             if (
                 terminal_ymir_labels

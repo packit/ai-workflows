@@ -364,28 +364,37 @@ async def queue_siblings_for_triage(
                 async with redis_client(os.environ["REDIS_URL"]) as redis:
                     await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
 
-                # Add label
-                await tasks.set_jira_labels(
-                    jira_issue=candidate_key,
-                    labels_to_add=[JiraLabels.REBASE_SIBLING.value],
-                    dry_run=False,
-                    user_triggered=user_triggered,
-                )
-
-                # Post comment on sibling
-                await tasks.comment_in_jira(
-                    jira_issue=candidate_key,
-                    agent_type="Triage",
-                    comment_text=f"Queued for triage as potential sibling of {primary_issue}",
-                    available_tools=available_tools,
-                    is_error=False,
-                    user_triggered=user_triggered,
-                )
-
+            # Increment count immediately after Redis push (or would-push in dry-run)
+            # so that failures in label/comment don't miscount queued siblings
             queued_count += 1
             logger.info(
                 f"{'[DRY-RUN] Would queue' if dry_run else 'Queued'} sibling {candidate_key} for triage"
             )
+
+            if not dry_run:
+                # Add label (best-effort; failure doesn't affect queue count)
+                try:
+                    await tasks.set_jira_labels(
+                        jira_issue=candidate_key,
+                        labels_to_add=[JiraLabels.REBASE_SIBLING.value],
+                        dry_run=False,
+                        user_triggered=user_triggered,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to label sibling {candidate_key}: {e}")
+
+                # Post comment on sibling (best-effort; failure doesn't affect queue count)
+                try:
+                    await tasks.comment_in_jira(
+                        jira_issue=candidate_key,
+                        agent_type="Triage",
+                        comment_text=f"Queued for triage as potential sibling of {primary_issue}",
+                        available_tools=available_tools,
+                        is_error=False,
+                        user_triggered=user_triggered,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to comment on sibling {candidate_key}: {e}")
 
         except Exception as e:
             import traceback

@@ -1021,14 +1021,34 @@ async def run_workflow(
             rebase_data = state.triage_result.data
 
             # Skip consolidation if this issue is already a sibling of another primary
+            # Check both label (set when queued) and comments (may not be labeled yet due to race)
             current_labels, _ = await tasks.get_jira_issue_metadata(state.jira_issue)
             if JiraLabels.REBASE_SIBLING.value in current_labels:
-                logger.info(f"Issue {state.jira_issue} is already a sibling, skipping consolidation")
+                logger.info(f"Issue {state.jira_issue} has ymir_rebase_sibling label, skipping consolidation")
                 # Don't search for siblings or set waiting flag
                 state.waiting_for_siblings = False
                 rebase_data.consolidated_issues = []
                 rebase_data.consolidation_summary = None
                 return "comment_in_jira"
+
+            # Also check comments for "Queued for triage as potential sibling" (label may not be set yet)
+            try:
+                details = await run_tool(
+                    "get_jira_details",
+                    issue_key=state.jira_issue,
+                    fields=["comment"],
+                    available_tools=gateway_tools,
+                )
+                comments = details.get("fields", {}).get("comment", {}).get("comments", [])
+                for comment in comments:
+                    if "Queued for triage as potential sibling of" in comment.get("body", ""):
+                        logger.info(f"Issue {state.jira_issue} has sibling comment, skipping consolidation")
+                        state.waiting_for_siblings = False
+                        rebase_data.consolidated_issues = []
+                        rebase_data.consolidation_summary = None
+                        return "comment_in_jira"
+            except Exception as e:
+                logger.warning(f"Failed to check comments for {state.jira_issue}: {e}, proceeding")
 
             # Queue siblings for triage
             sibling_count = await queue_siblings_for_triage(

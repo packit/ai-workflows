@@ -536,17 +536,10 @@ async def check_and_queue_primary_if_ready(
         )
 
         if not dry_run:
-            # Remove waiting label
-            await tasks.set_jira_labels(
-                jira_issue=primary_issue,
-                labels_to_remove=[JiraLabels.WAITING_FOR_SIBLINGS.value],
-                dry_run=False,
-                user_triggered=user_triggered,
-            )
-
-            # Re-queue primary to triage queue
-            # Triage will see the existing ymir_triaged_rebase label, skip expensive analysis,
-            # and queue for rebase with proper full state (Task.metadata = state.model_dump())
+            # Re-queue primary to triage queue (triage will remove ymir_waiting_for_siblings)
+            # Triage will see ymir_waiting_for_siblings (non-terminal), bypass dedup check,
+            # skip expensive analysis, remove the waiting label, and queue for rebase
+            # with proper full state (Task.metadata = state.model_dump())
             task = Task.from_issue(primary_issue, user_triggered=user_triggered)
             async with redis_client(os.environ["REDIS_URL"]) as redis:
                 await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))

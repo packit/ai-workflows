@@ -1243,10 +1243,17 @@ async def main() -> None:
 
             current_labels, current_status = await tasks.get_jira_issue_metadata(input.issue)
             all_labels = JiraLabels.all_labels()
+            # Non-terminal labels that don't indicate triage completion
+            non_terminal_labels = {
+                JiraLabels.TRIAGE_IN_PROGRESS.value,
+                JiraLabels.REBASE_SIBLING.value,
+                JiraLabels.WAITING_FOR_SIBLINGS.value,
+                JiraLabels.TODO.value,
+            }
             terminal_ymir_labels = [
                 label
                 for label in current_labels
-                if label in all_labels and label != JiraLabels.TRIAGE_IN_PROGRESS.value
+                if label in all_labels and label not in non_terminal_labels
             ]
             if (
                 terminal_ymir_labels

@@ -535,36 +535,13 @@ async def check_and_queue_primary_if_ready(
                 user_triggered=user_triggered,
             )
 
-            # Queue for rebase
-            # The primary issue should already have its triage state stored somewhere,
-            # but we can't fetch it without the proper tool. For now, we'll extract
-            # the target branch from the primary's fix version
-            fix_versions = primary_details.get("fields", {}).get("fixVersions", [])
-            if fix_versions:
-                fix_version = fix_versions[0].get("name", "")
-                # Map fix version to target branch (e.g., "rhel-9.6.z" -> "rhel-9.6.0")
-                # This is a simplified mapping; the actual logic is more complex
-                import re
-
-                match = re.match(r"rhel-(\d+)\.(\d+)(\.z)?", fix_version)
-                if match:
-                    major, minor, _z_suffix = match.groups()
-                    target_branch = f"rhel-{major}.{minor}.0"
-
-                    # Create minimal task metadata
-                    task_metadata = {
-                        "jira_issue": primary_issue,
-                        "target_branch": target_branch,
-                    }
-                    task = Task(metadata=task_metadata, user_triggered=user_triggered)
-                    queue = RedisQueues.get_rebase_queue_for_branch(target_branch, user_triggered)
-                    async with redis_client(os.environ["REDIS_URL"]) as redis:
-                        await fix_await(redis.lpush(queue, task.model_dump_json()))
-                    logger.info(f"Queued {primary_issue} to {queue}")
-                else:
-                    logger.warning(f"Could not parse fix version {fix_version} for {primary_issue}")
-            else:
-                logger.warning(f"No fix version found for {primary_issue}, cannot queue for rebase")
+            # Re-queue primary to triage queue
+            # Triage will see the existing ymir_triaged_rebase label, skip expensive analysis,
+            # and queue for rebase with proper full state (Task.metadata = state.model_dump())
+            task = Task.from_issue(primary_issue, user_triggered=user_triggered)
+            async with redis_client(os.environ["REDIS_URL"]) as redis:
+                await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
+            logger.info(f"Re-queued {primary_issue} to triage (will queue to rebase with full state)")
 
         # Post comment
         await tasks.comment_in_jira(

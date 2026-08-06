@@ -15,6 +15,18 @@ function getVal(value) {
   return null;
 }
 
+// Spans recorded before the enum-normalization fix in openinference-streaming.patch
+// have the span kind stringified as "OpenInferenceSpanKindValues.MEMBER_NAME"
+// (Python's str(enum)). Strip that prefix so old and new spans render the same way.
+const ENUM_STR_PREFIX = 'OpenInferenceSpanKindValues.';
+
+function getSpanKind(attrs) {
+  const kind = getVal((attrs || {})['openinference.span.kind']);
+  return typeof kind === 'string' && kind.startsWith(ENUM_STR_PREFIX)
+    ? kind.slice(ENUM_STR_PREFIX.length)
+    : kind;
+}
+
 function escHtml(s) {
   if (typeof s !== 'string') s = String(s ?? '');
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -85,6 +97,45 @@ function fmtDuration(startNanos, endNanos) {
   return (ms / 60000).toFixed(1) + 'm';
 }
 
+function parseTraceHash(hash) {
+  // Parse #/trace/<issue>/<traceId>[/<spanId>]
+  // OTEL trace IDs are 32 hex chars, span IDs are 16 hex chars
+  if (!hash.startsWith('#/trace/')) return null;
+  const parts = hash.slice(8).split('/');
+  if (parts.length < 2) return null;
+
+  const isTraceId = s => /^[0-9a-f]{32}$/i.test(s);
+  const isSpanId = s => /^[0-9a-f]{16}$/i.test(s);
+
+  const lastPart = parts[parts.length - 1];
+  const secondToLast = parts.length >= 2 ? parts[parts.length - 2] : null;
+
+  let spanId = null;
+  let traceId = null;
+  let issue = null;
+
+  try {
+    if (isSpanId(lastPart) && isTraceId(secondToLast)) {
+      // Hash has spanId: #/trace/<issue>/<traceId>/<spanId>
+      spanId = parts.pop().toLowerCase();
+      traceId = parts.pop().toLowerCase();
+      issue = decodeURIComponent(parts.join('/'));
+    } else if (isTraceId(lastPart)) {
+      // Hash has no spanId: #/trace/<issue>/<traceId>
+      traceId = parts.pop().toLowerCase();
+      issue = decodeURIComponent(parts.join('/'));
+    } else {
+      return null;
+    }
+  } catch (e) {
+    // Malformed percent-encoding in issue
+    console.error('Failed to parse trace hash:', hash, e);
+    return null;
+  }
+
+  return {issue, traceId, spanId};
+}
+
 function fmtTokens(n) {
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
@@ -96,7 +147,7 @@ function aggregateLlmStats(spans) {
   const models = new Set();
   for (const s of spans) {
     const attrs = s.attributes || {};
-    const kind = getVal(attrs['openinference.span.kind']);
+    const kind = getSpanKind(attrs);
     if (kind !== 'LLM' && !s.name.endsWith('ChatModel')) continue;
     calls++;
     const pt = getVal(attrs['llm.token_count.prompt']);
@@ -266,18 +317,26 @@ function route() {
   app.innerHTML = '';
 
   document.querySelector('.jump-bottom')?.remove();
+  jumpBtn = null;
+  currentHighlightedSpan = null;
 
   const prevHash = state.previousHash;
   state.previousHash = hash;
 
   if (hash.startsWith('#/trace/')) {
-    const parts = hash.slice(8).split('/');
-    const traceId = parts.pop();
-    const issue = decodeURIComponent(parts.join('/'));
-    state.view = 'trace';
-    state.currentIssue = issue;
-    state.currentTraceId = traceId;
-    renderTraceDetail(app, issue, traceId, prevHash);
+    const parsed = parseTraceHash(hash);
+    if (parsed) {
+      state.view = 'trace';
+      state.currentIssue = parsed.issue;
+      state.currentTraceId = parsed.traceId;
+      renderTraceDetail(app, parsed.issue, parsed.traceId, prevHash, parsed.spanId);
+    } else {
+      // Invalid trace URL - fall back to recent view
+      state.view = 'recent';
+      state.currentIssue = null;
+      state.currentTraceId = null;
+      renderRecent(app, 'Invalid trace URL');
+    }
   } else if (hash.startsWith('#/issues/')) {
     const issue = decodeURIComponent(hash.slice(9));
     state.view = 'issue';
@@ -349,7 +408,8 @@ function setStatus(text) {
 // Recent Traces View
 // ============================================================
 
-async function renderRecent(container) {
+async function renderRecent(container, message) {
+  if (message) container.appendChild(el('div', {className: 'error-banner'}, message));
   container.appendChild(el('div', {className: 'loading'}, 'loading traces...'));
 
   const filtersBar = el('div', {className: 'filters'});
@@ -387,13 +447,17 @@ async function renderRecent(container) {
       since: state.filterSince,
       workflow: state.filterWorkflow || undefined,
     });
+    if (state.view !== 'recent') return;
     state.recentTraces = data.traces || [];
     container.innerHTML = '';
+    if (message) container.appendChild(el('div', {className: 'error-banner'}, message));
     container.appendChild(filtersBar);
     renderTraceCards(container, state.recentTraces);
     setStatus(state.recentTraces.length + ' traces');
   } catch (e) {
+    if (state.view !== 'recent') return;
     container.innerHTML = '';
+    if (message) container.appendChild(el('div', {className: 'error-banner'}, message));
     container.appendChild(filtersBar);
     container.appendChild(el('div', {className: 'error-banner'}, 'Failed to load traces: ' + e.message));
   }
@@ -407,6 +471,7 @@ async function refreshRecent(container) {
       since: state.filterSince,
       workflow: state.filterWorkflow || undefined,
     });
+    if (state.view !== 'recent') return;
     state.recentTraces = data.traces || [];
     const grid = container.querySelector('.trace-grid');
     const filters = container.querySelector('.filters');
@@ -471,11 +536,12 @@ function renderTraceCards(container, traces) {
 // Trace Detail View
 // ============================================================
 
-async function renderTraceDetail(container, issue, traceId, prevHash) {
+async function renderTraceDetail(container, issue, traceId, prevHash, targetSpanId) {
   container.appendChild(el('div', {className: 'loading'}, 'loading spans...'));
 
   try {
     const data = await api.spans(issue, {traceId: traceId});
+    if (state.view !== 'trace' || state.currentTraceId !== traceId || state.currentIssue !== issue) return;
     state.spans = data.spans || [];
     state.spanIds = new Set(state.spans.map(s => s.span_id));
 
@@ -532,6 +598,26 @@ async function renderTraceDetail(container, issue, traceId, prevHash) {
     container.appendChild(layout);
 
     setupAutoScroll();
+
+    if (targetSpanId) {
+      const expectedTraceId = traceId;
+      const expectedIssue = issue;
+      requestAnimationFrame(() => {
+        if (state.view !== 'trace' || state.currentTraceId !== expectedTraceId || state.currentIssue !== expectedIssue) return;
+        const target = document.getElementById('span-' + targetSpanId);
+        if (target) {
+          autoScroll = false;
+          target.scrollIntoView({behavior: 'smooth', block: 'center'});
+          target.style.backgroundColor = 'var(--highlight-bg)';
+          currentHighlightedSpan = target;
+          setTimeout(() => {
+            target.style.backgroundColor = '';
+            if (currentHighlightedSpan === target) currentHighlightedSpan = null;
+          }, 2000);
+        }
+      });
+    }
+
     if (isTraceComplete(state.spans)) {
       setStatus('completed · ' + state.spans.length + ' spans');
     } else {
@@ -539,6 +625,7 @@ async function renderTraceDetail(container, issue, traceId, prevHash) {
       setStatus('live');
     }
   } catch (e) {
+    if (state.view !== 'trace' || state.currentTraceId !== traceId || state.currentIssue !== issue) return;
     container.innerHTML = '';
     container.appendChild(el('div', {className: 'error-banner'}, 'Failed to load spans: ' + e.message));
   }
@@ -547,6 +634,7 @@ async function renderTraceDetail(container, issue, traceId, prevHash) {
 async function pollNewSpans(issue, traceId) {
   try {
     const data = await api.spans(issue, {traceId: traceId});
+    if (state.view !== 'trace' || state.currentTraceId !== traceId || state.currentIssue !== issue) return;
     const allSpans = data.spans || [];
     let changed = false;
 
@@ -715,7 +803,7 @@ function buildSpanTree(spans) {
 function treeLlmStats(node) {
   let promptTokens = 0, completionTokens = 0, cost = 0, cacheRead = 0, cacheWrite = 0;
   const attrs = node.attributes || {};
-  const kind = getVal(attrs['openinference.span.kind']);
+  const kind = getSpanKind(attrs);
   if (kind === 'LLM' || node.name.endsWith('ChatModel')) {
     const pt = getVal(attrs['llm.token_count.prompt']);
     const ct = getVal(attrs['llm.token_count.completion']);
@@ -743,7 +831,7 @@ function treeLlmStats(node) {
 
 function isEmptyLlm(node) {
   const attrs = node.attributes || {};
-  const kind = getVal(attrs['openinference.span.kind']);
+  const kind = getSpanKind(attrs);
   if (kind !== 'LLM' && !node.name.endsWith('ChatModel')) return false;
   if (getVal(attrs['llm.output_messages.0.message.contents.0.message_content.type'])) return false;
   if (getVal(attrs['llm.output_messages.0.message.tool_calls.0.tool_call.function.name'])) return false;
@@ -751,7 +839,7 @@ function isEmptyLlm(node) {
 }
 
 function renderSpanTree(container, nodes, depth, parent) {
-  const parentKind = parent ? getVal((parent.attributes || {})['openinference.span.kind']) : null;
+  const parentKind = parent ? getSpanKind(parent.attributes) : null;
   for (const node of nodes) {
     if (parentKind === 'TOOL' && node.name === 'error') continue;
     if (isEmptyLlm(node)) continue;
@@ -764,7 +852,7 @@ function renderSpanTree(container, nodes, depth, parent) {
 
 function renderSpanRow(span, depth, parent) {
   const attrs = span.attributes || {};
-  let kind = getVal(attrs['openinference.span.kind']) || '';
+  let kind = getSpanKind(attrs) || '';
   if (!kind && span.name.endsWith('ChatModel')) kind = 'LLM';
   let effectiveStatus = span.status_code;
   if (kind === 'TOOL' && span.name === 'run_shell_command') {
@@ -787,7 +875,28 @@ function renderSpanRow(span, depth, parent) {
     style: 'padding-left: ' + (10 + depth * 20) + 'px',
   });
 
-  const header = el('div', {className: 'span-row-header'});
+  const header = el('div', {
+    className: 'span-row-header',
+    onClick: () => {
+      // Clear previous highlight immediately
+      if (currentHighlightedSpan) {
+        currentHighlightedSpan.style.backgroundColor = '';
+      }
+      const hash = location.hash;
+      const parsed = parseTraceHash(hash);
+      if (parsed) {
+        const newHash = '#/trace/' + encodeURIComponent(parsed.issue) + '/' + parsed.traceId + '/' + span.span_id;
+        history.replaceState(null, '', newHash);
+        row.style.backgroundColor = 'var(--highlight-bg)';
+        currentHighlightedSpan = row;
+        setTimeout(() => {
+          row.style.backgroundColor = '';
+          if (currentHighlightedSpan === row) currentHighlightedSpan = null;
+        }, 2000);
+      }
+    },
+    style: 'cursor: pointer',
+  });
   if (kind === 'TOOL' && span.name === 'final_answer') {
     header.appendChild(el('span', {className: 'span-name'}, span.name));
   } else if (kind === 'TOOL' && span.name === 'run_shell_command') {
@@ -875,7 +984,7 @@ function renderSpanRow(span, depth, parent) {
 // ============================================================
 
 function extractDetail(attrs, spanName) {
-  const kind = getVal(attrs['openinference.span.kind']);
+  const kind = getSpanKind(attrs);
 
   if (kind === 'LLM' || (!kind && spanName.endsWith('ChatModel'))) {
     const frag = document.createDocumentFragment();
@@ -1042,7 +1151,7 @@ function collectAgents(nodes, depth) {
   const agents = [];
   for (const node of nodes) {
     const attrs = node.attributes || {};
-    const kind = getVal(attrs['openinference.span.kind']) || '';
+    const kind = getSpanKind(attrs) || '';
     const isAgent = kind === 'AGENT' || kind === 'CHAIN' || node._placeholder
       || node.name.endsWith('Workflow') || node.name.endsWith('Agent') || node.name.endsWith('Analyst');
     if (isAgent) {
@@ -1099,12 +1208,28 @@ function renderSidebar(agents) {
         style: 'padding-left: ' + (8 + depth * 16) + 'px',
         'data-span-id': agent.span_id,
         onClick: () => {
+          // Clear previous highlight immediately
+          if (currentHighlightedSpan) {
+            currentHighlightedSpan.style.backgroundColor = '';
+          }
+          const hash = location.hash;
+          const parsed = parseTraceHash(hash);
+          if (parsed) {
+            const newHash = '#/trace/' + encodeURIComponent(parsed.issue) + '/' + parsed.traceId + '/' + agent.span_id;
+            history.replaceState(null, '', newHash);
+          }
           const target = document.getElementById('span-' + agent.span_id);
           if (target) {
             setSidebarActive(nav, agent.span_id);
             sidebarScrollLocked = true;
             if (sidebarScrollLockTimer) clearTimeout(sidebarScrollLockTimer);
-            target.scrollIntoView({behavior: 'smooth', block: 'start'});
+            target.scrollIntoView({behavior: 'smooth', block: 'center'});
+            target.style.backgroundColor = 'var(--highlight-bg)';
+            currentHighlightedSpan = target;
+            setTimeout(() => {
+              target.style.backgroundColor = '';
+              if (currentHighlightedSpan === target) currentHighlightedSpan = null;
+            }, 2000);
           }
         },
       });
@@ -1149,6 +1274,7 @@ function renderSidebar(agents) {
 
 let autoScroll = true;
 let jumpBtn = null;
+let currentHighlightedSpan = null;
 
 function setupAutoScroll() {
   autoScroll = true;
@@ -1166,6 +1292,28 @@ function onScroll() {
     if (jumpBtn) { jumpBtn.remove(); jumpBtn = null; }
   } else {
     autoScroll = false;
+    if (!jumpBtn) {
+      jumpBtn = el('button', {
+        className: 'jump-bottom',
+        onClick: () => {
+          // Update URL to last rendered span
+          const hash = location.hash;
+          const parsed = parseTraceHash(hash);
+          if (parsed) {
+            const lastSpanRow = document.querySelector('.span-list .span-row:last-child');
+            if (lastSpanRow && lastSpanRow.id && lastSpanRow.id.startsWith('span-')) {
+              const lastSpanId = lastSpanRow.id.slice(5);
+              const newHash = '#/trace/' + encodeURIComponent(parsed.issue) + '/' + parsed.traceId + '/' + lastSpanId;
+              history.replaceState(null, '', newHash);
+            }
+          }
+          autoScroll = true;
+          window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});
+          if (jumpBtn) { jumpBtn.remove(); jumpBtn = null; }
+        },
+      }, '↓ jump to bottom');
+      document.body.appendChild(jumpBtn);
+    }
   }
 }
 
@@ -1194,6 +1342,7 @@ async function renderIssues(container) {
 
   try {
     const data = await api.issues();
+    if (state.view !== 'issues') return;
     const issues = data.issues || [];
     container.innerHTML = '';
     container.appendChild(el('div', {className: 'view-title'}, 'Issues (' + issues.length + ')'));
@@ -1213,6 +1362,7 @@ async function renderIssues(container) {
     container.appendChild(list);
     setStatus(issues.length + ' issues');
   } catch (e) {
+    if (state.view !== 'issues') return;
     container.innerHTML = '';
     container.appendChild(el('div', {className: 'error-banner'}, 'Failed to load issues: ' + e.message));
   }
@@ -1223,6 +1373,7 @@ async function renderIssues(container) {
 async function refreshIssues(container) {
   try {
     const data = await api.issues();
+    if (state.view !== 'issues') return;
     const issues = data.issues || [];
     container.innerHTML = '';
     container.appendChild(el('div', {className: 'view-title'}, 'Issues (' + issues.length + ')'));
@@ -1270,6 +1421,7 @@ async function renderIssueDetail(container, issue) {
     const opts = {};
     if (state.issueFilterSince > 0) opts.since = sinceNanos(state.issueFilterSince);
     const data = await api.spans(issue, opts);
+    if (state.view !== 'issue' || state.currentIssue !== issue) return;
     const spans = data.spans || [];
     container.innerHTML = '';
     container.appendChild(el('a', {className: 'back-link', href: '#/issues'}, '← issues'));
@@ -1283,6 +1435,7 @@ async function renderIssueDetail(container, issue) {
 
     renderIssueTraces(container, issue, spans);
   } catch (e) {
+    if (state.view !== 'issue' || state.currentIssue !== issue) return;
     container.innerHTML = '';
     container.appendChild(el('a', {className: 'back-link', href: '#/issues'}, '← issues'));
     container.appendChild(filtersBar);
@@ -1344,6 +1497,7 @@ async function refreshIssueDetail(container, issue) {
     const opts = {};
     if (state.issueFilterSince > 0) opts.since = sinceNanos(state.issueFilterSince);
     const data = await api.spans(issue, opts);
+    if (state.view !== 'issue' || state.currentIssue !== issue) return;
     const spans = data.spans || [];
     const filters = container.querySelector('.filters');
     const backLink = container.querySelector('.back-link');

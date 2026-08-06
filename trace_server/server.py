@@ -269,6 +269,19 @@ def _b64_to_hex(value: str) -> str:
         return value
 
 
+_TRACE_ID_RE = re.compile(r"^[0-9a-fA-F]{32}$")
+_SPAN_ID_RE = re.compile(r"^[0-9a-fA-F]{16}$")
+
+
+def _normalize_hex_id(value: str, pattern: re.Pattern) -> str:
+    """Lowercase a hex trace/span ID so lookups are case-insensitive.
+
+    Only touches values that actually look like the expected hex ID, so
+    non-hex or malformed IDs are passed through untouched.
+    """
+    return value.lower() if pattern.match(value) else value
+
+
 def _normalize_protobuf_ids(otlp_data: dict) -> None:
     """Convert base64 trace/span IDs produced by MessageToDict to hex in-place."""
     for rs in otlp_data.get("resourceSpans") or []:
@@ -366,9 +379,9 @@ def _extract_spans(otlp_data: dict) -> list[SpanRow]:
                     status_code = _STATUS_CODE_NAMES.get(status_code, 0)
                 spans.append(
                     SpanRow(
-                        trace_id=span.get("traceId") or "",
-                        span_id=span.get("spanId") or "",
-                        parent_span_id=span.get("parentSpanId") or "",
+                        trace_id=_normalize_hex_id(span.get("traceId") or "", _TRACE_ID_RE),
+                        span_id=_normalize_hex_id(span.get("spanId") or "", _SPAN_ID_RE),
+                        parent_span_id=_normalize_hex_id(span.get("parentSpanId") or "", _SPAN_ID_RE),
                         name=name,
                         start_time=int(span.get("startTimeUnixNano") or 0),
                         end_time=int(span.get("endTimeUnixNano") or 0) or None,
@@ -488,6 +501,7 @@ def query_spans(issue: str, params: dict) -> list[dict]:
         trace_id = params.get("trace_id")
         if not trace_id:
             return []
+        trace_id = _normalize_hex_id(trace_id, _TRACE_ID_RE)
         query_bindings: list = [trace_id]
         subquery = "SELECT ? AS trace_id"
 
@@ -536,7 +550,7 @@ def query_spans(issue: str, params: dict) -> list[dict]:
 
     if trace_id := params.get("trace_id"):
         issue_conditions.append("si.trace_id = ?")
-        issue_bindings.append(trace_id)
+        issue_bindings.append(_normalize_hex_id(trace_id, _TRACE_ID_RE))
 
     if names := params.get("name"):
         name_list = [n.strip() for n in names.split(",")]

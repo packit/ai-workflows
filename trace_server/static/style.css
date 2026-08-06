@@ -21,6 +21,7 @@
   --error-border: #ef4444;
   --pre-bg: #f5f5f5;
   --card-hover: rgba(0, 102, 204, 0.04);
+  --highlight-bg: rgba(0, 102, 204, 0.15);
   --header-bg: #1a1a1a;
   --header-fg: #e0e0e0;
 }
@@ -46,6 +47,7 @@ html.dark {
   --error-border: #ef4444;
   --pre-bg: #1a1a1a;
   --card-hover: rgba(88, 166, 255, 0.06);
+  --highlight-bg: rgba(88, 166, 255, 0.2);
   --header-bg: #0a0a0a;
   --header-fg: #d4d4d4;
 }
@@ -320,6 +322,14 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: center;
   gap: 8px;
+  transition: background 0.15s;
+  border-radius: 2px;
+  margin: -2px -4px;
+  padding: 2px 4px;
+}
+
+.span-row-header:hover {
+  background: var(--card-hover);
 }
 
 .span-name {

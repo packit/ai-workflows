@@ -47,6 +47,7 @@ from ymir.common.issue_lock import issue_lock
 from ymir.common.logging_setup import configure_logging, current_jira_issue, get_trajectory_writeable
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
+    POSTPONED_RESOLUTIONS,
     ApplicabilityResult,
     ClarificationNeededData,
     CVEEligibilityResult,
@@ -107,9 +108,9 @@ def _should_update_jira(resolution: Resolution = None, user_triggered: bool = Fa
         return True
     return resolution in (
         Resolution.NOT_AFFECTED,
-        Resolution.POSTPONED,
         Resolution.OPEN_ENDED_ANALYSIS,
         Resolution.CLARIFICATION_NEEDED,
+        *POSTPONED_RESOLUTIONS,
     )
 
 
@@ -119,9 +120,12 @@ _RESOLUTION_TO_LABEL: dict[Resolution, JiraLabels] = {
     Resolution.REBUILD: JiraLabels.TRIAGED_REBUILD,
     Resolution.CLARIFICATION_NEEDED: JiraLabels.NEEDS_ATTENTION,
     Resolution.OPEN_ENDED_ANALYSIS: JiraLabels.TRIAGED,
-    Resolution.POSTPONED: JiraLabels.TRIAGED_POSTPONED,
     Resolution.NOT_AFFECTED: JiraLabels.TRIAGED_NOT_AFFECTED,
     Resolution.ERROR: JiraLabels.TRIAGE_ERRORED,
+    Resolution.POSTPONED_DEPENDENCY: JiraLabels.YMIR_POSTPONED_DEPENDENCY,
+    Resolution.POSTPONED_NO_PATCH: JiraLabels.YMIR_POSTPONED_NO_PATCH,
+    Resolution.POSTPONED_PR_PENDING: JiraLabels.YMIR_POSTPONED_PR_PENDING,
+    Resolution.POSTPONED_Y_STREAM: JiraLabels.YMIR_POSTPONED_Y_STREAM,
 }
 
 _REPRODUCER_ELIGIBLE_RESOLUTIONS = frozenset(
@@ -574,17 +578,36 @@ async def run_workflow(
                         f"Issue {state.jira_issue}: eligibility is PENDING_DEPENDENCIES "
                         f"but no pending Z-stream issues were returned — this is unexpected"
                     )
+                    state.triage_result = OutputSchema(
+                        resolution=Resolution.OPEN_ENDED_ANALYSIS,
+                        data=OpenEndedAnalysisData(
+                            summary=(
+                                "Eligibility blocked on PENDING_DEPENDENCIES but "
+                                "no Z-stream issues were returned."
+                            ),
+                            jira_issue=state.jira_issue,
+                            recommendation="Check the eligibility tool output manually.",
+                        ),
+                    )
+                    return "comment_in_jira"
                 logger.info(
                     f"Issue {state.jira_issue} postponed — waiting for "
                     f"{len(pending)} Z-stream issue(s): {pending}. "
                     f"Reason: {state.cve_eligibility_result.reason}"
                 )
+                # A Y-stream CVE waiting for its Z-stream clones to ship is the
+                # "y_stream" postponement category (waiting for Z-stream errata),
+                # NOT "dependency" (a rebuild waiting for another component's
+                # fixed build). PENDING_DEPENDENCIES is only ever returned by the
+                # Y-stream eligibility path, so this always maps to y_stream and
+                # is swept by YStreamSweep.
                 state.triage_result = OutputSchema(
-                    resolution=Resolution.POSTPONED,
+                    resolution=Resolution.POSTPONED_Y_STREAM,
                     data=PostponedData(
                         summary=state.cve_eligibility_result.reason,
                         pending_issues=pending,
                         jira_issue=state.jira_issue,
+                        blocker_references=pending,
                     ),
                 )
                 return "comment_in_jira"
@@ -685,6 +708,34 @@ async def run_workflow(
             )
             state.triage_result = OutputSchema.model_validate_json(response.last_message.text)
 
+            # postponed_y_stream is owned by the eligibility system (PENDING_DEPENDENCIES
+            # verdict). The LLM analysis node is only reached when eligibility returned
+            # IMMEDIATELY or force_cve_triage bypassed it — in both cases the eligibility
+            # tool has already decided the issue is not waiting on Z-stream clones.
+            # An LLM-asserted postponed_y_stream would be swept away immediately anyway,
+            # so coerce it to open-ended-analysis to surface the mismatch for review.
+            if state.triage_result.resolution == Resolution.POSTPONED_Y_STREAM:
+                logger.warning(
+                    "LLM emitted postponed_y_stream for %s, which is reserved for the "
+                    "eligibility system. Coercing to open-ended-analysis.",
+                    state.jira_issue,
+                )
+                state.triage_result = OutputSchema(
+                    resolution=Resolution.OPEN_ENDED_ANALYSIS,
+                    data=OpenEndedAnalysisData(
+                        summary=(
+                            "Triage agent identified a Y-stream/Z-stream dependency, "
+                            "but the eligibility system did not return PENDING_DEPENDENCIES. "
+                            "Manual review required."
+                        ),
+                        recommendation=(
+                            "Check whether Z-stream clones exist and their shipping status. "
+                            "If the dependency is genuine, the eligibility tool may need updating."
+                        ),
+                        jira_issue=state.jira_issue,
+                    ),
+                )
+
             # Jira issue key in resolution data has been generated by LLM, make sure it's upper-case
             state.triage_result.data.jira_issue = state.triage_result.data.jira_issue.upper()
 
@@ -707,7 +758,7 @@ async def run_workflow(
                 Resolution.NOT_AFFECTED,
             ]:
                 return "comment_in_jira"
-            if state.triage_result.resolution == Resolution.POSTPONED:
+            if state.triage_result.resolution in POSTPONED_RESOLUTIONS:
                 # Route postponed-rebuild CVEs through applicability to check
                 # if the CVE actually affects the package — if not, resolve as
                 # NOT_AFFECTED instead of waiting for the dependency to ship.
@@ -743,7 +794,7 @@ async def run_workflow(
                 state.cve_eligibility_result
                 and state.cve_eligibility_result.is_cve
                 and state.triage_result.resolution
-                in (Resolution.BACKPORT, Resolution.REBUILD, Resolution.REBASE, Resolution.POSTPONED)
+                in (Resolution.BACKPORT, Resolution.REBUILD, Resolution.REBASE, *POSTPONED_RESOLUTIONS)
             ):
                 return "check_cve_applicability"
 
@@ -1010,7 +1061,7 @@ async def run_workflow(
                 f"{state.target_branch} buildroot — postponing {state.jira_issue}"
             )
             state.triage_result = OutputSchema(
-                resolution=Resolution.POSTPONED,
+                resolution=Resolution.POSTPONED_DEPENDENCY,
                 data=PostponedData(
                     summary=(
                         f"Rebuild of {data.package} waiting for {dep_component} "
@@ -1018,6 +1069,7 @@ async def run_workflow(
                     ),
                     pending_issues=[dep_issue_key],
                     jira_issue=state.jira_issue,
+                    blocker_references=[dep_issue_key],
                     package=data.package,
                     fix_version=data.fix_version,
                     cve_id=data.cve_id,
@@ -1151,6 +1203,32 @@ async def run_workflow(
         return response.state
 
 
+async def label_postponed_issues(jira_issue: str, output: OutputSchema, dry_run: bool, user_triggered: bool):
+    """Remove existing postponement and triage in progress labels, place label with reason on the issue.
+    Log and reraise exceptions."""
+    if not (reason_label := _RESOLUTION_TO_LABEL.get(output.resolution)):
+        raise ValueError(f"No label mapping for postponed resolution {output.resolution!r};")
+
+    postponement_labels = [lbl for lbl in JiraLabels.postponement_labels() if lbl != reason_label.value] + [
+        JiraLabels.TRIAGED_POSTPONED.value
+    ]
+    try:
+        await tasks.set_jira_labels(
+            jira_issue=jira_issue,
+            labels_to_add=[reason_label.value],
+            labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value, *postponement_labels],
+            dry_run=dry_run,
+            user_triggered=user_triggered,
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to set postponement label on %s: %s",
+            jira_issue,
+            e,
+        )
+        raise
+
+
 async def main() -> None:
     init_sentry()
 
@@ -1224,21 +1302,26 @@ async def main() -> None:
             (result_dir / "triage_result.json").write_text(output.model_dump_json(indent=2), encoding="utf-8")
 
             if user_triggered and not dry_run:
-                resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
-                if resolution_label and output.resolution != Resolution.ERROR:
-                    try:
-                        await tasks.set_jira_labels(
-                            jira_issue=jira_issue,
-                            labels_to_add=[resolution_label.value],
-                            user_triggered=True,
-                            dry_run=dry_run,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to set resolution label on %s: %s",
-                            jira_issue,
-                            e,
-                        )
+                if output.resolution in POSTPONED_RESOLUTIONS:
+                    await label_postponed_issues(
+                        jira_issue=jira_issue, output=output, dry_run=dry_run, user_triggered=user_triggered
+                    )
+                else:
+                    resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
+                    if resolution_label and output.resolution != Resolution.ERROR:
+                        try:
+                            await tasks.set_jira_labels(
+                                jira_issue=jira_issue,
+                                labels_to_add=[resolution_label.value],
+                                user_triggered=True,
+                                dry_run=dry_run,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to set resolution label on %s: %s",
+                                jira_issue,
+                                e,
+                            )
                     if output.resolution == Resolution.REBUILD:
                         for consolidated in output.data.consolidated_issues:
                             try:
@@ -1493,46 +1576,53 @@ async def main() -> None:
                 except Exception as e:
                     logger.warning(f"Failed to check if {input.issue} is sibling: {e}")
 
-                resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
-                if resolution_label and output.resolution != Resolution.ERROR:
-                    # Terminal resolution label is the dedup anchor that replaces
-                    # ymir_triage_in_progress — must be written unconditionally so
-                    # the next fetcher sweep skips this issue.
-                    # Exception: skip terminal label if waiting for siblings (will be set on re-triage)
-                    # Also remove ymir_rebase_sibling if present (sibling finished triaging)
-                    labels_to_remove = [JiraLabels.TRIAGE_IN_PROGRESS.value]
-                    labels_to_add = []
+                if output.resolution in POSTPONED_RESOLUTIONS:
+                    await label_postponed_issues(
+                        jira_issue=input.issue, output=output, dry_run=dry_run, user_triggered=user_triggered
+                    )
+                else:
+                    resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
+                    if resolution_label and output.resolution != Resolution.ERROR:
+                        # Terminal resolution label is the dedup anchor that replaces
+                        # ymir_triage_in_progress — must be written unconditionally so
+                        # the next fetcher sweep skips this issue.
+                        # Exception: skip terminal label if waiting for siblings (will be set on re-triage)
+                        # Also remove ymir_rebase_sibling if present (sibling finished triaging)
+                        labels_to_remove = [JiraLabels.TRIAGE_IN_PROGRESS.value]
+                        labels_to_add = []
 
-                    if is_sibling:
-                        labels_to_remove.append(JiraLabels.REBASE_SIBLING.value)
-                        logger.info(f"{input.issue} is a sibling, will check if primary is ready to queue")
+                        if is_sibling:
+                            labels_to_remove.append(JiraLabels.REBASE_SIBLING.value)
+                            logger.info(
+                                f"{input.issue} is a sibling, will check if primary is ready to queue"
+                            )
 
-                    # Only add terminal label if NOT waiting for siblings
-                    # (primary waiting for siblings will be re-triaged when siblings finish,
-                    # and terminal label will be added then)
-                    if not (
-                        state.rebase_waiting_for_siblings
-                        or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
-                    ):
-                        labels_to_add.append(resolution_label.value)
-                    else:
-                        logger.info(
-                            f"{input.issue} is waiting for siblings, skipping terminal label "
-                            "(will be added on re-triage after siblings finish)"
+                        # Only add terminal label if NOT waiting for siblings
+                        # (primary waiting for siblings will be re-triaged when siblings finish,
+                        # and terminal label will be added then)
+                        if not (
+                            state.rebase_waiting_for_siblings
+                            or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
+                        ):
+                            labels_to_add.append(resolution_label.value)
+                        else:
+                            logger.info(
+                                f"{input.issue} is waiting for siblings, skipping terminal label "
+                                "(will be added on re-triage after siblings finish)"
+                            )
+
+                        await tasks.set_jira_labels(
+                            jira_issue=input.issue,
+                            labels_to_add=labels_to_add,
+                            labels_to_remove=labels_to_remove,
+                            dry_run=dry_run,
+                            user_triggered=user_triggered,
+                            critical=True,  # Terminal label is dedup anchor; must succeed
                         )
 
-                    await tasks.set_jira_labels(
-                        jira_issue=input.issue,
-                        labels_to_add=labels_to_add,
-                        labels_to_remove=labels_to_remove,
-                        dry_run=dry_run,
-                        user_triggered=user_triggered,
-                        critical=True,  # Terminal label is dedup anchor; must succeed
-                    )
-
-                    # Update current_labels to reflect the changes we just made
-                    if is_sibling and JiraLabels.REBASE_SIBLING.value in current_labels:
-                        current_labels.remove(JiraLabels.REBASE_SIBLING.value)
+                        # Update current_labels to reflect the changes we just made
+                        if is_sibling and JiraLabels.REBASE_SIBLING.value in current_labels:
+                            current_labels.remove(JiraLabels.REBASE_SIBLING.value)
                     if output.resolution == Resolution.REBUILD:
                         for consolidated in output.data.consolidated_issues:
                             try:
@@ -1613,7 +1703,7 @@ async def main() -> None:
                 # Dispatch to downstream queues
                 if output.resolution == Resolution.ERROR:
                     await retry(task, output.data.model_dump_json())
-                elif output.resolution == Resolution.POSTPONED:
+                elif output.resolution in POSTPONED_RESOLUTIONS:
                     await fix_await(
                         redis.lpush(
                             RedisQueues.POSTPONED_LIST.value,

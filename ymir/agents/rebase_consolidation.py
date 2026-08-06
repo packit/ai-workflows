@@ -530,19 +530,44 @@ async def check_and_queue_primary_if_ready(
             component=component,
             fix_version=fix_version,
         )
-        # Add filter for ymir_rebase_sibling label
-        jql_with_label = f'{jql} AND labels = "{JiraLabels.REBASE_SIBLING.value}"'
+        # Check for siblings that are still processing: either still labeled as sibling
+        # (not started triage yet) OR in-progress (triage removes ymir_rebase_sibling
+        # at start, so we need to check both)
+        sibling_label = JiraLabels.REBASE_SIBLING.value
+        in_progress_label = JiraLabels.TRIAGE_IN_PROGRESS.value
+        jql_pending = f'{jql} AND (labels = "{sibling_label}" OR labels = "{in_progress_label}")'
 
         pending_siblings = await run_tool(
             "search_jira_issues",
             available_tools=available_tools,
-            jql=jql_with_label,
-            fields=["key"],
-            max_results=1,  # We just need to know if any exist
+            jql=jql_pending,
+            fields=["key", "labels", "comment"],
+            max_results=50,  # Get all potential siblings to verify
         )
 
-        if pending_siblings:
-            logger.info(f"Primary {primary_issue} still has pending siblings, not ready to queue")
+        # Filter to only siblings of THIS primary (verify via comment)
+        actual_siblings = []
+        for candidate in pending_siblings:
+            candidate_key = candidate.get("key", "")
+            # If it has ymir_rebase_sibling, it's definitely a sibling (not started yet)
+            labels = candidate.get("fields", {}).get("labels", [])
+            if JiraLabels.REBASE_SIBLING.value in labels:
+                actual_siblings.append(candidate_key)
+                continue
+            # If it has ymir_triage_in_progress, check if it's a sibling of THIS primary
+            if JiraLabels.TRIAGE_IN_PROGRESS.value in labels:
+                comments = candidate.get("fields", {}).get("comment", {}).get("comments", [])
+                for comment in comments:
+                    body = comment.get("body", "")
+                    if "Queued for triage as potential sibling of" in body and primary_issue in body:
+                        actual_siblings.append(candidate_key)
+                        break
+
+        if actual_siblings:
+            logger.info(
+                f"Primary {primary_issue} still has {len(actual_siblings)} pending sibling(s): "
+                f"{', '.join(actual_siblings)}, not ready to queue"
+            )
             return
 
         # All siblings are done! Queue primary for rebase

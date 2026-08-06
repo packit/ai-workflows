@@ -2,9 +2,10 @@ diff --git a/python/instrumentation/openinference-instrumentation-beeai/src/open
 index d3f3adc6..5497ff77 100644
 --- a/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/__init__.py
 +++ b/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/__init__.py
-@@ -1,18 +1,15 @@
+@@ -1,18 +1,16 @@
 -import contextlib
  import logging
++from enum import Enum
  from importlib.metadata import PackageNotFoundError, version
 -from typing import TYPE_CHECKING, Any, Callable, Collection, Generator
 +from typing import TYPE_CHECKING, Any, Callable, Collection
@@ -25,7 +26,7 @@ index d3f3adc6..5497ff77 100644
  from openinference.instrumentation import (
      OITracer,
      TraceConfig,
-@@ -32,13 +29,14 @@ except PackageNotFoundError:
+@@ -32,13 +30,14 @@ except PackageNotFoundError:
  
  
  class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
@@ -42,7 +43,7 @@ index d3f3adc6..5497ff77 100644
  
      def instrumentation_dependencies(self) -> Collection[str]:
          return _instruments
-@@ -70,39 +68,81 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
+@@ -70,39 +69,85 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
      def _uninstrument(self, **kwargs: Any) -> None:
          self._cleanup()
          self._processes.clear()
@@ -81,6 +82,13 @@ index d3f3adc6..5497ff77 100644
 +        node = processor.span
 +        _OTEL_TYPES = (bool, str, bytes, int, float)
 +        for key, value in node.attributes.items():
++            # Extract enum value if it's an enum
++            if isinstance(value, Enum):
++                value = value.value
++            # Extract enum values from arrays/tuples
++            elif isinstance(value, (list, tuple)):
++                value = type(value)(v.value if isinstance(v, Enum) else v for v in value)
++            # Convert to string if not an OTEL type
 +            if not isinstance(value, _OTEL_TYPES) and not (
 +                isinstance(value, (list, tuple)) and all(isinstance(v, _OTEL_TYPES) for v in value)
 +            ):
@@ -147,7 +155,7 @@ index d3f3adc6..5497ff77 100644
  
      @exception_handler
      async def _handler(self, data: Any, event: "EventMeta") -> None:
-@@ -118,10 +158,8 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
+@@ -118,10 +163,8 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
              if event.trace.parent_run_id and not parent:
                  raise ValueError(f"Parent run with ID {event.trace.parent_run_id} was not found!")
  
@@ -159,7 +167,7 @@ index d3f3adc6..5497ff77 100644
          else:
              node = self._processes[event.trace.run_id]
  
-@@ -129,8 +167,8 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
+@@ -129,8 +172,8 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
  
          if isinstance(data, RunContextFinishEvent):
              await node.end(data, event)

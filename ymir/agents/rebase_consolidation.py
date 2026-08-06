@@ -358,6 +358,16 @@ async def queue_siblings_for_triage(
                 logger.info(f"Sibling {candidate_key} not eligible: {eligibility_result.reason}")
                 continue
 
+            # Check if already queued as sibling (by this or another primary)
+            # Labels are more robust than comments for detecting duplicates
+            candidate_labels, _ = await tasks.get_jira_issue_metadata(candidate_key)
+            if (
+                JiraLabels.REBASE_SIBLING.value in candidate_labels
+                or JiraLabels.TRIAGED_REBASE.value in candidate_labels
+            ):
+                logger.info(f"Sibling {candidate_key} already processed as sibling or triaged, skipping")
+                continue
+
             # Queue for triage (skip in dry-run)
             if not dry_run:
                 task = Task.from_issue(candidate_key)

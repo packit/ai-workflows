@@ -43,6 +43,7 @@ from ymir.agents.utils import (
     mcp_tools,
     render_template,
     resolve_chat_model_override,
+    run_tool,
     wrap_details,
 )
 from ymir.common.base_utils import fix_await, install_shutdown_handler, redis_client, run_task_loop
@@ -273,6 +274,30 @@ async def main() -> None:
             log_agent = create_log_agent(gateway_tools, local_tool_options)
 
             workflow = Workflow(State, name="RebaseWorkflow")
+
+            async def check_if_sibling(state):
+                """Check if this issue is a sibling - siblings should not create their own MR."""
+                # Check comments for "Queued for triage as potential sibling" marker
+                # (ymir_rebase_sibling label was already removed by triage cleanup)
+                try:
+                    details = await run_tool(
+                        "get_jira_details",
+                        issue_key=state.jira_issue,
+                        fields=["comment"],
+                        available_tools=gateway_tools,
+                    )
+                    comments = details.get("fields", {}).get("comment", {}).get("comments", [])
+                    for comment in comments:
+                        if "Queued for triage as potential sibling of" in comment.get("body", ""):
+                            logger.info(
+                                f"Issue {state.jira_issue} is a sibling (found sibling comment). "
+                                "Siblings do not create their own MR - the primary will consolidate them. "
+                                "Exiting without processing."
+                            )
+                            return Workflow.END
+                except Exception as e:
+                    logger.warning(f"Failed to check if {state.jira_issue} is a sibling: {e}, proceeding")
+                return "change_jira_status"
 
             async def change_jira_status(state):
                 if dry_run:
@@ -562,6 +587,7 @@ async def main() -> None:
                     )
                 return Workflow.END
 
+            workflow.add_step("check_if_sibling", check_if_sibling)
             workflow.add_step("change_jira_status", change_jira_status)
             workflow.add_step("find_consolidated_siblings", find_consolidated_siblings)
             workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)

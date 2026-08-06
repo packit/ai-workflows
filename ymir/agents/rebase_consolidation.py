@@ -368,21 +368,9 @@ async def queue_siblings_for_triage(
                 logger.info(f"Sibling {candidate_key} already processed as sibling or triaged, skipping")
                 continue
 
-            # Queue for triage (skip in dry-run)
             if not dry_run:
-                task = Task.from_issue(candidate_key)
-                async with redis_client(os.environ["REDIS_URL"]) as redis:
-                    await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
-
-            # Increment count immediately after Redis push (or would-push in dry-run)
-            # so that failures in label/comment don't miscount queued siblings
-            queued_count += 1
-            logger.info(
-                f"{'[DRY-RUN] Would queue' if dry_run else 'Queued'} sibling {candidate_key} for triage"
-            )
-
-            if not dry_run:
-                # Add label (best-effort; failure doesn't affect queue count)
+                # Add label BEFORE queueing so the sibling sees it when it starts processing
+                # This prevents the sibling from treating itself as a primary
                 try:
                     await tasks.set_jira_labels(
                         jira_issue=candidate_key,
@@ -392,7 +380,22 @@ async def queue_siblings_for_triage(
                     )
                 except Exception as e:
                     logger.warning(f"Failed to label sibling {candidate_key}: {e}")
+                    # If we can't label it, don't queue it (would be treated as primary)
+                    continue
 
+                # Queue for triage AFTER labeling
+                task = Task.from_issue(candidate_key)
+                async with redis_client(os.environ["REDIS_URL"]) as redis:
+                    await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
+
+            # Increment count immediately after Redis push (or would-push in dry-run)
+            # so that failures in comment don't miscount queued siblings
+            queued_count += 1
+            logger.info(
+                f"{'[DRY-RUN] Would queue' if dry_run else 'Queued'} sibling {candidate_key} for triage"
+            )
+
+            if not dry_run:
                 # Post comment on sibling (best-effort; failure doesn't affect queue count)
                 try:
                     await tasks.comment_in_jira(

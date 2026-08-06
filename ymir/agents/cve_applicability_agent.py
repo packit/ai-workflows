@@ -13,7 +13,7 @@ from beeai_framework.tools.think import ThinkTool
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import get_chat_model, get_tool_call_checker_config, is_reasoning_enabled
 from ymir.common.logging_setup import get_trajectory_writeable
-from ymir.common.models import Resolution
+from ymir.common.models import POSTPONED_RESOLUTIONS, Resolution
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.text import SearchTextTool, ViewTool
 
@@ -68,7 +68,7 @@ def build_applicability_prompt(
     cve_label = cve_id or "the CVE"
 
     rebuild_context = ""
-    if resolution in (Resolution.REBUILD, Resolution.POSTPONED) and dep_component:
+    if resolution in (Resolution.REBUILD, *POSTPONED_RESOLUTIONS) and dep_component:
         rebuild_context = f"\nThis is a dependency rebuild against updated '{dep_component}'."
         if dep_issue_key:
             rebuild_context += (

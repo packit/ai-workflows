@@ -1,5 +1,6 @@
 from ymir.common.models import (
     AUTOMATED_RESOLUTION_NOT_SUPPORTED,
+    POSTPONEMENT_NOTE,
     TRIAGE_DISCLAIMER,
     ApplicabilityResult,
     BackportData,
@@ -148,15 +149,16 @@ def test_postponed_formatting_multiple_issues():
         pending_issues=["RHEL-111", "RHEL-222"],
         jira_issue="RHEL-99999",
     )
-    result = TriageOutputSchema(resolution=Resolution.POSTPONED, data=data)
+    result = TriageOutputSchema(resolution=Resolution.POSTPONED_Y_STREAM, data=data)
 
     assert result.format_for_comment() == (
-        "*Resolution*: postponed\n"
+        "*Resolution*: postponed_y_stream\n"
         "*Summary*: Y-stream CVE (CVE-2025-12345): "
         "waiting for at least one Z-stream clone to ship\n"
         "*Waiting for at least one of*:\n"
         "* RHEL-111\n"
         "* RHEL-222"
+        f"{POSTPONEMENT_NOTE}"
         f"{TRIAGE_DISCLAIMER}"
     )
 
@@ -167,13 +169,14 @@ def test_postponed_formatting_single_issue():
         pending_issues=["RHEL-333"],
         jira_issue="RHEL-99999",
     )
-    result = TriageOutputSchema(resolution=Resolution.POSTPONED, data=data)
+    result = TriageOutputSchema(resolution=Resolution.POSTPONED_DEPENDENCY, data=data)
 
     assert result.format_for_comment() == (
-        "*Resolution*: postponed\n"
+        "*Resolution*: postponed_dependency\n"
         "*Summary*: Rebuild waiting for dependency to ship\n"
         "*Waiting for*:\n"
         "* RHEL-333"
+        f"{POSTPONEMENT_NOTE}"
         f"{TRIAGE_DISCLAIMER}"
     )
 
@@ -195,9 +198,10 @@ def test_postponed_rebuild_with_extra_fields():
     assert data.cve_id == "CVE-2026-99999"
     assert data.fix_version == "rhel-10.1"
 
-    result = TriageOutputSchema(resolution=Resolution.POSTPONED, data=data)
+    result = TriageOutputSchema(resolution=Resolution.POSTPONED_DEPENDENCY, data=data)
     comment = result.format_for_comment()
     assert "*Summary*: Rebuild of butane" in comment
+    assert "*Resolution*: postponed_dependency" in comment
     assert "RHEL-67890" in comment
 
 
@@ -214,9 +218,10 @@ def test_postponed_without_rebuild_fields():
     assert data.dependency_issue is None
     assert data.dependency_component is None
 
-    result = TriageOutputSchema(resolution=Resolution.POSTPONED, data=data)
+    result = TriageOutputSchema(resolution=Resolution.POSTPONED_Y_STREAM, data=data)
     comment = result.format_for_comment()
     assert "*Waiting for*:" in comment
+    assert "*Resolution*: postponed_y_stream" in comment
 
 
 def test_error_formatting():
@@ -670,3 +675,104 @@ def test_reproducer_output_retryable_error():
     assert data.test_already_exists is False
     restored = ReproducerOutputSchema.model_validate_json(data.model_dump_json())
     assert restored.retryable_error is True
+
+
+# --- Postponement reason (resolution) and blocker_reference tests ---
+
+
+def test_postponed_dependency_with_blocker():
+    """Dependency postponement renders reason (resolution) and blocker."""
+    data = PostponedData(
+        summary="Rebuild of butane waiting for golang to ship",
+        pending_issues=["RHEL-67890"],
+        jira_issue="RHEL-12345",
+        blocker_references=["RHEL-67890"],
+    )
+    result = TriageOutputSchema(resolution=Resolution.POSTPONED_DEPENDENCY, data=data)
+    comment = result.format_for_comment()
+
+    assert "*Resolution*: postponed_dependency" in comment
+    assert "*Blockers*: RHEL-67890" in comment
+    assert "*Waiting for*:" in comment
+    assert "* RHEL-67890" in comment
+
+
+def test_postponed_reason_y_stream():
+    """Y-stream postponement renders its resolution as the reason."""
+    data = PostponedData(
+        summary="Y-stream CVE waiting for Z-stream clone to ship",
+        pending_issues=["RHEL-111"],
+        jira_issue="RHEL-99999",
+    )
+    result = TriageOutputSchema(resolution=Resolution.POSTPONED_Y_STREAM, data=data)
+    comment = result.format_for_comment()
+    assert "*Resolution*: postponed_y_stream" in comment
+
+
+def test_postponed_reason_pr_pending():
+    """PR-pending postponement renders its resolution and blocker MR URL."""
+    data = PostponedData(
+        summary="Waiting for upstream MR to be merged",
+        pending_issues=["RHEL-222"],
+        jira_issue="RHEL-88888",
+        blocker_references=["https://gitlab.com/redhat/rpms/pkg/-/merge_requests/42"],
+    )
+    result = TriageOutputSchema(resolution=Resolution.POSTPONED_PR_PENDING, data=data)
+    comment = result.format_for_comment()
+    assert "*Resolution*: postponed_pr_pending" in comment
+    assert "*Blockers*: https://gitlab.com/redhat/rpms/pkg/-/merge_requests/42" in comment
+
+
+def test_postponed_reason_no_patch():
+    """No-patch postponement renders its resolution as the reason."""
+    data = PostponedData(
+        summary="No upstream patch available yet",
+        pending_issues=["RHEL-333"],
+        jira_issue="RHEL-77777",
+    )
+    result = TriageOutputSchema(resolution=Resolution.POSTPONED_NO_PATCH, data=data)
+    comment = result.format_for_comment()
+    assert "*Resolution*: postponed_no_patch" in comment
+
+
+def test_postponed_no_blocker_reference():
+    """PostponedData without blocker_references omits *Blockers*: line."""
+    data = PostponedData(
+        summary="Waiting for dependency",
+        pending_issues=["RHEL-444"],
+        jira_issue="RHEL-66666",
+    )
+    result = TriageOutputSchema(resolution=Resolution.POSTPONED_DEPENDENCY, data=data)
+    comment = result.format_for_comment()
+    assert "*Blockers*:" not in comment
+
+
+def test_postponed_serialization_roundtrip():
+    """PostponedData survives a JSON roundtrip."""
+    data = PostponedData(
+        summary="Rebuild waiting for golang",
+        pending_issues=["RHEL-67890"],
+        jira_issue="RHEL-12345",
+        blocker_references=["RHEL-67890"],
+        package="butane",
+        fix_version="rhel-10.1",
+    )
+    json_str = data.model_dump_json()
+    restored = PostponedData.model_validate_json(json_str)
+
+    assert restored.blocker_references == ["RHEL-67890"]
+    assert restored.package == "butane"
+    assert restored.fix_version == "rhel-10.1"
+    assert restored.pending_issues == ["RHEL-67890"]
+
+
+def test_postponed_minimal_fields():
+    """PostponedData validates with only the required fields."""
+    payload = {
+        "summary": "Rebuild waiting for dependency to ship",
+        "pending_issues": ["RHEL-333"],
+        "jira_issue": "RHEL-99999",
+    }
+    data = PostponedData.model_validate(payload)
+    assert data.blocker_references is None
+    assert data.pending_issues == ["RHEL-333"]

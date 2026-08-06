@@ -67,11 +67,12 @@ mentions a build side-tag. Do not set it otherwise.
 Postponed resolution (rebuild waiting for dependency):
 ```json
 {
-    "resolution": "postponed",
+    "resolution": "postponed_dependency",
     "data": {
         "summary": "Rebuild of some-package waiting for RHEL-67890 (golang) to ship",
         "pending_issues": ["RHEL-67890"],
         "jira_issue": "RHEL-12345",
+        "blocker_references": ["RHEL-67890"],
         "package": "some-package",
         "fix_version": "rhel-X.Y.Z",
         "cve_id": "CVE-1234-98765",
@@ -80,6 +81,43 @@ Postponed resolution (rebuild waiting for dependency):
     }
 }
 ```
+Note: When the Jira issue covers multiple CVEs, include ALL CVE IDs in `cve_id`, e.g.:
+`"cve_id": "CVE-1234-98765 CVE-1234-98766"`
+
+Postponed resolution (CVE confirmed but no upstream patch available yet):
+```json
+{
+    "resolution": "postponed_no_patch",
+    "data": {
+        "summary": "CVE-1234-98765 confirmed in upstream but no patch available; issue will be re-triaged when upstream provides a fix",
+        "pending_issues": ["RHEL-12345"],
+        "jira_issue": "RHEL-12345",
+        "package": "libfoo",
+        "fix_version": "rhel-8.10.0",
+        "cve_id": "CVE-1234-98765"
+    }
+}
+```
+Note: Use this when investigation confirms a valid CVE or bug exists but no upstream fix is available yet (not even an unmerged one). The issue will be periodically re-triaged.
+Note: When the Jira issue covers multiple CVEs, include ALL CVE IDs in `cve_id`, e.g.:
+`"cve_id": "CVE-1234-98765 CVE-1234-98766"`
+
+Postponed resolution (fix identified in unmerged GitLab merge request):
+```json
+{
+    "resolution": "postponed_pr_pending",
+    "data": {
+        "summary": "Fix for CVE-1234-98765 pending in upstream MR !123; waiting for merge",
+        "pending_issues": ["RHEL-12345"],
+        "jira_issue": "RHEL-12345",
+        "blocker_references": ["https://gitlab.com/example-org/example-repo/-/merge_requests/123"],
+        "package": "some-package",
+        "fix_version": "rhel-9.5.0",
+        "cve_id": "CVE-1234-98765"
+    }
+}
+```
+Note: Use this when you find a relevant upstream fix in an unmerged GitLab merge request or GitHub pull request. Include the full PR/MR URL(s) in blocker_references as a JSON array. Do NOT use this for other platforms (e.g. Bitbucket, SourceForge).
 Note: When the Jira issue covers multiple CVEs, include ALL CVE IDs in `cve_id`, e.g.:
 `"cve_id": "CVE-1234-98765 CVE-1234-98766"`
 

@@ -229,6 +229,17 @@ You must decide between one of the following actions. Follow these guidelines to
      If you find a relevant but unmerged patch during your investigation, mention it in the
      clarification-needed note so a human can evaluate it, but do not use it as the basis
      for a backport decision.
+   * **Unmerged upstream fixes — use postponed_pr_pending**: If during your
+     investigation you find a relevant fix in an UNMERGED GitLab merge request
+     or GitHub pull request that addresses the issue but has not been merged yet:
+     - Validate that the PR/MR is still open (not closed/abandoned)
+     - Use resolution "postponed_pr_pending" instead of "clarification-needed"
+     - Set blocker_references to a JSON array with the full PR/MR URL:
+       - GitLab MR: `["https://gitlab.com/org/repo/-/merge_requests/123"]`
+       - GitHub PR: `["https://github.com/org/repo/pull/123"]`
+     - Set pending_issues to [<this issue key>]
+     - This does NOT apply to other platforms (e.g. Bitbucket, SourceForge)
+     The sweep system will monitor the PR/MR and re-triage once it merges.
    * **Check for follow-up commits**: After identifying a valid fix, you MUST check
      whether there are follow-up commits that are **necessary to make the fix
      correct and complete**. A follow-up commit should be included ONLY when:
@@ -331,8 +342,18 @@ You must decide between one of the following actions. Follow these guidelines to
      passes all validations in step 2.3, your decision is backport
    * You must be able to justify why the patch is correct and how it addresses the issue
    {% endif %}
-   * If your investigation confirms a valid bug/CVE but fails to locate a specific fix, your decision
-     is clarification-needed
+   * If your investigation confirms a valid bug/CVE but fails to locate a specific fix:
+     - If you found NO fix anywhere (not even an unmerged MR or proposed patch),
+       AND you exhausted all search strategies from step 2.2 (Fedora, upstream git,
+       bug trackers, targeted git searches, etc.), your decision is
+       "postponed_no_patch". Use this when you're confident the bug/CVE is real
+       but upstream has not yet provided a solution. The issue will be
+       periodically re-queued for fresh triage.
+     - If you found partial information (e.g., bug tracker discussion, proposed
+       but not accepted patches, or you need human clarification on next steps),
+       your decision is "clarification-needed"
+     - If you found an unmerged GitLab MR or GitHub PR, use "postponed_pr_pending"
+       as described in step 2.3
    * This is the correct choice when you are sure a problem exists but cannot find the solution yourself
 
    2.5 Set the Jira fields as per the instructions below.
@@ -375,9 +396,10 @@ You must decide between one of the following actions. Follow these guidelines to
      Set dependency_issue to the issue key AND dependency_component to the component name
      (e.g., "golang", "openssl") from the dependency issue's component field
    * If the dependency issue exists but has no `Fixed in Build` yet
-     and is still open → resolution is "postponed"
+     and is still open → resolution is "postponed_dependency"
      Set summary to explain that rebuild is waiting for the dependency to ship,
      and set pending_issues to the dependency issue key.
+     Set blocker_references to a JSON array containing the dependency issue key, e.g. ["RHEL-67890"].
      Also set package, fix_version, cve_id, dependency_issue, and dependency_component
      (same values as you would for a rebuild resolution).
    * **Fallback — no matching CVE tracker found**: If no dependency CVE tracker

@@ -33,7 +33,10 @@ from ymir.common.version_utils import is_modular
         Resolution.BACKPORT,
         Resolution.REBUILD,
         Resolution.NOT_AFFECTED,
-        Resolution.POSTPONED,
+        Resolution.POSTPONED_DEPENDENCY,
+        Resolution.POSTPONED_Y_STREAM,
+        Resolution.POSTPONED_NO_PATCH,
+        Resolution.POSTPONED_PR_PENDING,
         Resolution.OPEN_ENDED_ANALYSIS,
         Resolution.CLARIFICATION_NEEDED,
         Resolution.ERROR,
@@ -62,7 +65,10 @@ def test_non_user_triggered_skips_comment_when_mr_will_be_opened(resolution):
     "resolution",
     [
         Resolution.NOT_AFFECTED,
-        Resolution.POSTPONED,
+        Resolution.POSTPONED_DEPENDENCY,
+        Resolution.POSTPONED_Y_STREAM,
+        Resolution.POSTPONED_NO_PATCH,
+        Resolution.POSTPONED_PR_PENDING,
         Resolution.OPEN_ENDED_ANALYSIS,
         Resolution.CLARIFICATION_NEEDED,
     ],
@@ -575,7 +581,7 @@ def test_build_reproducer_input_skips_postponed():
     state = TriageState(
         jira_issue="RHEL-105",
         triage_result=TriageOutputSchema(
-            resolution=Resolution.POSTPONED,
+            resolution=Resolution.POSTPONED_DEPENDENCY,
             data=PostponedData(
                 summary="waiting",
                 pending_issues=["RHEL-1"],
@@ -586,3 +592,50 @@ def test_build_reproducer_input_skips_postponed():
     )
     # Builder returns a payload when package exists; eligibility is checked by enqueue.
     assert _build_reproducer_input(state).package == "golang"
+
+
+# --- Eligibility → resolution mapping regression tests ---
+
+
+@pytest.mark.asyncio
+async def test_pending_dependencies_maps_to_postponed_y_stream():
+    """PENDING_DEPENDENCIES eligibility must produce POSTPONED_Y_STREAM, not
+    POSTPONED_DEPENDENCY.  The former is swept by YStreamSweep; the latter by
+    DependencySweep (rebuild waiting for a component's fixed build).  Mixing
+    them up silently deadlocks one of the two sweep paths."""
+    from ymir.agents.triage_agent import run_workflow
+
+    pending_issues = ["RHEL-99998"]
+    eligibility_result = CVEEligibilityResult(
+        is_cve=True,
+        eligibility=TriageEligibility.PENDING_DEPENDENCIES,
+        reason="Waiting for Z-stream clones to ship",
+        pending_zstream_issues=pending_issues,
+    )
+
+    @asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    with (
+        patch("ymir.agents.triage_agent.mcp_tools", side_effect=_mock_mcp_tools),
+        patch(
+            "ymir.agents.triage_agent.run_tool",
+            new_callable=AsyncMock,
+            return_value=eligibility_result.model_dump(),
+        ),
+        patch("ymir.agents.triage_agent.get_mock_local_tool_env", return_value=None),
+        patch.dict(
+            "os.environ",
+            {"GIT_REPO_BASEPATH": "/tmp", "MCP_GATEWAY_URL": "http://localhost"},
+            clear=False,
+        ),
+    ):
+        state = await run_workflow(
+            "RHEL-99999",
+            dry_run=True,
+            triage_agent_factory=MagicMock(),
+        )
+
+    assert state.triage_result.resolution == Resolution.POSTPONED_Y_STREAM
+    assert state.triage_result.data.pending_issues == pending_issues

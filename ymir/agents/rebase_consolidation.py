@@ -75,19 +75,32 @@ def build_rebase_siblings_jql(
     issue_key: str,
     component: str,
     fix_version: str,
+    exclude_triaged: bool = True,
 ) -> str:
-    """Build JQL query to find rebase sibling candidates."""
-    return build_siblings_jql(
-        issue_key=issue_key,
-        component=component,
-        fix_version=fix_version,
-        excluded_labels=[
+    """
+    Build JQL query to find rebase sibling candidates.
+
+    Args:
+        issue_key: Primary issue to exclude
+        component: Package component
+        fix_version: Target fix version
+        exclude_triaged: If True, exclude already-triaged issues (for queueing new siblings).
+                        If False, include all siblings (for consolidating in rebase MR).
+    """
+    excluded = []
+    if exclude_triaged:
+        excluded = [
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBUILD.value,
             JiraLabels.TRIAGED_REBASE.value,
             JiraLabels.TRIAGED_POSTPONED.value,
-        ],
+        ]
+    return build_siblings_jql(
+        issue_key=issue_key,
+        component=component,
+        fix_version=fix_version,
+        excluded_labels=excluded,
     )
 
 
@@ -133,16 +146,18 @@ async def find_rebase_siblings(
         return [], ""
 
     try:
+        # Include already-triaged siblings for consolidation (don't exclude ymir_triaged_rebase)
         jql = build_rebase_siblings_jql(
             issue_key=jira_issue,
             component=rebase_data.package,
             fix_version=rebase_data.fix_version,
+            exclude_triaged=False,
         )
         candidates = await run_tool(
             "search_jira_issues",
             available_tools=available_tools,
             jql=jql,
-            fields=["key", "summary"],
+            fields=["key", "summary", "comment"],
             max_results=50,
         )
     except Exception as e:
@@ -152,7 +167,25 @@ async def find_rebase_siblings(
     if not candidates:
         return [], ""
 
-    logger.info(f"Analyzing {len(candidates)} sibling candidates for {jira_issue}")
+    # Filter to only candidates that were queued as siblings of THIS primary
+    # (verify via comment to avoid consolidating siblings of different primaries)
+    verified_candidates = []
+    for candidate in candidates:
+        comments = candidate.get("fields", {}).get("comment", {}).get("comments", [])
+        for comment in comments:
+            body = comment.get("body", "")
+            if "Queued for triage as potential sibling of" in body and jira_issue in body:
+                verified_candidates.append(candidate)
+                break
+
+    if not verified_candidates:
+        logger.info(
+            f"No verified siblings found for {jira_issue} "
+            f"(found {len(candidates)} candidates but none queued by this primary)"
+        )
+        return [], ""
+
+    logger.info(f"Analyzing {len(verified_candidates)} verified sibling candidates for {jira_issue}")
 
     analysis_tools = [t for t in available_tools if t.name in ["get_jira_details", "search_jira_issues"]]
 
@@ -242,8 +275,8 @@ async def find_rebase_siblings(
                 logger.warning(f"Failed to analyze sibling {candidate_key}: {e}")
                 return None, f"* {candidate_key} — excluded (analysis failed)"
 
-    # Analyze all candidates in parallel
-    results = await asyncio.gather(*[analyze_candidate(c) for c in candidates])
+    # Analyze all verified candidates in parallel
+    results = await asyncio.gather(*[analyze_candidate(c) for c in verified_candidates])
 
     # Collect consolidated issues and summary lines
     consolidated: list[ConsolidatedIssue] = []

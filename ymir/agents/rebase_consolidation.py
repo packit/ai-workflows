@@ -397,9 +397,14 @@ async def queue_siblings_for_triage(
                     logger.warning(f"Failed to comment on sibling {candidate_key}: {e}")
 
                 # Queue for triage AFTER label AND comment
-                task = Task.from_issue(candidate_key)
+                # Inherit user_triggered from primary to preserve priority
+                task = Task.from_issue(candidate_key, user_triggered=user_triggered)
+                # Use priority queue for user-triggered tasks
+                queue = (
+                    RedisQueues.TRIAGE_QUEUE_TODO.value if user_triggered else RedisQueues.TRIAGE_QUEUE.value
+                )
                 async with redis_client(os.environ["REDIS_URL"]) as redis:
-                    await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
+                    await fix_await(redis.lpush(queue, task.model_dump_json()))
 
             # Increment count immediately after Redis push (or would-push in dry-run)
             queued_count += 1

@@ -383,20 +383,7 @@ async def queue_siblings_for_triage(
                     # If we can't label it, don't queue it (would be treated as primary)
                     continue
 
-                # Queue for triage AFTER labeling
-                task = Task.from_issue(candidate_key)
-                async with redis_client(os.environ["REDIS_URL"]) as redis:
-                    await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
-
-            # Increment count immediately after Redis push (or would-push in dry-run)
-            # so that failures in comment don't miscount queued siblings
-            queued_count += 1
-            logger.info(
-                f"{'[DRY-RUN] Would queue' if dry_run else 'Queued'} sibling {candidate_key} for triage"
-            )
-
-            if not dry_run:
-                # Post comment on sibling (best-effort; failure doesn't affect queue count)
+                # Post comment BEFORE queueing (fallback detection if label not visible yet)
                 try:
                     await tasks.comment_in_jira(
                         jira_issue=candidate_key,
@@ -408,6 +395,17 @@ async def queue_siblings_for_triage(
                     )
                 except Exception as e:
                     logger.warning(f"Failed to comment on sibling {candidate_key}: {e}")
+
+                # Queue for triage AFTER label AND comment
+                task = Task.from_issue(candidate_key)
+                async with redis_client(os.environ["REDIS_URL"]) as redis:
+                    await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
+
+            # Increment count immediately after Redis push (or would-push in dry-run)
+            queued_count += 1
+            logger.info(
+                f"{'[DRY-RUN] Would queue' if dry_run else 'Queued'} sibling {candidate_key} for triage"
+            )
 
         except Exception as e:
             import traceback

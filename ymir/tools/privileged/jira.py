@@ -392,10 +392,16 @@ class AddJiraCommentTool(Tool[AddJiraCommentToolInput, ToolRunOptions, StringToo
 
 CVE_ID_PATTERN = re.compile(r"(CVE-\d{4}-\d{4,})")
 
+_MODULAR_SUMMARY_PREFIX = r"^(?:CVE-\d{4}-\d+\s+)?([\w.+-]+):([^/\s]+)/"
+
 
 def extract_cve_id(summary: str) -> str | None:
     match = CVE_ID_PATTERN.search(summary)
     return match.group(1) if match else None
+
+
+def _is_modular_summary(summary: str, component: str) -> bool:
+    return bool(re.match(_MODULAR_SUMMARY_PREFIX + re.escape(component) + r":", summary))
 
 
 async def _check_zstream_clones_shipped(
@@ -505,7 +511,11 @@ def _issue_number(key: str) -> int:
 
 
 async def _check_duplicate_tracker(
-    cve_id: str, component: str, fix_version: str, issue_key: str
+    cve_id: str,
+    component: str,
+    fix_version: str,
+    issue_key: str,
+    is_modular: bool = False,
 ) -> tuple[str | None, bool]:
     """Check for duplicate CVE trackers (same CVE + component + fix version).
 
@@ -527,8 +537,14 @@ async def _check_duplicate_tracker(
     logger.info(f"Checking for duplicate trackers with JQL: {jql}")
 
     tool = SearchJiraIssuesTool()
-    output = await tool.run(input={"jql": jql, "fields": ["status", "resolution"], "max_results": 50})
-    issues = output.result
+    output = await tool.run(
+        input={"jql": jql, "fields": ["status", "resolution", "summary"], "max_results": 50}
+    )
+    issues = [
+        i
+        for i in output.result
+        if _is_modular_summary(i.get("fields", {}).get("summary", ""), component) == is_modular
+    ]
 
     if not issues:
         logger.info(f"No duplicate trackers found for {cve_id} in {component}/{fix_version}")
@@ -952,6 +968,7 @@ class CheckCveTriageEligibilityTool(
                 component,
                 target_version,
                 issue_key,
+                is_modular=_is_modular_summary(summary, component),
             )
         except Exception as e:
             logger.warning(f"Duplicate tracker check failed for {issue_key}: {e}")

@@ -23,6 +23,10 @@ import ymir.agents.tasks as tasks
 from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_applicability_agent
 from ymir.agents.observability import setup_observability
 from ymir.agents.reasoning_agent import ReasoningAgent
+from ymir.agents.rebase_consolidation import (
+    check_and_queue_primary_if_ready,
+    queue_siblings_for_triage,
+)
 from ymir.agents.rebuild_consolidation import find_rebuild_siblings
 from ymir.agents.utils import (
     build_agent_factory_with_mock_repos,
@@ -365,6 +369,12 @@ class TriageState(BaseModel):
     applicability_unpacked_sources: Path | None = Field(default=None)
     applicability_used_fallback: bool = Field(default=False)
     applicability_check_skipped: bool = Field(default=False)
+    waiting_for_siblings: bool = Field(
+        default=False,
+        description=(
+            "Set to True when siblings are queued and this issue should wait for them to finish triaging."
+        ),
+    )
 
 
 def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgent:
@@ -656,12 +666,14 @@ async def run_workflow(
                 state.cve_eligibility_result
                 and state.cve_eligibility_result.is_cve
                 and state.triage_result.resolution
-                in (Resolution.BACKPORT, Resolution.REBUILD, Resolution.POSTPONED)
+                in (Resolution.BACKPORT, Resolution.REBUILD, Resolution.REBASE, Resolution.POSTPONED)
             ):
                 return "check_cve_applicability"
 
             if state.triage_result.resolution == Resolution.REBUILD:
                 return "consolidate_rebuild_siblings"
+            if state.triage_result.resolution == Resolution.REBASE:
+                return "consolidate_rebase_siblings"
             return "comment_in_jira"
 
         async def verify_rebase_author(state):
@@ -757,6 +769,8 @@ async def run_workflow(
                                 state.applicability_check_skipped = True
                                 if state.triage_result.resolution == Resolution.REBUILD:
                                     return "consolidate_rebuild_siblings"
+                                if state.triage_result.resolution == Resolution.REBASE:
+                                    return "consolidate_rebase_siblings"
                                 return "comment_in_jira"
                         else:
                             clone_branch = f"c{major_version}s"
@@ -781,6 +795,8 @@ async def run_workflow(
                 state.applicability_check_skipped = True
                 if state.triage_result.resolution == Resolution.REBUILD:
                     return "verify_rebuild_buildroot"
+                if state.triage_result.resolution == Resolution.REBASE:
+                    return "consolidate_rebase_siblings"
                 return "comment_in_jira"
 
             if not prep_ok:
@@ -865,6 +881,8 @@ async def run_workflow(
 
             if state.triage_result.resolution == Resolution.REBUILD:
                 return "verify_rebuild_buildroot"
+            if state.triage_result.resolution == Resolution.REBASE:
+                return "consolidate_rebase_siblings"
             return "comment_in_jira"
 
         async def verify_rebuild_buildroot(state):
@@ -941,6 +959,69 @@ async def run_workflow(
             rebuild_data.consolidation_summary = summary or None
             return "comment_in_jira"
 
+        async def consolidate_rebase_siblings(state):
+            """Queue sibling issues for triage and decide whether to queue primary for rebase."""
+            rebase_data = state.triage_result.data
+
+            # Skip consolidation if this issue is already a sibling of another primary
+            # Check both label (set when queued) and comments (may not be labeled yet due to race)
+            current_labels, _ = await tasks.get_jira_issue_metadata(state.jira_issue)
+            if JiraLabels.REBASE_SIBLING.value in current_labels:
+                logger.info(f"Issue {state.jira_issue} has ymir_rebase_sibling label, skipping consolidation")
+                # Don't search for siblings or set waiting flag
+                state.waiting_for_siblings = False
+                rebase_data.consolidated_issues = []
+                rebase_data.consolidation_summary = None
+                return "comment_in_jira"
+
+            # Also check comments for "Queued for triage as potential sibling" (label may not be set yet)
+            try:
+                details = await run_tool(
+                    "get_jira_details",
+                    issue_key=state.jira_issue,
+                    fields=["comment"],
+                    available_tools=gateway_tools,
+                )
+                comments = details.get("fields", {}).get("comment", {}).get("comments", [])
+                for comment in comments:
+                    if "Queued for triage as potential sibling of" in comment.get("body", ""):
+                        logger.info(f"Issue {state.jira_issue} has sibling comment, skipping consolidation")
+                        state.waiting_for_siblings = False
+                        rebase_data.consolidated_issues = []
+                        rebase_data.consolidation_summary = None
+                        return "comment_in_jira"
+            except Exception as e:
+                logger.warning(f"Failed to check comments for {state.jira_issue}: {e}, proceeding")
+
+            # Queue siblings for triage
+            sibling_count = await queue_siblings_for_triage(
+                primary_issue=state.jira_issue,
+                rebase_data=rebase_data,
+                available_tools=gateway_tools,
+                dry_run=dry_run,
+                user_triggered=user_triggered,
+            )
+
+            # If siblings were queued, don't queue primary yet (wait for siblings)
+            if sibling_count > 0:
+                logger.info(
+                    f"Queued {sibling_count} siblings for {state.jira_issue}, "
+                    "primary will be queued after siblings finish triaging"
+                )
+                # Mark that this issue is waiting for siblings
+                state.waiting_for_siblings = True
+                # Clear consolidated issues - found during rebase via find_triaged_rebase_siblings()
+                rebase_data.consolidated_issues = []
+                rebase_data.consolidation_summary = None
+            else:
+                # No siblings found, queue primary for rebase immediately
+                logger.info(f"No siblings found for {state.jira_issue}, will queue for rebase now")
+                state.waiting_for_siblings = False
+                rebase_data.consolidated_issues = []
+                rebase_data.consolidation_summary = None
+
+            return "comment_in_jira"
+
         async def comment_in_jira(state):
             applicability_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / APPLICABILITY_DIR / state.jira_issue
             if applicability_dir.exists():
@@ -978,6 +1059,7 @@ async def run_workflow(
         workflow.add_step("check_cve_applicability", check_cve_applicability)
         workflow.add_step("verify_rebuild_buildroot", verify_rebuild_buildroot)
         workflow.add_step("consolidate_rebuild_siblings", consolidate_rebuild_siblings)
+        workflow.add_step("consolidate_rebase_siblings", consolidate_rebase_siblings)
         workflow.add_step("comment_in_jira", comment_in_jira)
 
         response = await workflow.run(TriageState(jira_issue=jira_issue))
@@ -1134,10 +1216,15 @@ async def main() -> None:
 
             current_labels, current_status = await tasks.get_jira_issue_metadata(input.issue)
             all_labels = JiraLabels.all_labels()
+            # Non-terminal labels that don't indicate triage completion
+            non_terminal_labels = {
+                JiraLabels.TRIAGE_IN_PROGRESS.value,
+                JiraLabels.REBASE_SIBLING.value,
+                JiraLabels.WAITING_FOR_SIBLINGS.value,
+                JiraLabels.TODO.value,
+            }
             terminal_ymir_labels = [
-                label
-                for label in current_labels
-                if label in all_labels and label != JiraLabels.TRIAGE_IN_PROGRESS.value
+                label for label in current_labels if label in all_labels and label not in non_terminal_labels
             ]
             if (
                 terminal_ymir_labels
@@ -1293,18 +1380,31 @@ async def main() -> None:
             else:
                 logger.info(f"Triage resolved as {output.resolution.value} for {input.issue}")
 
+                # Check if this issue is a sibling (has ymir_rebase_sibling label)
+                is_sibling = JiraLabels.REBASE_SIBLING.value in current_labels
+
                 resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
                 if resolution_label and output.resolution != Resolution.ERROR:
                     # Terminal resolution label is the dedup anchor that replaces
                     # ymir_triage_in_progress — must be written unconditionally so
                     # the next fetcher sweep skips this issue.
+                    # Also remove ymir_rebase_sibling if present (sibling finished triaging)
+                    labels_to_remove = [JiraLabels.TRIAGE_IN_PROGRESS.value]
+                    if is_sibling:
+                        labels_to_remove.append(JiraLabels.REBASE_SIBLING.value)
+                        logger.info(f"{input.issue} is a sibling, will check if primary is ready to queue")
+
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[resolution_label.value],
-                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                        labels_to_remove=labels_to_remove,
                         dry_run=dry_run,
                         user_triggered=user_triggered,
                     )
+
+                    # Update current_labels to reflect the changes we just made
+                    if is_sibling:
+                        current_labels.remove(JiraLabels.REBASE_SIBLING.value)
                     if output.resolution == Resolution.REBUILD:
                         for consolidated in output.data.consolidated_issues:
                             try:
@@ -1323,7 +1423,66 @@ async def main() -> None:
                                     f"Failed to set labels on consolidated issue "
                                     f"{consolidated.issue_key}: {e}"
                                 )
+                    elif output.resolution == Resolution.REBASE:
+                        # Label and link consolidated siblings so they skip re-triage
+                        for consolidated in output.data.consolidated_issues:
+                            try:
+                                await tasks.set_jira_labels(
+                                    jira_issue=consolidated.issue_key,
+                                    labels_to_add=[JiraLabels.TRIAGED_REBASE.value],
+                                    labels_to_remove=[
+                                        JiraLabels.TRIAGE_IN_PROGRESS.value,
+                                        JiraLabels.REBASED.value,
+                                    ],
+                                    dry_run=dry_run,
+                                    user_triggered=user_triggered,
+                                )
+                                logger.info(
+                                    f"Labeled consolidated sibling {consolidated.issue_key} "
+                                    f"for group rebase with {input.issue}"
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to set labels on consolidated issue "
+                                    f"{consolidated.issue_key}: {e}"
+                                )
+                        # Post consolidation link comments after all labels are set
+                        if not dry_run and output.data.consolidated_issues:
+                            try:
+                                async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+                                    for consolidated in output.data.consolidated_issues:
+                                        await tasks.comment_in_jira(
+                                            jira_issue=consolidated.issue_key,
+                                            agent_type="Triage",
+                                            comment_text=(
+                                                f"Consolidated for rebase with {input.issue}. "
+                                                f"See {input.issue} for rebase status and results."
+                                            ),
+                                            available_tools=gateway_tools,
+                                            user_triggered=user_triggered,
+                                        )
+                                    logger.info(
+                                        f"Linked {len(output.data.consolidated_issues)} "
+                                        f"consolidated siblings to primary issue {input.issue}"
+                                    )
+                            except Exception as e:
+                                logger.warning(f"Failed to post consolidation link comments: {e}")
 
+                # If this was a sibling issue, check if primary is ready to be queued
+                if is_sibling:
+                    logger.info(f"Sibling {input.issue} finished triaging, checking if primary is ready")
+                    try:
+                        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+                            await check_and_queue_primary_if_ready(
+                                sibling_issue=input.issue,
+                                available_tools=gateway_tools,
+                                dry_run=dry_run,
+                                user_triggered=user_triggered,
+                            )
+                    except Exception as e:
+                        logger.warning(f"Failed to check/queue primary for sibling {input.issue}: {e}")
+
+                # Dispatch to downstream queues
                 if output.resolution == Resolution.ERROR:
                     await retry(task, output.data.model_dump_json())
                 elif output.resolution == Resolution.POSTPONED:
@@ -1357,9 +1516,24 @@ async def main() -> None:
                             task = Task(metadata=state.model_dump(), user_triggered=user_triggered)
                             downstream_payload = task.model_dump_json()
                             if output.resolution == Resolution.REBASE:
-                                queue = RedisQueues.get_rebase_queue_for_branch(
-                                    state.target_branch, task.user_triggered
-                                )
+                                # Skip queueing if issue is waiting for siblings to finish triaging.
+                                # Check both state flag (set mid-workflow) and
+                                # Jira label (persisted across restarts).
+                                # After pod restart/re-triage, state.waiting_for_siblings defaults to False,
+                                # but the Jira label persists until siblings finish.
+                                if (
+                                    state.waiting_for_siblings
+                                    or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
+                                ):
+                                    logger.info(
+                                        f"Issue {input.issue} is waiting for siblings to finish triaging, "
+                                        "skipping rebase queue (will be queued when siblings are done)"
+                                    )
+                                    queue = None
+                                else:
+                                    queue = RedisQueues.get_rebase_queue_for_branch(
+                                        state.target_branch, task.user_triggered
+                                    )
                             elif output.resolution == Resolution.BACKPORT:
                                 queue = RedisQueues.get_backport_queue_for_branch(
                                     state.target_branch, task.user_triggered

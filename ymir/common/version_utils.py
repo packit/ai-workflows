@@ -5,14 +5,111 @@ This module provides functions for parsing and comparing RHEL version
 strings in various formats (e.g., rhel-9.8, rhel-9.7.z, rhel-9.0.0.z).
 """
 
+import asyncio
 import contextvars
 import re
+import subprocess
 
 _DIST_TAG_RE = re.compile(r"\.el(\d+)(_\d+)?")
 
 current_z_streams_override: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
     "current_z_streams_override", default=None
 )
+
+
+def compare_versions(version1: str, version2: str) -> int:
+    """
+    Compare two upstream package versions using rpmdev-vercmp.
+
+    DEPRECATED: Use compare_versions_async() in async contexts to avoid blocking the event loop.
+
+    Args:
+        version1: First version string (e.g., "1.2.3", "2.4.1-rc1")
+        version2: Second version string (e.g., "1.2.3", "1.2")
+
+    Returns:
+        -1 if version1 < version2
+         0 if version1 == version2
+         1 if version1 > version2
+
+    Raises:
+        RuntimeError: If rpmdev-vercmp command fails or times out
+    """
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["rpmdev-vercmp", version1, version2],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5.0,  # 5 second timeout to prevent hanging
+        )
+        # rpmdev-vercmp returns:
+        # exit code 0: versions are equal
+        # exit code 11: first version is greater
+        # exit code 12: second version is greater
+        if result.returncode == 0:
+            return 0
+        if result.returncode == 11:
+            return 1
+        if result.returncode == 12:
+            return -1
+        raise RuntimeError(f"rpmdev-vercmp failed with exit code {result.returncode}: {result.stderr}")
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"rpmdev-vercmp timed out after 5 seconds comparing {version1} and {version2}"
+        ) from e
+    except FileNotFoundError as e:
+        raise RuntimeError("rpmdev-vercmp command not found. Install rpmdevtools package.") from e
+
+
+async def compare_versions_async(version1: str, version2: str) -> int:
+    """
+    Compare two upstream package versions using rpmdev-vercmp (async version).
+
+    This is the preferred version for async contexts as it doesn't block the event loop.
+
+    Args:
+        version1: First version string (e.g., "1.2.3", "2.4.1-rc1")
+        version2: Second version string (e.g., "1.2.3", "1.2")
+
+    Returns:
+        -1 if version1 < version2
+         0 if version1 == version2
+         1 if version1 > version2
+
+    Raises:
+        RuntimeError: If rpmdev-vercmp command fails or times out
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "rpmdev-vercmp",
+            version1,
+            version2,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        except TimeoutError as e:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError(
+                f"rpmdev-vercmp timed out after 5 seconds comparing {version1} and {version2}"
+            ) from e
+
+        # rpmdev-vercmp returns:
+        # exit code 0: versions are equal
+        # exit code 11: first version is greater
+        # exit code 12: second version is greater
+        if proc.returncode == 0:
+            return 0
+        if proc.returncode == 11:
+            return 1
+        if proc.returncode == 12:
+            return -1
+        raise RuntimeError(f"rpmdev-vercmp failed with exit code {proc.returncode}: {stderr.decode()}")
+    except FileNotFoundError as e:
+        raise RuntimeError("rpmdev-vercmp command not found. Install rpmdevtools package.") from e
 
 
 def parse_rhel_version(version: str) -> tuple[str, str, bool] | None:

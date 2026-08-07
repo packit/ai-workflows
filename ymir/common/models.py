@@ -243,6 +243,19 @@ class RebaseData(BaseModel):
         default=None,
     )
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
+    consolidated_issues: list["ConsolidatedIssue"] = Field(
+        default_factory=list,
+        description="Sibling issues consolidated into this rebase task",
+    )
+    consolidation_summary: str | None = Field(
+        default=None,
+        description="Summary of sibling consolidation analysis",
+    )
+
+    @property
+    def all_jira_issues(self) -> list[str]:
+        """Return the primary issue plus all consolidated sibling issue keys."""
+        return [self.jira_issue] + [ci.issue_key for ci in self.consolidated_issues]
 
 
 class BackportData(BaseModel):

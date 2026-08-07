@@ -174,6 +174,10 @@ class JiraLabels(Enum):
     # Applied by the CLI when a developer triggers triage manually.
     CLI_TRIAGE = "ymir_cli_triage"
 
+    # Sibling consolidation labels
+    REBASE_SIBLING = "ymir_rebase_sibling"  # Marks sibling queued for triage
+    WAITING_FOR_SIBLINGS = "ymir_waiting_for_siblings"  # Primary waiting for siblings to triage
+
     # Maintainer-facing trigger: when a Red Hat Employee adds this label to a CVE
     # issue, the fetcher enqueues it for an e2e run and swaps the label for
     # TRIAGE_IN_PROGRESS on enqueue.

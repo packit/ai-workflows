@@ -32,6 +32,7 @@ from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState
 from ymir.agents.reasoning_agent import ReasoningAgent
+from ymir.agents.rebase_consolidation import find_triaged_rebase_siblings
 from ymir.agents.utils import (
     format_mr_triage_details,
     get_agent_execution_config,
@@ -42,6 +43,7 @@ from ymir.agents.utils import (
     mcp_tools,
     render_template,
     resolve_chat_model_override,
+    run_tool,
     wrap_details,
 )
 from ymir.common.base_utils import fix_await, install_shutdown_handler, redis_client, run_task_loop
@@ -52,6 +54,7 @@ from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     BuildInputSchema,
     BuildOutputSchema,
+    ConsolidatedIssue,
     ErrorData,
     LogInputSchema,
     LogOutputSchema,
@@ -138,6 +141,8 @@ async def main() -> None:
         fix_version: str | None = Field(default=None)
         justification: str | None = Field(default=None)
         triage_summary: str | None = Field(default=None)
+        consolidated_issues: list[ConsolidatedIssue] = Field(default_factory=list)
+        consolidation_summary: str | None = Field(default=None)
         fedora_clone: Path | None = Field(default=None)
         leading_zstream_branch: str | None = Field(default=None)
         rebase_log: list[str] = Field(default_factory=list)
@@ -145,6 +150,104 @@ async def main() -> None:
         attempts_remaining: int = Field(default=max_build_attempts)
         all_files_git_to_add: set[str] = Field(default_factory=set)
         abandon_autorelease: bool = Field(default=False)
+
+    async def update_labels_for_all_issues(
+        primary_issue: str,
+        consolidated_issues: list[ConsolidatedIssue],
+        labels_to_add: list[str],
+        labels_to_remove: list[str],
+        dry_run: bool,
+        user_triggered: bool,
+    ) -> None:
+        """Update Jira labels for primary issue and all consolidated siblings in parallel.
+
+        Uses return_exceptions=True to ensure partial Jira failures don't disrupt
+        the entire workflow or leave inconsistent labels across issues.
+        """
+        # Deduplicate in case consolidated_issues contains duplicates or the primary issue
+        all_issues = list(dict.fromkeys([primary_issue] + [item.issue_key for item in consolidated_issues]))
+        results = await asyncio.gather(
+            *[
+                tasks.set_jira_labels(
+                    jira_issue=issue,
+                    labels_to_add=labels_to_add,
+                    labels_to_remove=labels_to_remove,
+                    dry_run=dry_run,
+                    user_triggered=user_triggered,
+                )
+                for issue in all_issues
+            ],
+            return_exceptions=True,
+        )
+        # Log any failures but continue (label updates are best-effort)
+        for issue, result in zip(all_issues, results, strict=True):
+            if isinstance(result, Exception):
+                logger.warning(f"Failed to update labels for {issue}: {result}")
+
+    async def post_comments_to_all_issues(
+        primary_issue: str,
+        consolidated_issues: list[ConsolidatedIssue],
+        comment_text: str,
+        available_tools: list[Tool],
+        is_error: bool,
+        user_triggered: bool,
+    ) -> None:
+        """
+        Post comment to primary issue and all consolidated siblings in parallel.
+
+        Isolates errors per-issue so a single Jira failure doesn't abort the entire step.
+        Deduplicates issue list to prevent multiple identical comments.
+        """
+        # Deduplicate in case consolidated_issues contains duplicates or the primary issue
+        all_issues = list(dict.fromkeys([primary_issue] + [item.issue_key for item in consolidated_issues]))
+
+        async def post_with_error_handling(issue: str) -> None:
+            try:
+                await tasks.comment_in_jira(
+                    jira_issue=issue,
+                    agent_type="Rebase",
+                    comment_text=comment_text,
+                    is_error=is_error,
+                    available_tools=available_tools,
+                    user_triggered=user_triggered,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to post comment to {issue}: {e}")
+
+        await asyncio.gather(*[post_with_error_handling(issue) for issue in all_issues])
+
+    async def post_failure_comments_to_consolidated_siblings(
+        primary_issue: str,
+        consolidated_issues: list[ConsolidatedIssue],
+        available_tools: list[Tool],
+        user_triggered: bool,
+    ) -> None:
+        """
+        Post link comments to consolidated siblings pointing to primary issue with error details.
+
+        Uses is_error=False so these informational links are always posted, even on automatic runs.
+        Only the detailed error on the primary issue is gated by user_triggered.
+
+        Isolates errors per-sibling so a single Jira failure doesn't abort posting to other siblings.
+        Deduplicates issue keys to prevent multiple identical comments.
+        """
+        # Deduplicate by issue_key in case consolidated_issues contains duplicates
+        unique_siblings = {c.issue_key: c for c in consolidated_issues}.values()
+
+        async def post_with_error_handling(consolidated: ConsolidatedIssue) -> None:
+            try:
+                await tasks.comment_in_jira(
+                    jira_issue=consolidated.issue_key,
+                    agent_type="Rebase",
+                    comment_text=f"Consolidated rebase failed. See {primary_issue} for error details.",
+                    available_tools=available_tools,
+                    is_error=False,  # Informational link, not a noisy error notification
+                    user_triggered=user_triggered,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to post failure comment to {consolidated.issue_key}: {e}")
+
+        await asyncio.gather(*[post_with_error_handling(c) for c in unique_siblings])
 
     async def run_workflow(
         package,
@@ -154,6 +257,8 @@ async def main() -> None:
         fix_version=None,
         justification=None,
         triage_summary=None,
+        consolidated_issues=None,
+        consolidation_summary=None,
         redis_conn=None,
         user_triggered=False,
         dist_git_namespace=None,
@@ -170,10 +275,34 @@ async def main() -> None:
 
             workflow = Workflow(State, name="RebaseWorkflow")
 
+            async def check_if_sibling(state):
+                """Check if this issue is a sibling - siblings should not create their own MR."""
+                # Check comments for "Queued for triage as potential sibling" marker
+                # (ymir_rebase_sibling label was already removed by triage cleanup)
+                try:
+                    details = await run_tool(
+                        "get_jira_details",
+                        issue_key=state.jira_issue,
+                        fields=["comment"],
+                        available_tools=gateway_tools,
+                    )
+                    comments = details.get("fields", {}).get("comment", {}).get("comments", [])
+                    for comment in comments:
+                        if "Queued for triage as potential sibling of" in comment.get("body", ""):
+                            logger.info(
+                                f"Issue {state.jira_issue} is a sibling (found sibling comment). "
+                                "Siblings do not create their own MR - the primary will consolidate them. "
+                                "Exiting without processing."
+                            )
+                            return Workflow.END
+                except Exception as e:
+                    logger.warning(f"Failed to check if {state.jira_issue} is a sibling: {e}, proceeding")
+                return "change_jira_status"
+
             async def change_jira_status(state):
                 if dry_run:
                     logger.info(f"Dry run: skipping Jira status change of {state.jira_issue} to In Progress")
-                    return "fork_and_prepare_dist_git"
+                    return "find_consolidated_siblings"
                 # tasks.change_jira_status further gates the write on
                 # JIRA_ALLOW_STATUS_CHANGES; nothing else to check here.
                 try:
@@ -184,6 +313,39 @@ async def main() -> None:
                     )
                 except Exception as status_error:
                     logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
+                return "find_consolidated_siblings"
+
+            async def find_consolidated_siblings(state):
+                """Find siblings that have been triaged as REBASE to the same version."""
+                if not state.consolidated_issues:
+                    # consolidated_issues is empty when using wait-for-siblings approach
+                    # Find siblings that triaged as REBASE
+                    rebase_data = RebaseData(
+                        jira_issue=state.jira_issue,
+                        package=state.package,
+                        version=state.version,
+                        fix_version=state.fix_version,
+                    )
+                    logger.info(f"Finding triaged siblings for {state.jira_issue}")
+                    try:
+                        included, summary = await find_triaged_rebase_siblings(
+                            jira_issue=state.jira_issue,
+                            rebase_data=rebase_data,
+                            available_tools=gateway_tools,
+                        )
+                        state.consolidated_issues = included
+                        state.consolidation_summary = summary or None
+                        if included:
+                            logger.info(
+                                f"Found {len(included)} triaged siblings for consolidation "
+                                f"with {state.jira_issue}"
+                            )
+                    except Exception as e:
+                        logger.warning(f"Failed to find triaged siblings for {state.jira_issue}: {e}")
+                else:
+                    logger.info(
+                        f"Using {len(state.consolidated_issues)} consolidated siblings from triage result"
+                    )
                 return "fork_and_prepare_dist_git"
 
             async def fork_and_prepare_dist_git(state):
@@ -335,7 +497,13 @@ async def main() -> None:
 
             async def commit_push_and_open_mr(state):
                 try:
+                    all_issues = [state.jira_issue] + [item.issue_key for item in state.consolidated_issues]
                     triage_details_text = format_mr_triage_details(state.justification, state.triage_summary)
+                    consolidation_text = (
+                        f"\n\n{wrap_details('Consolidated issues', state.consolidation_summary)}"
+                        if state.consolidation_summary
+                        else ""
+                    )
                     (
                         state.merge_request_url,
                         state.merge_request_newly_created,
@@ -355,8 +523,9 @@ async def main() -> None:
                         mr_description=(
                             f"{state.log_result.description}\n\n"
                             f"{triage_details_text}"
-                            f"{format_jira_links_for_mr(state.jira_issue)}\n"
+                            f"{format_jira_links_for_mr(all_issues)}\n"
                             f"{wrap_details('Rebase status', state.rebase_log[-1])}"
+                            f"{consolidation_text}"
                             f"\n\n{mr_description_footer(state.package)}"
                         ),
                         available_tools=gateway_tools,
@@ -385,21 +554,42 @@ async def main() -> None:
                     comment_text = (
                         state.merge_request_url if state.merge_request_url else state.rebase_result.status
                     )
-                    is_error = False
+                    # Post same success message to all issues in parallel with per-issue error handling
+                    await post_comments_to_all_issues(
+                        primary_issue=state.jira_issue,
+                        consolidated_issues=state.consolidated_issues,
+                        comment_text=comment_text,
+                        available_tools=gateway_tools,
+                        is_error=False,
+                        user_triggered=user_triggered,
+                    )
                 else:
-                    comment_text = f"Agent failed to perform a rebase: {state.rebase_result.error}"
-                    is_error = True
-                await tasks.comment_in_jira(
-                    jira_issue=state.jira_issue,
-                    agent_type="Rebase",
-                    comment_text=comment_text,
-                    is_error=is_error,
-                    available_tools=gateway_tools,
-                    user_triggered=user_triggered,
-                )
+                    # Post detailed error to primary issue (with error handling)
+                    try:
+                        await tasks.comment_in_jira(
+                            jira_issue=state.jira_issue,
+                            agent_type="Rebase",
+                            comment_text=f"Agent failed to perform a rebase: {state.rebase_result.error}",
+                            is_error=True,
+                            available_tools=gateway_tools,
+                            user_triggered=user_triggered,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to post error comment to primary issue {state.jira_issue}: {e}"
+                        )
+                    # Link consolidated siblings to primary issue (with per-sibling error handling)
+                    await post_failure_comments_to_consolidated_siblings(
+                        primary_issue=state.jira_issue,
+                        consolidated_issues=state.consolidated_issues,
+                        available_tools=gateway_tools,
+                        user_triggered=user_triggered,
+                    )
                 return Workflow.END
 
+            workflow.add_step("check_if_sibling", check_if_sibling)
             workflow.add_step("change_jira_status", change_jira_status)
+            workflow.add_step("find_consolidated_siblings", find_consolidated_siblings)
             workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
             workflow.add_step("run_rebase_agent", run_rebase_agent)
             workflow.add_step("run_build_agent", run_build_agent)
@@ -419,6 +609,8 @@ async def main() -> None:
                     fix_version=fix_version,
                     justification=justification,
                     triage_summary=triage_summary,
+                    consolidated_issues=consolidated_issues or [],
+                    consolidation_summary=consolidation_summary,
                 ),
             )
             return response.state
@@ -504,8 +696,10 @@ async def main() -> None:
                         f"Task failed after {max_retries} attempts, "
                         f"moving to error list: {rebase_data.jira_issue}"
                     )
-                    await tasks.set_jira_labels(
-                        jira_issue=rebase_data.jira_issue,
+                    # Label all consolidated issues with error status
+                    await update_labels_for_all_issues(
+                        primary_issue=rebase_data.jira_issue,
+                        consolidated_issues=rebase_data.consolidated_issues,
                         labels_to_add=[JiraLabels.REBASE_ERRORED.value],
                         labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
                         dry_run=dry_run,
@@ -516,18 +710,34 @@ async def main() -> None:
                     # user-triggered (ymir_todo) runs: a maintainer who didn't ask
                     # for processing shouldn't be notified, so skip the gateway
                     # connection entirely otherwise.
-                    if user_triggered and comment_text and not dry_run:
+                    if user_triggered and not dry_run:
                         try:
                             async with mcp_tools(
                                 os.environ["MCP_GATEWAY_URL"],
                                 call_meta={"jira_issue": rebase_data.jira_issue},
                             ) as gateway_tools:
-                                await tasks.comment_in_jira(
-                                    jira_issue=rebase_data.jira_issue,
-                                    agent_type="Rebase",
-                                    comment_text=comment_text,
+                                # Post detailed error to primary issue (with error handling)
+                                if comment_text:
+                                    try:
+                                        await tasks.comment_in_jira(
+                                            jira_issue=rebase_data.jira_issue,
+                                            agent_type="Rebase",
+                                            comment_text=comment_text,
+                                            available_tools=gateway_tools,
+                                            is_error=True,
+                                            user_triggered=user_triggered,
+                                        )
+                                    except Exception as e:
+                                        logger.warning(
+                                            f"Failed to post error comment to primary issue "
+                                            f"{rebase_data.jira_issue}: {e}"
+                                        )
+                                # Link consolidated siblings to primary issue
+                                # (with per-sibling error handling)
+                                await post_failure_comments_to_consolidated_siblings(
+                                    primary_issue=rebase_data.jira_issue,
+                                    consolidated_issues=rebase_data.consolidated_issues,
                                     available_tools=gateway_tools,
-                                    is_error=True,
                                     user_triggered=user_triggered,
                                 )
                         except Exception as comment_error:
@@ -548,6 +758,8 @@ async def main() -> None:
                         fix_version=rebase_data.fix_version,
                         justification=rebase_data.justification,
                         triage_summary=rebase_data.triage_summary,
+                        consolidated_issues=rebase_data.consolidated_issues,
+                        consolidation_summary=rebase_data.consolidation_summary,
                         redis_conn=redis,
                         user_triggered=user_triggered,
                         dist_git_namespace=dist_git_namespace,
@@ -581,8 +793,9 @@ async def main() -> None:
             else:
                 if state.rebase_result.success:
                     logger.info(f"Rebase successful for {rebase_data.jira_issue}, adding to completed list")
-                    await tasks.set_jira_labels(
-                        jira_issue=rebase_data.jira_issue,
+                    await update_labels_for_all_issues(
+                        primary_issue=rebase_data.jira_issue,
+                        consolidated_issues=rebase_data.consolidated_issues,
                         labels_to_add=[JiraLabels.REBASED.value],
                         labels_to_remove=[
                             JiraLabels.TRIAGED_REBASE.value,
@@ -600,8 +813,10 @@ async def main() -> None:
                     )
                 else:
                     logger.warning(f"Rebase failed for {rebase_data.jira_issue}: {state.rebase_result.error}")
-                    await tasks.set_jira_labels(
-                        jira_issue=rebase_data.jira_issue,
+                    # Label all consolidated issues with failure status
+                    await update_labels_for_all_issues(
+                        primary_issue=rebase_data.jira_issue,
+                        consolidated_issues=rebase_data.consolidated_issues,
                         labels_to_add=[JiraLabels.REBASE_FAILED.value],
                         labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
                         dry_run=dry_run,

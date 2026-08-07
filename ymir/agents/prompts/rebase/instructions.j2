@@ -23,7 +23,10 @@ To rebase package <PACKAGE> to version <VERSION> in dist-git branch <DIST_GIT_BR
 1. Check if the current version is older than <VERSION>. To get the current version,
    you can use `rpmspec -q --queryformat "%{VERSION}\n" --srpm <PACKAGE>.spec`.
    To compare versions, use `rpmdev-vercmp`. If the current version is not older than <VERSION>,
-   rebasing doesn't make sense, so end the process with an error.
+   rebasing is not needed. In this case, return success=false with a status message explaining
+   that the package is already at the target version. Include in the error field guidance to
+   check if an existing build for this version exists and to add the issue to that build's
+   Errata if appropriate.
 
 2. Try to find past rebases in git history to see how this particular package does rebases.
    Keep in mind what parts of the spec file are usually changed. At the minimum a rebase should

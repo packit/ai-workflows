@@ -12,6 +12,7 @@ from ymir.common.base_utils import KerberosError, extract_principal, init_kerber
 from ymir.common.utils import (
     _is_connection_error,
     get_latest_candidate_build,
+    get_latest_z_build,
     get_latest_z_pending_build,
     mcp_tools,
 )
@@ -546,3 +547,49 @@ async def test_get_latest_z_pending_build_no_builds():
     )
     with pytest.raises(RuntimeError, match="no builds"):
         await get_latest_z_pending_build("bash", "rhel-9.6.0")
+
+
+# ============================================================================
+# get_latest_z_build
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_latest_z_build_prefers_pending():
+    _mock_koji_session(
+        {
+            "rhel-9.6.0-z-pending": [
+                {"build_id": 1, "nvr": "bash-1.0-1.el9", "epoch": 0, "version": "1.0", "release": "1.el9"},
+            ],
+        },
+        {"source": "git+https://pkgs.example.com/rpms/bash#abc123"},
+    )
+    evr, ref = await get_latest_z_build("bash", "rhel-9.6.0")
+    assert evr == EVR(epoch=0, version="1.0", release="1.el9")
+    assert ref == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_get_latest_z_build_falls_back_to_released():
+    _mock_koji_session(
+        {
+            "rhel-9.6.0-z-pending": [],
+            "rhel-9.6.0-z": [
+                {"build_id": 2, "nvr": "bash-1.0-2.el9", "epoch": 0, "version": "1.0", "release": "2.el9"},
+            ],
+        },
+        {"source": "git+https://pkgs.example.com/rpms/bash#def456"},
+    )
+    evr, ref = await get_latest_z_build("bash", "rhel-9.6.0")
+    assert evr == EVR(epoch=0, version="1.0", release="2.el9")
+    assert ref == "def456"
+
+
+@pytest.mark.asyncio
+async def test_get_latest_z_build_no_builds():
+    _mock_koji_session(
+        {"rhel-9.6.0-z-pending": [], "rhel-9.6.0-z": []},
+        None,
+    )
+    with pytest.raises(RuntimeError, match="no builds"):
+        await get_latest_z_build("bash", "rhel-9.6.0")

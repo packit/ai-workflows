@@ -170,6 +170,34 @@ print(json.dumps({ \
 	oc exec deployment/valkey -- valkey-cli LPUSH $$queue "$$payload" && \
 	echo "✓ Pushed to $$queue. View with: make show-reproducer-queue"
 
+run-sweep-dependency:
+	oc delete job sweep-dependency-manual --ignore-not-found
+	oc create job sweep-dependency-manual --from=cronjob/sweep-dependency
+
+run-sweep-y-stream:
+	oc delete job sweep-y-stream-manual --ignore-not-found
+	oc create job sweep-y-stream-manual --from=cronjob/sweep-y-stream
+
+run-sweep-pr-pending:
+	oc delete job sweep-pr-pending-manual --ignore-not-found
+	oc create job sweep-pr-pending-manual --from=cronjob/sweep-pr-pending
+
+run-sweep-no-patch:
+	oc delete job sweep-no-patch-manual --ignore-not-found
+	oc create job sweep-no-patch-manual --from=cronjob/sweep-no-patch
+
+suspend-sweeps:
+	oc patch cronjob sweep-dependency --type merge -p '{"spec":{"suspend":true}}'
+	oc patch cronjob sweep-y-stream --type merge -p '{"spec":{"suspend":true}}'
+	oc patch cronjob sweep-pr-pending --type merge -p '{"spec":{"suspend":true}}'
+	oc patch cronjob sweep-no-patch --type merge -p '{"spec":{"suspend":true}}'
+
+unsuspend-sweeps:
+	oc patch cronjob sweep-dependency --type merge -p '{"spec":{"suspend":false}}'
+	oc patch cronjob sweep-y-stream --type merge -p '{"spec":{"suspend":false}}'
+	oc patch cronjob sweep-pr-pending --type merge -p '{"spec":{"suspend":false}}'
+	oc patch cronjob sweep-no-patch --type merge -p '{"spec":{"suspend":false}}'
+
 .PHONY: deploy run-jira-issue-fetcher run-jira-issue-fetcher-todo \
 	suspend-jira-issue-fetcher unsuspend-jira-issue-fetcher \
 	suspend-jira-issue-fetcher-todo unsuspend-jira-issue-fetcher-todo \
@@ -180,4 +208,6 @@ print(json.dumps({ \
 	logs-triage logs-backport-c9s logs-backport-c10s \
 	logs-rebase-c9s logs-rebase-c10s logs-rebuild-c9s logs-rebuild-c10s \
 	logs-reproducer logs-mcp logs-supervisor logs-valkey logs-phoenix \
-	logs-redis-commander logs-otel-collector process trigger-reproducer
+	logs-redis-commander logs-otel-collector process trigger-reproducer \
+	run-sweep-dependency run-sweep-y-stream run-sweep-pr-pending run-sweep-no-patch \
+	suspend-sweeps unsuspend-sweeps

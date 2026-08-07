@@ -1,0 +1,57 @@
+FROM quay.io/centos/centos:stream10
+
+RUN dnf -y install epel-release \
+    && dnf config-manager --set-enabled crb \
+    && dnf -y update
+
+RUN dnf -y install --allowerasing \
+      # Build dependencies (removed after pip install)
+      gcc \
+      gcc-c++ \
+      python3-devel \
+      # Runtime system packages
+      python3 \
+      python3-backoff \
+      python3-koji \
+      python3-pip \
+      python3-requests
+RUN pip3 install -v --no-cache-dir \
+      "litellm!=1.82.7,!=1.82.8" \
+      "beeai-framework==0.1.82" \
+      "mcp<1.29.0" \
+      pydantic \
+      aiofiles \
+      aiohttp \
+      httpx \
+      jinja2 \
+      redis \
+      specfile \
+    && dnf -y remove gcc gcc-c++ python3-devel \
+    && dnf clean all
+
+# Create unprivileged user
+RUN useradd -m -G wheel sweepbot
+
+WORKDIR /home/sweepbot
+
+# Copy only the modules required by the sweep.
+# ymir.sweep — the sweep module itself
+# ymir.common — shared utilities, models, constants, config
+# ymir.supervisor — jira_utils, gitlab_utils, http_utils, supervisor_types
+# ymir.tools — tools constants (YMIR_USER_AGENT, imported by http_utils) and
+#              ymir.tools.privileged.jira (CheckCveTriageEligibilityTool, which
+#              the y_stream sweep re-runs to decide unblocking)
+COPY ymir/sweep/ /home/sweepbot/ymir/sweep/
+COPY ymir/common/ /home/sweepbot/ymir/common/
+COPY ymir/supervisor/ /home/sweepbot/ymir/supervisor/
+COPY ymir/tools/ /home/sweepbot/ymir/tools/
+
+RUN chgrp -R root /home/sweepbot && chmod -R g+rwX /home/sweepbot
+
+USER sweepbot
+ENV HOME=/home/sweepbot
+WORKDIR $HOME
+
+ENV PYTHONPATH=$HOME:$PYTHONPATH
+
+CMD ["python3", "-m", "ymir.sweep", "--all"]

@@ -254,6 +254,24 @@ build-jira-issue-fetcher:
 build-mr-cleanup:
 	$(COMPOSE) --profile manual build mr-cleanup
 
+.PHONY: build-sweep
+build-sweep:
+	$(CONTAINER_TOOL) build -f Containerfile.sweep -t sweep:latest .
+
+.PHONY: run-sweep
+run-sweep:
+	@if [ -z "$(STRATEGY)" ]; then \
+		echo "Usage: make run-sweep STRATEGY=dependency|y_stream|pr_pending|no_patch"; \
+		exit 1; \
+	fi
+	@if [ ! -f .secrets/sweep.env ]; then \
+		echo "Error: .secrets/sweep.env not found"; \
+		echo "Copy the template: cp templates/sweep.env .secrets/sweep.env"; \
+		echo "Then edit it with your credentials"; \
+		exit 1; \
+	fi
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile manual run --rm sweep python3 -m ymir.sweep --strategy $(STRATEGY)
+
 # Usage:
 #   make run-mr-cleanup-dry-run    # dry run, lists what would be changed
 #   make run-mr-cleanup            # live run
@@ -462,7 +480,7 @@ redis-cli:
 build-test-image:
 	$(MAKE) -f Makefile.tests build-test-image
 
-.PHONY: check-in-container check-agents-in-container check-unprivileged-tools-in-container check-privileged-tools-in-container check-jira-issue-fetcher-in-container check-ymir-common-in-container check-supervisor-in-container check-mcp-install-in-container check-cli-in-container
+.PHONY: check-in-container check-agents-in-container check-unprivileged-tools-in-container check-privileged-tools-in-container check-jira-issue-fetcher-in-container check-ymir-common-in-container check-supervisor-in-container check-mcp-install-in-container check-cli-in-container check-sweep-in-container check-sweep-integration-in-container
 check-in-container: build-test-image
 	$(MAKE) -f Makefile.tests check-in-container
 check-agents-in-container: build-test-image
@@ -477,6 +495,10 @@ check-ymir-common-in-container: build-test-image
 	$(MAKE) -f Makefile.tests check-ymir-common-in-container
 check-supervisor-in-container: build-test-image
 	$(MAKE) -f Makefile.tests check-supervisor-in-container
+check-sweep-in-container: build-test-image
+	$(MAKE) -f Makefile.tests check-sweep-in-container
+check-sweep-integration-in-container: build-test-image
+	$(MAKE) -f Makefile.tests check-sweep-integration-in-container
 check-mcp-install-in-container: build-test-image
 	$(MAKE) -f Makefile.tests check-mcp-install-in-container
 check-cli-in-container: build-test-image

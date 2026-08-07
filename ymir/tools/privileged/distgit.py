@@ -37,7 +37,6 @@ _TRANSIENT_STDERR_PATTERNS = (
     "no route to host",
     "broken pipe",
     "ssh_exchange_identification",
-    "failed to push some refs",
 )
 
 _T = TypeVar("_T")
@@ -230,7 +229,8 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                         _, ref = await get_latest_z_pending_build(package, branch)
                     else:
                         _, ref = await get_latest_candidate_build(package, branch)
-                if source_branch := self._find_source_branch(repo, branch):
+                source_branch = self._find_source_branch(repo, branch)
+                if source_branch and source_branch.endswith("-main"):
                     ref = await self._find_latest_same_nvr_ref(
                         repo,
                         package,
@@ -240,16 +240,24 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                 with tool_error_context(
                     "Failed to push branch to dist-git", package=package, branch=branch, ref=ref
                 ):
-                    push_infos = await _retry_transient(
-                        lambda: asyncio.to_thread(repo.remotes.origin.push, f"{ref}:refs/heads/{branch}"),
+                    try:
+                        await asyncio.to_thread(repo.commit, ref)
+                    except Exception:
+                        raise ToolError(
+                            f"Commit {ref} (from latest Brew build) not found in dist-git clone of {package}"
+                        ) from None
+                    await _retry_transient(
+                        lambda: asyncio.to_thread(repo.git.push, "origin", f"{ref}:refs/heads/{branch}"),
                         f"push {branch} to dist-git",
                     )
-                    if getattr(push_infos, "error", None):
-                        logger.error("git push stderr: %s", sanitize_url(str(push_infos.error)))
-                    for info in push_infos:
-                        if info.flags & git.remote.PushInfo.ERROR:
-                            logger.error("Push to dist-git rejected: %s", info.summary.strip())
-                            raise ToolError("Push to dist-git was rejected")
+                    if not await _retry_transient(
+                        lambda: asyncio.to_thread(repo.git.ls_remote, "--heads", "origin", branch),
+                        f"verify {branch} on dist-git",
+                    ):
+                        raise ToolError(
+                            f"Push appeared to succeed but branch {branch} not found "
+                            f"on dist-git — possible silent rejection by server ACL"
+                        )
             start_time = time.monotonic()
             while time.monotonic() - start_time < SYNC_TIMEOUT:
                 try:

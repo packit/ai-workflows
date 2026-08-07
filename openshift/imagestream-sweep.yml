@@ -1,0 +1,15 @@
+---
+kind: ImageStream
+apiVersion: image.openshift.io/v1
+metadata:
+  name: sweep
+spec:
+  tags:
+    - name: prod
+      from:
+        kind: DockerImage
+        name: quay.io/jotnar/sweep:latest
+      importPolicy:
+        scheduled: true
+  lookupPolicy:
+    local: true

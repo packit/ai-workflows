@@ -451,6 +451,18 @@ services:
     restart: "no"
     profiles: ["manual"]
 
+  sweep:
+    image: sweep
+    build:
+      context: .
+      dockerfile: Containerfile.sweep
+    environment:
+      - REDIS_URL=redis://valkey:6379/0
+    env_file:
+      - .secrets/sweep.env
+    restart: "no"
+    profiles: ["manual"]
+
 
 volumes:
   valkey-data:

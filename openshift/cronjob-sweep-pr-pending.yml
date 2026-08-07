@@ -1,0 +1,61 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sweep-pr-pending
+  labels:
+    app: sweep-pr-pending
+    component: scheduler
+spec:
+  schedule: "0 */8 * * *"  # Every 8 hours
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  suspend: false
+  jobTemplate:
+    metadata:
+      labels:
+        app: sweep-pr-pending
+        component: job
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 600  # 10 minutes max runtime
+      template:
+        metadata:
+          labels:
+            app: sweep-pr-pending
+            component: pod
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: sweep-pr-pending
+            image: 'sweep:prod'
+            imagePullPolicy: IfNotPresent
+            args: ["python3", "-m", "ymir.sweep", "--strategy", "pr_pending"]
+            envFrom:
+            - configMapRef:
+                name: endpoints-env
+            - configMapRef:
+                name: jira-env
+            - secretRef:
+                name: jira-env
+            - secretRef:
+                name: gitlab-env
+            resources:
+              limits:
+                cpu: "200m"
+                memory: "128Mi"
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+              capabilities:
+                drop:
+                - ALL
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          dnsPolicy: ClusterFirst
+          schedulerName: default-scheduler
+          terminationGracePeriodSeconds: 30

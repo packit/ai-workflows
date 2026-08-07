@@ -1,0 +1,64 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sweep-no-patch
+  labels:
+    app: sweep-no-patch
+    component: scheduler
+spec:
+  schedule: "0 4 * * *"  # Daily at 4am UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  suspend: false
+  jobTemplate:
+    metadata:
+      labels:
+        app: sweep-no-patch
+        component: job
+    spec:
+      backoffLimit: 2
+      # Shorter deadline: this sweep only pushes to Redis, the expensive
+      # LLM work happens in the triage agent pods.
+      activeDeadlineSeconds: 300  # 5 minutes max runtime
+      template:
+        metadata:
+          labels:
+            app: sweep-no-patch
+            component: pod
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: sweep-no-patch
+            image: 'sweep:prod'
+            imagePullPolicy: IfNotPresent
+            args: ["python3", "-m", "ymir.sweep", "--strategy", "no_patch"]
+            env:
+            - name: MAX_ISSUES_PER_RUN
+              value: "20"
+            envFrom:
+            - configMapRef:
+                name: endpoints-env
+            - configMapRef:
+                name: jira-env
+            - secretRef:
+                name: jira-env
+            resources:
+              limits:
+                cpu: "200m"
+                memory: "128Mi"
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+              capabilities:
+                drop:
+                - ALL
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          dnsPolicy: ClusterFirst
+          schedulerName: default-scheduler
+          terminationGracePeriodSeconds: 30

@@ -117,6 +117,14 @@ apply imagestream-mr-cleanup.yml
 import_image mr-cleanup
 apply cronjob-mr-cleanup.yml
 
+# Postponed Issue Sweeps
+apply imagestream-sweep.yml
+import_image sweep
+apply cronjob-sweep-dependency.yml
+apply cronjob-sweep-y-stream.yml
+apply cronjob-sweep-pr-pending.yml
+apply cronjob-sweep-no-patch.yml
+
 # # Supervisor
 # apply imagestream-supervisor.yml
 # import_image supervisor

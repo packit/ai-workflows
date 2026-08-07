@@ -35,6 +35,7 @@ jobs:
           - target: check-jira-issue-fetcher-in-container
           - target: check-ymir-common-in-container
           - target: check-supervisor-in-container
+          - target: check-sweep-in-container
           - target: check-mcp-install-in-container
     steps:
     - name: Checkout code
@@ -63,3 +64,29 @@ jobs:
     - name: Test unprivileged gateway module
       run: |
         podman run --rm mcp-gateway-test:pr python3.13 -c "from ymir.tools.unprivileged.gateway import main; print('✓ unprivileged gateway import successful')"
+
+  smoke-test-sweep-containerfile:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+    - name: Set up Podman
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y podman
+        podman --version
+    - name: Build sweep container
+      run: |
+        podman build --no-cache -f Containerfile.sweep -t sweep-test:pr .
+    # Containerfile.sweep copies only a curated subset of ymir/* (sweep, common,
+    # supervisor, tools) onto PYTHONPATH rather than pip-installing the package.
+    # The slim image's import graph is therefore an unenforced contract: if a
+    # package-structure change makes the sweep's imports reach outside that
+    # subset (or pull in a dep this Containerfile doesn't install), the image
+    # breaks only at runtime.  These imports turn that into a build-time failure.
+    - name: Test sweep strategy imports
+      run: |
+        podman run --rm sweep-test:pr python3 -c "from ymir.sweep.y_stream import YStreamSweep; from ymir.tools.privileged.jira import CheckCveTriageEligibilityTool; print('✓ sweep strategy + eligibility tool import successful')"
+    - name: Test sweep CLI entrypoint
+      run: |
+        podman run --rm sweep-test:pr python3 -m ymir.sweep --help

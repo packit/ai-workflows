@@ -1437,8 +1437,24 @@ async def main() -> None:
             else:
                 logger.info(f"Triage resolved as {output.resolution.value} for {input.issue}")
 
-                # Check if this issue is a sibling (has ymir_rebase_sibling label)
-                is_sibling = JiraLabels.REBASE_SIBLING.value in current_labels
+                # Check if this issue is a sibling by checking for sibling comment
+                # (can't use ymir_rebase_sibling label because it was removed at line 1308)
+                is_sibling = False
+                try:
+                    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+                        details = await run_tool(
+                            "get_jira_details",
+                            issue_key=input.issue,
+                            fields=["comment"],
+                            available_tools=gateway_tools,
+                        )
+                        comments = details.get("fields", {}).get("comment", {}).get("comments", [])
+                        for comment in comments:
+                            if "Queued for triage as potential sibling of" in comment.get("body", ""):
+                                is_sibling = True
+                                break
+                except Exception as e:
+                    logger.warning(f"Failed to check if {input.issue} is sibling: {e}")
 
                 resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
                 if resolution_label and output.resolution != Resolution.ERROR:

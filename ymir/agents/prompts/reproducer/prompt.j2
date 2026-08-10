@@ -69,6 +69,15 @@ Execute the following steps in order.
 
    1.5. If `{{ patch_urls }}` is provided, it is already a list of URLs. For each URL, call `get_patch_from_url` to fetch the patch content and study what the fix changes — this informs what the reproducer should test (the pre-fix behavior). By reading the fix backwards — from what was changed to what was there before — you can determine how to trigger the original bug.
 
+   **Critical — understand the fix's activation conditions:** When the patch introduces thresholds, limits, or new protection mechanisms, extract the **default values** from the code (look for default constants, initializers, `#define`, or default function arguments). Your reproducer payload MUST exceed these defaults so that the fix actually activates and changes behavior. If the fix adds a protection that only triggers above 64 MiB, a 1 MB payload will behave identically on both fixed and unfixed systems — the test will be useless. Design your test input to land squarely in the range where the fix makes a difference.
+
+   1.5.1. **Check upstream for reproducer artifacts.** If `{{ patch_urls }}` points to a GitHub/GitLab pull request or commit, navigate to the linked issue or PR description and look for:
+   * A reproducer test case file (e.g. a fuzzer crash input, a malformed document, a minimal script)
+   * Reproducer commands or instructions showing how to trigger the bug (e.g. running the project's own CLI tool with specific arguments)
+   * Resource-usage measurements (RSS, allocation counts, timing) that demonstrate the bug
+
+   If the upstream provides a reproducer input file or a command that triggers the bug using the project's own tools (e.g. `xmlwf`, `openssl`, `curl`), **prefer using that over writing a custom C program**. The upstream has already validated that this input triggers the bug — reuse it. Download or reconstruct the file, feed it to the package's CLI tool, and measure the outcome (exit code, RSS, error message). This is faster, more reliable, and avoids writing fragile C code that depends on internal API details or error codes that may differ between versions.
+
    1.6. If neither `{{ triage_summary }}` nor `{{ patch_urls }}` are provided, design the test based solely on the Jira issue description, comments, and any reproducer steps or error messages described in the issue. In this case, the test may require more iteration in step 5.
 
    1.7. **Check for Existing Test or Open Reproducer MR**
@@ -265,7 +274,14 @@ Execute the following steps in order.
 
    Based on the bug description from the Jira issue, triage summary, and patch URLs, create one or more standalone test scripts. These are the actual programs/scripts that exercise the bug.
 
-   Choose the language based on the package type:
+   **Prefer upstream reproducer + CLI tool when available:** If step 1.5.1 found an upstream reproducer file or command, use that as your primary approach. Write a shell script that:
+   1. Reconstructs or embeds the upstream reproducer input (inline hex/base64 or generated)
+   2. Feeds it to the package's own CLI tool (e.g. `xmlwf` for expat, `openssl` for openssl, `curl` for curl)
+   3. Measures the outcome using the same method the upstream used (exit code, RSS via `/usr/bin/time -v`, error message, timeout)
+
+   This avoids writing custom C programs that depend on internal API details, error code values, or symbols that may differ between package versions. The upstream reproducer is the ground truth for what triggers the bug — reuse it.
+
+   **Fall back to custom code only when no upstream reproducer exists** or the bug cannot be triggered via a CLI tool. In that case, choose the language based on the package type:
    * C/C++ libraries (e.g., `libxml2`, `openssl`, `glibc`): write a C program (`test_<cve_id>.c` or `test_<jira_issue>.c`) that calls the vulnerable function with crafted input
    * Python packages (e.g., `python-pillow`, `python-cryptography`): write a Python script (`test_<id>.py`)
    * CLI tools (e.g., `curl`, `binutils`, `grep`): write a shell script (`test_<id>.sh`) that invokes the tool with triggering arguments
@@ -306,8 +322,9 @@ Execute the following steps in order.
      - Method: check for presence of sensitive data in output
 
    * **Denial of service bugs** (excessive resource consumption):
-     - Detection: resource usage exceeds threshold
-     - Method: measure CPU time, memory, or disk usage
+     - Detection: resource usage exceeds threshold, or the fix's new protection rejects the input
+     - Method: measure CPU time, memory, or disk usage; OR check for a parser/library error code returned by the new protection
+     - CRITICAL: If the fix introduces a protection with default activation thresholds (e.g. "activates after N bytes of allocation"), your test payload MUST exceed that threshold so the protection fires on the fixed system. A payload below the threshold will behave the same on both fixed and unfixed systems, making the test unable to distinguish them. Read the patch carefully for default threshold constants and design the payload accordingly.
 
    4.4. Create `runtest.sh` (BeakerLib Harness)
 
@@ -483,7 +500,8 @@ Execute the following steps in order.
    *Case A: Bug is REPRODUCED (test FAILS as expected — the bug is present)*
    * The detection method fires: crash detected, wrong output observed, timeout hit, memory leak found, etc.
    * This means the reproducer WORKS. The test correctly detects the bug on the unpatched system.
-   * The reproducer is verified.
+   * **Before declaring success, reason about the fixed system:** Would this exact test PASS (exit 0) once the fix is applied? Review the patch's activation conditions and default thresholds. If the fix has a protection threshold that your payload does not exceed, the test will also FAIL on a fixed system — that means the reproducer is broken. Redesign the payload to exceed the fix's defaults so behavior actually changes between fixed and unfixed.
+   * Once you are confident the test differentiates fixed from unfixed, the reproducer is verified.
    * Proceed to step 6 (return machine), then produce your final output JSON. The workflow creates the merge request from your output.
 
    *Case B: Bug is NOT reproduced (test PASSES — the bug is not triggered)*

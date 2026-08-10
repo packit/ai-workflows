@@ -16,8 +16,8 @@ from pydantic import BaseModel, Field
 from specfile import Specfile
 
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket
-from ymir.common.utils import get_latest_z_build
-from ymir.common.version_utils import parse_zstream_branch_name
+from ymir.common.utils import get_latest_candidate_build, get_latest_z_pending_build
+from ymir.common.version_utils import is_older_zstream, parse_zstream_branch_name
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.privileged.utils import sanitize_url
 
@@ -221,7 +221,10 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                         "skipping push and waiting for mirror sync"
                     )
                 else:
-                    _, ref = await get_latest_z_build(package, branch)
+                    if await is_older_zstream(branch):
+                        _, ref = await get_latest_z_pending_build(package, branch)
+                    else:
+                        _, ref = await get_latest_candidate_build(package, branch)
                     source_branch = self._find_source_branch(repo, branch)
                     if source_branch and source_branch.endswith("-main"):
                         ref = await self._find_latest_same_nvr_ref(
@@ -240,7 +243,10 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                         lambda: asyncio.to_thread(repo.git.push, "origin", f"{ref}:refs/heads/{branch}"),
                         f"push {branch} to dist-git",
                     )
-                    if not await asyncio.to_thread(repo.git.ls_remote, "--heads", "origin", branch):
+                    if not await _retry_transient(
+                        lambda: asyncio.to_thread(repo.git.ls_remote, "--heads", "origin", branch),
+                        f"verify {branch} on dist-git",
+                    ):
                         raise RuntimeError(
                             f"Push appeared to succeed but branch {branch} not found "
                             f"on dist-git — possible silent rejection by server ACL"

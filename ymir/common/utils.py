@@ -240,31 +240,6 @@ async def get_latest_z_pending_build(package: str, dist_git_branch: str) -> tupl
     )
 
 
-async def get_latest_z_build(package: str, dist_git_branch: str) -> tuple[EVR, str]:
-    """Look up the latest build for z-stream branch creation.
-
-    Tries ``{branch}-z-pending`` first (builds approved for release but not
-    yet shipped — equivalent to rhpkg's ``--allow-pending``), then falls back
-    to ``{branch}-z`` (released builds).  Both queries use Koji
-    ``inherit=True`` so they also see parent tags.
-    """
-    pending_tag = f"{dist_git_branch}-z-pending"
-    released_tag = f"{dist_git_branch}-z"
-    build = await asyncio.to_thread(_get_latest_koji_build, BREWHUB_URL, pending_tag, package)
-    tag_used = pending_tag
-    if build is None:
-        build = await asyncio.to_thread(_get_latest_koji_build, BREWHUB_URL, released_tag, package)
-        tag_used = released_tag
-    if build is None:
-        raise RuntimeError(f"There are no builds of {package} in {pending_tag} or {released_tag}")
-    evr = _evr_from_build(build)
-    session = koji.ClientSession(BREWHUB_URL)
-    metadata = await asyncio.to_thread(session.getBuild, build["build_id"], strict=True)
-    source_ref = metadata["source"].split("#")[-1]
-    logger.info(f"Found {package} build {build['nvr']} in {tag_used} (commit {source_ref[:12]})")
-    return evr, source_ref
-
-
 def _resolve_buildroot_checks(
     target_branch: str, fix_version: str, rhel_config: dict | None = None
 ) -> list[tuple[str, str]]:

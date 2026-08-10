@@ -22,8 +22,8 @@ def gitlab_headers() -> dict[str, str]:
     }
 
 
-def gitlab_api_get(path: str, *, params: dict | None = None) -> Any:
-    url = f"{GITLAB_URL}/api/v4/{path}"
+def gitlab_api_get(path: str, *, params: dict | None = None, gitlab_url: str = GITLAB_URL) -> Any:
+    url = f"{gitlab_url}/api/v4/{path}"
     response = requests_session().get(url, headers=gitlab_headers(), params=params)
     response.raise_for_status()
     return response.json()

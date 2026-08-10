@@ -8,6 +8,7 @@ from beeai_framework.tools import JSONToolOutput
 from flexmock import flexmock
 
 from ymir.common.models import TriageEligibility
+from ymir.common.version_utils import is_modular
 from ymir.tools.privileged import jira as jira_tools
 from ymir.tools.privileged.jira import (
     AddJiraCommentTool,
@@ -520,6 +521,24 @@ async def test_verify_issue_author(user_groups, expected_result, use_account_id)
 )
 def test_extract_cve_id(summary, expected):
     assert extract_cve_id(summary) == expected
+
+
+@pytest.mark.parametrize(
+    "summary, component, expected",
+    [
+        ("CVE-2025-1234 postgresql:15/postgresql: overflow", "postgresql", True),
+        ("postgresql:12/postgresql: some vuln", "postgresql", True),
+        ("CVE-2025-1234 postgresql: overflow", "postgresql", False),
+        ("postgresql: some vuln", "postgresql", False),
+        ("CVE-2025-1234 nginx:1.22/nginx: bug", "nginx", True),
+        ("CVE-2025-1234 nginx: bug", "nginx", False),
+        (None, "postgresql", False),
+        ("CVE-2025-1234 postgresql:15/postgresql: overflow", None, False),
+        (None, None, False),
+    ],
+)
+def test_is_modular(summary, component, expected):
+    assert is_modular(summary, component) is expected
 
 
 # --- Z-stream clone check tests ---
@@ -1546,6 +1565,34 @@ async def test_check_duplicate_wont_do_not_blocked():
     assert should_block is False
 
 
+@pytest.mark.asyncio
+async def test_check_duplicate_modular_candidate_filtered_out():
+    """Non-modular issue should not match a modular candidate as duplicate."""
+    search_result = [
+        {
+            "key": "RHEL-100",
+            "fields": {
+                "status": {"name": "New"},
+                "resolution": None,
+                "summary": "CVE-2025-12345 postgresql:15/postgresql: overflow",
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+
+    dup_key, should_block = await _check_duplicate_tracker(
+        "CVE-2025-12345",
+        "postgresql",
+        "rhel-9.2.0.z",
+        "RHEL-500",
+        modular=False,
+    )
+    assert dup_key is None
+    assert should_block is False
+
+
 # --- Eligibility tool: duplicate tracker integration tests ---
 
 
@@ -1570,7 +1617,7 @@ async def test_eligibility_zstream_blocking_duplicate():
         )
     ).once()
     flexmock(jira_tools).should_receive("_check_duplicate_tracker").with_args(
-        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345"
+        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", modular=False
     ).and_return(_create_async_return(("RHEL-100", True))).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
@@ -1600,7 +1647,7 @@ async def test_eligibility_zstream_nonblocking_duplicate():
         )
     ).once()
     flexmock(jira_tools).should_receive("_check_duplicate_tracker").with_args(
-        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345"
+        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", modular=False
     ).and_return(_create_async_return(("RHEL-100", False))).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
@@ -1629,7 +1676,36 @@ async def test_eligibility_no_duplicate():
         )
     ).once()
     flexmock(jira_tools).should_receive("_check_duplicate_tracker").with_args(
-        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345"
+        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", modular=False
+    ).and_return(_create_async_return((None, False))).once()
+
+    result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
+    assert result["eligibility"] == TriageEligibility.IMMEDIATELY
+    assert result["duplicate_of"] is None
+
+
+@pytest.mark.asyncio
+async def test_eligibility_modular_filters_nonmodular_duplicates():
+    """Modular issue should not match non-modular candidates as duplicates."""
+    issue = _make_jira_issue(
+        labels=["SecurityTracking"],
+        fix_versions=[{"name": "rhel-9.6.z"}],
+        summary="CVE-2025-12345 postgresql:15/postgresql: overflow [rhel-9.6.z]",
+        severity="moderate",
+        components=[{"name": "postgresql"}],
+    )
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(
+            {
+                "current_y_streams": {"9": "rhel-9.8"},
+                "current_z_streams": {"9": "rhel-9.6.z"},
+                "upcoming_z_streams": {},
+            }
+        )
+    ).once()
+    flexmock(jira_tools).should_receive("_check_duplicate_tracker").with_args(
+        "CVE-2025-12345", "postgresql", "rhel-9.6.z", "RHEL-12345", modular=True
     ).and_return(_create_async_return((None, False))).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result

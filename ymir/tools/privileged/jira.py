@@ -536,7 +536,7 @@ async def _check_duplicate_tracker(
         input={"jql": jql, "fields": ["status", "resolution", "summary"], "max_results": 50}
     )
     issues = [
-        i for i in output.result if is_modular(i.get("fields", {}).get("summary", ""), component) == modular
+        i for i in output.result if is_modular(i.get("fields", {}).get("summary"), component) == modular
     ]
 
     if not issues:

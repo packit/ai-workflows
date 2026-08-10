@@ -209,7 +209,7 @@ async def test_process_task_proceeds_for_open_issues():
         ("postgresql:12/postgresql:vuln", "", False),
     ],
 )
-def testis_modular(summary, downstream_component, expected):
+def test_is_modular(summary, downstream_component, expected):
     assert is_modular(summary, downstream_component) is expected
 
 

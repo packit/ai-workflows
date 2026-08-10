@@ -1036,7 +1036,6 @@ async def run_workflow(
                 details = await run_tool(
                     "get_jira_details",
                     issue_key=state.jira_issue,
-                    fields=["comment"],
                     available_tools=gateway_tools,
                 )
                 comments = details.get("fields", {}).get("comment", {}).get("comments", [])
@@ -1445,7 +1444,6 @@ async def main() -> None:
                         details = await run_tool(
                             "get_jira_details",
                             issue_key=input.issue,
-                            fields=["comment"],
                             available_tools=gateway_tools,
                         )
                         comments = details.get("fields", {}).get("comment", {}).get("comments", [])

@@ -8,6 +8,7 @@ from beeai_framework.tools import JSONToolOutput
 from flexmock import flexmock
 
 from ymir.common.models import TriageEligibility
+from ymir.common.version_utils import is_modular
 from ymir.tools.privileged import jira as jira_tools
 from ymir.tools.privileged.jira import (
     AddJiraCommentTool,
@@ -23,7 +24,6 @@ from ymir.tools.privileged.jira import (
     _check_duplicate_tracker,
     _check_zstream_clones_shipped,
     _check_zstream_fix_approach,
-    _is_modular_summary,
     extract_cve_id,
 )
 
@@ -532,10 +532,13 @@ def test_extract_cve_id(summary, expected):
         ("postgresql: some vuln", "postgresql", False),
         ("CVE-2025-1234 nginx:1.22/nginx: bug", "nginx", True),
         ("CVE-2025-1234 nginx: bug", "nginx", False),
+        (None, "postgresql", False),
+        ("CVE-2025-1234 postgresql:15/postgresql: overflow", None, False),
+        (None, None, False),
     ],
 )
-def test_is_modular_summary(summary, component, expected):
-    assert _is_modular_summary(summary, component) is expected
+def test_is_modular(summary, component, expected):
+    assert is_modular(summary, component) is expected
 
 
 # --- Z-stream clone check tests ---
@@ -1584,7 +1587,7 @@ async def test_check_duplicate_modular_candidate_filtered_out():
         "postgresql",
         "rhel-9.2.0.z",
         "RHEL-500",
-        is_modular=False,
+        modular=False,
     )
     assert dup_key is None
     assert should_block is False
@@ -1614,7 +1617,7 @@ async def test_eligibility_zstream_blocking_duplicate():
         )
     ).once()
     flexmock(jira_tools).should_receive("_check_duplicate_tracker").with_args(
-        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", is_modular=False
+        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", modular=False
     ).and_return(_create_async_return(("RHEL-100", True))).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
@@ -1644,7 +1647,7 @@ async def test_eligibility_zstream_nonblocking_duplicate():
         )
     ).once()
     flexmock(jira_tools).should_receive("_check_duplicate_tracker").with_args(
-        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", is_modular=False
+        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", modular=False
     ).and_return(_create_async_return(("RHEL-100", False))).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
@@ -1673,7 +1676,7 @@ async def test_eligibility_no_duplicate():
         )
     ).once()
     flexmock(jira_tools).should_receive("_check_duplicate_tracker").with_args(
-        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", is_modular=False
+        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", modular=False
     ).and_return(_create_async_return((None, False))).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
@@ -1702,7 +1705,7 @@ async def test_eligibility_modular_filters_nonmodular_duplicates():
         )
     ).once()
     flexmock(jira_tools).should_receive("_check_duplicate_tracker").with_args(
-        "CVE-2025-12345", "postgresql", "rhel-9.6.z", "RHEL-12345", is_modular=True
+        "CVE-2025-12345", "postgresql", "rhel-9.6.z", "RHEL-12345", modular=True
     ).and_return(_create_async_return((None, False))).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result

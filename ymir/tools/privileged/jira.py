@@ -25,6 +25,7 @@ from ymir.common.utils import _get_koji_build
 from ymir.common.version_utils import (
     get_fix_version_variants,
     get_maintenance_majors,
+    is_modular,
     normalize_fix_version,
     nvr_to_cs_nvr,
     parse_rhel_version,
@@ -392,16 +393,10 @@ class AddJiraCommentTool(Tool[AddJiraCommentToolInput, ToolRunOptions, StringToo
 
 CVE_ID_PATTERN = re.compile(r"(CVE-\d{4}-\d{4,})")
 
-_MODULAR_SUMMARY_PREFIX = r"^(?:CVE-\d{4}-\d+\s+)?([\w.+-]+):([^/\s]+)/"
-
 
 def extract_cve_id(summary: str) -> str | None:
     match = CVE_ID_PATTERN.search(summary)
     return match.group(1) if match else None
-
-
-def _is_modular_summary(summary: str, component: str) -> bool:
-    return bool(re.match(_MODULAR_SUMMARY_PREFIX + re.escape(component) + r":", summary))
 
 
 async def _check_zstream_clones_shipped(
@@ -515,7 +510,7 @@ async def _check_duplicate_tracker(
     component: str,
     fix_version: str,
     issue_key: str,
-    is_modular: bool = False,
+    modular: bool = False,
 ) -> tuple[str | None, bool]:
     """Check for duplicate CVE trackers (same CVE + component + fix version).
 
@@ -541,9 +536,7 @@ async def _check_duplicate_tracker(
         input={"jql": jql, "fields": ["status", "resolution", "summary"], "max_results": 50}
     )
     issues = [
-        i
-        for i in output.result
-        if _is_modular_summary(i.get("fields", {}).get("summary", ""), component) == is_modular
+        i for i in output.result if is_modular(i.get("fields", {}).get("summary", ""), component) == modular
     ]
 
     if not issues:
@@ -968,7 +961,7 @@ class CheckCveTriageEligibilityTool(
                 component,
                 target_version,
                 issue_key,
-                is_modular=_is_modular_summary(summary, component),
+                modular=is_modular(summary, component),
             )
         except Exception as e:
             logger.warning(f"Duplicate tracker check failed for {issue_key}: {e}")

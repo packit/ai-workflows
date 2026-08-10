@@ -68,7 +68,9 @@ from ymir.common.utils import (
     get_latest_candidate_build,
 )
 from ymir.common.version_utils import (
+    MODULAR_SUMMARY_PREFIX,
     construct_internal_branch_name,
+    is_modular,
     is_older_zstream,
     normalize_fix_version,
     parse_rhel_version,
@@ -117,28 +119,9 @@ _RESOLUTION_TO_LABEL: dict[Resolution, JiraLabels] = {
 }
 
 
-# Optional CVE-YYYY-NNNNN prefix, then module:stream/<package>:
-# The package segment is the Downstream Component Name (not a free word match).
-_MODULAR_SUMMARY_PREFIX = r"^(?:CVE-\d{4}-\d+\s+)?([\w.+-]+):([^/\s]+)/"
-
-
 def _modular_summary_re(downstream_component: str) -> re.Pattern[str]:
     """Build a modular-summary regex anchored on the Downstream Component Name."""
-    return re.compile(_MODULAR_SUMMARY_PREFIX + re.escape(downstream_component) + r":")
-
-
-def _is_modular(jira_summary: str | None, downstream_component: str | None) -> bool:
-    """Detect whether the Jira ticket targets a modular package.
-
-    Modular summaries follow ``module:stream/<package>:Title`` (optionally
-    CVE-prefixed), where ``<package>`` is the Downstream Component Name
-    (customfield_10669), e.g. summary ``postgresql:12/postgresql:…`` with
-    downstream component ``postgresql``. Non-modular summaries are
-    ``package:Title`` or ``CVE-... package:Title``.
-    """
-    if not jira_summary or not downstream_component:
-        return False
-    return bool(_modular_summary_re(downstream_component).match(jira_summary))
+    return re.compile(MODULAR_SUMMARY_PREFIX + re.escape(downstream_component) + r":")
 
 
 def _parse_module_summary(summary: str, downstream_component: str) -> tuple[str, str] | None:
@@ -212,7 +195,7 @@ async def determine_target_branch(
 
     package = triage_data.package if hasattr(triage_data, "package") else None
 
-    if _is_modular(jira_summary, downstream_component):
+    if is_modular(jira_summary, downstream_component):
         branch = _map_version_to_module_branch(triage_data.fix_version, jira_summary, downstream_component)
         if not branch:
             return None, None
@@ -325,7 +308,7 @@ async def render_prompt(
         cve_eligibility_result and cve_eligibility_result.is_cve and cve_eligibility_result.needs_internal_fix
     )
     if cve_needs_internal_fix and fix_version:
-        if _is_modular(jira_summary, downstream_component):
+        if is_modular(jira_summary, downstream_component):
             internal_branch = _map_version_to_module_branch(fix_version, jira_summary, downstream_component)
             if internal_branch:
                 updates["needs_internal_fix"] = True

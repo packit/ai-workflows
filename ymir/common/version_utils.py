@@ -247,3 +247,12 @@ async def is_older_zstream(
     current_minor = int(current_parsed[1])
     target_minor = int(minor_str)
     return target_minor < current_minor
+
+
+MODULAR_SUMMARY_PREFIX = r"^(?:CVE-\d{4}-\d+\s+)?([\w.+-]+):([^/\s]+)/"
+
+
+def is_modular(summary: str | None, component: str | None) -> bool:
+    if not summary or not component:
+        return False
+    return bool(re.match(MODULAR_SUMMARY_PREFIX + re.escape(component) + r":", summary))

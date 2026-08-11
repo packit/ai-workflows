@@ -1475,7 +1475,7 @@ async def main() -> None:
                     )
 
                     # Update current_labels to reflect the changes we just made
-                    if is_sibling:
+                    if is_sibling and JiraLabels.REBASE_SIBLING.value in current_labels:
                         current_labels.remove(JiraLabels.REBASE_SIBLING.value)
                     if output.resolution == Resolution.REBUILD:
                         for consolidated in output.data.consolidated_issues:

@@ -324,3 +324,39 @@ async def check_build_in_buildroot(
             return False
 
     return True
+
+
+def extract_text_from_adf(adf_body) -> str:
+    """Extract plain text from Jira ADF (Atlassian Document Format) comment body.
+
+    The MCP get_jira_details tool returns comment bodies in ADF JSON format:
+    {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "Actual comment text here"},
+                    ...
+                ]
+            },
+            ...
+        ]
+    }
+
+    This function recursively extracts all "text" values.
+    """
+    if isinstance(adf_body, str):
+        return adf_body
+    if isinstance(adf_body, dict):
+        # If this is a text node, return its text
+        if adf_body.get("type") == "text" and "text" in adf_body:
+            return adf_body["text"]
+        # Recursively extract from content array
+        if "content" in adf_body:
+            return " ".join(extract_text_from_adf(item) for item in adf_body["content"])
+        return ""
+    if isinstance(adf_body, list):
+        return " ".join(extract_text_from_adf(item) for item in adf_body)
+    return ""

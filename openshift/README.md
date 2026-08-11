@@ -170,10 +170,33 @@ oc rollout restart deployment -l app=triage-agent  # plus any other agent deploy
 To push a Jira issue into the triage queue (e.g. to force CVE triage):
 
 ```bash
+make process ISSUE=RHEL-XXXX
+# or:
 oc rsh deployment/valkey redis-cli LPUSH triage_queue '{"metadata": {"issue": "RHEL-XXXXXX", "force_cve_triage": true}}'
 ```
 
 Set `force_cve_triage` to `false` for a normal triage run. This mirrors the `make trigger-pipeline` target used locally.
+
+### Triggering a reproducer job
+
+Triage auto-enqueue of reproducer jobs is currently disabled. Enqueue manually
+(same flags as local `make trigger-reproducer`):
+
+```bash
+make trigger-reproducer JIRA_ISSUE=RHEL-12345 PACKAGE=bind
+
+make trigger-reproducer \
+  JIRA_ISSUE=RHEL-12345 \
+  PACKAGE=bind \
+  CVE_ID=CVE-2025-12345 \
+  FIX_VERSION=rhel-10.1 \
+  TARGET_BRANCH=c10s
+
+make show-reproducer-queue
+make logs-reproducer
+```
+
+Requires an active `oc login` to the `jotnar-ymir--jotnar-ymir` project.
 
 ## Inspecting queues and following logs
 

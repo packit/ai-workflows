@@ -1431,12 +1431,21 @@ async def main() -> None:
                     else:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
 
-                # Reproducer runs in parallel with the fix agent (and for not-affected).
-                if auto_chain and output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
-                    await _enqueue_reproducer(redis, state, user_triggered)
-                elif not auto_chain and output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
+                # Auto-enqueue of reproducer jobs is temporarily disabled.
+                # Submit manually instead:
+                #   make trigger-reproducer JIRA_ISSUE=… PACKAGE=…
+                # if auto_chain and output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
+                #     await _enqueue_reproducer(redis, state, user_triggered)
+                # elif not auto_chain and output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
+                #     logger.info(
+                #         "AUTO_CHAIN disabled, skipping reproducer queue for %s",
+                #         input.issue,
+                #     )
+                if output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
                     logger.info(
-                        "AUTO_CHAIN disabled, skipping reproducer queue for %s",
+                        "Skipping auto-enqueue of reproducer for %s "
+                        "(manual trigger: make trigger-reproducer JIRA_ISSUE=%s PACKAGE=…)",
+                        input.issue,
                         input.issue,
                     )
 

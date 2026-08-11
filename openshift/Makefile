@@ -74,6 +74,9 @@ show-rebuild-queue-c10s:
 show-clarification-queue:
 	$(call show_single_queue,clarification_needed_queue)
 
+show-reproducer-queue:
+	$(call show_queue,reproducer_queue)
+
 show-error-list:
 	@oc exec deployment/valkey -- valkey-cli --no-raw LRANGE error_list 0 -1 | python3 scripts/error_list.py --file -
 
@@ -97,6 +100,9 @@ logs-rebuild-c9s:
 
 logs-rebuild-c10s:
 	oc logs -f deployment/rebuild-agent-c10s
+
+logs-reproducer:
+	oc logs -f deployment/reproducer-agent
 
 logs-mcp:
 	oc logs -f deployment/mcp-gateway
@@ -132,8 +138,8 @@ process:
 	show-triage-queue show-rebase-queue-c9s show-rebase-queue-c10s \
 	show-backport-queue-c9s show-backport-queue-c10s \
 	show-rebuild-queue-c9s show-rebuild-queue-c10s \
-	show-clarification-queue show-error-list \
+	show-clarification-queue show-reproducer-queue show-error-list \
 	logs-triage logs-backport-c9s logs-backport-c10s \
 	logs-rebase-c9s logs-rebase-c10s logs-rebuild-c9s logs-rebuild-c10s \
-	logs-mcp logs-supervisor logs-valkey logs-phoenix \
+	logs-reproducer logs-mcp logs-supervisor logs-valkey logs-phoenix \
 	logs-redis-commander logs-otel-collector process

@@ -47,6 +47,16 @@ spec:
     - type: Allow
       to:
         dnsName: sources.stream.centos.org
+    # Testing Farm API (reproducer agent via mcp-gateway)
+    - type: Allow
+      to:
+        dnsName: api.testing-farm.io
+    - type: Allow
+      to:
+        dnsName: artifacts.testing-farm.io
+    - type: Allow
+      to:
+        dnsName: artifacts.osci.redhat.com
     # Upstream patch and commit lookup
     - type: Allow
       to:

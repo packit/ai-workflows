@@ -480,6 +480,8 @@ class JiraIssueFetcher:
                                             | RedisQueues.CLARIFICATION_NEEDED_QUEUE.value
                                             | RedisQueues.BACKPORT_QUEUE.value
                                             | RedisQueues.REBASE_QUEUE.value
+                                            | RedisQueues.REPRODUCER_QUEUE.value
+                                            | RedisQueues.REPRODUCER_QUEUE_TODO.value
                                         ):
                                             issue_key = task.metadata.get("jira_issue", "").upper()
                                         case _:

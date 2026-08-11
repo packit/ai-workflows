@@ -14,7 +14,7 @@ from typing import Any
 import requests
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
-from beeai_framework.tools import JSONToolOutput, Tool, ToolError, ToolRunOptions
+from beeai_framework.tools import JSONToolOutput, ToolError, ToolRunOptions
 from mcp.server.lowlevel.server import request_ctx
 from pydantic import BaseModel, Field, field_validator
 
@@ -278,6 +278,109 @@ class ReproduceTestingFarmRequestTool(
 
 _RESERVATION_DURATION_MINUTES = 30
 
+# Per-issue allowlist of SSH hosts returned by get_testing_farm_reservation_details.
+# run_remote_command / copy_files_to_remote refuse any host not on this list.
+_ssh_allowlist_lock = threading.Lock()
+_allowed_ssh_hosts: dict[str, set[str]] = {}
+
+_PACKAGE_NAME_RE = re.compile(r"^[A-Za-z0-9_.+-]+$")
+
+
+def _get_mcp_meta() -> Any:
+    try:
+        return request_ctx.get().meta
+    except LookupError:
+        return None
+
+
+def _meta_get(key: str) -> str | None:
+    """Read a string field from the current MCP request ``_meta``."""
+    meta = _get_mcp_meta()
+    if meta is None:
+        return None
+    value = getattr(meta, key, None)
+    if not value:
+        extra = getattr(meta, "__pydantic_extra__", None) or {}
+        value = extra.get(key)
+    if value is None or value == "":
+        return None
+    return str(value)
+
+
+def _allowlist_key() -> str:
+    return _meta_get("jira_issue") or "_anonymous"
+
+
+def register_allowed_ssh_host(ssh_host: str, *, issue_key: str | None = None) -> None:
+    """Allow *ssh_host* for the current (or given) Jira issue's remote tools."""
+    if not ssh_host or ssh_host == "not-yet-available":
+        return
+    key = issue_key or _allowlist_key()
+    with _ssh_allowlist_lock:
+        _allowed_ssh_hosts.setdefault(key, set()).add(ssh_host)
+    logger.info("Allowlisted SSH host %s for %s", ssh_host, key)
+
+
+def clear_allowed_ssh_hosts(*, issue_key: str | None = None) -> None:
+    """Drop allowlisted SSH hosts for the current (or given) Jira issue."""
+    key = issue_key or _meta_get("jira_issue")
+    if not key:
+        return
+    with _ssh_allowlist_lock:
+        removed = _allowed_ssh_hosts.pop(key, None)
+    if removed:
+        logger.info("Cleared %d allowlisted SSH host(s) for %s", len(removed), key)
+
+
+def _assert_ssh_host_allowed(ssh_host: str) -> None:
+    """Reject SSH targets that were not returned by reservation details."""
+    if _tf_dry_run():
+        return
+    key = _allowlist_key()
+    with _ssh_allowlist_lock:
+        allowed = set(_allowed_ssh_hosts.get(key, ()))
+    if ssh_host in allowed:
+        return
+    raise ToolError(
+        f"ssh_host {ssh_host!r} is not bound to an active Testing Farm reservation "
+        "for this job. Call get_testing_farm_reservation_details and use its "
+        "ssh_connection value."
+    )
+
+
+def _assert_local_paths_scoped(local_paths: list[str]) -> None:
+    """Restrict SCP sources to this job's tests tree (and /tmp scratch).
+
+    Paths under ``$GIT_REPO_BASEPATH`` must live in ``tests-<package>`` when
+    MCP ``_meta`` includes ``package``; without ``package``, no git-volume
+    paths are allowed. Paths outside the git volume may only be under
+    ``/tmp`` (local scratch), so other packages' clones cannot be copied.
+    """
+    git_base = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")).resolve()
+    tmp_base = Path("/tmp").resolve()  # noqa: S108
+    package = _meta_get("package")
+    package_base: Path | None = None
+    if package:
+        if not _PACKAGE_NAME_RE.fullmatch(package):
+            raise ToolError(f"Invalid package name in request meta: {package!r}")
+        package_base = (git_base / f"tests-{package}").resolve()
+
+    for p in local_paths:
+        resolved = Path(p).resolve()
+        if resolved == git_base or resolved.is_relative_to(git_base):
+            if package_base is None or not (
+                resolved == package_base or resolved.is_relative_to(package_base)
+            ):
+                allowed = str(package_base) if package_base is not None else "(none — package meta required)"
+                raise ToolError(f"Path {p} is not under the allowed tests tree for this job ({allowed})")
+            continue
+        if resolved == tmp_base or resolved.is_relative_to(tmp_base):
+            continue
+        raise ToolError(
+            f"Path {p} is not under an allowed job directory "
+            f"({package_base or '(package meta required)'}, {tmp_base})"
+        )
+
 
 def _get_compose_filter() -> str | None:
     """Return the compose filter for the current MCP request, if any.
@@ -288,22 +391,12 @@ def _get_compose_filter() -> str | None:
     ``gitlab.py``.  Falls back to the ``TESTING_FARM_COMPOSE_FILTER``
     env var for non-per-issue filtering.
     """
-    try:
-        ctx = request_ctx.get()
-        meta = ctx.meta
-    except LookupError:
-        meta = None
-
-    if meta is not None:
-        issue_key = getattr(meta, "jira_issue", None)
-        if not issue_key:
-            extra = getattr(meta, "__pydantic_extra__", None) or {}
-            issue_key = extra.get("jira_issue")
-        if issue_key:
-            base = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos"))
-            per_issue = base / f".compose_filter_{issue_key}"
-            if per_issue.is_file():
-                return per_issue.read_text().strip()
+    issue_key = _meta_get("jira_issue")
+    if issue_key:
+        base = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos"))
+        per_issue = base / f".compose_filter_{issue_key}"
+        if per_issue.is_file():
+            return per_issue.read_text().strip()
 
     return os.getenv("TESTING_FARM_COMPOSE_FILTER") or None
 
@@ -515,7 +608,9 @@ class GetTestingFarmReservationDetailsTool(
         logger.info("Getting Testing Farm reservation details for %s", tool_input.request_id)
 
         if _tf_dry_run():
-            return JSONToolOutput(result={"state": "complete", "ssh_connection": "root@dry-run-host"})
+            ssh_connection = "root@dry-run-host"
+            register_allowed_ssh_host(ssh_connection)
+            return JSONToolOutput(result={"state": "complete", "ssh_connection": ssh_connection})
 
         max_attempts = 120
         poll_interval = 30
@@ -586,6 +681,7 @@ class GetTestingFarmReservationDetailsTool(
                                     ssh_connection,
                                     attempt,
                                 )
+                                register_allowed_ssh_host(ssh_connection)
                                 return JSONToolOutput(
                                     result={"state": state, "ssh_connection": ssh_connection}
                                 )
@@ -654,6 +750,7 @@ class CancelTestingFarmRequestTool(
         logger.info("Cancelling Testing Farm request %s", request_id)
 
         if _tf_dry_run():
+            clear_allowed_ssh_hosts()
             return JSONToolOutput(
                 result={
                     "cancelled": True,
@@ -667,6 +764,7 @@ class CancelTestingFarmRequestTool(
         except Exception as e:
             raise ToolError(f"Failed to cancel Testing Farm request {request_id}: {e}") from e
 
+        clear_allowed_ssh_hosts()
         return JSONToolOutput(result={"cancelled": True, "request_id": request_id})
 
 
@@ -680,6 +778,8 @@ class RunRemoteCommandTool(Tool[RunRemoteCommandToolInput, ToolRunOptions, JSONT
     name = "run_remote_command"
     description = """
     Run a command on a remote machine via SSH.
+    ssh_host must be the ssh_connection value returned by get_testing_farm_reservation_details
+    for the current job's active reservation.
     """
     input_schema = RunRemoteCommandToolInput
 
@@ -698,6 +798,7 @@ class RunRemoteCommandTool(Tool[RunRemoteCommandToolInput, ToolRunOptions, JSONT
         ssh_host = tool_input.ssh_host
         command = tool_input.command
         timeout = tool_input.timeout
+        _assert_ssh_host_allowed(ssh_host)
         logger.info("Running remote command on %s: %s", ssh_host, command)
 
         if _tf_dry_run():
@@ -772,6 +873,9 @@ class CopyFilesToRemoteTool(Tool[CopyFilesToRemoteToolInput, ToolRunOptions, JSO
     name = "copy_files_to_remote"
     description = """
     Copy files to a remote machine via SCP.
+    ssh_host must be the ssh_connection from get_testing_farm_reservation_details.
+    local_paths must be under /tmp or the current job's tests-<package> clone
+    (package is taken from MCP request metadata).
     """
     input_schema = CopyFilesToRemoteToolInput
 
@@ -791,6 +895,8 @@ class CopyFilesToRemoteTool(Tool[CopyFilesToRemoteToolInput, ToolRunOptions, JSO
         local_paths = tool_input.local_paths
         remote_dir = tool_input.remote_dir
         timeout = tool_input.timeout
+        _assert_ssh_host_allowed(ssh_host)
+        _assert_local_paths_scoped(local_paths)
         logger.info("Copying %s to %s:%s", local_paths, ssh_host, remote_dir)
 
         if _tf_dry_run():

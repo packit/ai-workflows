@@ -383,7 +383,11 @@ async def run_workflow(
     if mock_env := get_mock_local_tool_env(jira_issue):
         local_tool_options = {"env": mock_env}
 
-    async with mcp_tools(os.getenv("MCP_GATEWAY_URL"), call_meta={"jira_issue": jira_issue}) as gateway_tools:
+    call_meta: dict[str, str] = {"jira_issue": jira_issue}
+    if input_data and input_data.package:
+        call_meta["package"] = input_data.package
+
+    async with mcp_tools(os.getenv("MCP_GATEWAY_URL"), call_meta=call_meta) as gateway_tools:
         tf_cleanup = TFReservationCleanupMiddleware()
         reproducer_agent = reproducer_agent_factory(
             gateway_tools, local_tool_options, extra_middlewares=[tf_cleanup]

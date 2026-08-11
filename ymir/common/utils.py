@@ -338,6 +338,7 @@ def extract_text_from_adf(adf_body) -> str:
                 "type": "paragraph",
                 "content": [
                     {"type": "text", "text": "Actual comment text here"},
+                    {"type": "inlineCard", "attrs": {"url": "https://..."}},
                     ...
                 ]
             },
@@ -345,14 +346,18 @@ def extract_text_from_adf(adf_body) -> str:
         ]
     }
 
-    This function recursively extracts all "text" values.
+    This function recursively extracts all "text" values and URLs from inlineCard nodes.
     """
     if isinstance(adf_body, str):
         return adf_body
     if isinstance(adf_body, dict):
+        node_type = adf_body.get("type")
         # If this is a text node, return its text
-        if adf_body.get("type") == "text" and "text" in adf_body:
+        if node_type == "text" and "text" in adf_body:
             return adf_body["text"]
+        # If this is an inlineCard, extract the URL (contains issue key)
+        if node_type == "inlineCard" and "attrs" in adf_body and "url" in adf_body["attrs"]:
+            return adf_body["attrs"]["url"]
         # Recursively extract from content array
         if "content" in adf_body:
             return " ".join(extract_text_from_adf(item) for item in adf_body["content"])

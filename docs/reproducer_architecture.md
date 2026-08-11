@@ -288,6 +288,7 @@ See also [jira_label_workflow_routing.md](../jira_label_workflow_routing.md).
 | Abandoned locks do not block forever | 6h stale sweep with compare-and-delete |
 | No second concurrent run of same Jira issue | `ymir_reproducer_in_progress` + terminal labels |
 | No TF machine leaks | Agent cancel + `TFReservationCleanupMiddleware` |
+| Remote SSH/SCP cannot target arbitrary hosts or other clones | `ssh_host` allowlisted from reservation details; SCP paths limited to `tests-<package>` / `/tmp` |
 | No real writes in dry-run / tests | `DRY_RUN` skips MR and Jira finalization |
 | Adapt targets the right MR | Match open `ymir_reproducer` MRs by URL / CVE / issue; fetch/checkout MR source branch before overlaying local adaptations |
 

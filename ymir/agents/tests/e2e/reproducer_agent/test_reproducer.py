@@ -262,7 +262,12 @@ class ReproducerAgentTestCase:
             logger.warning("Cannot verify %s: MCP_GATEWAY_URL not set", self.jira_issue)
             return
 
-        async with mcp_tools(gateway_url, call_meta={"jira_issue": self.jira_issue}) as tools:
+        package = result.package or self.input.package
+        call_meta = {"jira_issue": self.jira_issue}
+        if package:
+            call_meta["package"] = package
+
+        async with mcp_tools(gateway_url, call_meta=call_meta) as tools:
             for phase in ("unfixed", "fixed"):
                 compose = self.verification_config.get(f"{phase}_compose")
                 if not compose:
@@ -273,7 +278,6 @@ class ReproducerAgentTestCase:
                     self.jira_issue,
                     compose,
                 )
-                package = result.package or self.input.package
                 self.verification_results[phase] = await _verify_on_compose(
                     tools,
                     compose,

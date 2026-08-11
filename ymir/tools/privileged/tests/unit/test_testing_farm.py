@@ -21,6 +21,7 @@ from ymir.tools.privileged.testing_farm import (
     GetTestingFarmReservationDetailsToolInput,
     ReserveTestingFarmMachineTool,
     RunRemoteCommandTool,
+    register_allowed_ssh_host,
 )
 
 SAMPLE_SSH_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey user@host"
@@ -32,6 +33,16 @@ def _mock_gateway_ssh_key():
     """Mock _ensure_gateway_ssh_key so tests don't generate real keys."""
     with patch.object(tf_module, "_ensure_gateway_ssh_key", return_value=GATEWAY_SSH_KEY):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_ssh_allowlist():
+    """Isolate per-test SSH host allowlists."""
+    with tf_module._ssh_allowlist_lock:
+        tf_module._allowed_ssh_hosts.clear()
+    yield
+    with tf_module._ssh_allowlist_lock:
+        tf_module._allowed_ssh_hosts.clear()
 
 
 @pytest.mark.asyncio
@@ -430,6 +441,8 @@ async def test_run_remote_command_dry_run(monkeypatch):
 async def test_run_remote_command_success(monkeypatch):
     """Successful SSH command returns stdout/stderr/exit_code and uses correct SSH args."""
     monkeypatch.delenv("DRY_RUN", raising=False)
+    monkeypatch.delenv("TESTING_FARM_DRY_RUN", raising=False)
+    register_allowed_ssh_host("root@10.0.0.1")
 
     fake_proc = _make_fake_process(
         stdout=b"5.14.0-362.el9.x86_64\n",
@@ -467,9 +480,26 @@ async def test_run_remote_command_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_remote_command_rejects_unbound_host(monkeypatch):
+    """SSH hosts not returned by reservation details are rejected."""
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    monkeypatch.delenv("TESTING_FARM_DRY_RUN", raising=False)
+
+    with pytest.raises(ToolError, match="not bound to an active Testing Farm reservation"):
+        await RunRemoteCommandTool().run(
+            input={
+                "ssh_host": "root@evil.internal",
+                "command": "uname -r",
+            }
+        )
+
+
+@pytest.mark.asyncio
 async def test_run_remote_command_nonzero_exit(monkeypatch):
     """Non-zero exit code is passed through, not treated as an error."""
     monkeypatch.delenv("DRY_RUN", raising=False)
+    monkeypatch.delenv("TESTING_FARM_DRY_RUN", raising=False)
+    register_allowed_ssh_host("root@10.0.0.1")
 
     fake_proc = _make_fake_process(
         stdout=b"",
@@ -517,6 +547,8 @@ async def test_copy_files_dry_run(monkeypatch):
 async def test_copy_files_success(monkeypatch):
     """Successful copy runs mkdir then scp, returns correct result."""
     monkeypatch.delenv("DRY_RUN", raising=False)
+    monkeypatch.delenv("TESTING_FARM_DRY_RUN", raising=False)
+    register_allowed_ssh_host("root@10.0.0.1")
 
     mkdir_proc = _make_fake_process(stdout=b"", stderr=b"", returncode=0)
     scp_proc = _make_fake_process(stdout=b"", stderr=b"", returncode=0)
@@ -568,6 +600,56 @@ async def test_copy_files_success(monkeypatch):
     assert result["files"] == ["/tmp/test.sh"]
 
 
+@pytest.mark.asyncio
+async def test_copy_files_rejects_unbound_host(monkeypatch):
+    """SCP to a host not returned by reservation details is rejected."""
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    monkeypatch.delenv("TESTING_FARM_DRY_RUN", raising=False)
+
+    with pytest.raises(ToolError, match="not bound to an active Testing Farm reservation"):
+        await CopyFilesToRemoteTool().run(
+            input={
+                "ssh_host": "root@evil.internal",
+                "local_paths": ["/tmp/test.sh"],
+            }
+        )
+
+
+def test_assert_local_paths_scoped_to_package_tree(tmp_path, monkeypatch):
+    """With package meta, only tests-<package> (and /tmp) may be copied."""
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+    own = tmp_path / "tests-bind" / "Security" / "CVE-1"
+    other = tmp_path / "tests-otherpkg" / "Security" / "CVE-1"
+    own.mkdir(parents=True)
+    other.mkdir(parents=True)
+    own_file = own / "runtest.sh"
+    other_file = other / "secret.sh"
+    own_file.write_text("ok\n")
+    other_file.write_text("leak\n")
+
+    def meta_get(key: str) -> str | None:
+        return {"package": "bind", "jira_issue": "RHEL-1"}.get(key)
+
+    with patch.object(tf_module, "_meta_get", side_effect=meta_get):
+        tf_module._assert_local_paths_scoped([str(own_file)])
+        with pytest.raises(ToolError, match="not under the allowed tests tree"):
+            tf_module._assert_local_paths_scoped([str(other_file)])
+
+
+def test_assert_local_paths_without_package_only_tmp(tmp_path, monkeypatch):
+    """Without package meta, /git-repos trees are not readable via SCP."""
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+    clone = tmp_path / "tests-bind" / "x"
+    clone.mkdir(parents=True)
+    f = clone / "runtest.sh"
+    f.write_text("x\n")
+
+    with patch.object(tf_module, "_meta_get", return_value=None):
+        with pytest.raises(ToolError, match="not under the allowed tests tree"):
+            tf_module._assert_local_paths_scoped([str(f)])
+        tf_module._assert_local_paths_scoped(["/tmp/scratch.sh"])
+
+
 # -- Error-path / validation tests --
 
 
@@ -575,6 +657,8 @@ async def test_copy_files_success(monkeypatch):
 async def test_run_remote_command_timeout_kills_process(monkeypatch):
     """Timeout triggers proc.kill() and raises ToolError."""
     monkeypatch.delenv("DRY_RUN", raising=False)
+    monkeypatch.delenv("TESTING_FARM_DRY_RUN", raising=False)
+    register_allowed_ssh_host("root@10.0.0.1")
 
     fake_proc = _make_fake_process()
     fake_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
@@ -595,6 +679,8 @@ async def test_run_remote_command_timeout_kills_process(monkeypatch):
 async def test_copy_files_timeout_kills_process(monkeypatch):
     """CopyFilesToRemoteTool timeout triggers proc.kill() and raises ToolError."""
     monkeypatch.delenv("DRY_RUN", raising=False)
+    monkeypatch.delenv("TESTING_FARM_DRY_RUN", raising=False)
+    register_allowed_ssh_host("root@10.0.0.1")
 
     fake_proc = _make_fake_process()
     fake_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)

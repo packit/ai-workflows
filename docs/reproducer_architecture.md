@@ -65,6 +65,12 @@ reproducer job is an **additional** parallel enqueue for eligible resolutions.
 
 ### Auto-chain from triage
 
+> **Temporarily disabled.** Triage no longer LPUSHes to `reproducer_queue`.
+> Submit jobs manually with `make trigger-reproducer` (see
+> [Manual queue submit](#manual-queue-submit) below). The enqueue helpers
+> (`_build_reproducer_input`, `_enqueue_reproducer`) remain in place for when
+> auto-chain is re-enabled.
+
 When `AUTO_CHAIN=true` (default) and triage resolves as one of:
 
 | Resolution       | Fix agent queued? | Reproducer queued? |
@@ -325,19 +331,67 @@ Unit tests for enqueue helpers, labels, and the create/adapt lock live under
 ### Queue mode (production)
 
 Start the compose `reproducer-agent` service (agents profile) with Redis and
-**without** `JIRA_ISSUE`. Triage (with `AUTO_CHAIN=true`) feeds
-`reproducer_queue` / `reproducer_queue_todo`. This is the normal production
-path, not a test harness.
+**without** `JIRA_ISSUE`. Triage auto-enqueue is currently **disabled**; use
+`make trigger-reproducer` (below) to feed `reproducer_queue` /
+`reproducer_queue_todo`.
 
 On OpenShift, `openshift/deployment-reproducer-agent.yml` runs the same queue
 worker (`beeai-agent:c10s`, module `ymir.agents.reproducer_agent`). Testing Farm
 calls go through `mcp-gateway`, which must mount the `testing-farm-env` secret
-(`TESTING_FARM_API_TOKEN`). Apply via `./openshift/deploy.sh`, then:
+(`TESTING_FARM_API_TOKEN`). Apply via `./openshift/deploy.sh`, then enqueue and
+watch from the `openshift/` directory (requires `oc login`):
 
 ```bash
+make -C openshift trigger-reproducer JIRA_ISSUE=RHEL-12345 PACKAGE=bind
 make -C openshift show-reproducer-queue
 make -C openshift logs-reproducer
 ```
+
+Same optional flags as the local target (`CVE_ID`, `FIX_VERSION`,
+`TARGET_BRANCH`, `TRIAGE_SUMMARY`, `USER_TRIGGERED`).
+
+### Manual queue submit
+
+With the agents stack running (`make start` / `make start DRY_RUN=true`) and
+the `reproducer-agent` worker up, enqueue a job:
+
+```bash
+# Minimum (required fields)
+make trigger-reproducer JIRA_ISSUE=RHEL-12345 PACKAGE=bind
+
+# Typical CVE job
+make trigger-reproducer \
+  JIRA_ISSUE=RHEL-12345 \
+  PACKAGE=bind \
+  CVE_ID=CVE-2025-12345 \
+  FIX_VERSION=rhel-10.1 \
+  TARGET_BRANCH=c10s \
+  TRIAGE_SUMMARY='Triage concluded backport; verify on compose before adapting.'
+
+# Priority queue (reproducer_queue_todo) — posts user-facing ack comments
+make trigger-reproducer JIRA_ISSUE=RHEL-12345 PACKAGE=bind USER_TRIGGERED=true
+```
+
+| Variable | Required | Default | Notes |
+|----------|----------|---------|-------|
+| `JIRA_ISSUE` | yes | — | Issue key (e.g. `RHEL-12345`) |
+| `PACKAGE` | yes | — | Downstream component / tests-repo name |
+| `CVE_ID` | no | unset | CVE id(s); used for lock id and Security/ path hints |
+| `FIX_VERSION` | no | unset | Jira fix version (e.g. `rhel-10.1`) |
+| `TARGET_BRANCH` | no | unset | Dist-git / stream hint (e.g. `c10s`) |
+| `TRIAGE_SUMMARY` | no | unset | Free-text context for the reproducer prompt |
+| `USER_TRIGGERED` | no | `false` | `true` → `reproducer_queue_todo` + user ack comments |
+
+The target LPUSHes a `Task` whose `metadata` validates as
+`ReproducerInputSchema` onto Valkey. Watch progress with:
+
+```bash
+$(COMPOSE) -f compose.yaml --profile=agents logs -f reproducer-agent
+# or Redis Commander at http://localhost:8081/
+```
+
+Standalone mode (`make run-reproducer-agent-standalone`) bypasses Redis entirely
+and is better for one-off dry runs without a running worker.
 
 ## File Map
 

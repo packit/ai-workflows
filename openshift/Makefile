@@ -132,6 +132,44 @@ process:
 		'{"metadata":{"issue":"$(ISSUE)"},"attempts":0,"user_triggered":false}'
 	@echo "✓ Task queued successfully. View queue with: make show-triage-queue"
 
+# Manually enqueue a reproducer job (triage auto-enqueue is currently disabled).
+# Same interface as the local `make trigger-reproducer` target.
+# Required: JIRA_ISSUE, PACKAGE
+# Optional: CVE_ID, FIX_VERSION, TARGET_BRANCH, TRIAGE_SUMMARY, USER_TRIGGERED=true
+trigger-reproducer:
+	@if [ -z "$(JIRA_ISSUE)" ] || [ -z "$(PACKAGE)" ]; then \
+		echo "Usage: make trigger-reproducer JIRA_ISSUE=RHEL-12345 PACKAGE=bind \\"; \
+		echo "         [CVE_ID=CVE-2025-12345] [FIX_VERSION=rhel-10.1] [TARGET_BRANCH=c10s] \\"; \
+		echo "         [TRIAGE_SUMMARY='…'] [USER_TRIGGERED=true]"; \
+		exit 1; \
+	fi
+	@echo "Enqueueing reproducer for $(JIRA_ISSUE) (package=$(PACKAGE), user_triggered=$(or $(USER_TRIGGERED),false))"
+	@payload=$$( \
+		JIRA_ISSUE="$(JIRA_ISSUE)" \
+		PACKAGE="$(PACKAGE)" \
+		CVE_ID="$(CVE_ID)" \
+		FIX_VERSION="$(FIX_VERSION)" \
+		TARGET_BRANCH="$(TARGET_BRANCH)" \
+		TRIAGE_SUMMARY="$(TRIAGE_SUMMARY)" \
+		USER_TRIGGERED="$(or $(USER_TRIGGERED),false)" \
+		python3 -c 'import json, os; \
+meta = {"jira_issue": os.environ["JIRA_ISSUE"], "package": os.environ["PACKAGE"]}; \
+[meta.__setitem__(k, v) for k, e in ( \
+    ("cve_id", "CVE_ID"), \
+    ("fix_version", "FIX_VERSION"), \
+    ("target_branch", "TARGET_BRANCH"), \
+    ("triage_summary", "TRIAGE_SUMMARY"), \
+) if (v := (os.environ.get(e) or "").strip())]; \
+print(json.dumps({ \
+    "metadata": meta, \
+    "attempts": 0, \
+    "user_triggered": os.environ.get("USER_TRIGGERED", "false").lower() == "true", \
+}))' \
+	) && \
+	queue=$$(if [ "$(or $(USER_TRIGGERED),false)" = "true" ]; then echo reproducer_queue_todo; else echo reproducer_queue; fi) && \
+	oc exec deployment/valkey -- valkey-cli LPUSH $$queue "$$payload" && \
+	echo "✓ Pushed to $$queue. View with: make show-reproducer-queue"
+
 .PHONY: deploy run-jira-issue-fetcher run-jira-issue-fetcher-todo \
 	suspend-jira-issue-fetcher unsuspend-jira-issue-fetcher \
 	suspend-jira-issue-fetcher-todo unsuspend-jira-issue-fetcher-todo \
@@ -142,4 +180,4 @@ process:
 	logs-triage logs-backport-c9s logs-backport-c10s \
 	logs-rebase-c9s logs-rebase-c10s logs-rebuild-c9s logs-rebuild-c10s \
 	logs-reproducer logs-mcp logs-supervisor logs-valkey logs-phoenix \
-	logs-redis-commander logs-otel-collector process
+	logs-redis-commander logs-otel-collector process trigger-reproducer

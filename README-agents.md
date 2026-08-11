@@ -116,7 +116,14 @@ make trigger-pipeline JIRA_ISSUE=RHEL-12345
 
 # Force triage of Y-stream CVEs (normally skipped)
 make trigger-pipeline JIRA_ISSUE=RHEL-12345 FORCE_CVE_TRIAGE=true
+
+# Manually enqueue a reproducer job (triage auto-enqueue is currently disabled)
+make trigger-reproducer JIRA_ISSUE=RHEL-12345 PACKAGE=bind
+make trigger-reproducer JIRA_ISSUE=RHEL-12345 PACKAGE=bind CVE_ID=CVE-2025-12345 FIX_VERSION=rhel-10.1
 ```
+
+See [docs/reproducer_architecture.md](docs/reproducer_architecture.md#manual-queue-submit)
+for full `trigger-reproducer` options.
 
 **Environment variables:**
 | Variable | Default | Description |

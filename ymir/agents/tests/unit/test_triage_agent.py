@@ -4,13 +4,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ymir.agents.triage_agent import (
-    _is_modular,
     _map_version_to_module_branch,
     _parse_module_summary,
     _should_update_jira,
     determine_target_branch,
 )
 from ymir.common.models import BackportData, CVEEligibilityResult, Resolution, Task, TriageEligibility
+from ymir.common.version_utils import is_modular
 
 
 @pytest.mark.parametrize(
@@ -210,7 +210,7 @@ async def test_process_task_proceeds_for_open_issues():
     ],
 )
 def test_is_modular(summary, downstream_component, expected):
-    assert _is_modular(summary, downstream_component) is expected
+    assert is_modular(summary, downstream_component) is expected
 
 
 # --- Module summary parsing tests ---

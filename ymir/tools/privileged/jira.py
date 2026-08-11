@@ -25,6 +25,7 @@ from ymir.common.utils import _get_koji_build
 from ymir.common.version_utils import (
     get_fix_version_variants,
     get_maintenance_majors,
+    is_modular,
     normalize_fix_version,
     nvr_to_cs_nvr,
     parse_rhel_version,
@@ -505,7 +506,11 @@ def _issue_number(key: str) -> int:
 
 
 async def _check_duplicate_tracker(
-    cve_id: str, component: str, fix_version: str, issue_key: str
+    cve_id: str,
+    component: str,
+    fix_version: str,
+    issue_key: str,
+    modular: bool = False,
 ) -> tuple[str | None, bool]:
     """Check for duplicate CVE trackers (same CVE + component + fix version).
 
@@ -527,8 +532,12 @@ async def _check_duplicate_tracker(
     logger.info(f"Checking for duplicate trackers with JQL: {jql}")
 
     tool = SearchJiraIssuesTool()
-    output = await tool.run(input={"jql": jql, "fields": ["status", "resolution"], "max_results": 50})
-    issues = output.result
+    output = await tool.run(
+        input={"jql": jql, "fields": ["status", "resolution", "summary"], "max_results": 50}
+    )
+    issues = [
+        i for i in output.result if is_modular(i.get("fields", {}).get("summary"), component) == modular
+    ]
 
     if not issues:
         logger.info(f"No duplicate trackers found for {cve_id} in {component}/{fix_version}")
@@ -952,6 +961,7 @@ class CheckCveTriageEligibilityTool(
                 component,
                 target_version,
                 issue_key,
+                modular=is_modular(summary, component),
             )
         except Exception as e:
             logger.warning(f"Duplicate tracker check failed for {issue_key}: {e}")

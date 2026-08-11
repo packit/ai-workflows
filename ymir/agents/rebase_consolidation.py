@@ -565,10 +565,23 @@ async def check_and_queue_primary_if_ready(
         )
         # Check for siblings that are still processing: either still labeled as sibling
         # (not started triage yet) OR in-progress (triage removes ymir_rebase_sibling
-        # at start, so we need to check both)
+        # at start, so we need to check both).
+        # Exclude siblings with terminal triage labels - they're done, even if they
+        # triaged to a different resolution (e.g. BACKPORT instead of REBASE).
         sibling_label = JiraLabels.REBASE_SIBLING.value
         in_progress_label = JiraLabels.TRIAGE_IN_PROGRESS.value
-        jql_pending = f'{jql} AND (labels = "{sibling_label}" OR labels = "{in_progress_label}")'
+        terminal_labels = [
+            JiraLabels.TRIAGED_REBASE.value,
+            JiraLabels.TRIAGED_BACKPORT.value,
+            JiraLabels.TRIAGED_REBUILD.value,
+            JiraLabels.TRIAGED_NOT_AFFECTED.value,
+            JiraLabels.TRIAGED_POSTPONED.value,
+        ]
+        excluded = ", ".join(f'"{label}"' for label in terminal_labels)
+        jql_pending = (
+            f'{jql} AND (labels = "{sibling_label}" OR labels = "{in_progress_label}") '
+            f"AND labels not in ({excluded})"
+        )
 
         pending_siblings = await run_tool(
             "search_jira_issues",

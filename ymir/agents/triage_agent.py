@@ -1471,6 +1471,7 @@ async def main() -> None:
                         labels_to_remove=labels_to_remove,
                         dry_run=dry_run,
                         user_triggered=user_triggered,
+                        critical=True,  # Terminal label is dedup anchor; must succeed
                     )
 
                     # Update current_labels to reflect the changes we just made

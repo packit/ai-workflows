@@ -1117,6 +1117,51 @@ def test_find_stale_in_flight_label_downstream_stage(fetcher):
     assert result == JiraLabels.TRIAGED_REBUILD.value
 
 
+def test_find_stale_reproducer_in_progress_despite_triage_labels(fetcher):
+    """Reproducer coexists with triage outcome labels by design — those must
+    not block stale recovery of ymir_reproducer_in_progress."""
+    issue = {"fields": {"updated": _STALE_UPDATED}}
+    result = fetcher._find_stale_in_flight_label(
+        issue,
+        [
+            JiraLabels.TRIAGED_BACKPORT.value,
+            JiraLabels.REPRODUCER_IN_PROGRESS.value,
+            JiraLabels.CLI_TRIAGE.value,
+        ],
+    )
+    assert result == JiraLabels.REPRODUCER_IN_PROGRESS.value
+
+
+def test_find_stale_reproducer_in_progress_blocked_by_terminal_reproducer(fetcher):
+    """A terminal reproducer label alongside in-progress means the stage
+    finished; do not treat the leftover in-progress marker as abandoned."""
+    issue = {"fields": {"updated": _STALE_UPDATED}}
+    result = fetcher._find_stale_in_flight_label(
+        issue,
+        [
+            JiraLabels.TRIAGED_REBASE.value,
+            JiraLabels.REPRODUCER_IN_PROGRESS.value,
+            JiraLabels.REPRODUCER_CREATED.value,
+        ],
+    )
+    assert result is None
+
+
+def test_find_stale_reproducer_in_progress_alone(fetcher):
+    issue = {"fields": {"updated": _STALE_UPDATED}}
+    result = fetcher._find_stale_in_flight_label(issue, [JiraLabels.REPRODUCER_IN_PROGRESS.value])
+    assert result == JiraLabels.REPRODUCER_IN_PROGRESS.value
+
+
+def test_find_stale_reproducer_in_progress_fresh_not_recovered(fetcher):
+    issue = {"fields": {"updated": _FRESH_UPDATED}}
+    result = fetcher._find_stale_in_flight_label(
+        issue,
+        [JiraLabels.TRIAGED_NOT_AFFECTED.value, JiraLabels.REPRODUCER_IN_PROGRESS.value],
+    )
+    assert result is None
+
+
 # ============================================================================
 # push_issues_to_queue: stale in-flight label safety net
 # ============================================================================
@@ -1155,6 +1200,51 @@ async def test_push_stale_triage_in_progress_reenqueued(fetcher, mock_redis_cont
     ).once()
 
     expected_task = Task.from_issue("STUCK-1", user_triggered=False)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE.value, expected_task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_push_stale_reproducer_in_progress_with_triage_labels_reenqueued(fetcher, mock_redis_context):
+    """Stale ymir_reproducer_in_progress must recover even when triage outcome
+    labels remain (parallel workflow). Flip only the reproducer in-flight
+    marker to ymir_retry_needed, then re-triage."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "STUCK-REPRO",
+            "fields": {
+                "labels": [
+                    JiraLabels.TRIAGED_BACKPORT.value,
+                    JiraLabels.REPRODUCER_IN_PROGRESS.value,
+                ],
+                "updated": _STALE_UPDATED,
+            },
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "STUCK-REPRO",
+        add=[JiraLabels.RETRY_NEEDED.value],
+        remove=[JiraLabels.REPRODUCER_IN_PROGRESS.value],
+    ).once()
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "STUCK-REPRO",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+        remove=[JiraLabels.RETRY_NEEDED.value],
+    ).once()
+
+    expected_task = Task.from_issue("STUCK-REPRO", user_triggered=False)
     mock_redis.should_receive("lpush").with_args(
         RedisQueues.TRIAGE_QUEUE.value, expected_task.to_json()
     ).and_return(create_async_mock_return_value(1)).once()

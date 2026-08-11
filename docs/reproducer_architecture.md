@@ -268,7 +268,10 @@ issue is not in-progress (unless `user_triggered`).
 | GitLab `ymir_reproducer` | Marks tests-repo MRs for discovery |
 
 Triage still stamps its own terminal labels (`ymir_triaged_*`). The reproducer
-runs afterward without clearing those.
+runs afterward without clearing those. Fetcher stale recovery for
+`ymir_reproducer_in_progress` therefore ignores coexisting triage/fix-agent
+labels and only treats another `ymir_reproducer_*` label as proof the stage
+already finished.
 
 See also [jira_label_workflow_routing.md](../jira_label_workflow_routing.md).
 

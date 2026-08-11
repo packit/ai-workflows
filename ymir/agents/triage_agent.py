@@ -91,7 +91,43 @@ logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")
 
 
-def _should_update_jira(resolution: Resolution, user_triggered: bool = False) -> bool:
+def _extract_text_from_adf(adf_body) -> str:
+    """Extract plain text from Jira ADF (Atlassian Document Format) comment body.
+
+    The MCP get_jira_details tool returns comment bodies in ADF JSON format:
+    {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "Actual comment text here"},
+                    ...
+                ]
+            },
+            ...
+        ]
+    }
+
+    This function recursively extracts all "text" values.
+    """
+    if isinstance(adf_body, str):
+        return adf_body
+    if isinstance(adf_body, dict):
+        # If this is a text node, return its text
+        if adf_body.get("type") == "text" and "text" in adf_body:
+            return adf_body["text"]
+        # Recursively extract from content array
+        if "content" in adf_body:
+            return " ".join(_extract_text_from_adf(item) for item in adf_body["content"])
+        return ""
+    if isinstance(adf_body, list):
+        return " ".join(_extract_text_from_adf(item) for item in adf_body)
+    return ""
+
+
+def _should_update_jira(resolution: Resolution = None, user_triggered: bool = False) -> bool:
     """Whether to post a user-facing Jira comment for this run.
 
     Used only for comments — labels are dedup anchors and are written
@@ -1448,7 +1484,9 @@ async def main() -> None:
                         )
                         comments = details.get("fields", {}).get("comment", {}).get("comments", [])
                         for comment in comments:
-                            if "Queued for triage as potential sibling of" in comment.get("body", ""):
+                            # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
+                            comment_text = _extract_text_from_adf(comment.get("body", ""))
+                            if "Queued for triage as potential sibling of" in comment_text:
                                 is_sibling = True
                                 break
                 except Exception as e:

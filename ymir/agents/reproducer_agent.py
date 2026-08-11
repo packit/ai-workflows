@@ -2,9 +2,12 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import sys
+import tempfile
 import traceback
 from pathlib import Path
+from typing import Any
 
 import sentry_sdk
 from beeai_framework.errors import FrameworkError
@@ -30,6 +33,7 @@ from ymir.agents.utils import (
     mcp_tools,
     render_template,
     resolve_chat_model_override,
+    run_subprocess,
     run_tool,
 )
 from ymir.common.base_utils import fix_await, redis_client, run_task_loop
@@ -39,6 +43,7 @@ from ymir.common.logging_setup import configure_logging, current_jira_issue
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     ErrorData,
+    MergeRequestDetails,
     Task,
 )
 from ymir.common.models import (
@@ -234,6 +239,91 @@ def _resolve_test_dir(tests_clone: Path, test_directory: str | None) -> Path | N
     return None
 
 
+async def _prepare_reproducer_branch(
+    tests_clone: Path,
+    test_dir: Path,
+    update_branch: str,
+    *,
+    adapted_existing: bool,
+    existing_mr_url: str | None,
+    available_tools: list[Any],
+) -> str:
+    """Checkout the commit/push branch while preserving local ``test_dir`` edits.
+
+    For adaptations of an open MR, fetch and check out that MR's source-branch
+    tip first (same idea as ``prepare_dist_git_from_merge_request``) so a later
+    force-push cannot drop sibling commits already on the MR. New MRs create
+    ``update_branch`` from the current local HEAD.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        snapshot = Path(tmp) / "adapted_test"
+        shutil.copytree(test_dir, snapshot)
+
+        branch = update_branch
+        try:
+            if adapted_existing and existing_mr_url:
+                try:
+                    details_raw = await run_tool(
+                        "get_merge_request_details",
+                        merge_request_url=existing_mr_url,
+                        available_tools=available_tools,
+                    )
+                    details = MergeRequestDetails.model_validate(details_raw)
+                    branch = details.source_branch or update_branch
+
+                    # Leave the target branch so fetch can update refs/heads/<branch>.
+                    _, head_branch, _ = await run_subprocess(
+                        ["git", "branch", "--show-current"], cwd=tests_clone
+                    )
+                    if head_branch.strip() == branch:
+                        await check_subprocess(
+                            ["git", "checkout", "--detach"],
+                            cwd=tests_clone,
+                        )
+
+                    await run_tool(
+                        "fetch_branch",
+                        repository=details.source_repo,
+                        branch=branch,
+                        clone_path=str(tests_clone),
+                        available_tools=available_tools,
+                    )
+                    await check_subprocess(
+                        ["git", "checkout", "-f", branch],
+                        cwd=tests_clone,
+                    )
+                    logger.info(
+                        "Checked out existing MR source branch %s for adapt (%s)",
+                        branch,
+                        existing_mr_url,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to fetch/checkout existing MR branch for %s "
+                        "(wanted %s); falling back to checkout -B from local HEAD: %s",
+                        existing_mr_url,
+                        update_branch,
+                        e,
+                    )
+                    branch = update_branch
+                    await check_subprocess(
+                        ["git", "checkout", "-B", branch],
+                        cwd=tests_clone,
+                    )
+            else:
+                await check_subprocess(
+                    ["git", "checkout", "-B", branch],
+                    cwd=tests_clone,
+                )
+        finally:
+            # Overlay agent adaptations onto whatever tip we checked out.
+            if test_dir.exists():
+                shutil.rmtree(test_dir)
+            shutil.copytree(snapshot, test_dir)
+
+    return branch
+
+
 def _build_mr_description(result: OutputSchema, input_data: InputSchema) -> str:
     """Assemble the MR description from the reproducer output."""
     if result.reproducer_type == "cve":
@@ -424,7 +514,14 @@ async def run_workflow(
                 logger.info("Using test directory %s for MR creation", test_dir)
 
                 update_branch = await _resolve_update_branch(result, package)
-                await check_subprocess(["git", "checkout", "-B", update_branch], cwd=tests_clone)
+                update_branch = await _prepare_reproducer_branch(
+                    tests_clone,
+                    test_dir,
+                    update_branch,
+                    adapted_existing=bool(result.adapted_existing),
+                    existing_mr_url=result.existing_mr_url,
+                    available_tools=gateway_tools,
+                )
 
                 # Make shell scripts executable before staging
                 for script in test_dir.glob("*.sh"):

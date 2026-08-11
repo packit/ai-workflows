@@ -1,7 +1,8 @@
 """Unit tests for reproducer agent label and comment helpers."""
 
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -9,11 +10,13 @@ from ymir.agents.reproducer_agent import (
     _determine_comment_resolution,
     _determine_result_label,
     _needs_merge_request,
+    _prepare_reproducer_branch,
     _resolve_test_dir,
     _should_finalize_jira,
 )
+from ymir.common.base_utils import check_subprocess
 from ymir.common.constants import JiraLabels
-from ymir.common.models import ReproducerOutputSchema
+from ymir.common.models import MergeRequestDetails, ReproducerOutputSchema
 
 
 def _output(**overrides) -> ReproducerOutputSchema:
@@ -121,3 +124,98 @@ def test_reproducer_agent_enables_context_management():
         assert agent._enable_context_management is True
         assert agent._sequential_tool_calls is False
         assert llm.allow_parallel_tool_calls is True
+
+
+async def _git_init_with_main(repo: Path) -> None:
+    await check_subprocess(["git", "init", "-b", "main"], cwd=repo)
+    await check_subprocess(["git", "config", "user.email", "test@example.com"], cwd=repo)
+    await check_subprocess(["git", "config", "user.name", "Test"], cwd=repo)
+    (repo / "README").write_text("base\n")
+    await check_subprocess(["git", "add", "README"], cwd=repo)
+    await check_subprocess(["git", "commit", "-m", "init"], cwd=repo)
+
+
+@pytest.mark.asyncio
+async def test_prepare_reproducer_branch_new_mr_preserves_test_dir(tmp_path: Path):
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    await _git_init_with_main(repo)
+
+    test_dir = repo / "Security" / "CVE-1"
+    test_dir.mkdir(parents=True)
+    (test_dir / "runtest.sh").write_text("adapted-on-default\n")
+
+    branch = await _prepare_reproducer_branch(
+        repo,
+        test_dir,
+        "reproducer/RHEL-1",
+        adapted_existing=False,
+        existing_mr_url=None,
+        available_tools=[],
+    )
+
+    assert branch == "reproducer/RHEL-1"
+    head, _ = await check_subprocess(["git", "branch", "--show-current"], cwd=repo)
+    assert head.strip() == "reproducer/RHEL-1"
+    assert (test_dir / "runtest.sh").read_text() == "adapted-on-default\n"
+
+
+@pytest.mark.asyncio
+async def test_prepare_reproducer_branch_adapt_keeps_sibling_commits(tmp_path: Path):
+    """Adapt must land on the MR tip (sibling commit), not wipe it via checkout -B HEAD."""
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    await _git_init_with_main(repo)
+
+    # Simulate an existing MR branch that already has a sibling commit.
+    await check_subprocess(["git", "checkout", "-b", "reproducer/RHEL-1"], cwd=repo)
+    mr_dir = repo / "Security" / "CVE-1"
+    mr_dir.mkdir(parents=True)
+    (mr_dir / "runtest.sh").write_text("sibling-stream\n")
+    await check_subprocess(["git", "add", "Security"], cwd=repo)
+    await check_subprocess(["git", "commit", "-m", "sibling adapt"], cwd=repo)
+    sibling_sha, _ = await check_subprocess(["git", "rev-parse", "HEAD"], cwd=repo)
+
+    # Agent continued on main with a local adaptation of the same test path.
+    await check_subprocess(["git", "checkout", "main"], cwd=repo)
+    test_dir = repo / "Security" / "CVE-1"
+    test_dir.mkdir(parents=True)
+    (test_dir / "runtest.sh").write_text("local-adapt\n")
+
+    details = MergeRequestDetails(
+        source_repo="https://gitlab.com/fork/tests-pkg.git",
+        source_branch="reproducer/RHEL-1",
+        target_repo_name="pkg",
+        target_branch="main",
+        title="adapt",
+        description="",
+        last_updated_at=datetime.now(UTC),
+        comments=[],
+    )
+
+    async def fake_run_tool(name, available_tools=None, **kwargs):
+        if name == "get_merge_request_details":
+            return details.model_dump(mode="json")
+        if name == "fetch_branch":
+            # Local stand-in: branch already exists; nothing to fetch.
+            return "ok"
+        raise AssertionError(f"unexpected tool {name}")
+
+    with patch("ymir.agents.reproducer_agent.run_tool", new=AsyncMock(side_effect=fake_run_tool)):
+        branch = await _prepare_reproducer_branch(
+            repo,
+            test_dir,
+            "reproducer/RHEL-1",
+            adapted_existing=True,
+            existing_mr_url="https://gitlab.com/redhat/rhel/tests/pkg/-/merge_requests/1",
+            available_tools=[],
+        )
+
+    assert branch == "reproducer/RHEL-1"
+    head, _ = await check_subprocess(["git", "branch", "--show-current"], cwd=repo)
+    assert head.strip() == "reproducer/RHEL-1"
+    # HEAD is still the sibling commit (not a reset of main).
+    sha, _ = await check_subprocess(["git", "rev-parse", "HEAD"], cwd=repo)
+    assert sha.strip() == sibling_sha.strip()
+    # Local adaptations were restored on top of that tip.
+    assert (test_dir / "runtest.sh").read_text() == "local-adapt\n"

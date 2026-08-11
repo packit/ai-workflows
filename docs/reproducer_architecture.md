@@ -289,7 +289,7 @@ See also [jira_label_workflow_routing.md](../jira_label_workflow_routing.md).
 | No second concurrent run of same Jira issue | `ymir_reproducer_in_progress` + terminal labels |
 | No TF machine leaks | Agent cancel + `TFReservationCleanupMiddleware` |
 | No real writes in dry-run / tests | `DRY_RUN` skips MR and Jira finalization |
-| Adapt targets the right MR | Match open `ymir_reproducer` MRs by URL / CVE / issue |
+| Adapt targets the right MR | Match open `ymir_reproducer` MRs by URL / CVE / issue; fetch/checkout MR source branch before overlaying local adaptations |
 
 ## Running and Testing the Agent
 

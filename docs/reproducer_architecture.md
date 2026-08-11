@@ -323,6 +323,16 @@ Start the compose `reproducer-agent` service (agents profile) with Redis and
 `reproducer_queue` / `reproducer_queue_todo`. This is the normal production
 path, not a test harness.
 
+On OpenShift, `openshift/deployment-reproducer-agent.yml` runs the same queue
+worker (`beeai-agent:c10s`, module `ymir.agents.reproducer_agent`). Testing Farm
+calls go through `mcp-gateway`, which must mount the `testing-farm-env` secret
+(`TESTING_FARM_API_TOKEN`). Apply via `./openshift/deploy.sh`, then:
+
+```bash
+make -C openshift show-reproducer-queue
+make -C openshift logs-reproducer
+```
+
 ## File Map
 
 | File | Purpose |
@@ -345,3 +355,4 @@ path, not a test harness.
 | `ymir/agents/tests/unit/test_triage_agent.py` | Unit tests: enqueue input builder |
 | `ymir/common/tests/unit/test_reproducer_lock.py` | Unit tests: create/adapt lock |
 | `ymir/agents/tests/e2e/reproducer_agent/` | E2E test suite (mock repos / fixtures) |
+| `openshift/deployment-reproducer-agent.yml` | Production OpenShift Deployment |

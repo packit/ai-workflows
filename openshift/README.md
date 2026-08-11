@@ -191,6 +191,7 @@ make show-backport-queue-c9s    # backport_queue_c9s_todo + backport_queue_c9s
 make show-backport-queue-c10s   # backport_queue_c10s_todo + backport_queue_c10s
 make show-rebuild-queue-c9s     # rebuild_queue_c9s_todo + rebuild_queue_c9s
 make show-rebuild-queue-c10s    # rebuild_queue_c10s_todo + rebuild_queue_c10s
+make show-reproducer-queue      # reproducer_queue_todo + reproducer_queue
 make show-clarification-queue   # clarification_needed_queue (no priority twin)
 make show-error-list            # per-issue / per-tool-error breakdown via scripts/error_list.py
 ```
@@ -207,6 +208,7 @@ make logs-rebase-c9s       # rebase-agent-c9s
 make logs-rebase-c10s      # rebase-agent-c10s
 make logs-rebuild-c9s      # rebuild-agent-c9s
 make logs-rebuild-c10s     # rebuild-agent-c10s
+make logs-reproducer       # reproducer-agent
 make logs-mcp              # mcp-gateway
 make logs-supervisor       # supervisor-processor
 make logs-valkey           # valkey

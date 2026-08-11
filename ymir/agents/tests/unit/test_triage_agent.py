@@ -6,7 +6,6 @@ import pytest
 from ymir.agents.triage_agent import (
     TriageState,
     _build_reproducer_input,
-    _is_modular,
     _map_version_to_module_branch,
     _parse_module_summary,
     _should_update_jira,

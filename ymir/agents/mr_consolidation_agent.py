@@ -163,7 +163,7 @@ def _files_to_stage_for_patches(
     """
     spec_name = f"{package}.spec"
     with Specfile(local_clone / spec_name) as spec:
-        patch_files = [p.expanded_location for p in get_all_patches(spec) if p.expanded_location]
+        patch_files = [p.location for p in get_all_patches(spec) if p.location]
     missing = [p for p in patch_files if not (local_clone / p).is_file()]
     if missing:
         raise RuntimeError(f"Spec references patch file(s) that do not exist: {missing}")

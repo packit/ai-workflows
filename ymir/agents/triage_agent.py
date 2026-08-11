@@ -1587,12 +1587,19 @@ async def main() -> None:
                             task = Task(metadata=state.model_dump(), user_triggered=user_triggered)
                             downstream_payload = task.model_dump_json()
                             if output.resolution == Resolution.REBASE:
+                                # Skip queueing if this is a sibling (will be consolidated with primary)
+                                if is_sibling:
+                                    logger.info(
+                                        f"Issue {input.issue} is a sibling, skipping rebase queue "
+                                        "(will be consolidated with primary)"
+                                    )
+                                    queue = None
                                 # Skip queueing if issue is waiting for siblings to finish triaging.
                                 # Check both state flag (set mid-workflow) and
                                 # Jira label (persisted across restarts).
                                 # After pod restart/re-triage, state.waiting_for_siblings defaults to False,
                                 # but the Jira label persists until siblings finish.
-                                if (
+                                elif (
                                     state.waiting_for_siblings
                                     or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
                                 ):

@@ -257,6 +257,46 @@ async def test_get_existing_issue_keys(fetcher, mock_redis_context):
 
 
 @pytest.mark.asyncio
+async def test_get_existing_issue_keys_includes_reproducer_queues(fetcher, mock_redis_context):
+    """Queued reproducer tasks must be visible to the duplicate/stale guard.
+
+    Without a match arm for reproducer_queue / _todo, a stale-looking
+    ymir_reproducer_in_progress would be flipped even while work is still
+    sitting in Redis.
+    """
+    reproducer_task_json = json.dumps(
+        {"metadata": {"jira_issue": "RHEL-REPRO-1", "package": "bind"}, "attempts": 0}
+    )
+    reproducer_todo_json = json.dumps(
+        {
+            "metadata": {"jira_issue": "RHEL-REPRO-TODO", "package": "bind"},
+            "attempts": 0,
+            "user_triggered": True,
+        }
+    )
+
+    mock_redis, _ = mock_redis_context
+    for queue in RedisQueues.all_queues():
+        if queue == RedisQueues.REPRODUCER_QUEUE.value:
+            mock_redis.should_receive("lrange").with_args(queue, 0, -1).and_return(
+                create_async_mock_return_value([reproducer_task_json])
+            )
+        elif queue == RedisQueues.REPRODUCER_QUEUE_TODO.value:
+            mock_redis.should_receive("lrange").with_args(queue, 0, -1).and_return(
+                create_async_mock_return_value([reproducer_todo_json])
+            )
+        else:
+            mock_redis.should_receive("lrange").with_args(queue, 0, -1).and_return(
+                create_async_mock_return_value([])
+            )
+
+    result = await fetcher._get_existing_issue_keys(mock_redis)
+
+    assert "RHEL-REPRO-1" in result
+    assert "RHEL-REPRO-TODO" in result
+
+
+@pytest.mark.asyncio
 async def test_push_issues_to_queue(fetcher, mock_redis_context):
     """Test pushing new issues to the triage queue."""
     mock_redis, _ = mock_redis_context

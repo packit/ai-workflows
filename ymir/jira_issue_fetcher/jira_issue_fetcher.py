@@ -341,23 +341,30 @@ class JiraIssueFetcher:
     def _find_stale_in_flight_label(self, issue: dict[str, Any], ymir_labels: list[str]) -> str | None:
         """Return the in-flight label on `issue` if it looks abandoned, else None.
 
-        "Abandoned" means: one of IN_FLIGHT_LABELS is present, no other Ymir
-        label coexists with it (the same signal triage_agent's own dedup
-        check uses to decide a stage already produced an outcome — see
-        triage_agent.py's `terminal_ymir_labels` check), and the issue hasn't
-        been updated in over `stale_label_threshold_hours`. A coexisting
-        label means either the outcome label was written but the in-flight
-        one wasn't cleaned up (not actually stuck), or it's an orthogonal
-        label from an unrelated workflow (e.g. ymir_consolidate_base) — in
-        both cases we can't be confident it's abandoned, so we leave it
-        alone rather than risk a false-positive re-enqueue.
+        "Abandoned" means: one of IN_FLIGHT_LABELS is present, no blocking
+        coexisting Ymir label, and the issue hasn't been updated in over
+        ``stale_label_threshold_hours``.
+
+        For most in-flight labels, any other Ymir label blocks recovery (the
+        same signal triage_agent's dedup check uses — outcome written but
+        in-flight not cleaned up, or an orthogonal workflow label such as
+        ``ymir_consolidate_base``).
+
+        ``ymir_reproducer_in_progress`` is special: reproducer runs in parallel
+        with triage/fix agents and deliberately leaves their outcome labels
+        in place. Only another ``ymir_reproducer_*`` label means that stage
+        already finished (or was partially cleaned up).
         """
         ignorable = {JiraLabels.RETRY_NEEDED.value, JiraLabels.TODO.value}
+        reproducer_in_progress = JiraLabels.REPRODUCER_IN_PROGRESS.value
         for label in self.IN_FLIGHT_LABELS:
             if label not in ymir_labels:
                 continue
-            other_labels = [ol for ol in ymir_labels if ol != label and ol not in ignorable]
-            if other_labels:
+            if label == reproducer_in_progress:
+                blocking = [ol for ol in ymir_labels if ol != label and ol.startswith("ymir_reproducer_")]
+            else:
+                blocking = [ol for ol in ymir_labels if ol != label and ol not in ignorable]
+            if blocking:
                 continue
             if self._is_label_stale(issue, self.stale_label_threshold_hours):
                 return label
@@ -639,8 +646,9 @@ class JiraIssueFetcher:
                 elif stale_label:
                     logger.warning(
                         f"Issue {issue_key} has stale {stale_label} (no update in "
-                        f">{self.stale_label_threshold_hours}h, no other Ymir label) - "
-                        f"treating as abandoned and flipping to {JiraLabels.RETRY_NEEDED.value}"
+                        f"{self.stale_label_threshold_hours}h, no blocking coexisting "
+                        f"Ymir label) - treating as abandoned and flipping to "
+                        f"{JiraLabels.RETRY_NEEDED.value}"
                     )
                     if self.dry_run:
                         logger.info(

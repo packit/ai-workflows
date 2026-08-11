@@ -25,6 +25,7 @@ from ymir.common.models import (
     Task,
     TriageEligibility,
 )
+from ymir.common.utils import extract_text_from_adf
 from ymir.common.version_utils import compare_versions_async, get_fix_version_variants
 
 logger = logging.getLogger(__name__)
@@ -531,7 +532,8 @@ async def check_and_queue_primary_if_ready(
         primary_issue = None
         comments = sibling_details.get("fields", {}).get("comment", {}).get("comments", [])
         for comment in comments:
-            body = comment.get("body", "")
+            # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
+            body = extract_text_from_adf(comment.get("body", ""))
             if "Queued for triage as potential sibling of" in body:
                 # Extract issue key (format: RHEL-123456)
                 import re

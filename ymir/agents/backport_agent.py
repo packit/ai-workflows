@@ -625,7 +625,7 @@ async def run_workflow(
             try:
                 spec_path = state.local_clone / f"{state.package}.spec"
                 with Specfile(spec_path) as spec:
-                    patch_files = [p.expanded_location for p in get_all_patches(spec) if p.expanded_location]
+                    patch_files = [p.location for p in get_all_patches(spec) if p.location]
 
                 if not patch_files:
                     raise RuntimeError(f"Backport completed but no Patch tags found in {spec_path}")

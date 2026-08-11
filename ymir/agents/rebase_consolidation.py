@@ -417,6 +417,7 @@ async def queue_siblings_for_triage(
                     continue
 
                 # Post comment BEFORE queueing (fallback detection if label not visible yet)
+                # This comment is CRITICAL - it's how we detect sibling status and find the primary
                 try:
                     await tasks.comment_in_jira(
                         jira_issue=candidate_key,
@@ -428,6 +429,20 @@ async def queue_siblings_for_triage(
                     )
                 except Exception as e:
                     logger.warning(f"Failed to comment on sibling {candidate_key}: {e}")
+                    # Roll back the label we just added (best effort)
+                    try:
+                        await tasks.set_jira_labels(
+                            jira_issue=candidate_key,
+                            labels_to_remove=[JiraLabels.REBASE_SIBLING.value],
+                            dry_run=False,
+                            user_triggered=user_triggered,
+                        )
+                    except Exception as rollback_error:
+                        logger.warning(
+                            f"Failed to rollback sibling label for {candidate_key}: {rollback_error}"
+                        )
+                    # Do NOT queue without the marker comment
+                    continue
 
                 # Queue for triage AFTER label AND comment
                 # Inherit user_triggered from primary to preserve priority

@@ -379,16 +379,16 @@ async def run_workflow(
             package = result.package
             agent_input = InputSchema(jira_issue=state.jira_issue) if input_data is None else input_data
             lock_id = reproducer_lock_id(agent_input.cve_id, state.jira_issue)
-            lock_held = False
+            lock_token: str | None = None
 
             if redis_conn is not None:
-                acquired = await try_acquire_reproducer_lock(
+                lock_token = await try_acquire_reproducer_lock(
                     redis_conn,
                     package,
                     lock_id,
                     jira_issue=state.jira_issue,
                 )
-                if not acquired:
+                if lock_token is None:
                     result.lock_deferred = True
                     result.summary = (
                         (result.summary or "")
@@ -401,7 +401,6 @@ async def run_workflow(
                         state.jira_issue,
                     )
                     return "handle_results"
-                lock_held = True
 
             try:
                 tests_clone = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / f"tests-{package}"
@@ -484,9 +483,9 @@ async def run_workflow(
                 result.success = False
                 result.summary += f" (MR creation failed: {e})"
             finally:
-                if lock_held and redis_conn is not None:
+                if lock_token is not None and redis_conn is not None:
                     try:
-                        await release_reproducer_lock(redis_conn, package, lock_id)
+                        await release_reproducer_lock(redis_conn, package, lock_id, lock_token)
                     except Exception as e:
                         logger.warning(
                             "Failed to release reproducer lock for %s/%s: %s",

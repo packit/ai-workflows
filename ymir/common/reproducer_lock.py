@@ -71,10 +71,13 @@ async def try_acquire_reproducer_lock(
     package: str,
     lock_id: str,
     jira_issue: str | None = None,
-) -> bool:
+) -> str | None:
     """Acquire the create/adapt lock if no active holder exists.
 
-    Returns True if this caller now holds the lock, False if busy.
+    Returns the ownership token (serialized ``ReproducerLockEntry`` JSON) if
+    this caller now holds the lock, or ``None`` if busy. Pass the token to
+    ``release_reproducer_lock`` so a late release cannot delete a lock that
+    another worker has since acquired.
     """
     field = _active_field(package, lock_id)
     entry = ReproducerLockEntry(
@@ -82,27 +85,47 @@ async def try_acquire_reproducer_lock(
         lock_id=lock_id,
         jira_issue=jira_issue,
     )
+    token = entry.model_dump_json()
     acquired = await fix_await(
         redis_conn.eval(
             _ACQUIRE_LUA,
             1,
             REPRODUCER_LOCK_HASH,
             field,
-            entry.model_dump_json(),
+            token,
         )
     )
     if acquired:
         logger.info("Acquired reproducer lock for %s/%s", package, lock_id)
-        return True
+        return token
     logger.info("Reproducer lock busy for %s/%s", package, lock_id)
-    return False
+    return None
 
 
-async def release_reproducer_lock(redis_conn, package: str, lock_id: str) -> None:
-    """Release the active create/adapt lock for package/lock_id."""
+async def release_reproducer_lock(
+    redis_conn,
+    package: str,
+    lock_id: str,
+    token: str,
+) -> bool:
+    """Release the create/adapt lock only if *token* still owns it.
+
+    Uses the same compare-and-delete Lua as the stale sweeper so a delayed
+    ``finally`` from worker A cannot wipe worker B's re-acquired lock.
+    Returns True if this call deleted the lock entry.
+    """
     field = _active_field(package, lock_id)
-    await fix_await(redis_conn.hdel(REPRODUCER_LOCK_HASH, field))
-    logger.info("Released reproducer lock for %s/%s", package, lock_id)
+    deleted = await fix_await(redis_conn.eval(_CONDITIONAL_HDEL_LUA, 1, REPRODUCER_LOCK_HASH, field, token))
+    if deleted:
+        logger.info("Released reproducer lock for %s/%s", package, lock_id)
+        return True
+    logger.warning(
+        "Reproducer lock for %s/%s was not released — token no longer matches "
+        "(already released, swept stale, or re-acquired by another worker)",
+        package,
+        lock_id,
+    )
+    return False
 
 
 async def sweep_stale_reproducer_locks(

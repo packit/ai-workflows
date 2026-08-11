@@ -191,11 +191,13 @@ Unlike MR consolidation, there is **no pending slot** — waiters requeue on
 ### Operations
 
 **`try_acquire_reproducer_lock(package, lock_id)`** — Lua `HEXISTS` then
-`HSET` if absent. Returns whether this caller holds the lock.
+`HSET` if absent. Returns an ownership token (serialized lock entry JSON) on
+success, or `None` if busy.
 
-**`release_reproducer_lock(package, lock_id)`** — `HDEL` the `:active` field
-(always in `finally` after create/adapt push, except cancel paths that leave
-the lock for the stale sweep).
+**`release_reproducer_lock(package, lock_id, token)`** — compare-and-delete the
+`:active` field only when *token* still matches (same Lua as the stale
+sweeper). Always called in `finally` after create/adapt push; a late release
+from worker A cannot wipe worker B's re-acquired lock.
 
 **`sweep_stale_reproducer_locks(threshold=6h)`** — Removes `:active` entries
 whose `activated_at` is older than the threshold, using compare-and-delete so
@@ -281,7 +283,7 @@ See also [jira_label_workflow_routing.md](../jira_label_workflow_routing.md).
 |-----------|-----------|
 | No duplicate triage→reproducer for ineligible resolutions | `_REPRODUCER_ELIGIBLE_RESOLUTIONS` gate |
 | No enqueue without package | `_build_reproducer_input` returns `None` |
-| One create/adapt at a time per package+CVE/issue | Redis lock + Lua acquire |
+| One create/adapt at a time per package+CVE/issue | Redis lock + Lua acquire; release is compare-and-delete by ownership token |
 | Waiters do not spin | Delayed ZSET retry on lock busy |
 | Abandoned locks do not block forever | 6h stale sweep with compare-and-delete |
 | No second concurrent run of same Jira issue | `ymir_reproducer_in_progress` + terminal labels |

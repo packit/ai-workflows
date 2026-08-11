@@ -34,11 +34,18 @@ async def test_try_acquire_reproducer_lock_success():
     redis = MagicMock()
     redis.eval = AsyncMock(return_value=1)
 
-    assert await try_acquire_reproducer_lock(redis, "bind", "CVE-1", jira_issue="RHEL-1") is True
+    token = await try_acquire_reproducer_lock(redis, "bind", "CVE-1", jira_issue="RHEL-1")
+    assert token is not None
+    entry = ReproducerLockEntry.model_validate_json(token)
+    assert entry.package == "bind"
+    assert entry.lock_id == "CVE-1"
+    assert entry.jira_issue == "RHEL-1"
+
     redis.eval.assert_awaited_once()
     args = redis.eval.await_args.args
     assert args[2] == REPRODUCER_LOCK_HASH
     assert args[3] == "bind:CVE-1:active"
+    assert args[4] == token
 
 
 @pytest.mark.asyncio
@@ -46,16 +53,40 @@ async def test_try_acquire_reproducer_lock_busy():
     redis = MagicMock()
     redis.eval = AsyncMock(return_value=0)
 
-    assert await try_acquire_reproducer_lock(redis, "bind", "CVE-1") is False
+    assert await try_acquire_reproducer_lock(redis, "bind", "CVE-1") is None
 
 
 @pytest.mark.asyncio
-async def test_release_reproducer_lock():
+async def test_release_reproducer_lock_compare_and_delete():
     redis = MagicMock()
-    redis.hdel = AsyncMock(return_value=1)
+    redis.eval = AsyncMock(return_value=1)
+    token = ReproducerLockEntry(package="bind", lock_id="CVE-1", jira_issue="RHEL-1").model_dump_json()
 
-    await release_reproducer_lock(redis, "bind", "CVE-1")
-    redis.hdel.assert_awaited_once_with(REPRODUCER_LOCK_HASH, "bind:CVE-1:active")
+    assert await release_reproducer_lock(redis, "bind", "CVE-1", token) is True
+    redis.eval.assert_awaited_once()
+    args = redis.eval.await_args.args
+    assert "HGET" in args[0] and "HDEL" in args[0]
+    assert args[2] == REPRODUCER_LOCK_HASH
+    assert args[3] == "bind:CVE-1:active"
+    assert args[4] == token
+    redis.hdel.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_release_reproducer_lock_skips_when_token_mismatch():
+    """A late finally must not wipe a lock re-acquired by another worker."""
+    redis = MagicMock()
+    redis.eval = AsyncMock(return_value=0)
+    stale_token = ReproducerLockEntry(
+        package="bind",
+        lock_id="CVE-1",
+        jira_issue="RHEL-OLD",
+        activated_at=datetime.now(UTC) - timedelta(hours=7),
+    ).model_dump_json()
+
+    assert await release_reproducer_lock(redis, "bind", "CVE-1", stale_token) is False
+    redis.eval.assert_awaited_once()
+    redis.hdel.assert_not_called()
 
 
 @pytest.mark.asyncio

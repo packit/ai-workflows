@@ -1462,15 +1462,31 @@ async def main() -> None:
                     # Terminal resolution label is the dedup anchor that replaces
                     # ymir_triage_in_progress — must be written unconditionally so
                     # the next fetcher sweep skips this issue.
+                    # Exception: skip terminal label if waiting for siblings (will be set on re-triage)
                     # Also remove ymir_rebase_sibling if present (sibling finished triaging)
                     labels_to_remove = [JiraLabels.TRIAGE_IN_PROGRESS.value]
+                    labels_to_add = []
+
                     if is_sibling:
                         labels_to_remove.append(JiraLabels.REBASE_SIBLING.value)
                         logger.info(f"{input.issue} is a sibling, will check if primary is ready to queue")
 
+                    # Only add terminal label if NOT waiting for siblings
+                    # (primary waiting for siblings will be re-triaged when siblings finish,
+                    # and terminal label will be added then)
+                    if not (
+                        state.waiting_for_siblings or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
+                    ):
+                        labels_to_add.append(resolution_label.value)
+                    else:
+                        logger.info(
+                            f"{input.issue} is waiting for siblings, skipping terminal label "
+                            "(will be added on re-triage after siblings finish)"
+                        )
+
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
-                        labels_to_add=[resolution_label.value],
+                        labels_to_add=labels_to_add,
                         labels_to_remove=labels_to_remove,
                         dry_run=dry_run,
                         user_triggered=user_triggered,

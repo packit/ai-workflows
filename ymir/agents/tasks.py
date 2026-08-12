@@ -228,12 +228,16 @@ async def fork_and_prepare_dist_git(
     package: str,
     dist_git_branch: str,
     available_tools: list[Tool],
+    agent_type: str,
     with_fedora: bool = False,
     dist_git_namespace: str | None = None,
 ) -> tuple[Path, str, str, Path | None]:
     if not jira_issue or Path(jira_issue).is_absolute() or ".." in jira_issue:
         raise ValueError(f"Invalid jira_issue: {jira_issue}")
-    working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / jira_issue
+    # Scoped by agent_type so different agent types processing the same
+    # jira_issue concurrently (e.g. rebase and backport) never share a
+    # working directory and can't rm -rf each other's checkout.
+    working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / agent_type / jira_issue
     if working_dir.is_dir():
         _force_rmtree(working_dir)
     working_dir.mkdir(parents=True, exist_ok=True)

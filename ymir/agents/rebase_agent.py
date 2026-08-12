@@ -197,6 +197,7 @@ async def main() -> None:
                     package=state.package,
                     dist_git_branch=state.dist_git_branch,
                     available_tools=gateway_tools,
+                    agent_type="Rebase",
                     with_fedora=True,
                     dist_git_namespace=state.dist_git_namespace,
                 )

@@ -375,6 +375,7 @@ async def queue_siblings_for_triage(
     logger.info(f"Found {len(candidates)} sibling candidates for {primary_issue}")
 
     queued_count = 0
+    queued_siblings = []  # Track which siblings were actually queued
     for candidate in candidates:
         candidate_key = candidate.get("key", "")
         if not candidate_key:
@@ -470,6 +471,7 @@ async def queue_siblings_for_triage(
 
             # Increment count immediately after Redis push (or would-push in dry-run)
             queued_count += 1
+            queued_siblings.append(candidate_key)
             logger.info(
                 f"{'[DRY-RUN] Would queue' if dry_run else 'Queued'} sibling {candidate_key} for triage"
             )
@@ -494,9 +496,14 @@ async def queue_siblings_for_triage(
         except Exception as e:
             logger.warning(f"Failed to label primary {primary_issue} as waiting: {e}")
 
-        # Post comment on primary
+        # Post comment on primary with links to siblings
         try:
-            comment_text = f"Waiting for {queued_count} sibling(s) to finish triaging before starting rebase"
+            # Format sibling links
+            sibling_links = ", ".join(queued_siblings)
+            comment_text = (
+                f"Waiting for {queued_count} sibling(s) to finish triaging before starting rebase:\n"
+                f"{sibling_links}"
+            )
             await tasks.comment_in_jira(
                 jira_issue=primary_issue,
                 agent_type="Triage",

@@ -515,6 +515,7 @@ async def run_workflow(
                 package=package,
                 dist_git_branch=dist_git_branch,
                 available_tools=gateway_tools,
+                agent_type="MRConsolidation",
             )
             local_tool_options["working_directory"] = state.local_clone
 

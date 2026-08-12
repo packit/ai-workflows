@@ -44,9 +44,10 @@ async def test_fork_and_prepare_dist_git_wipes_stale_working_dir(git_repo_basepa
     jira_issue = "RHEL-12345"
     package = "some-package"
     branch = "rhel-10.0"
+    agent_type = "Rebase"
 
-    working_dir = git_repo_basepath / jira_issue
-    working_dir.mkdir()
+    working_dir = git_repo_basepath / agent_type / jira_issue
+    working_dir.mkdir(parents=True)
     stale_file = working_dir / "leftover-artifact.txt"
     stale_file.write_text("stale")
 
@@ -65,6 +66,7 @@ async def test_fork_and_prepare_dist_git_wipes_stale_working_dir(git_repo_basepa
             package=package,
             dist_git_branch=branch,
             available_tools=mock_tools,
+            agent_type=agent_type,
         )
 
     assert working_dir.is_dir(), "working_dir should be recreated"
@@ -87,6 +89,7 @@ async def test_fork_and_prepare_honors_explicit_centos_stream_namespace(git_repo
             package="squid",
             dist_git_branch="stream-squid-4-rhel-8.10.0",
             available_tools=mock_tools,
+            agent_type="Rebase",
             dist_git_namespace="centos-stream",
         )
 
@@ -113,6 +116,7 @@ async def test_fork_and_prepare_modular_rhel_skips_create_zstream_branch(git_rep
             package="squid",
             dist_git_branch="stream-squid-4-rhel-8.10.0",
             available_tools=mock_tools,
+            agent_type="Rebase",
             dist_git_namespace="rhel",
         )
 

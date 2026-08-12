@@ -109,6 +109,7 @@ async def main() -> None:
                     package=state.package,
                     dist_git_branch=state.dist_git_branch,
                     available_tools=gateway_tools,
+                    agent_type="Rebuild",
                     dist_git_namespace=state.dist_git_namespace,
                 )
                 local_tool_options["working_directory"] = state.local_clone

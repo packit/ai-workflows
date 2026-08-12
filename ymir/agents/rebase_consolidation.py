@@ -709,6 +709,23 @@ async def find_triaged_rebase_siblings(
         logger.info(f"No fix_version for {jira_issue}, skipping consolidation")
         return [], ""
 
+    # Validate that the primary issue is still open/valid before consolidating siblings
+    try:
+        primary_details = await run_tool(
+            "get_jira_details",
+            available_tools=available_tools,
+            issue_key=jira_issue,
+        )
+        primary_status = primary_details.get("fields", {}).get("status", {}).get("name", "")
+        if primary_status in ("Closed", "Done", "Resolved"):
+            logger.warning(
+                f"Primary issue {jira_issue} is {primary_status}, "
+                "skipping sibling consolidation (would create MR with invalid primary reference)"
+            )
+            return [], ""
+    except Exception as e:
+        logger.warning(f"Failed to check primary issue status for {jira_issue}: {e}, proceeding anyway")
+
     try:
         # Build JQL to find siblings with ymir_triaged_rebase
         jql = build_siblings_jql(

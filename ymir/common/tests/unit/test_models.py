@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from ymir.common.models import (
     AUTOMATED_RESOLUTION_NOT_SUPPORTED,
     TRIAGE_DISCLAIMER,
@@ -6,6 +9,7 @@ from ymir.common.models import (
     ClarificationNeededData,
     ConsolidatedIssue,
     ErrorData,
+    MRConsolidationOutputSchema,
     NotAffectedData,
     OpenEndedAnalysisData,
     PostponedData,
@@ -639,3 +643,70 @@ def test_reproducer_output_retryable_error():
     assert data.test_already_exists is False
     restored = ReproducerOutputSchema.model_validate_json(data.model_dump_json())
     assert restored.retryable_error is True
+
+
+# --- MRConsolidationOutputSchema tests ---
+
+
+class TestMRConsolidationOutputSchema:
+    @pytest.mark.parametrize(
+        "status",
+        [
+            "nothing_to_consolidate",
+            "mr_not_found",
+            "consolidation_complete",
+            "failed",
+        ],
+    )
+    def test_valid_status_values_accepted(self, status):
+        schema = MRConsolidationOutputSchema(success=True, status=status)
+        assert schema.status == status
+
+    def test_invalid_status_raises_validation_error(self):
+        with pytest.raises(ValidationError):
+            MRConsolidationOutputSchema(success=True, status="in_progress")
+
+    def test_status_detail_defaults_to_none(self):
+        schema = MRConsolidationOutputSchema(success=True, status="consolidation_complete")
+        assert schema.status_detail is None
+
+    def test_status_detail_is_set(self):
+        schema = MRConsolidationOutputSchema(
+            success=False,
+            status="failed",
+            status_detail="Agent error during consolidation",
+        )
+        assert schema.status_detail == "Agent error during consolidation"
+
+    def test_failed_status_with_error_field(self):
+        schema = MRConsolidationOutputSchema(
+            success=False,
+            status="failed",
+            status_detail="Unexpected error",
+            error="Traceback (most recent call last): ...",
+        )
+        assert schema.success is False
+        assert schema.status == "failed"
+        assert schema.status_detail == "Unexpected error"
+        assert schema.error is not None
+
+    def test_nothing_to_consolidate_is_successful(self):
+        """A nothing_to_consolidate result is a success (not a failure)."""
+        schema = MRConsolidationOutputSchema(
+            success=True,
+            status="nothing_to_consolidate",
+            status_detail="Fewer than 2 unique MRs resolved; nothing to do.",
+        )
+        assert schema.success is True
+        assert schema.error is None
+
+    def test_mr_not_found_with_error(self):
+        schema = MRConsolidationOutputSchema(
+            success=False,
+            status="mr_not_found",
+            status_detail="Could not find an open MR for RHEL-99999",
+            error="No open MR matching RHEL-99999 in rpms/bash",
+        )
+        assert schema.status == "mr_not_found"
+        assert "RHEL-99999" in schema.status_detail
+        assert "RHEL-99999" in schema.error

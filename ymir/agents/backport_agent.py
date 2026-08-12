@@ -744,6 +744,7 @@ async def run_workflow(
                     state.dist_git_branch,
                     gateway_tools,
                     redis_conn,
+                    jira_issue=state.jira_issue,
                 )
             except InvalidConsolidationConfigError as e:
                 logger.warning("Invalid consolidation config for %s: %s", state.package, e)
@@ -768,9 +769,16 @@ async def run_workflow(
             if dry_run:
                 return Workflow.END
             if state.backport_result.success:
-                comment_text = (
-                    state.merge_request_url if state.merge_request_url else state.backport_result.status
-                )
+                if state.merge_request_url:
+                    if not state.merge_request_newly_created:
+                        comment_text = (
+                            f"MR: {state.merge_request_url}\n\n"
+                            "The existing MR was reused; MR consolidation will not run for this issue."
+                        )
+                    else:
+                        comment_text = f"New merge request was created: {state.merge_request_url}"
+                else:
+                    comment_text = state.backport_result.status
                 is_error = False
             else:
                 comment_text = f"Agent failed to perform a backport: {state.backport_result.error}"

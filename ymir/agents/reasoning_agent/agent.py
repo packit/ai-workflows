@@ -22,6 +22,10 @@ from beeai_framework.utils.models import update_model
 from typing_extensions import Unpack
 
 from ymir.agents.reasoning_agent._runner import ReasoningAgentRunner
+from ymir.agents.reasoning_agent.context_management import (
+    YMIR_PROTECTED_META_KEY,
+    YMIR_ROLE_META_KEY,
+)
 from ymir.agents.reasoning_agent.events import reasoning_agent_event_types
 from ymir.agents.reasoning_agent.prompts import ReasoningAgentTaskPromptInput
 from ymir.agents.reasoning_agent.types import (
@@ -60,6 +64,7 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
         tool_call_checker: ToolCallCheckerConfig | bool = True,
         final_answer_as_tool: bool = True,
         save_intermediate_steps: bool = True,
+        enable_context_management: bool = False,
         templates: dict[ReasoningAgentTemplatesKeys, PromptTemplate[Any] | ReasoningAgentTemplateFactory]
         | ReasoningAgentTemplates
         | None = None,
@@ -72,6 +77,7 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
         self._save_intermediate_steps = save_intermediate_steps
         self._tool_call_checker = tool_call_checker
         self._final_answer_as_tool = final_answer_as_tool
+        self._enable_context_management = enable_context_management
         self._unconstrained = unconstrained
         self._requirements = [] if unconstrained else list(requirements or [])
         if role or instructions or notes:
@@ -110,6 +116,7 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
             templates=self._templates,
             requirements=self._requirements,
             unconstrained=self._unconstrained,
+            enable_context_management=self._enable_context_management,
         )
         new_messages = self._process_input(
             input,
@@ -141,6 +148,9 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
 
         *msgs, last_message = [UserMessage(input)] if isinstance(input, str) else input
         if last_message is not None and isinstance(last_message, UserMessage) and last_message.text:
+            task_meta = last_message.meta.copy()
+            task_meta[YMIR_PROTECTED_META_KEY] = True
+            task_meta[YMIR_ROLE_META_KEY] = "task"
             user_message = UserMessage(
                 self._templates.task.render(
                     ReasoningAgentTaskPromptInput(
@@ -148,7 +158,7 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
                         context=backstory,
                     )
                 ),
-                meta=last_message.meta.copy(),
+                meta=task_meta,
             )
             user_message.content.extend(
                 [content for content in last_message.content if not isinstance(content, MessageTextContent)]
@@ -207,6 +217,7 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
             ),
             save_intermediate_steps=self._save_intermediate_steps,
             final_answer_as_tool=self._final_answer_as_tool,
+            enable_context_management=self._enable_context_management,
             name=self._meta.name,
             description=self._meta.description,
             middlewares=self.middlewares.copy(),

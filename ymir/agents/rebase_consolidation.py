@@ -621,7 +621,8 @@ async def check_and_queue_primary_if_ready(
             if JiraLabels.TRIAGE_IN_PROGRESS.value in labels:
                 comments = candidate.get("fields", {}).get("comment", {}).get("comments", [])
                 for comment in comments:
-                    body = comment.get("body", "")
+                    # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
+                    body = extract_text_from_adf(comment.get("body", ""))
                     if "Queued for triage as potential sibling of" in body and primary_issue in body:
                         actual_siblings.append(candidate_key)
                         break

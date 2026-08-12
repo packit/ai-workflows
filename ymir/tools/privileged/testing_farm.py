@@ -351,19 +351,24 @@ def _assert_ssh_host_allowed(ssh_host: str) -> None:
 def _assert_local_paths_scoped(local_paths: list[str]) -> None:
     """Restrict SCP sources to this job's tests tree (and /tmp scratch).
 
-    Paths under ``$GIT_REPO_BASEPATH`` must live in ``tests-<package>`` when
-    MCP ``_meta`` includes ``package``; without ``package``, no git-volume
-    paths are allowed. Paths outside the git volume may only be under
-    ``/tmp`` (local scratch), so other packages' clones cannot be copied.
+    Paths under ``$GIT_REPO_BASEPATH`` must live under the current job's
+    per-issue reproducer clone (``Reproducer/<jira_issue>/tests-<package>``)
+    when MCP ``_meta`` includes ``package`` and ``jira_issue``; without
+    ``package``, no git-volume paths are allowed. Paths outside the git
+    volume may only be under ``/tmp`` (local scratch), so other packages'
+    clones cannot be copied.
     """
     git_base = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")).resolve()
     tmp_base = Path("/tmp").resolve()  # noqa: S108
     package = _meta_get("package")
+    jira_issue = _meta_get("jira_issue")
     package_base: Path | None = None
     if package:
         if not _PACKAGE_NAME_RE.fullmatch(package):
             raise ToolError(f"Invalid package name in request meta: {package!r}")
-        package_base = (git_base / f"tests-{package}").resolve()
+        if not jira_issue:
+            raise ToolError("jira_issue meta is required to scope git-repos paths for this job")
+        package_base = (git_base / "Reproducer" / jira_issue / f"tests-{package}").resolve()
 
     for p in local_paths:
         resolved = Path(p).resolve()
@@ -874,8 +879,9 @@ class CopyFilesToRemoteTool(Tool[CopyFilesToRemoteToolInput, ToolRunOptions, JSO
     description = """
     Copy files to a remote machine via SCP.
     ssh_host must be the ssh_connection from get_testing_farm_reservation_details.
-    local_paths must be under /tmp or the current job's tests-<package> clone
-    (package is taken from MCP request metadata).
+    local_paths must be under /tmp or the current job's per-issue tests clone
+    (Reproducer/<jira_issue>/tests-<package>; package and jira_issue are taken
+    from MCP request metadata).
     """
     input_schema = CopyFilesToRemoteToolInput
 

@@ -153,11 +153,19 @@ class _PromptContext(InputSchema):
     """
 
     dry_run: bool = Field(default=False)
+    reproducer_working_dir: str = Field(description="Per-issue working directory on the shared git volume")
 
 
 def _render_prompt(input_data: InputSchema, dry_run: bool = False) -> str:
     """Render the reproducer prompt template with the input schema fields."""
-    context = _PromptContext(**input_data.model_dump(), dry_run=dry_run)
+    working_dir = (
+        Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / "Reproducer" / input_data.jira_issue
+    )
+    context = _PromptContext(
+        **input_data.model_dump(),
+        dry_run=dry_run,
+        reproducer_working_dir=str(working_dir),
+    )
     return render_template(_PROMPT_TEMPLATE, context)
 
 
@@ -386,6 +394,13 @@ async def run_workflow(
     if input_data and input_data.package:
         call_meta["package"] = input_data.package
 
+    if not jira_issue or Path(jira_issue).is_absolute() or ".." in jira_issue:
+        raise ValueError(f"Invalid jira_issue: {jira_issue}")
+    working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / "Reproducer" / jira_issue
+    if working_dir.is_dir():
+        tasks._force_rmtree(working_dir)
+    working_dir.mkdir(parents=True, exist_ok=True)
+
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL"), call_meta=call_meta) as gateway_tools:
         tf_cleanup = TFReservationCleanupMiddleware()
         reproducer_agent = reproducer_agent_factory(
@@ -496,7 +511,12 @@ async def run_workflow(
                     return "handle_results"
 
             try:
-                tests_clone = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / f"tests-{package}"
+                tests_clone = (
+                    Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos"))
+                    / "Reproducer"
+                    / state.jira_issue
+                    / f"tests-{package}"
+                )
 
                 if not tests_clone.is_dir():
                     logger.warning(f"Tests clone not found at {tests_clone}, skipping MR creation")

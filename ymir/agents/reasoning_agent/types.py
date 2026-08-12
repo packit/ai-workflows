@@ -61,6 +61,8 @@ class ReasoningAgentRunState(BaseModel):
     steps: list[ReasoningAgentRunStateStep] = []
     usage: ChatModelUsage = ChatModelUsage()
     cost: ChatModelCost = ChatModelCost()
+    # Set by ManageContextTool; applied by the runner after the tool turn.
+    pending_context_compaction: Any | None = None
 
     @property
     def input(self) -> UserMessage:

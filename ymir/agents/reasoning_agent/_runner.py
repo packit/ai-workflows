@@ -37,6 +37,10 @@ from beeai_framework.utils.lists import ensure_strictly_increasing, find_last_in
 from beeai_framework.utils.strings import find_first_pair, generate_random_string, to_json, to_safe_word
 from pydantic import BaseModel, Field
 
+from ymir.agents.reasoning_agent.context_management import (
+    ManageContextTool,
+    apply_pending_context_compaction,
+)
 from ymir.agents.reasoning_agent.events import (
     ReasoningAgentFinalAnswerEvent,
     ReasoningAgentStartEvent,
@@ -122,6 +126,7 @@ class ReasoningAgentRunner:
         llm: ChatModel,
         requirements: Sequence[RequirementAgentRequirement] | None = None,
         unconstrained: bool = False,
+        enable_context_management: bool = False,
     ) -> None:
         self._ctx = run_context
         self._llm = llm
@@ -132,7 +137,10 @@ class ReasoningAgentRunner:
         )
         self._final_answer = FinalAnswerTool(expected_output, state=self._state)
         self._tools = tools
-        self._all_tools: list[AnyTool] = [*tools, self._final_answer]
+        self._all_tools: list[AnyTool] = [*tools]
+        if enable_context_management:
+            self._all_tools.append(ManageContextTool(state=self._state))
+        self._all_tools.append(self._final_answer)
         self._run_config = config
         self._tool_call_cycle_checker = tool_call_cycle_checker
         self._requirements: list[RequirementAgentRequirement] = list(requirements or [])
@@ -583,6 +591,7 @@ class ReasoningAgentRunner:
 
         await self._state.memory.add_many([*response.output, *tool_results])
         await delete_messages_by_meta_key(self._state.memory, key=TEMP_MESSAGE_META_KEY, value=True)
+        await apply_pending_context_compaction(self._state)
 
         return response
 
@@ -647,5 +656,6 @@ class ReasoningAgentRunner:
 
         await self._state.memory.add_many([*response.output, *tool_results])
         await delete_messages_by_meta_key(self._state.memory, key=TEMP_MESSAGE_META_KEY, value=True)
+        await apply_pending_context_compaction(self._state)
 
         return response

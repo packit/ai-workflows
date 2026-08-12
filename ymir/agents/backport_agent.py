@@ -162,7 +162,7 @@ async def create_backport_agent(
         BuildSrpmTool(options=local_tool_options),
     ]
 
-    base_tools.extend([t for t in mcp_tools if t.name == "get_maintainer_rules"])
+    base_tools.extend([t for t in mcp_tools if t.name in ["get_maintainer_rules", "get_shared_rules"]])
 
     # Add clone_repository from MCP gateway (needed for dist-git workflow with auth)
     if fix_version and await is_older_zstream(fix_version):

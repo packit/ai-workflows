@@ -74,11 +74,17 @@ previous fix attempts. Do NOT repeat strategies that already failed.
 
 WORKFLOW:
 
-0. Use the `get_maintainer_rules` tool with package {{ package }} to check whether
-   the maintainer explicitly allows adding new BuildRequires/Requires entries during
-   backport build fixes (see CRITICAL CONSTRAINTS above).
-   IMPORTANT: If the tool fails to fetch rules (returns an error, timeout, etc.), treat
-   this as "NOT allowed" — do NOT add any spec entries, fix patches only.
+0. Fetch rules in this order:
+   a. Call `get_shared_rules` with package {{ package }} to discover applicable
+      shared rule sets. For each name returned, call `get_maintainer_rules`
+      with package="shared-rules" and file_path="{name}/AGENTS.md" to fetch
+      the shared ecosystem rules.
+   b. Call `get_maintainer_rules` with package {{ package }} to check whether
+      the maintainer explicitly allows adding new BuildRequires/Requires entries
+      during backport build fixes (see CRITICAL CONSTRAINTS above).
+   Package-specific rules take precedence over shared rules when they conflict.
+   IMPORTANT: If the tools fail to fetch rules (returns an error, timeout, etc.),
+   treat this as "NOT allowed" — do NOT add any spec entries, fix patches only.
 
 1. Analyze the build error and identify what's missing (functions, types, headers, etc.)
 

@@ -105,7 +105,7 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
             RunPackagePrepTool(options=local_tool_options),
             BuildSrpmTool(options=local_tool_options),
         ]
-        + [t for t in mcp_tools if t.name in ["upload_sources", "get_maintainer_rules"]],
+        + [t for t in mcp_tools if t.name in ["upload_sources", "get_maintainer_rules", "get_shared_rules"]],
         memory=UnconstrainedMemory(),
         requirements=[
             ConditionalRequirement(

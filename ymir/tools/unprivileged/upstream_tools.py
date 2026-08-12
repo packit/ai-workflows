@@ -371,7 +371,7 @@ class FindBaseCommitToolInput(BaseModel):
 
 class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToolOutput]):
     name = "find_base_commit"
-    timeout = 30
+    timeout = 300
     description = """
     Find and checkout the base version commit in an upstream repository.
 

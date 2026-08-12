@@ -174,7 +174,8 @@ async def find_rebase_siblings(
     for candidate in candidates:
         comments = candidate.get("fields", {}).get("comment", {}).get("comments", [])
         for comment in comments:
-            body = comment.get("body", "")
+            # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
+            body = extract_text_from_adf(comment.get("body", ""))
             if "Queued for triage as potential sibling of" in body and jira_issue in body:
                 verified_candidates.append(candidate)
                 break
@@ -755,7 +756,8 @@ async def find_triaged_rebase_siblings(
                 has_primary_reference = False
                 comments = candidate_details.get("fields", {}).get("comment", {}).get("comments", [])
                 for comment in comments:
-                    body = comment.get("body", "")
+                    # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
+                    body = extract_text_from_adf(comment.get("body", ""))
                     if f"Queued for triage as potential sibling of {jira_issue}" in body:
                         has_primary_reference = True
                         break

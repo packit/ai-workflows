@@ -204,6 +204,8 @@ class ReproducerAgentTestCase:
         self.error: BaseException | None = None
         self.zstream_override: dict[str, str] | None = None
         self.verification_results: dict[str, VerificationResult] = {}
+        # Used by e2e/conftest.py results.yaml reporting (optional skip note).
+        self.skip_reason: str | None = None
 
     def __repr__(self) -> str:
         return f"ReproducerTestCase({self.jira_issue})"

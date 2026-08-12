@@ -116,7 +116,7 @@ async def create_consolidation_agent(
         BuildSrpmTool(options=local_tool_options),
     ]
 
-    base_tools.extend([t for t in mcp_tools_list if t.name == "get_maintainer_rules"])
+    base_tools.extend([t for t in mcp_tools_list if t.name in ["get_maintainer_rules", "get_shared_rules"]])
 
     return ReasoningAgent(
         name="MRConsolidationAgent",

@@ -22,7 +22,9 @@ def create_applicability_agent(
     gateway_tools: list[Tool],
     local_tool_options: dict,
 ) -> ReasoningAgent:
-    extra_gateway_tools = [t for t in gateway_tools if t.name in ["get_jira_details", "get_maintainer_rules"]]
+    extra_gateway_tools = [
+        t for t in gateway_tools if t.name in ["get_jira_details", "get_maintainer_rules", "get_shared_rules"]
+    ]
     return ReasoningAgent(
         name="ApplicabilityAgent",
         llm=get_chat_model(),
@@ -136,10 +138,17 @@ def build_applicability_prompt(
         build flags, commented-out BuildRequires).
 
         Steps:
-        0. Use get_maintainer_rules with package '{package}' to check for
-           maintainer-specific guidelines. If rules are found, treat them
-           as additional context — e.g. if they indicate rebuilds are always
-           relevant, classify as Inconclusive rather than Not Affected.
+        0. Fetch rules in this order:
+           a. Call get_shared_rules with package '{package}' to discover
+              applicable shared rule sets. For each name returned, call
+              get_maintainer_rules with package="shared-rules" and
+              file_path="{{name}}/AGENTS.md" to fetch shared rules.
+           b. Call get_maintainer_rules with package '{package}' to check
+              for package-specific guidelines.
+           If rules are found at either level, treat them as additional
+           context — e.g. if they indicate rebuilds are always relevant,
+           classify as Inconclusive rather than Not Affected.
+           Package-specific rules take precedence over shared rules.
         1. Use get_jira_details on {jira_issue} to understand the
            CVE context and what is affected. Also check the Jira
            comments — maintainers may have left notes about whether

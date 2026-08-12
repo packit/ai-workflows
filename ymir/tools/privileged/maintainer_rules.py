@@ -10,15 +10,10 @@ from pydantic import BaseModel, Field
 
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.base import tool_error_context
-from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
+from ymir.tools.constants import AIOHTTP_TIMEOUT, GITLAB_API_URL, RULES_NAMESPACE, YMIR_USER_AGENT
 from ymir.tools.http import aiohttp_get_with_retries
 
 logger = logging.getLogger(__name__)
-
-GITLAB_API_URL = "https://gitlab.com/api/v4"
-RULES_NAMESPACE = "redhat/centos-stream/rules"
-# use for testing:
-# RULES_NAMESPACE = "ymir-rules-test"
 
 
 class MaintainerRulesInput(BaseModel):

@@ -85,6 +85,7 @@ _REPRODUCER_MCP_TOOLS = [
     "get_jira_details",
     "get_patch_from_url",
     "get_maintainer_rules",
+    "get_shared_rules",
     "clone_repository",
     "list_project_merge_requests",
     "list_testing_farm_composes",

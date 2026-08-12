@@ -634,17 +634,29 @@ async def check_and_queue_primary_if_ready(
             )
             return
 
-        # All siblings are done! Queue primary for rebase
-        logger.info(
-            f"All siblings done for {primary_issue}, "
-            f"{'[DRY-RUN] would queue' if dry_run else 'queueing'} for rebase"
+        # All siblings are done! Remove waiting label and queue primary for rebase
+        action = (
+            "[DRY-RUN] would remove waiting label and queue"
+            if dry_run
+            else "removing waiting label and queueing"
         )
+        logger.info(f"All siblings done for {primary_issue}, {action} for rebase")
 
         if not dry_run:
-            # Re-queue primary to triage queue (triage will remove ymir_waiting_for_siblings)
-            # Triage will see ymir_waiting_for_siblings (non-terminal), bypass dedup check,
-            # skip expensive analysis, remove the waiting label, and queue for rebase
-            # with proper full state (Task.metadata = state.model_dump())
+            # Remove ymir_waiting_for_siblings label now that all siblings are done
+            # This is CRITICAL - if we can't remove it, the primary will never queue for rebase
+            await tasks.set_jira_labels(
+                jira_issue=primary_issue,
+                labels_to_remove=[JiraLabels.WAITING_FOR_SIBLINGS.value],
+                dry_run=False,
+                user_triggered=user_triggered,
+                critical=True,  # Must succeed; retries 3 times with backoff
+            )
+
+            # Re-queue primary to triage queue
+            # Triage will bypass dedup check (ymir_triaged_rebase is non-terminal when
+            # ymir_waiting_for_siblings was present), skip expensive analysis, and queue
+            # for rebase with proper full state (Task.metadata = state.model_dump())
             task = Task.from_issue(primary_issue, user_triggered=user_triggered)
             async with redis_client(os.environ["REDIS_URL"]) as redis:
                 await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))

@@ -122,7 +122,6 @@ def test_reproducer_agent_enables_context_management():
 
         agent = create_reproducer_agent(gateway_tools=[])
         assert agent._enable_context_management is True
-        assert agent._sequential_tool_calls is False
         assert llm.allow_parallel_tool_calls is True
 
 

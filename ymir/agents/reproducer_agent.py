@@ -110,7 +110,6 @@ def create_reproducer_agent(gateway_tools, local_tool_options=None, extra_middle
         unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
         enable_context_management=True,
-        sequential_tool_calls=False,
         tools=[
             ThinkTool(),
             RunShellCommandTool(options=local_tool_options) if local_tool_options else RunShellCommandTool(),

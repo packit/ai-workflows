@@ -38,6 +38,7 @@ class ReasoningAgentSystemPromptInput(BaseModel):
     final_answer_instructions: str | None
     notes: str | None = None
     tool_constraints: str | None = None
+    sequential_tool_calls: bool = True
     tools: list[ReasoningAgentToolTemplateDefinition] = Field(default_factory=list)
 
 
@@ -94,7 +95,13 @@ Never use the tool twice with the same input if not stated otherwise.
 - Use markdown syntax to format code snippets, links, JSON, tables, images, and files.
 - If the provided task is unclear, ask the user for clarification.
 - Do not refer to tools or tool outputs by name when responding.
+{{#sequential_tool_calls}}
 - Always take it one step at a time. Don't try to do multiple things at once.
+{{/sequential_tool_calls}}
+{{^sequential_tool_calls}}
+- You may submit multiple independent tool calls in a single turn to save time.
+  Only keep calls sequential when one depends on the result of another.
+{{/sequential_tool_calls}}
 - When the tool doesn't give you what you were asking for, you must either use another tool or a different tool input.
 - You should always try a few different approaches before declaring the problem unsolvable.
 - If you can't fully answer the user's question, answer partially and describe what you couldn't achieve.

@@ -228,6 +228,12 @@ clone, Testing Farm reserve/details/cancel, remote copy/run, and
 `list_project_merge_requests`. Prompt:
 `ymir/agents/prompts/reproducer/prompt.j2`.
 
+**Context management:** the agent may call `manage_context` in the same turn as
+another tool to replace older dead-end tool traffic with an agent-authored
+`durable_summary`. The system prompt is rebuilt each turn (outside memory) and
+the task `UserMessage` is meta-protected, so neither is compacted. Compaction is
+deferred until after parallel tools finish — no extra inference round.
+
 `TFReservationCleanupMiddleware` tracks reservations and cancels leaks in
 `finally` even if the agent fails to call cancel.
 
@@ -323,6 +329,7 @@ path, not a test harness.
 |------|---------|
 | `ymir/agents/triage_agent.py` | `_build_reproducer_input`, `_enqueue_reproducer`, parallel dispatch |
 | `ymir/agents/reproducer_agent.py` | Workflow, queue consumer, MR create/adapt, lock integration |
+| `ymir/agents/reasoning_agent/context_management.py` | `manage_context` tool + deferred memory compaction |
 | `ymir/common/reproducer_lock.py` | Acquire / release / stale sweep |
 | `ymir/common/delayed_queue.py` | Delayed retry ZSET helpers |
 | `ymir/common/models.py` | `ReproducerInputSchema`, `ReproducerOutputSchema`, enriched `NotAffectedData` |
@@ -334,6 +341,7 @@ path, not a test harness.
 | `ymir/jira_issue_fetcher/jira_issue_fetcher.py` | `IN_FLIGHT` includes reproducer |
 | `agents_as_skills/reproducer/SKILL.md` | Skill mirror of the workflow |
 | `ymir/agents/tests/unit/test_reproducer_agent.py` | Unit tests: label / MR-need helpers |
+| `ymir/agents/tests/unit/test_context_management.py` | Unit tests: manage_context compaction |
 | `ymir/agents/tests/unit/test_triage_agent.py` | Unit tests: enqueue input builder |
 | `ymir/common/tests/unit/test_reproducer_lock.py` | Unit tests: create/adapt lock |
 | `ymir/agents/tests/e2e/reproducer_agent/` | E2E test suite (mock repos / fixtures) |

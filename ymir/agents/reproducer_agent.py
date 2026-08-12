@@ -96,11 +96,16 @@ def create_reproducer_agent(gateway_tools, local_tool_options=None, extra_middle
     middlewares = [GlobalTrajectoryMiddleware(pretty=True)]
     if extra_middlewares:
         middlewares.extend(extra_middlewares)
+    llm = get_chat_model()
+    # manage_context must piggyback on the same turn as other tools
+    llm.allow_parallel_tool_calls = True
     return ReasoningAgent(
         name="ReproducerAgent",
-        llm=get_chat_model(),
+        llm=llm,
         unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
+        enable_context_management=True,
+        sequential_tool_calls=False,
         tools=[
             ThinkTool(),
             RunShellCommandTool(options=local_tool_options) if local_tool_options else RunShellCommandTool(),
@@ -121,6 +126,16 @@ def create_reproducer_agent(gateway_tools, local_tool_options=None, extra_middle
             "If https:// fails when validating the patch with get_patch_from_url, "
             "retry with http:// instead.",
             "Never use shallow clones (--depth) when cloning upstream repositories.",
+            "When conversation history contains failed approaches, large obsolete dumps, or "
+            "noise you no longer need, call manage_context in the SAME turn as your next useful "
+            "tool. Put all still-needed facts in durable_summary (paths, CVE/issue IDs, TF "
+            "request id, what already failed and must not be retried, current hypothesis). "
+            "Never call manage_context alone. Never restate the task or system instructions in "
+            "the summary — those remain available outside compacted history.",
+        ],
+        notes=[
+            "You may call manage_context together with another useful tool in the same turn; "
+            "that is the required way to compact context without an extra inference round.",
         ],
     )
 

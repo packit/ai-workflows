@@ -1,6 +1,7 @@
 """Unit tests for reproducer agent label and comment helpers."""
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -102,3 +103,21 @@ def test_resolve_test_dir_rejects_traversal_and_missing(tmp_path: Path):
     assert _resolve_test_dir(tmp_path, "") is None
     assert _resolve_test_dir(tmp_path, "../etc") is None
     assert _resolve_test_dir(tmp_path, "Security/CVE-missing") is None
+
+
+def test_reproducer_agent_enables_context_management():
+    with (
+        patch("ymir.agents.reproducer_agent.get_chat_model") as mock_get_model,
+        patch("ymir.agents.reproducer_agent.is_reasoning_enabled", return_value=False),
+        patch("ymir.agents.reproducer_agent.get_tool_call_checker_config"),
+    ):
+        llm = MagicMock()
+        llm.allow_parallel_tool_calls = False
+        mock_get_model.return_value = llm
+
+        from ymir.agents.reproducer_agent import create_reproducer_agent
+
+        agent = create_reproducer_agent(gateway_tools=[])
+        assert agent._enable_context_management is True
+        assert agent._sequential_tool_calls is False
+        assert llm.allow_parallel_tool_calls is True

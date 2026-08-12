@@ -44,7 +44,9 @@ class VerificationResult:
 def _resolve_test_dir(test_case_input: dict, result: Any) -> Path | None:
     """Locate the test directory the agent created inside the tests clone."""
     package = result.package
-    tests_clone = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / f"tests-{package}"
+    jira_issue = result.jira_issue
+    git_base = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos"))
+    tests_clone = git_base / "Reproducer" / jira_issue / f"tests-{package}"
     if not tests_clone.is_dir():
         return None
 

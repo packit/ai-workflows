@@ -616,16 +616,20 @@ async def test_copy_files_rejects_unbound_host(monkeypatch):
 
 
 def test_assert_local_paths_scoped_to_package_tree(tmp_path, monkeypatch):
-    """With package meta, only tests-<package> (and /tmp) may be copied."""
+    """With package and jira_issue meta, only this job's tests clone may be copied."""
     monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
-    own = tmp_path / "tests-bind" / "Security" / "CVE-1"
-    other = tmp_path / "tests-otherpkg" / "Security" / "CVE-1"
+    own = tmp_path / "Reproducer" / "RHEL-1" / "tests-bind" / "Security" / "CVE-1"
+    other_issue = tmp_path / "Reproducer" / "RHEL-2" / "tests-bind" / "Security" / "CVE-1"
+    other_pkg = tmp_path / "Reproducer" / "RHEL-1" / "tests-otherpkg" / "Security" / "CVE-1"
     own.mkdir(parents=True)
-    other.mkdir(parents=True)
+    other_issue.mkdir(parents=True)
+    other_pkg.mkdir(parents=True)
     own_file = own / "runtest.sh"
-    other_file = other / "secret.sh"
+    other_issue_file = other_issue / "secret.sh"
+    other_pkg_file = other_pkg / "secret.sh"
     own_file.write_text("ok\n")
-    other_file.write_text("leak\n")
+    other_issue_file.write_text("leak\n")
+    other_pkg_file.write_text("leak\n")
 
     def meta_get(key: str) -> str | None:
         return {"package": "bind", "jira_issue": "RHEL-1"}.get(key)
@@ -633,13 +637,15 @@ def test_assert_local_paths_scoped_to_package_tree(tmp_path, monkeypatch):
     with patch.object(tf_module, "_meta_get", side_effect=meta_get):
         tf_module._assert_local_paths_scoped([str(own_file)])
         with pytest.raises(ToolError, match="not under the allowed tests tree"):
-            tf_module._assert_local_paths_scoped([str(other_file)])
+            tf_module._assert_local_paths_scoped([str(other_issue_file)])
+        with pytest.raises(ToolError, match="not under the allowed tests tree"):
+            tf_module._assert_local_paths_scoped([str(other_pkg_file)])
 
 
 def test_assert_local_paths_without_package_only_tmp(tmp_path, monkeypatch):
     """Without package meta, /git-repos trees are not readable via SCP."""
     monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
-    clone = tmp_path / "tests-bind" / "x"
+    clone = tmp_path / "Reproducer" / "RHEL-1" / "tests-bind" / "x"
     clone.mkdir(parents=True)
     f = clone / "runtest.sh"
     f.write_text("x\n")

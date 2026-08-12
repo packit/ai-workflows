@@ -90,7 +90,7 @@ Execute the following steps in order.
    * Clone the RHEL tests repository using `clone_repository`:
      - URL: `https://gitlab.com/redhat/rhel/tests/<package_name>`
      - Do NOT specify a `branch` parameter — omit it so the tool clones the default branch.
-     - Use clone path `/git-repos/tests-<package_name>`.
+     - Use clone path `{{ reproducer_working_dir }}/tests-<package_name>`.
      - If the clone path already exists, `clone_repository` removes and re-clones it — do NOT delete it yourself with `rm -rf`.
    * Determine the expected test directory by inspecting the tests repo layout
      for this package (names are package-specific; do not assume a fixed scheme):
@@ -98,14 +98,14 @@ Execute the following steps in order.
        follow existing package convention if different)
      - For bugs (non-CVE): typically under `Regression/` (often
        `Regression/<jira_issue>/`, but follow existing package convention)
-   * Run `run_shell_command("ls /git-repos/tests-<package_name>/<expected_test_dir>/")` to check if it exists.
+   * Run `run_shell_command("ls {{ reproducer_working_dir }}/tests-<package_name>/<expected_test_dir>/")` to check if it exists.
    * Additionally, search for any existing test referencing this issue:
      ```
-     run_shell_command("grep -rl '{{ jira_issue }}' /git-repos/tests-<package_name>/ --include='*.fmf' --include='*.sh' || true")
+     run_shell_command("grep -rl '{{ jira_issue }}' {{ reproducer_working_dir }}/tests-<package_name>/ --include='*.fmf' --include='*.sh' || true")
      ```
      {% if cve_id %}Also search for the CVE ID:
      ```
-     run_shell_command("grep -rl '{{ cve_id }}' /git-repos/tests-<package_name>/ --include='*.fmf' --include='*.sh' || true")
+     run_shell_command("grep -rl '{{ cve_id }}' {{ reproducer_working_dir }}/tests-<package_name>/ --include='*.fmf' --include='*.sh' || true")
      ```
      {% endif %}
    * List open reproducer MRs with `list_project_merge_requests`:
@@ -221,7 +221,7 @@ Execute the following steps in order.
 
    4.1. Use the Already-Cloned Tests Repository
 
-   The tests repository was already cloned in step 1.7 at `/git-repos/tests-<package_name>`. If for any reason the clone is missing, re-clone it using `clone_repository` with URL `https://gitlab.com/redhat/rhel/tests/<package_name>` (no `branch` parameter) to `/git-repos/tests-<package_name>`.
+   The tests repository was already cloned in step 1.7 at `{{ reproducer_working_dir }}/tests-<package_name>`. If for any reason the clone is missing, re-clone it using `clone_repository` with URL `https://gitlab.com/redhat/rhel/tests/<package_name>` (no `branch` parameter) to `{{ reproducer_working_dir }}/tests-<package_name>`.
 
    * Create the test directory under the tests clone. Prefer package convention:
      - CVEs: often `<tests_clone>/Security/<cve_id>/`

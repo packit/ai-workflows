@@ -479,6 +479,7 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
                 "search_jira_issues",
                 "zstream_search",
                 "get_maintainer_rules",
+                "get_shared_rules",
                 "clone_repository",
             ]
         ],
@@ -492,6 +493,7 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
             ),
             ConditionalRequirement("get_jira_details", min_invocations=1),
             ConditionalRequirement("get_maintainer_rules", only_after=["get_jira_details"]),
+            ConditionalRequirement("get_shared_rules", only_after=["get_jira_details"]),
             ConditionalRequirement(RunShellCommandTool, only_after=["get_jira_details"]),
             ConditionalRequirement("get_patch_from_url", only_after=["get_jira_details"]),
             ConditionalRequirement("set_jira_fields", only_after=["get_jira_details"]),

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -82,6 +83,36 @@ def _render_testing_analyst_prompt(input: TestingAnalystInput, after_baseline: b
     return render_template(template_name, input)
 
 
+async def _fetch_shared_rules(gateway_tools: list, package: str) -> str:
+    """Fetch shared rules that apply to a package from the central registry."""
+    try:
+        shared_rules_json = await run_tool(
+            "get_shared_rules",
+            available_tools=gateway_tools,
+            package=package,
+        )
+        rule_names = json.loads(shared_rules_json) if shared_rules_json else []
+    except Exception:
+        logger.warning("Failed to look up shared rules for %s", package)
+        return ""
+
+    parts = []
+    for name in rule_names:
+        try:
+            content = await run_tool(
+                "get_maintainer_rules",
+                available_tools=gateway_tools,
+                package="shared-rules",
+                file_path=f"{name}/AGENTS.md",
+            )
+            if content and "not found" not in content.lower():
+                parts.append(f"--- Shared rules ({name}) ---\n{content}")
+        except Exception:
+            logger.warning("Failed to fetch shared rules '%s' for %s", name, package)
+
+    return "\n\n".join(parts)
+
+
 async def _analyze_testing_results(
     jira_issue: FullIssue,
     erratum: FullErratum,
@@ -108,11 +139,17 @@ async def _analyze_testing_results(
         memory=UnconstrainedMemory(),
     )
 
+    package = jira_issue.components[0]
+
     maintainer_rules = await run_tool(
         "get_maintainer_rules",
         available_tools=gateway_tools,
-        package=jira_issue.components[0],
+        package=package,
     )
+
+    shared_rules = await _fetch_shared_rules(gateway_tools, package)
+    if shared_rules:
+        maintainer_rules = shared_rules + "\n\n--- Package-specific rules ---\n" + maintainer_rules
 
     input = TestingAnalystInput(
         issue=jira_issue,

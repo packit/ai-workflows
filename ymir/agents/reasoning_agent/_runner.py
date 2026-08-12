@@ -413,7 +413,7 @@ class ReasoningAgentRunner:
                 tools=tools_for_llm,
                 tool_choice="auto",
                 stream_partial_tool_calls=True,
-                parallel_tool_calls=self._llm.allow_parallel_tool_calls or None,
+                parallel_tool_calls=self._llm.allow_parallel_tool_calls,
                 fallback_tool=self._final_answer if evaluation.can_stop else None,
             )
             cache_index = 0
@@ -437,7 +437,7 @@ class ReasoningAgentRunner:
                 tools=tools_for_llm,
                 tool_choice=evaluation.tool_choice,
                 stream_partial_tool_calls=True,
-                parallel_tool_calls=self._llm.allow_parallel_tool_calls or None,
+                parallel_tool_calls=self._llm.allow_parallel_tool_calls,
                 fallback_tool=self._final_answer if evaluation.can_stop else None,
             )
             cache_index = 1 if self._requirements else 0

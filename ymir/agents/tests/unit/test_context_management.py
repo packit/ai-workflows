@@ -66,6 +66,18 @@ def test_partition_exchanges_keeps_protected_prefix():
     assert exchanges[1] == ex2
 
 
+def test_partition_exchanges_protects_all_tagged_task_messages():
+    task1 = _task_message("Your task: first turn")
+    ex1 = _exchange("view", "c1", "file contents")
+    task2 = _task_message("Your task: second turn")
+    ex2 = _exchange("shell", "c2", "failed")
+    protected, exchanges = partition_exchanges([task1, *ex1, task2, *ex2])
+    assert protected == [task1, task2]
+    assert len(exchanges) == 2
+    assert exchanges[0] == ex1
+    assert exchanges[1] == ex2
+
+
 def test_strip_manage_context_from_exchange():
     assistant = AssistantMessage(
         [
@@ -88,6 +100,31 @@ def test_strip_manage_context_from_exchange():
     assert [c.tool_name for c in cleaned[0].get_tool_calls()] == ["view"]
     assert isinstance(cleaned[1], ToolMessage)
     assert cleaned[1].content[0].tool_name == "view"
+
+
+def test_strip_manage_context_keeps_sibling_results_in_batched_tool_message():
+    assistant = AssistantMessage(
+        [
+            _tool_call("view", "c1"),
+            _tool_call(MANAGE_CONTEXT_TOOL_NAME, "c2", '{"durable_summary":"keep me"}'),
+        ]
+    )
+    batched = ToolMessage(
+        [
+            MessageToolResultContent(tool_name="view", tool_call_id="c1", result="data"),
+            MessageToolResultContent(
+                tool_name=MANAGE_CONTEXT_TOOL_NAME,
+                tool_call_id="c2",
+                result="scheduled",
+            ),
+        ]
+    )
+    cleaned = strip_manage_context_from_exchange([assistant, batched])
+    assert len(cleaned) == 2
+    assert [c.tool_name for c in cleaned[0].get_tool_calls()] == ["view"]
+    assert len(cleaned[1].content) == 1
+    assert cleaned[1].content[0].tool_name == "view"
+    assert cleaned[1].content[0].result == "data"
 
 
 def test_strip_drops_thinking_only_assistant_after_solo_manage_context():
@@ -150,6 +187,27 @@ async def test_manage_context_tool_only_schedules():
     assert state.pending_context_compaction is not None
     assert state.pending_context_compaction.durable_summary == "important fact"
     assert list(state.memory.messages) == before
+
+
+@pytest.mark.asyncio
+async def test_apply_compaction_protects_later_task_messages():
+    task1 = _task_message("Your task: first turn")
+    ex1 = _exchange("view", "c1", "dead end dump " * 20)
+    task2 = _task_message("Your task: second turn")
+    ex2 = _exchange("shell", "c2", "also failed")
+    state = _state_with_messages([task1, *ex1, task2, *ex2])
+    state.pending_context_compaction = ManageContextSchema(
+        durable_summary="CVE-2026-1; approach A failed",
+        keep_recent_exchanges=1,
+    )
+
+    applied = await apply_pending_context_compaction(state)
+    assert applied is True
+
+    protected = [m for m in state.memory.messages if m.meta.get(YMIR_PROTECTED_META_KEY)]
+    assert len(protected) == 2
+    assert "first turn" in protected[0].text
+    assert "second turn" in protected[1].text
 
 
 @pytest.mark.asyncio

@@ -64,7 +64,6 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
         final_answer_as_tool: bool = True,
         save_intermediate_steps: bool = True,
         enable_context_management: bool = False,
-        sequential_tool_calls: bool = True,
         templates: dict[ReasoningAgentTemplatesKeys, PromptTemplate[Any] | ReasoningAgentTemplateFactory]
         | ReasoningAgentTemplates
         | None = None,
@@ -78,20 +77,18 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
         self._tool_call_checker = tool_call_checker
         self._final_answer_as_tool = final_answer_as_tool
         self._enable_context_management = enable_context_management
-        self._sequential_tool_calls = sequential_tool_calls
         self._unconstrained = unconstrained
         self._requirements = [] if unconstrained else list(requirements or [])
-        template_defaults: dict[str, Any] = {}
+        template_defaults: dict[str, Any] = {
+            "allow_parallel_tool_calls": bool(self._llm.allow_parallel_tool_calls),
+        }
         if role:
             template_defaults["role"] = role
         if instructions:
             template_defaults["instructions"] = "\n -".join(cast_list(instructions))
         if notes:
             template_defaults["notes"] = "\n -".join(cast_list(notes))
-        if not sequential_tool_calls:
-            template_defaults["sequential_tool_calls"] = False
-        if template_defaults:
-            self._templates.system.update(defaults=template_defaults)
+        self._templates.system.update(defaults=template_defaults)
         tools_list = list(tools or [])
         if unconstrained:
             tools_list = [t for t in tools_list if not isinstance(t, ThinkTool)]
@@ -220,7 +217,6 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
             save_intermediate_steps=self._save_intermediate_steps,
             final_answer_as_tool=self._final_answer_as_tool,
             enable_context_management=self._enable_context_management,
-            sequential_tool_calls=self._sequential_tool_calls,
             name=self._meta.name,
             description=self._meta.description,
             middlewares=self.middlewares.copy(),

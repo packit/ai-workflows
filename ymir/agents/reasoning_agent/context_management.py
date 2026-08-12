@@ -90,22 +90,22 @@ class ManageContextTool(Tool[ManageContextSchema, ToolRunOptions, StringToolOutp
 
 
 def partition_exchanges(messages: list[AnyMessage]) -> tuple[list[AnyMessage], list[list[AnyMessage]]]:
-    """Split memory into a protected prefix and tool/user exchanges.
+    """Split memory into protected task messages and tool/user exchanges.
 
-    Protected messages (task prompt) are collected only while no non-protected
-    message has been seen yet. An exchange is an assistant message with tool
-    calls plus its following tool results, or a standalone user/assistant text
-    message (e.g. a prior context summary).
+    Every message tagged with ``YMIR_PROTECTED_META_KEY`` is protected, even
+    when memory already contains older unprotected exchanges from a prior
+    ``ReasoningAgent.run()`` (e.g. ``save_intermediate_steps=True``).
+    An exchange is an assistant message with tool calls plus its following tool
+    results, or a standalone user/assistant text message (e.g. a prior context
+    summary).
     """
     protected: list[AnyMessage] = []
     rest: list[AnyMessage] = []
-    seen_unprotected = False
     for msg in messages:
-        if not seen_unprotected and msg.meta.get(YMIR_PROTECTED_META_KEY):
+        if msg.meta.get(YMIR_PROTECTED_META_KEY):
             protected.append(msg)
-            continue
-        seen_unprotected = True
-        rest.append(msg)
+        else:
+            rest.append(msg)
 
     exchanges: list[list[AnyMessage]] = []
     current: list[AnyMessage] = []
@@ -177,14 +177,13 @@ def strip_manage_context_from_exchange(exchange: list[AnyMessage]) -> list[AnyMe
             if _assistant_has_provider_visible_output(msg):
                 cleaned.append(msg)
         elif isinstance(msg, ToolMessage):
-            keep = True
-            for content in msg.content:
-                tool_call_id = getattr(content, "tool_call_id", None)
-                tool_name = getattr(content, "tool_name", None)
-                if tool_call_id in manage_ids or tool_name == MANAGE_CONTEXT_TOOL_NAME:
-                    keep = False
-                    break
-            if keep:
+            msg.content[:] = [
+                content
+                for content in msg.content
+                if getattr(content, "tool_call_id", None) not in manage_ids
+                and getattr(content, "tool_name", None) != MANAGE_CONTEXT_TOOL_NAME
+            ]
+            if msg.content:
                 cleaned.append(msg)
         else:
             cleaned.append(msg)

@@ -899,11 +899,23 @@ class MRConsolidationInputSchema(BaseModel):
     build_error: str | None = Field(default=None, description="Error encountered during package build")
 
 
+ConsolidationStatus = Literal[
+    "nothing_to_consolidate",  # Fewer than 2 MRs, or no backport MR found
+    "mr_not_found",  # Could not find MR for specified issue
+    "consolidation_complete",  # Successfully consolidated and created MR
+    "failed",  # Consolidation failed (see error field for details)
+]
+
+
 class MRConsolidationOutputSchema(BaseModel):
     """Output schema for the MR consolidation agent."""
 
     success: bool = Field(description="Whether the consolidation was successfully completed")
-    status: str = Field(description="Consolidation status with details of how the merge was performed")
+    status: ConsolidationStatus = Field(description="Consolidation status indicating the outcome type")
+    status_detail: str | None = Field(
+        default=None,
+        description="Human-readable details about the status",
+    )
     srpm_path: Path | None = Field(default=None, description="Absolute path to generated SRPM")
     error: str | None = Field(default=None, description="Specific details about an error")
     files_to_git_add: list[str] | None = Field(

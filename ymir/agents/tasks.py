@@ -1075,11 +1075,19 @@ async def try_submit_consolidation_job(
     dist_git_branch: str,
     gateway_tools: list,
     redis_conn,
+    jira_issue: str | None = None,
 ) -> None:
     """Fetch consolidation config and submit a job if enabled.
 
     Shared logic used by both the backport and rebuild agents after
-    creating an MR.
+    creating an MR. Posts a Jira comment when consolidation is triggered.
+
+    Args:
+        package: The package name
+        dist_git_branch: The dist-git branch
+        gateway_tools: List of available MCP tools
+        redis_conn: Redis connection for job submission
+        jira_issue: Optional Jira issue key to post consolidation notification
 
     Raises:
         InvalidConsolidationConfigError: When ymir.yaml exists but the
@@ -1103,6 +1111,27 @@ async def try_submit_consolidation_job(
     )
     if submitted:
         logger.info("Submitted consolidation job for %s/%s", package, dist_git_branch)
+
+        # Post a Jira comment notifying that consolidation has been triggered
+        if jira_issue:
+            try:
+                await run_tool(
+                    "add_jira_comment",
+                    issue_key=jira_issue,
+                    comment=JIRA_COMMENT_TEMPLATE.substitute(
+                        AGENT_TYPE="MR Consolidation",
+                        JIRA_COMMENT=(
+                            f"Your MR has been queued for consolidation with other open MRs "
+                            f"for {package} on {dist_git_branch}. "
+                            f"A consolidated MR will be created automatically once processing completes."
+                        ),
+                    ),
+                    private=True,
+                    available_tools=gateway_tools,
+                )
+                logger.info("Posted consolidation notification to %s", jira_issue)
+            except Exception as e:
+                logger.warning("Failed to post consolidation notification to %s: %s", jira_issue, e)
     else:
         logger.info("Consolidation job already queued for %s/%s", package, dist_git_branch)
 

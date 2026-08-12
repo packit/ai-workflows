@@ -18,9 +18,10 @@ from ymir.agents.tasks import (
     post_user_ack_once,
     push_changes,
     request_mr_qe_reviews,
+    try_submit_consolidation_job,
 )
 from ymir.common.constants import JiraLabels, RedisQueues
-from ymir.common.models import Task
+from ymir.common.models import PackageConsolidationConfig, Task
 
 
 @asynccontextmanager
@@ -812,3 +813,170 @@ async def test_fetch_release_bumping_config_returns_default_when_no_release_bump
     assert config.abandon_autorelease is False
     assert config.treat_maintenance_rhel_as_zstream is False
     assert config.disregard_zstream_nvr_policy is False
+
+
+# -- try_submit_consolidation_job ---------------------------------------------
+
+
+def _consolidation_config(merge_mrs: bool = True) -> PackageConsolidationConfig:
+    return PackageConsolidationConfig(merge_mrs=merge_mrs)
+
+
+@pytest.mark.asyncio
+async def test_try_submit_posts_jira_comment_when_submitted_with_issue():
+    """When the job is newly submitted and jira_issue is given, a Jira comment is posted."""
+    with (
+        patch(
+            "ymir.agents.tasks.fetch_consolidation_config",
+            new_callable=AsyncMock,
+            return_value=_consolidation_config(),
+        ),
+        patch(
+            "ymir.agents.tasks.submit_merge_job",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
+    ):
+        await try_submit_consolidation_job(
+            package="bash",
+            dist_git_branch="c10s",
+            gateway_tools=[],
+            redis_conn=AsyncMock(),
+            jira_issue="RHEL-12345",
+        )
+
+    mock_run_tool.assert_awaited_once()
+    assert mock_run_tool.call_args.args[0] == "add_jira_comment"
+    assert mock_run_tool.call_args.kwargs["issue_key"] == "RHEL-12345"
+
+
+@pytest.mark.asyncio
+async def test_try_submit_no_jira_comment_when_issue_is_none():
+    """When jira_issue=None no Jira comment is posted, even if the job was submitted."""
+    with (
+        patch(
+            "ymir.agents.tasks.fetch_consolidation_config",
+            new_callable=AsyncMock,
+            return_value=_consolidation_config(),
+        ),
+        patch(
+            "ymir.agents.tasks.submit_merge_job",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
+    ):
+        await try_submit_consolidation_job(
+            package="bash",
+            dist_git_branch="c10s",
+            gateway_tools=[],
+            redis_conn=AsyncMock(),
+            jira_issue=None,
+        )
+
+    mock_run_tool.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_try_submit_no_jira_comment_when_already_queued():
+    """When the job is already queued (submit_merge_job returns False) no comment is posted."""
+    with (
+        patch(
+            "ymir.agents.tasks.fetch_consolidation_config",
+            new_callable=AsyncMock,
+            return_value=_consolidation_config(),
+        ),
+        patch(
+            "ymir.agents.tasks.submit_merge_job",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
+    ):
+        await try_submit_consolidation_job(
+            package="bash",
+            dist_git_branch="c10s",
+            gateway_tools=[],
+            redis_conn=AsyncMock(),
+            jira_issue="RHEL-12345",
+        )
+
+    mock_run_tool.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_try_submit_jira_comment_failure_is_swallowed():
+    """A failure posting the Jira comment must not propagate — it is logged and ignored."""
+    with (
+        patch(
+            "ymir.agents.tasks.fetch_consolidation_config",
+            new_callable=AsyncMock,
+            return_value=_consolidation_config(),
+        ),
+        patch(
+            "ymir.agents.tasks.submit_merge_job",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "ymir.agents.tasks.run_tool",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("Jira down"),
+        ),
+    ):
+        await try_submit_consolidation_job(
+            package="bash",
+            dist_git_branch="c10s",
+            gateway_tools=[],
+            redis_conn=AsyncMock(),
+            jira_issue="RHEL-12345",
+        )
+
+
+@pytest.mark.asyncio
+async def test_try_submit_skips_when_consolidation_disabled():
+    """When merge_mrs=False no job is submitted and no Jira comment is posted."""
+    with (
+        patch(
+            "ymir.agents.tasks.fetch_consolidation_config",
+            new_callable=AsyncMock,
+            return_value=_consolidation_config(merge_mrs=False),
+        ),
+        patch("ymir.agents.tasks.submit_merge_job", new_callable=AsyncMock) as mock_submit,
+        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
+    ):
+        await try_submit_consolidation_job(
+            package="bash",
+            dist_git_branch="c10s",
+            gateway_tools=[],
+            redis_conn=AsyncMock(),
+            jira_issue="RHEL-12345",
+        )
+
+    mock_submit.assert_not_awaited()
+    mock_run_tool.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_try_submit_skips_when_redis_is_none():
+    """Without a Redis connection (direct mode) no job is submitted and no comment is posted."""
+    with (
+        patch(
+            "ymir.agents.tasks.fetch_consolidation_config",
+            new_callable=AsyncMock,
+            return_value=_consolidation_config(),
+        ),
+        patch("ymir.agents.tasks.submit_merge_job", new_callable=AsyncMock) as mock_submit,
+        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
+    ):
+        await try_submit_consolidation_job(
+            package="bash",
+            dist_git_branch="c10s",
+            gateway_tools=[],
+            redis_conn=None,
+            jira_issue="RHEL-12345",
+        )
+
+    mock_submit.assert_not_awaited()
+    mock_run_tool.assert_not_awaited()

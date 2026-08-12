@@ -6,9 +6,15 @@ using the `download_artifacts` tool to a temporary directory. If there are no lo
 just return the error message. Otherwise,
 {% if has_extract_log_snippets %}
 use the `extract_log_snippets` tool with `log_path` pointing to the location of
-`builder-live.log` and try to identify the build failure.
+`builder-live.log` and try to identify the build failure. The downloaded files are only
+accessible through `extract_log_snippets` — never use `view`, `search_text`, or shell
+commands to read them, even after a successful `extract_log_snippets` call; those tools
+run in a different sandbox and will always fail with "No such file or directory" on
+these paths, no matter how many times you retry.
 {% else %}
-start with `builder-live.log` and try to identify the build failure.
+start with `builder-live.log` and try to identify the build failure. `download_artifacts`
+saves files to a location that `view`, `search_text`, and shell commands cannot reach, so
+you cannot read them directly this way — work from `artifacts_urls` instead.
 {% endif %}
 If the failure is not found, try the same with `root.log`. Summarize the findings
 and return them as `error`. Set `is_timeout` to the value of the `is_timeout` field

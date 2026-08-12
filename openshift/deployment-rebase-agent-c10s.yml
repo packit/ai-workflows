@@ -4,7 +4,7 @@ metadata:
   name: rebase-agent-c10s
 spec:
   progressDeadlineSeconds: 600
-  replicas: 1
+  replicas: 2
   revisionHistoryLimit: 10
   selector:
     matchLabels:
@@ -48,6 +48,7 @@ spec:
           protocol: TCP
         resources:
           limits:
+            cpu: 300m
             memory: 3Gi
           requests:
             memory: 1536Mi

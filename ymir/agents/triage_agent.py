@@ -1033,6 +1033,7 @@ async def run_workflow(
                 return "comment_in_jira"
 
             # Also check comments for "Queued for triage as potential sibling" (label may not be set yet)
+            # Siblings should NOT search for their own siblings (prevents circular dependencies)
             try:
                 details = await run_tool(
                     "get_jira_details",
@@ -1041,8 +1042,10 @@ async def run_workflow(
                 )
                 comments = details.get("fields", {}).get("comment", {}).get("comments", [])
                 for comment in comments:
-                    if "Queued for triage as potential sibling of" in comment.get("body", ""):
-                        logger.info(f"Issue {state.jira_issue} has sibling comment, skipping consolidation")
+                    # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
+                    comment_text = extract_text_from_adf(comment.get("body", ""))
+                    if "Queued for triage as potential sibling of" in comment_text:
+                        logger.info(f"Issue {state.jira_issue} is a sibling, skipping consolidation")
                         state.waiting_for_siblings = False
                         rebase_data.consolidated_issues = []
                         rebase_data.consolidation_summary = None

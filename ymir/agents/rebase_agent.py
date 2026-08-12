@@ -63,6 +63,7 @@ from ymir.common.models import (
     RebaseOutputSchema,
     Task,
 )
+from ymir.common.utils import extract_text_from_adf
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
 from ymir.tools.unprivileged.text import (
@@ -287,7 +288,9 @@ async def main() -> None:
                     )
                     comments = details.get("fields", {}).get("comment", {}).get("comments", [])
                     for comment in comments:
-                        if "Queued for triage as potential sibling of" in comment.get("body", ""):
+                        # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
+                        comment_text = extract_text_from_adf(comment.get("body", ""))
+                        if "Queued for triage as potential sibling of" in comment_text:
                             logger.info(
                                 f"Issue {state.jira_issue} is a sibling (found sibling comment). "
                                 "Siblings do not create their own MR - the primary will consolidate them. "

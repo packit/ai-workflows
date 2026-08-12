@@ -4,7 +4,7 @@ metadata:
   name: backport-agent-c9s
 spec:
   progressDeadlineSeconds: 600
-  replicas: 2
+  replicas: 4
   revisionHistoryLimit: 10
   selector:
     matchLabels:
@@ -48,6 +48,7 @@ spec:
           protocol: TCP
         resources:
           limits:
+            cpu: 300m
             memory: 4Gi
           requests:
             memory: 2Gi

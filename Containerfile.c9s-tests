@@ -28,7 +28,7 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
        "litellm!=1.82.7,!=1.82.8" \
        beeai-framework[vertexai,mcp,duckduckgo]==0.1.82 \
        "mcp<1.29.0" \
-       openinference-instrumentation-beeai \
+       openinference-instrumentation-beeai==0.1.21 \
        arize-phoenix-otel \
        aiohttp>=3.12.15 \
        redis \

@@ -78,7 +78,7 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
          beeai-framework[vertexai,mcp,duckduckgo]==0.1.82 \
          "mcp<1.29.0" \
          google-cloud-aiplatform \
-         openinference-instrumentation-beeai \
+         openinference-instrumentation-beeai==0.1.21 \
          arize-phoenix-otel \
          redis \
          specfile \

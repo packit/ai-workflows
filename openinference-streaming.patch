@@ -43,7 +43,7 @@ index d3f3adc6..5497ff77 100644
  
      def instrumentation_dependencies(self) -> Collection[str]:
          return _instruments
-@@ -70,39 +69,85 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
+@@ -70,39 +69,88 @@ class BeeAIInstrumentor(BaseInstrumentor):  # type: ignore
      def _uninstrument(self, **kwargs: Any) -> None:
          self._cleanup()
          self._processes.clear()

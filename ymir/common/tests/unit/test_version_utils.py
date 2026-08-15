@@ -5,6 +5,7 @@ from ymir.common.version_utils import (
     get_maintenance_rhel_branch,
     is_older_zstream,
     parse_branch_name,
+    parse_module_stream,
     parse_rhel_version,
     parse_zstream_branch_name,
 )
@@ -176,3 +177,25 @@ async def test_get_maintenance_rhel_branch(branch, expected):
     flexmock(config).should_receive("load_rhel_config").replace_with(mock_load_rhel_config)
     result = await get_maintenance_rhel_branch(branch)
     assert result == expected
+
+
+@pytest.mark.parametrize(
+    "summary, component, expected",
+    [
+        ("CVE-2025-12345 postgresql:16/postgresql: overflow", "postgresql", ("postgresql", "16")),
+        ("CVE-2025-12345 postgresql:18/postgresql: overflow", "postgresql", ("postgresql", "18")),
+        ("postgresql:12/postgresql: overflow", "postgresql", ("postgresql", "12")),
+        ("CVE-2025-12345 buffer overflow in curl", "curl", None),
+        (
+            "CVE-2025-12345 CVE-2025-67890 postgresql:16/postgresql: overflow",
+            "postgresql",
+            ("postgresql", "16"),
+        ),
+        ("CVE-2025-12345 postgresql:16/postgis: overflow", "postgis", ("postgresql", "16")),
+        (None, "postgresql", None),
+        ("CVE-2025-12345 postgresql:16/postgresql: overflow", None, None),
+        ("", "postgresql", None),
+    ],
+)
+def test_parse_module_stream(summary, component, expected):
+    assert parse_module_stream(summary, component) == expected

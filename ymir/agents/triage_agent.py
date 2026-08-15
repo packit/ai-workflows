@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import re
 import shutil
 import sys
 import traceback
@@ -75,11 +74,11 @@ from ymir.common.utils import (
     get_latest_candidate_build,
 )
 from ymir.common.version_utils import (
-    MODULAR_SUMMARY_PREFIX,
     construct_internal_branch_name,
     is_modular,
     is_older_zstream,
     normalize_fix_version,
+    parse_module_stream,
     parse_rhel_version,
 )
 from ymir.tools.privileged.utils import APPLICABILITY_DIR
@@ -210,24 +209,6 @@ async def _enqueue_reproducer(redis, state, user_triggered: bool, gateway_tools)
     logger.info("Pushed %s to %s", state.jira_issue, queue)
 
 
-def _modular_summary_re(downstream_component: str) -> re.Pattern[str]:
-    """Build a modular-summary regex anchored on the Downstream Component Name."""
-    return re.compile(MODULAR_SUMMARY_PREFIX + re.escape(downstream_component) + r":")
-
-
-def _parse_module_summary(summary: str, downstream_component: str) -> tuple[str, str] | None:
-    """Extract module name and stream from a modular Jira summary.
-
-    Requires the component segment to match *downstream_component*.
-    E.g. summary ``postgresql:12/postgresql:…`` + package ``postgresql``
-    → ``("postgresql", "12")``.
-    """
-    m = _modular_summary_re(downstream_component).match(summary)
-    if not m:
-        return None
-    return m.group(1), m.group(2)
-
-
 def _map_version_to_module_branch(version: str, summary: str, downstream_component: str) -> str | None:
     """Map version string to a modular target branch.
 
@@ -244,7 +225,7 @@ def _map_version_to_module_branch(version: str, summary: str, downstream_compone
         logger.warning(f"Failed to parse version for modular branch: {version}")
         return None
 
-    parsed_module = _parse_module_summary(summary, downstream_component)
+    parsed_module = parse_module_stream(summary, downstream_component)
     if not parsed_module:
         logger.warning(
             f"Failed to parse module/stream from summary={summary!r} "

@@ -346,10 +346,27 @@ async def is_older_zstream(
     return target_minor < current_minor
 
 
-MODULAR_SUMMARY_PREFIX = r"^(?:CVE-\d{4}-\d+\s+)?([\w.+-]+):([^/\s]+)/"
+MODULAR_SUMMARY_PREFIX = r"^(?:\S+\s+)*([\w.+-]+):([^/\s]+)/"
 
 
 def is_modular(summary: str | None, component: str | None) -> bool:
     if not summary or not component:
         return False
     return bool(re.match(MODULAR_SUMMARY_PREFIX + re.escape(component) + r":", summary))
+
+
+def parse_module_stream(summary: str | None, component: str | None) -> tuple[str, str] | None:
+    """Extract module name and stream from a modular Jira summary.
+
+    Requires the component segment after ``/`` to match *component*.
+    E.g. summary ``"postgresql:16/postgis: …"`` + component ``"postgis"``
+    → ``("postgresql", "16")``.
+
+    Returns ``None`` when the summary is not modular or does not match.
+    """
+    if not summary or not component:
+        return None
+    m = re.match(MODULAR_SUMMARY_PREFIX + re.escape(component) + r":", summary)
+    if not m:
+        return None
+    return m.group(1), m.group(2)

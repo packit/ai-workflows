@@ -25,9 +25,9 @@ from ymir.common.utils import _get_koji_build
 from ymir.common.version_utils import (
     get_fix_version_variants,
     get_maintenance_majors,
-    is_modular,
     normalize_fix_version,
     nvr_to_cs_nvr,
+    parse_module_stream,
     parse_rhel_version,
 )
 from ymir.tools.base import CloneableTool as Tool
@@ -526,9 +526,13 @@ async def _check_duplicate_tracker(
     component: str,
     fix_version: str,
     issue_key: str,
-    modular: bool = False,
+    module_stream: tuple[str, str] | None = None,
 ) -> tuple[str | None, bool]:
     """Check for duplicate CVE trackers (same CVE + component + fix version).
+
+    *module_stream* is the ``(module, stream)`` pair of the current issue
+    (e.g. ``("postgresql", "16")``), or ``None`` for non-modular issues.
+    Candidates must have the exact same module:stream to count as duplicates.
 
     Returns (older_tracker_key, should_block):
       - (None, False): no duplicate found
@@ -552,7 +556,9 @@ async def _check_duplicate_tracker(
         input={"jql": jql, "fields": ["status", "resolution", "summary"], "max_results": 50}
     )
     issues = [
-        i for i in output.result if is_modular(i.get("fields", {}).get("summary"), component) == modular
+        i
+        for i in output.result
+        if parse_module_stream(i.get("fields", {}).get("summary"), component) == module_stream
     ]
 
     if not issues:
@@ -975,7 +981,7 @@ class CheckCveTriageEligibilityTool(
                 component,
                 target_version,
                 issue_key,
-                modular=is_modular(summary, component),
+                module_stream=parse_module_stream(summary, component),
             )
         except Exception as e:
             logger.warning(f"Duplicate tracker check failed for {issue_key}: {e}")

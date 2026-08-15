@@ -7,7 +7,6 @@ from ymir.agents.triage_agent import (
     TriageState,
     _build_reproducer_input,
     _map_version_to_module_branch,
-    _parse_module_summary,
     _should_update_jira,
     determine_target_branch,
 )
@@ -23,7 +22,7 @@ from ymir.common.models import (
     TriageEligibility,
     TriageOutputSchema,
 )
-from ymir.common.version_utils import is_modular
+from ymir.common.version_utils import is_modular, parse_module_stream
 
 
 @pytest.mark.parametrize(
@@ -254,7 +253,7 @@ def test_is_modular(summary, downstream_component, expected):
     ],
 )
 def test_parse_module_summary(summary, downstream_component, expected_module, expected_stream):
-    result = _parse_module_summary(summary, downstream_component)
+    result = parse_module_stream(summary, downstream_component)
     assert result is not None
     module, stream = result
     assert module == expected_module
@@ -262,11 +261,11 @@ def test_parse_module_summary(summary, downstream_component, expected_module, ex
 
 
 def test_parse_module_summary_non_modular():
-    assert _parse_module_summary("postgresql:PostgreSQL: vuln", "postgresql") is None
+    assert parse_module_stream("postgresql:PostgreSQL: vuln", "postgresql") is None
 
 
 def test_parse_module_summary_package_mismatch():
-    assert _parse_module_summary("postgresql:12/postgresql:vuln", "nginx") is None
+    assert parse_module_stream("postgresql:12/postgresql:vuln", "nginx") is None
 
 
 # --- Modular branch mapping tests ---

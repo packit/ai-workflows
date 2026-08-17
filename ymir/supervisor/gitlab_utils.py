@@ -3,6 +3,7 @@ import os
 from functools import cache
 from typing import Any
 from urllib.parse import quote as urlquote
+from urllib.parse import urlparse
 
 from .http_utils import requests_session
 from .supervisor_types import MergeRequest, MergeRequestState
@@ -10,6 +11,13 @@ from .supervisor_types import MergeRequest, MergeRequestState
 logger = logging.getLogger(__name__)
 
 GITLAB_URL = "https://gitlab.com"
+
+# GitLab hosts Ymir is allowed to talk to.  ``gitlab_api_get`` attaches the
+# ``GITLAB_TOKEN`` Bearer credential to every request, so the target host must
+# be constrained to trusted instances -- otherwise an attacker-controlled host
+# (e.g. supplied through an LLM-authored ``blocker_reference``) would receive
+# the token.  This is the single source of truth for that allowlist.
+ALLOWED_GITLAB_HOSTS = frozenset({"gitlab.com", "gitlab.cee.redhat.com"})
 
 
 @cache
@@ -23,6 +31,13 @@ def gitlab_headers() -> dict[str, str]:
 
 
 def gitlab_api_get(path: str, *, params: dict | None = None, gitlab_url: str = GITLAB_URL) -> Any:
+    hostname = urlparse(gitlab_url).hostname
+    if hostname not in ALLOWED_GITLAB_HOSTS:
+        # Never attach the Bearer token to an untrusted host.
+        raise ValueError(
+            f"Refusing to call GitLab API on untrusted host {hostname!r}; "
+            f"allowed hosts: {sorted(ALLOWED_GITLAB_HOSTS)}"
+        )
     url = f"{gitlab_url}/api/v4/{path}"
     response = requests_session().get(url, headers=gitlab_headers(), params=params)
     response.raise_for_status()

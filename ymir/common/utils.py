@@ -347,9 +347,29 @@ def extract_text_from_adf(adf_body) -> str:
     }
 
     This function recursively extracts all "text" values and URLs from inlineCard nodes.
+
+    When MCP returns HTML format, it may contain smartlink tags like:
+    <custom data-type="smartlink">https://redhat.atlassian.net/browse/RHEL-123</custom>
+
+    We extract issue keys from these URLs to make them searchable.
     """
     if isinstance(adf_body, str):
-        return adf_body
+        # Handle HTML smartlink tags: extract issue keys from URLs
+        # Pattern: <custom data-type="smartlink"...>URL</custom>
+        import re
+
+        result = adf_body
+        # Find all smartlink tags and extract issue keys from their URLs
+        smartlink_pattern = r'<custom[^>]*data-type="smartlink"[^>]*>([^<]+)</custom>'
+        for match in re.finditer(smartlink_pattern, result):
+            url = match.group(1)
+            # Extract issue key from URL (e.g., RHEL-234905 from https://.../browse/RHEL-234905)
+            issue_match = re.search(r"browse/([A-Z]+-\d+)", url)
+            if issue_match:
+                issue_key = issue_match.group(1)
+                # Replace the entire smartlink tag with just the issue key
+                result = result.replace(match.group(0), issue_key)
+        return result
     if isinstance(adf_body, dict):
         node_type = adf_body.get("type")
         # If this is a text node, return its text

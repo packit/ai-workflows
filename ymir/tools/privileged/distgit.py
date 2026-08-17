@@ -36,7 +36,6 @@ _TRANSIENT_STDERR_PATTERNS = (
     "no route to host",
     "broken pipe",
     "ssh_exchange_identification",
-    "failed to push some refs",
 )
 
 _T = TypeVar("_T")
@@ -226,20 +225,32 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                         _, ref = await get_latest_z_pending_build(package, branch)
                     else:
                         _, ref = await get_latest_candidate_build(package, branch)
-                    if source_branch := self._find_source_branch(repo, branch):
+                    source_branch = self._find_source_branch(repo, branch)
+                    if source_branch and source_branch.endswith("-main"):
                         ref = await self._find_latest_same_nvr_ref(
                             repo,
                             package,
                             ref,
                             source_branch,
                         )
-                    push_infos = await _retry_transient(
-                        lambda: asyncio.to_thread(repo.remotes.origin.push, f"{ref}:refs/heads/{branch}"),
+                    try:
+                        await asyncio.to_thread(repo.commit, ref)
+                    except Exception:
+                        raise RuntimeError(
+                            f"Commit {ref} (from latest Brew build) not found in dist-git clone of {package}"
+                        ) from None
+                    await _retry_transient(
+                        lambda: asyncio.to_thread(repo.git.push, "origin", f"{ref}:refs/heads/{branch}"),
                         f"push {branch} to dist-git",
                     )
-                    for info in push_infos:
-                        if info.flags & git.remote.PushInfo.ERROR:
-                            raise RuntimeError(f"Push rejected: {info.summary.strip()}")
+                    if not await _retry_transient(
+                        lambda: asyncio.to_thread(repo.git.ls_remote, "--heads", "origin", branch),
+                        f"verify {branch} on dist-git",
+                    ):
+                        raise RuntimeError(
+                            f"Push appeared to succeed but branch {branch} not found "
+                            f"on dist-git — possible silent rejection by server ACL"
+                        )
                 start_time = time.monotonic()
                 while time.monotonic() - start_time < SYNC_TIMEOUT:
                     try:

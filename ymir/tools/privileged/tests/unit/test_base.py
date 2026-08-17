@@ -8,7 +8,8 @@ from beeai_framework.tools import StringToolOutput, ToolRunOptions
 from beeai_framework.utils.cancellation import AbortSignal
 from pydantic import BaseModel
 
-from ymir.tools.base import CloneableTool
+from ymir.tools.base import CloneableTool, tool_error_context
+from ymir.tools.errors import ToolErrorWithContext
 
 
 class DummyInput(BaseModel):
@@ -48,6 +49,39 @@ class FastDummyTool(DummyTool):
 
 class NoTimeoutDummyTool(DummyTool):
     name = "no_timeout_dummy"
+
+
+def test_tool_error_context_wraps_exception():
+    with (
+        pytest.raises(ToolErrorWithContext, match="Something failed") as exc_info,
+        tool_error_context("Something failed", url="https://example.com"),
+    ):
+        raise RuntimeError("connection refused")
+
+    err = exc_info.value
+    assert err.context["additional_context"] == {
+        "url": "https://example.com",
+        "exception": "RuntimeError: connection refused",
+    }
+
+
+def test_tool_error_context_passes_through_tool_error_with_context():
+    with (
+        pytest.raises(ToolErrorWithContext, match="specific inner error"),
+        tool_error_context("general outer error"),
+    ):
+        raise ToolErrorWithContext("specific inner error")
+
+
+def test_tool_error_context_redacts_credentials():
+    fake_token = "glpat-0123456789ABCDEFGHIJ"  # pragma: allowlist secret
+    with (
+        pytest.raises(ToolErrorWithContext) as exc_info,
+        tool_error_context("Failed", token=fake_token),
+    ):
+        raise RuntimeError("401 Unauthorized")
+
+    assert exc_info.value.context["additional_context"]["token"] == "[REDACTED]"
 
 
 @pytest.mark.asyncio

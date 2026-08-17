@@ -672,14 +672,8 @@ class JiraIssueFetcher:
                     retry_needed_keys.add(issue_key)
                     continue
 
-                # If issue has Ymir labels and there is no ymir_retry_needed or
-                # ymir_rebase_sibling label, mark as existing
-                # (ymir_rebase_sibling = queued for triage but not processed yet)
-                if (
-                    ymir_labels
-                    and JiraLabels.RETRY_NEEDED.value not in ymir_labels
-                    and JiraLabels.REBASE_SIBLING.value not in ymir_labels
-                ):
+                # If issue has Ymir labels and there is no ymir_retry_needed label, mark as existing
+                if ymir_labels and JiraLabels.RETRY_NEEDED.value not in ymir_labels:
                     existing_keys.add(issue_key)
                     logger.info(f"Issue {issue_key} has Ymir labels {ymir_labels} - marking as existing")
                 elif JiraLabels.RETRY_NEEDED.value in ymir_labels:

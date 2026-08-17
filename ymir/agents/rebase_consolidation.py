@@ -577,12 +577,14 @@ async def find_triaged_rebase_siblings(
                 )
 
                 # Look for comment matching "Queued for triage as potential sibling of {jira_issue}"
+                # The comment contains an inlineCard with URL, so we check for both the phrase and issue key
                 has_primary_reference = False
                 comments = candidate_details.get("fields", {}).get("comment", {}).get("comments", [])
                 for comment in comments:
-                    # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
+                    # Extract text from ADF comment body (MCP returns ADF JSON with inlineCard nodes)
                     body = extract_text_from_adf(comment.get("body", ""))
-                    if f"Queued for triage as potential sibling of {jira_issue}" in body:
+                    # Check if comment has the sibling phrase AND references the primary issue
+                    if "Queued for triage as potential sibling of" in body and jira_issue in body:
                         has_primary_reference = True
                         break
 

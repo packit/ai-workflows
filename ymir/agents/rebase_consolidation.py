@@ -461,7 +461,7 @@ async def check_and_queue_primary_if_ready(
         logger.info(f"All siblings done for {primary_issue}, {action} for rebase")
 
         if not dry_run:
-            # Remove ymir_waiting_for_siblings label now that all siblings are done
+            # Remove ymir_rebase_waiting_for_siblings label now that all siblings are done
             # This is CRITICAL - if we can't remove it, the primary will never queue for rebase
             await tasks.set_jira_labels(
                 jira_issue=primary_issue,
@@ -475,7 +475,7 @@ async def check_and_queue_primary_if_ready(
             # Triage will re-process the issue (full LLM triage + eligibility check), then
             # queue for rebase with proper full state (Task.metadata = state.model_dump()).
             # The ymir_triaged_rebase label will be removed by triage when it sees
-            # ymir_waiting_for_siblings was present (non-terminal state for re-triaging).
+            # ymir_rebase_waiting_for_siblings was present (non-terminal state for re-triaging).
             task = Task.from_issue(primary_issue, user_triggered=user_triggered)
             async with redis_client(os.environ["REDIS_URL"]) as redis:
                 await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))

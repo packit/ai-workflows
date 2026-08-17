@@ -421,7 +421,7 @@ class TriageState(BaseModel):
     applicability_unpacked_sources: Path | None = Field(default=None)
     applicability_used_fallback: bool = Field(default=False)
     applicability_check_skipped: bool = Field(default=False)
-    waiting_for_siblings: bool = Field(
+    rebase_waiting_for_siblings: bool = Field(
         default=False,
         description=(
             "Set to True when siblings are queued and this issue should wait for them to finish triaging."
@@ -1027,7 +1027,7 @@ async def run_workflow(
             if JiraLabels.REBASE_SIBLING.value in current_labels:
                 logger.info(f"Issue {state.jira_issue} has ymir_rebase_sibling label, skipping consolidation")
                 # Don't search for siblings or set waiting flag
-                state.waiting_for_siblings = False
+                state.rebase_waiting_for_siblings = False
                 rebase_data.consolidated_issues = []
                 rebase_data.consolidation_summary = None
                 return "comment_in_jira"
@@ -1046,7 +1046,7 @@ async def run_workflow(
                     comment_text = extract_text_from_adf(comment.get("body", ""))
                     if "Queued for triage as potential sibling of" in comment_text:
                         logger.info(f"Issue {state.jira_issue} is a sibling, skipping consolidation")
-                        state.waiting_for_siblings = False
+                        state.rebase_waiting_for_siblings = False
                         rebase_data.consolidated_issues = []
                         rebase_data.consolidation_summary = None
                         return "comment_in_jira"
@@ -1069,14 +1069,14 @@ async def run_workflow(
                     "primary will be queued after siblings finish triaging"
                 )
                 # Mark that this issue is waiting for siblings
-                state.waiting_for_siblings = True
+                state.rebase_waiting_for_siblings = True
                 # Clear consolidated issues - found during rebase via find_triaged_rebase_siblings()
                 rebase_data.consolidated_issues = []
                 rebase_data.consolidation_summary = None
             else:
                 # No siblings found, queue primary for rebase immediately
                 logger.info(f"No siblings found for {state.jira_issue}, will queue for rebase now")
-                state.waiting_for_siblings = False
+                state.rebase_waiting_for_siblings = False
                 rebase_data.consolidated_issues = []
                 rebase_data.consolidation_summary = None
 
@@ -1478,7 +1478,8 @@ async def main() -> None:
                     # (primary waiting for siblings will be re-triaged when siblings finish,
                     # and terminal label will be added then)
                     if not (
-                        state.waiting_for_siblings or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
+                        state.rebase_waiting_for_siblings
+                        or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
                     ):
                         labels_to_add.append(resolution_label.value)
                     else:
@@ -1620,10 +1621,10 @@ async def main() -> None:
                                 # Skip queueing if issue is waiting for siblings to finish triaging.
                                 # Check both state flag (set mid-workflow) and
                                 # Jira label (persisted across restarts).
-                                # After pod restart/re-triage, state.waiting_for_siblings defaults to False,
-                                # but the Jira label persists until siblings finish.
+                                # After pod restart/re-triage, state.rebase_waiting_for_siblings
+                                # defaults to False, but the Jira label persists until siblings finish.
                                 elif (
-                                    state.waiting_for_siblings
+                                    state.rebase_waiting_for_siblings
                                     or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
                                 ):
                                     logger.info(

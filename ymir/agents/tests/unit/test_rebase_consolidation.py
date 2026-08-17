@@ -1,4 +1,5 @@
 from ymir.agents.rebase_consolidation import build_rebase_siblings_jql
+from ymir.common.utils import extract_text_from_adf
 
 
 def test_build_rebase_siblings_jql():
@@ -31,3 +32,151 @@ def test_build_rebase_siblings_jql_excludes_correct_labels():
     assert '"ymir_triaged_rebuild"' in jql
     assert '"ymir_triaged_rebase"' in jql  # Prevents circular consolidation
     assert '"ymir_triaged_postponed"' in jql
+
+
+class TestSiblingCommentExtraction:
+    """Tests for extracting and matching sibling references from Jira comments."""
+
+    def test_extract_from_adf_inline_card(self):
+        """Test extraction from ADF JSON with inlineCard (MCP gateway format)."""
+        adf_body = {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {"type": "text", "text": "Queued for triage as potential sibling of "},
+                        {
+                            "type": "inlineCard",
+                            "attrs": {
+                                "url": "https://redhat.atlassian.net/browse/RHEL-234905#icft=RHEL-234905"
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+
+        result = extract_text_from_adf(adf_body)
+
+        # Should extract URL from inlineCard
+        assert "https://redhat.atlassian.net/browse/RHEL-234905" in result
+        # Should contain the issue key
+        assert "RHEL-234905" in result
+        # Should contain the phrase
+        assert "Queued for triage as potential sibling of" in result
+
+    def test_extract_from_html_smartlink(self):
+        """Test extraction from HTML with smartlink tags (alternative MCP format)."""
+        html_body = (
+            "Queued for triage as potential sibling of "
+            '<custom data-type="smartlink" data-id="id-0">'
+            "https://redhat.atlassian.net/browse/RHEL-234905#icft=RHEL-234905"
+            "</custom>"
+        )
+
+        result = extract_text_from_adf(html_body)
+
+        # Should extract issue key from smartlink URL
+        assert "RHEL-234905" in result
+        # Should contain the phrase
+        assert "Queued for triage as potential sibling of" in result
+
+    def test_sibling_comment_matching_with_inline_card(self):
+        """Test that sibling comment check works with ADF inlineCard format."""
+        primary_issue = "RHEL-234905"
+        comment_body = {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {"type": "text", "text": "Queued for triage as potential sibling of "},
+                        {
+                            "type": "inlineCard",
+                            "attrs": {"url": f"https://redhat.atlassian.net/browse/{primary_issue}"},
+                        },
+                    ],
+                }
+            ],
+        }
+
+        extracted = extract_text_from_adf(comment_body)
+
+        # This is the check pattern used in find_triaged_rebase_siblings
+        has_phrase = "Queued for triage as potential sibling of" in extracted
+        has_issue_key = primary_issue in extracted
+
+        assert has_phrase, "Should find sibling phrase in extracted text"
+        assert has_issue_key, "Should find primary issue key in extracted text"
+        assert has_phrase and has_issue_key, "Both conditions should be true for valid sibling reference"
+
+    def test_sibling_comment_matching_with_wrong_primary(self):
+        """Test that sibling comment check fails when issue key doesn't match."""
+        primary_issue = "RHEL-234905"
+        wrong_issue = "RHEL-999999"
+        comment_body = {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {"type": "text", "text": "Queued for triage as potential sibling of "},
+                        {
+                            "type": "inlineCard",
+                            "attrs": {"url": f"https://redhat.atlassian.net/browse/{wrong_issue}"},
+                        },
+                    ],
+                }
+            ],
+        }
+
+        extracted = extract_text_from_adf(comment_body)
+
+        has_phrase = "Queued for triage as potential sibling of" in extracted
+        has_issue_key = primary_issue in extracted
+
+        assert has_phrase, "Should find sibling phrase"
+        assert not has_issue_key, "Should NOT find wrong issue key"
+        assert not (has_phrase and has_issue_key), "Should fail the combined check"
+
+    def test_sibling_comment_matching_with_plain_text(self):
+        """Test that sibling comment check works with plain text (fallback)."""
+        primary_issue = "RHEL-234905"
+        plain_text = f"Queued for triage as potential sibling of {primary_issue}"
+
+        extracted = extract_text_from_adf(plain_text)
+
+        has_phrase = "Queued for triage as potential sibling of" in extracted
+        has_issue_key = primary_issue in extracted
+
+        assert has_phrase and has_issue_key, "Should work with plain text format"
+
+    def test_extract_multiple_inline_cards(self):
+        """Test extraction handles multiple inlineCard nodes correctly."""
+        adf_body = {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {"type": "text", "text": "See "},
+                        {"type": "inlineCard", "attrs": {"url": "https://example.com/browse/RHEL-100"}},
+                        {"type": "text", "text": " and "},
+                        {"type": "inlineCard", "attrs": {"url": "https://example.com/browse/RHEL-200"}},
+                    ],
+                }
+            ],
+        }
+
+        result = extract_text_from_adf(adf_body)
+
+        # Should extract both URLs
+        assert "RHEL-100" in result
+        assert "RHEL-200" in result
+        assert "See" in result
+        assert "and" in result

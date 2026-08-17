@@ -1,19 +1,12 @@
 import asyncio
 import logging
 import os
-from textwrap import dedent
 
-from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.tools import Tool
 from pydantic import BaseModel, Field, model_validator
 
 import ymir.agents.tasks as tasks
-from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import (
-    get_agent_execution_config,
-    get_chat_model,
-    get_tool_call_checker_config,
-    is_reasoning_enabled,
     run_tool,
 )
 from ymir.common.base_utils import fix_await, redis_client
@@ -26,7 +19,7 @@ from ymir.common.models import (
     TriageEligibility,
 )
 from ymir.common.utils import extract_text_from_adf
-from ymir.common.version_utils import compare_versions_async, get_fix_version_variants
+from ymir.common.version_utils import get_fix_version_variants
 
 logger = logging.getLogger(__name__)
 
@@ -127,201 +120,6 @@ class SiblingRebaseAnalysis(BaseModel):
         if self.requires_same_rebase and not self.target_version:
             raise ValueError("target_version must be provided when requires_same_rebase is True")
         return self
-
-
-async def find_rebase_siblings(
-    jira_issue: str,
-    rebase_data: RebaseData,
-    available_tools: list[Tool],
-) -> tuple[list[ConsolidatedIssue], str]:
-    """
-    Find sibling Jira issues that can share a single rebase MR.
-
-    Searches for other issues against the same package and fix_version,
-    then uses an LLM to verify each requires rebasing to the same target version.
-
-    Returns (consolidated_issues, summary_text).
-    """
-    if not rebase_data.fix_version:
-        logger.info(f"No fix_version for {jira_issue}, skipping consolidation")
-        return [], ""
-
-    try:
-        # Include already-triaged siblings for consolidation (don't exclude ymir_triaged_rebase)
-        jql = build_rebase_siblings_jql(
-            issue_key=jira_issue,
-            component=rebase_data.package,
-            fix_version=rebase_data.fix_version,
-            exclude_triaged=False,
-        )
-        candidates = await run_tool(
-            "search_jira_issues",
-            available_tools=available_tools,
-            jql=jql,
-            fields=["key", "summary", "comment"],
-            max_results=50,
-        )
-    except Exception as e:
-        logger.warning(f"Failed to find rebase siblings for {jira_issue}: {e}")
-        return [], ""
-
-    if not candidates:
-        return [], ""
-
-    # Filter to only candidates that were queued as siblings of THIS primary
-    # (verify via comment to avoid consolidating siblings of different primaries)
-    verified_candidates = []
-    for candidate in candidates:
-        comments = candidate.get("fields", {}).get("comment", {}).get("comments", [])
-        for comment in comments:
-            # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
-            body = extract_text_from_adf(comment.get("body", ""))
-            if "Queued for triage as potential sibling of" in body and jira_issue in body:
-                verified_candidates.append(candidate)
-                break
-
-    if not verified_candidates:
-        logger.info(
-            f"No verified siblings found for {jira_issue} "
-            f"(found {len(candidates)} candidates but none queued by this primary)"
-        )
-        return [], ""
-
-    logger.info(f"Analyzing {len(verified_candidates)} verified sibling candidates for {jira_issue}")
-
-    analysis_tools = [t for t in available_tools if t.name in ["get_jira_details", "search_jira_issues"]]
-
-    # Limit concurrent sibling analyses to avoid overwhelming downstream services
-    semaphore = asyncio.Semaphore(10)
-
-    async def analyze_candidate(candidate: dict) -> tuple[ConsolidatedIssue | None, str]:
-        """Analyze a single candidate sibling for consolidation eligibility."""
-        async with semaphore:
-            candidate_key = candidate.get("key", "")
-            try:
-                eligibility_result = CVEEligibilityResult.model_validate(
-                    await run_tool(
-                        "check_cve_triage_eligibility",
-                        available_tools=available_tools,
-                        issue_key=candidate_key,
-                    )
-                )
-                if eligibility_result.eligibility != TriageEligibility.IMMEDIATELY:
-                    logger.info(f"Sibling {candidate_key} not eligible: {eligibility_result.reason}")
-                    return None, f"* {candidate_key} — excluded (not eligible: {eligibility_result.reason})"
-            except Exception as e:
-                logger.warning(f"Failed to check eligibility for sibling {candidate_key}: {e}")
-                return None, f"* {candidate_key} — excluded (eligibility check failed)"
-
-            try:
-                analysis_agent = ReasoningAgent(
-                    name="SiblingRebaseAnalyzer",
-                    llm=get_chat_model(),
-                    unconstrained=is_reasoning_enabled(),
-                    tool_call_checker=get_tool_call_checker_config(),
-                    tools=analysis_tools,
-                    memory=UnconstrainedMemory(),
-                )
-                prompt = _build_sibling_analysis_prompt(
-                    candidate_key=candidate_key,
-                    jira_issue=jira_issue,
-                    package=rebase_data.package,
-                    target_version=rebase_data.version,
-                )
-                response = await analysis_agent.run(
-                    prompt,
-                    expected_output=SiblingRebaseAnalysis,
-                    **get_agent_execution_config(),
-                )
-                analysis = SiblingRebaseAnalysis.model_validate_json(response.last_message.text)
-
-                if analysis.requires_same_rebase:
-                    # Guard: target_version must be present when requires_same_rebase is True
-                    if not analysis.target_version:
-                        logger.warning(
-                            f"Sibling {candidate_key} marked as requires_same_rebase "
-                            "but missing target_version"
-                        )
-                        return (
-                            None,
-                            f"* {candidate_key} — excluded (missing target version)",
-                        )
-                    cmp_result = await compare_versions_async(analysis.target_version, rebase_data.version)
-                    if cmp_result == 0:
-                        logger.info(
-                            f"Sibling {candidate_key} confirmed as requiring rebase "
-                            f"to {analysis.target_version}"
-                        )
-                        cve_id = analysis.cve_id
-                        cve_info = f" [{cve_id}]" if cve_id else ""
-                        consolidated_issue = ConsolidatedIssue(
-                            issue_key=candidate_key,
-                            dependency_issue=None,
-                            dependency_component=None,
-                        )
-                        return (
-                            consolidated_issue,
-                            f"* {candidate_key}{cve_info} — included (target: {analysis.target_version})",
-                        )
-                    logger.info(
-                        f"Sibling {candidate_key} requires different version: "
-                        f"{analysis.target_version} != {rebase_data.version}"
-                    )
-                    return (
-                        None,
-                        f"* {candidate_key} — excluded (different target version: {analysis.target_version})",
-                    )
-                logger.info(f"Sibling {candidate_key} does not require a rebase")
-                return None, f"* {candidate_key} — excluded (not a rebase)"
-            except Exception as e:
-                logger.warning(f"Failed to analyze sibling {candidate_key}: {e}")
-                return None, f"* {candidate_key} — excluded (analysis failed)"
-
-    # Analyze all verified candidates in parallel
-    results = await asyncio.gather(*[analyze_candidate(c) for c in verified_candidates])
-
-    # Collect consolidated issues and summary lines
-    consolidated: list[ConsolidatedIssue] = []
-    summary_lines: list[str] = []
-    for issue, summary_line in results:
-        if issue:
-            consolidated.append(issue)
-        summary_lines.append(summary_line)
-
-    if consolidated:
-        logger.info(f"Consolidated {len(consolidated)} sibling(s) into rebase for {jira_issue}")
-
-    return consolidated, "\n".join(summary_lines)
-
-
-def _build_sibling_analysis_prompt(
-    candidate_key: str,
-    jira_issue: str,
-    package: str,
-    target_version: str,
-) -> str:
-    return dedent(f"""\
-        Analyze Jira issue {candidate_key} to determine if it requires
-        rebasing package '{package}' to version {target_version}.
-
-        Context: Package '{package}' has issue {jira_issue} which requires
-        a rebase to version {target_version}. We are checking if sibling issue
-        {candidate_key} also requires rebasing to the exact same version.
-
-        Steps:
-        1. Use get_jira_details to examine issue {candidate_key}
-        2. Determine if this issue requires rebasing '{package}' to
-           a specific upstream version (typically to fix a CVE)
-        3. If yes, identify the exact target version from:
-           - Issue description or comments
-           - Upstream advisory references
-           - CVE database information
-        4. Extract CVE ID(s) from the issue summary (e.g. CVE-2024-1234).
-           Note: the summary may contain multiple CVE IDs — include all of them.
-        5. Set requires_same_rebase=true ONLY if the target version
-           matches exactly: {target_version}
-
-        Return your analysis as JSON.""")
 
 
 async def queue_siblings_for_triage(
@@ -674,13 +472,14 @@ async def check_and_queue_primary_if_ready(
             )
 
             # Re-queue primary to triage queue
-            # Triage will bypass dedup check (ymir_triaged_rebase is non-terminal when
-            # ymir_waiting_for_siblings was present), skip expensive analysis, and queue
-            # for rebase with proper full state (Task.metadata = state.model_dump())
+            # Triage will re-process the issue (full LLM triage + eligibility check), then
+            # queue for rebase with proper full state (Task.metadata = state.model_dump()).
+            # The ymir_triaged_rebase label will be removed by triage when it sees
+            # ymir_waiting_for_siblings was present (non-terminal state for re-triaging).
             task = Task.from_issue(primary_issue, user_triggered=user_triggered)
             async with redis_client(os.environ["REDIS_URL"]) as redis:
                 await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
-            logger.info(f"Re-queued {primary_issue} to triage (will queue to rebase with full state)")
+            logger.info(f"Re-queued {primary_issue} to triage (will re-triage and queue to rebase)")
 
         # Post comment
         await tasks.comment_in_jira(

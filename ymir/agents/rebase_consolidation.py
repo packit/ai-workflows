@@ -569,6 +569,7 @@ async def find_triaged_rebase_siblings(
             candidate_key = candidate.get("key", "")
             try:
                 # Get sibling's details including comments to check for primary issue reference
+                # Note: get_jira_details tool should include comments by default
                 candidate_details = await run_tool(
                     "get_jira_details",
                     available_tools=available_tools,

@@ -179,7 +179,7 @@ class GetTestingFarmRequestTool(
         context: RunContext,
     ) -> JSONToolOutput[dict[str, Any]]:
         logger.info("Getting Testing Farm request %s", tool_input.request_id)
-        
+
         with tool_error_context(f"Failed to get Testing Farm request {tool_input.request_id}"):
             response = await asyncio.to_thread(_testing_farm_api_get, f"requests/{tool_input.request_id}")
             tf_request = _parse_tf_request(response)

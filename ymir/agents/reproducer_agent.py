@@ -766,7 +766,7 @@ async def main() -> None:
             # Duplicate-processing guard: skip if the issue already has a
             # reproducer-terminal label and is not currently in-progress or
             # user-triggered (which always gets a fresh run).
-            current_labels = await tasks.get_jira_labels(input_data.jira_issue)
+            current_labels, _ = await tasks.get_jira_issue_metadata(input_data.jira_issue)
             terminal_ymir_labels = [label for label in current_labels if label in _REPRODUCER_TERMINAL_LABELS]
             if (
                 terminal_ymir_labels

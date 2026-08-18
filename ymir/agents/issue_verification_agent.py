@@ -38,7 +38,6 @@ from ymir.common.models import (
     TestingState,
     WorkflowResult,
 )
-from ymir.tools.privileged.jira import GetJiraAttachmentTool
 from ymir.tools.unprivileged.analyze_ewa_testrun import AnalyzeEwaTestRunTool
 from ymir.tools.unprivileged.read_logfile import ReadLogfileTool
 from ymir.tools.unprivileged.read_readme import ReadReadmeTool
@@ -92,7 +91,7 @@ async def _analyze_testing_results(
     """Run the testing analyst sub-agent to analyze test results."""
     tools = [
         ThinkTool(),
-        GetJiraAttachmentTool(),
+        *[t for t in gateway_tools if t.name == "get_jira_attachment"],
         ReadLogfileTool(),
         ReadReadmeTool(),
         SearchResultsdbTool(),

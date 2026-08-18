@@ -1,6 +1,6 @@
 apiVersion: v1
 data:
-  QUERY: 'project = RHEL AND labels = "ymir_todo" AND labels != "sustaining"'
+  QUERY: 'project = RHEL AND (labels = "ymir_todo" OR labels IN ("ymir_consolidate_base", "ymir_consolidate_next")) AND labels != "sustaining"'
 immutable: false
 kind: ConfigMap
 metadata:

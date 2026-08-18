@@ -952,11 +952,12 @@ class JiraIssueFetcher:
 
                 if not result:
                     logger.info(
-                        "Consolidation job already queued for %s/%s, removing labels anyway",
+                        "Consolidation job already queued for %s/%s, removing labels without commenting",
                         package,
                         branch,
                     )
 
+                # Remove labels from both issues
                 for issue_key, label in [
                     (base_key, JiraLabels.CONSOLIDATE_BASE.value),
                     (next_key, JiraLabels.CONSOLIDATE_NEXT.value),
@@ -969,27 +970,30 @@ class JiraIssueFetcher:
                         except Exception as e:
                             logger.warning("Failed to remove %s from %s: %s", label, issue_key, e)
 
+                # Only post comment if job was newly submitted
+                if result:
                     comment = (
                         f"MR consolidation job submitted for {package}/{branch}. "
                         f"The backport MRs for {base_key} and {next_key} will be "
                         f"consolidated into a single MR."
                     )
-                    if self.dry_run:
-                        logger.info("DRY_RUN: would post comment on %s", issue_key)
-                    else:
-                        try:
-                            self._post_jira_comment(issue_key, comment)
-                        except Exception as e:
-                            logger.warning("Failed to post comment on %s: %s", issue_key, e)
+                    for issue_key in [base_key, next_key]:
+                        if self.dry_run:
+                            logger.info("DRY_RUN: would post comment on %s", issue_key)
+                        else:
+                            try:
+                                self._post_jira_comment(issue_key, comment)
+                            except Exception as e:
+                                logger.warning("Failed to post comment on %s: %s", issue_key, e)
 
-                submitted += 1
-                logger.info(
-                    "Submitted consolidation job for %s/%s (issues: %s, %s)",
-                    package,
-                    branch,
-                    base_key,
-                    next_key,
-                )
+                    submitted += 1
+                    logger.info(
+                        "Submitted consolidation job for %s/%s (issues: %s, %s)",
+                        package,
+                        branch,
+                        base_key,
+                        next_key,
+                    )
 
         for bucket_key, next_entry in next_bucket.items():
             logger.warning(

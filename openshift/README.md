@@ -124,9 +124,15 @@ Two CronJobs run the fetcher with different JQL queries:
 | CronJob | Schedule | QUERY | ConfigMap |
 |---|---|---|---|
 | `jira-issue-fetcher` | `0 8 * * *` (daily, 8am UTC) | Main CVE batch — processes up to `MAX_ISSUES` issues from the filter in `jira-issue-fetcher-filter-env` | `jira-issue-fetcher-filter-env` |
-| `jira-issue-fetcher-todo` | `*/5 * * * *` | `labels = "ymir_todo"` | `jira-issue-fetcher-todo-env` |
+| `jira-issue-fetcher-todo` | `*/5 * * * *` | `labels = "ymir_todo"` OR consolidation labels (`ymir_consolidate_base`, `ymir_consolidate_next`) | `jira-issue-fetcher-todo-env` |
 
-Both share the common knobs (`MAX_ISSUES`, `LOGLEVEL`) from `jira-issue-fetcher-env`. Components excluded from scope are part of the Jira filter itself, maintained (with rationale per component) in the separate [`cve-scope`](https://gitlab.cee.redhat.com/jotnar-project/cve-scope) repo — not in a configmap or env var. The `ymir_todo` fetcher uses its own JQL (`labels = "ymir_todo"`) and is not filtered by component, so it processes any issue a maintainer tags regardless of scope exclusions. Each pod mounts the shared configmap plus its per-cron QUERY configmap. To target a different batch, edit `configmap-jira-issue-fetcher-filter-env.yml` and re-apply.
+Both share the common knobs (`MAX_ISSUES`, `LOGLEVEL`) from `jira-issue-fetcher-env`. Components excluded from scope are part of the Jira filter itself, maintained (with rationale per component) in the separate [`cve-scope`](https://gitlab.cee.redhat.com/jotnar-project/cve-scope) repo — not in a configmap or env var.
+
+The `jira-issue-fetcher-todo` runs every 5 minutes and processes:
+- **User-triggered issues**: Any issue tagged with `ymir_todo` by a maintainer (not filtered by component, processes regardless of scope exclusions)
+- **Consolidation requests**: Issue pairs tagged with `ymir_consolidate_base` and `ymir_consolidate_next` to trigger MR consolidation (see `configmap-jira-issue-fetcher-todo-env.yml` for the exact JQL)
+
+Both fetchers also process consolidation labels (the daily fetcher provides a slower fallback path). Each pod mounts the shared configmap plus its per-cron QUERY configmap. To target a different batch, edit the corresponding configmap and re-apply.
 
 Both CronJobs ship with `suspend: false` and run on their schedules out of the box. Pause or resume either one:
 

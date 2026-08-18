@@ -639,3 +639,70 @@ async def test_pending_dependencies_maps_to_postponed_y_stream():
 
     assert state.triage_result.resolution == Resolution.POSTPONED_Y_STREAM
     assert state.triage_result.data.pending_issues == pending_issues
+
+
+@pytest.mark.asyncio
+async def test_pr_pending_without_blocker_reference_raises():
+    """A postponed_pr_pending resolution with no blocker_references URL is not
+    sweepable (PRPendingSweep has no MR/PR to poll), so run_triage_analysis must
+    raise rather than silently produce a permanently-stuck issue. The raise is
+    caught by the workflow's outer handler and routed through retry()."""
+    from ymir.agents.triage_agent import run_workflow
+
+    eligibility_result = CVEEligibilityResult(
+        is_cve=True,
+        eligibility=TriageEligibility.IMMEDIATELY,
+        reason="Eligible for immediate triage",
+    )
+
+    # LLM output: postponed_pr_pending but blocker_references omitted.
+    llm_json = (
+        '{"resolution": "postponed_pr_pending", "data": {'
+        '"summary": "Fix pending in upstream MR; waiting for merge", '
+        '"pending_issues": ["RHEL-1"], "jira_issue": "RHEL-99999"}}'
+    )
+    response = MagicMock()
+    response.last_message.text = llm_json
+    agent = MagicMock()
+    agent.run = AsyncMock(return_value=response)
+
+    @asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    with (
+        patch("ymir.agents.triage_agent.mcp_tools", side_effect=_mock_mcp_tools),
+        patch(
+            "ymir.agents.triage_agent.run_tool",
+            new_callable=AsyncMock,
+            return_value=eligibility_result.model_dump(),
+        ),
+        patch("ymir.agents.triage_agent.get_mock_local_tool_env", return_value=None),
+        patch("ymir.agents.triage_agent.render_prompt", new_callable=AsyncMock, return_value="prompt"),
+        patch("ymir.agents.triage_agent.render_template", return_value="output format"),
+        patch("ymir.agents.triage_agent.get_agent_execution_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {"GIT_REPO_BASEPATH": "/tmp", "MCP_GATEWAY_URL": "http://localhost"},
+            clear=False,
+        ),
+        pytest.raises(Exception) as excinfo,
+    ):
+        await run_workflow(
+            "RHEL-99999",
+            dry_run=True,
+            triage_agent_factory=MagicMock(return_value=agent),
+        )
+
+    # The beeai Workflow wraps a node's exception in a FrameworkError, chaining
+    # the original via __cause__. The outer handler in _process_triage_locked
+    # catches it (except Exception) and routes to retry(); here we assert the
+    # guard's ValueError is what propagated.
+    chain = []
+    err = excinfo.value
+    while err is not None:
+        chain.append(err)
+        err = err.__cause__
+    assert any(isinstance(e, ValueError) and "postponed_pr_pending" in str(e) for e in chain), (
+        f"expected a chained ValueError about postponed_pr_pending, got: {chain!r}"
+    )

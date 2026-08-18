@@ -30,7 +30,7 @@ class FakeRedis:
         self._results = list(brpop_results or [])
         self.brpop_calls = 0
         self.rpush_calls: list[tuple[bytes, bytes]] = []
-        self._delayed_result: tuple[bytes, bytes] | None | object = _NO_DELAYED_RESULT
+        self._delayed_result: tuple[bytes, bytes] | object | None = _NO_DELAYED_RESULT
         self._release_delayed = asyncio.Event()
         self._rpush_failures: set[tuple[bytes, bytes]] = set()
 

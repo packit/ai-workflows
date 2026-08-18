@@ -13,10 +13,12 @@ from ymir.agents.reproducer_agent import (
     _prepare_reproducer_branch,
     _resolve_test_dir,
     _should_finalize_jira,
+    create_reproducer_agent,
+    main,
 )
 from ymir.common.base_utils import check_subprocess
 from ymir.common.constants import JiraLabels
-from ymir.common.models import MergeRequestDetails, ReproducerOutputSchema
+from ymir.common.models import MergeRequestDetails, ReproducerInputSchema, ReproducerOutputSchema, Task
 
 
 def _output(**overrides) -> ReproducerOutputSchema:
@@ -118,8 +120,6 @@ def test_reproducer_agent_enables_context_management():
         llm.allow_parallel_tool_calls = False
         mock_get_model.return_value = llm
 
-        from ymir.agents.reproducer_agent import create_reproducer_agent
-
         agent = create_reproducer_agent(gateway_tools=[])
         assert agent._enable_context_management is True
         assert llm.allow_parallel_tool_calls is True
@@ -218,3 +218,144 @@ async def test_prepare_reproducer_branch_adapt_keeps_sibling_commits(tmp_path: P
     assert sha.strip() == sibling_sha.strip()
     # Local adaptations were restored on top of that tip.
     assert (test_dir / "runtest.sh").read_text() == "local-adapt\n"
+
+
+# =============================================================================
+# process_task tests
+# =============================================================================
+
+
+def _make_reproducer_payload(issue: str = "RHEL-99999", user_triggered: bool = False) -> bytes:
+    input_data = ReproducerInputSchema(jira_issue=issue)
+    task = Task(metadata=input_data.model_dump(), user_triggered=user_triggered)
+    return task.model_dump_json().encode()
+
+
+async def _run_process_task(payload: bytes) -> None:
+    """Run reproducer main() in queue mode, invoking process_task with payload once.
+
+    process_task is a closure defined inside main() and cannot be imported directly.
+    This helper runs main() with a fake run_task_loop that calls process_fn(payload)
+    immediately, so process_task executes inside main()'s redis context — matching
+    the production execution environment.  Test-specific patches (e.g. get_jira_issue_metadata,
+    run_workflow) must be applied by the caller before invoking this helper.
+    """
+    span_processor = MagicMock()
+    span_processor.start_transaction.return_value.__enter__ = MagicMock(return_value=None)
+    span_processor.start_transaction.return_value.__exit__ = MagicMock(return_value=False)
+
+    async def fake_run_task_loop(_redis, _queues, process_fn, **_kw):
+        await process_fn(payload)
+
+    with (
+        patch("ymir.agents.reproducer_agent.init_sentry"),
+        patch("ymir.agents.reproducer_agent.configure_logging"),
+        patch("ymir.agents.reproducer_agent.resolve_chat_model_override"),
+        patch("ymir.agents.reproducer_agent.setup_observability", return_value=span_processor),
+        patch("ymir.agents.reproducer_agent.run_task_loop", side_effect=fake_run_task_loop),
+        patch("ymir.agents.reproducer_agent.redis_client") as mock_redis_ctx,
+        patch.dict(
+            "os.environ",
+            {"COLLECTOR_ENDPOINT": "http://localhost:4317", "REDIS_URL": "redis://localhost"},
+            clear=False,
+        ),
+    ):
+        mock_redis_ctx.return_value.__aenter__ = AsyncMock()
+        mock_redis_ctx.return_value.__aexit__ = AsyncMock()
+        await main()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "terminal_label",
+    [
+        "ymir_reproducer_created",
+        "ymir_reproducer_failed",
+        "ymir_reproducer_errored",
+        "ymir_reproducer_not_reproducible",
+        "ymir_reproducer_already_exists",
+    ],
+)
+async def test_process_task_skips_duplicate_with_terminal_label(terminal_label):
+    """When a terminal label is already set and the task is not user-triggered,
+    process_task must skip without calling run_workflow.
+
+    This is a regression guard for the get_jira_labels → get_jira_issue_metadata
+    rename: the function must be called and its tuple return value unpacked correctly.
+    """
+    with (
+        patch(
+            "ymir.agents.tasks.get_jira_issue_metadata",
+            new_callable=AsyncMock,
+            return_value=([terminal_label], "New"),
+        ) as mock_get_metadata,
+        patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+    ):
+        await _run_process_task(_make_reproducer_payload())
+
+    mock_get_metadata.assert_awaited_once_with("RHEL-99999")
+    mock_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_task_proceeds_despite_terminal_label_when_user_triggered():
+    """A user-triggered run must always proceed even when a terminal label is set."""
+    with (
+        patch(
+            "ymir.agents.tasks.get_jira_issue_metadata",
+            new_callable=AsyncMock,
+            return_value=(["ymir_reproducer_created"], "New"),
+        ),
+        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
+        patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
+        patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+    ):
+        mock_workflow.return_value = MagicMock(
+            result=MagicMock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
+        )
+        await _run_process_task(_make_reproducer_payload(user_triggered=True))
+
+    mock_workflow.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_task_proceeds_when_terminal_label_and_in_progress():
+    """If the in-progress label is set alongside a terminal label, the task
+    must still be processed — the in-progress label signals an active run."""
+    with (
+        patch(
+            "ymir.agents.tasks.get_jira_issue_metadata",
+            new_callable=AsyncMock,
+            return_value=(["ymir_reproducer_created", "ymir_reproducer_in_progress"], "New"),
+        ),
+        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
+        patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
+        patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+    ):
+        mock_workflow.return_value = MagicMock(
+            result=MagicMock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
+        )
+        await _run_process_task(_make_reproducer_payload())
+
+    mock_workflow.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_task_proceeds_when_no_terminal_labels():
+    """An issue with no terminal labels goes through the full workflow."""
+    with (
+        patch(
+            "ymir.agents.tasks.get_jira_issue_metadata",
+            new_callable=AsyncMock,
+            return_value=([], "New"),
+        ),
+        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
+        patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
+        patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+    ):
+        mock_workflow.return_value = MagicMock(
+            result=MagicMock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
+        )
+        await _run_process_task(_make_reproducer_payload())
+
+    mock_workflow.assert_awaited_once()

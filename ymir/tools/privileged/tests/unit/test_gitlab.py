@@ -27,8 +27,34 @@ from ymir.tools.privileged.gitlab import (
     RetryPipelineJobTool,
     SetMergeRequestReviewersTool,
     _get_git_auth_args,
+    _wait_for_fork_ready,
 )
 from ymir.tools.privileged.utils import sanitize_url
+
+
+def _fork_project_mock(
+    *,
+    target_namespace: str,
+    fork_name: str,
+    clone_url: str,
+    import_status: str = "finished",
+):
+    gitlab_repo = flexmock(
+        namespace={"full_path": target_namespace},
+        path=fork_name,
+        attributes={"import_status": import_status},
+    )
+    gitlab_repo.should_receive("refresh")
+    service = flexmock(
+        gitlab_instance=flexmock(projects=flexmock(get=lambda _path: gitlab_repo)),
+    )
+    return flexmock(
+        namespace=target_namespace,
+        repo=fork_name,
+        gitlab_repo=gitlab_repo,
+        service=service,
+        get_git_urls=lambda: {"git": clone_url},
+    )
 
 
 @pytest.mark.parametrize(
@@ -59,9 +85,10 @@ async def test_fork_repository(repository, fork_exists, fork_namespace):
     expected_data = {"name": fork_name, "path": fork_name}
     if fork_namespace:
         expected_data["namespace"] = fork_namespace
-    fork = flexmock(
-        gitlab_repo=flexmock(namespace={"full_path": target_namespace}, path=fork_name),
-        get_git_urls=lambda: {"git": clone_url},
+    fork = _fork_project_mock(
+        target_namespace=target_namespace,
+        fork_name=fork_name,
+        clone_url=clone_url,
     )
     flexmock(GitlabProject).new_instances(fork)
     flexmock(GitlabService).should_receive("get_project_from_url").with_args(url=repository).and_return(
@@ -86,6 +113,112 @@ async def test_fork_repository(repository, fork_exists, fork_namespace):
         )
     )
     assert (await ForkRepositoryTool().run(input={"repository": repository})).result == clone_url
+
+
+def test_wait_for_fork_ready_returns_when_import_finished():
+    fork = _fork_project_mock(
+        target_namespace="redhat/rhel/bot-branches",
+        fork_name="rhel_tests_expat",
+        clone_url="https://gitlab.com/redhat/rhel/bot-branches/rhel_tests_expat.git",
+        import_status="finished",
+    )
+    _wait_for_fork_ready(fork)
+
+
+def test_wait_for_fork_ready_polls_until_finished(monkeypatch):
+    class Repo:
+        def __init__(self):
+            self.namespace = {"full_path": "redhat/rhel/bot-branches"}
+            self.path = "rhel_tests_expat"
+            self.attributes = {"import_status": "started"}
+            self.refresh_count = 0
+
+        def refresh(self):
+            self.refresh_count += 1
+            if self.refresh_count >= 2:
+                self.attributes["import_status"] = "finished"
+
+    repo = Repo()
+    fork = flexmock(
+        namespace="redhat/rhel/bot-branches",
+        repo="rhel_tests_expat",
+        gitlab_repo=repo,
+        service=flexmock(
+            gitlab_instance=flexmock(projects=flexmock(get=lambda _path: repo)),
+        ),
+        get_git_urls=lambda: {"git": "https://gitlab.com/redhat/rhel/bot-branches/rhel_tests_expat.git"},
+    )
+    monkeypatch.setattr(
+        "ymir.tools.privileged.gitlab._FORK_READY_POLL_INTERVAL_SEC",
+        0,
+    )
+    _wait_for_fork_ready(fork)
+    assert repo.refresh_count == 2
+
+
+def test_wait_for_fork_ready_raises_on_failed_import():
+    fork = _fork_project_mock(
+        target_namespace="redhat/rhel/bot-branches",
+        fork_name="rhel_tests_expat",
+        clone_url="https://gitlab.com/redhat/rhel/bot-branches/rhel_tests_expat.git",
+        import_status="failed",
+    )
+    fork.gitlab_repo.attributes["import_error"] = "fork import blew up"
+    with pytest.raises(ToolError, match="failed to import"):
+        _wait_for_fork_ready(fork)
+
+
+def test_wait_for_fork_ready_wraps_gitlab_error_from_project_get():
+    fork = flexmock(
+        namespace="redhat/rhel/bot-branches",
+        repo="rhel_tests_foo",
+        service=flexmock(
+            gitlab_instance=flexmock(
+                projects=flexmock(
+                    get=lambda _path: (_ for _ in ()).throw(gitlab.GitlabGetError("404", 404, b""))
+                )
+            ),
+        ),
+    )
+    with pytest.raises(ToolError, match="Failed to query fork project"):
+        _wait_for_fork_ready(fork)
+
+
+def test_wait_for_fork_ready_wraps_gitlab_error_from_refresh():
+    class Repo:
+        def __init__(self):
+            self.attributes = {"import_status": "started"}
+
+        def refresh(self):
+            raise gitlab.GitlabGetError("403", 403, b"")
+
+    repo = Repo()
+    fork = flexmock(
+        namespace="redhat/rhel/bot-branches",
+        repo="rhel_tests_foo",
+        service=flexmock(gitlab_instance=flexmock(projects=flexmock(get=lambda _path: repo))),
+    )
+    with pytest.raises(ToolError, match="Failed to query fork project"):
+        _wait_for_fork_ready(fork)
+
+
+def test_wait_for_fork_ready_raises_on_timeout(monkeypatch):
+    fork = _fork_project_mock(
+        target_namespace="redhat/rhel/bot-branches",
+        fork_name="rhel_tests_expat",
+        clone_url="https://gitlab.com/redhat/rhel/bot-branches/rhel_tests_expat.git",
+        import_status="started",
+    )
+    monkeypatch.setattr(
+        "ymir.tools.privileged.gitlab._FORK_READY_POLL_INTERVAL_SEC",
+        0,
+    )
+    monkeypatch.setattr(
+        "ymir.tools.privileged.gitlab._FORK_READY_TIMEOUT_SEC",
+        0,
+    )
+    with pytest.raises(ToolError, match="did not become ready"):
+        _wait_for_fork_ready(fork)
 
 
 @pytest.mark.parametrize(

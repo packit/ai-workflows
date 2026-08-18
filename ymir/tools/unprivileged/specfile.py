@@ -22,7 +22,12 @@ from specfile.value_parser import (
     ValueParser,
 )
 
-from ymir.common.utils import get_absolute_path, get_all_patches, get_latest_candidate_build
+from ymir.common.utils import (
+    NoBuildFoundError,
+    get_absolute_path,
+    get_all_patches,
+    get_latest_candidate_build,
+)
 from ymir.common.version_utils import get_maintenance_rhel_branch
 from ymir.tools.base import CloneableTool as Tool
 
@@ -196,13 +201,19 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
     description = """
     Updates the value of the `Release` field in the specified spec file.
 
-    If branch is a Z-Stream branch (rhel-X.Y or rhel-X.Y.Z) or a CentOS Stream branch for a
-    RHEL version in maintenance phase (e.g. c8s), release is updated in the following way:
-        - base release is established - from the latest candidate build of the current stream (for
-          CentOS Stream branches corresponding to a RHEL version in maintenance phase, the internal
-          RHEL branch is used for the candidate build lookup), unless the latest higher stream (Y + 1)
-          candidate build shares the same version but has a higher release (not applicable to
-          maintenance phase RHEL as there is no higher stream)
+    If branch is a Z-Stream branch (rhel-X.Y or rhel-X.Y.Z) or a CentOS Stream branch for
+    a RHEL version in maintenance phase (e.g. c8s), release is updated in the following way:
+        - base release is established - from the latest candidate build of the current stream
+          (for CentOS Stream branches corresponding to a RHEL version in maintenance phase,
+          the internal RHEL branch is used for the candidate build lookup), unless the latest
+          higher stream (Y + 1) candidate build shares the same version but has a higher release
+          (not applicable to maintenance phase RHEL as there is no higher stream); if there is no
+          candidate build for the higher stream, the current stream build is used as base
+        - if there is no candidate build for the current stream, base release falls back to 0 if
+          %autorelease is present in the current Release (it has no base release of its own to
+          fall back to), otherwise to the numeric prefix of the release already present in the
+          spec file (or 0 if there is none); the abandon_autorelease Z-stream counter falls back
+          to 0 as well
         - if %autorelease is present in the current Release:
             - if abandon_autorelease is True, %autorelease is removed and Release is set to
               "N%{?dist}.1" (or "0%{?dist}.1" for rebase), using a plain numeric Z-stream counter
@@ -259,6 +270,29 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                 return index
         return None
 
+    @staticmethod
+    def _split_release_at_dist(
+        current_release: str,
+        expanded_raw_release: str,
+        dist: str,
+        nodes: list[Node],
+        dist_index: int | None,
+    ) -> tuple[str, str]:
+        """Split a raw Release value into (prefix, suffix) around the %dist macro.
+
+        Falls back to splitting the expanded Release on the expanded dist string when %dist
+        isn't a directly parseable macro (e.g. it's embedded in a custom macro).
+        """
+        if dist_index is not None:
+            return (
+                "".join(str(n) for n in nodes[:dist_index]),
+                "".join(str(n) for n in nodes[dist_index + 1 :]),
+            )
+        if dist and expanded_raw_release and dist in expanded_raw_release:
+            prefix, suffix = expanded_raw_release.split(dist, 1)
+            return prefix, suffix
+        return current_release, ""
+
     @classmethod
     async def _bump_or_reset_release(cls, spec_path: Path, rebase: bool) -> None:
         with Specfile(spec_path) as spec:
@@ -273,15 +307,9 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
             # revert to plain %autorelease
             release = "%autorelease"
         else:
-            if dist_index is None:
-                if dist and expanded_raw_release and dist in expanded_raw_release:
-                    prefix, suffix = expanded_raw_release.split(dist, 1)
-                else:
-                    prefix = current_release
-                    suffix = ""
-            else:
-                prefix = "".join(str(n) for n in nodes[:dist_index])
-                suffix = "".join(str(n) for n in nodes[dist_index + 1 :])
+            prefix, suffix = cls._split_release_at_dist(
+                current_release, expanded_raw_release, dist, nodes, dist_index
+            )
             if m := re.match(r"^(\d+)(.*)$", prefix):
                 # increase or reset the main numeric part
                 release = str(1 if rebase else int(m.group(1)) + 1) + m.group(2)
@@ -294,6 +322,99 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         with Specfile(spec_path) as spec:
             spec.raw_release = release
 
+    @staticmethod
+    def _extract_release_without_dist(evr: EVR) -> str:
+        return evr.release.rsplit(".el", maxsplit=1)[0]
+
+    @staticmethod
+    def _extract_zstream_suffix(evr: EVR) -> int:
+        parts = evr.release.rsplit(".el", maxsplit=1)
+        if len(parts) < 2:
+            return 0
+        after_el = parts[1]
+        dot_parts = after_el.split(".", 1)
+        if len(dot_parts) > 1:
+            try:
+                return int(dot_parts[1])
+            except ValueError:
+                return 0
+        return 0
+
+    @classmethod
+    async def _resolve_zstream_base_build(
+        cls,
+        package: str,
+        current_stream_branch: str,
+        higher_stream_branch: str | None,
+    ) -> tuple[EVR | None, EVR | None]:
+        """Determine which build's release the new Z-Stream release should be based on.
+
+        Returns (base_build, latest_current_stream_build): the latter is also returned on its own
+        because it (not necessarily base_build, which may be the higher stream's build) is what
+        the Z-Stream counter is incremented from. Either may be None if there is simply no
+        candidate build yet for the respective branch; any other error looking up a build is
+        raised instead of being treated as "no build".
+        """
+        if not higher_stream_branch:
+            try:
+                latest_current_stream_build, _ = await get_latest_candidate_build(
+                    package, current_stream_branch
+                )
+            except NoBuildFoundError:
+                return None, None
+            return latest_current_stream_build, latest_current_stream_build
+
+        current_task = asyncio.ensure_future(get_latest_candidate_build(package, current_stream_branch))
+        higher_task = asyncio.ensure_future(get_latest_candidate_build(package, higher_stream_branch))
+        tasks = (current_task, higher_task)
+        try:
+            # return as soon as either lookup raises, rather than always waiting for both, so a
+            # real failure (as opposed to NoBuildFoundError) doesn't sit blocked on a slow Koji
+            # call
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+            fatal_error = None
+            for task in done:
+                exc = task.exception()
+                if exc is not None and not isinstance(exc, NoBuildFoundError):
+                    fatal_error = exc
+                    break
+            if fatal_error is not None:
+                raise fatal_error
+            if pending:
+                await asyncio.wait(pending)
+            for task in tasks:
+                exc = task.exception()
+                if exc is not None and not isinstance(exc, NoBuildFoundError):
+                    raise exc
+        except BaseException:
+            # make sure neither lookup outlives this call - on a fatal error or on this coroutine
+            # itself being cancelled, cancel whatever is still running and wait for it to actually
+            # finish before propagating
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
+        try:
+            latest_current_stream_build, _ = current_task.result()
+        except NoBuildFoundError:
+            return None, None
+
+        try:
+            latest_higher_stream_build, _ = higher_task.result()
+        except NoBuildFoundError:
+            # no higher stream build to compare against (yet), just use the current stream one
+            return latest_current_stream_build, latest_current_stream_build
+        higher_stream_takes_over = EVR(
+            epoch=latest_higher_stream_build.epoch, version=latest_higher_stream_build.version
+        ) == EVR(
+            epoch=latest_current_stream_build.epoch, version=latest_current_stream_build.version
+        ) and EVR(version="0", release=cls._extract_release_without_dist(latest_higher_stream_build)) >= EVR(
+            version="0", release=cls._extract_release_without_dist(latest_current_stream_build)
+        )
+        base_build = latest_higher_stream_build if higher_stream_takes_over else latest_current_stream_build
+        return base_build, latest_current_stream_build
+
     @classmethod
     async def _set_zstream_release(
         cls,
@@ -304,42 +425,6 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         higher_stream_branch: str | None = None,
         abandon_autorelease: bool = False,
     ) -> None:
-        def extract_release_without_dist(evr):
-            return evr.release.rsplit(".el", maxsplit=1)[0]
-
-        def extract_zstream_suffix(evr):
-            parts = evr.release.rsplit(".el", maxsplit=1)
-            if len(parts) < 2:
-                return 0
-            after_el = parts[1]
-            dot_parts = after_el.split(".", 1)
-            if len(dot_parts) > 1:
-                try:
-                    return int(dot_parts[1])
-                except ValueError:
-                    return 0
-            return 0
-
-        if higher_stream_branch:
-            (latest_current_stream_build, _), (latest_higher_stream_build, _) = await asyncio.gather(
-                get_latest_candidate_build(package, current_stream_branch),
-                get_latest_candidate_build(package, higher_stream_branch),
-            )
-            base_build = latest_current_stream_build
-            if EVR(
-                epoch=latest_higher_stream_build.epoch,
-                version=latest_higher_stream_build.version,
-            ) == EVR(
-                epoch=latest_current_stream_build.epoch,
-                version=latest_current_stream_build.version,
-            ) and EVR(version="0", release=extract_release_without_dist(latest_higher_stream_build)) >= EVR(
-                version="0", release=extract_release_without_dist(latest_current_stream_build)
-            ):
-                base_build = latest_higher_stream_build
-        else:
-            latest_current_stream_build, _ = await get_latest_candidate_build(package, current_stream_branch)
-            base_build = latest_current_stream_build
-        base_release = extract_release_without_dist(base_build)
         with Specfile(spec_path) as spec:
             current_release = spec.raw_release
             expanded_raw_release = spec.expanded_raw_release
@@ -348,9 +433,33 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
 
         autorelease_index = cls._find_macro("autorelease", nodes)
         dist_index = cls._find_macro("dist", nodes)
+
+        base_build, latest_current_stream_build = await cls._resolve_zstream_base_build(
+            package, current_stream_branch, higher_stream_branch
+        )
+        if base_build is not None:
+            base_release = cls._extract_release_without_dist(base_build)
+        elif autorelease_index is not None:
+            # no candidate build yet and %autorelease hasn't been given an established Z-stream
+            # base release of its own - expanding it would only yield its own commit-count
+            # counter (unrelated to the base release we need here), so start fresh like a rebase
+            base_release = "0"
+        else:
+            # no candidate build yet for the current stream: fall back to the release already
+            # present in the spec file
+            prefix, _ = cls._split_release_at_dist(
+                current_release, expanded_raw_release, dist, nodes, dist_index
+            )
+            match = re.match(r"^(\d+(?:\.\d+)*)", prefix)
+            base_release = match.group(1) if match else "0"
+
         if autorelease_index is not None:
             if abandon_autorelease:
-                zstream_suffix = extract_zstream_suffix(latest_current_stream_build)
+                zstream_suffix = (
+                    cls._extract_zstream_suffix(latest_current_stream_build)
+                    if latest_current_stream_build
+                    else 0
+                )
                 release = f"{'0' if rebase else base_release}%{{?dist}}.{1 if rebase else zstream_suffix + 1}"
             elif rebase:
                 # %autorelease present, rebase, reset the release
@@ -367,15 +476,14 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
                 release = "0%{?dist}.1"
             elif dist_index is None:
                 # no %autorelease and no %dist
-                if dist and expanded_raw_release and dist in expanded_raw_release:
+                prefix, suffix = cls._split_release_at_dist(
+                    current_release, expanded_raw_release, dist, nodes, dist_index
+                )
+                if m := re.match(r"^\.(\d+)$", suffix):
                     # %dist is embedded in a macro, use the expanded form
-                    before_dist, after_dist = expanded_raw_release.split(dist, 1)
-                    if m := re.match(r"^\.(\d+)$", after_dist):
-                        release = f"{before_dist}%{{?dist}}.{int(m.group(1)) + 1}"
-                    else:
-                        release = before_dist + "%{?dist}.1"
+                    release = f"{prefix}%{{?dist}}.{int(m.group(1)) + 1}"
                 else:
-                    release = current_release + "%{?dist}.1"
+                    release = prefix + "%{?dist}.1"
             elif dist_index + 1 < len(nodes):
                 prefix = "".join(str(n) for n in nodes[: dist_index + 1])
                 suffix = "".join(str(n) for n in nodes[dist_index + 1 :])

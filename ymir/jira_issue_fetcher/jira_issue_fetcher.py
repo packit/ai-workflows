@@ -223,22 +223,27 @@ class JiraIssueFetcher:
         response.raise_for_status()
         return response.json()
 
-    def _label_added_by_rh_employee(self, issue_key: str) -> bool:
-        """Verify that the latest add of ymir_todo was performed by a Red Hat Employee.
+    def _label_added_by_rh_employee(self, issue_key: str, label: str | None = None) -> bool:
+        """Verify that the latest add of a label was performed by a Red Hat Employee.
 
-        The JQL no longer gates ymir_todo on the assignee, so the fetcher must
-        check per-issue that the label was added by a Red Hat Employee rather
+        Checks per-issue that the label was added by a Red Hat Employee rather
         than (e.g.) an external collaborator. Fetches the full changelog via
         the dedicated /rest/api/3/issue/{issueKey}/changelog endpoint with
         pagination to handle issues with long histories (which may exceed the
-        100-entry limit when expanded inline). Picks the most-recent
-        ``ymir_todo`` add event and looks up that author's Jira group
-        memberships.
+        100-entry limit when expanded inline). Picks the most-recent add event
+        for the specified label and looks up that author's Jira group memberships.
+
+        Args:
+            issue_key: Jira issue key (e.g., RHEL-12345)
+            label: Label to check. Defaults to ymir_todo for backwards compatibility.
 
         Returns False on any lookup or parsing failure — that path skips the
         issue with a warning rather than treating an unverifiable label as a
         legitimate trigger.
         """
+        if label is None:
+            label = JiraLabels.TODO.value
+
         try:
             # Fetch full changelog with pagination to handle long histories
             changelog_url = urljoin(self.jira_url, f"rest/api/3/issue/{issue_key}/changelog")
@@ -257,7 +262,7 @@ class JiraIssueFetcher:
                 if not histories:
                     break
 
-                # Find the most-recent entry that adds ymir_todo to labels. Track by
+                # Find the most-recent entry that adds the specified label. Track by
                 # `created` timestamp so the result is order-independent (ISO 8601
                 # strings are lexically comparable).
                 for history in histories:
@@ -267,7 +272,7 @@ class JiraIssueFetcher:
                             continue
                         from_labels = set((item.get("fromString") or "").split())
                         to_labels = set((item.get("toString") or "").split())
-                        if JiraLabels.TODO.value in (to_labels - from_labels) and created > latest_add_time:
+                        if label in (to_labels - from_labels) and created > latest_add_time:
                             latest_add_time = created
                             latest_add_author = (history.get("author") or {}).get("accountId")
                         break  # one labels item per history
@@ -281,7 +286,7 @@ class JiraIssueFetcher:
 
             if not latest_add_author:
                 logger.warning(
-                    f"No changelog entry adds {JiraLabels.TODO.value} to {issue_key}; "
+                    f"No changelog entry adds {label} to {issue_key}; "
                     f"cannot verify author, treating as non-RH-employee"
                 )
                 return False
@@ -297,16 +302,13 @@ class JiraIssueFetcher:
         except requests.HTTPError as e:
             if e.response is not None and e.response.status_code in (400, 401, 403, 404):
                 logger.warning(
-                    f"Permanent API error verifying {JiraLabels.TODO.value} author on {issue_key}: {e}; "
+                    f"Permanent API error verifying {label} author on {issue_key}: {e}; "
                     f"treating as non-RH-employee to avoid infinite retries"
                 )
                 return False
             raise
         except (ValueError, KeyError, AttributeError) as e:
-            logger.warning(
-                f"Failed to parse {JiraLabels.TODO.value} author on {issue_key}: {e}; "
-                f"treating as non-RH-employee"
-            )
+            logger.warning(f"Failed to parse {label} author on {issue_key}: {e}; treating as non-RH-employee")
             return False
 
     @staticmethod
@@ -810,6 +812,10 @@ class JiraIssueFetcher:
     ) -> int:
         """Scan for ymir_consolidate_base / _next label pairs and submit targeted jobs.
 
+        Verifies that both consolidation labels were added by Red Hat Employees
+        to prevent untrusted external collaborators from submitting consolidation
+        jobs. Removes labels that fail verification.
+
         Returns the number of consolidation jobs submitted.
         """
         base_bucket: dict[str, dict] = {}
@@ -825,6 +831,60 @@ class JiraIssueFetcher:
             is_base = JiraLabels.CONSOLIDATE_BASE.value in labels
             is_next = JiraLabels.CONSOLIDATE_NEXT.value in labels
             if not is_base and not is_next:
+                continue
+
+            # Verify that consolidation labels were added by Red Hat Employees
+            # to prevent untrusted external collaborators from triggering jobs
+            labels_to_remove = []
+            if is_base:
+                try:
+                    is_rh_employee = self._label_added_by_rh_employee(
+                        issue_key, JiraLabels.CONSOLIDATE_BASE.value
+                    )
+                except requests.RequestException as e:
+                    logger.warning(
+                        f"Transient error verifying {JiraLabels.CONSOLIDATE_BASE.value} author on "
+                        f"{issue_key}: {e}; skipping for this sweep"
+                    )
+                    continue
+
+                if not is_rh_employee:
+                    logger.warning(
+                        f"Issue {issue_key} has {JiraLabels.CONSOLIDATE_BASE.value} but the label "
+                        f"was not added by a Red Hat Employee - skipping and removing the label"
+                    )
+                    labels_to_remove.append(JiraLabels.CONSOLIDATE_BASE.value)
+                    is_base = False
+
+            if is_next:
+                try:
+                    is_rh_employee = self._label_added_by_rh_employee(
+                        issue_key, JiraLabels.CONSOLIDATE_NEXT.value
+                    )
+                except requests.RequestException as e:
+                    logger.warning(
+                        f"Transient error verifying {JiraLabels.CONSOLIDATE_NEXT.value} author on "
+                        f"{issue_key}: {e}; skipping for this sweep"
+                    )
+                    continue
+
+                if not is_rh_employee:
+                    logger.warning(
+                        f"Issue {issue_key} has {JiraLabels.CONSOLIDATE_NEXT.value} but the label "
+                        f"was not added by a Red Hat Employee - skipping and removing the label"
+                    )
+                    labels_to_remove.append(JiraLabels.CONSOLIDATE_NEXT.value)
+                    is_next = False
+
+            # Remove any labels that failed verification
+            if labels_to_remove:
+                if self.dry_run:
+                    logger.info(f"DRY_RUN: would remove {labels_to_remove} from {issue_key}")
+                else:
+                    try:
+                        self._edit_jira_labels(issue_key, add=[], remove=labels_to_remove)
+                    except Exception as e:
+                        logger.warning(f"Failed to remove {labels_to_remove} from {issue_key}: {e}")
                 continue
 
             components = [c.get("name") for c in (fields.get("components") or []) if c.get("name")]

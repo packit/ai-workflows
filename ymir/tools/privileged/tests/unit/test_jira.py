@@ -1587,10 +1587,130 @@ async def test_check_duplicate_modular_candidate_filtered_out():
         "postgresql",
         "rhel-9.2.0.z",
         "RHEL-500",
-        modular=False,
+        module_stream=None,
     )
     assert dup_key is None
     assert should_block is False
+
+
+@pytest.mark.asyncio
+async def test_check_duplicate_same_module_stream_is_duplicate():
+    """Modular issue with same module:stream should be flagged as duplicate."""
+    search_result = [
+        {
+            "key": "RHEL-100",
+            "fields": {
+                "status": {"name": "New"},
+                "resolution": None,
+                "summary": "CVE-2025-12345 postgresql:16/postgresql: overflow",
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+
+    dup_key, should_block = await _check_duplicate_tracker(
+        "CVE-2025-12345",
+        "postgresql",
+        "rhel-9.6.z",
+        "RHEL-500",
+        module_stream=("postgresql", "16"),
+    )
+    assert dup_key == "RHEL-100"
+    assert should_block is True
+
+
+@pytest.mark.asyncio
+async def test_check_duplicate_different_module_stream_not_duplicate():
+    """Modular issues with different streams (e.g. postgresql:16 vs :18) are NOT duplicates."""
+    search_result = [
+        {
+            "key": "RHEL-100",
+            "fields": {
+                "status": {"name": "New"},
+                "resolution": None,
+                "summary": "CVE-2025-12345 postgresql:16/postgresql: overflow",
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+
+    dup_key, should_block = await _check_duplicate_tracker(
+        "CVE-2025-12345",
+        "postgresql",
+        "rhel-9.6.z",
+        "RHEL-500",
+        module_stream=("postgresql", "18"),
+    )
+    assert dup_key is None
+    assert should_block is False
+
+
+@pytest.mark.asyncio
+async def test_check_duplicate_modular_issue_no_match_for_nonmodular_candidate():
+    """Modular issue (postgresql:16) should not match a non-modular candidate."""
+    search_result = [
+        {
+            "key": "RHEL-100",
+            "fields": {
+                "status": {"name": "New"},
+                "resolution": None,
+                "summary": "CVE-2025-12345 buffer overflow in postgresql [rhel-9.6.z]",
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+
+    dup_key, should_block = await _check_duplicate_tracker(
+        "CVE-2025-12345",
+        "postgresql",
+        "rhel-9.6.z",
+        "RHEL-500",
+        module_stream=("postgresql", "16"),
+    )
+    assert dup_key is None
+    assert should_block is False
+
+
+@pytest.mark.asyncio
+async def test_check_duplicate_mixed_streams_picks_matching():
+    """Only candidates with the same stream match; others are filtered out."""
+    search_result = [
+        {
+            "key": "RHEL-100",
+            "fields": {
+                "status": {"name": "New"},
+                "resolution": None,
+                "summary": "CVE-2025-12345 postgresql:18/postgresql: overflow",
+            },
+        },
+        {
+            "key": "RHEL-200",
+            "fields": {
+                "status": {"name": "New"},
+                "resolution": None,
+                "summary": "CVE-2025-12345 postgresql:16/postgresql: overflow",
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+
+    dup_key, should_block = await _check_duplicate_tracker(
+        "CVE-2025-12345",
+        "postgresql",
+        "rhel-9.6.z",
+        "RHEL-500",
+        module_stream=("postgresql", "16"),
+    )
+    assert dup_key == "RHEL-200"
+    assert should_block is True
 
 
 # --- Eligibility tool: duplicate tracker integration tests ---
@@ -1617,7 +1737,7 @@ async def test_eligibility_zstream_blocking_duplicate():
         )
     ).once()
     flexmock(jira_tools).should_receive("_check_duplicate_tracker").with_args(
-        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", modular=False
+        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", module_stream=None
     ).and_return(_create_async_return(("RHEL-100", True))).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
@@ -1647,7 +1767,7 @@ async def test_eligibility_zstream_nonblocking_duplicate():
         )
     ).once()
     flexmock(jira_tools).should_receive("_check_duplicate_tracker").with_args(
-        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", modular=False
+        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", module_stream=None
     ).and_return(_create_async_return(("RHEL-100", False))).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
@@ -1676,7 +1796,7 @@ async def test_eligibility_no_duplicate():
         )
     ).once()
     flexmock(jira_tools).should_receive("_check_duplicate_tracker").with_args(
-        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", modular=False
+        "CVE-2025-12345", "curl", "rhel-9.6.z", "RHEL-12345", module_stream=None
     ).and_return(_create_async_return((None, False))).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
@@ -1705,7 +1825,11 @@ async def test_eligibility_modular_filters_nonmodular_duplicates():
         )
     ).once()
     flexmock(jira_tools).should_receive("_check_duplicate_tracker").with_args(
-        "CVE-2025-12345", "postgresql", "rhel-9.6.z", "RHEL-12345", modular=True
+        "CVE-2025-12345",
+        "postgresql",
+        "rhel-9.6.z",
+        "RHEL-12345",
+        module_stream=("postgresql", "15"),
     ).and_return(_create_async_return((None, False))).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result

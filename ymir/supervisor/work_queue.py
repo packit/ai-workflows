@@ -63,7 +63,7 @@ class WorkQueue:
     async def pop_first_ready_work_item(self) -> WorkItem | None:
         current_time = time.time()
         result = cast(
-            None | tuple[bytes, float],
+            tuple[bytes, float] | None,
             await fix_await(
                 self.first_ready_script(
                     keys=["supervisor_work_queue"],

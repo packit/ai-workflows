@@ -10,6 +10,7 @@ from beeai_framework.backend import (
     ToolMessage,
     UserMessage,
 )
+from beeai_framework.backend.message import MessageTextContent
 from beeai_framework.memory import UnconstrainedMemory
 
 from ymir.agents.reasoning_agent.context_management import (
@@ -301,6 +302,47 @@ async def test_apply_with_nothing_to_drop_still_strips_manage_context():
     await apply_pending_context_compaction(state)
     assert not any(m.meta.get(YMIR_CONTEXT_SUMMARY_META_KEY) for m in state.memory.messages)
     assert any(isinstance(m, ToolMessage) and m.content[0].result == "data" for m in state.memory.messages)
+
+
+def test_strip_manage_context_only_exchange_drops_entire_exchange_with_text():
+    exchange = [
+        AssistantMessage(
+            [
+                MessageTextContent(text="Valgrind confirmed the OOB write."),
+                _tool_call(MANAGE_CONTEXT_TOOL_NAME, "c1"),
+            ],
+            meta={"thinking_blocks": [{"type": "thinking", "thinking": "compact", "signature": "sig"}]},
+        ),
+        _tool_result(MANAGE_CONTEXT_TOOL_NAME, "c1", "scheduled"),
+    ]
+    assert strip_manage_context_from_exchange(exchange) == []
+
+
+@pytest.mark.asyncio
+async def test_apply_compaction_drops_manage_context_only_kept_exchange():
+    task = _task_message()
+    old = _exchange("shell", "old", "noise")
+    kept = [
+        AssistantMessage(
+            [
+                MessageTextContent(text="Valgrind confirmed the OOB write."),
+                _tool_call(MANAGE_CONTEXT_TOOL_NAME, "c1"),
+            ],
+            meta={"thinking_blocks": [{"type": "thinking", "thinking": "compact", "signature": "sig"}]},
+        ),
+        _tool_result(MANAGE_CONTEXT_TOOL_NAME, "c1", "scheduled"),
+    ]
+    state = _state_with_messages([task, *old, *kept])
+    state.pending_context_compaction = ManageContextSchema(
+        durable_summary="Valgrind confirmed OOB write; update runtest.sh next.",
+        keep_recent_exchanges=1,
+    )
+
+    await apply_pending_context_compaction(state)
+
+    assert state.memory.messages[-1].meta.get(YMIR_CONTEXT_SUMMARY_META_KEY)
+    assert "Valgrind confirmed OOB write" in state.memory.messages[-1].text
+    assert not any(isinstance(m, AssistantMessage) for m in state.memory.messages)
 
 
 @pytest.mark.asyncio

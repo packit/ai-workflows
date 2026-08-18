@@ -129,26 +129,25 @@ def partition_exchanges(messages: list[AnyMessage]) -> tuple[list[AnyMessage], l
     return protected, exchanges
 
 
-def _assistant_has_provider_visible_output(msg: AssistantMessage) -> bool:
-    """Return True if the message has text or tool_calls (not reasoning-only).
-
-    Anthropic/Vertex reject assistant messages whose final block is ``thinking``.
-    Extended thinking is round-tripped via signed ``meta['thinking_blocks']``
-    (Vertex/Anthropic's format); ``MessageReasoningContent`` in content alone is
-    not sent as a valid assistant block. A message with only reasoning content
-    (or empty content + ``thinking_blocks``) is therefore an invalid
-    thinking-only turn.
-    """
-    return bool(msg.get_tool_calls() or msg.get_texts())
+def _is_manage_context_only_exchange(exchange: list[AnyMessage]) -> bool:
+    """Return True when every tool call in the exchange is manage_context."""
+    tool_calls: list[MessageToolCallContent] = []
+    for msg in exchange:
+        if isinstance(msg, AssistantMessage):
+            tool_calls.extend(msg.get_tool_calls())
+    return bool(tool_calls) and all(call.tool_name == MANAGE_CONTEXT_TOOL_NAME for call in tool_calls)
 
 
 def strip_manage_context_from_exchange(exchange: list[AnyMessage]) -> list[AnyMessage]:
     """Remove manage_context tool-call/result pairs from a kept exchange.
 
-    Mutates assistant content in place so ``meta['thinking_blocks']`` (signed
-    Anthropic thinking) stays attached to the same message object. Drops the
-    assistant message entirely when stripping would leave a thinking-only turn
-    (no text/tool_calls), which Vertex/Claude reject.
+    When manage_context was the only tool in the exchange, drop the whole
+    exchange: the durable summary already carries what matters, and keeping
+    assistant text/thinking would leave history ending on an assistant turn
+    (Vertex rejects that on the next LLM call).
+
+    When manage_context was batched with other tools, strip only its call/result
+    pair and keep the rest of the exchange.
     """
     manage_ids: set[str] = set()
     for msg in exchange:
@@ -159,6 +158,9 @@ def strip_manage_context_from_exchange(exchange: list[AnyMessage]) -> list[AnyMe
 
     if not manage_ids:
         return list(exchange)
+
+    if _is_manage_context_only_exchange(exchange):
+        return []
 
     cleaned: list[AnyMessage] = []
     for msg in exchange:
@@ -171,11 +173,7 @@ def strip_manage_context_from_exchange(exchange: list[AnyMessage]) -> list[AnyMe
                     and content.tool_name == MANAGE_CONTEXT_TOOL_NAME
                 )
             ]
-            # Drop the assistant if stripping manage_context left only thinking:
-            # meta['thinking_blocks'] would still serialize, but with no text or
-            # tool_calls Vertex rejects the message as thinking-only.
-            if _assistant_has_provider_visible_output(msg):
-                cleaned.append(msg)
+            cleaned.append(msg)
         elif isinstance(msg, ToolMessage):
             msg.content[:] = [
                 content
@@ -188,15 +186,6 @@ def strip_manage_context_from_exchange(exchange: list[AnyMessage]) -> list[AnyMe
         else:
             cleaned.append(msg)
     return cleaned
-
-
-def sanitize_assistant_messages(messages: list[AnyMessage]) -> list[AnyMessage]:
-    """Drop assistant messages that would serialize as thinking-only."""
-    return [
-        msg
-        for msg in messages
-        if not (isinstance(msg, AssistantMessage) and not _assistant_has_provider_visible_output(msg))
-    ]
 
 
 async def apply_pending_context_compaction(state: ReasoningAgentRunState) -> bool:
@@ -229,7 +218,6 @@ async def apply_pending_context_compaction(state: ReasoningAgentRunState) -> boo
             )
         )
     new_messages.extend(cleaned_kept)
-    new_messages = sanitize_assistant_messages(new_messages)
 
     state.memory.reset()
     await state.memory.add_many(new_messages)

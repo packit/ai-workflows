@@ -9,6 +9,7 @@ from flexmock import flexmock
 from specfile import specfile
 from specfile.utils import EVR
 
+from ymir.common.utils import NoBuildFoundError
 from ymir.tools.unprivileged import specfile as specfile_tools
 from ymir.tools.unprivileged.specfile import (
     AddChangelogEntryTool,
@@ -763,3 +764,235 @@ async def test_update_release_abandon_autorelease_non_zstream(autorelease_spec):
         line for line in autorelease_spec.read_text().splitlines() if line.startswith("Release:")
     )
     assert release_line == "Release:        %autorelease"
+
+
+@pytest.mark.asyncio
+async def test_update_release_no_candidate_build_maintenance_branch(autorelease_spec):
+    """No candidate build yet for the (maintenance) current stream: fall back to the release
+    already in the spec file instead of failing."""
+    package = "test"
+    dist_git_branch = "c8s"
+
+    async def mock_get_latest_candidate_build(package, dist_git_branch_arg):
+        raise NoBuildFoundError("no builds")
+
+    flexmock(specfile_tools).should_receive("get_latest_candidate_build").replace_with(
+        mock_get_latest_candidate_build
+    )
+
+    async def mock_get_maintenance_rhel_branch(_):
+        return "rhel-8.10.0"
+
+    flexmock(specfile_tools).should_receive("get_maintenance_rhel_branch").replace_with(
+        mock_get_maintenance_rhel_branch
+    )
+
+    tool = UpdateReleaseTool()
+    output = await tool.run(
+        input=UpdateReleaseToolInput(
+            spec=autorelease_spec,
+            package=package,
+            dist_git_branch=dist_git_branch,
+            rebase=False,
+        )
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    release_line = next(
+        line for line in autorelease_spec.read_text().splitlines() if line.startswith("Release:")
+    )
+    # bare %autorelease has no established Z-stream base release of its own to fall back to
+    # (expanding it would only yield its unrelated commit-count counter), so it starts at "0"
+    assert release_line == "Release:        0%{?dist}.%{autorelease -n}"
+
+
+@pytest.mark.asyncio
+async def test_update_release_no_candidate_build_falls_back_to_spec_release(tmp_path):
+    """No candidate build yet: the numeric release already in the spec file is reused as-is,
+    same as if a candidate build with that exact release already existed."""
+    package = "test"
+    dist_git_branch = "c8s"
+
+    spec = tmp_path / "invalid_counter.spec"
+    spec.write_text(
+        dedent(
+            """\
+            Name:           test
+            Version:        0.1
+            Release:        5%{?dist}x
+            Summary:        Test package
+
+            License:        MIT
+
+            %description
+            Test package
+
+            %changelog
+            * Thu Jun 07 2018 Test User <test@redhat.com> - 0.1-5
+            - first version
+            """
+        )
+    )
+
+    async def mock_get_latest_candidate_build(package, dist_git_branch_arg):
+        raise NoBuildFoundError("no builds")
+
+    flexmock(specfile_tools).should_receive("get_latest_candidate_build").replace_with(
+        mock_get_latest_candidate_build
+    )
+
+    async def mock_get_maintenance_rhel_branch(_):
+        return "rhel-8.10.0"
+
+    flexmock(specfile_tools).should_receive("get_maintenance_rhel_branch").replace_with(
+        mock_get_maintenance_rhel_branch
+    )
+
+    tool = UpdateReleaseTool()
+    output = await tool.run(
+        input=UpdateReleaseToolInput(
+            spec=spec,
+            package=package,
+            dist_git_branch=dist_git_branch,
+            rebase=False,
+        )
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    release_line = next(line for line in spec.read_text().splitlines() if line.startswith("Release:"))
+    assert release_line == "Release:        5%{?dist}.1"
+
+
+@pytest.mark.asyncio
+async def test_update_release_no_candidate_build_current_stream(autorelease_spec):
+    """No candidate build yet for the current stream, higher stream has one: the higher stream
+    build must still be ignored and the fallback to the spec's own release applies."""
+    package = "test"
+    dist_git_branch = "rhel-9.6.0"
+
+    async def mock_get_latest_candidate_build(package, dist_git_branch_arg):
+        if dist_git_branch_arg.startswith(dist_git_branch):
+            raise NoBuildFoundError("no builds")
+        return EVR(version="0.1", release="8.elX"), "dummy_ref"
+
+    flexmock(specfile_tools).should_receive("get_latest_candidate_build").replace_with(
+        mock_get_latest_candidate_build
+    )
+
+    tool = UpdateReleaseTool()
+    output = await tool.run(
+        input=UpdateReleaseToolInput(
+            spec=autorelease_spec,
+            package=package,
+            dist_git_branch=dist_git_branch,
+            rebase=False,
+        )
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    release_line = next(
+        line for line in autorelease_spec.read_text().splitlines() if line.startswith("Release:")
+    )
+    assert release_line == "Release:        0%{?dist}.%{autorelease -n}"
+
+
+@pytest.mark.asyncio
+async def test_update_release_no_candidate_build_higher_stream(autorelease_spec):
+    """Current stream has a candidate build, higher stream has none yet: fall back to using the
+    current stream build as base, same as if there were no higher stream branch at all."""
+    package = "test"
+    dist_git_branch = "rhel-9.6.0"
+
+    async def mock_get_latest_candidate_build(package, dist_git_branch_arg):
+        if dist_git_branch_arg.startswith(dist_git_branch):
+            return EVR(version="0.1", release="8.elX"), "dummy_ref"
+        raise NoBuildFoundError("no builds")
+
+    flexmock(specfile_tools).should_receive("get_latest_candidate_build").replace_with(
+        mock_get_latest_candidate_build
+    )
+
+    tool = UpdateReleaseTool()
+    output = await tool.run(
+        input=UpdateReleaseToolInput(
+            spec=autorelease_spec,
+            package=package,
+            dist_git_branch=dist_git_branch,
+            rebase=False,
+        )
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    release_line = next(
+        line for line in autorelease_spec.read_text().splitlines() if line.startswith("Release:")
+    )
+    assert release_line == "Release:        8%{?dist}.%{autorelease -n}"
+
+
+@pytest.mark.parametrize("failing_branch", ["current", "higher"])
+@pytest.mark.asyncio
+async def test_update_release_candidate_build_lookup_failure(failing_branch, autorelease_spec):
+    """A real failure to fetch a candidate build (as opposed to there being none) must still
+    fail the tool, regardless of which of the two branches fails."""
+    package = "test"
+    dist_git_branch = "rhel-9.6.0"
+
+    async def mock_get_latest_candidate_build(package, dist_git_branch_arg):
+        is_current = dist_git_branch_arg.startswith(dist_git_branch)
+        if (is_current and failing_branch == "current") or (not is_current and failing_branch == "higher"):
+            raise RuntimeError("Koji is unavailable")
+        return EVR(version="0.1", release="8.elX"), "dummy_ref"
+
+    flexmock(specfile_tools).should_receive("get_latest_candidate_build").replace_with(
+        mock_get_latest_candidate_build
+    )
+
+    tool = UpdateReleaseTool()
+    with pytest.raises(ToolError, match="Koji is unavailable"):
+        await tool.run(
+            input=UpdateReleaseToolInput(
+                spec=autorelease_spec,
+                package=package,
+                dist_git_branch=dist_git_branch,
+                rebase=False,
+            )
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+
+@pytest.mark.asyncio
+async def test_update_release_abandon_autorelease_no_candidate_build(autorelease_spec):
+    """abandon_autorelease with no candidate build yet: both the base release and the Z-stream
+    counter default to 0 instead of failing to look them up on a non-existent build."""
+    package = "test"
+    dist_git_branch = "c8s"
+
+    async def mock_get_latest_candidate_build(package, dist_git_branch_arg):
+        raise NoBuildFoundError("no builds")
+
+    flexmock(specfile_tools).should_receive("get_latest_candidate_build").replace_with(
+        mock_get_latest_candidate_build
+    )
+
+    async def mock_get_maintenance_rhel_branch(_):
+        return "rhel-8.10.0"
+
+    flexmock(specfile_tools).should_receive("get_maintenance_rhel_branch").replace_with(
+        mock_get_maintenance_rhel_branch
+    )
+
+    tool = UpdateReleaseTool()
+    output = await tool.run(
+        input=UpdateReleaseToolInput(
+            spec=autorelease_spec,
+            package=package,
+            dist_git_branch=dist_git_branch,
+            rebase=False,
+            abandon_autorelease=True,
+        )
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    release_line = next(
+        line for line in autorelease_spec.read_text().splitlines() if line.startswith("Release:")
+    )
+    assert release_line == "Release:        0%{?dist}.1"

@@ -10,6 +10,7 @@ from specfile.utils import EVR
 import ymir.common.utils as _ymir_utils
 from ymir.common.base_utils import KerberosError, extract_principal, init_kerberos_ticket
 from ymir.common.utils import (
+    NoBuildFoundError,
     _is_connection_error,
     get_latest_candidate_build,
     get_latest_z_pending_build,
@@ -514,7 +515,7 @@ async def test_get_latest_candidate_build_no_builds():
         {"rhel-9.6.0-candidate": [], "rhel-9.6.0-z-candidate": []},
         None,
     )
-    with pytest.raises(RuntimeError, match="no builds"):
+    with pytest.raises(NoBuildFoundError, match="no builds"):
         await get_latest_candidate_build("bash", "rhel-9.6.0")
 
 
@@ -544,5 +545,5 @@ async def test_get_latest_z_pending_build_no_builds():
         {"rhel-9.6.0-z-pending": []},
         None,
     )
-    with pytest.raises(RuntimeError, match="no builds"):
+    with pytest.raises(NoBuildFoundError, match="no builds"):
         await get_latest_z_pending_build("bash", "rhel-9.6.0")

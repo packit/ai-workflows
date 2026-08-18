@@ -202,6 +202,10 @@ def _get_koji_build(koji_url: str, nvr: str) -> dict | None:
     return koji.ClientSession(koji_url).getBuild(nvr)
 
 
+class NoBuildFoundError(Exception):
+    """Raised when no build exists in any of the queried tags (as opposed to a lookup failure)."""
+
+
 async def _get_latest_build_from_tags(
     package: str,
     *tags: str,
@@ -217,7 +221,7 @@ async def _get_latest_build_from_tags(
         if latest is None or latest[0] < evr:
             latest = (evr, build["build_id"])
     if latest is None:
-        raise RuntimeError(f"There are no builds of {package} in {' or '.join(tags)}")
+        raise NoBuildFoundError(f"There are no builds of {package} in {' or '.join(tags)}")
     evr, build_id = latest
     session = koji.ClientSession(BREWHUB_URL)
     metadata = await asyncio.to_thread(session.getBuild, build_id, strict=True)

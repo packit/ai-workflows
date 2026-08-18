@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
     hooks:
       - id: trailing-whitespace
         exclude: '\.patch$'
@@ -11,12 +11,12 @@ repos:
       - id: check-merge-conflict
       - id: mixed-line-ending
   - repo: https://github.com/Yelp/detect-secrets
-    rev: v1.5.0
+    rev: 68e8b45440415753fff70a312ece8da92ba85b4a  # frozen: v1.5.0
     hooks:
       - id: detect-secrets
         args: ['--baseline', '.secrets.baseline']
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.12
+    rev: 65dbdb59d2f2d9c3bdc343c566821ad3319ddaa3  # frozen: v0.16.3
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]

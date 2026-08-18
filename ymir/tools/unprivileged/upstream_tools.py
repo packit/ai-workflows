@@ -320,9 +320,10 @@ class CloneUpstreamRepositoryTool(Tool[CloneUpstreamRepositoryToolInput, ToolRun
             # Always append -upstream suffix to avoid conflicts with dist-git
             clone_path = tool_input.clone_directory.parent / f"{tool_input.clone_directory.name}-upstream"
 
-            # Check if directory already exists
+            # Remove any stale directory left behind by a previous failed
+            # attempt so retries with the same arguments are idempotent.
             if clone_path.exists():
-                raise ToolError(f"Clone directory already exists: {clone_path}")
+                shutil.rmtree(clone_path)
 
             # Create parent directory if needed
             clone_path.parent.mkdir(parents=True, exist_ok=True)

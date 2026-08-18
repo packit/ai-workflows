@@ -395,17 +395,29 @@ class TestCloneUpstreamRepositoryTool:
         assert "mypackage-upstream" in result.result
 
     @pytest.mark.asyncio
-    async def test_clone_directory_already_exists(self, tool, tmp_path):
+    async def test_clone_removes_stale_existing_directory(self, tool, tmp_path):
+        """A leftover directory from a previous failed attempt should be removed, not refused."""
         clone_dir = tmp_path / "mypackage"
-        (tmp_path / "mypackage-upstream").mkdir()
+        expected_path = tmp_path / "mypackage-upstream"
+        expected_path.mkdir()
+        (expected_path / "stale").write_text("old", encoding="utf-8")
 
-        with pytest.raises(ToolError, match="Clone directory already exists"):
-            await tool.run(
-                input=CloneUpstreamRepositoryToolInput(
-                    repo_url="https://github.com/owner/repo.git",
-                    clone_directory=str(clone_dir),
-                )
-            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+        async def mock_run_subprocess(cmd, **kwargs):
+            expected_path.mkdir(parents=True, exist_ok=True)
+            (expected_path / ".git").mkdir(exist_ok=True)
+            return (0, "", "")
+
+        flexmock(upstream_tools_mod).should_receive("run_subprocess").replace_with(mock_run_subprocess).once()
+
+        result = await tool.run(
+            input=CloneUpstreamRepositoryToolInput(
+                repo_url="https://github.com/owner/repo.git",
+                clone_directory=str(clone_dir),
+            )
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert "Successfully cloned" in result.result
+        assert not (expected_path / "stale").exists()
 
     @pytest.mark.asyncio
     async def test_clone_git_failure(self, tool, tmp_path):

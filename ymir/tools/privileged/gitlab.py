@@ -98,6 +98,56 @@ async def _run_git_cmd(
 # Maintainer (40), Owner (50)
 DEVELOPER_ACCESS_LEVEL = 30
 
+_FORK_READY_IMPORT_STATUSES = frozenset({"finished", "none"})
+_FORK_READY_POLL_INTERVAL_SEC = 2.0
+_FORK_READY_TIMEOUT_SEC = 110  # leave margin under fork_repository tool timeout
+
+
+def _fork_api_project(fork: GitlabProject):
+    """Return a python-gitlab Project object suitable for import_status polling.
+
+    ``forks.create()`` returns a ``ProjectFork`` without ``refresh()``; always
+    fetch the full project by path for status polling.
+    """
+    return fork.service.gitlab_instance.projects.get(f"{fork.namespace}/{fork.repo}")
+
+
+def _wait_for_fork_ready(fork: GitlabProject) -> None:
+    """Block until GitLab finishes provisioning a fork's git repository.
+
+    Fork creation is asynchronous: the API returns before the repository
+    accepts git pushes. Poll ``import_status`` until the fork is ready.
+    """
+    fork_path = f"{fork.namespace}/{fork.repo}"
+    deadline = time.monotonic() + _FORK_READY_TIMEOUT_SEC
+    while True:
+        try:
+            repo = _fork_api_project(fork)
+            repo.refresh()
+        except gitlab.GitlabError as exc:
+            raise ToolError(f"Failed to query fork project {fork_path}") from exc
+
+        status = repo.attributes.get("import_status", "none")
+        if status in _FORK_READY_IMPORT_STATUSES:
+            logger.info("Fork %s is ready (import_status=%s)", fork_path, status)
+            return
+        if status == "failed":
+            import_error = repo.attributes.get("import_error") or "unknown error"
+            raise ToolError(f"Fork {fork_path} failed to import: {import_error}")
+        if time.monotonic() >= deadline:
+            raise ToolError(
+                f"Fork {fork_path} did not become ready within {_FORK_READY_TIMEOUT_SEC}s "
+                f"(import_status={status})"
+            )
+
+        logger.info(
+            "Fork %s not ready yet (import_status=%s), waiting %.0fs",
+            fork_path,
+            status,
+            _FORK_READY_POLL_INTERVAL_SEC,
+        )
+        time.sleep(_FORK_READY_POLL_INTERVAL_SEC)
+
 
 _GITLAB_COMMIT_RE = re.compile(r"^/(.+?)/-/commit/([0-9a-f]+)\.(?:patch|diff)$", re.IGNORECASE)
 _REDHAT_WEB_PREFIX = "/redhat/"
@@ -392,6 +442,7 @@ class ForkRepositoryTool(Tool[ForkRepositoryToolInput, ToolRunOptions, StringToo
         fork = await asyncio.to_thread(create_fork)
         if not fork:
             raise ToolError("Failed to fork the specified repository")
+        await asyncio.to_thread(_wait_for_fork_ready, fork)
         return StringToolOutput(result=fork.get_git_urls()["git"])
 
 

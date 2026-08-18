@@ -23,7 +23,7 @@ CRITICAL CONSTRAINTS:
   DO NOT clone it again. DO NOT reset to base commit.
 
 - Spec file modification rules:
-  IF maintainer rules explicitly allow adding BuildRequires/Requires for backport fixes:
+  IF rules (shared or package-specific) explicitly allow adding BuildRequires/Requires for backport fixes:
     You may add NEW BuildRequires/Requires entries to the spec file, and ONLY when:
     * Adding BuildRequires: the build error shows missing headers/libraries/executables
       that are DIRECTLY INTRODUCED by your backported patch (check the patch diff to confirm).
@@ -47,7 +47,7 @@ CRITICAL CONSTRAINTS:
     * Loosening/removing existing BuildRequires version constraints
     * Any changes to %changelog, Release field, existing Patch tags, or patch ordering
 
-  IF maintainer rules do NOT explicitly allow it (or no rules exist):
+  IF rules do NOT explicitly allow it (or no rules exist):
     NEVER modify the spec file — the build worked before your patches; fix the patches instead.
     The build runs in COPR, not on official RHEL builders. COPR environments may have
     differences (e.g. unbuffer/expect wrappers, pipefail behavior, locale settings) that
@@ -74,16 +74,23 @@ previous fix attempts. Do NOT repeat strategies that already failed.
 
 WORKFLOW:
 
-0. Use the `get_maintainer_rules` tool with package {{ package }} to check whether
-   the maintainer explicitly allows adding new BuildRequires/Requires entries during
-   backport build fixes (see CRITICAL CONSTRAINTS above).
-   IMPORTANT: If the tool fails to fetch rules (returns an error, timeout, etc.), treat
-   this as "NOT allowed" — do NOT add any spec entries, fix patches only.
+0. Fetch rules in this order:
+   a. Call `get_shared_rules` with package {{ package }} to discover applicable
+      shared rule sets. For each name returned, call `get_maintainer_rules`
+      with package="shared-rules" and file_path="{name}/AGENTS.md" to fetch
+      the shared ecosystem rules.
+   b. Call `get_maintainer_rules` with package {{ package }} to fetch
+      package-specific rules.
+
+   Check rules (both shared and package-specific) for BuildRequires/Requires
+   permission. Package-specific takes precedence if they conflict.
+   IMPORTANT: If the tools fail to fetch rules (returns an error, timeout, etc.),
+   treat this as "NOT allowed" — do NOT add any spec entries, fix patches only.
 
 1. Analyze the build error and identify what's missing (functions, types, headers, etc.)
 
 2. If the build error indicates missing dependencies that are DIRECTLY INTRODUCED by your
-   backported patch AND maintainer rules (from step 0) explicitly allow it:
+   backported patch AND rules (from step 0) explicitly allow it:
    - For missing headers/libraries or "command not found" during %build/%check: add BuildRequires
    - For executables/libraries/modules needed by the installed package at runtime: add Requires
    - If needed during build (%build or %check) AND at runtime: add both BuildRequires and Requires
@@ -126,7 +133,7 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
 7. Append a summary to {{ local_clone }}-upstream/build-logs/fix-attempts.md documenting:
    - What you identified as the root cause
    - Which commits you cherry-picked or what manual edits you made
-   - Any BuildRequires or Requires additions to the spec file (if maintainer rules allowed
+   - Any BuildRequires or Requires additions to the spec file (if rules allowed
      adding new entries), including what was added and why
    - The build result (pass/fail and error if applicable)
 
@@ -142,13 +149,13 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
    Criterion 2 — Spec file modifications are justified:
    Run `git diff HEAD -- *.spec` in {{ local_clone }} to inspect spec changes.
 
-   Check maintainer rules (from the `get_maintainer_rules` call earlier):
+   Check rules from step 0 (both shared and package-specific):
 
-   IF maintainer rules do NOT explicitly allow spec modifications for backport fixes:
+   IF rules do NOT explicitly allow spec modifications for backport fixes:
      Verify the spec file was NOT modified. If the diff shows any spec changes,
      this criterion fails.
 
-   IF maintainer rules explicitly allow adding BuildRequires/Requires for backport fixes:
+   IF rules explicitly allow adding BuildRequires/Requires for backport fixes:
      If there are NO spec changes: criterion passes.
 
      If there ARE spec changes, verify ALL of the following:
@@ -180,7 +187,7 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
    Criterion 3 — No unrelated changes:
    From the git diff output, verify your changes are limited to:
    - The patch file(s) listed in step 5
-   - The spec file (ONLY if maintainer rules allow it AND Criterion 2 passes)
+   - The spec file (ONLY if rules allow it AND Criterion 2 passes)
 
    No other files in {{ local_clone }} should be modified.
 
@@ -198,7 +205,7 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
 
    Criterion 6 — Changes match intent:
    Review each hunk in the regenerated patch file(s) AND any spec file changes
-   (if maintainer rules allow spec modifications).
+   (if rules allow spec modifications).
 
    For patch files: Every changed line must be directly needed to fix the build
    error or to backport the upstream fix.

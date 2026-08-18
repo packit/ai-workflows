@@ -67,6 +67,7 @@ from ymir.tools.privileged.lookaside import (
     UploadSourcesTool,
 )
 from ymir.tools.privileged.maintainer_rules import MaintainerRulesTool
+from ymir.tools.privileged.shared_rules import SharedRulesTool
 from ymir.tools.privileged.testing_farm import (
     CancelTestingFarmRequestTool,
     CopyFilesToRemoteTool,
@@ -167,6 +168,7 @@ async def _async_main():
             UploadSourcesTool(options=tool_options),
             ZStreamSearchTool(options=tool_options),
             MaintainerRulesTool(options=tool_options),
+            SharedRulesTool(options=tool_options),
             *log_detective_tools,
         ]
     )

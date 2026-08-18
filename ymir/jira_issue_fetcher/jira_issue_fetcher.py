@@ -300,12 +300,22 @@ class JiraIssueFetcher:
             group_names = [g.get("name") for g in items if g]
             return _RH_EMPLOYEE_GROUP in group_names
         except requests.HTTPError as e:
-            if e.response is not None and e.response.status_code in (400, 401, 403, 404):
-                logger.warning(
-                    f"Permanent API error verifying {label} author on {issue_key}: {e}; "
-                    f"treating as non-RH-employee to avoid infinite retries"
-                )
-                return False
+            if e.response is not None:
+                status_code = e.response.status_code
+                # 401/403: auth/permission errors - re-raise as transient to avoid deleting valid labels
+                if status_code in (401, 403):
+                    logger.warning(
+                        f"Auth/permission error verifying {label} author on {issue_key}: {e}; "
+                        f"will retry next sweep (not removing label)"
+                    )
+                    raise
+                # 400/404: bad request or not found - treat as verification failure
+                if status_code in (400, 404):
+                    logger.warning(
+                        f"Permanent API error verifying {label} author on {issue_key}: {e}; "
+                        f"treating as non-RH-employee"
+                    )
+                    return False
             raise
         except (ValueError, KeyError, AttributeError) as e:
             logger.warning(f"Failed to parse {label} author on {issue_key}: {e}; treating as non-RH-employee")

@@ -970,7 +970,7 @@ async def run_workflow(
             # flowed to CentOS Stream (and thus to newer Y-streams) — skip buildroot check.
             # Example: dependency targets rhel-10.0.z (Done-Errata), current issue targets
             # rhel-10.3 — the golang fix is already in c10s, no need to wait.
-            dep_status = dep_details.get("fields", {}).get("status", {}).get("name", "")
+            dep_status = (dep_details.get("fields", {}).get("status") or {}).get("name", "")
             dep_fix_versions = dep_details.get("fields", {}).get("fixVersions", [])
             dep_fix_version = dep_fix_versions[0].get("name", "") if dep_fix_versions else ""
 

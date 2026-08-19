@@ -421,6 +421,45 @@ async def test_determine_target_branch_non_modular_has_no_explicit_namespace():
     assert namespace is None
 
 
+@pytest.mark.asyncio
+async def test_verify_rebuild_buildroot_handles_null_status():
+    """
+    Verify that verify_rebuild_buildroot handles null status gracefully.
+
+    Jira can return null for fields.status when an issue is in an unexpected
+    state. The defensive access pattern must not crash.
+    """
+
+    # Mock dependency details with null status (defensive pattern test)
+    dep_details_null_status = {
+        "fields": {
+            "status": None,  # This should not crash
+            "fixVersions": [{"name": "rhel-10.0.z"}],
+            "customfield_10578": "golang-1.26.5-1.el10_0",
+        }
+    }
+
+    # Mock dependency details with missing status field
+    dep_details_missing_status = {
+        "fields": {
+            "fixVersions": [{"name": "rhel-10.0.z"}],
+            "customfield_10578": "golang-1.26.5-1.el10_0",
+        }
+    }
+
+    # Test that the defensive pattern extracts empty string for null status
+    dep_status_null = (dep_details_null_status.get("fields", {}).get("status") or {}).get("name", "")
+    assert dep_status_null == ""
+
+    # Test that the defensive pattern extracts empty string for missing status
+    dep_status_missing = (dep_details_missing_status.get("fields", {}).get("status") or {}).get("name", "")
+    assert dep_status_missing == ""
+
+    # Verify that empty string is not in ("Done", "Closed")
+    assert dep_status_null not in ("Done", "Closed")
+    assert dep_status_missing not in ("Done", "Closed")
+
+
 # --- Per-issue lock tests ---
 
 

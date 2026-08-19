@@ -61,7 +61,7 @@ These are AI-powered agents that use the MCP Server tools to interact with Jira:
 ### Python Services (Direct Jira API Access)
 
 Traditional Python services that make direct HTTP calls to Jira:
-- **Jira Issue Fetcher** - Periodic/cron job that queries Jira for assigned issues and pushes them to Redis triage queue. Uses `requests` library for direct API calls.
+- **Jira Issue Fetcher** - Two CronJobs querying Jira on a schedule and pushing matches to the Redis triage queue: a main sweep against a saved Jira filter (query maintained in the separate [`cve-scope`](https://gitlab.cee.redhat.com/jotnar-project/cve-scope) repo) and a `ymir_todo`-label sweep. Uses `requests` library for direct API calls.
 - **Supervisor** - Workflow orchestration service that monitors issues/errata, advances them through testing/release process. Makes direct API calls using `requests` library via functions like `jira_api_get()`, `jira_api_post()`, `jira_api_put()`.
 
 *These services do NOT use the MCP Server - they call Jira API directly.*
@@ -83,7 +83,7 @@ sequenceDiagram
     participant Jira as Jira API
     participant Redis as Redis Queue
 
-    Fetcher->>Jira: POST /rest/api/2/search<br/>JQL: "project=RHEL and assignee=jotnar-project"
+    Fetcher->>Jira: POST /rest/api/2/search<br/>JQL: saved filter "CVE work to do"<br/>(query maintained in cve-scope repo)
     Jira-->>Fetcher: Issues [{key, labels}]
     Fetcher->>Fetcher: Deduplicate & Filter<br/>(skip if Ymir labels exist)
     Fetcher->>Redis: Push Task to triage_queue<br/>{metadata: {issue: "RHEL-12345"}}

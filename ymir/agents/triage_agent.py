@@ -966,6 +966,26 @@ async def run_workflow(
             # fix_version is already normalized by run_triage_analysis (e.g. rhel-9.8 → rhel-9.8.z)
             fix_version = getattr(data, "fix_version", None) or ""
 
+            # If dependency is from an older z-stream and is Done/Closed, the fix has already
+            # flowed to CentOS Stream (and thus to newer Y-streams) — skip buildroot check.
+            # Example: dependency targets rhel-10.0.z (Done-Errata), current issue targets
+            # rhel-10.3 — the golang fix is already in c10s, no need to wait.
+            dep_status = dep_details.get("fields", {}).get("status", {}).get("name", "")
+            dep_fix_versions = dep_details.get("fields", {}).get("fixVersions", [])
+            dep_fix_version = dep_fix_versions[0].get("name", "") if dep_fix_versions else ""
+
+            if dep_fix_version and fixed_in_build:
+                dep_is_older_zstream = await is_older_zstream(dep_fix_version)
+                dep_is_shipped = dep_status in ("Done", "Closed")
+
+                if dep_is_older_zstream and dep_is_shipped:
+                    logger.info(
+                        f"Dependency {dep_issue_key} is {dep_status} from older z-stream "
+                        f"({dep_fix_version}, build {fixed_in_build}) — fix has already "
+                        f"flowed to {state.target_branch} via CentOS Stream, skipping buildroot check"
+                    )
+                    return "consolidate_rebuild_siblings"
+
             try:
                 in_buildroot = await check_build_in_buildroot(
                     state.target_branch,

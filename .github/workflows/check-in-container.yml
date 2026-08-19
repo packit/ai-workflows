@@ -39,11 +39,6 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-    - name: Set up Podman
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y podman
-        podman --version
     - name: Run ${{ matrix.target }} target
       env:
         CONTAINER_ENGINE: podman
@@ -56,11 +51,6 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-    - name: Set up Podman
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y podman
-        podman --version
     - name: Build MCP gateway container
       run: |
         podman build --no-cache -f Containerfile.mcp -t mcp-gateway-test:pr .

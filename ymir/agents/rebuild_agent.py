@@ -232,6 +232,11 @@ async def main() -> None:
 
                     triage_details_text = format_mr_triage_details(state.justification, state.triage_summary)
 
+                    # For empty commits (rebuilds with %autorelease), include Resolves:
+                    # in the MR description so GitLab CI can detect resolved tickets.
+                    # For non-empty commits, use Jira: links to avoid triggering check_tickets.
+                    resolves_or_jira_text = resolves_text if is_empty_commit else jira_links_text
+
                     (
                         state.merge_request_url,
                         state.merge_request_newly_created,
@@ -253,7 +258,7 @@ async def main() -> None:
                             f"{state.log_result.description}\n\n"
                             f"{dep_text}"
                             f"{dep_issues_text}"
-                            f"{jira_links_text}"
+                            f"{resolves_or_jira_text}\n"
                             f"{side_tag_text}\n"
                             f"{triage_details_text}"
                             f"{consolidation_text}"

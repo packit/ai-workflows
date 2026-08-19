@@ -971,16 +971,26 @@ async def run_workflow(
             # Example: dependency targets rhel-10.0.z (Done-Errata), current issue targets
             # rhel-10.3 — the golang fix is already in c10s, no need to wait.
             dep_status = (dep_details.get("fields", {}).get("status") or {}).get("name", "")
+            dep_resolution = (dep_details.get("fields", {}).get("resolution") or {}).get("name", "")
             dep_fix_versions = dep_details.get("fields", {}).get("fixVersions", [])
             dep_fix_version = dep_fix_versions[0].get("name", "") if dep_fix_versions else ""
 
+            # Dependency is considered shipped if:
+            # 1. Status is "Done" (RHEL-only status indicating shipped), OR
+            # 2. Status is "Closed" AND resolution is "Done" or "Done-Errata"
+            # Closed with other resolutions (WONTFIX, NOTABUG, etc.) means NOT shipped.
+            _SHIPPING_RESOLUTIONS = frozenset({"Done", "Done-Errata"})
+            dep_is_shipped = dep_status == "Done" or (
+                dep_status == "Closed" and dep_resolution in _SHIPPING_RESOLUTIONS
+            )
+
             if dep_fix_version and fixed_in_build:
                 dep_is_older_zstream = await is_older_zstream(dep_fix_version)
-                dep_is_shipped = dep_status in ("Done", "Closed")
 
                 if dep_is_older_zstream and dep_is_shipped:
+                    status_desc = f"{dep_status}/{dep_resolution}" if dep_status == "Closed" else dep_status
                     logger.info(
-                        f"Dependency {dep_issue_key} is {dep_status} from older z-stream "
+                        f"Dependency {dep_issue_key} is {status_desc} from older z-stream "
                         f"({dep_fix_version}, build {fixed_in_build}) — fix has already "
                         f"flowed to {state.target_branch} via CentOS Stream, skipping buildroot check"
                     )

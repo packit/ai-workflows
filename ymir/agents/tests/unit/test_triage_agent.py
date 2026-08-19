@@ -424,138 +424,103 @@ async def test_determine_target_branch_non_modular_has_no_explicit_namespace():
 @pytest.mark.asyncio
 async def test_verify_rebuild_buildroot_handles_null_status():
     """
-    Verify that verify_rebuild_buildroot handles null status gracefully.
+    Test that verify_rebuild_buildroot handles null Jira status without crashing.
 
-    Jira can return null for fields.status when an issue is in an unexpected
-    state. The defensive access pattern must not crash.
+    When Jira returns null for fields.status, the defensive pattern must extract
+    an empty string safely. The workflow should continue to buildroot check instead
+    of treating null status as shipped.
     """
-    # Mock dependency details with null status (defensive pattern test)
-    dep_details_null_status = {
-        "fields": {
-            "status": None,  # This should not crash
-            "resolution": {"name": "Done-Errata"},
-            "fixVersions": [{"name": "rhel-10.0.z"}],
-            "customfield_10578": "golang-1.26.5-1.el10_0",
+
+    # Mock Jira response with null status
+    def make_jira_response(status_value):
+        return {
+            "fields": {
+                "status": status_value,  # Can be None or missing entirely
+                "resolution": {"name": "Done-Errata"},
+                "fixVersions": [{"name": "rhel-10.0.z"}],
+                "customfield_10578": "golang-1.26.5-1.el10_0",
+            }
         }
-    }
 
-    # Mock dependency details with missing status field
-    dep_details_missing_status = {
-        "fields": {
-            "resolution": {"name": "Done"},
-            "fixVersions": [{"name": "rhel-10.0.z"}],
-            "customfield_10578": "golang-1.26.5-1.el10_0",
-        }
-    }
+    # Test case 1: Null status doesn't crash
+    # Use production defensive pattern from triage_agent.py:973
+    mock_response = make_jira_response(None)
+    dep_status = (mock_response.get("fields", {}).get("status") or {}).get("name", "")
+    dep_resolution = (mock_response.get("fields", {}).get("resolution") or {}).get("name", "")
 
-    # Test that the defensive pattern extracts empty string for null status
-    dep_status_null = (dep_details_null_status.get("fields", {}).get("status") or {}).get("name", "")
-    assert dep_status_null == ""
+    assert dep_status == "", "Null status should yield empty string"
+    assert dep_resolution == "Done-Errata"
 
-    # Test that the defensive pattern extracts empty string for missing status
-    dep_status_missing = (dep_details_missing_status.get("fields", {}).get("status") or {}).get("name", "")
-    assert dep_status_missing == ""
+    # Test case 2: Missing status field doesn't crash
+    mock_response_missing = make_jira_response(None)
+    del mock_response_missing["fields"]["status"]
+    dep_status_missing = (mock_response_missing.get("fields", {}).get("status") or {}).get("name", "")
 
-    # Verify that empty string is not "Done" or "Closed"
-    assert dep_status_null != "Done"
-    assert dep_status_null != "Closed"
-    assert dep_status_missing != "Done"
-    assert dep_status_missing != "Closed"
+    assert dep_status_missing == "", "Missing status should yield empty string"
+
+    # Test case 3: Empty string is not considered shipped
+    _SHIPPING_RESOLUTIONS = frozenset({"Done", "Done-Errata"})
+    is_shipped = dep_status == "Done" or (dep_status == "Closed" and dep_resolution in _SHIPPING_RESOLUTIONS)
+
+    assert is_shipped is False, "Null/missing status should NOT be treated as shipped"
 
 
 @pytest.mark.asyncio
 async def test_verify_rebuild_buildroot_shipping_resolutions():
     """
-    Verify that shipped state is determined by both status and resolution.
+    Test that shipped state requires both correct status AND resolution.
 
-    A Closed status alone does not establish that the dependency shipped;
-    the resolution must be a shipping resolution like Done or Done-Errata.
+    Tests the production logic from triage_agent.py:978-985. A Closed status
+    alone does not establish shipping; resolution must be Done or Done-Errata.
+    Rejected resolutions (WONTFIX, NOTABUG, etc.) mean the dependency did NOT ship.
     """
+
+    # Production constant from triage_agent.py:982
     _SHIPPING_RESOLUTIONS = frozenset({"Done", "Done-Errata"})
 
-    # Test case 1: Closed with Done-Errata (SHIPPED)
-    dep_details_closed_done_errata = {
-        "fields": {
-            "status": {"name": "Closed"},
-            "resolution": {"name": "Done-Errata"},
-            "fixVersions": [{"name": "rhel-10.0.z"}],
-            "customfield_10578": "golang-1.26.5-1.el10_0",
-        }
-    }
-    status1 = (dep_details_closed_done_errata.get("fields", {}).get("status") or {}).get("name", "")
-    resolution1 = (dep_details_closed_done_errata.get("fields", {}).get("resolution") or {}).get("name", "")
-    is_shipped1 = status1 == "Done" or (status1 == "Closed" and resolution1 in _SHIPPING_RESOLUTIONS)
-    assert is_shipped1 is True, "Closed/Done-Errata should be considered shipped"
+    def check_is_shipped(dep_details):
+        """Extract and check shipping status using production pattern (triage_agent.py:973-985)"""
+        dep_status = (dep_details.get("fields", {}).get("status") or {}).get("name", "")
+        dep_resolution = (dep_details.get("fields", {}).get("resolution") or {}).get("name", "")
+        return dep_status == "Done" or (dep_status == "Closed" and dep_resolution in _SHIPPING_RESOLUTIONS)
 
-    # Test case 2: Closed with Done (SHIPPED)
-    dep_details_closed_done = {
-        "fields": {
-            "status": {"name": "Closed"},
-            "resolution": {"name": "Done"},
-            "fixVersions": [{"name": "rhel-10.0.z"}],
-            "customfield_10578": "golang-1.26.5-1.el10_0",
-        }
-    }
-    status2 = (dep_details_closed_done.get("fields", {}).get("status") or {}).get("name", "")
-    resolution2 = (dep_details_closed_done.get("fields", {}).get("resolution") or {}).get("name", "")
-    is_shipped2 = status2 == "Done" or (status2 == "Closed" and resolution2 in _SHIPPING_RESOLUTIONS)
-    assert is_shipped2 is True, "Closed/Done should be considered shipped"
-
-    # Test case 3: Done status (SHIPPED, RHEL-only)
-    dep_details_done = {
-        "fields": {
-            "status": {"name": "Done"},
-            "resolution": {"name": "Done"},  # Resolution doesn't matter when status is Done
-            "fixVersions": [{"name": "rhel-10.0.z"}],
-            "customfield_10578": "golang-1.26.5-1.el10_0",
-        }
-    }
-    status3 = (dep_details_done.get("fields", {}).get("status") or {}).get("name", "")
-    resolution3 = (dep_details_done.get("fields", {}).get("resolution") or {}).get("name", "")
-    is_shipped3 = status3 == "Done" or (status3 == "Closed" and resolution3 in _SHIPPING_RESOLUTIONS)
-    assert is_shipped3 is True, "Done status should be considered shipped"
-
-    # Test case 4: Closed with WONTFIX (NOT SHIPPED - rejected)
-    dep_details_closed_wontfix = {
-        "fields": {
-            "status": {"name": "Closed"},
-            "resolution": {"name": "WONTFIX"},
-            "fixVersions": [{"name": "rhel-10.0.z"}],
-            "customfield_10578": "golang-1.26.5-1.el10_0",
-        }
-    }
-    status4 = (dep_details_closed_wontfix.get("fields", {}).get("status") or {}).get("name", "")
-    resolution4 = (dep_details_closed_wontfix.get("fields", {}).get("resolution") or {}).get("name", "")
-    is_shipped4 = status4 == "Done" or (status4 == "Closed" and resolution4 in _SHIPPING_RESOLUTIONS)
-    assert is_shipped4 is False, "Closed/WONTFIX should NOT be considered shipped"
-
-    # Test case 5: Closed with NOTABUG (NOT SHIPPED - rejected)
-    dep_details_closed_notabug = {
-        "fields": {
-            "status": {"name": "Closed"},
-            "resolution": {"name": "NOTABUG"},
-            "fixVersions": [{"name": "rhel-10.0.z"}],
-        }
-    }
-    status5 = (dep_details_closed_notabug.get("fields", {}).get("status") or {}).get("name", "")
-    resolution5 = (dep_details_closed_notabug.get("fields", {}).get("resolution") or {}).get("name", "")
-    is_shipped5 = status5 == "Done" or (status5 == "Closed" and resolution5 in _SHIPPING_RESOLUTIONS)
-    assert is_shipped5 is False, "Closed/NOTABUG should NOT be considered shipped"
-
-    # Test case 6: Closed with null resolution (NOT SHIPPED - defensive)
-    dep_details_closed_null_resolution = {
-        "fields": {
-            "status": {"name": "Closed"},
-            "resolution": None,
-            "fixVersions": [{"name": "rhel-10.0.z"}],
-        }
-    }
-    status6 = (dep_details_closed_null_resolution.get("fields", {}).get("status") or {}).get("name", "")
-    resolution6 = (dep_details_closed_null_resolution.get("fields", {}).get("resolution") or {}).get(
-        "name", ""
+    # Test case 1: Closed/Done-Errata → SHIPPED
+    assert (
+        check_is_shipped({"fields": {"status": {"name": "Closed"}, "resolution": {"name": "Done-Errata"}}})
+        is True
     )
-    is_shipped6 = status6 == "Done" or (status6 == "Closed" and resolution6 in _SHIPPING_RESOLUTIONS)
-    assert is_shipped6 is False, "Closed with null resolution should NOT be considered shipped"
+
+    # Test case 2: Closed/Done → SHIPPED
+    assert (
+        check_is_shipped({"fields": {"status": {"name": "Closed"}, "resolution": {"name": "Done"}}}) is True
+    )
+
+    # Test case 3: Done status → SHIPPED (RHEL-only, resolution doesn't matter)
+    assert check_is_shipped({"fields": {"status": {"name": "Done"}, "resolution": {"name": "Done"}}}) is True
+
+    # Test case 4: Closed/WONTFIX → NOT SHIPPED (rejected)
+    assert (
+        check_is_shipped({"fields": {"status": {"name": "Closed"}, "resolution": {"name": "WONTFIX"}}})
+        is False
+    )
+
+    # Test case 5: Closed/NOTABUG → NOT SHIPPED (rejected)
+    assert (
+        check_is_shipped({"fields": {"status": {"name": "Closed"}, "resolution": {"name": "NOTABUG"}}})
+        is False
+    )
+
+    # Test case 6: Closed/DUPLICATE → NOT SHIPPED (rejected)
+    assert (
+        check_is_shipped({"fields": {"status": {"name": "Closed"}, "resolution": {"name": "DUPLICATE"}}})
+        is False
+    )
+
+    # Test case 7: Closed with null resolution → NOT SHIPPED (defensive)
+    assert check_is_shipped({"fields": {"status": {"name": "Closed"}, "resolution": None}}) is False
+
+    # Test case 8: Closed with missing resolution → NOT SHIPPED (defensive)
+    assert check_is_shipped({"fields": {"status": {"name": "Closed"}}}) is False
 
 
 # --- Per-issue lock tests ---

@@ -272,8 +272,20 @@ def _build_sibling_analysis_prompt(
              the summary and use search_jira_issues with JQL:
              project = RHEL AND summary ~ "<CVE-ID>" \
         AND component != "{package}"
-        4. Once you find the dependency issue, use get_jira_details
-           on it and thoroughly verify it was actually fixed:
+           - CRITICAL: The dependency issue MUST have the same
+             fixVersion stream as {candidate_key} (same major.minor).
+             If multiple results are returned, pick only the one
+             matching the same stream. Never use a tracker from a
+             different stream (e.g. rhel-10.0.z for a rhel-10.3 issue).
+           - If no matching CVE tracker found, look for a rebase/update
+             ticket on the dependency component with a matching
+             fixVersion that includes the CVE fix. Only use it if you
+             are certain the rebase resolves the CVE.
+           - If no dependency ticket can be found for the correct
+             stream, set is_dependency_rebuild=false.
+        4. Once you find the dependency issue (with matching fixVersion),
+           use get_jira_details on it and thoroughly verify it was
+           actually fixed:
            - Check if 'Fixed in Build' field is set (non-null/non-empty)
            - Check the issue status and resolution — if the dependency
              issue was Closed/Done with resolution like 'NOTABUG',

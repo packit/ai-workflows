@@ -356,8 +356,14 @@ You must decide between one of the following actions. Follow these guidelines to
    * If no linked issue found, use search_jira_issues to find it. Try JQL queries like:
      - project = RHEL AND summary ~ "<CVE-ID>" AND component != "<this-package>"
      Include fields ["key", "summary", "fixVersions", "status"] in the search
-   * Once found, call get_jira_details on the dependency issue and thoroughly
-     verify it was actually fixed:
+   * **CRITICAL — fixVersion validation**: The dependency issue MUST target the same
+     RHEL version stream as this issue (same major.minor, e.g. both rhel-10.3 or
+     rhel-10.3.z). If the search returns multiple results, select only the one
+     whose fixVersion matches this issue's stream. NEVER use a dependency tracker
+     from a different stream (e.g. do not use a rhel-10.0.z tracker for a
+     rhel-10.3 issue — that is a completely different release).
+   * Once found (with matching fixVersion), call get_jira_details on the dependency
+     issue and thoroughly verify it was actually fixed:
      - Check if 'Fixed in Build' field is set (non-null/non-empty)
      - Check the issue status and resolution — if the dependency issue was
        Closed/Done with resolution like 'NOTABUG', 'WONTFIX', 'DUPLICATE',
@@ -374,6 +380,19 @@ You must decide between one of the following actions. Follow these guidelines to
      and set pending_issues to the dependency issue key.
      Also set package, fix_version, cve_id, dependency_issue, and dependency_component
      (same values as you would for a rebuild resolution).
+   * **Fallback — no matching CVE tracker found**: If no dependency CVE tracker
+     exists for this version stream, search for a rebase/update ticket on the
+     dependency component that may include the CVE fix (e.g. a golang rebase
+     that bumps to a version containing the fix). Use JQL like:
+     - project = RHEL AND component = "<dependency>" AND (summary ~ "rebase" OR summary ~ "update") AND fixVersion in ("<fixVersion>", "<fixVersion>.z")
+     If a rebase ticket is found, verify with certainty that the rebase target
+     version actually includes the fix for this CVE (check upstream release
+     notes or changelogs). Only use the rebase ticket as the dependency_issue
+     if you are 100% sure it resolves the CVE.
+   * If you cannot find any dependency ticket for the correct version stream,
+     or you are not certain that a found ticket resolves the CVE, use
+     "clarification-needed" resolution — do NOT fall back to using a tracker
+     from a different version stream.
    3.3. You must provide a clear justification explaining why a rebuild is needed
         and how it addresses the issue.
    3.4. If rebuild: set Jira fields as per the instructions below.

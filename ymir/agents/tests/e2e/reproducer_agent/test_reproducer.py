@@ -510,6 +510,13 @@ def test_reproducer_agent_artifacts(test_case: ReproducerAgentTestCase):
     main_fmf = test_dir / "main.fmf"
     assert main_fmf.is_file(), f"{test_case.jira_issue}: missing main.fmf in {test_dir}"
 
+    jira_url = f"https://issues.redhat.com/browse/{test_case.jira_issue}"
+    main_fmf_content = main_fmf.read_text()
+    assert jira_url in main_fmf_content, (
+        f"{test_case.jira_issue}: main.fmf must link to the Jira issue via verifies"
+    )
+    assert "verifies:" in main_fmf_content
+
 
 # ---------------------------------------------------------------------------
 # Verification tests — run the agent-created test on unfixed & fixed composes

@@ -131,6 +131,9 @@ Execute the following steps in order.
         - **Adapt** the test so it works for both the original stream and this one
           (avoid stream-hardcoded paths/versions; use portable assertions /
           conditionals where needed).
+        - Update `main.fmf`: read the existing `link` list and **append**
+          `- verifies: https://issues.redhat.com/browse/{{ jira_issue }}` if that
+          URL is not already present. Do not remove or replace existing link entries.
         - Re-verify on this compose (still within the iteration limit).
         - Leave the adapted files in the clone under the same test directory path.
         - Produce final output with `success`: `true`, `test_already_exists`: `true`,
@@ -416,6 +419,8 @@ Execute the following steps in order.
      - <cve_id>
      - Security
      - CVE
+   link:
+     - verifies: https://issues.redhat.com/browse/{{ jira_issue }}
    tier: "1"
    ```
 
@@ -436,10 +441,15 @@ Execute the following steps in order.
    tag:
      - <jira_issue>
      - Regression
+   link:
+     - verifies: https://issues.redhat.com/browse/{{ jira_issue }}
    tier: "1"
    ```
 
    Adjust `duration` based on the test complexity. Use `5m` for simple tests, `10m` for standard tests, and `30m` for tests that require compilation, large inputs, or Valgrind.
+
+   The `link` field with `verifies` is **required** — it records which Jira issue
+   the test verifies (same format as package tests in `redhat/rhel/tests/*`).
 
 5. **Copy Reproducer to TF Machine, Run, Iterate**
 

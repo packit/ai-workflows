@@ -122,7 +122,7 @@ Execute the following steps in order. Track state across steps using these varia
    - Call `list_project_merge_requests` on `redhat/rhel/tests/<package_name>` with `state=opened` and label `ymir_reproducer`; match title/description to this issue/CVE.
    - If found: reserve TF for **this** stream and verify the existing test.
      - Works → `success=true`, `test_already_exists=true`, `adapted_existing=false` (no new MR).
-     - Fails on this stream → adapt the test to be portable across streams, re-verify, set `adapted_existing=true` and `existing_mr_url` so orchestration updates the open MR.
+     - Fails on this stream → adapt the test to be portable across streams, update `main.fmf` by appending `- verifies: https://issues.redhat.com/browse/{{jira_issue}}` to the `link` list (keep existing entries), re-verify, set `adapted_existing=true` and `existing_mr_url` so orchestration updates the open MR.
    - If triage says not-affected: still build/verify a test that would catch the issue if present; detection contradicts N/A, non-reproducible supports N/A.
 
 ### Step 2: Get Maintainer Rules
@@ -377,6 +377,8 @@ tag:
   - <cve_id>
   - Security
   - CVE
+link:
+  - verifies: https://issues.redhat.com/browse/{{jira_issue}}
 tier: "1"
 ```
 
@@ -397,10 +399,14 @@ duration: 10m
 tag:
   - <jira_issue>
   - Regression
+link:
+  - verifies: https://issues.redhat.com/browse/{{jira_issue}}
 tier: "1"
 ```
 
 Adjust `duration` based on the test complexity. Use `5m` for simple tests, `10m` for standard tests, and `30m` for tests that require compilation, large inputs, or Valgrind.
+
+The `link` field with `verifies` is **required** — it records which Jira issue the test verifies.
 
 ### Step 5: Copy Reproducer to TF Machine, Run, Iterate
 

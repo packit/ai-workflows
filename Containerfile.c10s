@@ -69,12 +69,10 @@ RUN dnf -y install --allowerasing \
 
 COPY openinference-reasoning.patch /tmp
 COPY openinference-streaming.patch /tmp
-COPY beeai-framework-error-context.patch /tmp
 
 RUN pip3 install --no-cache-dir \
       "litellm!=1.82.7,!=1.82.8,!=1.92.0" \
-      beeai-framework[vertexai,mcp,duckduckgo]==0.1.82 \
-      "mcp<1.29.0" \
+      beeai-framework[vertexai,mcp,duckduckgo]==0.1.83 \
       google-cloud-aiplatform \
       openinference-instrumentation-beeai==0.1.21 \
       arize-phoenix-otel \
@@ -86,7 +84,6 @@ RUN pip3 install --no-cache-dir \
       unidiff \
       sentry-sdk>=2.13.0 \
     && cd /usr/local/lib/python3.12/site-packages \
-    && patch -p2 -i /tmp/beeai-framework-error-context.patch \
     && patch -p5 -i /tmp/openinference-reasoning.patch \
     && patch -p5 -i /tmp/openinference-streaming.patch
 

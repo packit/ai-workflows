@@ -27,8 +27,7 @@ ENV PYTHONPATH=/src:$PYTHONPATH
 # Install BeeAI Framework and FastMCP
 RUN pip install --no-cache-dir \
       "litellm!=1.82.7,!=1.82.8" \
-      beeai-framework[vertexai,mcp,duckduckgo]==0.1.82 \
-      "mcp<1.29.0" \
+      beeai-framework[vertexai,mcp,duckduckgo]==0.1.83 \
       fastmcp \
       redis \
       backoff \

@@ -87,6 +87,13 @@ Execute the following steps in order.
    an open MR already carries that test. Do **not** skip verification — reuse and
    adapt instead of duplicating.
 
+   **Cross-stream CVE jobs:** Sibling Jira issues (e.g. RHEL-221017 on rhel-10.2.z
+   and RHEL-221014 on rhel-9.8.z) share the same `{{ cve_id }}` and one canonical
+   test directory. An open reproducer MR from the first stream does **not** need
+   to be merged before you adapt for another stream — orchestration updates that
+   same MR. Search open MRs primarily by **`{{ cve_id }}`** in title/description,
+   not only by `{{ jira_issue }}`.
+
    * Clone the RHEL tests repository using `clone_repository`:
      - URL: `https://gitlab.com/redhat/rhel/tests/<package_name>`
      - Do NOT specify a `branch` parameter — omit it so the tool clones the default branch.
@@ -112,11 +119,18 @@ Execute the following steps in order.
      - `project`: `redhat/rhel/tests/<package_name>`
      - `state`: `opened`
      - `labels`: `["ymir_reproducer"]`
-     Match MRs whose title/description mention `{{ jira_issue }}`{% if cve_id %} or `{{ cve_id }}`{% endif %}.
-     If an open MR matches, note its URL as `existing_mr_url`. If the MR source
-     branch has the test but the default branch does not yet, fetch/checkout that
-     branch into the clone (or re-clone and check out the source branch) so you
-     can run the MR's test files.
+     Match MRs whose **title** contains the canonical tag ``[{{ cve_id }}]``{% if cve_id %}
+     (primary for sibling streams — do not match on description text, which may
+     mention unrelated CVEs){% endif %}, or ``[{{ jira_issue }}]`` for regression tests.
+     Orchestration titles new reproducer MRs as ``<package>: [CVE-…] ymir reproducer test``
+     (CVE, stable across streams) or ``<package>: [RHEL-…] ymir reproducer test``
+     (regression). When a regression test is adapted for another stream, the MR
+     title gains an additional ``[RHEL-…]`` key (e.g. ``[RHEL-100, RHEL-200]``).
+     If an open MR matches, note its URL as `existing_mr_url`. **Check out the MR
+     source branch** in the clone (via `get_merge_request_details` + `fetch_branch` +
+     `git checkout`) **before** copying/running the test — the test usually lives
+     only on that branch, not on the default branch yet. The MR does not need to be
+     merged first.
 
    * **If an existing test directory / matching test / open MR is found:**
      1. Continue to steps 3–6 to reserve a Testing Farm machine for **this**
@@ -128,18 +142,19 @@ Execute the following steps in order.
           and `test_directory` set to the relative path of the existing test
           (e.g. `Security/CVE-2025-12345`). Do **not** create new test files or a new MR.
      3. If the existing test does **not** work on this stream:
-        - **Adapt** the test so it works for both the original stream and this one
-          (avoid stream-hardcoded paths/versions; use portable assertions /
-          conditionals where needed).
+        - **Adapt** the test in the **same directory path** already on the open MR
+          (do not create a parallel directory or a second MR for the same CVE).
+        - Make the test portable across streams (avoid stream-hardcoded paths/versions;
+          use portable assertions / conditionals where needed).
         - Update `main.fmf`: read the existing `link` list and **append**
           `- verifies: https://issues.redhat.com/browse/{{ jira_issue }}` if that
           URL is not already present. Do not remove or replace existing link entries.
         - Re-verify on this compose (still within the iteration limit).
         - Leave the adapted files in the clone under the same test directory path.
         - Produce final output with `success`: `true`, `test_already_exists`: `true`,
-          `adapted_existing`: `true`, `existing_mr_url` when updating an open MR,
+          `adapted_existing`: `true`, `existing_mr_url` set to the open CVE MR URL,
           and `test_directory` set to that relative path.
-          Orchestration will push to the existing MR branch (or open a follow-up).
+          Orchestration will push to that MR's source branch (even if unmerged).
      4. Always cancel the TF reservation (step 6) before returning output.
 
    * **If no existing test or open MR is found:** proceed to create a new test (steps 2–6).

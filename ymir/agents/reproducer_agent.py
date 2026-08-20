@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -54,10 +55,11 @@ from ymir.common.models import (
 )
 from ymir.common.reproducer_lock import (
     release_reproducer_lock,
-    reproducer_lock_id,
+    resolve_reproducer_lock_id,
     sweep_stale_reproducer_locks,
     try_acquire_reproducer_lock,
 )
+from ymir.tools.privileged.jira import fetch_jira_issue_issuelinks
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.text import CreateTool, SearchTextTool, ViewTool
 from ymir.tools.unprivileged.version_mapper import VersionMapperTool
@@ -246,6 +248,172 @@ def _resolve_test_dir(tests_clone: Path, test_directory: str | None) -> Path | N
     return None
 
 
+def _cve_only_needles(cve_id: str | None) -> list[str]:
+    """CVE id strings used to match sibling-stream reproducer MRs."""
+    if not cve_id or not cve_id.strip():
+        return []
+    return sorted({p.strip().upper() for p in cve_id.replace(";", ",").split(",") if p.strip()})
+
+
+_REPRODUCER_MR_BRACKET_CVE = re.compile(r"\[(CVE-\d{4}-\d+)\]", re.IGNORECASE)
+_REPRODUCER_MR_BRACKET_JIRA = re.compile(r"\[(RHEL-\d+)\]", re.IGNORECASE)
+
+
+def _reproducer_mr_title_tags(title: str) -> tuple[set[str], set[str]]:
+    """Parse canonical ``[CVE-…]`` / ``[RHEL-…]`` tags from an MR title."""
+    cves = {match.upper() for match in _REPRODUCER_MR_BRACKET_CVE.findall(title)}
+    jiras = {match.upper() for match in _REPRODUCER_MR_BRACKET_JIRA.findall(title)}
+    return cves, jiras
+
+
+def _build_mr_title(
+    result: OutputSchema,
+    input_data: InputSchema,
+    *,
+    matched_mr: dict | None = None,
+) -> str:
+    """Build MR title keyed by bracket tags in the title (title-only matching).
+
+    CVE reproducers use a single ``[CVE-…]`` tag (stable across streams).
+    Regression reproducers accumulate ``[RHEL-…]`` keys when another stream's
+    job updates the same open MR.
+    """
+    cves = _cve_only_needles(input_data.cve_id)
+    if result.reproducer_type == "cve" and cves:
+        tags = " ".join(f"[{cve}]" for cve in cves)
+        return f"{result.package}: {tags} ymir reproducer test"
+
+    jiras = {result.jira_issue.upper()}
+    if matched_mr:
+        _, existing_jiras = _reproducer_mr_title_tags(matched_mr.get("title") or "")
+        jiras |= existing_jiras
+    tag = "[" + ", ".join(sorted(jiras)) + "]"
+    return f"{result.package}: {tag} ymir reproducer test"
+
+
+def _is_reproducer_mr_title(title: str) -> bool:
+    return "ymir reproducer test" in title.lower()
+
+
+def _match_regression_sibling_mr(mrs: list[dict], jira_issue: str) -> dict | None:
+    """Find the canonical regression reproducer MR to extend for another stream.
+
+    When the current issue is not yet listed in the title, match a sole open
+    regression reproducer MR (no ``[CVE-…]`` tag in the title).
+    """
+    wanted = jira_issue.upper()
+    candidates: list[dict] = []
+    for mr in mrs:
+        title = mr.get("title") or ""
+        title_cves, title_jiras = _reproducer_mr_title_tags(title)
+        if title_cves or not title_jiras or not _is_reproducer_mr_title(title):
+            continue
+        if wanted in title_jiras:
+            return mr
+        candidates.append(mr)
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def _match_open_reproducer_mr(
+    mrs: list[dict],
+    *,
+    cve_ids: list[str] | None = None,
+    jira_issue: str | None = None,
+    existing_mr_url: str | None = None,
+) -> dict | None:
+    """Return the open reproducer MR for this CVE or Jira issue.
+
+    Matching uses **MR title only** via ``[CVE-…]`` or ``[RHEL-…]`` bracket
+    tags (see ``_build_mr_title``). Descriptions are ignored.
+    """
+    if existing_mr_url:
+        for mr in mrs:
+            if mr.get("url") == existing_mr_url:
+                return mr
+
+    wanted_cves = {cve.upper() for cve in cve_ids or [] if cve}
+    wanted_jira = jira_issue.upper() if jira_issue else None
+
+    for mr in mrs:
+        title = mr.get("title") or ""
+        title_cves, title_jiras = _reproducer_mr_title_tags(title)
+
+        if wanted_cves and wanted_cves & title_cves:
+            return mr
+        if wanted_jira and wanted_jira in title_jiras:
+            return mr
+
+    return None
+
+
+async def _list_open_reproducer_mrs(package: str, available_tools: list[Any]) -> list[dict]:
+    try:
+        listed = await run_tool(
+            "list_project_merge_requests",
+            project=f"redhat/rhel/tests/{package}",
+            state="opened",
+            labels=["ymir_reproducer"],
+            available_tools=available_tools,
+        )
+    except Exception as e:
+        logger.warning("Failed to list open reproducer MRs for %s: %s", package, e)
+        return []
+
+    mrs = json.loads(listed) if isinstance(listed, str) else listed
+    return mrs if isinstance(mrs, list) else []
+
+
+async def _resolve_reproducer_mr_target(
+    result: OutputSchema,
+    agent_input: InputSchema,
+    package: str,
+    available_tools: list[Any],
+) -> tuple[str | None, str, dict | None]:
+    """Resolve MR URL, git branch, and matched MR metadata for create/adapt push.
+
+    When an open ``ymir_reproducer`` MR already exists for the same CVE, sibling
+    stream jobs must update that MR's source branch — the MR does not need to be
+    merged first. Regression (non-CVE) jobs accumulate ``[RHEL-…]`` keys in the
+    MR title when another stream extends the same open MR.
+    """
+    fallback_branch = f"reproducer/{result.jira_issue}"
+    mrs = await _list_open_reproducer_mrs(package, available_tools)
+
+    cve_needles = _cve_only_needles(agent_input.cve_id)
+    if cve_needles:
+        matched = _match_open_reproducer_mr(
+            mrs,
+            cve_ids=cve_needles,
+            existing_mr_url=result.existing_mr_url,
+        )
+    else:
+        matched = _match_open_reproducer_mr(
+            mrs,
+            jira_issue=result.jira_issue,
+            existing_mr_url=result.existing_mr_url,
+        )
+        if matched is None and result.reproducer_type == "bug":
+            matched = _match_regression_sibling_mr(mrs, result.jira_issue)
+
+    if matched:
+        mr_url = matched.get("url")
+        branch = matched.get("source_branch") or fallback_branch
+        if mr_url:
+            result.existing_mr_url = mr_url
+        result.adapted_existing = True
+        logger.info(
+            "Updating existing reproducer MR %s on branch %s for %s",
+            mr_url,
+            branch,
+            result.jira_issue,
+        )
+        return mr_url, branch, matched
+
+    return result.existing_mr_url, fallback_branch, None
+
+
 async def _prepare_reproducer_branch(
     tests_clone: Path,
     test_dir: Path,
@@ -268,7 +436,7 @@ async def _prepare_reproducer_branch(
 
         branch = update_branch
         try:
-            if adapted_existing and existing_mr_url:
+            if existing_mr_url:
                 try:
                     details_raw = await run_tool(
                         "get_merge_request_details",
@@ -427,43 +595,6 @@ async def run_workflow(
 
             return "create_merge_request"
 
-        async def _resolve_update_branch(result: OutputSchema, package: str) -> str:
-            """Prefer the existing open MR source branch when adapting."""
-            fallback = f"reproducer/{result.jira_issue}"
-            if not result.adapted_existing:
-                return fallback
-
-            try:
-                listed = await run_tool(
-                    "list_project_merge_requests",
-                    project=f"redhat/rhel/tests/{package}",
-                    state="opened",
-                    labels=["ymir_reproducer"],
-                    available_tools=gateway_tools,
-                )
-            except Exception as e:
-                logger.warning("Failed to list open reproducer MRs for %s: %s", package, e)
-                return fallback
-
-            mrs = json.loads(listed) if isinstance(listed, str) else listed
-            if not isinstance(mrs, list):
-                return fallback
-
-            needles = []
-            if input_data and input_data.cve_id:
-                needles.extend(p.strip() for p in input_data.cve_id.replace(";", ",").split(",") if p.strip())
-            needles.append(result.jira_issue)
-
-            for mr in mrs:
-                blob = f"{mr.get('title', '')}\n{mr.get('description', '')}\n{mr.get('url', '')}"
-                if result.existing_mr_url and mr.get("url") == result.existing_mr_url:
-                    return mr.get("source_branch") or fallback
-                if any(n and n in blob for n in needles):
-                    result.existing_mr_url = result.existing_mr_url or mr.get("url")
-                    return mr.get("source_branch") or fallback
-
-            return fallback
-
         async def create_merge_request(state):
             """Fork, push, and open or update a merge request for verified reproducers."""
             result = state.result
@@ -486,7 +617,11 @@ async def run_workflow(
 
             package = result.package
             agent_input = InputSchema(jira_issue=state.jira_issue) if input_data is None else input_data
-            lock_id = reproducer_lock_id(agent_input.cve_id, state.jira_issue)
+            lock_id = await resolve_reproducer_lock_id(
+                agent_input.cve_id,
+                state.jira_issue,
+                fetch_issuelinks=fetch_jira_issue_issuelinks,
+            )
             lock_token: str | None = None
 
             if redis_conn is not None:
@@ -536,13 +671,18 @@ async def run_workflow(
                     return "handle_results"
                 logger.info("Using test directory %s for MR creation", test_dir)
 
-                update_branch = await _resolve_update_branch(result, package)
+                existing_mr_url, update_branch, matched_mr = await _resolve_reproducer_mr_target(
+                    result,
+                    agent_input,
+                    package,
+                    gateway_tools,
+                )
                 update_branch = await _prepare_reproducer_branch(
                     tests_clone,
                     test_dir,
                     update_branch,
                     adapted_existing=bool(result.adapted_existing),
-                    existing_mr_url=result.existing_mr_url,
+                    existing_mr_url=existing_mr_url,
                     available_tools=gateway_tools,
                 )
 
@@ -569,10 +709,7 @@ async def run_workflow(
                     "fork_repository", repository=repository, available_tools=gateway_tools
                 )
 
-                if result.adapted_existing:
-                    mr_title = f"{package}: adapt {result.reproducer_type} reproducer for {state.jira_issue}"
-                else:
-                    mr_title = f"{package}: add {result.reproducer_type} reproducer for {state.jira_issue}"
+                mr_title = _build_mr_title(result, agent_input, matched_mr=matched_mr)
                 mr_description = _build_mr_description(result, agent_input)
                 commit_message = _build_commit_message(result, agent_input)
 

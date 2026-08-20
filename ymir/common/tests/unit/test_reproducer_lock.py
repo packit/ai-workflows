@@ -8,25 +8,113 @@ import pytest
 from ymir.common.reproducer_lock import (
     REPRODUCER_LOCK_HASH,
     ReproducerLockEntry,
+    _immediate_clone_parent,
     release_reproducer_lock,
     reproducer_lock_id,
+    resolve_clone_root,
+    resolve_reproducer_lock_id,
     sweep_stale_reproducer_locks,
     try_acquire_reproducer_lock,
 )
 
 
+def _cloners_link(parent: str, clone: str) -> dict:
+    return {
+        "type": {"name": "Cloners", "inward": "is cloned by", "outward": "clones"},
+        "inwardIssue": {"key": clone},
+        "outwardIssue": {"key": parent},
+    }
+
+
 @pytest.mark.parametrize(
-    ("cve_id", "jira_issue", "expected"),
+    ("cve_id", "jira_issue", "clone_root", "expected"),
     [
-        ("CVE-2025-1", "RHEL-1", "CVE-2025-1"),
-        ("cve-2025-2, CVE-2025-1", "RHEL-1", "CVE-2025-1,CVE-2025-2"),
-        (None, "RHEL-99", "RHEL-99"),
-        ("", "rhel-99", "RHEL-99"),
-        ("  ", "RHEL-99", "RHEL-99"),
+        ("CVE-2025-1", "RHEL-1", None, "CVE-2025-1"),
+        ("cve-2025-2, CVE-2025-1", "RHEL-1", None, "CVE-2025-1,CVE-2025-2"),
+        (None, "RHEL-99", None, "RHEL-99"),
+        ("", "rhel-99", None, "RHEL-99"),
+        ("  ", "RHEL-99", None, "RHEL-99"),
+        (None, "RHEL-200", "RHEL-100", "RHEL-100"),
+        ("CVE-2025-1", "RHEL-200", "RHEL-100", "CVE-2025-1"),
     ],
 )
-def test_reproducer_lock_id(cve_id, jira_issue, expected):
-    assert reproducer_lock_id(cve_id, jira_issue) == expected
+def test_reproducer_lock_id(cve_id, jira_issue, clone_root, expected):
+    assert reproducer_lock_id(cve_id, jira_issue, clone_root=clone_root) == expected
+
+
+def test_immediate_clone_parent_finds_cloner():
+    links = [_cloners_link("RHEL-100", "RHEL-200")]
+    assert _immediate_clone_parent("RHEL-200", links) == "RHEL-100"
+
+
+def test_immediate_clone_parent_ignores_outward_clone_direction():
+    links = [_cloners_link("RHEL-100", "RHEL-200")]
+    assert _immediate_clone_parent("RHEL-100", links) is None
+
+
+def test_immediate_clone_parent_picks_smallest_when_multiple():
+    links = [
+        _cloners_link("RHEL-100", "RHEL-300"),
+        _cloners_link("RHEL-200", "RHEL-300"),
+    ]
+    assert _immediate_clone_parent("RHEL-300", links) == "RHEL-100"
+
+
+@pytest.mark.asyncio
+async def test_resolve_clone_root_walks_chain():
+    chain = {
+        "RHEL-100": [],
+        "RHEL-200": [_cloners_link("RHEL-100", "RHEL-200")],
+        "RHEL-300": [_cloners_link("RHEL-200", "RHEL-300")],
+    }
+
+    async def fetch(issue_key: str) -> list[dict]:
+        return chain[issue_key.upper()]
+
+    assert await resolve_clone_root("RHEL-300", fetch) == "RHEL-100"
+    assert await resolve_clone_root("RHEL-200", fetch) == "RHEL-100"
+    assert await resolve_clone_root("RHEL-100", fetch) == "RHEL-100"
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_lock_id_uses_clone_root_for_bugs():
+    chain = {
+        "RHEL-100": [],
+        "RHEL-200": [_cloners_link("RHEL-100", "RHEL-200")],
+    }
+
+    async def fetch(issue_key: str) -> list[dict]:
+        return chain[issue_key.upper()]
+
+    lock_id = await resolve_reproducer_lock_id(
+        None,
+        "RHEL-200",
+        fetch_issuelinks=fetch,
+    )
+    assert lock_id == "RHEL-100"
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_lock_id_skips_clone_walk_for_cve():
+    fetch = AsyncMock()
+    lock_id = await resolve_reproducer_lock_id(
+        "CVE-2026-1",
+        "RHEL-200",
+        fetch_issuelinks=fetch,
+    )
+    assert lock_id == "CVE-2026-1"
+    fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_lock_id_falls_back_on_fetch_error():
+    fetch = AsyncMock(side_effect=RuntimeError("jira down"))
+    lock_id = await resolve_reproducer_lock_id(
+        None,
+        "RHEL-200",
+        fetch_issuelinks=fetch,
+    )
+    assert lock_id == "RHEL-200"
 
 
 @pytest.mark.asyncio

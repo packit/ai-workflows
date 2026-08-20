@@ -7,10 +7,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ymir.agents.reproducer_agent import (
+    _build_mr_title,
+    _cve_only_needles,
     _determine_comment_resolution,
     _determine_result_label,
+    _match_open_reproducer_mr,
+    _match_regression_sibling_mr,
     _needs_merge_request,
     _prepare_reproducer_branch,
+    _reproducer_mr_title_tags,
+    _resolve_reproducer_mr_target,
     _resolve_test_dir,
     _should_finalize_jira,
     create_reproducer_agent,
@@ -108,6 +114,257 @@ def test_resolve_test_dir_rejects_traversal_and_missing(tmp_path: Path):
     assert _resolve_test_dir(tmp_path, "") is None
     assert _resolve_test_dir(tmp_path, "../etc") is None
     assert _resolve_test_dir(tmp_path, "Security/CVE-missing") is None
+
+
+def test_cve_only_needles_splits_and_normalizes():
+    assert _cve_only_needles("CVE-2026-56132") == ["CVE-2026-56132"]
+    assert _cve_only_needles("cve-1; CVE-2") == ["CVE-1", "CVE-2"]
+    assert _cve_only_needles(None) == []
+
+
+def test_match_open_reproducer_mr_by_cve_bracket_in_title():
+    mrs = [
+        {
+            "url": "https://gitlab.com/redhat/rhel/tests/expat/-/merge_requests/17",
+            "title": "expat: [CVE-2026-56132] ymir reproducer test",
+            "description": "Follow-up for CVE-2026-99999 mentioned here only.",
+            "source_branch": "reproducer/RHEL-221017",
+        }
+    ]
+    matched = _match_open_reproducer_mr(mrs, cve_ids=["CVE-2026-56132"])
+    assert matched is not None
+    assert matched["source_branch"] == "reproducer/RHEL-221017"
+
+
+def test_match_open_reproducer_mr_ignores_unrelated_cve_in_description():
+    mrs = [
+        {
+            "url": "https://gitlab.com/redhat/rhel/tests/expat/-/merge_requests/99",
+            "title": "expat: [CVE-2026-56132] ymir reproducer test",
+            "description": "Test for CVE-2026-99999 which is unrelated.",
+        }
+    ]
+    assert _match_open_reproducer_mr(mrs, cve_ids=["CVE-2026-99999"]) is None
+    assert _match_open_reproducer_mr(mrs, cve_ids=["CVE-2026-56132"]) is not None
+
+
+def test_match_open_reproducer_mr_ignores_bare_cve_token_without_brackets():
+    mrs = [
+        {
+            "url": "https://gitlab.com/redhat/rhel/tests/expat/-/merge_requests/17",
+            "title": "expat: add cve reproducer for RHEL-221017 (CVE-2026-56132)",
+            "description": "Security test for CVE-2026-56132 in expat.",
+        }
+    ]
+    assert _match_open_reproducer_mr(mrs, cve_ids=["CVE-2026-56132"]) is None
+
+
+def test_match_regression_sibling_mr_when_issue_not_yet_in_title():
+    mrs = [
+        {
+            "url": "https://gitlab.com/a/1",
+            "title": "bind: [RHEL-100] ymir reproducer test",
+        },
+        {
+            "url": "https://gitlab.com/a/2",
+            "title": "bind: [RHEL-200] ymir reproducer test",
+        },
+    ]
+    assert _match_regression_sibling_mr(mrs, "RHEL-300") is None
+
+    single = [mrs[0]]
+    assert _match_regression_sibling_mr(single, "RHEL-200") == single[0]
+
+
+def test_build_mr_title_appends_jira_on_regression_adapt():
+    matched_mr = {"title": "bind: [RHEL-100] ymir reproducer test"}
+    result = _output(package="bind", reproducer_type="bug", jira_issue="RHEL-200")
+    agent_input = ReproducerInputSchema(jira_issue="RHEL-200", package="bind")
+    assert (
+        _build_mr_title(result, agent_input, matched_mr=matched_mr)
+        == "bind: [RHEL-100, RHEL-200] ymir reproducer test"
+    )
+
+
+def test_build_mr_title_keeps_cve_tag_when_updating_existing_mr():
+    matched_mr = {"title": "expat: [CVE-2026-56132] ymir reproducer test"}
+    result = _output(package="expat", reproducer_type="cve", jira_issue="RHEL-221014")
+    agent_input = ReproducerInputSchema(
+        jira_issue="RHEL-221014",
+        package="expat",
+        cve_id="CVE-2026-56132",
+    )
+    assert (
+        _build_mr_title(result, agent_input, matched_mr=matched_mr)
+        == "expat: [CVE-2026-56132] ymir reproducer test"
+    )
+
+
+def test_match_open_reproducer_mr_by_jira_bracket():
+    mrs = [
+        {
+            "url": "https://gitlab.com/a/1",
+            "title": "bind: [RHEL-99999] ymir reproducer test",
+            "description": "Also mentions RHEL-88888 in prose.",
+        }
+    ]
+    matched = _match_open_reproducer_mr(mrs, jira_issue="RHEL-99999")
+    assert matched is not None
+    assert _match_open_reproducer_mr(mrs, jira_issue="RHEL-88888") is None
+
+
+def test_build_mr_title_uses_cve_bracket_for_security():
+    result = _output(package="expat", reproducer_type="cve", jira_issue="RHEL-221014")
+    agent_input = ReproducerInputSchema(
+        jira_issue="RHEL-221014",
+        package="expat",
+        cve_id="CVE-2026-56132",
+    )
+    assert _build_mr_title(result, agent_input) == "expat: [CVE-2026-56132] ymir reproducer test"
+
+
+def test_build_mr_title_multi_cve_roundtrip():
+    """Multi-CVE titles must use separate bracket tags so the regex can parse each one."""
+    result = _output(package="expat", reproducer_type="cve", jira_issue="RHEL-221014")
+    agent_input = ReproducerInputSchema(
+        jira_issue="RHEL-221014",
+        package="expat",
+        cve_id="CVE-2026-56132, CVE-2026-50219",
+    )
+    title = _build_mr_title(result, agent_input)
+    assert title == "expat: [CVE-2026-50219] [CVE-2026-56132] ymir reproducer test"
+
+    cves, jiras = _reproducer_mr_title_tags(title)
+    assert cves == {"CVE-2026-50219", "CVE-2026-56132"}
+    assert jiras == set()
+
+    matched = _match_open_reproducer_mr(
+        [{"url": "https://gitlab.com/a/1", "title": title}],
+        cve_ids=["CVE-2026-56132"],
+    )
+    assert matched is not None
+
+    matched2 = _match_open_reproducer_mr(
+        [{"url": "https://gitlab.com/a/1", "title": title}],
+        cve_ids=["CVE-2026-50219"],
+    )
+    assert matched2 is not None
+
+
+def test_build_mr_title_uses_jira_bracket_for_regression():
+    result = _output(package="bind", reproducer_type="bug", jira_issue="RHEL-12345")
+    agent_input = ReproducerInputSchema(jira_issue="RHEL-12345", package="bind")
+    assert _build_mr_title(result, agent_input) == "bind: [RHEL-12345] ymir reproducer test"
+
+
+def test_match_open_reproducer_mr_prefers_existing_url():
+    mrs = [
+        {"url": "https://gitlab.com/a/1", "title": "other", "description": ""},
+        {"url": "https://gitlab.com/a/2", "title": "target", "description": ""},
+    ]
+    matched = _match_open_reproducer_mr(
+        mrs,
+        cve_ids=["CVE-1"],
+        existing_mr_url="https://gitlab.com/a/2",
+    )
+    assert matched["url"] == "https://gitlab.com/a/2"
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_mr_target_uses_open_cve_mr():
+    result = _output(
+        jira_issue="RHEL-221014",
+        success=True,
+        test_directory="Security/CVE-2026-56132",
+        package="expat",
+        reproducer_type="cve",
+    )
+    agent_input = ReproducerInputSchema(
+        jira_issue="RHEL-221014",
+        package="expat",
+        cve_id="CVE-2026-56132",
+    )
+    open_mrs = [
+        {
+            "url": "https://gitlab.com/redhat/rhel/tests/expat/-/merge_requests/17",
+            "title": "expat: [CVE-2026-56132] ymir reproducer test",
+            "description": "Security test for CVE-2026-56132 in expat.",
+            "source_branch": "reproducer/RHEL-221017",
+        }
+    ]
+
+    async def fake_run_tool(name, available_tools=None, **kwargs):
+        if name == "list_project_merge_requests":
+            return open_mrs
+        raise AssertionError(name)
+
+    with patch("ymir.agents.reproducer_agent.run_tool", new=AsyncMock(side_effect=fake_run_tool)):
+        mr_url, branch, matched_mr = await _resolve_reproducer_mr_target(result, agent_input, "expat", [])
+
+    assert mr_url == open_mrs[0]["url"]
+    assert branch == "reproducer/RHEL-221017"
+    assert matched_mr == open_mrs[0]
+    assert result.adapted_existing is True
+    assert result.existing_mr_url == open_mrs[0]["url"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_mr_target_extends_regression_mr_for_sibling():
+    result = _output(
+        jira_issue="RHEL-200",
+        success=True,
+        test_directory="Regression/RHEL-200",
+        package="bind",
+        reproducer_type="bug",
+    )
+    agent_input = ReproducerInputSchema(jira_issue="RHEL-200", package="bind")
+    open_mrs = [
+        {
+            "url": "https://gitlab.com/redhat/rhel/tests/bind/-/merge_requests/5",
+            "title": "bind: [RHEL-100] ymir reproducer test",
+            "source_branch": "reproducer/RHEL-100",
+        }
+    ]
+
+    async def fake_run_tool(name, available_tools=None, **kwargs):
+        if name == "list_project_merge_requests":
+            return open_mrs
+        raise AssertionError(name)
+
+    with patch("ymir.agents.reproducer_agent.run_tool", new=AsyncMock(side_effect=fake_run_tool)):
+        mr_url, branch, matched_mr = await _resolve_reproducer_mr_target(result, agent_input, "bind", [])
+
+    assert mr_url == open_mrs[0]["url"]
+    assert branch == "reproducer/RHEL-100"
+    assert matched_mr == open_mrs[0]
+    assert result.adapted_existing is True
+    assert (
+        _build_mr_title(result, agent_input, matched_mr=matched_mr)
+        == "bind: [RHEL-100, RHEL-200] ymir reproducer test"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_mr_target_new_branch_without_open_mr():
+    result = _output(jira_issue="RHEL-221017", success=True, package="expat", reproducer_type="cve")
+    agent_input = ReproducerInputSchema(
+        jira_issue="RHEL-221017",
+        package="expat",
+        cve_id="CVE-2026-56132",
+    )
+
+    async def fake_run_tool(name, available_tools=None, **kwargs):
+        if name == "list_project_merge_requests":
+            return []
+        raise AssertionError(name)
+
+    with patch("ymir.agents.reproducer_agent.run_tool", new=AsyncMock(side_effect=fake_run_tool)):
+        mr_url, branch, matched_mr = await _resolve_reproducer_mr_target(result, agent_input, "expat", [])
+
+    assert mr_url is None
+    assert branch == "reproducer/RHEL-221017"
+    assert matched_mr is None
+    assert result.adapted_existing is False
 
 
 def test_reproducer_agent_enables_context_management():

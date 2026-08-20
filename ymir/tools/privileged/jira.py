@@ -94,6 +94,28 @@ RH_EMPLOYEE_GROUP = "Red Hat Employee"
 logger = logging.getLogger(__name__)
 
 
+async def fetch_jira_issue_issuelinks(issue_key: str) -> list[dict[str, Any]]:
+    """Fetch ``fields.issuelinks`` for a Jira issue (minimal API query)."""
+    headers = get_jira_auth_headers()
+    jira_url = urljoin(os.getenv("JIRA_URL"), f"rest/api/3/issue/{issue_key}")
+    logger.info("Fetching Jira issuelinks for %s", issue_key)
+
+    async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+        with tool_error_context(f"Failed to get issuelinks for issue {issue_key}", url=jira_url):
+            async with aiohttp_get_with_retries(
+                session,
+                jira_url,
+                params={"fields": "issuelinks"},
+                headers=headers,
+            ) as response:
+                response.raise_for_status()
+                issue_data = await response.json()
+
+    fields = issue_data.get("fields") or {}
+    issuelinks = fields.get("issuelinks")
+    return issuelinks if isinstance(issuelinks, list) else []
+
+
 def _skip_jira_writes() -> bool:
     return os.getenv("JIRA_DRY_RUN", "False").lower() == "true"
 

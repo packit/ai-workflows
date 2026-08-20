@@ -89,7 +89,7 @@ Existing test verified on this stream (no changes needed):
 Existing test adapted for this stream:
 ```json
 {
-    "jira_issue": "RHEL-12345",
+    "jira_issue": "RHEL-12346",
     "success": true,
     "reproducer_type": "cve",
     "package": "libfoo",
@@ -98,7 +98,7 @@ Existing test adapted for this stream:
     "test_directory": "Security/CVE-2025-12345",
     "testing_farm_request_id": "tf-request-adapt1",
     "pass_fail_criteria": "PASS: program exits 0 (fix applied). FAIL: SIGSEGV (bug present).",
-    "summary": "Existing Security/CVE-2025-12345/ test failed on RHEL 9; adapted package names and assertions so the same test works on RHEL 9 and RHEL 10. Files updated in the clone for orchestration to push to the open MR.",
+    "summary": "Open MR !12 already had Security/CVE-2025-12345/ from rhel-10.2.z. Adapted the same test for RHEL 9.8 (portable compose checks). Orchestration will push to MR !12's branch — the MR need not be merged first.",
     "not_reproducible_reason": null,
     "test_already_exists": true,
     "existing_mr_url": "https://gitlab.com/redhat/rhel/tests/libfoo/-/merge_requests/12",

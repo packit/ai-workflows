@@ -21,6 +21,7 @@ import ymir.agents.tasks as tasks
 from ymir.agents.constants import I_AM_YMIR, mr_description_footer
 from ymir.agents.observability import setup_observability
 from ymir.agents.reasoning_agent import ReasoningAgent
+from ymir.agents.tasks import InvalidReproducerConfigError
 from ymir.agents.tf_cleanup_middleware import TFReservationCleanupMiddleware
 from ymir.agents.utils import (
     build_agent_factory_with_mock_repos,
@@ -791,6 +792,41 @@ def _build_commit_message(result: OutputSchema, input_data: InputSchema) -> str:
     )
 
 
+async def _reproducer_enabled_for_package(
+    package: str,
+    jira_issue: str,
+    gateway_tools: list,
+    *,
+    dry_run: bool,
+    user_triggered: bool,
+) -> bool:
+    """Return False when reproducer is disabled or rules config is invalid."""
+    try:
+        config = await tasks.fetch_reproducer_config(package, gateway_tools)
+    except InvalidReproducerConfigError as e:
+        logger.warning("Invalid reproducer config for %s: %s", package, e)
+        if not dry_run:
+            await tasks.comment_in_jira(
+                jira_issue=jira_issue,
+                agent_type="Reproducer",
+                comment_text=(
+                    f"ymir.yaml for {package} has a malformed reproducer "
+                    f"section: {e}\n\nReproducer analysis was skipped. Please fix "
+                    f"the config file in the rules repository."
+                ),
+                is_error=True,
+                available_tools=gateway_tools,
+                user_triggered=user_triggered,
+            )
+        return False
+
+    if not config.enabled:
+        logger.info("Reproducer not enabled for %s, skipping", package)
+        return False
+
+    return True
+
+
 async def run_workflow(
     jira_issue: str,
     dry_run: bool,
@@ -815,12 +851,13 @@ async def run_workflow(
     working_dir.mkdir(parents=True, exist_ok=True)
 
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL"), call_meta=call_meta) as gateway_tools:
+        agent_input = InputSchema(jira_issue=jira_issue) if input_data is None else input_data
+
         tf_cleanup = TFReservationCleanupMiddleware()
         reproducer_agent = reproducer_agent_factory(
             gateway_tools, local_tool_options, extra_middlewares=[tf_cleanup]
         )
 
-        agent_input = InputSchema(jira_issue=jira_issue) if input_data is None else input_data
         bootstrap: TestsCloneBootstrap | None = None
         if agent_input.package:
             bootstrap = await _bootstrap_tests_clone(working_dir, agent_input, gateway_tools)
@@ -1234,6 +1271,17 @@ async def main() -> None:
                     ).model_dump_json(),
                 )
                 return
+
+            call_meta = {"jira_issue": input_data.jira_issue, "package": input_data.package}
+            async with mcp_tools(os.getenv("MCP_GATEWAY_URL"), call_meta=call_meta) as gateway_tools:
+                if not await _reproducer_enabled_for_package(
+                    input_data.package,
+                    input_data.jira_issue,
+                    gateway_tools,
+                    dry_run=dry_run,
+                    user_triggered=user_triggered,
+                ):
+                    return
 
             lock_id = await resolve_reproducer_lock_id(
                 input_data.cve_id,

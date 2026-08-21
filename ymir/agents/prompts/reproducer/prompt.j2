@@ -94,11 +94,22 @@ Execute the following steps in order.
    same MR. Search open MRs primarily by **`{{ cve_id }}`** in title/description,
    not only by `{{ jira_issue }}`.
 
+   {% if tests_clone_ready %}
+   **Pre-provisioned tests clone (orchestration):** The tests repository is already
+   cloned at `{{ tests_clone_path }}`{% if mr_source_branch %} on branch
+   `{{ mr_source_branch }}`{% endif %}{% if existing_mr_url %} for open MR
+   {{ existing_mr_url }}{% endif %}{% if existing_test_directory %}. The existing
+   reproducer test is at `{{ existing_test_directory }}/` — **adapt it in place**;
+   do NOT create a parallel directory or call `clone_repository` for this path{% else %}.
+   Do NOT call `clone_repository` for this path — it would destroy the checked-out
+   branch{% endif %}.
+   {% else %}
    * Clone the RHEL tests repository using `clone_repository`:
      - URL: `https://gitlab.com/redhat/rhel/tests/<package_name>`
      - Do NOT specify a `branch` parameter — omit it so the tool clones the default branch.
      - Use clone path `{{ reproducer_working_dir }}/tests-<package_name>`.
      - If the clone path already exists, `clone_repository` removes and re-clones it — do NOT delete it yourself with `rm -rf`.
+   {% endif %}
    * Determine the expected test directory by inspecting the tests repo layout
      for this package (names are package-specific; do not assume a fixed scheme):
      - For CVEs: typically under `Security/` (often `Security/<cve_id>/`, but
@@ -126,11 +137,11 @@ Execute the following steps in order.
      (CVE, stable across streams) or ``<package>: [RHEL-…] ymir reproducer test``
      (regression). When a regression test is adapted for another stream, the MR
      title gains an additional ``[RHEL-…]`` key (e.g. ``[RHEL-100, RHEL-200]``).
-     If an open MR matches, note its URL as `existing_mr_url`. **Check out the MR
-     source branch** in the clone (via `get_merge_request_details` + `fetch_branch` +
-     `git checkout`) **before** copying/running the test — the test usually lives
-     only on that branch, not on the default branch yet. The MR does not need to be
-     merged first.
+     If an open MR matches, note its URL as `existing_mr_url`.{% if not tests_clone_ready %}
+     **Check out the MR source branch** in the clone (via `get_merge_request_details` +
+     `fetch_branch` + `git checkout`) **before** copying/running the test — the test
+     usually lives only on that branch, not on the default branch yet.{% endif %}
+     The MR does not need to be merged first.
 
    * **If an existing test directory / matching test / open MR is found:**
      1. Continue to steps 3–6 to reserve a Testing Farm machine for **this**
@@ -239,7 +250,11 @@ Execute the following steps in order.
 
    4.1. Use the Already-Cloned Tests Repository
 
+   {% if tests_clone_ready %}
+   The tests repository was prepared by orchestration at `{{ tests_clone_path }}`{% if mr_source_branch %} on branch `{{ mr_source_branch }}`{% endif %}{% if existing_test_directory %} with the canonical test at `{{ existing_test_directory }}/`{% endif %}. Do NOT call `clone_repository` for this path.
+   {% else %}
    The tests repository was already cloned in step 1.7 at `{{ reproducer_working_dir }}/tests-<package_name>`. If for any reason the clone is missing, re-clone it using `clone_repository` with URL `https://gitlab.com/redhat/rhel/tests/<package_name>` (no `branch` parameter) to `{{ reproducer_working_dir }}/tests-<package_name>`.
+   {% endif %}
 
    * Create the test directory under the tests clone. Prefer package convention:
      - CVEs: often `<tests_clone>/Security/<cve_id>/`

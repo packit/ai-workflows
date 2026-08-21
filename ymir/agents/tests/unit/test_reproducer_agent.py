@@ -27,6 +27,7 @@ from ymir.agents.reproducer_agent import (
     create_reproducer_agent,
     main,
 )
+from ymir.agents.tasks import InvalidReproducerConfigError, fetch_reproducer_config
 from ymir.common.base_utils import check_subprocess
 from ymir.common.constants import JiraLabels
 from ymir.common.models import MergeRequestDetails, ReproducerInputSchema, ReproducerOutputSchema, Task
@@ -663,6 +664,23 @@ def _make_reproducer_payload(issue: str = "RHEL-99999", user_triggered: bool = F
 
 
 @contextlib.contextmanager
+def _mock_reproducer_config_enabled():
+    enabled_config = MagicMock(enabled=True)
+
+    @contextlib.asynccontextmanager
+    async def fake_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    with (
+        patch(
+            "ymir.agents.tasks.fetch_reproducer_config", new_callable=AsyncMock, return_value=enabled_config
+        ),
+        patch("ymir.agents.reproducer_agent.mcp_tools", side_effect=fake_mcp_tools),
+    ):
+        yield
+
+
+@contextlib.contextmanager
 def _mock_workflow_lock():
     with (
         patch(
@@ -762,6 +780,7 @@ async def test_process_task_proceeds_despite_terminal_label_when_user_triggered(
         patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
         patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
         patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+        _mock_reproducer_config_enabled(),
         _mock_workflow_lock(),
     ):
         mock_workflow.return_value = MagicMock(
@@ -785,6 +804,7 @@ async def test_process_task_proceeds_when_terminal_label_and_in_progress():
         patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
         patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
         patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+        _mock_reproducer_config_enabled(),
         _mock_workflow_lock(),
     ):
         mock_workflow.return_value = MagicMock(
@@ -807,6 +827,7 @@ async def test_process_task_proceeds_when_no_terminal_labels():
         patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
         patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
         patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+        _mock_reproducer_config_enabled(),
         _mock_workflow_lock(),
     ):
         mock_workflow.return_value = MagicMock(
@@ -843,8 +864,68 @@ async def test_process_task_blocks_when_workflow_lock_busy():
             "ymir.agents.reproducer_agent.enqueue_blocked_reproducer_task",
             new_callable=AsyncMock,
         ) as mock_enqueue_blocked,
+        _mock_reproducer_config_enabled(),
     ):
         await _run_process_task(_make_reproducer_payload())
 
     mock_workflow.assert_not_awaited()
     mock_enqueue_blocked.assert_awaited_once()
+
+
+# -- fetch_reproducer_config ---------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_reproducer_config_returns_default_when_not_found():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "No maintainer rules found for package 'bind' (file 'ymir.yaml' not found)"
+        config = await fetch_reproducer_config("bind", [])
+
+    assert config.enabled is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_reproducer_config_parses_disabled():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "reproducer:\n  enabled: false\n"
+        config = await fetch_reproducer_config("bind", [])
+
+    assert config.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_reproducer_config_raises_on_malformed_section():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "reproducer:\n  enabled: not_a_bool\n"
+        with pytest.raises(InvalidReproducerConfigError, match="malformed"):
+            await fetch_reproducer_config("bind", [])
+
+
+@pytest.mark.asyncio
+async def test_process_task_skips_when_reproducer_disabled():
+    disabled_config = MagicMock(enabled=False)
+
+    @contextlib.asynccontextmanager
+    async def fake_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    with (
+        patch(
+            "ymir.agents.tasks.get_jira_issue_metadata",
+            new_callable=AsyncMock,
+            return_value=([], "New"),
+        ),
+        patch(
+            "ymir.agents.tasks.fetch_reproducer_config", new_callable=AsyncMock, return_value=disabled_config
+        ),
+        patch("ymir.agents.reproducer_agent.mcp_tools", side_effect=fake_mcp_tools),
+        patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+        patch(
+            "ymir.agents.reproducer_agent.try_acquire_reproducer_lock",
+            new_callable=AsyncMock,
+        ) as mock_acquire_lock,
+    ):
+        await _run_process_task(_make_reproducer_payload())
+
+    mock_workflow.assert_not_awaited()
+    mock_acquire_lock.assert_not_awaited()

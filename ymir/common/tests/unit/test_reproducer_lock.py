@@ -9,6 +9,9 @@ from ymir.common.reproducer_lock import (
     REPRODUCER_LOCK_HASH,
     ReproducerLockEntry,
     _immediate_clone_parent,
+    blocked_reproducer_queue_key,
+    enqueue_blocked_reproducer_task,
+    promote_blocked_reproducer_tasks,
     release_reproducer_lock,
     reproducer_lock_id,
     resolve_clone_root,
@@ -148,6 +151,7 @@ async def test_try_acquire_reproducer_lock_busy():
 async def test_release_reproducer_lock_compare_and_delete():
     redis = MagicMock()
     redis.eval = AsyncMock(return_value=1)
+    redis.lpop = AsyncMock(return_value=None)
     token = ReproducerLockEntry(package="bind", lock_id="CVE-1", jira_issue="RHEL-1").model_dump_json()
 
     assert await release_reproducer_lock(redis, "bind", "CVE-1", token) is True
@@ -158,6 +162,29 @@ async def test_release_reproducer_lock_compare_and_delete():
     assert args[3] == "bind:CVE-1:active"
     assert args[4] == token
     redis.hdel.assert_not_called()
+    redis.lpop.assert_awaited_once_with(blocked_reproducer_queue_key("bind", "CVE-1"))
+
+
+@pytest.mark.asyncio
+async def test_promote_blocked_reproducer_tasks():
+    payload = '{"metadata":{"jira_issue":"RHEL-2","package":"bind"},"attempts":0,"user_triggered":false}'
+    redis = MagicMock()
+    redis.lpop = AsyncMock(side_effect=[payload.encode(), None])
+    redis.lpush = AsyncMock()
+
+    promoted = await promote_blocked_reproducer_tasks(redis, "bind", "CVE-1")
+    assert promoted == 1
+    redis.lpush.assert_awaited_once_with("reproducer_queue", payload)
+
+
+@pytest.mark.asyncio
+async def test_enqueue_blocked_reproducer_task():
+    redis = MagicMock()
+    redis.rpush = AsyncMock()
+    payload = '{"metadata":{"jira_issue":"RHEL-2","package":"bind"}}'
+
+    await enqueue_blocked_reproducer_task(redis, "bind", "CVE-1", payload)
+    redis.rpush.assert_awaited_once_with(blocked_reproducer_queue_key("bind", "CVE-1"), payload)
 
 
 @pytest.mark.asyncio
@@ -197,6 +224,7 @@ async def test_sweep_stale_reproducer_locks_removes_old():
         }
     )
     redis.eval = AsyncMock(return_value=1)
+    redis.lpop = AsyncMock(return_value=None)
 
     removed = await sweep_stale_reproducer_locks(redis, threshold=timedelta(hours=6))
     assert removed == 1

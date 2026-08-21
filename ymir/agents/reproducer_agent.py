@@ -54,6 +54,7 @@ from ymir.common.models import (
     ReproducerOutputSchema as OutputSchema,
 )
 from ymir.common.reproducer_lock import (
+    enqueue_blocked_reproducer_task,
     release_reproducer_lock,
     resolve_reproducer_lock_id,
     sweep_stale_reproducer_locks,
@@ -617,33 +618,6 @@ async def run_workflow(
 
             package = result.package
             agent_input = InputSchema(jira_issue=state.jira_issue) if input_data is None else input_data
-            lock_id = await resolve_reproducer_lock_id(
-                agent_input.cve_id,
-                state.jira_issue,
-                fetch_issuelinks=fetch_jira_issue_issuelinks,
-            )
-            lock_token: str | None = None
-
-            if redis_conn is not None:
-                lock_token = await try_acquire_reproducer_lock(
-                    redis_conn,
-                    package,
-                    lock_id,
-                    jira_issue=state.jira_issue,
-                )
-                if lock_token is None:
-                    result.lock_deferred = True
-                    result.summary = (
-                        (result.summary or "")
-                        + " (Deferred: another worker holds the reproducer create/adapt lock)"
-                    ).strip()
-                    logger.info(
-                        "Reproducer lock busy for %s/%s — deferring %s",
-                        package,
-                        lock_id,
-                        state.jira_issue,
-                    )
-                    return "handle_results"
 
             try:
                 tests_clone = (
@@ -739,17 +713,6 @@ async def run_workflow(
                 result.test_mr_url = None
                 result.success = False
                 result.summary += f" (MR creation failed: {e})"
-            finally:
-                if lock_token is not None and redis_conn is not None:
-                    try:
-                        await release_reproducer_lock(redis_conn, package, lock_id, lock_token)
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to release reproducer lock for %s/%s: %s",
-                            package,
-                            lock_id,
-                            e,
-                        )
 
             return "handle_results"
 
@@ -823,6 +786,35 @@ async def run_workflow(
             return response.state
         finally:
             await tf_cleanup.cleanup(gateway_tools)
+
+
+async def _stage_reproducer_in_progress(
+    *,
+    jira_issue: str,
+    dry_run: bool,
+    user_triggered: bool,
+    task: Task,
+) -> None:
+    """Stamp ``ymir_reproducer_in_progress`` before queue work or while blocked on lock."""
+    await tasks.set_jira_labels(
+        jira_issue=jira_issue,
+        labels_to_add=[JiraLabels.REPRODUCER_IN_PROGRESS.value],
+        labels_to_remove=list(_REPRODUCER_TERMINAL_LABELS),
+        dry_run=dry_run,
+        user_triggered=user_triggered,
+        critical=True,
+    )
+    await tasks.post_user_ack_once(
+        task=task,
+        jira_issue=jira_issue,
+        agent_type="Reproducer",
+        comment_text=(
+            "Ymir picked up your request and started processing. "
+            "Results will be posted here when reproducer analysis completes."
+        ),
+        user_triggered=user_triggered,
+        dry_run=dry_run,
+    )
 
 
 async def main() -> None:
@@ -964,49 +956,91 @@ async def main() -> None:
                         )
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
-            # ymir_reproducer_in_progress is the dedup anchor for the next
-            # fetcher sweep. If we cannot write it, we must not proceed —
-            # otherwise the fetcher will re-enqueue this issue and a second
-            # reproducer will run in parallel.
-            try:
-                await tasks.set_jira_labels(
-                    jira_issue=input_data.jira_issue,
-                    labels_to_add=[JiraLabels.REPRODUCER_IN_PROGRESS.value],
-                    labels_to_remove=list(_REPRODUCER_TERMINAL_LABELS),
-                    dry_run=dry_run,
-                    user_triggered=user_triggered,
-                    critical=True,
-                )
-                logger.info(f"Cleaned up existing labels for {input_data.jira_issue}")
-                # Post acknowledgement comment for user-triggered runs now that
-                # the in-progress label write succeeded. This prevents duplicate
-                # comments if the critical label write were to fail.
-                await tasks.post_user_ack_once(
-                    task=task,
-                    jira_issue=input_data.jira_issue,
-                    agent_type="Reproducer",
-                    comment_text=(
-                        "Ymir picked up your request and started processing. "
-                        "Results will be posted here when reproducer analysis completes."
-                    ),
-                    user_triggered=user_triggered,
-                    dry_run=dry_run,
-                )
-            except Exception as e:
+            if not input_data.package:
                 logger.error(
-                    f"Could not set {JiraLabels.REPRODUCER_IN_PROGRESS.value} on "
-                    f"{input_data.jira_issue} after retries: {e}; re-queuing to avoid duplicate reproducer."
+                    "Reproducer task for %s is missing package metadata; cannot acquire lock",
+                    input_data.jira_issue,
                 )
-                error_msg = f"Failed to set in-progress label: {e}"
-                error_data = ErrorData(details=error_msg, jira_issue=input_data.jira_issue)
-                await retry(task, error_data.model_dump_json())
-                # Long sleep on purpose: critical-write retries already burned
-                # ~7s, so we're past transient blips. Typical Jira outages last
-                # minutes; cycling faster just spams the API.
-                await asyncio.sleep(60)
+                await retry(
+                    task,
+                    ErrorData(
+                        details="Missing package in reproducer task metadata",
+                        jira_issue=input_data.jira_issue,
+                    ).model_dump_json(),
+                )
+                return
+
+            lock_id = await resolve_reproducer_lock_id(
+                input_data.cve_id,
+                input_data.jira_issue,
+                fetch_issuelinks=fetch_jira_issue_issuelinks,
+            )
+            lock_token = await try_acquire_reproducer_lock(
+                redis,
+                input_data.package,
+                lock_id,
+                jira_issue=input_data.jira_issue,
+            )
+            if lock_token is None:
+                try:
+                    await _stage_reproducer_in_progress(
+                        jira_issue=input_data.jira_issue,
+                        dry_run=dry_run,
+                        user_triggered=user_triggered,
+                        task=task,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Could not set %s on blocked reproducer %s: %s",
+                        JiraLabels.REPRODUCER_IN_PROGRESS.value,
+                        input_data.jira_issue,
+                        e,
+                    )
+                    await retry(
+                        task,
+                        ErrorData(
+                            details=f"Failed to set in-progress label while blocked: {e}",
+                            jira_issue=input_data.jira_issue,
+                        ).model_dump_json(),
+                    )
+                    await asyncio.sleep(60)
+                    return
+
+                await enqueue_blocked_reproducer_task(
+                    redis,
+                    input_data.package,
+                    lock_id,
+                    task.model_dump_json(),
+                )
+                logger.info(
+                    "Reproducer lock busy for %s/%s — blocked %s until lock is released",
+                    input_data.package,
+                    lock_id,
+                    input_data.jira_issue,
+                )
                 return
 
             try:
+                try:
+                    await _stage_reproducer_in_progress(
+                        jira_issue=input_data.jira_issue,
+                        dry_run=dry_run,
+                        user_triggered=user_triggered,
+                        task=task,
+                    )
+                    logger.info(f"Cleaned up existing labels for {input_data.jira_issue}")
+                except Exception as e:
+                    logger.error(
+                        f"Could not set {JiraLabels.REPRODUCER_IN_PROGRESS.value} on "
+                        f"{input_data.jira_issue} after retries: {e}; "
+                        "re-queuing to avoid duplicate reproducer."
+                    )
+                    error_msg = f"Failed to set in-progress label: {e}"
+                    error_data = ErrorData(details=error_msg, jira_issue=input_data.jira_issue)
+                    await retry(task, error_data.model_dump_json())
+                    await asyncio.sleep(60)
+                    return
+
                 logger.info(f"Starting reproducer processing for {input_data.jira_issue}")
                 with span_processor.start_transaction(input_data.jira_issue, workflow="reproducer"):
                     state = await run_workflow(
@@ -1032,16 +1066,15 @@ async def main() -> None:
                     ErrorData(details=error, jira_issue=input_data.jira_issue).model_dump_json(),
                 )
             else:
-                if output.retryable_error or output.lock_deferred:
-                    reason = "lock contention" if output.lock_deferred else "retryable infra error"
+                if output.retryable_error:
                     logger.info(
-                        f"Reproducer {reason} for {input_data.jira_issue}; "
+                        f"Reproducer retryable infra error for {input_data.jira_issue}; "
                         f"scheduling retry in {retry_delay_seconds:.0f}s"
                     )
                     await retry(
                         task,
                         ErrorData(
-                            details=output.summary or f"Reproducer deferred: {reason}",
+                            details=output.summary or "Reproducer deferred: retryable infra error",
                             jira_issue=input_data.jira_issue,
                         ).model_dump_json(),
                         delay_seconds=retry_delay_seconds,
@@ -1058,6 +1091,21 @@ async def main() -> None:
                     )
                     logger.info(
                         f"Pushed {input_data.jira_issue} to {RedisQueues.COMPLETED_REPRODUCER_LIST.value}"
+                    )
+            finally:
+                try:
+                    await release_reproducer_lock(
+                        redis,
+                        input_data.package,
+                        lock_id,
+                        lock_token,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to release reproducer lock for %s/%s: %s",
+                        input_data.package,
+                        lock_id,
+                        e,
                     )
 
         await run_task_loop(

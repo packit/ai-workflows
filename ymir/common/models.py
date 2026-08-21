@@ -1346,8 +1346,8 @@ class ReproducerOutputSchema(BaseModel):
     lock_deferred: bool = Field(
         default=False,
         description=(
-            "True when create/adapt could not proceed because another worker holds "
-            "the reproducer lock; the task should be scheduled for delayed retry"
+            "Legacy output flag; queue orchestration now blocks at workflow start "
+            "instead of deferring MR creation with a long delayed retry"
         ),
     )
     retryable_error: bool = Field(

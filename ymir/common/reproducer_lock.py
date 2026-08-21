@@ -4,6 +4,11 @@ Sibling-stream workers (e.g. rhel-10 then rhel-9/rhel-8) serialize on
 ``package:lock_id`` so only one worker creates or adapts the canonical
 ``Security/<CVE>/`` or ``Regression/<JIRA>/`` test at a time.
 
+The lock is acquired at **workflow start** (queue mode) and held until the
+worker finishes analysis, Testing Farm verification, and MR push (or skip).
+Tasks that cannot acquire the lock are parked on a per-lock blocked list and
+promoted back to the main reproducer queue when the lock is released.
+
 For CVE jobs *lock_id* is the normalized CVE id. For non-CVE bugs it is the
 root issue of the Jira Cloners chain (Y-stream root), resolved via issuelinks.
 """
@@ -21,6 +26,7 @@ from ymir.common.base_utils import fix_await
 logger = logging.getLogger(__name__)
 
 REPRODUCER_LOCK_HASH = "reproducer_creation_lock"
+REPRODUCER_BLOCKED_QUEUE_PREFIX = "reproducer_blocked"
 _DEFAULT_STALE_THRESHOLD = timedelta(hours=6)
 
 _ACQUIRE_LUA = """
@@ -186,6 +192,66 @@ def _active_field(package: str, lock_id: str) -> str:
     return f"{package}:{lock_id}:active"
 
 
+def blocked_reproducer_queue_key(package: str, lock_id: str) -> str:
+    """Per-lock Redis list for tasks waiting on ``package:lock_id``."""
+    return f"{REPRODUCER_BLOCKED_QUEUE_PREFIX}:{package}:{lock_id}"
+
+
+async def enqueue_blocked_reproducer_task(
+    redis_conn,
+    package: str,
+    lock_id: str,
+    payload: str,
+) -> None:
+    """Park a task until the create/adapt lock for ``package:lock_id`` is free."""
+    key = blocked_reproducer_queue_key(package, lock_id)
+    await fix_await(redis_conn.rpush(key, payload))
+    logger.info(
+        "Blocked reproducer task for %s/%s — waiting for lock (queue %s)",
+        package,
+        lock_id,
+        key,
+    )
+
+
+async def promote_blocked_reproducer_tasks(
+    redis_conn,
+    package: str,
+    lock_id: str,
+) -> int:
+    """Move tasks blocked on ``package:lock_id`` back to their target list queues."""
+    from ymir.common.constants import RedisQueues
+    from ymir.common.models import Task
+
+    key = blocked_reproducer_queue_key(package, lock_id)
+    promoted = 0
+    while True:
+        raw = await fix_await(redis_conn.lpop(key))
+        if raw is None:
+            break
+        payload = raw.decode() if isinstance(raw, bytes) else str(raw)
+        try:
+            task = Task.model_validate_json(payload)
+        except Exception:
+            logger.warning("Skipping invalid blocked reproducer payload on %s", key)
+            continue
+        target = (
+            RedisQueues.REPRODUCER_QUEUE_TODO.value
+            if task.user_triggered
+            else RedisQueues.REPRODUCER_QUEUE.value
+        )
+        await fix_await(redis_conn.lpush(target, payload))
+        promoted += 1
+        logger.info(
+            "Promoted blocked reproducer task for %s to %s (lock %s/%s)",
+            task.metadata.get("jira_issue", "?"),
+            target,
+            package,
+            lock_id,
+        )
+    return promoted
+
+
 async def try_acquire_reproducer_lock(
     redis_conn,
     package: str,
@@ -238,6 +304,7 @@ async def release_reproducer_lock(
     deleted = await fix_await(redis_conn.eval(_CONDITIONAL_HDEL_LUA, 1, REPRODUCER_LOCK_HASH, field, token))
     if deleted:
         logger.info("Released reproducer lock for %s/%s", package, lock_id)
+        await promote_blocked_reproducer_tasks(redis_conn, package, lock_id)
         return True
     logger.warning(
         "Reproducer lock for %s/%s was not released — token no longer matches "
@@ -286,6 +353,11 @@ async def sweep_stale_reproducer_locks(
                 field_str,
                 age,
                 threshold,
+            )
+            await promote_blocked_reproducer_tasks(
+                redis_conn,
+                entry.package,
+                entry.lock_id,
             )
 
     return removed

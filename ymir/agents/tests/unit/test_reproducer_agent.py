@@ -1,5 +1,6 @@
 """Unit tests for reproducer agent label and comment helpers."""
 
+import contextlib
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -483,9 +484,31 @@ async def test_prepare_reproducer_branch_adapt_keeps_sibling_commits(tmp_path: P
 
 
 def _make_reproducer_payload(issue: str = "RHEL-99999", user_triggered: bool = False) -> bytes:
-    input_data = ReproducerInputSchema(jira_issue=issue)
+    input_data = ReproducerInputSchema(jira_issue=issue, package="bind")
     task = Task(metadata=input_data.model_dump(), user_triggered=user_triggered)
     return task.model_dump_json().encode()
+
+
+@contextlib.contextmanager
+def _mock_workflow_lock():
+    with (
+        patch(
+            "ymir.agents.reproducer_agent.resolve_reproducer_lock_id",
+            new_callable=AsyncMock,
+            return_value="RHEL-99999",
+        ),
+        patch(
+            "ymir.agents.reproducer_agent.try_acquire_reproducer_lock",
+            new_callable=AsyncMock,
+            return_value='{"package":"bind","lock_id":"RHEL-99999","jira_issue":"RHEL-99999"}',
+        ),
+        patch(
+            "ymir.agents.reproducer_agent.release_reproducer_lock",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+    ):
+        yield
 
 
 async def _run_process_task(payload: bytes) -> None:
@@ -566,6 +589,7 @@ async def test_process_task_proceeds_despite_terminal_label_when_user_triggered(
         patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
         patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
         patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+        _mock_workflow_lock(),
     ):
         mock_workflow.return_value = MagicMock(
             result=MagicMock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
@@ -588,6 +612,7 @@ async def test_process_task_proceeds_when_terminal_label_and_in_progress():
         patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
         patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
         patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+        _mock_workflow_lock(),
     ):
         mock_workflow.return_value = MagicMock(
             result=MagicMock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
@@ -609,6 +634,7 @@ async def test_process_task_proceeds_when_no_terminal_labels():
         patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
         patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
         patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+        _mock_workflow_lock(),
     ):
         mock_workflow.return_value = MagicMock(
             result=MagicMock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
@@ -616,3 +642,36 @@ async def test_process_task_proceeds_when_no_terminal_labels():
         await _run_process_task(_make_reproducer_payload())
 
     mock_workflow.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_task_blocks_when_workflow_lock_busy():
+    """Busy create/adapt locks park the task until the holder releases."""
+    with (
+        patch(
+            "ymir.agents.tasks.get_jira_issue_metadata",
+            new_callable=AsyncMock,
+            return_value=([], "New"),
+        ),
+        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
+        patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
+        patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+        patch(
+            "ymir.agents.reproducer_agent.resolve_reproducer_lock_id",
+            new_callable=AsyncMock,
+            return_value="CVE-2026-56132",
+        ),
+        patch(
+            "ymir.agents.reproducer_agent.try_acquire_reproducer_lock",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "ymir.agents.reproducer_agent.enqueue_blocked_reproducer_task",
+            new_callable=AsyncMock,
+        ) as mock_enqueue_blocked,
+    ):
+        await _run_process_task(_make_reproducer_payload())
+
+    mock_workflow.assert_not_awaited()
+    mock_enqueue_blocked.assert_awaited_once()

@@ -28,6 +28,7 @@ from ymir.agents.rebase_consolidation import (
     queue_siblings_for_triage,
 )
 from ymir.agents.rebuild_consolidation import find_rebuild_siblings
+from ymir.agents.tasks import InvalidReproducerConfigError
 from ymir.agents.utils import (
     build_agent_factory_with_mock_repos,
     get_agent_execution_config,
@@ -173,7 +174,7 @@ def _build_reproducer_input(state) -> ReproducerInputSchema | None:
     )
 
 
-async def _enqueue_reproducer(redis, state, user_triggered: bool) -> None:
+async def _enqueue_reproducer(redis, state, user_triggered: bool, gateway_tools) -> None:
     """Push a reproducer job when triage resolution is eligible."""
     if state.triage_result is None:
         return
@@ -186,6 +187,23 @@ async def _enqueue_reproducer(redis, state, user_triggered: bool) -> None:
             state.jira_issue,
         )
         return
+    if reproducer_input.package:
+        try:
+            config = await tasks.fetch_reproducer_config(reproducer_input.package, gateway_tools)
+        except InvalidReproducerConfigError as e:
+            logger.warning(
+                "Invalid reproducer config for %s: %s; skipping enqueue",
+                reproducer_input.package,
+                e,
+            )
+            return
+        if not config.enabled:
+            logger.info(
+                "Reproducer not enabled for %s, skipping enqueue for %s",
+                reproducer_input.package,
+                state.jira_issue,
+            )
+            return
     queue = RedisQueues.get_reproducer_queue(user_triggered)
     task = Task(metadata=reproducer_input.model_dump(), user_triggered=user_triggered)
     await fix_await(redis.lpush(queue, task.model_dump_json()))
@@ -1654,7 +1672,8 @@ async def main() -> None:
                 # Submit manually instead:
                 #   make trigger-reproducer JIRA_ISSUE=… PACKAGE=…
                 # if auto_chain and output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
-                #     await _enqueue_reproducer(redis, state, user_triggered)
+                #     async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+                #         await _enqueue_reproducer(redis, state, user_triggered, gateway_tools)
                 # elif not auto_chain and output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
                 #     logger.info(
                 #         "AUTO_CHAIN disabled, skipping reproducer queue for %s",

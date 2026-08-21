@@ -1154,6 +1154,7 @@ async def main() -> None:
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     auto_chain = os.getenv("AUTO_CHAIN", "true").lower() == "true"
+    enqueue_reproducer = os.getenv("TRIAGE_ENQUEUE_REPRODUCER", "false").lower() == "true"
     force_cve_triage = os.getenv("FORCE_CVE_TRIAGE", "false").lower() == "true"
 
     if jira_issue := os.getenv("JIRA_ISSUE", None):
@@ -1253,7 +1254,11 @@ async def main() -> None:
 
             return
 
-    logger.info(f"Starting triage agent in queue mode (AUTO_CHAIN={'enabled' if auto_chain else 'disabled'})")
+    logger.info(
+        "Starting triage agent in queue mode (AUTO_CHAIN=%s, TRIAGE_ENQUEUE_REPRODUCER=%s)",
+        "enabled" if auto_chain else "disabled",
+        "enabled" if enqueue_reproducer else "disabled",
+    )
     max_concurrent_tasks = int(os.getenv("MAX_CONCURRENT_TASKS", 1))
     async with redis_client(os.environ["REDIS_URL"]) as redis:
         max_retries = int(os.getenv("MAX_RETRIES", 3))
@@ -1668,24 +1673,15 @@ async def main() -> None:
                     else:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
 
-                # Auto-enqueue of reproducer jobs is temporarily disabled.
-                # Submit manually instead:
-                #   make trigger-reproducer JIRA_ISSUE=… PACKAGE=…
-                # if auto_chain and output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
-                #     async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-                #         await _enqueue_reproducer(redis, state, user_triggered, gateway_tools)
-                # elif not auto_chain and output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
-                #     logger.info(
-                #         "AUTO_CHAIN disabled, skipping reproducer queue for %s",
-                #         input.issue,
-                #     )
                 if output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
-                    logger.info(
-                        "Skipping auto-enqueue of reproducer for %s "
-                        "(manual trigger: make trigger-reproducer JIRA_ISSUE=%s PACKAGE=…)",
-                        input.issue,
-                        input.issue,
-                    )
+                    if enqueue_reproducer:
+                        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+                            await _enqueue_reproducer(redis, state, user_triggered, gateway_tools)
+                    else:
+                        logger.info(
+                            "TRIAGE_ENQUEUE_REPRODUCER disabled, skipping reproducer queue for %s",
+                            input.issue,
+                        )
 
         shutdown_event = asyncio.Event()
         install_shutdown_handler(asyncio.get_running_loop(), shutdown_event)

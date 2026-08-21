@@ -23,6 +23,7 @@ from ymir.tools.privileged.gitlab import (
     GetFailedPipelineJobsFromMergeRequestTool,
     OpenMergeRequestTool,
     PushToRemoteRepositoryTool,
+    ResolveQeReviewersTool,
     ResolveReviewersTool,
     RetryPipelineJobTool,
     SetMergeRequestReviewersTool,
@@ -1315,3 +1316,14 @@ async def test_resolve_reviewers_tool():
     ):
         result = await ResolveReviewersTool().run(input={"package": "bash", "dist_git_branch": "c10s"})
     assert result.result == [42, 99]
+
+
+@pytest.mark.asyncio
+async def test_resolve_qe_reviewers_tool():
+    with patch(
+        "ymir.tools.privileged.reviewer_resolver.resolve_qe_reviewers",
+        new_callable=AsyncMock,
+        return_value=[99],
+    ):
+        result = await ResolveQeReviewersTool().run(input={"package": "bash", "dist_git_branch": "c10s"})
+    assert result.result == [99]

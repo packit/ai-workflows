@@ -257,8 +257,41 @@ async def _lookup_gitlab_user_by_username(
 async def resolve_reviewers(package: str, dist_git_branch: str) -> list[int]:
     """Resolve reviewer GitLab user IDs for a package on a given branch.
 
+    Includes both the default assignee (maintainer) and QA contact.
+
     Returns a (possibly empty) list of user IDs. Never raises.
     """
+    return await _resolve_component_reviewers(
+        package,
+        dist_git_branch,
+        include_assignee=True,
+        include_qa=True,
+    )
+
+
+async def resolve_qe_reviewers(package: str, dist_git_branch: str) -> list[int]:
+    """Resolve QE reviewer GitLab user IDs for a package on a given branch.
+
+    Uses only the bugzilla component ``QA Contact`` field.
+
+    Returns a (possibly empty) list of user IDs. Never raises.
+    """
+    return await _resolve_component_reviewers(
+        package,
+        dist_git_branch,
+        include_assignee=False,
+        include_qa=True,
+    )
+
+
+async def _resolve_component_reviewers(
+    package: str,
+    dist_git_branch: str,
+    *,
+    include_assignee: bool,
+    include_qa: bool,
+) -> list[int]:
+    """Resolve GitLab reviewer IDs from bugzilla component contacts."""
     try:
         parsed = parse_branch_name(dist_git_branch)
         if not parsed:
@@ -271,13 +304,13 @@ async def resolve_reviewers(package: str, dist_git_branch: str) -> list[int]:
             return []
 
         emails: list[str] = []
-        if assignee := component_data.get("Default Assignee"):
+        if include_assignee and (assignee := component_data.get("Default Assignee")):
             emails.append(assignee)
-        if (qa_contact := component_data.get("QA Contact")) and qa_contact not in emails:
+        if include_qa and (qa_contact := component_data.get("QA Contact")) and qa_contact not in emails:
             emails.append(qa_contact)
 
         if not emails:
-            logger.info("No assignee or QA contact for %s (RHEL%s)", package, rhel_major)
+            logger.info("No matching component contacts for %s (RHEL%s)", package, rhel_major)
             return []
 
         reviewer_ids: list[int] = []

@@ -879,6 +879,32 @@ class ResolveReviewersTool(Tool[ResolveReviewersToolInput, ToolRunOptions, JSONT
         return JSONToolOutput(result=reviewer_ids)
 
 
+class ResolveQeReviewersTool(Tool[ResolveReviewersToolInput, ToolRunOptions, JSONToolOutput[list[int]]]):
+    name = "resolve_qe_reviewers"
+    timeout = 120
+    description = """
+    Resolve QE reviewer GitLab user IDs for a package from the bugzilla QA Contact.
+    """
+    input_schema = ResolveReviewersToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: ResolveReviewersToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[list[int]]:
+        from ymir.tools.privileged.reviewer_resolver import resolve_qe_reviewers
+
+        reviewer_ids = await resolve_qe_reviewers(tool_input.package, tool_input.dist_git_branch)
+        return JSONToolOutput(result=reviewer_ids)
+
+
 class AddMergeRequestCommentToolInput(BaseModel):
     merge_request_url: str = Field(description="URL of the merge request")
     comment: str = Field(description="Comment text")

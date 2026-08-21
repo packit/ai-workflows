@@ -447,6 +447,36 @@ async def request_mr_reviews(
         logger.warning("Failed to assign reviewers to MR %s: %s", mr_url, e)
 
 
+async def request_mr_qe_reviews(
+    package: str,
+    dist_git_branch: str,
+    mr_url: str,
+    available_tools: list[Tool],
+) -> None:
+    """Best-effort QE reviewer assignment — logs warnings but never raises."""
+    if os.getenv("ASSIGN_MR_REVIEWERS", "false").lower() != "true":
+        return
+    try:
+        reviewer_ids = await run_tool(
+            "resolve_qe_reviewers",
+            package=package,
+            dist_git_branch=dist_git_branch,
+            available_tools=available_tools,
+        )
+        if not reviewer_ids:
+            logger.info("No QE reviewers resolved for %s (%s)", package, dist_git_branch)
+            return
+        await run_tool(
+            "set_merge_request_reviewers",
+            merge_request_url=mr_url,
+            reviewer_ids=reviewer_ids,
+            available_tools=available_tools,
+        )
+        logger.info("Assigned QE reviewers %s to MR %s", reviewer_ids, mr_url)
+    except Exception as e:
+        logger.warning("Failed to assign QE reviewers to MR %s: %s", mr_url, e)
+
+
 async def commit_push_and_open_mr(
     local_clone: Path,
     commit_message: str,

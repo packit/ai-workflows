@@ -187,7 +187,16 @@ class JiraLabels(Enum):
     REPRODUCER_NOT_REPRODUCIBLE = "ymir_reproducer_not_reproducible"
     REPRODUCER_ALREADY_EXISTS = "ymir_reproducer_already_exists"
 
+    # Deprecated general postponed label,
+    # replaced by labels with reason for postponement
     TRIAGED_POSTPONED = "ymir_triaged_postponed"
+
+    # Reasons for postponing implementation
+    YMIR_POSTPONED_DEPENDENCY = "ymir_postponed_dependency"
+    YMIR_POSTPONED_Y_STREAM = "ymir_postponed_y_stream"
+    YMIR_POSTPONED_NO_PATCH = "ymir_postponed_no_patch"
+    YMIR_POSTPONED_PR_PENDING = "ymir_postponed_pr_pending"
+
     TRIAGED_NOT_AFFECTED = "ymir_triaged_not_affected"
 
     RETRY_NEEDED = "ymir_retry_needed"
@@ -211,7 +220,20 @@ class JiraLabels(Enum):
     # TRIAGE_IN_PROGRESS on enqueue.
     TODO = "ymir_todo"
 
+    # When issue has been postponed too many times it must be marked as abandoned
+    ABANDONED = "ymir_abandoned"
+
     @classmethod
     def all_labels(cls) -> set[str]:
         """Return all Ymir labels for cleanup operations"""
         return {label.value for label in cls}
+
+    @classmethod
+    def postponement_labels(cls) -> set[str]:
+        """Return all postponement labels"""
+        return {
+            cls.YMIR_POSTPONED_DEPENDENCY.value,
+            cls.YMIR_POSTPONED_Y_STREAM.value,
+            cls.YMIR_POSTPONED_NO_PATCH.value,
+            cls.YMIR_POSTPONED_PR_PENDING.value,
+        }

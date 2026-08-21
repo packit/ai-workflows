@@ -1,0 +1,59 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sweep-y-stream
+  labels:
+    app: sweep-y-stream
+    component: scheduler
+spec:
+  schedule: "0 */12 * * *"  # Every 12 hours
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  suspend: false
+  jobTemplate:
+    metadata:
+      labels:
+        app: sweep-y-stream
+        component: job
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 600  # 10 minutes max runtime
+      template:
+        metadata:
+          labels:
+            app: sweep-y-stream
+            component: pod
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: sweep-y-stream
+            image: 'sweep:prod'
+            imagePullPolicy: IfNotPresent
+            args: ["python3", "-m", "ymir.sweep", "--strategy", "y_stream"]
+            envFrom:
+            - configMapRef:
+                name: endpoints-env
+            - configMapRef:
+                name: jira-env
+            - secretRef:
+                name: jira-env
+            resources:
+              limits:
+                cpu: "200m"
+                memory: "256Mi"
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+              capabilities:
+                drop:
+                - ALL
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          dnsPolicy: ClusterFirst
+          schedulerName: default-scheduler
+          terminationGracePeriodSeconds: 30

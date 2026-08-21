@@ -216,9 +216,28 @@ class Resolution(Enum):
     REBUILD = "rebuild"
     CLARIFICATION_NEEDED = "clarification-needed"
     OPEN_ENDED_ANALYSIS = "open-ended-analysis"
-    POSTPONED = "postponed"
     NOT_AFFECTED = "not-affected"
     ERROR = "error"
+    # Postponement resolutions, broken down by the reason for postponing.
+    # The reason is carried by the resolution itself (there is no separate
+    # category field); each maps to a distinct ymir_postponed_* Jira label.
+    POSTPONED_DEPENDENCY = "postponed_dependency"
+    POSTPONED_Y_STREAM = "postponed_y_stream"
+    POSTPONED_NO_PATCH = "postponed_no_patch"
+    POSTPONED_PR_PENDING = "postponed_pr_pending"
+
+
+# The set of resolutions that postpone an issue. Use for membership checks
+# (``resolution in POSTPONED_RESOLUTIONS``) instead of comparing against a
+# single general POSTPONED value.
+POSTPONED_RESOLUTIONS: frozenset[Resolution] = frozenset(
+    {
+        Resolution.POSTPONED_DEPENDENCY,
+        Resolution.POSTPONED_Y_STREAM,
+        Resolution.POSTPONED_NO_PATCH,
+        Resolution.POSTPONED_PR_PENDING,
+    }
+)
 
 
 class RebaseData(BaseModel):
@@ -394,6 +413,10 @@ class PostponedData(BaseModel):
     summary: str = Field(description="Reason for postponement")
     pending_issues: list[str] = Field(description="Jira issue keys of dependencies not yet shipped")
     jira_issue: str = Field(description="Jira issue identifier")
+    blocker_references: list[str] | None = Field(
+        default=None,
+        description="List of machine-readable blocker IDs: Jira issue keys, errata IDs, or MR URLs",
+    )
     package: str | None = Field(default=None, description="Package name (for rebuild postponements)")
     fix_version: str | None = Field(
         default=None, description="Fix version in Jira (for rebuild postponements)"
@@ -474,13 +497,16 @@ AUTOMATED_RESOLUTION_NOT_SUPPORTED = (
     "is not yet supported by Ymir. Manual action is required._"
 )
 
+POSTPONEMENT_NOTE = "\n\n_This issue will be monitored by Ymir and processed once it is unblocked._"
+
 
 class TriageOutputSchema(BaseModel):
     """Output schema for the triage agent."""
 
     resolution: Resolution = Field(
         description="Triage resolution, one of rebase, backport, rebuild, "
-        "clarification-needed, open-ended-analysis, postponed, error"
+        "clarification-needed, open-ended-analysis, not-affected, error, "
+        "postponed_dependency, postponed_no_patch, postponed_pr_pending"
     )
     data: (
         RebaseData
@@ -615,10 +641,19 @@ class TriageOutputSchema(BaseModel):
                     heading = "*Waiting for*:"
                 else:
                     heading = "*Waiting for at least one of*:"
+                blocker_line = (
+                    f"\n*Blockers*: {','.join(self.data.blocker_references)}"
+                    if self.data.blocker_references
+                    else ""
+                )
+                # Changes here must be reflected in the `ymir.sweep` regular expressions
+                # otherwise the postponed issue processing will break
                 return (
                     f"{resolution}"
                     f"*Summary*: {self.data.summary}\n"
                     f"{heading}\n{pending_text}"
+                    f"{blocker_line}"
+                    f"{POSTPONEMENT_NOTE}"
                     f"{TRIAGE_DISCLAIMER}"
                 )
 

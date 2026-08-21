@@ -11,6 +11,7 @@ from ymir.tools.privileged.reviewer_resolver import (
     fetch_bugzilla_component_data,
     parse_component_file,
     resolve_gitlab_user_id,
+    resolve_qe_reviewers,
     resolve_reviewers,
 )
 
@@ -206,6 +207,45 @@ async def test_resolve_reviewers_full_flow(monkeypatch):
 
     result = await resolve_reviewers("bash", "c10s")
     assert sorted(result) == [42, 99]
+
+
+@pytest.mark.asyncio
+async def test_resolve_qe_reviewers_only_uses_qa_contact(monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "test-token")
+
+    @asynccontextmanager
+    async def get(url, headers=None, params=None):
+        if "gitlab.cee.redhat.com" in url:
+
+            async def text():
+                return SAMPLE_COMPONENT_FILE
+
+            yield flexmock(status=200, text=text)
+        elif params:
+            search = params["search"]
+            if search == "qaengineer@redhat.com":
+
+                async def json():
+                    return [{"id": 99, "username": "qaengineer"}]
+
+                yield flexmock(status=200, json=json)
+            else:
+
+                async def json():
+                    return []
+
+                yield flexmock(status=200, json=json)
+        else:
+
+            async def json():
+                return {"id": 99, "public_email": "qaengineer@redhat.com"}
+
+            yield flexmock(status=200, json=json)
+
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(get)
+
+    result = await resolve_qe_reviewers("bash", "c10s")
+    assert result == [99]
 
 
 @pytest.mark.asyncio

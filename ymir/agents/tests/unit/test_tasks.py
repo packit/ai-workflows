@@ -13,6 +13,7 @@ from ymir.agents.tasks import (
     handle_zstream_branch_stale_error,
     needs_zstream_target_label,
     post_user_ack_once,
+    request_mr_qe_reviews,
 )
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import Task
@@ -369,6 +370,32 @@ async def test_commit_push_and_open_mr_assigns_reviewers(tmp_path, monkeypatch):
     reviewer_calls = [(n, kw) for n, kw in tool_calls if n == "set_merge_request_reviewers"]
     assert len(reviewer_calls) == 1
     assert reviewer_calls[0][1]["reviewer_ids"] == [42, 99]
+
+
+@pytest.mark.asyncio
+async def test_request_mr_qe_reviews_assigns_qe_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("ASSIGN_MR_REVIEWERS", "true")
+    tool_calls = []
+
+    async def mock_run_tool(name, *, available_tools=None, **kwargs):
+        tool_calls.append((name, kwargs))
+        if name == "resolve_qe_reviewers":
+            return [99]
+        return None
+
+    with patch("ymir.agents.tasks.run_tool", side_effect=mock_run_tool):
+        await request_mr_qe_reviews(
+            "bind",
+            "c10s",
+            "https://gitlab.com/redhat/rhel/tests/bind/-/merge_requests/1",
+            [],
+        )
+
+    assert tool_calls[0][0] == "resolve_qe_reviewers"
+    assert tool_calls[0][1] == {"package": "bind", "dist_git_branch": "c10s"}
+    reviewer_calls = [(n, kw) for n, kw in tool_calls if n == "set_merge_request_reviewers"]
+    assert len(reviewer_calls) == 1
+    assert reviewer_calls[0][1]["reviewer_ids"] == [99]
 
 
 @pytest.mark.asyncio

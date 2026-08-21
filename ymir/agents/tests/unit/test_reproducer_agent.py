@@ -23,6 +23,7 @@ from ymir.agents.reproducer_agent import (
     _reproducer_mr_title_tags,
     _resolve_reproducer_mr_target,
     _resolve_test_dir,
+    _reviewer_lookup_branch,
     _should_finalize_jira,
     create_reproducer_agent,
     main,
@@ -79,6 +80,21 @@ def test_adapted_existing_uses_created_label():
     result = _output(success=True, test_already_exists=True, adapted_existing=True)
     assert _determine_result_label(result) == JiraLabels.REPRODUCER_CREATED
     assert _determine_comment_resolution(result) == "adapted-existing"
+
+
+@pytest.mark.parametrize(
+    ("input_data", "expected"),
+    [
+        (ReproducerInputSchema(jira_issue="RHEL-1", package="bind", target_branch="c10s"), "c10s"),
+        (
+            ReproducerInputSchema(jira_issue="RHEL-1", package="bind", fix_version="rhel-9.8"),
+            "rhel-9.8.0",
+        ),
+        (ReproducerInputSchema(jira_issue="RHEL-1", package="bind"), None),
+    ],
+)
+def test_reviewer_lookup_branch(input_data, expected):
+    assert _reviewer_lookup_branch(input_data) == expected
 
 
 def test_should_finalize_jira_false_for_retryable_error():

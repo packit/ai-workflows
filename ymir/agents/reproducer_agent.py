@@ -60,6 +60,7 @@ from ymir.common.reproducer_lock import (
     sweep_stale_reproducer_locks,
     try_acquire_reproducer_lock,
 )
+from ymir.common.version_utils import construct_internal_branch_name, parse_rhel_version
 from ymir.tools.privileged.jira import fetch_jira_issue_issuelinks
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.text import CreateTool, SearchTextTool, ViewTool
@@ -792,6 +793,18 @@ def _build_commit_message(result: OutputSchema, input_data: InputSchema) -> str:
     )
 
 
+def _reviewer_lookup_branch(input_data: InputSchema) -> str | None:
+    """Map reproducer task metadata to a dist-git branch for reviewer lookup."""
+    if input_data.target_branch:
+        return input_data.target_branch
+    if input_data.fix_version:
+        parsed = parse_rhel_version(input_data.fix_version)
+        if parsed:
+            major, minor, _ = parsed
+            return construct_internal_branch_name(major, minor)
+    return None
+
+
 async def _reproducer_enabled_for_package(
     package: str,
     jira_issue: str,
@@ -989,7 +1002,7 @@ async def run_workflow(
                 mr_description = _build_mr_description(result, agent_input)
                 commit_message = _build_commit_message(result, agent_input)
 
-                mr_url, _ = await tasks.commit_push_and_open_mr(
+                mr_url, is_new_mr = await tasks.commit_push_and_open_mr(
                     local_clone=tests_clone,
                     commit_message=commit_message,
                     fork_url=fork_url,
@@ -1003,6 +1016,21 @@ async def run_workflow(
                 result.test_mr_url = mr_url
                 if mr_url:
                     logger.info(f"Created/updated reproducer MR: {mr_url}")
+                    if is_new_mr:
+                        reviewer_branch = _reviewer_lookup_branch(agent_input)
+                        if reviewer_branch:
+                            await tasks.request_mr_qe_reviews(
+                                package,
+                                reviewer_branch,
+                                mr_url,
+                                gateway_tools,
+                            )
+                        else:
+                            logger.info(
+                                "Skipping QE reviewer assignment for %s — "
+                                "no target_branch or fix_version in reproducer input",
+                                state.jira_issue,
+                            )
                     if result.adapted_existing:
                         result.existing_mr_url = result.existing_mr_url or mr_url
                 else:

@@ -1,5 +1,6 @@
 """Unit tests for reproducer agent label and comment helpers."""
 
+import contextlib
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,21 +8,27 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ymir.agents.reproducer_agent import (
+    PreparedTestsClone,
+    _bootstrap_tests_clone,
     _build_mr_title,
     _cve_only_needles,
     _determine_comment_resolution,
     _determine_result_label,
+    _discover_existing_reproducer_test_dir,
     _match_open_reproducer_mr,
+    _match_open_reproducer_mr_for_input,
     _match_regression_sibling_mr,
     _needs_merge_request,
     _prepare_reproducer_branch,
     _reproducer_mr_title_tags,
     _resolve_reproducer_mr_target,
     _resolve_test_dir,
+    _reviewer_lookup_branch,
     _should_finalize_jira,
     create_reproducer_agent,
     main,
 )
+from ymir.agents.tasks import InvalidReproducerConfigError, fetch_reproducer_config
 from ymir.common.base_utils import check_subprocess
 from ymir.common.constants import JiraLabels
 from ymir.common.models import MergeRequestDetails, ReproducerInputSchema, ReproducerOutputSchema, Task
@@ -75,6 +82,21 @@ def test_adapted_existing_uses_created_label():
     assert _determine_comment_resolution(result) == "adapted-existing"
 
 
+@pytest.mark.parametrize(
+    ("input_data", "expected"),
+    [
+        (ReproducerInputSchema(jira_issue="RHEL-1", package="bind", target_branch="c10s"), "c10s"),
+        (
+            ReproducerInputSchema(jira_issue="RHEL-1", package="bind", fix_version="rhel-9.8"),
+            "rhel-9.8.0",
+        ),
+        (ReproducerInputSchema(jira_issue="RHEL-1", package="bind"), None),
+    ],
+)
+def test_reviewer_lookup_branch(input_data, expected):
+    assert _reviewer_lookup_branch(input_data) == expected
+
+
 def test_should_finalize_jira_false_for_retryable_error():
     assert _should_finalize_jira(_output(success=False, retryable_error=True)) is False
     assert _should_finalize_jira(_output(success=False, lock_deferred=True)) is False
@@ -114,6 +136,38 @@ def test_resolve_test_dir_rejects_traversal_and_missing(tmp_path: Path):
     assert _resolve_test_dir(tmp_path, "") is None
     assert _resolve_test_dir(tmp_path, "../etc") is None
     assert _resolve_test_dir(tmp_path, "Security/CVE-missing") is None
+
+
+def test_discover_existing_reproducer_test_dir_prefers_security_cve(tmp_path: Path):
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    canonical = repo / "Security" / "CVE-2026-50219"
+    canonical.mkdir(parents=True)
+    (canonical / "main.fmf").write_text("summary: test\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id="CVE-2026-50219",
+        jira_issue="RHEL-220981",
+        reproducer_type="cve",
+    )
+    assert discovered == canonical
+
+
+def test_discover_existing_reproducer_test_dir_finds_sole_regression_dir(tmp_path: Path):
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    regression = repo / "Regression" / "RHEL-100"
+    regression.mkdir(parents=True)
+    (regression / "runtest.sh").write_text("#!/bin/bash\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id=None,
+        jira_issue="RHEL-200",
+        reproducer_type="bug",
+    )
+    assert discovered == regression
 
 
 def test_cve_only_needles_splits_and_normalizes():
@@ -167,13 +221,113 @@ def test_match_regression_sibling_mr_when_issue_not_yet_in_title():
         },
         {
             "url": "https://gitlab.com/a/2",
-            "title": "bind: [RHEL-200] ymir reproducer test",
+            "title": "bind: [RHEL-500] ymir reproducer test",
         },
     ]
     assert _match_regression_sibling_mr(mrs, "RHEL-300") is None
+    assert _match_regression_sibling_mr(mrs, "RHEL-300", clone_root="RHEL-100") == mrs[0]
 
     single = [mrs[0]]
     assert _match_regression_sibling_mr(single, "RHEL-200") == single[0]
+    assert _match_regression_sibling_mr(single, "RHEL-200", clone_root="RHEL-100") == single[0]
+
+
+def test_match_open_reproducer_mr_uses_clone_root_tag():
+    mrs = [
+        {
+            "url": "https://gitlab.com/a/1",
+            "title": "bind: [RHEL-100] ymir reproducer test",
+        },
+        {
+            "url": "https://gitlab.com/a/2",
+            "title": "bind: [RHEL-500] ymir reproducer test",
+        },
+    ]
+    assert _match_open_reproducer_mr(mrs, jira_issue="RHEL-200", clone_root="RHEL-100") == mrs[0]
+    assert _match_open_reproducer_mr(mrs, jira_issue="RHEL-600", clone_root="RHEL-500") == mrs[1]
+
+
+def test_discover_existing_reproducer_test_dir_prefers_clone_root_regression_path(tmp_path: Path):
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    root_dir = repo / "Regression" / "RHEL-100"
+    root_dir.mkdir(parents=True)
+    (root_dir / "runtest.sh").write_text("#!/bin/bash\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id=None,
+        jira_issue="RHEL-300",
+        reproducer_type="bug",
+        clone_root="RHEL-100",
+    )
+    assert discovered == root_dir
+
+
+@pytest.mark.asyncio
+async def test_match_open_reproducer_mr_for_input_uses_clone_root(monkeypatch):
+    mrs = [
+        {
+            "url": "https://gitlab.com/a/1",
+            "title": "bind: [RHEL-100] ymir reproducer test",
+        },
+        {
+            "url": "https://gitlab.com/a/2",
+            "title": "bind: [RHEL-500] ymir reproducer test",
+        },
+    ]
+    monkeypatch.setattr(
+        "ymir.agents.reproducer_agent._resolve_reproducer_clone_root",
+        AsyncMock(return_value="RHEL-100"),
+    )
+    input_data = ReproducerInputSchema(jira_issue="RHEL-300", package="bind")
+    matched = await _match_open_reproducer_mr_for_input(input_data, mrs)
+    assert matched == mrs[0]
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_mr_target_extends_clone_chain_mr_with_multiple_open():
+    result = _output(
+        jira_issue="RHEL-300",
+        success=True,
+        test_directory="Regression/RHEL-100",
+        package="bind",
+        reproducer_type="bug",
+    )
+    agent_input = ReproducerInputSchema(jira_issue="RHEL-300", package="bind")
+    open_mrs = [
+        {
+            "url": "https://gitlab.com/redhat/rhel/tests/bind/-/merge_requests/5",
+            "title": "bind: [RHEL-100] ymir reproducer test",
+            "source_branch": "reproducer/RHEL-100",
+        },
+        {
+            "url": "https://gitlab.com/redhat/rhel/tests/bind/-/merge_requests/6",
+            "title": "bind: [RHEL-500] ymir reproducer test",
+            "source_branch": "reproducer/RHEL-500",
+        },
+    ]
+
+    async def fake_run_tool(name, available_tools=None, **kwargs):
+        if name == "list_project_merge_requests":
+            return open_mrs
+        raise AssertionError(name)
+
+    with (
+        patch("ymir.agents.reproducer_agent.run_tool", new=AsyncMock(side_effect=fake_run_tool)),
+        patch(
+            "ymir.agents.reproducer_agent._resolve_reproducer_clone_root",
+            new=AsyncMock(return_value="RHEL-100"),
+        ),
+    ):
+        mr_url, branch, matched_mr = await _resolve_reproducer_mr_target(result, agent_input, "bind", [])
+
+    assert mr_url == open_mrs[0]["url"]
+    assert branch == "reproducer/RHEL-100"
+    assert (
+        _build_mr_title(result, agent_input, matched_mr=matched_mr)
+        == "bind: [RHEL-100, RHEL-300] ymir reproducer test"
+    )
 
 
 def test_build_mr_title_appends_jira_on_regression_adapt():
@@ -401,80 +555,117 @@ async def test_prepare_reproducer_branch_new_mr_preserves_test_dir(tmp_path: Pat
     test_dir.mkdir(parents=True)
     (test_dir / "runtest.sh").write_text("adapted-on-default\n")
 
-    branch = await _prepare_reproducer_branch(
+    branch, commit_dir = await _prepare_reproducer_branch(
         repo,
         test_dir,
         "reproducer/RHEL-1",
-        adapted_existing=False,
         existing_mr_url=None,
         available_tools=[],
     )
 
     assert branch == "reproducer/RHEL-1"
+    assert commit_dir == test_dir
     head, _ = await check_subprocess(["git", "branch", "--show-current"], cwd=repo)
     assert head.strip() == "reproducer/RHEL-1"
     assert (test_dir / "runtest.sh").read_text() == "adapted-on-default\n"
 
 
 @pytest.mark.asyncio
-async def test_prepare_reproducer_branch_adapt_keeps_sibling_commits(tmp_path: Path):
-    """Adapt must land on the MR tip (sibling commit), not wipe it via checkout -B HEAD."""
+async def test_prepare_reproducer_branch_bootstrapped_adapt_preserves_worktree(tmp_path: Path):
+    """Bootstrapped adapt must not re-overlay — agent edits are already on the MR branch."""
     repo = tmp_path / "tests-pkg"
     repo.mkdir()
     await _git_init_with_main(repo)
 
-    # Simulate an existing MR branch that already has a sibling commit.
     await check_subprocess(["git", "checkout", "-b", "reproducer/RHEL-1"], cwd=repo)
-    mr_dir = repo / "Security" / "CVE-1"
-    mr_dir.mkdir(parents=True)
-    (mr_dir / "runtest.sh").write_text("sibling-stream\n")
+    test_dir = repo / "Security" / "CVE-1"
+    test_dir.mkdir(parents=True)
+    (test_dir / "main.fmf").write_text("summary: sibling\n")
+    (test_dir / "runtest.sh").write_text("local-adapt\n")
     await check_subprocess(["git", "add", "Security"], cwd=repo)
     await check_subprocess(["git", "commit", "-m", "sibling adapt"], cwd=repo)
     sibling_sha, _ = await check_subprocess(["git", "rev-parse", "HEAD"], cwd=repo)
 
-    # Agent continued on main with a local adaptation of the same test path.
-    await check_subprocess(["git", "checkout", "main"], cwd=repo)
-    test_dir = repo / "Security" / "CVE-1"
-    test_dir.mkdir(parents=True)
-    (test_dir / "runtest.sh").write_text("local-adapt\n")
-
-    details = MergeRequestDetails(
-        source_repo="https://gitlab.com/fork/tests-pkg.git",
-        source_branch="reproducer/RHEL-1",
-        target_repo_name="pkg",
-        target_branch="main",
-        title="adapt",
-        description="",
-        last_updated_at=datetime.now(UTC),
-        comments=[],
+    bootstrap = PreparedTestsClone(
+        tests_clone=repo,
+        existing_mr_url="https://gitlab.com/redhat/rhel/tests/pkg/-/merge_requests/1",
+        mr_source_branch="reproducer/RHEL-1",
+        existing_test_directory="Security/CVE-1",
+        matched_mr={"url": "https://gitlab.com/redhat/rhel/tests/pkg/-/merge_requests/1"},
     )
 
+    branch, commit_dir = await _prepare_reproducer_branch(
+        repo,
+        test_dir,
+        "reproducer/RHEL-1",
+        existing_mr_url=bootstrap.existing_mr_url,
+        available_tools=[],
+        bootstrap=bootstrap,
+    )
+
+    assert branch == "reproducer/RHEL-1"
+    assert commit_dir == test_dir
+    sha, _ = await check_subprocess(["git", "rev-parse", "HEAD"], cwd=repo)
+    assert sha.strip() == sibling_sha.strip()
+    assert (test_dir / "runtest.sh").read_text() == "local-adapt\n"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Path, monkeypatch):
+    working_dir = tmp_path / "Reproducer" / "RHEL-2"
+    working_dir.mkdir(parents=True)
+    repo = working_dir / "tests-bind"
+    repo.mkdir()
+    cve_id = "CVE-2026-0001"
+
     async def fake_run_tool(name, available_tools=None, **kwargs):
+        if name == "clone_repository":
+            (repo / "README").write_text("cloned\n")
+            return "ok"
+        if name == "list_project_merge_requests":
+            return [
+                {
+                    "url": "https://gitlab.com/redhat/rhel/tests/bind/-/merge_requests/9",
+                    "title": f"bind: [{cve_id}] ymir reproducer test",
+                    "source_branch": "reproducer/RHEL-1",
+                }
+            ]
         if name == "get_merge_request_details":
-            return details.model_dump(mode="json")
+            return MergeRequestDetails(
+                source_repo="https://gitlab.com/fork/tests-bind.git",
+                source_branch="reproducer/RHEL-1",
+                target_repo_name="bind",
+                target_branch="main",
+                title=f"bind: [{cve_id}] ymir reproducer test",
+                description="",
+                last_updated_at=datetime.now(UTC),
+                comments=[],
+            ).model_dump(mode="json")
         if name == "fetch_branch":
-            # Local stand-in: branch already exists; nothing to fetch.
+            await _git_init_with_main(repo)
+            await check_subprocess(["git", "checkout", "-b", "reproducer/RHEL-1"], cwd=repo)
+            mr_dir = repo / "Security" / cve_id
+            mr_dir.mkdir(parents=True)
+            (mr_dir / "main.fmf").write_text("summary: on mr\n")
+            await check_subprocess(["git", "add", "Security"], cwd=repo)
+            await check_subprocess(["git", "commit", "-m", "mr test"], cwd=repo)
             return "ok"
         raise AssertionError(f"unexpected tool {name}")
 
-    with patch("ymir.agents.reproducer_agent.run_tool", new=AsyncMock(side_effect=fake_run_tool)):
-        branch = await _prepare_reproducer_branch(
-            repo,
-            test_dir,
-            "reproducer/RHEL-1",
-            adapted_existing=True,
-            existing_mr_url="https://gitlab.com/redhat/rhel/tests/pkg/-/merge_requests/1",
-            available_tools=[],
-        )
+    monkeypatch.setattr("ymir.agents.reproducer_agent.run_tool", fake_run_tool)
 
-    assert branch == "reproducer/RHEL-1"
+    input_data = ReproducerInputSchema(
+        jira_issue="RHEL-2",
+        package="bind",
+        cve_id=cve_id,
+    )
+    bootstrap = await _bootstrap_tests_clone(working_dir, input_data, [])
+
+    assert bootstrap.existing_mr_url.endswith("/merge_requests/9")
+    assert bootstrap.mr_source_branch == "reproducer/RHEL-1"
+    assert bootstrap.existing_test_directory == f"Security/{cve_id}"
     head, _ = await check_subprocess(["git", "branch", "--show-current"], cwd=repo)
     assert head.strip() == "reproducer/RHEL-1"
-    # HEAD is still the sibling commit (not a reset of main).
-    sha, _ = await check_subprocess(["git", "rev-parse", "HEAD"], cwd=repo)
-    assert sha.strip() == sibling_sha.strip()
-    # Local adaptations were restored on top of that tip.
-    assert (test_dir / "runtest.sh").read_text() == "local-adapt\n"
 
 
 # =============================================================================
@@ -483,9 +674,48 @@ async def test_prepare_reproducer_branch_adapt_keeps_sibling_commits(tmp_path: P
 
 
 def _make_reproducer_payload(issue: str = "RHEL-99999", user_triggered: bool = False) -> bytes:
-    input_data = ReproducerInputSchema(jira_issue=issue)
+    input_data = ReproducerInputSchema(jira_issue=issue, package="bind")
     task = Task(metadata=input_data.model_dump(), user_triggered=user_triggered)
     return task.model_dump_json().encode()
+
+
+@contextlib.contextmanager
+def _mock_reproducer_config_enabled():
+    enabled_config = MagicMock(enabled=True)
+
+    @contextlib.asynccontextmanager
+    async def fake_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    with (
+        patch(
+            "ymir.agents.tasks.fetch_reproducer_config", new_callable=AsyncMock, return_value=enabled_config
+        ),
+        patch("ymir.agents.reproducer_agent.mcp_tools", side_effect=fake_mcp_tools),
+    ):
+        yield
+
+
+@contextlib.contextmanager
+def _mock_workflow_lock():
+    with (
+        patch(
+            "ymir.agents.reproducer_agent.resolve_reproducer_lock_id",
+            new_callable=AsyncMock,
+            return_value="RHEL-99999",
+        ),
+        patch(
+            "ymir.agents.reproducer_agent.try_acquire_reproducer_lock",
+            new_callable=AsyncMock,
+            return_value='{"package":"bind","lock_id":"RHEL-99999","jira_issue":"RHEL-99999"}',
+        ),
+        patch(
+            "ymir.agents.reproducer_agent.release_reproducer_lock",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+    ):
+        yield
 
 
 async def _run_process_task(payload: bytes) -> None:
@@ -566,6 +796,8 @@ async def test_process_task_proceeds_despite_terminal_label_when_user_triggered(
         patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
         patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
         patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+        _mock_reproducer_config_enabled(),
+        _mock_workflow_lock(),
     ):
         mock_workflow.return_value = MagicMock(
             result=MagicMock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
@@ -588,6 +820,8 @@ async def test_process_task_proceeds_when_terminal_label_and_in_progress():
         patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
         patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
         patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+        _mock_reproducer_config_enabled(),
+        _mock_workflow_lock(),
     ):
         mock_workflow.return_value = MagicMock(
             result=MagicMock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
@@ -609,6 +843,8 @@ async def test_process_task_proceeds_when_no_terminal_labels():
         patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
         patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
         patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+        _mock_reproducer_config_enabled(),
+        _mock_workflow_lock(),
     ):
         mock_workflow.return_value = MagicMock(
             result=MagicMock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
@@ -616,3 +852,96 @@ async def test_process_task_proceeds_when_no_terminal_labels():
         await _run_process_task(_make_reproducer_payload())
 
     mock_workflow.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_task_blocks_when_workflow_lock_busy():
+    """Busy create/adapt locks park the task until the holder releases."""
+    with (
+        patch(
+            "ymir.agents.tasks.get_jira_issue_metadata",
+            new_callable=AsyncMock,
+            return_value=([], "New"),
+        ),
+        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
+        patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
+        patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+        patch(
+            "ymir.agents.reproducer_agent.resolve_reproducer_lock_id",
+            new_callable=AsyncMock,
+            return_value="CVE-2026-56132",
+        ),
+        patch(
+            "ymir.agents.reproducer_agent.try_acquire_reproducer_lock",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "ymir.agents.reproducer_agent.enqueue_blocked_reproducer_task",
+            new_callable=AsyncMock,
+        ) as mock_enqueue_blocked,
+        _mock_reproducer_config_enabled(),
+    ):
+        await _run_process_task(_make_reproducer_payload())
+
+    mock_workflow.assert_not_awaited()
+    mock_enqueue_blocked.assert_awaited_once()
+
+
+# -- fetch_reproducer_config ---------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_reproducer_config_returns_default_when_not_found():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "No maintainer rules found for package 'bind' (file 'ymir.yaml' not found)"
+        config = await fetch_reproducer_config("bind", [])
+
+    assert config.enabled is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_reproducer_config_parses_disabled():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "reproducer:\n  enabled: false\n"
+        config = await fetch_reproducer_config("bind", [])
+
+    assert config.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_reproducer_config_raises_on_malformed_section():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "reproducer:\n  enabled: not_a_bool\n"
+        with pytest.raises(InvalidReproducerConfigError, match="malformed"):
+            await fetch_reproducer_config("bind", [])
+
+
+@pytest.mark.asyncio
+async def test_process_task_skips_when_reproducer_disabled():
+    disabled_config = MagicMock(enabled=False)
+
+    @contextlib.asynccontextmanager
+    async def fake_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    with (
+        patch(
+            "ymir.agents.tasks.get_jira_issue_metadata",
+            new_callable=AsyncMock,
+            return_value=([], "New"),
+        ),
+        patch(
+            "ymir.agents.tasks.fetch_reproducer_config", new_callable=AsyncMock, return_value=disabled_config
+        ),
+        patch("ymir.agents.reproducer_agent.mcp_tools", side_effect=fake_mcp_tools),
+        patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
+        patch(
+            "ymir.agents.reproducer_agent.try_acquire_reproducer_lock",
+            new_callable=AsyncMock,
+        ) as mock_acquire_lock,
+    ):
+        await _run_process_task(_make_reproducer_payload())
+
+    mock_workflow.assert_not_awaited()
+    mock_acquire_lock.assert_not_awaited()

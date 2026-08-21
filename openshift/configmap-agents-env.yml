@@ -21,6 +21,9 @@ data:
   # When "true", agents assign reviewers to newly created MRs based on
   # the package's bugzilla component contacts (Default Assignee + QA Contact).
   ASSIGN_MR_REVIEWERS: "true"
+  # When "true", triage enqueues reproducer jobs for eligible resolutions.
+  # Unset or "false" disables auto-enqueue (manual: make trigger-reproducer).
+  TRIAGE_ENQUEUE_REPRODUCER: "false"
 immutable: false
 kind: ConfigMap
 metadata:

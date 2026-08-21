@@ -3,10 +3,9 @@ import json
 import logging
 import os
 import re
-import shutil
 import sys
-import tempfile
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +21,7 @@ import ymir.agents.tasks as tasks
 from ymir.agents.constants import I_AM_YMIR, mr_description_footer
 from ymir.agents.observability import setup_observability
 from ymir.agents.reasoning_agent import ReasoningAgent
+from ymir.agents.tasks import InvalidReproducerConfigError
 from ymir.agents.tf_cleanup_middleware import TFReservationCleanupMiddleware
 from ymir.agents.utils import (
     build_agent_factory_with_mock_repos,
@@ -34,7 +34,6 @@ from ymir.agents.utils import (
     mcp_tools,
     render_template,
     resolve_chat_model_override,
-    run_subprocess,
     run_tool,
 )
 from ymir.common.base_utils import fix_await, redis_client, run_task_loop
@@ -54,11 +53,14 @@ from ymir.common.models import (
     ReproducerOutputSchema as OutputSchema,
 )
 from ymir.common.reproducer_lock import (
+    enqueue_blocked_reproducer_task,
     release_reproducer_lock,
+    resolve_clone_root,
     resolve_reproducer_lock_id,
     sweep_stale_reproducer_locks,
     try_acquire_reproducer_lock,
 )
+from ymir.common.version_utils import construct_internal_branch_name, parse_rhel_version
 from ymir.tools.privileged.jira import fetch_jira_issue_issuelinks
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.text import CreateTool, SearchTextTool, ViewTool
@@ -156,17 +158,61 @@ class _PromptContext(InputSchema):
 
     dry_run: bool = Field(default=False)
     reproducer_working_dir: str = Field(description="Per-issue working directory on the shared git volume")
+    tests_clone_ready: bool = Field(
+        default=False,
+        description="True when orchestration already cloned the tests repo before the agent runs",
+    )
+    tests_clone_path: str | None = Field(
+        default=None,
+        description="Absolute path to the pre-provisioned tests clone",
+    )
+    existing_mr_url: str | None = Field(
+        default=None,
+        description="Open reproducer MR URL when the tests clone was bootstrapped for adapt",
+    )
+    mr_source_branch: str | None = Field(
+        default=None,
+        description="MR source branch checked out in the pre-provisioned tests clone",
+    )
+    existing_test_directory: str | None = Field(
+        default=None,
+        description="Relative test directory path already on the MR branch",
+    )
 
 
-def _render_prompt(input_data: InputSchema, dry_run: bool = False) -> str:
+@dataclass
+class PreparedTestsClone:
+    """Tests-repo layout prepared before the reproducer agent runs."""
+
+    tests_clone: Path
+    existing_mr_url: str | None = None
+    mr_source_branch: str | None = None
+    existing_test_directory: str | None = None
+    matched_mr: dict | None = None
+
+
+TestsCloneBootstrap = PreparedTestsClone
+
+
+def _render_prompt(
+    input_data: InputSchema,
+    dry_run: bool = False,
+    bootstrap: TestsCloneBootstrap | None = None,
+) -> str:
     """Render the reproducer prompt template with the input schema fields."""
     working_dir = (
         Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / "Reproducer" / input_data.jira_issue
     )
+    default_clone = working_dir / f"tests-{input_data.package}" if input_data.package else working_dir
     context = _PromptContext(
         **input_data.model_dump(),
         dry_run=dry_run,
         reproducer_working_dir=str(working_dir),
+        tests_clone_ready=bootstrap is not None,
+        tests_clone_path=str(bootstrap.tests_clone if bootstrap else default_clone),
+        existing_mr_url=bootstrap.existing_mr_url if bootstrap else None,
+        mr_source_branch=bootstrap.mr_source_branch if bootstrap else None,
+        existing_test_directory=bootstrap.existing_test_directory if bootstrap else None,
     )
     return render_template(_PROMPT_TEMPLATE, context)
 
@@ -248,6 +294,76 @@ def _resolve_test_dir(tests_clone: Path, test_directory: str | None) -> Path | N
     return None
 
 
+def _is_reproducer_test_dir(path: Path) -> bool:
+    """Return whether *path* looks like a reproducer test directory."""
+    return path.is_dir() and (
+        (path / "main.fmf").is_file()
+        or (path / "runtest.sh").is_file()
+        or (path / "ai-test-description").is_file()
+    )
+
+
+def _discover_existing_reproducer_test_dir(
+    tests_clone: Path,
+    *,
+    cve_id: str | None,
+    jira_issue: str,
+    reproducer_type: str,
+    clone_root: str | None = None,
+) -> Path | None:
+    """Find the reproducer test directory already on an open MR branch.
+
+    When a sibling stream adapts an existing MR, the agent may report a fresh
+    ``test_directory`` under the default branch layout. After checking out the
+    MR tip, prefer the directory that is already part of that MR.
+    """
+    cves = _cve_only_needles(cve_id)
+    if cves:
+        for cve in cves:
+            candidate = tests_clone / "Security" / cve
+            if _is_reproducer_test_dir(candidate):
+                return candidate
+
+        security = tests_clone / "Security"
+        if security.is_dir():
+            matches = [
+                child
+                for child in security.iterdir()
+                if child.is_dir()
+                and _is_reproducer_test_dir(child)
+                and any(cve in child.name.upper() for cve in cves)
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            for cve in cves:
+                for match in matches:
+                    if match.name.upper() == cve:
+                        return match
+        return None
+
+    if reproducer_type == "bug":
+        search_keys: list[str] = []
+        root = (clone_root or "").upper()
+        issue = jira_issue.upper()
+        if root and root not in search_keys:
+            search_keys.append(root)
+        if issue not in search_keys:
+            search_keys.append(issue)
+        for key in search_keys:
+            candidate = tests_clone / "Regression" / key
+            if _is_reproducer_test_dir(candidate):
+                return candidate
+
+        regression = tests_clone / "Regression"
+        if regression.is_dir():
+            matches = [
+                child for child in regression.iterdir() if child.is_dir() and _is_reproducer_test_dir(child)
+            ]
+            if len(matches) == 1:
+                return matches[0]
+    return None
+
+
 def _cve_only_needles(cve_id: str | None) -> list[str]:
     """CVE id strings used to match sibling-stream reproducer MRs."""
     if not cve_id or not cve_id.strip():
@@ -295,13 +411,22 @@ def _is_reproducer_mr_title(title: str) -> bool:
     return "ymir reproducer test" in title.lower()
 
 
-def _match_regression_sibling_mr(mrs: list[dict], jira_issue: str) -> dict | None:
+def _match_regression_sibling_mr(
+    mrs: list[dict],
+    jira_issue: str,
+    *,
+    clone_root: str | None = None,
+) -> dict | None:
     """Find the canonical regression reproducer MR to extend for another stream.
 
-    When the current issue is not yet listed in the title, match a sole open
-    regression reproducer MR (no ``[CVE-…]`` tag in the title).
+    Clone-chain siblings share one MR keyed by the root issue's ``[RHEL-…]`` tag
+    (same id as the create/adapt lock). When the current issue is not yet listed
+    in the title, match an MR tagged with the clone root before falling back to a
+    sole open regression reproducer MR.
     """
     wanted = jira_issue.upper()
+    root = (clone_root or wanted).upper()
+    root_match: dict | None = None
     candidates: list[dict] = []
     for mr in mrs:
         title = mr.get("title") or ""
@@ -310,10 +435,27 @@ def _match_regression_sibling_mr(mrs: list[dict], jira_issue: str) -> dict | Non
             continue
         if wanted in title_jiras:
             return mr
+        if root in title_jiras:
+            root_match = mr
         candidates.append(mr)
+    if root_match is not None:
+        return root_match
     if len(candidates) == 1:
         return candidates[0]
     return None
+
+
+async def _resolve_reproducer_clone_root(jira_issue: str) -> str:
+    """Return the Cloners-chain root issue key (uppercase) for MR/lock grouping."""
+    try:
+        return (await resolve_clone_root(jira_issue, fetch_jira_issue_issuelinks)).upper()
+    except Exception:
+        logger.warning(
+            "Failed to resolve clone root for %s; using issue key for reproducer MR match",
+            jira_issue,
+            exc_info=True,
+        )
+        return jira_issue.upper()
 
 
 def _match_open_reproducer_mr(
@@ -321,6 +463,7 @@ def _match_open_reproducer_mr(
     *,
     cve_ids: list[str] | None = None,
     jira_issue: str | None = None,
+    clone_root: str | None = None,
     existing_mr_url: str | None = None,
 ) -> dict | None:
     """Return the open reproducer MR for this CVE or Jira issue.
@@ -335,6 +478,7 @@ def _match_open_reproducer_mr(
 
     wanted_cves = {cve.upper() for cve in cve_ids or [] if cve}
     wanted_jira = jira_issue.upper() if jira_issue else None
+    root_jira = clone_root.upper() if clone_root else None
 
     for mr in mrs:
         title = mr.get("title") or ""
@@ -343,6 +487,8 @@ def _match_open_reproducer_mr(
         if wanted_cves and wanted_cves & title_cves:
             return mr
         if wanted_jira and wanted_jira in title_jiras:
+            return mr
+        if root_jira and root_jira in title_jiras:
             return mr
 
     return None
@@ -365,11 +511,125 @@ async def _list_open_reproducer_mrs(package: str, available_tools: list[Any]) ->
     return mrs if isinstance(mrs, list) else []
 
 
+async def _match_open_reproducer_mr_for_input(
+    input_data: InputSchema,
+    mrs: list[dict],
+) -> dict | None:
+    """Match an open reproducer MR from queue input (before the agent runs)."""
+    cve_needles = _cve_only_needles(input_data.cve_id)
+    if cve_needles:
+        return _match_open_reproducer_mr(mrs, cve_ids=cve_needles)
+    clone_root = await _resolve_reproducer_clone_root(input_data.jira_issue)
+    matched = _match_open_reproducer_mr(
+        mrs,
+        jira_issue=input_data.jira_issue,
+        clone_root=clone_root,
+    )
+    if matched is None:
+        matched = _match_regression_sibling_mr(
+            mrs,
+            input_data.jira_issue,
+            clone_root=clone_root,
+        )
+    return matched
+
+
+async def _bootstrap_tests_clone(
+    working_dir: Path,
+    input_data: InputSchema,
+    available_tools: list[Any],
+) -> TestsCloneBootstrap:
+    """Clone the tests repo and check out an open reproducer MR branch when present."""
+    package = input_data.package
+    if not package:
+        raise ValueError("package is required to bootstrap tests clone")
+
+    tests_clone = working_dir / f"tests-{package}"
+    repository = f"https://gitlab.com/redhat/rhel/tests/{package}"
+
+    await run_tool(
+        "clone_repository",
+        repository=repository,
+        clone_path=str(tests_clone),
+        available_tools=available_tools,
+    )
+
+    mrs = await _list_open_reproducer_mrs(package, available_tools)
+    matched = await _match_open_reproducer_mr_for_input(input_data, mrs)
+    if not matched:
+        logger.info(
+            "No open reproducer MR for %s — tests clone left on default branch",
+            input_data.jira_issue,
+        )
+        return TestsCloneBootstrap(tests_clone=tests_clone)
+
+    mr_url = matched.get("url")
+    if not mr_url:
+        logger.warning("Matched reproducer MR for %s has no URL", input_data.jira_issue)
+        return TestsCloneBootstrap(tests_clone=tests_clone, matched_mr=matched)
+
+    details_raw = await run_tool(
+        "get_merge_request_details",
+        merge_request_url=mr_url,
+        available_tools=available_tools,
+    )
+    details = MergeRequestDetails.model_validate(details_raw)
+    branch = details.source_branch or matched.get("source_branch")
+    if not branch:
+        raise RuntimeError(f"Open reproducer MR {mr_url} has no source branch")
+
+    await run_tool(
+        "fetch_branch",
+        repository=details.source_repo,
+        branch=branch,
+        clone_path=str(tests_clone),
+        available_tools=available_tools,
+    )
+    await check_subprocess(["git", "checkout", "-f", branch], cwd=tests_clone)
+
+    reproducer_type = "cve" if _cve_only_needles(input_data.cve_id) else "bug"
+    clone_root = None
+    if reproducer_type == "bug":
+        clone_root = await _resolve_reproducer_clone_root(input_data.jira_issue)
+    discovered = _discover_existing_reproducer_test_dir(
+        tests_clone,
+        cve_id=input_data.cve_id,
+        jira_issue=input_data.jira_issue,
+        reproducer_type=reproducer_type,
+        clone_root=clone_root,
+    )
+    existing_test_directory = None
+    if discovered:
+        existing_test_directory = str(discovered.relative_to(tests_clone))
+    else:
+        logger.warning(
+            "Checked out reproducer MR %s on %s but found no test directory on branch",
+            mr_url,
+            branch,
+        )
+
+    logger.info(
+        "Bootstrapped tests clone for %s on MR branch %s (test dir: %s)",
+        input_data.jira_issue,
+        branch,
+        existing_test_directory or "unknown",
+    )
+    return TestsCloneBootstrap(
+        tests_clone=tests_clone,
+        existing_mr_url=mr_url,
+        mr_source_branch=branch,
+        existing_test_directory=existing_test_directory,
+        matched_mr=matched,
+    )
+
+
 async def _resolve_reproducer_mr_target(
     result: OutputSchema,
     agent_input: InputSchema,
     package: str,
     available_tools: list[Any],
+    *,
+    bootstrap: TestsCloneBootstrap | None = None,
 ) -> tuple[str | None, str, dict | None]:
     """Resolve MR URL, git branch, and matched MR metadata for create/adapt push.
 
@@ -379,23 +639,31 @@ async def _resolve_reproducer_mr_target(
     MR title when another stream extends the same open MR.
     """
     fallback_branch = f"reproducer/{result.jira_issue}"
-    mrs = await _list_open_reproducer_mrs(package, available_tools)
-
-    cve_needles = _cve_only_needles(agent_input.cve_id)
-    if cve_needles:
-        matched = _match_open_reproducer_mr(
-            mrs,
-            cve_ids=cve_needles,
-            existing_mr_url=result.existing_mr_url,
-        )
+    if bootstrap and bootstrap.matched_mr:
+        matched = bootstrap.matched_mr
     else:
-        matched = _match_open_reproducer_mr(
-            mrs,
-            jira_issue=result.jira_issue,
-            existing_mr_url=result.existing_mr_url,
-        )
-        if matched is None and result.reproducer_type == "bug":
-            matched = _match_regression_sibling_mr(mrs, result.jira_issue)
+        mrs = await _list_open_reproducer_mrs(package, available_tools)
+        cve_needles = _cve_only_needles(agent_input.cve_id)
+        if cve_needles:
+            matched = _match_open_reproducer_mr(
+                mrs,
+                cve_ids=cve_needles,
+                existing_mr_url=result.existing_mr_url,
+            )
+        else:
+            clone_root = await _resolve_reproducer_clone_root(agent_input.jira_issue)
+            matched = _match_open_reproducer_mr(
+                mrs,
+                jira_issue=result.jira_issue,
+                clone_root=clone_root,
+                existing_mr_url=result.existing_mr_url,
+            )
+            if matched is None and result.reproducer_type == "bug":
+                matched = _match_regression_sibling_mr(
+                    mrs,
+                    result.jira_issue,
+                    clone_root=clone_root,
+                )
 
     if matched:
         mr_url = matched.get("url")
@@ -419,84 +687,56 @@ async def _prepare_reproducer_branch(
     test_dir: Path,
     update_branch: str,
     *,
-    adapted_existing: bool,
     existing_mr_url: str | None,
     available_tools: list[Any],
-) -> str:
-    """Checkout the commit/push branch while preserving local ``test_dir`` edits.
+    bootstrap: TestsCloneBootstrap | None = None,
+) -> tuple[str, Path]:
+    """Ensure the local clone is on the branch that will be pushed.
 
-    For adaptations of an open MR, fetch and check out that MR's source-branch
-    tip first (same idea as ``prepare_dist_git_from_merge_request``) so a later
-    force-push cannot drop sibling commits already on the MR. New MRs create
-    ``update_branch`` from the current local HEAD.
+    When orchestration bootstrapped an open MR before the agent ran, the agent
+    already worked on the fork branch in place — do not re-checkout or overlay.
     """
-    with tempfile.TemporaryDirectory() as tmp:
-        snapshot = Path(tmp) / "adapted_test"
-        shutil.copytree(test_dir, snapshot)
+    if bootstrap and bootstrap.mr_source_branch and bootstrap.existing_mr_url:
+        branch = bootstrap.mr_source_branch
+        head, _ = await check_subprocess(["git", "branch", "--show-current"], cwd=tests_clone)
+        if head.strip() != branch:
+            await check_subprocess(["git", "checkout", "-f", branch], cwd=tests_clone)
+        return branch, test_dir
 
-        branch = update_branch
+    if existing_mr_url:
         try:
-            if existing_mr_url:
-                try:
-                    details_raw = await run_tool(
-                        "get_merge_request_details",
-                        merge_request_url=existing_mr_url,
-                        available_tools=available_tools,
-                    )
-                    details = MergeRequestDetails.model_validate(details_raw)
-                    branch = details.source_branch or update_branch
+            details_raw = await run_tool(
+                "get_merge_request_details",
+                merge_request_url=existing_mr_url,
+                available_tools=available_tools,
+            )
+            details = MergeRequestDetails.model_validate(details_raw)
+            branch = details.source_branch or update_branch
+            await run_tool(
+                "fetch_branch",
+                repository=details.source_repo,
+                branch=branch,
+                clone_path=str(tests_clone),
+                available_tools=available_tools,
+            )
+            await check_subprocess(["git", "checkout", "-f", branch], cwd=tests_clone)
+            logger.info(
+                "Checked out existing MR source branch %s for adapt (%s)",
+                branch,
+                existing_mr_url,
+            )
+            return branch, test_dir
+        except Exception as e:
+            logger.warning(
+                "Failed to fetch/checkout existing MR branch for %s "
+                "(wanted %s); falling back to checkout -B from local HEAD: %s",
+                existing_mr_url,
+                update_branch,
+                e,
+            )
 
-                    # Leave the target branch so fetch can update refs/heads/<branch>.
-                    _, head_branch, _ = await run_subprocess(
-                        ["git", "branch", "--show-current"], cwd=tests_clone
-                    )
-                    if head_branch.strip() == branch:
-                        await check_subprocess(
-                            ["git", "checkout", "--detach"],
-                            cwd=tests_clone,
-                        )
-
-                    await run_tool(
-                        "fetch_branch",
-                        repository=details.source_repo,
-                        branch=branch,
-                        clone_path=str(tests_clone),
-                        available_tools=available_tools,
-                    )
-                    await check_subprocess(
-                        ["git", "checkout", "-f", branch],
-                        cwd=tests_clone,
-                    )
-                    logger.info(
-                        "Checked out existing MR source branch %s for adapt (%s)",
-                        branch,
-                        existing_mr_url,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to fetch/checkout existing MR branch for %s "
-                        "(wanted %s); falling back to checkout -B from local HEAD: %s",
-                        existing_mr_url,
-                        update_branch,
-                        e,
-                    )
-                    branch = update_branch
-                    await check_subprocess(
-                        ["git", "checkout", "-B", branch],
-                        cwd=tests_clone,
-                    )
-            else:
-                await check_subprocess(
-                    ["git", "checkout", "-B", branch],
-                    cwd=tests_clone,
-                )
-        finally:
-            # Overlay agent adaptations onto whatever tip we checked out.
-            if test_dir.exists():
-                shutil.rmtree(test_dir)
-            shutil.copytree(snapshot, test_dir)
-
-    return branch
+    await check_subprocess(["git", "checkout", "-B", update_branch], cwd=tests_clone)
+    return update_branch, test_dir
 
 
 def _build_mr_description(result: OutputSchema, input_data: InputSchema) -> str:
@@ -530,7 +770,14 @@ def _build_mr_description(result: OutputSchema, input_data: InputSchema) -> str:
 
 def _build_commit_message(result: OutputSchema, input_data: InputSchema) -> str:
     """Build the commit message for the reproducer test."""
-    if result.reproducer_type == "cve":
+    if result.adapted_existing:
+        if result.reproducer_type == "cve":
+            title = f"{result.package}: adapt security reproducer for {result.jira_issue}"
+            body = f"Adapt security test for {input_data.cve_id} in {result.package} for this stream."
+        else:
+            title = f"{result.package}: adapt regression reproducer for {result.jira_issue}"
+            body = f"Adapt regression test for {result.jira_issue} in {result.package} for this stream."
+    elif result.reproducer_type == "cve":
         title = f"{result.package}: add security reproducer for {result.jira_issue}"
         body = f"Add security test for {input_data.cve_id} in {result.package}."
     else:
@@ -544,6 +791,53 @@ def _build_commit_message(result: OutputSchema, input_data: InputSchema) -> str:
         f"This test was created {I_AM_YMIR}\n\n"
         f"Assisted-by: Ymir\n"
     )
+
+
+def _reviewer_lookup_branch(input_data: InputSchema) -> str | None:
+    """Map reproducer task metadata to a dist-git branch for reviewer lookup."""
+    if input_data.target_branch:
+        return input_data.target_branch
+    if input_data.fix_version:
+        parsed = parse_rhel_version(input_data.fix_version)
+        if parsed:
+            major, minor, _ = parsed
+            return construct_internal_branch_name(major, minor)
+    return None
+
+
+async def _reproducer_enabled_for_package(
+    package: str,
+    jira_issue: str,
+    gateway_tools: list,
+    *,
+    dry_run: bool,
+    user_triggered: bool,
+) -> bool:
+    """Return False when reproducer is disabled or rules config is invalid."""
+    try:
+        config = await tasks.fetch_reproducer_config(package, gateway_tools)
+    except InvalidReproducerConfigError as e:
+        logger.warning("Invalid reproducer config for %s: %s", package, e)
+        if not dry_run:
+            await tasks.comment_in_jira(
+                jira_issue=jira_issue,
+                agent_type="Reproducer",
+                comment_text=(
+                    f"ymir.yaml for {package} has a malformed reproducer "
+                    f"section: {e}\n\nReproducer analysis was skipped. Please fix "
+                    f"the config file in the rules repository."
+                ),
+                is_error=True,
+                available_tools=gateway_tools,
+                user_triggered=user_triggered,
+            )
+        return False
+
+    if not config.enabled:
+        logger.info("Reproducer not enabled for %s, skipping", package)
+        return False
+
+    return True
 
 
 async def run_workflow(
@@ -570,10 +864,16 @@ async def run_workflow(
     working_dir.mkdir(parents=True, exist_ok=True)
 
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL"), call_meta=call_meta) as gateway_tools:
+        agent_input = InputSchema(jira_issue=jira_issue) if input_data is None else input_data
+
         tf_cleanup = TFReservationCleanupMiddleware()
         reproducer_agent = reproducer_agent_factory(
             gateway_tools, local_tool_options, extra_middlewares=[tf_cleanup]
         )
+
+        bootstrap: TestsCloneBootstrap | None = None
+        if agent_input.package:
+            bootstrap = await _bootstrap_tests_clone(working_dir, agent_input, gateway_tools)
 
         workflow = Workflow(ReproducerState, name="ReproducerWorkflow")
 
@@ -581,10 +881,8 @@ async def run_workflow(
             """Run the reproducer agent."""
             logger.info(f"Running reproducer analysis for {state.jira_issue}")
 
-            agent_input = InputSchema(jira_issue=state.jira_issue) if input_data is None else input_data
-
             response = await reproducer_agent.run(
-                _render_prompt(agent_input, dry_run=dry_run),
+                _render_prompt(agent_input, dry_run=dry_run, bootstrap=bootstrap),
                 expected_output=render_template("reproducer/output_format.j2"),
                 **get_agent_execution_config(),
             )
@@ -617,33 +915,6 @@ async def run_workflow(
 
             package = result.package
             agent_input = InputSchema(jira_issue=state.jira_issue) if input_data is None else input_data
-            lock_id = await resolve_reproducer_lock_id(
-                agent_input.cve_id,
-                state.jira_issue,
-                fetch_issuelinks=fetch_jira_issue_issuelinks,
-            )
-            lock_token: str | None = None
-
-            if redis_conn is not None:
-                lock_token = await try_acquire_reproducer_lock(
-                    redis_conn,
-                    package,
-                    lock_id,
-                    jira_issue=state.jira_issue,
-                )
-                if lock_token is None:
-                    result.lock_deferred = True
-                    result.summary = (
-                        (result.summary or "")
-                        + " (Deferred: another worker holds the reproducer create/adapt lock)"
-                    ).strip()
-                    logger.info(
-                        "Reproducer lock busy for %s/%s — deferring %s",
-                        package,
-                        lock_id,
-                        state.jira_issue,
-                    )
-                    return "handle_results"
 
             try:
                 tests_clone = (
@@ -671,29 +942,47 @@ async def run_workflow(
                     return "handle_results"
                 logger.info("Using test directory %s for MR creation", test_dir)
 
+                if bootstrap and bootstrap.existing_test_directory and result.adapted_existing:
+                    expected = bootstrap.existing_test_directory
+                    actual = (result.test_directory or "").strip().lstrip("/")
+                    if actual != expected:
+                        logger.error(
+                            "Adapt for %s used test_directory=%r but open MR test is at %r",
+                            state.jira_issue,
+                            actual,
+                            expected,
+                        )
+                        result.success = False
+                        result.summary += (
+                            f" (MR creation skipped: when adapting open MR, "
+                            f"test_directory must be {expected})"
+                        )
+                        return "handle_results"
+
                 existing_mr_url, update_branch, matched_mr = await _resolve_reproducer_mr_target(
                     result,
                     agent_input,
                     package,
                     gateway_tools,
+                    bootstrap=bootstrap,
                 )
-                update_branch = await _prepare_reproducer_branch(
+                update_branch, commit_dir = await _prepare_reproducer_branch(
                     tests_clone,
                     test_dir,
                     update_branch,
-                    adapted_existing=bool(result.adapted_existing),
                     existing_mr_url=existing_mr_url,
                     available_tools=gateway_tools,
+                    bootstrap=bootstrap,
                 )
 
                 # Make shell scripts executable before staging
-                for script in test_dir.glob("*.sh"):
+                for script in commit_dir.glob("*.sh"):
                     script.chmod(0o755)
-                for script in test_dir.glob("*.ksh"):
+                for script in commit_dir.glob("*.ksh"):
                     script.chmod(0o755)
 
                 await check_subprocess(
-                    ["git", "add", str(test_dir.relative_to(tests_clone))],
+                    ["git", "add", str(commit_dir.relative_to(tests_clone))],
                     cwd=tests_clone,
                 )
 
@@ -713,7 +1002,7 @@ async def run_workflow(
                 mr_description = _build_mr_description(result, agent_input)
                 commit_message = _build_commit_message(result, agent_input)
 
-                mr_url, _ = await tasks.commit_push_and_open_mr(
+                mr_url, is_new_mr = await tasks.commit_push_and_open_mr(
                     local_clone=tests_clone,
                     commit_message=commit_message,
                     fork_url=fork_url,
@@ -727,6 +1016,21 @@ async def run_workflow(
                 result.test_mr_url = mr_url
                 if mr_url:
                     logger.info(f"Created/updated reproducer MR: {mr_url}")
+                    if is_new_mr:
+                        reviewer_branch = _reviewer_lookup_branch(agent_input)
+                        if reviewer_branch:
+                            await tasks.request_mr_qe_reviews(
+                                package,
+                                reviewer_branch,
+                                mr_url,
+                                gateway_tools,
+                            )
+                        else:
+                            logger.info(
+                                "Skipping QE reviewer assignment for %s — "
+                                "no target_branch or fix_version in reproducer input",
+                                state.jira_issue,
+                            )
                     if result.adapted_existing:
                         result.existing_mr_url = result.existing_mr_url or mr_url
                 else:
@@ -739,17 +1043,6 @@ async def run_workflow(
                 result.test_mr_url = None
                 result.success = False
                 result.summary += f" (MR creation failed: {e})"
-            finally:
-                if lock_token is not None and redis_conn is not None:
-                    try:
-                        await release_reproducer_lock(redis_conn, package, lock_id, lock_token)
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to release reproducer lock for %s/%s: %s",
-                            package,
-                            lock_id,
-                            e,
-                        )
 
             return "handle_results"
 
@@ -823,6 +1116,35 @@ async def run_workflow(
             return response.state
         finally:
             await tf_cleanup.cleanup(gateway_tools)
+
+
+async def _stage_reproducer_in_progress(
+    *,
+    jira_issue: str,
+    dry_run: bool,
+    user_triggered: bool,
+    task: Task,
+) -> None:
+    """Stamp ``ymir_reproducer_in_progress`` before queue work or while blocked on lock."""
+    await tasks.set_jira_labels(
+        jira_issue=jira_issue,
+        labels_to_add=[JiraLabels.REPRODUCER_IN_PROGRESS.value],
+        labels_to_remove=list(_REPRODUCER_TERMINAL_LABELS),
+        dry_run=dry_run,
+        user_triggered=user_triggered,
+        critical=True,
+    )
+    await tasks.post_user_ack_once(
+        task=task,
+        jira_issue=jira_issue,
+        agent_type="Reproducer",
+        comment_text=(
+            "Ymir picked up your request and started processing. "
+            "Results will be posted here when reproducer analysis completes."
+        ),
+        user_triggered=user_triggered,
+        dry_run=dry_run,
+    )
 
 
 async def main() -> None:
@@ -964,49 +1286,102 @@ async def main() -> None:
                         )
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
 
-            # ymir_reproducer_in_progress is the dedup anchor for the next
-            # fetcher sweep. If we cannot write it, we must not proceed —
-            # otherwise the fetcher will re-enqueue this issue and a second
-            # reproducer will run in parallel.
-            try:
-                await tasks.set_jira_labels(
-                    jira_issue=input_data.jira_issue,
-                    labels_to_add=[JiraLabels.REPRODUCER_IN_PROGRESS.value],
-                    labels_to_remove=list(_REPRODUCER_TERMINAL_LABELS),
-                    dry_run=dry_run,
-                    user_triggered=user_triggered,
-                    critical=True,
-                )
-                logger.info(f"Cleaned up existing labels for {input_data.jira_issue}")
-                # Post acknowledgement comment for user-triggered runs now that
-                # the in-progress label write succeeded. This prevents duplicate
-                # comments if the critical label write were to fail.
-                await tasks.post_user_ack_once(
-                    task=task,
-                    jira_issue=input_data.jira_issue,
-                    agent_type="Reproducer",
-                    comment_text=(
-                        "Ymir picked up your request and started processing. "
-                        "Results will be posted here when reproducer analysis completes."
-                    ),
-                    user_triggered=user_triggered,
-                    dry_run=dry_run,
-                )
-            except Exception as e:
+            if not input_data.package:
                 logger.error(
-                    f"Could not set {JiraLabels.REPRODUCER_IN_PROGRESS.value} on "
-                    f"{input_data.jira_issue} after retries: {e}; re-queuing to avoid duplicate reproducer."
+                    "Reproducer task for %s is missing package metadata; cannot acquire lock",
+                    input_data.jira_issue,
                 )
-                error_msg = f"Failed to set in-progress label: {e}"
-                error_data = ErrorData(details=error_msg, jira_issue=input_data.jira_issue)
-                await retry(task, error_data.model_dump_json())
-                # Long sleep on purpose: critical-write retries already burned
-                # ~7s, so we're past transient blips. Typical Jira outages last
-                # minutes; cycling faster just spams the API.
-                await asyncio.sleep(60)
+                await retry(
+                    task,
+                    ErrorData(
+                        details="Missing package in reproducer task metadata",
+                        jira_issue=input_data.jira_issue,
+                    ).model_dump_json(),
+                )
+                return
+
+            call_meta = {"jira_issue": input_data.jira_issue, "package": input_data.package}
+            async with mcp_tools(os.getenv("MCP_GATEWAY_URL"), call_meta=call_meta) as gateway_tools:
+                if not await _reproducer_enabled_for_package(
+                    input_data.package,
+                    input_data.jira_issue,
+                    gateway_tools,
+                    dry_run=dry_run,
+                    user_triggered=user_triggered,
+                ):
+                    return
+
+            lock_id = await resolve_reproducer_lock_id(
+                input_data.cve_id,
+                input_data.jira_issue,
+                fetch_issuelinks=fetch_jira_issue_issuelinks,
+            )
+            lock_token = await try_acquire_reproducer_lock(
+                redis,
+                input_data.package,
+                lock_id,
+                jira_issue=input_data.jira_issue,
+            )
+            if lock_token is None:
+                try:
+                    await _stage_reproducer_in_progress(
+                        jira_issue=input_data.jira_issue,
+                        dry_run=dry_run,
+                        user_triggered=user_triggered,
+                        task=task,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Could not set %s on blocked reproducer %s: %s",
+                        JiraLabels.REPRODUCER_IN_PROGRESS.value,
+                        input_data.jira_issue,
+                        e,
+                    )
+                    await retry(
+                        task,
+                        ErrorData(
+                            details=f"Failed to set in-progress label while blocked: {e}",
+                            jira_issue=input_data.jira_issue,
+                        ).model_dump_json(),
+                    )
+                    await asyncio.sleep(60)
+                    return
+
+                await enqueue_blocked_reproducer_task(
+                    redis,
+                    input_data.package,
+                    lock_id,
+                    task.model_dump_json(),
+                )
+                logger.info(
+                    "Reproducer lock busy for %s/%s — blocked %s until lock is released",
+                    input_data.package,
+                    lock_id,
+                    input_data.jira_issue,
+                )
                 return
 
             try:
+                try:
+                    await _stage_reproducer_in_progress(
+                        jira_issue=input_data.jira_issue,
+                        dry_run=dry_run,
+                        user_triggered=user_triggered,
+                        task=task,
+                    )
+                    logger.info(f"Cleaned up existing labels for {input_data.jira_issue}")
+                except Exception as e:
+                    logger.error(
+                        f"Could not set {JiraLabels.REPRODUCER_IN_PROGRESS.value} on "
+                        f"{input_data.jira_issue} after retries: {e}; "
+                        "re-queuing to avoid duplicate reproducer."
+                    )
+                    error_msg = f"Failed to set in-progress label: {e}"
+                    error_data = ErrorData(details=error_msg, jira_issue=input_data.jira_issue)
+                    await retry(task, error_data.model_dump_json())
+                    await asyncio.sleep(60)
+                    return
+
                 logger.info(f"Starting reproducer processing for {input_data.jira_issue}")
                 with span_processor.start_transaction(input_data.jira_issue, workflow="reproducer"):
                     state = await run_workflow(
@@ -1032,16 +1407,15 @@ async def main() -> None:
                     ErrorData(details=error, jira_issue=input_data.jira_issue).model_dump_json(),
                 )
             else:
-                if output.retryable_error or output.lock_deferred:
-                    reason = "lock contention" if output.lock_deferred else "retryable infra error"
+                if output.retryable_error:
                     logger.info(
-                        f"Reproducer {reason} for {input_data.jira_issue}; "
+                        f"Reproducer retryable infra error for {input_data.jira_issue}; "
                         f"scheduling retry in {retry_delay_seconds:.0f}s"
                     )
                     await retry(
                         task,
                         ErrorData(
-                            details=output.summary or f"Reproducer deferred: {reason}",
+                            details=output.summary or "Reproducer deferred: retryable infra error",
                             jira_issue=input_data.jira_issue,
                         ).model_dump_json(),
                         delay_seconds=retry_delay_seconds,
@@ -1058,6 +1432,21 @@ async def main() -> None:
                     )
                     logger.info(
                         f"Pushed {input_data.jira_issue} to {RedisQueues.COMPLETED_REPRODUCER_LIST.value}"
+                    )
+            finally:
+                try:
+                    await release_reproducer_lock(
+                        redis,
+                        input_data.package,
+                        lock_id,
+                        lock_token,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to release reproducer lock for %s/%s: %s",
+                        input_data.package,
+                        lock_id,
+                        e,
                     )
 
         await run_task_loop(

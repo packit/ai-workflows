@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
+import yaml
 from beeai_framework.tools import Tool
 from specfile import Specfile
 
@@ -30,6 +31,7 @@ from ymir.common.models import (
     MergeRequestDetails,
     OpenMergeRequestResult,
     PackageConsolidationConfig,
+    PackageReproducerConfig,
     Task,
 )
 from ymir.common.utils import get_all_sources, get_latest_candidate_build, get_latest_z_pending_build
@@ -443,6 +445,36 @@ async def request_mr_reviews(
         logger.info("Assigned reviewers %s to MR %s", reviewer_ids, mr_url)
     except Exception as e:
         logger.warning("Failed to assign reviewers to MR %s: %s", mr_url, e)
+
+
+async def request_mr_qe_reviews(
+    package: str,
+    dist_git_branch: str,
+    mr_url: str,
+    available_tools: list[Tool],
+) -> None:
+    """Best-effort QE reviewer assignment — logs warnings but never raises."""
+    if os.getenv("ASSIGN_MR_REVIEWERS", "false").lower() != "true":
+        return
+    try:
+        reviewer_ids = await run_tool(
+            "resolve_qe_reviewers",
+            package=package,
+            dist_git_branch=dist_git_branch,
+            available_tools=available_tools,
+        )
+        if not reviewer_ids:
+            logger.info("No QE reviewers resolved for %s (%s)", package, dist_git_branch)
+            return
+        await run_tool(
+            "set_merge_request_reviewers",
+            merge_request_url=mr_url,
+            reviewer_ids=reviewer_ids,
+            available_tools=available_tools,
+        )
+        logger.info("Assigned QE reviewers %s to MR %s", reviewer_ids, mr_url)
+    except Exception as e:
+        logger.warning("Failed to assign QE reviewers to MR %s: %s", mr_url, e)
 
 
 async def commit_push_and_open_mr(
@@ -878,6 +910,10 @@ class InvalidConsolidationConfigError(Exception):
     """Raised when ymir.yaml exists but the consolidation section cannot be parsed."""
 
 
+class InvalidReproducerConfigError(Exception):
+    """Raised when ymir.yaml exists but the reproducer section cannot be parsed."""
+
+
 async def fetch_consolidation_config(
     package: str,
     available_tools: list,
@@ -900,8 +936,6 @@ async def fetch_consolidation_config(
     Returns:
         Parsed consolidation config.
     """
-    import yaml
-
     try:
         raw = await run_tool(
             "get_maintainer_rules",
@@ -967,3 +1001,55 @@ async def try_submit_consolidation_job(
         logger.info("Submitted consolidation job for %s/%s", package, dist_git_branch)
     else:
         logger.info("Consolidation job already queued for %s/%s", package, dist_git_branch)
+
+
+async def fetch_reproducer_config(
+    package: str,
+    available_tools: list,
+) -> PackageReproducerConfig:
+    """Fetch the reproducer config from the per-package rules repo.
+
+    Reads the ``reproducer`` section from ``ymir.yaml`` at
+    ``gitlab.com/redhat/centos-stream/rules/<package>``.
+    Returns the default config (enabled) when the file is absent
+    or has no ``reproducer`` key.
+
+    Raises:
+        InvalidReproducerConfigError: When the file exists but the
+            ``reproducer`` section does not conform to the expected schema.
+
+    Args:
+        package: RPM package name.
+        available_tools: MCP gateway tools (must include ``get_maintainer_rules``).
+
+    Returns:
+        Parsed reproducer config.
+    """
+    try:
+        raw = await run_tool(
+            "get_maintainer_rules",
+            package=package,
+            file_path="ymir.yaml",
+            available_tools=available_tools,
+        )
+    except Exception as e:
+        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, e)
+        return PackageReproducerConfig()
+
+    if "not found" in raw.lower():
+        return PackageReproducerConfig()
+
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        raise InvalidReproducerConfigError(f"ymir.yaml for {package} is not valid YAML: {e}") from e
+
+    if not isinstance(data, dict) or "reproducer" not in data:
+        return PackageReproducerConfig()
+
+    try:
+        return PackageReproducerConfig.model_validate(data["reproducer"])
+    except Exception as e:
+        raise InvalidReproducerConfigError(
+            f"ymir.yaml reproducer section for {package} is malformed: {e}"
+        ) from e

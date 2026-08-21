@@ -816,6 +816,19 @@ class PackageConsolidationConfig(BaseModel):
     )
 
 
+class PackageReproducerConfig(BaseModel):
+    """Machine-readable reproducer config from the per-package rules repo.
+
+    Parsed from the ``reproducer`` section of
+    ``gitlab.com/redhat/centos-stream/rules/<package>/ymir.yaml``.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description="Whether to run the Ymir reproducer workflow for this package",
+    )
+
+
 class MRConsolidationInputSchema(BaseModel):
     """Input schema for the MR consolidation agent."""
 
@@ -1346,8 +1359,8 @@ class ReproducerOutputSchema(BaseModel):
     lock_deferred: bool = Field(
         default=False,
         description=(
-            "True when create/adapt could not proceed because another worker holds "
-            "the reproducer lock; the task should be scheduled for delayed retry"
+            "Legacy output flag; queue orchestration now blocks at workflow start "
+            "instead of deferring MR creation with a long delayed retry"
         ),
     )
     retryable_error: bool = Field(

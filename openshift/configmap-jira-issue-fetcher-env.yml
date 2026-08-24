@@ -7,6 +7,12 @@ data:
   # jira_issue_fetcher.py. Shared by both cronjobs (daily + todo) since it's a
   # property of agent task duration, not of which query triggered the sweep.
   STALE_LABEL_THRESHOLD_HOURS: "24"
+  # Controls the fetcher-level filter for modular issues (Downstream Component
+  # matching module:stream/pkg, e.g. postgresql:16/postgresql). When "true"
+  # (default), the fetcher skips these issues before they reach the triage
+  # queue. When "false", modular issues pass through and are enqueued for
+  # triage like any other issue.
+  SKIP_MODULAR: "false"
 immutable: false
 kind: ConfigMap
 metadata:

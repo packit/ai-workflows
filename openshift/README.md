@@ -126,7 +126,7 @@ Two CronJobs run the fetcher with different JQL queries:
 | `jira-issue-fetcher` | `0 8 * * *` (daily, 8am UTC) | Main CVE batch — processes up to `MAX_ISSUES` issues from the filter in `jira-issue-fetcher-filter-env` | `jira-issue-fetcher-filter-env` |
 | `jira-issue-fetcher-todo` | `*/5 * * * *` | `labels = "ymir_todo"` OR consolidation labels (`ymir_consolidate_base`, `ymir_consolidate_next`) | `jira-issue-fetcher-todo-env` |
 
-Both share the common knobs (`MAX_ISSUES`, `LOGLEVEL`) from `jira-issue-fetcher-env`. Components excluded from scope are part of the Jira filter itself, maintained (with rationale per component) in the separate [`cve-scope`](https://gitlab.cee.redhat.com/jotnar-project/cve-scope) repo — not in a configmap or env var.
+Both share the common knobs (`MAX_ISSUES`, `LOGLEVEL`, `SKIP_MODULAR`) from `jira-issue-fetcher-env`. `SKIP_MODULAR` controls whether modular issues (Downstream Component matching `module:stream/pkg`) are enqueued for triage (`false`) or silently dropped (`true`; code default). Components excluded from scope are part of the Jira filter itself, maintained (with rationale per component) in the separate [`cve-scope`](https://gitlab.cee.redhat.com/jotnar-project/cve-scope) repo — not in a configmap or env var.
 
 The `jira-issue-fetcher-todo` runs every 5 minutes and processes:
 - **User-triggered issues**: Any issue tagged with `ymir_todo` by a maintainer (not filtered by component, processes regardless of scope exclusions)

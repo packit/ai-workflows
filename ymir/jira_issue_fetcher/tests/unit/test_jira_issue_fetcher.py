@@ -86,6 +86,7 @@ def test_init(mock_env_vars):
     assert fetcher.query == 'filter = "Jotnar_1000_packages"'
     assert fetcher.max_results_per_page == 500
     assert fetcher.headers["Authorization"].startswith("Basic ")
+    assert fetcher.skip_modular is True
 
 
 @pytest.mark.asyncio
@@ -413,6 +414,36 @@ async def test_push_issues_to_queue_skip_modular(fetcher, mock_redis_context):
     mock_redis.should_receive("lpush").with_args(RedisQueues.TRIAGE_QUEUE.value, task2.to_json()).and_return(
         create_async_mock_return_value(1)
     ).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 2
+
+
+@pytest.mark.asyncio
+async def test_push_issues_to_queue_enqueue_modular(mock_env_vars, monkeypatch, mock_redis_context):
+    """Test that modular issues are enqueued when SKIP_MODULAR=false."""
+    monkeypatch.setenv("SKIP_MODULAR", "false")
+    fetcher = JiraIssueFetcher()
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {"key": "MOD-1", "fields": {"labels": [], "customfield_10669": "perl:5.32/perl-IO-Socket-SSL"}},
+        {"key": "REG-1", "fields": {"labels": [], "customfield_10669": "regular-component"}},
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    task_mod = Task.from_issue("MOD-1")
+    task_reg = Task.from_issue("REG-1")
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE.value, task_mod.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE.value, task_reg.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
 
     result = await fetcher.push_issues_to_queue(issues)
 

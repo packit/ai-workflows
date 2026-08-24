@@ -29,7 +29,7 @@ TF verification, and MR push).
 │              │  ─────────────────────────▶│  rebase / backport │
 │   Triage     │                            │  / rebuild queues  │
 │   Agent      │                            └────────────────────┘
-│              │   TRIAGE_ENQUEUE_REPRODUCER (parallel, optional)
+│              │   TRIAGE_ENQUEUE_REPRODUCER (parallel)
 │              │  ─────────────────────────▶┌────────────────────┐
 │              │   rebase|backport|rebuild  │  reproducer_queue  │
 │              │   |not-affected            │  (+ _todo twin)    │
@@ -95,16 +95,16 @@ checks config before acquiring the lock.
 
 ### Auto-enqueue from triage
 
-> **Currently disabled by default.** Set `TRIAGE_ENQUEUE_REPRODUCER=true` in the
-> agents environment (see `openshift/configmap-agents-env.yml`) to LPUSH from
-> triage. Otherwise submit jobs manually with `make trigger-reproducer` (see
-> [Manual queue submit](#manual-queue-submit) below). The enqueue helpers
-> (`_build_reproducer_input`, `_enqueue_reproducer`) remain in place.
+> **Enabled by default** (`TRIAGE_ENQUEUE_REPRODUCER=true` in
+> `openshift/configmap-agents-env.yml` and local `compose.yaml`). Set
+> `TRIAGE_ENQUEUE_REPRODUCER=false` to disable triage LPUSH and submit jobs
+> manually with `make trigger-reproducer` (see
+> [Manual queue submit](#manual-queue-submit) below).
 
 `TRIAGE_ENQUEUE_REPRODUCER` is **independent** of `AUTO_CHAIN`. Fix-agent
 enqueue uses `AUTO_CHAIN`; reproducer enqueue uses its own flag.
 
-When `TRIAGE_ENQUEUE_REPRODUCER=true` and triage resolves as one of:
+When `TRIAGE_ENQUEUE_REPRODUCER` is true and triage resolves as one of:
 
 | Resolution       | Fix agent queued? (`AUTO_CHAIN`) | Reproducer eligible? |
 |------------------|----------------------------------|----------------------|
@@ -427,7 +427,7 @@ See also [jira_label_workflow_routing.md](../jira_label_workflow_routing.md).
 
 | Variable | Default | Role |
 |----------|---------|------|
-| `TRIAGE_ENQUEUE_REPRODUCER` | `false` | Triage LPUSH to reproducer queues |
+| `TRIAGE_ENQUEUE_REPRODUCER` | `true` | Triage LPUSH to reproducer queues |
 | `AUTO_CHAIN` | `true` | Triage → fix-agent queues (separate from reproducer) |
 | `REPRODUCER_RETRY_DELAY_SECONDS` | `1800` | Delayed ZSET retry for `retryable_error` |
 | `REPRODUCER_POLL_TIMEOUT` | `30` | BRPOP timeout (seconds) |
@@ -491,8 +491,9 @@ Unit tests for enqueue helpers, labels, blocked lock, and MR helpers live under
 ### Queue mode (production)
 
 Start the compose `reproducer-agent` service (agents profile) with Redis and
-**without** `JIRA_ISSUE`. Triage auto-enqueue defaults to **disabled**; use
-`make trigger-reproducer` (below) or set `TRIAGE_ENQUEUE_REPRODUCER=true`.
+**without** `JIRA_ISSUE`. With default settings, triage auto-enqueues eligible
+resolutions to the reproducer queues. Use `make trigger-reproducer` (below) for
+ad-hoc jobs or when `TRIAGE_ENQUEUE_REPRODUCER=false`.
 
 On OpenShift, `openshift/deployment-reproducer-agent.yml` runs the same queue
 worker (`beeai-agent:c10s`, module `ymir.agents.reproducer_agent`). Testing Farm
@@ -511,8 +512,9 @@ Same optional flags as the local target (`CVE_ID`, `FIX_VERSION`,
 
 ### Manual queue submit
 
-With the agents stack running (`make start` / `make start DRY_RUN=true`) and
-the `reproducer-agent` worker up, enqueue a job:
+For ad-hoc enqueue or when `TRIAGE_ENQUEUE_REPRODUCER=false`. With the agents
+stack running (`make start` / `make start DRY_RUN=true`) and the
+`reproducer-agent` worker up, enqueue a job:
 
 ```bash
 # Minimum (required fields)

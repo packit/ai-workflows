@@ -339,7 +339,7 @@ trigger-pipeline:
 	@echo "Triggering pipeline for issue: $(JIRA_ISSUE) (force_cve_triage=$(FORCE_CVE_TRIAGE))"
 	$(COMPOSE_AGENTS) exec valkey redis-cli LPUSH triage_queue '{"metadata": {"issue": "$(JIRA_ISSUE)", "force_cve_triage": $(FORCE_CVE_TRIAGE)}}'
 
-# Manually enqueue a reproducer job (triage auto-enqueue is currently disabled).
+# Manually enqueue a reproducer job (also when TRIAGE_ENQUEUE_REPRODUCER=false).
 # Required: JIRA_ISSUE, PACKAGE
 # Optional: CVE_ID, FIX_VERSION, TARGET_BRANCH, TRIAGE_SUMMARY, USER_TRIGGERED=true
 .PHONY: trigger-reproducer

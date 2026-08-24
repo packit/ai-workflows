@@ -132,7 +132,7 @@ process:
 		'{"metadata":{"issue":"$(ISSUE)"},"attempts":0,"user_triggered":false}'
 	@echo "✓ Task queued successfully. View queue with: make show-triage-queue"
 
-# Manually enqueue a reproducer job (triage auto-enqueue is currently disabled).
+# Manually enqueue a reproducer job (also when TRIAGE_ENQUEUE_REPRODUCER=false).
 # Same interface as the local `make trigger-reproducer` target.
 # Required: JIRA_ISSUE, PACKAGE
 # Optional: CVE_ID, FIX_VERSION, TARGET_BRANCH, TRIAGE_SUMMARY, USER_TRIGGERED=true

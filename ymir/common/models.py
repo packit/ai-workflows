@@ -824,7 +824,7 @@ class PackageReproducerConfig(BaseModel):
     """
 
     enabled: bool = Field(
-        default=True,
+        default=False,
         description="Whether to run the Ymir reproducer workflow for this package",
     )
 

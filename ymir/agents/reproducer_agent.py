@@ -326,19 +326,14 @@ def _discover_existing_reproducer_test_dir(
 
         security = tests_clone / "Security"
         if security.is_dir():
-            matches = [
-                child
+            by_name = {
+                child.name.upper(): child
                 for child in security.iterdir()
-                if child.is_dir()
-                and _is_reproducer_test_dir(child)
-                and any(cve in child.name.upper() for cve in cves)
-            ]
-            if len(matches) == 1:
-                return matches[0]
+                if child.is_dir() and _is_reproducer_test_dir(child)
+            }
             for cve in cves:
-                for match in matches:
-                    if match.name.upper() == cve:
-                        return match
+                if cve in by_name:
+                    return by_name[cve]
         return None
 
     if reproducer_type == "bug":

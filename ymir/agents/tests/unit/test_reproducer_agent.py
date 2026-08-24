@@ -154,6 +154,23 @@ def test_discover_existing_reproducer_test_dir_prefers_security_cve(tmp_path: Pa
     assert discovered == canonical
 
 
+def test_discover_existing_reproducer_test_dir_rejects_cve_prefix_collision(tmp_path: Path):
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    for cve in ("CVE-2026-1", "CVE-2026-10"):
+        test_dir = repo / "Security" / cve
+        test_dir.mkdir(parents=True)
+        (test_dir / "main.fmf").write_text(f"summary: {cve}\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id="CVE-2026-10",
+        jira_issue="RHEL-1",
+        reproducer_type="cve",
+    )
+    assert discovered == repo / "Security" / "CVE-2026-10"
+
+
 def test_discover_existing_reproducer_test_dir_finds_sole_regression_dir(tmp_path: Path):
     repo = tmp_path / "tests-pkg"
     repo.mkdir()

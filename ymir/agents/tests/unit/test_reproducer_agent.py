@@ -914,6 +914,15 @@ async def test_fetch_reproducer_config_returns_default_when_not_found():
         mock_run.return_value = "No maintainer rules found for package 'bind' (file 'ymir.yaml' not found)"
         config = await fetch_reproducer_config("bind", [])
 
+    assert config.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_reproducer_config_parses_enabled():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "reproducer:\n  enabled: true\n"
+        config = await fetch_reproducer_config("bind", [])
+
     assert config.enabled is True
 
 

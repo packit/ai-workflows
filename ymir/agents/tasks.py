@@ -1011,7 +1011,7 @@ async def fetch_reproducer_config(
 
     Reads the ``reproducer`` section from ``ymir.yaml`` at
     ``gitlab.com/redhat/centos-stream/rules/<package>``.
-    Returns the default config (enabled) when the file is absent
+    Returns the default config (disabled) when the file is absent
     or has no ``reproducer`` key.
 
     Raises:

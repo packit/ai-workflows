@@ -136,9 +136,9 @@ These labels are applied to GitLab merge requests (not Jira issues):
 | `clarification_needed_queue` | Input | Resolution=CLARIFICATION | `ymir_needs_attention` | Active (AUTO_CHAIN only) |
 | `error_list` | Output | Any error | `ymir_*_errored` | Active |
 | `open_ended_analysis_list` | Output | Resolution=OPEN_ENDED_ANALYSIS | `ymir_triaged` | Active (AUTO_CHAIN only) |
-| `reproducer_queue` | Input | Manual `make trigger-reproducer` (triage auto-enqueue temporarily disabled) | `ymir_reproducer_in_progress` → terminal `ymir_reproducer_*` | Manual enqueue only |
-| `reproducer_queue_todo` | Input (priority) | Same when `USER_TRIGGERED=true` | Same as `reproducer_queue` | Manual enqueue only |
-| `reproducer_queue_delayed` | Delayed (ZSET) | Retryable TF infra or create/adapt lock contention | Keeps `ymir_reproducer_in_progress` until retry completes | Active |
+| `reproducer_queue` | Input | Triage auto-enqueue (`TRIAGE_ENQUEUE_REPRODUCER`) or `make trigger-reproducer` | `ymir_reproducer_in_progress` → terminal `ymir_reproducer_*` | Active when auto-enqueue enabled |
+| `reproducer_queue_todo` | Input (priority) | Same when `user_triggered` / `USER_TRIGGERED=true` | Same as `reproducer_queue` | Active when auto-enqueue enabled |
+| `reproducer_queue_delayed` | Delayed (ZSET) | Retryable TF infra (`retryable_error`) | Keeps `ymir_reproducer_in_progress` until retry completes | Active |
 | `completed_rebase_list` | Output | Rebase success | `ymir_rebased` | Active |
 | `completed_backport_list` | Output | Backport success | `ymir_backported` | Active |
 | `completed_reproducer_list` | Output | Reproducer success/failure (non-retry) | `ymir_reproducer_*` | Active |

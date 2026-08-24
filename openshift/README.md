@@ -185,8 +185,10 @@ Set `force_cve_triage` to `false` for a normal triage run. This mirrors the `mak
 
 ### Triggering a reproducer job
 
-Triage auto-enqueue of reproducer jobs is currently disabled. Enqueue manually
-(same flags as local `make trigger-reproducer`):
+When triage auto-enqueue is enabled (`TRIAGE_ENQUEUE_REPRODUCER=true`, the
+OpenShift default), eligible triage resolutions LPUSH reproducer jobs
+automatically. You can still enqueue manually (same flags as local
+`make trigger-reproducer`):
 
 ```bash
 make trigger-reproducer JIRA_ISSUE=RHEL-12345 PACKAGE=bind

@@ -1154,7 +1154,7 @@ async def main() -> None:
 
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     auto_chain = os.getenv("AUTO_CHAIN", "true").lower() == "true"
-    enqueue_reproducer = os.getenv("TRIAGE_ENQUEUE_REPRODUCER", "false").lower() == "true"
+    enqueue_reproducer = os.getenv("TRIAGE_ENQUEUE_REPRODUCER", "true").lower() == "true"
     force_cve_triage = os.getenv("FORCE_CVE_TRIAGE", "false").lower() == "true"
 
     if jira_issue := os.getenv("JIRA_ISSUE", None):

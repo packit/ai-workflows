@@ -122,6 +122,15 @@ class JiraIssueFetcher:
                 "skipped; Redis pushes will proceed normally"
             )
 
+        # Rollout flag: code defaults to "true" (safe for local runs without the
+        # ConfigMap); the cluster ConfigMap sets "false" to enable modular triage.
+        self.skip_modular = os.getenv("SKIP_MODULAR", "true").lower() == "true"
+        logger.info(
+            "SKIP_MODULAR=%s — modular issues will be %s",
+            self.skip_modular,
+            "skipped" if self.skip_modular else "enqueued for triage",
+        )
+
     async def _rate_limit(self):
         """Enforce rate limiting of RATE_LIMIT_CALLS_PER_SECOND calls per second"""
         current_time = time.time()
@@ -717,7 +726,7 @@ class JiraIssueFetcher:
                     fields = issue.get("fields") or {}
 
                     downstream_component = fields.get("customfield_10669") or ""
-                    if self.MODULAR_COMPONENT_PATTERN.match(downstream_component):
+                    if self.skip_modular and self.MODULAR_COMPONENT_PATTERN.match(downstream_component):
                         logger.info(f"Skipping issue {issue_key} - modular issue: {downstream_component}")
                         modular_count += 1
                         continue

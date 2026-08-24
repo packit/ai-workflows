@@ -51,9 +51,11 @@ def build_rebuild_siblings_jql(
 class SiblingRebuildAnalysis(BaseModel):
     """LLM output schema for analyzing whether a sibling issue is a dependency rebuild."""
 
-    is_dependency_rebuild: bool = Field(
-        description="True if this issue requires rebuilding against an updated dependency "
-        "with no source code changes needed"
+    include_in_rebuild: bool = Field(
+        description="True if this sibling should be included in the current rebuild MR: "
+        "it requires a dependency rebuild (no source code changes needed) AND the dependency "
+        "fix has already shipped ('Fixed in Build' set and not dropped/rejected). "
+        "False for any other reason: not a dependency rebuild, or dependency fix not yet shipped."
     )
     dependency_issue: str | None = Field(
         default=None,
@@ -82,7 +84,7 @@ async def find_rebuild_siblings(
     Find sibling Jira issues that can share a single rebuild MR.
 
     Searches for other issues against the same package and fix_version,
-    then uses an LLM to verify each is a dependency rebuild with a shipped fix.
+    then uses an LLM to verify each is a dependency rebuild whose dependency fix has already shipped.
     When source clone paths are provided, runs a CVE applicability check per
     sibling and excludes those whose CVE doesn't affect the package.
 
@@ -161,9 +163,9 @@ async def find_rebuild_siblings(
             )
             analysis = SiblingRebuildAnalysis.model_validate_json(response.last_message.text)
 
-            if analysis.is_dependency_rebuild:
+            if analysis.include_in_rebuild:
                 logger.info(
-                    f"Sibling {candidate_key} confirmed as dependency rebuild "
+                    f"Sibling {candidate_key}: dependency fix shipped, including in rebuild "
                     f"(dependency: {analysis.dependency_component})"
                 )
                 cve_id = analysis.cve_id
@@ -233,8 +235,12 @@ async def find_rebuild_siblings(
                     )
                 )
             else:
-                logger.info(f"Sibling {candidate_key} is not a dependency rebuild")
-                summary_lines.append(f"* {candidate_key} — excluded (not a dependency rebuild)")
+                logger.info(
+                    f"Sibling {candidate_key}: dependency fix not shipped yet or not a dependency rebuild"
+                )
+                summary_lines.append(
+                    f"* {candidate_key} — excluded (dependency fix not shipped or not a dependency rebuild)"
+                )
         except Exception as e:
             logger.warning(f"Failed to analyze sibling {candidate_key}: {e}")
             summary_lines.append(f"* {candidate_key} — excluded (analysis failed)")
@@ -264,7 +270,7 @@ def _build_sibling_analysis_prompt(
         1. Use get_jira_details to examine issue {candidate_key}
         2. Determine if this issue requires the package to be rebuilt
            against an updated dependency (no source code changes needed
-           for the package itself)
+           for the package itself). If not, set include_in_rebuild=false.
         3. If yes, find the dependency issue:
            - Check issuelinks for linked issues with a different
              component than '{package}'
@@ -282,7 +288,7 @@ def _build_sibling_analysis_prompt(
              fixVersion that includes the CVE fix. Only use it if you
              are certain the rebase resolves the CVE.
            - If no dependency ticket can be found for the correct
-             stream, set is_dependency_rebuild=false.
+             stream, set include_in_rebuild=false.
         4. Once you find the dependency issue (with matching fixVersion),
            use get_jira_details on it and thoroughly verify it was
            actually fixed:
@@ -294,7 +300,7 @@ def _build_sibling_analysis_prompt(
              not needed
            - Only consider the dependency as fixed if it has
              'Fixed in Build' set AND was not dropped/rejected
-        5. Set is_dependency_rebuild=true ONLY if the dependency was
+        5. Set include_in_rebuild=true ONLY if the dependency was
            genuinely fixed (has 'Fixed in Build' and was not
            dropped/rejected)
         6. Extract CVE ID(s) from the issue summary (e.g. CVE-2024-1234).

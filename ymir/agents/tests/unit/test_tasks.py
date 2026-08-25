@@ -723,18 +723,23 @@ async def test_fetch_release_bumping_config_returns_default_when_not_found():
 
     assert config.abandon_autorelease is False
     assert config.treat_maintenance_rhel_as_zstream is False
+    assert config.disregard_zstream_nvr_policy is False
 
 
 @pytest.mark.asyncio
 async def test_fetch_release_bumping_config_parses_valid_yaml():
     with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
         mock_run.return_value = (
-            "release_bumping:\n  abandon_autorelease: true\n  treat_maintenance_rhel_as_zstream: true\n"
+            "release_bumping:\n"
+            "  abandon_autorelease: true\n"
+            "  treat_maintenance_rhel_as_zstream: true\n"
+            "  disregard_zstream_nvr_policy: true\n"
         )
         config = await fetch_release_bumping_config("bash", [])
 
     assert config.abandon_autorelease is True
     assert config.treat_maintenance_rhel_as_zstream is True
+    assert config.disregard_zstream_nvr_policy is True
 
 
 @pytest.mark.asyncio
@@ -745,6 +750,7 @@ async def test_fetch_release_bumping_config_returns_default_on_exception():
 
     assert config.abandon_autorelease is False
     assert config.treat_maintenance_rhel_as_zstream is False
+    assert config.disregard_zstream_nvr_policy is False
 
 
 @pytest.mark.asyncio
@@ -771,3 +777,4 @@ async def test_fetch_release_bumping_config_returns_default_when_no_release_bump
 
     assert config.abandon_autorelease is False
     assert config.treat_maintenance_rhel_as_zstream is False
+    assert config.disregard_zstream_nvr_policy is False

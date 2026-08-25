@@ -781,7 +781,10 @@ class CheckCveTriageEligibilityTool(
         logger.info(f"Connecting to JIRA API to check CVE eligibility: {jira_url}")
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-            with tool_error_context(f"Failed to get Jira data for {issue_key}"):
+            with tool_error_context(
+                f"Failed to get Jira data for {issue_key}",
+                issue_key=issue_key,
+            ):
                 async with aiohttp_get_with_retries(
                     session,
                     jira_url,
@@ -1238,7 +1241,11 @@ class ChangeJiraStatusTool(Tool[ChangeJiraStatusToolInput, ToolRunOptions, Strin
                 available = ", ".join(t.get("to", {}).get("name", "?") for t in transitions)
                 raise ToolError(f"Status '{status}' is not available for {issue_key}. Available: {available}")
 
-            with tool_error_context(f"Failed to change status of {issue_key} to {status}"):
+            with tool_error_context(
+                f"Failed to change status of {issue_key} to {status}",
+                issue_key=issue_key,
+                status=status,
+            ):
                 async with session.post(
                     jira_url,
                     json={"transition": {"id": transition["id"]}},
@@ -1352,7 +1359,10 @@ class VerifyIssueAuthorTool(Tool[VerifyIssueAuthorToolInput, ToolRunOptions, JSO
         logger.info(f"Connecting to JIRA API to verify issue author: {jira_url}")
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-            with tool_error_context(f"Failed to get Jira data for {issue_key}"):
+            with tool_error_context(
+                f"Failed to get Jira data for {issue_key}",
+                issue_key=issue_key,
+            ):
                 async with aiohttp_get_with_retries(
                     session,
                     jira_url,
@@ -1375,7 +1385,10 @@ class VerifyIssueAuthorTool(Tool[VerifyIssueAuthorToolInput, ToolRunOptions, JSO
             elif author_key:
                 params["key"] = author_key
 
-            with tool_error_context(f"Failed to get user groups for issue {issue_key}"):
+            with tool_error_context(
+                f"Failed to get user groups for issue {issue_key}",
+                issue_key=issue_key,
+            ):
                 async with aiohttp_get_with_retries(
                     session,
                     urljoin(os.getenv("JIRA_URL"), "rest/api/3/user"),
@@ -1481,7 +1494,10 @@ async def _fetch_dev_status_details(
     aggregated detail records for every application type found under
     *summary_category* (e.g. ``"repository"`` or ``"pullrequest"``)."""
     issue_url = urljoin(jira_base, f"rest/api/3/issue/{issue_key}")
-    with tool_error_context(f"Failed to resolve issue ID for {issue_key}"):
+    with tool_error_context(
+        f"Failed to resolve issue ID for {issue_key}",
+        issue_key=issue_key,
+    ):
         async with aiohttp_get_with_retries(
             session, issue_url, params={"fields": ""}, headers=headers
         ) as response:
@@ -1758,7 +1774,11 @@ class UpdateJiraCommentTool(Tool[UpdateJiraCommentToolInput, ToolRunOptions, Str
         logger.info("Updating comment %s on %s", comment_id, issue_key)
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-            with tool_error_context(f"Failed to update comment {comment_id} on {issue_key}"):
+            with tool_error_context(
+                f"Failed to update comment {comment_id} on {issue_key}",
+                issue_key=issue_key,
+                comment_id=comment_id,
+            ):
                 async with session.put(
                     jira_url,
                     json={"body": comment},
@@ -1920,7 +1940,10 @@ async def _get_user_identifier(session: Any, headers: dict, email: str) -> tuple
     """
     jira_base = os.getenv("JIRA_URL")
     url = urljoin(jira_base, "rest/api/3/user/search")
-    with tool_error_context(f"Failed to search for user {email}"):
+    with tool_error_context(
+        f"Failed to search for user {email}",
+        email=email,
+    ):
         async with session.get(url, params={"query": email}, headers=headers) as response:
             response.raise_for_status()
             users = await response.json()

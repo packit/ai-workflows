@@ -62,7 +62,10 @@ class MaintainerRulesTool(Tool[MaintainerRulesInput, ToolRunOptions, StringToolO
             headers["PRIVATE-TOKEN"] = token
 
         with tool_error_context(
-            f"Failed to fetch maintainer rules for {tool_input.package}", file_path=tool_input.file_path
+            f"Failed to fetch maintainer rules for {tool_input.package}",
+            include_exception_message_for=(ToolError,),
+            package=tool_input.package,
+            file_path=tool_input.file_path,
         ):
             try:
                 async with (
@@ -81,4 +84,4 @@ class MaintainerRulesTool(Tool[MaintainerRulesInput, ToolRunOptions, StringToolO
                         result=f"Failed to fetch maintainer rules (HTTP {response.status}): {text}"
                     )
             except TimeoutError as e:
-                raise ToolError(f"Timeout while fetching maintainer rules for {tool_input.package}") from e
+                raise ToolError("Timeout while fetching maintainer rules") from e

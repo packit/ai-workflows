@@ -28,7 +28,10 @@ from ymir.tools.privileged.gitlab import (
     AddBlockingMergeRequestCommentTool,
     AddMergeRequestCommentTool,
     AddMergeRequestLabelsTool,
+    ApproveMergeRequestTool,
     CloneRepositoryTool,
+    CompareMrTestFailuresTool,
+    CreateMrInlineCommentTool,
     FetchBranchTool,
     FetchGitlabMrNotesTool,
     ForkRepositoryTool,
@@ -36,15 +39,22 @@ from ymir.tools.privileged.gitlab import (
     GetFailedPipelineJobsFromMergeRequestTool,
     GetInternalRhelBranchesTool,
     GetMergeRequestDetailsTool,
+    GetMrChangesTool,
+    GetMrDiscussionsTool,
+    GetMrPipelinesWithStatusTool,
     GetPatchFromUrlTool,
+    GetPipelineFailedJobsDeepTool,
     ListProjectMergeRequestsTool,
     OpenMergeRequestTool,
     PushToRemoteRepositoryTool,
     ResolveQeReviewersTool,
+    ReplyToMrDiscussionTool,
     ResolveReviewersTool,
+    ResolveMrDiscussionTool,
     RetryPipelineJobTool,
     SearchGitlabProjectMrsTool,
     SetMergeRequestReviewersTool,
+    SetMrAutoMergeTool,
 )
 from ymir.tools.privileged.jira import (
     AddJiraAttachmentsTool,
@@ -61,6 +71,7 @@ from ymir.tools.privileged.jira import (
     SetJiraFieldsTool,
     SetPreliminaryTestingTool,
     UpdateJiraCommentTool,
+    UpdateTestCoverageTool,
     VerifyIssueAuthorTool,
 )
 from ymir.tools.privileged.lookaside import (
@@ -94,7 +105,7 @@ async def _async_main():
     config = MCPServerConfig(**config_kwargs)
 
     setup_logging()
-    apply_zstream_override_from_env()
+apply_zstream_override_from_env()
     tool_options: dict = {"working_directory": None}
     mcp = MCPServer(config=config)
 
@@ -132,6 +143,17 @@ async def _async_main():
             ResolveReviewersTool(options=tool_options),
             ResolveQeReviewersTool(options=tool_options),
             SetMergeRequestReviewersTool(options=tool_options),
+            # Review / QE tools
+            GetMrPipelinesWithStatusTool(options=tool_options),
+            GetMrChangesTool(options=tool_options),
+            GetMrDiscussionsTool(options=tool_options),
+            ReplyToMrDiscussionTool(options=tool_options),
+            ResolveMrDiscussionTool(options=tool_options),
+            ApproveMergeRequestTool(options=tool_options),
+            SetMrAutoMergeTool(options=tool_options),
+            GetPipelineFailedJobsDeepTool(options=tool_options),
+            CompareMrTestFailuresTool(options=tool_options),
+            CreateMrInlineCommentTool(options=tool_options),
             GetErratumTool(options=tool_options),
             GetErratumBuildNvrTool(options=tool_options),
             GetErratumTransitionRulesTool(options=tool_options),
@@ -163,6 +185,7 @@ async def _async_main():
             SetJiraFieldsTool(options=tool_options),
             SetPreliminaryTestingTool(options=tool_options),
             UpdateJiraCommentTool(options=tool_options),
+            UpdateTestCoverageTool(options=tool_options),
             VerifyIssueAuthorTool(options=tool_options),
             CreateJiraIssueTool(options=tool_options),
             DownloadSourcesTool(options=tool_options),

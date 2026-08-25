@@ -150,7 +150,6 @@ async def main() -> None:
         rebase_result: RebaseOutputSchema | None = Field(default=None)
         attempts_remaining: int = Field(default=max_build_attempts)
         all_files_git_to_add: set[str] = Field(default_factory=set)
-        abandon_autorelease: bool = Field(default=False)
 
     async def update_labels_for_all_issues(
         primary_issue: str,
@@ -389,8 +388,6 @@ async def main() -> None:
                     **get_agent_execution_config(),
                 )
                 state.rebase_result = RebaseOutputSchema.model_validate_json(response.last_message.text)
-                if state.rebase_result.abandon_autorelease:
-                    state.abandon_autorelease = True
                 if state.rebase_result.success:
                     state.rebase_log.append(state.rebase_result.status)
                     # Accumulate files from this rebase iteration
@@ -441,7 +438,7 @@ async def main() -> None:
                         package=state.package,
                         dist_git_branch=state.dist_git_branch,
                         rebase=True,
-                        abandon_autorelease=state.abandon_autorelease,
+                        available_tools=gateway_tools,
                     )
                 except Exception as e:
                     logger.warning(f"Error updating release: {e}")

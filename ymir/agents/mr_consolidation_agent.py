@@ -1037,6 +1037,7 @@ async def run_workflow(
                             package=package,
                             dist_git_branch=dist_git_branch,
                             rebase=False,
+                            available_tools=gateway_tools,
                         )
 
                         files_to_stage = _files_to_stage_for_patches(
@@ -1327,6 +1328,7 @@ async def run_workflow(
                     package=package,
                     dist_git_branch=dist_git_branch,
                     rebase=False,
+                    available_tools=gateway_tools,
                 )
             except Exception as e:
                 logger.error("Error updating release: %s", e)

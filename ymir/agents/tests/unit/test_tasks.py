@@ -4,10 +4,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ymir.agents.tasks import (
+    InvalidReleaseBumpingConfigError,
     ZStreamBranchStaleError,
     _check_zstream_branch_consistency,
     change_jira_status,
     commit_push_and_open_mr,
+    fetch_release_bumping_config,
     fork_and_prepare_dist_git,
     get_jira_issue_metadata,
     handle_zstream_branch_stale_error,
@@ -708,3 +710,64 @@ async def test_handle_zstream_branch_stale_error_skips_comment_on_dry_run():
     mock_labels.assert_awaited_once()
     mock_comment.assert_not_awaited()
     redis.lpush.assert_awaited_once()
+
+
+# -- fetch_release_bumping_config ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_release_bumping_config_returns_default_when_not_found():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "No maintainer rules found for package 'bash' (file 'ymir.yaml' not found)"
+        config = await fetch_release_bumping_config("bash", [])
+
+    assert config.abandon_autorelease is False
+    assert config.treat_maintenance_rhel_as_zstream is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_release_bumping_config_parses_valid_yaml():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = (
+            "release_bumping:\n  abandon_autorelease: true\n  treat_maintenance_rhel_as_zstream: true\n"
+        )
+        config = await fetch_release_bumping_config("bash", [])
+
+    assert config.abandon_autorelease is True
+    assert config.treat_maintenance_rhel_as_zstream is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_release_bumping_config_returns_default_on_exception():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.side_effect = RuntimeError("network error")
+        config = await fetch_release_bumping_config("bash", [])
+
+    assert config.abandon_autorelease is False
+    assert config.treat_maintenance_rhel_as_zstream is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_release_bumping_config_raises_on_malformed_section():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "release_bumping:\n  abandon_autorelease: not_a_bool\n"
+        with pytest.raises(InvalidReleaseBumpingConfigError, match="malformed"):
+            await fetch_release_bumping_config("bash", [])
+
+
+@pytest.mark.asyncio
+async def test_fetch_release_bumping_config_raises_on_invalid_yaml_syntax():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "release_bumping:\n  abandon_autorelease: [\n"
+        with pytest.raises(InvalidReleaseBumpingConfigError, match="not valid YAML"):
+            await fetch_release_bumping_config("bash", [])
+
+
+@pytest.mark.asyncio
+async def test_fetch_release_bumping_config_returns_default_when_no_release_bumping_key():
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = "some_other_setting: true\n"
+        config = await fetch_release_bumping_config("bash", [])
+
+    assert config.abandon_autorelease is False
+    assert config.treat_maintenance_rhel_as_zstream is False

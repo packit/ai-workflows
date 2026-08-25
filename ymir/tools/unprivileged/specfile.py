@@ -193,6 +193,12 @@ class UpdateReleaseToolInput(BaseModel):
         default=False,
         description="If True, remove %autorelease from Z-stream releases and use a numeric counter instead",
     )
+    treat_maintenance_rhel_as_zstream: bool = Field(
+        default=False,
+        description="If True, CentOS Stream branches for a RHEL version in maintenance phase (e.g. c8s) "
+        "get Z-Stream release bumping against the internal RHEL branch. If False (default), such "
+        "branches get a plain Y-Stream bump instead.",
+    )
 
 
 class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolOutput]):
@@ -201,8 +207,9 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
     description = """
     Updates the value of the `Release` field in the specified spec file.
 
-    If branch is a Z-Stream branch (rhel-X.Y or rhel-X.Y.Z) or a CentOS Stream branch for
-    a RHEL version in maintenance phase (e.g. c8s), release is updated in the following way:
+    If branch is a Z-Stream branch (rhel-X.Y or rhel-X.Y.Z), or a CentOS Stream branch for
+    a RHEL version in maintenance phase (e.g. c8s) with treat_maintenance_rhel_as_zstream set
+    to True, release is updated in the following way:
         - base release is established - from the latest candidate build of the current stream
           (for CentOS Stream branches corresponding to a RHEL version in maintenance phase,
           the internal RHEL branch is used for the candidate build lookup), unless the latest
@@ -226,7 +233,9 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
             - otherwise, ".1" is appended, unless there is a non-numeric suffix after the dist tag,
               in which case Release is set to "N%{?dist}.1", where N is base release
 
-    If branch is not a Z-Stream branch, release is updated in the following way:
+    If branch is not a Z-Stream branch (or is a CentOS Stream branch for a maintenance-phase
+    RHEL version with treat_maintenance_rhel_as_zstream set to False), release is updated in
+    the following way:
         - if %autorelease is present in the current Release in any form, Release is set to plain %autorelease
         - otherwise, initial numeric part of Release is increased by one or reset to 1 in case of rebase
         - if there is no numeric part, ".1" is appended to whatever is before the dist tag
@@ -236,10 +245,6 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
     For Z-Stream, the goal is to ensure EVR of the build resulting from this spec file is higher than EVR
     of the latest current stream candidate build and at the same time lower than EVR of (potential) future
     higher stream candidate build.
-
-    The abandon_autorelease parameter is intended to be set based on maintainer rules
-    (abandon_autorelease_for_zstream: true in AGENTS.md) for packages where the maintainer prefers
-    a fully numeric release on Z-stream branches instead of %autorelease.
     """
     input_schema = UpdateReleaseToolInput
 
@@ -509,8 +514,10 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         spec_path = get_absolute_path(tool_input.spec, self)
         try:
             higher_stream_branch = self._get_higher_stream_branch(tool_input.dist_git_branch)
-            maintenance_rhel_branch = not higher_stream_branch and await get_maintenance_rhel_branch(
-                tool_input.dist_git_branch
+            maintenance_rhel_branch = (
+                not higher_stream_branch
+                and tool_input.treat_maintenance_rhel_as_zstream
+                and await get_maintenance_rhel_branch(tool_input.dist_git_branch)
             )
             if higher_stream_branch or maintenance_rhel_branch:
                 await self._set_zstream_release(

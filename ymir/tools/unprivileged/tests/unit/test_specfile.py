@@ -555,6 +555,7 @@ async def test_update_release_maintenance_cs_branch(
                 package=package,
                 dist_git_branch=dist_git_branch,
                 rebase=rebase_in_current_stream,
+                treat_maintenance_rhel_as_zstream=True,
             )
         ).middleware(GlobalTrajectoryMiddleware(pretty=True))
         result = output.result
@@ -571,6 +572,40 @@ async def test_update_release_maintenance_cs_branch(
         release_macro_spec,
         "0%{?dist}.1" if rebase_in_current_stream else "5%{?dist}.1",
     )
+
+
+@pytest.mark.parametrize(
+    "rebase",
+    [False, True],
+)
+@pytest.mark.asyncio
+async def test_update_release_maintenance_cs_branch_default_plain_bump(
+    rebase,
+    minimal_spec,
+):
+    """Test that maintenance-phase RHEL CS branches get a plain Y-Stream bump by default."""
+    package = "test"
+    dist_git_branch = "c8s"
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("get_maintenance_rhel_branch should not be consulted by default")
+
+    flexmock(specfile_tools).should_receive("get_maintenance_rhel_branch").replace_with(fail_if_called)
+
+    tool = UpdateReleaseTool()
+
+    output = await tool.run(
+        input=UpdateReleaseToolInput(
+            spec=minimal_spec,
+            package=package,
+            dist_git_branch=dist_git_branch,
+            rebase=rebase,
+        )
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    release_line = next(line for line in minimal_spec.read_text().splitlines() if line.startswith("Release:"))
+    assert release_line == f"Release:        {'1%{?dist}' if rebase else '6%{?dist}'}"
 
 
 @pytest.mark.parametrize(
@@ -723,6 +758,7 @@ async def test_update_release_dotted_numeric_release(rebase, tmp_path):
             package=package,
             dist_git_branch=dist_git_branch,
             rebase=rebase,
+            treat_maintenance_rhel_as_zstream=True,
         )
     ).middleware(GlobalTrajectoryMiddleware(pretty=True))
     result = output.result
@@ -794,6 +830,7 @@ async def test_update_release_no_candidate_build_maintenance_branch(autorelease_
             package=package,
             dist_git_branch=dist_git_branch,
             rebase=False,
+            treat_maintenance_rhel_as_zstream=True,
         )
     ).middleware(GlobalTrajectoryMiddleware(pretty=True))
     result = output.result
@@ -855,6 +892,7 @@ async def test_update_release_no_candidate_build_falls_back_to_spec_release(tmp_
             package=package,
             dist_git_branch=dist_git_branch,
             rebase=False,
+            treat_maintenance_rhel_as_zstream=True,
         )
     ).middleware(GlobalTrajectoryMiddleware(pretty=True))
     result = output.result
@@ -988,6 +1026,7 @@ async def test_update_release_abandon_autorelease_no_candidate_build(autorelease
             dist_git_branch=dist_git_branch,
             rebase=False,
             abandon_autorelease=True,
+            treat_maintenance_rhel_as_zstream=True,
         )
     ).middleware(GlobalTrajectoryMiddleware(pretty=True))
     result = output.result

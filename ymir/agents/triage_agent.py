@@ -42,7 +42,7 @@ from ymir.agents.utils import (
 )
 from ymir.common.base_utils import fix_await, install_shutdown_handler, redis_client, run_task_loop
 from ymir.common.config import load_rhel_config
-from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.constants import YMIR_COMMENT_MARKER, JiraLabels, RedisQueues
 from ymir.common.issue_lock import issue_lock
 from ymir.common.logging_setup import configure_logging, current_jira_issue, get_trajectory_writeable
 from ymir.common.mock_repos import get_mock_local_tool_env
@@ -112,6 +112,31 @@ def _should_update_jira(resolution: Resolution = None, user_triggered: bool = Fa
         Resolution.CLARIFICATION_NEEDED,
         *POSTPONED_RESOLUTIONS,
     )
+
+
+async def _postponed_comment_exists(jira_issue: str, resolution: Resolution, available_tools) -> bool:
+    """Inspect the issue's existing comments for a Ymir Triage comment that already records ``resolution``.
+
+    Matching is on the marker plus the resolution's ``value`` (e.g.
+    ``postponed_no_patch``) rather than the rendered ``*Resolution*:`` line:
+    ``get_jira_details`` returns comment bodies as ADF, so the ``*bold*``
+    wiki markup is dropped and text nodes are space-joined by ``extract_text_from_adf`,
+    but the snake_case value carries no markup and survives intact.
+    A genuine resolution change (e.g. ``postponed_pr_pending`` -> ``postponed_no_patch``)
+    finds no match and is not suppressed.
+    """
+    details = await run_tool(
+        "get_jira_details",
+        issue_key=jira_issue,
+        available_tools=available_tools,
+    )
+    comments = details.get("fields", {}).get("comment", {}).get("comments", [])
+    marker = YMIR_COMMENT_MARKER.substitute(AGENT_TYPE="Triage")
+    for comment in comments:
+        body = extract_text_from_adf(comment.get("body", ""))
+        if marker in body and resolution.value in body:
+            return True
+    return False
 
 
 _RESOLUTION_TO_LABEL: dict[Resolution, JiraLabels] = {
@@ -1189,6 +1214,23 @@ async def run_workflow(
                 logger.info(
                     f"Skipping Jira comment for {state.jira_issue} "
                     f"(resolution={state.triage_result.resolution.value}, not user-triggered)"
+                )
+                return Workflow.END
+            # skip re-posting a comment when this issue already carries
+            # a Ymir comment for the same postponement resolution.
+            # User-triggered runs always get fresh confirmation, so they bypass this guard.
+            if (
+                not user_triggered
+                and state.triage_result.resolution in POSTPONED_RESOLUTIONS
+                and await _postponed_comment_exists(
+                    state.jira_issue, state.triage_result.resolution, gateway_tools
+                )
+            ):
+                logger.info(
+                    "Skipping duplicate postponed comment for %s "
+                    "(resolution=%s already recorded by a prior Ymir comment)",
+                    state.jira_issue,
+                    state.triage_result.resolution.value,
                 )
                 return Workflow.END
             await tasks.comment_in_jira(

@@ -1,6 +1,8 @@
 import re
 from string import Template
 
+from ymir.common.constants import YMIR_COMMENT_MARKER
+
 BRANCH_PREFIX = "automated-package-update"
 ZSTREAM_TARGET_LABEL = "target::zstream"
 
@@ -16,9 +18,10 @@ AGENT_WARNING = (
     "where your feedback will be more visible than pinging us on individual issues."
 )
 
-JIRA_COMMENT_TEMPLATE = Template(
-    f"""Output from Ymir $AGENT_TYPE Agent: \n\n$JIRA_COMMENT\n\n{AGENT_WARNING}"""
-)
+# Built from the shared YMIR_COMMENT_MARKER so the producer's comment prefix and
+# the sweep's parser can never drift. ``.template`` yields the raw marker string
+# (with its ``$AGENT_TYPE`` placeholder intact) to splice into this template.
+JIRA_COMMENT_TEMPLATE = Template(f"""{YMIR_COMMENT_MARKER.template}: \n\n$JIRA_COMMENT\n\n{AGENT_WARNING}""")
 
 I_AM_YMIR = "by Ymir, a Red Hat Enterprise Linux software maintenance AI agent."
 

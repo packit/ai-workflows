@@ -1,10 +1,17 @@
 from datetime import UTC, datetime, timedelta
 from enum import Enum
+from string import Template
 
 BREWHUB_URL = "https://brewhub.engineering.redhat.com/brewhub"
 CENTOS_STREAM_KOJIHUB_URL = "https://kojihub.stream.centos.org/kojihub"
 
 JIRA_SEARCH_PATH = "rest/api/3/search/jql"
+
+# Prefix Ymir agents put on every Jira comment; the sweep matches on it to find
+# Ymir-authored comments. Single source of truth for both the producer
+# (ymir.agents, which embeds it in JIRA_COMMENT_TEMPLATE) and the consumer
+# (ymir.sweep, which parses it).
+YMIR_COMMENT_MARKER = Template("Output from Ymir $AGENT_TYPE Agent")
 
 # Compares correctly - all our dates are tz-aware
 DATETIME_MIN_UTC = datetime.min.replace(tzinfo=UTC)

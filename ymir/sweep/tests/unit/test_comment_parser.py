@@ -3,8 +3,14 @@
 from datetime import datetime
 
 from ymir.supervisor.supervisor_types import JiraComment
-from ymir.sweep.comment_parser import parse_ymir_comment
+from ymir.sweep.comment_parser import _YMIR_TRIAGE_AGENT_COMMENT_MARKER, parse_ymir_comment
 from ymir.sweep.tests.unit.conftest import make_issue, make_ymir_comment
+
+
+def test_triage_marker_matches_producer_prefix():
+    """Pin the marker derived from the shared YMIR_COMMENT_MARKER template so it
+    cannot drift from the prefix the triage agent writes."""
+    assert _YMIR_TRIAGE_AGENT_COMMENT_MARKER == "Output from Ymir Triage Agent"
 
 
 def test_parse_dependency_comment_with_blocker():

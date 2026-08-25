@@ -13,9 +13,11 @@ import os
 import re
 from dataclasses import dataclass
 
+from ymir.common.constants import YMIR_COMMENT_MARKER
 from ymir.supervisor.supervisor_types import FullIssue
 
-_YMIR_TRIAGE_AGENT_COMMENT_MARKER = "Output from Ymir Triage Agent"
+# Derived from the shared marker template
+_YMIR_TRIAGE_AGENT_COMMENT_MARKER = YMIR_COMMENT_MARKER.substitute(AGENT_TYPE="Triage")
 
 _BLOCKER_RE = re.compile(r"^\*Blockers?\*:\s*(.+)$", re.MULTILINE)
 _PENDING_ISSUE_RE = re.compile(r"^\* ([A-Z]+-\d+)$", re.MULTILINE)

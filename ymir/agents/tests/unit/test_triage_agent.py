@@ -3,13 +3,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ymir.agents.constants import JIRA_COMMENT_TEMPLATE
 from ymir.agents.triage_agent import (
     TriageState,
     _build_reproducer_input,
     _map_version_to_module_branch,
+    _postponed_comment_exists,
     _should_update_jira,
     determine_target_branch,
 )
+from ymir.common.constants import YMIR_COMMENT_MARKER
 from ymir.common.models import (
     BackportData,
     CVEEligibilityResult,
@@ -705,3 +708,98 @@ async def test_pr_pending_without_blocker_reference_raises():
     assert any(isinstance(e, ValueError) and "postponed_pr_pending" in str(e) for e in chain), (
         f"expected a chained ValueError about postponed_pr_pending, got: {chain!r}"
     )
+
+
+def _adf_paragraph(*text_nodes: dict) -> dict:
+    return {"type": "paragraph", "content": list(text_nodes)}
+
+
+def _adf_ymir_postponed_body(resolution: Resolution, summary: str = "no upstream fix yet") -> dict:
+    """Build an ADF comment body as Jira REST v3 (get_jira_details) returns it.
+
+    Crucially this drops the ``*bold*`` wiki markup the agent posts: the
+    ``*Resolution*`` label becomes a strong-marked text node ("Resolution",
+    no asterisks) and the value lands in a separate text node. This is what
+    ``extract_text_from_adf`` actually sees in production, so the guard must
+    match on the marker + snake_case value token, not the rendered
+    ``*Resolution*:`` string.
+    """
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            _adf_paragraph({"type": "text", "text": "Output from Ymir Triage Agent: "}),
+            _adf_paragraph(
+                {"type": "text", "text": "Resolution", "marks": [{"type": "strong"}]},
+                {"type": "text", "text": f": {resolution.value}"},
+            ),
+            _adf_paragraph(
+                {"type": "text", "text": "Summary", "marks": [{"type": "strong"}]},
+                {"type": "text", "text": f": {summary}"},
+            ),
+        ],
+    }
+
+
+def _details_with_comments(*bodies) -> dict:
+    """Wrap comment bodies (ADF dicts or plain strings) in the get_jira_details shape."""
+    return {"fields": {"comment": {"comments": [{"body": b} for b in bodies]}}}
+
+
+@pytest.mark.asyncio
+async def test_postponed_comment_exists_true_same_resolution():
+    """Returns True when a prior Ymir ADF comment records the same resolution."""
+    details = _details_with_comments(
+        "some unrelated human comment",
+        _adf_ymir_postponed_body(Resolution.POSTPONED_NO_PATCH),
+    )
+    with patch("ymir.agents.triage_agent.run_tool", new_callable=AsyncMock, return_value=details):
+        assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is True
+
+
+@pytest.mark.asyncio
+async def test_postponed_comment_exists_false_different_resolution():
+    """A prior Ymir comment for a DIFFERENT resolution does not suppress."""
+    details = _details_with_comments(_adf_ymir_postponed_body(Resolution.POSTPONED_PR_PENDING))
+    with patch("ymir.agents.triage_agent.run_tool", new_callable=AsyncMock, return_value=details):
+        assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is False
+
+
+@pytest.mark.asyncio
+async def test_postponed_comment_exists_false_without_marker():
+    """The resolution value without the Ymir marker (e.g. a human quote) is ignored."""
+    human = {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            _adf_paragraph({"type": "text", "text": "I think this should be postponed_no_patch, agreed?"})
+        ],
+    }
+    with patch(
+        "ymir.agents.triage_agent.run_tool",
+        new_callable=AsyncMock,
+        return_value=_details_with_comments(human),
+    ):
+        assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is False
+
+
+@pytest.mark.asyncio
+async def test_postponed_comment_exists_false_no_comments():
+    """No comments at all -> nothing to deduplicate against."""
+    with patch(
+        "ymir.agents.triage_agent.run_tool",
+        new_callable=AsyncMock,
+        return_value=_details_with_comments(),
+    ):
+        assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is False
+
+
+def test_ymir_comment_marker_triage():
+    """The shared marker template renders the exact string the sweep matches."""
+    assert YMIR_COMMENT_MARKER.substitute(AGENT_TYPE="Triage") == "Output from Ymir Triage Agent"
+
+
+def test_jira_comment_template_output_unchanged():
+    """Rebuilding JIRA_COMMENT_TEMPLATE from the shared marker keeps output identical."""
+    rendered = JIRA_COMMENT_TEMPLATE.substitute(AGENT_TYPE="Triage", JIRA_COMMENT="hello")
+    assert rendered.startswith("Output from Ymir Triage Agent: \n\nhello\n\n")

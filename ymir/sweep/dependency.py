@@ -122,12 +122,25 @@ class DependencySweep(SweepStrategy):
                 detail=f"Cannot determine target branch for {issue.key} (fix_versions={issue.fix_versions})",
             )
 
-        raw_fix_version = issue.fix_versions[0] if issue.fix_versions else ""
-        if raw_fix_version:
-            rhel_config = await load_rhel_config()
-            fix_version = normalize_fix_version(raw_fix_version, rhel_config)
-        else:
-            fix_version = raw_fix_version
+        # An issue can only carry ymir_postponed_dependency if it had a
+        # non-empty Fix Version at triage time (that field is the source of
+        # the branch mapping; an empty one aborts postponement upstream).
+        # However, if the field was cleared after triage: the Z-stream
+        # determination (fix_version.endswith(".z")) is lost, so the buildroot
+        # check would silently query only one buildroot.
+        if not issue.fix_versions:
+            return SweepResult(
+                issue_key=issue.key,
+                action="error",
+                detail=(
+                    f"Cannot determine stream for {issue.key}: Fix Version is missing "
+                    f"(required to select the Z-stream buildroot)"
+                ),
+            )
+
+        raw_fix_version = issue.fix_versions[0]
+        rhel_config = await load_rhel_config()
+        fix_version = normalize_fix_version(raw_fix_version, rhel_config)
 
         try:
             in_buildroot = await check_build_in_buildroot(

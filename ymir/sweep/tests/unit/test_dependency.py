@@ -337,6 +337,28 @@ async def test_current_y_stream_fix_version_not_normalised(monkeypatch):
     )
 
 
+@pytest.mark.asyncio
+async def test_error_when_fix_version_missing_but_branch_from_summary(monkeypatch):
+    """Branch resolvable from the comment summary while fix_versions is empty.
+
+    This can only happen if the Fix Version was cleared after triage. Without
+    it the Z-stream signal is lost and only one buildroot would be checked, so
+    the sweep fails loud with an error instead of silently degrading.
+    """
+    monkeypatch.setattr(
+        "ymir.sweep.dependency.get_issue",
+        lambda key, full=False: _make_blocker(fixed_in_build="golang-1.21.0-1.el9"),
+    )
+    # Summary supplies the branch (c9s); fix_versions is empty.
+    issue = make_issue(fix_versions=[], comments=[_make_comment()])
+
+    result = await DependencySweep().is_unblocked(issue, _parse_comment(issue))
+
+    assert result.action == "error"
+    assert "Fix Version" in result.detail
+    assert _resolve_target_branch(_parse_comment(issue), issue.fix_versions) == "c9s"
+
+
 # ---------------------------------------------------------------------------
 # Async helpers
 # ---------------------------------------------------------------------------

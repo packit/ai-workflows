@@ -237,6 +237,8 @@ class ZStreamSearchTool(Tool[ZStreamSearchToolInput, ToolRunOptions, ZStreamSear
 
         with tool_error_context(
             f"Failed to check z-stream status for {tool_input.component}/{tool_input.fix_version}",
+            component=tool_input.component,
+            fix_version=tool_input.fix_version,
         ):
             older = await is_older_zstream(tool_input.fix_version)
 
@@ -263,6 +265,8 @@ class ZStreamSearchTool(Tool[ZStreamSearchToolInput, ToolRunOptions, ZStreamSear
         with tool_error_context(
             f"Failed to search Jira for related z-stream issues"
             f" for {tool_input.component}/{tool_input.fix_version}",
+            component=tool_input.component,
+            fix_version=tool_input.fix_version,
             jql=jql,
         ):
             search_result = await run_tool(

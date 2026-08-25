@@ -23,7 +23,8 @@ from ymir.common.models import (
     TestingFarmRequestResult,
 )
 from ymir.tools.base import CloneableTool as Tool
-from ymir.tools.base import tool_error_context
+from ymir.tools.base import make_additional_context, tool_error_context
+from ymir.tools.errors import ToolErrorWithContext
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +181,10 @@ class GetTestingFarmRequestTool(
     ) -> JSONToolOutput[dict[str, Any]]:
         logger.info("Getting Testing Farm request %s", tool_input.request_id)
 
-        with tool_error_context(f"Failed to get Testing Farm request {tool_input.request_id}"):
+        with tool_error_context(
+            f"Failed to get Testing Farm request {tool_input.request_id}",
+            request_id=tool_input.request_id,
+        ):
             response = await asyncio.to_thread(_testing_farm_api_get, f"requests/{tool_input.request_id}")
             tf_request = _parse_tf_request(response)
 
@@ -257,9 +261,14 @@ class ReproduceTestingFarmRequestTool(
                     new_env["artifacts"] = [{"id": build_nvr, "type": "redhat-brew-build", "order": 40}]
                     return new_env
 
-                raise ToolError(
+                raise ToolErrorWithContext(
                     "Cannot reproduce Testing Farm request: "
-                    "cannot determine how to replace build in environment."
+                    "cannot determine how to replace build in environment.",
+                    additional_context=make_additional_context(
+                        build_nvr=build_nvr,
+                        has_builds_var=builds_var is not None,
+                        artifacts_count=len(artifacts) if artifacts else 0,
+                    ),
                 )
 
             body = {
@@ -447,7 +456,11 @@ class ListTestingFarmComposesTool(
                 }
             )
 
-        try:
+        with tool_error_context(
+            "Failed to list Testing Farm composes",
+            ranch=tool_input.ranch,
+            arch=tool_input.arch,
+        ):
             base_url = _testing_farm_url().rsplit("/v0", 1)[0]
             url = f"{base_url}/v0.2/composes/{tool_input.ranch}"
             response = await asyncio.to_thread(requests.get, url, headers=_testing_farm_headers(), timeout=30)
@@ -471,9 +484,6 @@ class ListTestingFarmComposesTool(
                 composes = [c for c in composes if c in allowed]
 
             return JSONToolOutput(result={"composes": composes})
-
-        except Exception as e:
-            raise ToolError(f"Failed to list Testing Farm composes: {e}") from e
 
 
 class ReserveTestingFarmMachineToolInput(BaseModel):
@@ -524,7 +534,11 @@ class ReserveTestingFarmMachineTool(
                 }
             )
 
-        try:
+        with tool_error_context(
+            "Failed to reserve Testing Farm machine",
+            compose=tool_input.compose,
+            arch=tool_input.arch,
+        ):
             # Always use the gateway's own SSH key so run_remote_command can authenticate
             ssh_public_key = await asyncio.to_thread(_ensure_gateway_ssh_key)
             if tool_input.ssh_public_key and tool_input.ssh_public_key != ssh_public_key:
@@ -574,8 +588,6 @@ class ReserveTestingFarmMachineTool(
             }
 
             response = await asyncio.to_thread(_testing_farm_api_post, "requests", json=body)
-        except Exception as e:
-            raise ToolError(f"Failed to reserve Testing Farm machine: {e}") from e
 
         return JSONToolOutput(result={"id": response["id"]})
 
@@ -621,34 +633,34 @@ class GetTestingFarmReservationDetailsTool(
         _TRANSIENT_HTTP_CODES = (502, 503, 504)
 
         for attempt in range(1, max_attempts + 1):
-            try:
-                response = await asyncio.to_thread(_testing_farm_api_get, f"requests/{tool_input.request_id}")
-            except requests.RequestException as e:
-                is_transient = False
-                if isinstance(e, requests.HTTPError) and e.response is not None:
-                    if e.response.status_code in _TRANSIENT_HTTP_CODES:
-                        is_transient = True
-                elif isinstance(e, (requests.ConnectionError, requests.Timeout)):
-                    is_transient = True
-
-                if is_transient:
-                    logger.warning(
-                        "Transient error %s polling TF %s (attempt %d/%d)",
-                        e,
-                        tool_input.request_id,
-                        attempt,
-                        max_attempts,
+            with tool_error_context(
+                f"Failed to get Testing Farm reservation details {tool_input.request_id}",
+                request_id=tool_input.request_id,
+            ):
+                try:
+                    response = await asyncio.to_thread(
+                        _testing_farm_api_get, f"requests/{tool_input.request_id}"
                     )
-                    if attempt < max_attempts:
-                        await asyncio.sleep(poll_interval)
-                    continue
-                raise ToolError(
-                    f"Failed to get Testing Farm reservation details {tool_input.request_id}: {e}"
-                ) from e
-            except Exception as e:
-                raise ToolError(
-                    f"Failed to get Testing Farm reservation details {tool_input.request_id}: {e}"
-                ) from e
+                except requests.RequestException as e:
+                    is_transient = False
+                    if isinstance(e, requests.HTTPError) and e.response is not None:
+                        if e.response.status_code in _TRANSIENT_HTTP_CODES:
+                            is_transient = True
+                    elif isinstance(e, (requests.ConnectionError, requests.Timeout)):
+                        is_transient = True
+
+                    if is_transient:
+                        logger.warning(
+                            "Transient error %s polling TF %s (attempt %d/%d)",
+                            e,
+                            tool_input.request_id,
+                            attempt,
+                            max_attempts,
+                        )
+                        if attempt < max_attempts:
+                            await asyncio.sleep(poll_interval)
+                        continue
+                    raise
 
             state = response.get("state", "unknown")
 
@@ -761,10 +773,11 @@ class CancelTestingFarmRequestTool(
                 }
             )
 
-        try:
+        with tool_error_context(
+            f"Failed to cancel Testing Farm request {request_id}",
+            request_id=request_id,
+        ):
             await asyncio.to_thread(_testing_farm_api_delete, f"requests/{request_id}")
-        except Exception as e:
-            raise ToolError(f"Failed to cancel Testing Farm request {request_id}: {e}") from e
 
         clear_allowed_ssh_hosts()
         return JSONToolOutput(result={"cancelled": True, "request_id": request_id})
@@ -813,28 +826,33 @@ class RunRemoteCommandTool(Tool[RunRemoteCommandToolInput, ToolRunOptions, JSONT
                 }
             )
 
-        try:
-            await asyncio.to_thread(_ensure_gateway_ssh_key)
-            proc = await asyncio.create_subprocess_exec(
-                "ssh",
-                "-i",
-                str(_SSH_KEY_PATH),
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                ssh_host,
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except TimeoutError as e:
-            proc.kill()
-            await proc.wait()
-            raise ToolError(f"Command timed out after {timeout}s on {ssh_host}: {command}") from e
-        except Exception as e:
-            raise ToolError(f"Failed to run command on {ssh_host}: {e}") from e
+        with tool_error_context(
+            f"Failed to run remote command on {ssh_host}",
+            include_exception_message_for=(ToolError,),
+            ssh_host=ssh_host,
+            command=command,
+            timeout=timeout,
+        ):
+            try:
+                await asyncio.to_thread(_ensure_gateway_ssh_key)
+                proc = await asyncio.create_subprocess_exec(
+                    "ssh",
+                    "-i",
+                    str(_SSH_KEY_PATH),
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    ssh_host,
+                    command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except TimeoutError as e:
+                proc.kill()
+                await proc.wait()
+                raise ToolError(f"Command timed out after {timeout}s") from e
 
         return JSONToolOutput(
             result={
@@ -923,43 +941,49 @@ class CopyFilesToRemoteTool(Tool[CopyFilesToRemoteToolInput, ToolRunOptions, JSO
         ]
 
         active_proc = None
-        try:
-            # Create the remote directory
-            active_proc = await asyncio.create_subprocess_exec(
-                "ssh",
-                *ssh_opts,
-                ssh_host,
-                "mkdir",
-                "-p",
-                remote_dir,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, stderr = await asyncio.wait_for(active_proc.communicate(), timeout=timeout)
-            if active_proc.returncode != 0:
-                raise RuntimeError(
-                    f"Failed to create remote directory {remote_dir}: {stderr.decode().strip()}"
+        with tool_error_context(
+            f"Failed to copy files to {ssh_host}:{remote_dir}",
+            include_exception_message_for=(ToolError,),
+            ssh_host=ssh_host,
+            remote_dir=remote_dir,
+            local_paths=str(local_paths),
+            timeout=timeout,
+        ):
+            try:
+                # Create the remote directory
+                active_proc = await asyncio.create_subprocess_exec(
+                    "ssh",
+                    *ssh_opts,
+                    ssh_host,
+                    "mkdir",
+                    "-p",
+                    remote_dir,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
+                _, stderr = await asyncio.wait_for(active_proc.communicate(), timeout=timeout)
+                if active_proc.returncode != 0:
+                    raise RuntimeError(
+                        f"Failed to create remote directory {remote_dir}: {stderr.decode().strip()}"
+                    )
 
-            # Copy files via scp
-            active_proc = await asyncio.create_subprocess_exec(
-                "scp",
-                *ssh_opts,
-                "-r",
-                *local_paths,
-                f"{ssh_host}:{remote_dir}",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, stderr = await asyncio.wait_for(active_proc.communicate(), timeout=timeout)
-            if active_proc.returncode != 0:
-                raise RuntimeError(f"SCP failed: {stderr.decode().strip()}")
-        except TimeoutError as e:
-            if active_proc:
-                active_proc.kill()
-                await active_proc.wait()
-            raise ToolError(f"Copy operation timed out after {timeout}s to {ssh_host}:{remote_dir}") from e
-        except Exception as e:
-            raise ToolError(f"Failed to copy files to {ssh_host}:{remote_dir}: {e}") from e
+                # Copy files via scp
+                active_proc = await asyncio.create_subprocess_exec(
+                    "scp",
+                    *ssh_opts,
+                    "-r",
+                    *local_paths,
+                    f"{ssh_host}:{remote_dir}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await asyncio.wait_for(active_proc.communicate(), timeout=timeout)
+                if active_proc.returncode != 0:
+                    raise RuntimeError(f"SCP failed: {stderr.decode().strip()}")
+            except TimeoutError as e:
+                if active_proc:
+                    active_proc.kill()
+                    await active_proc.wait()
+                raise ToolError(f"Copy operation timed out after {timeout}s") from e
 
         return JSONToolOutput(result={"copied": True, "remote_dir": remote_dir, "files": local_paths})

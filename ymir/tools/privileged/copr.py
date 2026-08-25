@@ -14,7 +14,6 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import (
     JSONToolOutput,
-    ToolError,
     ToolRunOptions,
 )
 from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
@@ -22,11 +21,13 @@ from copr.v3.exceptions import CoprException
 from pydantic import BaseModel, Field
 
 from ymir.common import load_rhel_config
-from ymir.common.base_utils import KerberosError, init_kerberos_ticket
+from ymir.common.base_utils import init_kerberos_ticket
 from ymir.common.validators import AbsolutePath
 from ymir.common.version_utils import parse_branch_name
 from ymir.tools.base import CloneableTool as Tool
+from ymir.tools.base import make_additional_context, tool_error_context
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
+from ymir.tools.errors import ToolErrorWithContext
 from ymir.tools.http import aiohttp_get_with_retries
 
 COPR_CONFIG = {
@@ -124,15 +125,11 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
         srpm_path = tool_input.srpm_path
         dist_git_branch = tool_input.dist_git_branch
         jira_issue = tool_input.jira_issue
-        try:
+        with tool_error_context("Failed to initialize Kerberos ticket"):
             principal = await init_kerberos_ticket()
-        except KerberosError as e:
-            raise ToolError(f"Failed to initialize Kerberos ticket: {e}") from e
         copr_user = principal.split("@", maxsplit=1)[0]
-        try:
+        with tool_error_context("Failed to read SRPM header", srpm_path=str(srpm_path)):
             exclusive_arches = await self.get_exclusive_arches(srpm_path)
-        except Exception as e:
-            raise ToolError(f"Failed to read SRPM header: {e}") from e
         # build for the fastest supported arch (see COPR_ARCH_PREFERENCE);
         # default to x86_64 when the package has no ExclusiveArch
         build_arch = next(
@@ -141,11 +138,13 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
         )
         rhel_config = await load_rhel_config()
         upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
-        try:
+        with tool_error_context(
+            "Failed to deduce Copr chroot",
+            dist_git_branch=dist_git_branch,
+            build_arch=build_arch,
+        ):
             chroot_base, majorver = await self.branch_to_chroot(dist_git_branch, upcoming_z_streams)
             chroot = f"{chroot_base}-{build_arch}"
-        except ValueError as e:
-            raise ToolError(f"Failed to deduce Copr chroot: {e}") from e
         logger.info(f"Connecting to Copr API at {COPR_CONFIG['copr_url']} for project creation/update")
         project_proxy = ProjectProxy({"username": copr_user, **COPR_CONFIG})
         kwargs = {
@@ -164,14 +163,30 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 kwargs["chroots"] = sorted(set(project.chroot_repos.keys()) | {chroot})
                 await _copr_api_call(project_proxy.edit, **kwargs)
         except Exception as e:
-            raise ToolError(f"Failed to create or update Copr project: {_copr_error_detail(e)}") from e
+            raise ToolErrorWithContext(
+                "Failed to create or update Copr project",
+                cause=e,
+                additional_context=make_additional_context(
+                    copr_user=copr_user,
+                    project=jira_issue,
+                    chroot=chroot,
+                    exception=_copr_error_detail(e),
+                ),
+            ) from e
         if chroot.startswith("custom-"):
             # make sure the chroot has access to corresponding buildroot repository
             logger.info(f"Connecting to Copr API to update chroot configuration for {chroot}")
             chroot_proxy = ProjectChrootProxy({"username": copr_user, **COPR_CONFIG})
             bootstrap_image = f"registry.access.redhat.com/ubi{majorver}/ubi"
             if not (internal_repos_host := rhel_config.get("internal_repos_host")):
-                raise ToolError("Internal repos host not configured")
+                raise ToolErrorWithContext(
+                    "Internal repos host not configured",
+                    additional_context=make_additional_context(
+                        copr_user=copr_user,
+                        project=jira_issue,
+                        chroot=chroot,
+                    ),
+                )
             buildroot_repo_url = urljoin(
                 internal_repos_host,
                 f"brewroot/repos/{dist_git_branch}-z-build/latest/{build_arch}",
@@ -207,7 +222,16 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                         **kwargs,
                     )
             except Exception as e:
-                raise ToolError(f"Failed to update Copr chroot: {_copr_error_detail(e)}") from e
+                raise ToolErrorWithContext(
+                    "Failed to update Copr chroot",
+                    cause=e,
+                    additional_context=make_additional_context(
+                        copr_user=copr_user,
+                        project=jira_issue,
+                        chroot=chroot,
+                        exception=_copr_error_detail(e),
+                    ),
+                ) from e
         logger.info(f"Connecting to Copr API to submit build for {srpm_path}")
         build_proxy = BuildProxy({"username": copr_user, **COPR_CONFIG})
         try:
@@ -218,10 +242,19 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 path=str(srpm_path),
                 buildopts={"chroots": [chroot], "timeout": COPR_BUILD_TIMEOUT},
             )
-        except Exception as e:
-            raise ToolError(f"Failed to submit Copr build: {_copr_error_detail(e)}") from e
-        else:
             logger.info(f"{jira_issue}: build of {srpm_path} in {chroot} started: {build.id:08d}")
+        except Exception as e:
+            raise ToolErrorWithContext(
+                "Failed to submit Copr build",
+                cause=e,
+                additional_context=make_additional_context(
+                    copr_user=copr_user,
+                    project=jira_issue,
+                    chroot=chroot,
+                    srpm_path=str(srpm_path),
+                    exception=_copr_error_detail(e),
+                ),
+            ) from e
 
         async def get_artifacts_urls(build):
             if build.source_package and (package := build.source_package.get("name")):
@@ -370,21 +403,26 @@ class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, Dow
             for url in artifacts_urls:
                 logger.info(f"Downloading build artifact from: {url}")
                 try:
-                    async with aiohttp_get_with_retries(session, url) as response:
-                        if response.status < 400:
-                            target = Path(Path(urlparse(url).path).name)
-                            content = await response.read()
-                            if ".log" in target.suffixes:
-                                if content.startswith(b"\x1f\x8b"):
-                                    # decompress logs on-the-fly
-                                    content = gzip.decompress(content)
-                                if target.suffix == ".gz":
-                                    target = target.with_suffix("")
-                            (target_path / target).write_bytes(content)
-                        else:
-                            raise ValueError(f"{response.status} {response.reason}")
-                except Exception as e:
+                    with tool_error_context(
+                        "Failed to download build artifact",
+                        include_exception_message_for=(ValueError,),
+                        artifacts_url=url,
+                    ):
+                        async with aiohttp_get_with_retries(session, url) as response:
+                            if response.status < 400:
+                                target = Path(Path(urlparse(url).path).name)
+                                content = await response.read()
+                                if ".log" in target.suffixes:
+                                    if content.startswith(b"\x1f\x8b"):
+                                        # decompress logs on-the-fly
+                                        content = gzip.decompress(content)
+                                    if target.suffix == ".gz":
+                                        target = target.with_suffix("")
+                                (target_path / target).write_bytes(content)
+                            else:
+                                raise ValueError(f"{response.status} {response.reason}")
+                except Exception:
                     # Cleanup temporary dir
                     rmtree(target_path)
-                    raise ToolError(f"Failed to download {url}: {e}") from e
+                    raise
         return DownloadArtifactsToolOutput(result=DownloadArtifactsResult(target_path=target_path))

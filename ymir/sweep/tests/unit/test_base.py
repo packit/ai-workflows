@@ -104,7 +104,9 @@ def test_get_blocked_issues_uses_correct_jql(monkeypatch):
     strategy = _UnblockedStrategy()
     strategy.get_blocked_issues()
 
-    assert captured["jql"] == f'labels = "{JiraLabels.YMIR_POSTPONED_DEPENDENCY.value}"'
+    assert (
+        captured["jql"] == f'labels = "{JiraLabels.YMIR_POSTPONED_DEPENDENCY.value}" AND status != "Closed"'
+    )
 
 
 # ---------------------------------------------------------------------------

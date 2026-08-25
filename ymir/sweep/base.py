@@ -67,7 +67,7 @@ class SweepStrategy(ABC):
         Returns ``FullIssue`` objects with comments, labels, and custom
         fields decoded via ``jira_utils.get_current_issues(jql, full=True)``.
         """
-        jql = f'labels = "{self.label.value}"'
+        jql = f'labels = "{self.label.value}" AND status != "Closed"'
         issues = list(get_current_issues(jql, full=True))
         self.logger.info("Found %d issues with label %s", len(issues), self.label.value)
         return issues

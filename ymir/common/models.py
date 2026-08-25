@@ -837,6 +837,12 @@ class PackageReleaseBumpingConfig(BaseModel):
         "(e.g. c8s) get Z-Stream release bumping (checked against the internal RHEL branch) "
         "instead of a plain Y-Stream bump",
     )
+    disregard_zstream_nvr_policy: bool = Field(
+        default=False,
+        description="If true, a plain Y-Stream bump is used even for Z-Stream branches and "
+        "maintenance-phase RHEL CentOS Stream branches, instead of the strict Z-Stream NVR "
+        "ordering policy",
+    )
 
 
 class MRConsolidationInputSchema(BaseModel):

@@ -199,6 +199,12 @@ class UpdateReleaseToolInput(BaseModel):
         "get Z-Stream release bumping against the internal RHEL branch. If False (default), such "
         "branches get a plain Y-Stream bump instead.",
     )
+    disregard_zstream_nvr_policy: bool = Field(
+        default=False,
+        description="If True, a plain Y-Stream bump is used even for Z-Stream branches and "
+        "maintenance-phase RHEL CentOS Stream branches, instead of the strict Z-Stream NVR "
+        "ordering policy.",
+    )
 
 
 class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolOutput]):
@@ -209,7 +215,7 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
 
     If branch is a Z-Stream branch (rhel-X.Y or rhel-X.Y.Z), or a CentOS Stream branch for
     a RHEL version in maintenance phase (e.g. c8s) with treat_maintenance_rhel_as_zstream set
-    to True, release is updated in the following way:
+    to True, and disregard_zstream_nvr_policy is False, release is updated in the following way:
         - base release is established - from the latest candidate build of the current stream
           (for CentOS Stream branches corresponding to a RHEL version in maintenance phase,
           the internal RHEL branch is used for the candidate build lookup), unless the latest
@@ -233,9 +239,9 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
             - otherwise, ".1" is appended, unless there is a non-numeric suffix after the dist tag,
               in which case Release is set to "N%{?dist}.1", where N is base release
 
-    If branch is not a Z-Stream branch (or is a CentOS Stream branch for a maintenance-phase
-    RHEL version with treat_maintenance_rhel_as_zstream set to False), release is updated in
-    the following way:
+    Otherwise (branch is not a Z-Stream branch, or is a CentOS Stream branch for a
+    maintenance-phase RHEL version with treat_maintenance_rhel_as_zstream set to False, or
+    disregard_zstream_nvr_policy is True), release is updated in the following way:
         - if %autorelease is present in the current Release in any form, Release is set to plain %autorelease
         - otherwise, initial numeric part of Release is increased by one or reset to 1 in case of rebase
         - if there is no numeric part, ".1" is appended to whatever is before the dist tag
@@ -513,23 +519,26 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
     ) -> StringToolOutput:
         spec_path = get_absolute_path(tool_input.spec, self)
         try:
-            higher_stream_branch = self._get_higher_stream_branch(tool_input.dist_git_branch)
-            maintenance_rhel_branch = (
-                not higher_stream_branch
-                and tool_input.treat_maintenance_rhel_as_zstream
-                and await get_maintenance_rhel_branch(tool_input.dist_git_branch)
-            )
-            if higher_stream_branch or maintenance_rhel_branch:
-                await self._set_zstream_release(
-                    spec_path,
-                    tool_input.package,
-                    tool_input.rebase,
-                    maintenance_rhel_branch or tool_input.dist_git_branch,
-                    higher_stream_branch,
-                    abandon_autorelease=tool_input.abandon_autorelease,
-                )
-            else:
+            if tool_input.disregard_zstream_nvr_policy:
                 await self._bump_or_reset_release(spec_path, tool_input.rebase)
+            else:
+                higher_stream_branch = self._get_higher_stream_branch(tool_input.dist_git_branch)
+                maintenance_rhel_branch = (
+                    not higher_stream_branch
+                    and tool_input.treat_maintenance_rhel_as_zstream
+                    and await get_maintenance_rhel_branch(tool_input.dist_git_branch)
+                )
+                if higher_stream_branch or maintenance_rhel_branch:
+                    await self._set_zstream_release(
+                        spec_path,
+                        tool_input.package,
+                        tool_input.rebase,
+                        maintenance_rhel_branch or tool_input.dist_git_branch,
+                        higher_stream_branch,
+                        abandon_autorelease=tool_input.abandon_autorelease,
+                    )
+                else:
+                    await self._bump_or_reset_release(spec_path, tool_input.rebase)
         except Exception as e:
             raise ToolError(f"Failed to update release: {e}") from e
         return StringToolOutput(result=f"Successfully updated release in {spec_path}")

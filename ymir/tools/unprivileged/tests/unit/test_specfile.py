@@ -609,6 +609,48 @@ async def test_update_release_maintenance_cs_branch_default_plain_bump(
 
 
 @pytest.mark.parametrize(
+    "dist_git_branch",
+    ["rhel-9.6.0", "c8s"],
+)
+@pytest.mark.parametrize(
+    "rebase",
+    [False, True],
+)
+@pytest.mark.asyncio
+async def test_update_release_disregard_zstream_nvr_policy(
+    rebase,
+    dist_git_branch,
+    minimal_spec,
+):
+    """disregard_zstream_nvr_policy forces a plain Y-Stream bump even for a real Z-stream branch
+    or a maintenance-phase RHEL CS branch with treat_maintenance_rhel_as_zstream also set."""
+    package = "test"
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("Koji/maintenance branch lookups should not be consulted")
+
+    flexmock(specfile_tools).should_receive("get_latest_candidate_build").replace_with(fail_if_called)
+    flexmock(specfile_tools).should_receive("get_maintenance_rhel_branch").replace_with(fail_if_called)
+
+    tool = UpdateReleaseTool()
+
+    output = await tool.run(
+        input=UpdateReleaseToolInput(
+            spec=minimal_spec,
+            package=package,
+            dist_git_branch=dist_git_branch,
+            rebase=rebase,
+            treat_maintenance_rhel_as_zstream=True,
+            disregard_zstream_nvr_policy=True,
+        )
+    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    result = output.result
+    assert result.startswith("Successfully")
+    release_line = next(line for line in minimal_spec.read_text().splitlines() if line.startswith("Release:"))
+    assert release_line == f"Release:        {'1%{?dist}' if rebase else '6%{?dist}'}"
+
+
+@pytest.mark.parametrize(
     "rebase",
     [False, True],
 )

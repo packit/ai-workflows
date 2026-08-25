@@ -414,6 +414,7 @@ async def update_release(
         rebase=rebase,
         abandon_autorelease=config.abandon_autorelease,
         treat_maintenance_rhel_as_zstream=config.treat_maintenance_rhel_as_zstream,
+        disregard_zstream_nvr_policy=config.disregard_zstream_nvr_policy,
     )
 
 

@@ -1,6 +1,6 @@
 ---
 name: rebase
-description: Rebase packages to newer upstream versions in the RHEL ecosystem — version update, spec file modification, patch fixing, build verification, changelog, and merge request creation.
+description: Rebase packages to newer upstream versions in the RHEL ecosystem — version update, spec file modification, patch fixing, build verification, changelog, and merge request creation. Includes sibling deduplication and consolidated issue handling.
 ---
 
 # Rebase Skill
@@ -14,8 +14,12 @@ You are a Red Hat Enterprise Linux developer performing an end-to-end rebase of 
 - `version`: {{version}}
 - `jira_issue`: {{jira_issue}}
 - `dry_run`: {{dry_run}}
+- `fix_version`: {{fix_version}}
 - `justification`: {{justification}}
 - `triage_summary`: {{triage_summary}}
+- `consolidated_issues`: {{consolidated_issues}}
+- `consolidation_summary`: {{consolidation_summary}}
+- `dist_git_namespace`: {{dist_git_namespace}}
 - `max_build_attempts`: {{max_build_attempts}}
 
 ## Tools
@@ -23,6 +27,8 @@ You are a Red Hat Enterprise Linux developer performing an end-to-end rebase of 
 This skill uses the following tools. Do not restrict tool usage — use any tool available as needed.
 
 **MCP Tools (called via MCP gateway):**
+- `get_jira_details` — Get details of a JIRA issue (fields, comments, status, labels)
+- `search_jira_issues` — Search for JIRA issues using JQL queries
 - `change_jira_status` — Change the status of a JIRA issue
 - `fork_repository` — Fork a dist-git repository and prepare a working branch
 - `clone_repository` — Clone a dist-git repository (with authentication, used for z-stream dist-git workflow)
@@ -63,9 +69,18 @@ Execute the following steps in order. Track state across steps (paths, flags, re
 
 Determine `pkg_tool` from the branch: if `dist_git_branch` starts with `c` and ends with `s` (e.g., `c10s`, `c9s`), use `centpkg`; otherwise use `rhpkg`.
 
-Initialize `attempts_remaining` to `max_build_attempts` (default 10). Initialize `build_error` as null. Initialize `abandon_autorelease` as false.
+Initialize `attempts_remaining` to `max_build_attempts` (default 10). Initialize `build_error` as null. Initialize `abandon_autorelease` as false. Initialize `treat_maintenance_rhel_as_zstream` as false. Initialize `all_files_to_git_add` as an empty set.
 
-### Step 1: Change JIRA Status
+### Step 1: Check if Sibling
+
+Check whether this issue is a sibling that was queued for consolidation. Siblings should not create their own MR — the primary issue will consolidate them.
+
+1. Call `get_jira_details` with `issue_key` = `{{jira_issue}}`.
+2. Inspect the comments in the response. For each comment, extract the text content.
+3. If any comment contains the text `"Queued for triage as potential sibling of"`, this issue is a sibling. **End the workflow immediately** — do not process further.
+4. If the check fails (e.g., JIRA API error), log a warning and continue to the next step.
+
+### Step 2: Change JIRA Status
 
 If `dry_run` is false:
 1. Call `change_jira_status` with `issue_key` = `{{jira_issue}}` and `status` = `"In Progress"`.
@@ -73,11 +88,30 @@ If `dry_run` is false:
 
 If `dry_run` is true, skip this step.
 
-### Step 2: Fork and Prepare Dist-Git
+### Step 3: Find Consolidated Siblings
 
-1. Determine the namespace from the branch:
-   - If `dist_git_branch` starts with `c` and ends with `s` (e.g., `c10s`, `c9s`): namespace is `centos-stream`.
-   - Otherwise: namespace is `rhel`.
+Find sibling issues that have been triaged as REBASE to the same version. These siblings will be included in the same MR and JIRA updates.
+
+If `{{consolidated_issues}}` is already provided (non-empty list):
+- Use the provided list directly.
+- Proceed to Step 4.
+
+If `{{consolidated_issues}}` is empty or not provided:
+1. If `{{fix_version}}` is not set, skip consolidation and proceed to Step 4.
+2. Verify the primary issue is still open: call `get_jira_details` with `issue_key` = `{{jira_issue}}`. If the status is "Closed", "Done", or "Resolved", skip consolidation (do not consolidate siblings into a closed primary issue).
+3. Search for sibling candidates using `search_jira_issues` with a JQL query that finds issues:
+   - In the same component as `{{package}}`
+   - With the same `fix_version` as `{{fix_version}}`
+   - With the label `ymir_triaged_rebase`
+   - Excluding the primary issue `{{jira_issue}}`
+4. For each candidate found, add it to the `consolidated_issues` list with its `issue_key`.
+5. If consolidation produced results, generate a `consolidation_summary` describing which siblings were included.
+
+### Step 4: Fork and Prepare Dist-Git
+
+1. Determine the namespace:
+   - If `{{dist_git_namespace}}` is provided, use it directly.
+   - Otherwise, determine from the branch: if `dist_git_branch` starts with `c` and ends with `s` (e.g., `c10s`, `c9s`), namespace is `centos-stream`; otherwise namespace is `rhel`.
 2. Fork the repository by calling `fork_repository` with `repository` = `https://gitlab.com/redhat/<namespace>/rpms/{{package}}`. Save the returned `fork_url`.
 3. If the namespace is `rhel` (not CentOS Stream), call `create_zstream_branch` with `package` = `{{package}}` and `branch` = `{{dist_git_branch}}` to ensure the branch exists.
 4. Clone the repository by calling `clone_repository` with the repository URL, `branch` = `{{dist_git_branch}}`, and a local clone path. Save `local_clone`.
@@ -88,13 +122,13 @@ If `dry_run` is true, skip this step.
 7. Find the leading z-stream branch: if `dist_git_branch` is a z-stream branch (e.g. `rhel-9.6.0`), check whether a higher z-stream exists for the same RHEL major version (e.g. `rhel-9.8.0`). If so, save it as `leading_zstream_branch`; otherwise set it to null. The leading z-stream spec can be inspected with `git show origin/<leading_zstream_branch>:{{package}}.spec` and used as a reference for Source URLs.
 8. Set the working directory to `local_clone`.
 
-### Step 3: Run Rebase
+### Step 5: Run Rebase
 
 Follow the **Rebase Instructions** below.
 
 Provide the following context to the instructions:
-- `local_clone`: path from Step 2
-- `fedora_clone`: path from Step 2 (may be null)
+- `local_clone`: path from Step 4
+- `fedora_clone`: path from Step 4 (may be null)
 - `package`: `{{package}}`
 - `dist_git_branch`: `{{dist_git_branch}}`
 - `version`: `{{version}}`
@@ -102,7 +136,7 @@ Provide the following context to the instructions:
 - `pkg_tool`: determined above
 - `build_error`: current build error context (null on first attempt, set on retry)
 - `triage_summary`: `{{triage_summary}}` (if set, provides guidance on how the rebase should be done)
-- `leading_zstream_branch`: the leading z-stream branch from Step 2 (if found)
+- `leading_zstream_branch`: the leading z-stream branch from Step 4 (if found)
 
 The rebase must produce:
 - `success`: boolean
@@ -111,27 +145,29 @@ The rebase must produce:
 - `files_to_git_add`: list of files that should be git added for this rebase
 - `error`: error message (if failed)
 - `abandon_autorelease`: boolean (true if maintainer rules say not to use %autorelease for z-streams)
+- `treat_maintenance_rhel_as_zstream`: boolean (true if maintainer rules prefer z-stream release bumping for maintenance-phase CentOS Stream branches)
 
 If the rebase result has `abandon_autorelease` set to true, update the workflow-level `abandon_autorelease` flag.
+If the rebase result has `treat_maintenance_rhel_as_zstream` set to true, update the workflow-level `treat_maintenance_rhel_as_zstream` flag.
 
 If the rebase succeeds:
 - Save the status to `rebase_log`.
 - Accumulate `files_to_git_add` from this iteration into `all_files_to_git_add`.
-- Proceed to Step 4.
+- Proceed to Step 6.
 
-If the rebase fails (success=false), skip to **Step 9: Comment in JIRA** with the error.
+If the rebase fails (success=false), skip to **Step 11: Comment in JIRA** with the error.
 
-### Step 4: Run Build
+### Step 6: Run Build
 
-1. Call `build_package` with the SRPM path from Step 3, `dist_git_branch`, and `jira_issue`.
-2. If the build **succeeds** -> proceed to Step 5.
-3. If the build **timed out** (`is_timeout` = true) -> proceed to Step 5 (treat as success).
-4. If the build returned an **infrastructure error** (`is_infra_error` = true, e.g. Copr API error, project setup failure) -> set `success=false`, `error` to the infra error message, skip to Step 9.
+1. Call `build_package` with the SRPM path from Step 5, `dist_git_branch`, and `jira_issue`.
+2. If the build **succeeds** -> proceed to Step 7.
+3. If the build **timed out** (`is_timeout` = true) -> proceed to Step 7 (treat as success).
+4. If the build returned an **infrastructure error** (`is_infra_error` = true, e.g. Copr API error, project setup failure) -> set `success=false`, `error` to the infra error message, skip to Step 11.
 5. If the build **fails** (not infra error):
    a. Decrement `attempts_remaining`.
-   b. If `attempts_remaining <= 0` -> set `success=false`, `error="Unable to successfully build the package in N attempts"`, skip to Step 9.
+   b. If `attempts_remaining <= 0` -> set `success=false`, `error="Unable to successfully build the package in N attempts"`, skip to Step 11.
    c. Set `build_error` to the build failure details.
-   d. Go back to **Step 2** to reset and retry the entire rebase with the build error as context.
+   d. Go back to **Step 4** to reset and retry the entire rebase with the build error as context.
 
 When analyzing build failures:
 1. Download all `*.log.gz` files returned in `artifacts_urls` (if any) using `download_artifacts`.
@@ -140,22 +176,22 @@ When analyzing build failures:
 4. Summarize the failure as the `build_error` for the retry.
 5. Remove the downloaded `*.log.gz` files after analysis.
 
-### Step 5: Update Release
+### Step 7: Update Release
 
-Bump the Release field in the spec file for `{{package}}` on branch `{{dist_git_branch}}`. This IS a rebase, so reset the release appropriately. If `abandon_autorelease` is true, use `<release_num>%{?dist}.<zstream_release>` instead of `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
+Bump the Release field in the spec file for `{{package}}` on branch `{{dist_git_branch}}`. This IS a rebase, so reset the release appropriately. If `abandon_autorelease` is true, use `<release_num>%{?dist}.<zstream_release>` instead of `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches. If `treat_maintenance_rhel_as_zstream` is true, use Z-stream release-bumping logic (checked against the internal RHEL branch) for CentOS Stream branches corresponding to a RHEL version in maintenance phase.
 
-If this fails, set `success=false` with the error and skip to Step 9.
+If this fails, set `success=false` with the error and skip to Step 11.
 
-### Step 6: Stage Changes
+### Step 8: Stage Changes
 
 1. Use the accumulated `all_files_to_git_add` list. If empty, fall back to `["{{package}}.spec"]`.
 2. Stage all files: `git add --all <file>` for each file in the list.
 
-If the changelog/log step has already been completed (from a previous iteration), skip to Step 8.
+If the changelog/log step has already been completed (from a previous iteration), skip to Step 10.
 
-If this fails, set `success=false` with the error and skip to Step 9.
+If this fails, set `success=false` with the error and skip to Step 11.
 
-### Step 7: Generate Changelog and Commit Message
+### Step 9: Generate Changelog and Commit Message
 
 1. Run `git diff --cached --stat` to see which files have been changed.
 2. Examine changes in each file individually: `git diff --cached -- <filename>` (do NOT run `git diff --cached` without a path — patch files can be very large).
@@ -165,11 +201,11 @@ If this fails, set `success=false` with the error and skip to Step 9.
 4. Generate a title for the commit message and merge request. It should be descriptive but no longer than 80 characters.
 5. Generate a description as a short paragraph for the commit message and merge request. Line length should not exceed 80 characters. Do NOT include `Resolves:` lines — JIRA references are appended separately.
 
-Save the `title` and `description` for Step 8.
+Save the `title` and `description` for Step 10.
 
-Then go back to **Step 6** to re-stage changes (the changelog was just modified).
+Then go back to **Step 8** to re-stage changes (the changelog was just modified).
 
-### Step 8: Commit, Push, and Open Merge Request
+### Step 10: Commit, Push, and Open Merge Request
 
 1. Construct the commit message:
    ```
@@ -188,11 +224,13 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
 
 3. Push the branch to the fork using `push_to_remote_repository` with `repository` = `fork_url`, `clone_path` = `local_clone`, `branch` = `update_branch`, `force` = true.
 
-4. Open a merge request using `open_merge_request` with:
-   - `fork_url`: from Step 2
+4. Construct the list of all resolved issues: `[{{jira_issue}}]` plus the `issue_key` from each entry in `consolidated_issues`.
+
+5. Open a merge request using `open_merge_request` with:
+   - `fork_url`: from Step 4
    - `dist_git_branch`: target branch
-   - `update_branch`: source branch from Step 2
-   - `mr_title`: the title from Step 7
+   - `update_branch`: source branch from Step 4
+   - `mr_title`: the title from Step 9
    - `mr_description`:
      ```
      <description>
@@ -202,9 +240,18 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
        - "Reasoning:" section with triage_summary (if set)
        - "Justification:" section with justification (if set)>
 
-     Jira: [{{jira_issue}}](https://redhat.atlassian.net/browse/{{jira_issue}})
+     <jira_links:
+       If only one resolved issue:
+         Jira: [{{jira_issue}}](https://redhat.atlassian.net/browse/{{jira_issue}})
+       If multiple resolved issues (primary + consolidated):
+         ### Resolved Jira Issues
+         - [ISSUE-1](https://redhat.atlassian.net/browse/ISSUE-1)
+         - [ISSUE-2](https://redhat.atlassian.net/browse/ISSUE-2)
+         ...>
 
-     <rebase_status from Step 3, wrapped in a collapsible <details> block titled "Rebase status">
+     <rebase_status from Step 5, wrapped in a collapsible <details> block titled "Rebase status">
+
+     <consolidation_summary (if set), wrapped in a collapsible <details> block titled "Consolidated issues">
 
      ---
 
@@ -219,6 +266,12 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
 
      You can check out the source branch from the fork and push your changes directly.
 
+     ## Retrigger Ymir
+
+     If you'd like Ymir to run again on this issue (e.g. after fixing the rules or resolving
+     a blocker), add the `ymir_todo` label to the Jira issue.
+     See the triggering docs for details.
+
      ## Customize Ymir's behavior for your package
 
      If there is anything that could be adjusted regarding Ymir's behavior
@@ -228,27 +281,50 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
 
      ## Questions or Issues?
 
-     **Contact:** redhat-ymir-agent@redhat.com | **Slack:** #forum-ymir-package-automation |
+     **Contact:** redhat-ymir-agent@redhat.com | **Slack Forum:** #forum-ymir-package-automation |
      **Report AI Issues:** Jira (project: Packit, component: jotnar) or GitHub
+
+     ### Feedback Welcome
+
+     If you have suggestions or complaints about the quality of this MR,
+     please reach out to us on the Slack forum
+     where your feedback will be more visible than pinging us on individual issues.
+     Your feedback helps us continuously improve Ymir's capabilities and
+     deliver better results.
      ```
    - `labels`: `["ymir_rebase"]` plus `["target::zstream"]` if the `fix_version` targets a z-stream (determined by checking if the dist-git branch needs a z-stream target label based on the fix version)
 
-5. If the MR already existed (was not newly created) and labels were provided, call `add_merge_request_labels` with `merge_request_url` and `labels` to ensure the labels are applied.
+6. If the MR already existed (was not newly created) and labels were provided, call `add_merge_request_labels` with `merge_request_url` and `labels` to ensure the labels are applied.
 
 Save `merge_request_url` and whether it was newly created.
 
-If this fails, set `success=false` with the error but continue to Step 9 (via Step 9a).
+If this fails, set `success=false` with the error but continue to Step 11.
 
-### Step 9: Comment in JIRA
+### Step 11: Comment in JIRA
 
 If `dry_run` is true, end the workflow.
 
-Otherwise, post a comment to `{{jira_issue}}` using `add_jira_comment`:
-- If the rebase **succeeded**: post the `merge_request_url` (or the rebase status if no MR was created).
-- If the rebase **failed**: post `"Agent failed to perform a rebase: <error>"`.
-- Error comments are only posted for user-triggered runs.
+**On success:**
 
-Format the comment as:
+Post the same comment to `{{jira_issue}}` and all `consolidated_issues` in parallel:
+- If `merge_request_url` is set, post it as the comment text.
+- Otherwise, post the rebase status.
+
+Handle per-issue failures gracefully — a single JIRA API failure should not prevent posting to other issues.
+
+**On failure:**
+
+1. Post the detailed error to the primary issue `{{jira_issue}}`:
+   - Comment text: `"Agent failed to perform a rebase: <error>"`
+   - Error comments are only posted for user-triggered runs.
+
+2. Post informational link comments to each consolidated sibling:
+   - Comment text: `"Consolidated rebase failed. See {{jira_issue}} for error details."`
+   - These are always posted (not gated on user-triggered), as they are informational links.
+
+Handle per-issue failures gracefully — a single JIRA API failure should not prevent posting to other issues.
+
+Format each comment as:
 ```
 Output from Ymir Rebase Agent:
 
@@ -287,10 +363,21 @@ To rebase package <PACKAGE> to version <VERSION> in dist-git branch <DIST_GIT_BR
    Release field to use `<release_num>%{?dist}.<zstream_release>` instead of
    `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
 
+   MAINTENANCE PHASE RHEL RELEASE BUMPING:
+   For CentOS Stream branches corresponding to a RHEL version in maintenance
+   phase (e.g. c8s), Release bumping uses a plain Y-Stream bump by default.
+   If the maintainer rules indicate a preference for Z-Stream release-bumping
+   logic (checked against the internal RHEL branch) on these branches
+   instead, set `treat_maintenance_rhel_as_zstream` to `true` in your output
+   JSON.
+
 1. Check if the current version is older than <VERSION>. To get the current version,
    you can use `rpmspec -q --queryformat "%{VERSION}\n" --srpm <PACKAGE>.spec`.
    To compare versions, use `rpmdev-vercmp`. If the current version is not older than <VERSION>,
-   rebasing doesn't make sense, so end the process with an error.
+   rebasing is not needed. In this case, return success=false with a status message explaining
+   that the package is already at the target version. Include in the error field guidance to
+   check if an existing build for this version exists and to add the issue to that build's
+   Errata if appropriate.
 
 2. Try to find past rebases in git history to see how this particular package does rebases.
    Keep in mind what parts of the spec file are usually changed. At the minimum a rebase should
@@ -399,6 +486,7 @@ The final output must be a JSON object:
     "srpm_path": "/absolute/path/to/generated.srpm",
     "merge_request_url": "https://gitlab.com/...",
     "abandon_autorelease": false,
+    "treat_maintenance_rhel_as_zstream": false,
     "error": null
 }
 ```
@@ -412,6 +500,7 @@ On failure:
     "srpm_path": null,
     "merge_request_url": null,
     "abandon_autorelease": false,
+    "treat_maintenance_rhel_as_zstream": false,
     "error": "Specific details about the error"
 }
 ```

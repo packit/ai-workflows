@@ -32,11 +32,15 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `get_testing_farm_request` — Get Testing Farm request status and results
 - `reproduce_testing_farm_request` — Reproduce a Testing Farm test run with a different build NVR
 
-**Other:**
+**MCP Tools (Other):**
+- `get_maintainer_rules` — Fetch maintainer-defined rules and guidelines (AGENTS.md) for a package from its rules repository at gitlab.com/redhat/centos-stream/rules/<package>
 - `analyze_ewa_testrun` — Analyze an EWA (Errata Workflow Automation) TCMS test run
 - `get_jira_attachment` — Download a JIRA issue attachment by filename
 - `read_logfile` — Read a Testing Farm log file
+- `read_readme` — Read README file from a git repository URL
 - `search_resultsdb` — Search ResultsDB for test results
+
+**Other:**
 - WebFetch for fetching web content (e.g., Testing Farm artifacts)
 
 ## Constants
@@ -186,9 +190,11 @@ This step handles issues where an erratum has been created.
 
 This step performs a thorough analysis of test results for the issue. You act as a testing analyst.
 
-**5.1. Fetch erratum data:**
+**5.1. Fetch erratum data and maintainer rules:**
 - Call `get_erratum` with `erratum_id` = the errata link from the issue, and `full` = true.
 - Save the full erratum data including comments.
+- Call `get_maintainer_rules` with `package` = the component name (from the issue's components).
+- Save the maintainer rules — these tell you whether tests for this component are started by NEWA or EWA, and contain other component-specific guidelines.
 
 **5.2. Check for previous baseline test analysis:**
 - Search through the issue comments (in reverse order) for a comment matching the pattern `".*failed tests with previous build (.*):"`.
@@ -196,10 +202,11 @@ This step performs a thorough analysis of test results for the issue. You act as
 - If not found, set `after_baseline` = false.
 
 **5.3. Determine test location info:**
-- The component's tests may be triggered by NEWA (New Errata Workflow Automation) or EWA (Errata Workflow Automation).
+- Use the maintainer rules fetched in 5.1 to determine whether the component's tests are triggered by NEWA (New Errata Workflow Automation) or EWA (Errata Workflow Automation).
 - NEWA posts comments to the erratum with links to JIRA issues containing test results.
 - EWA posts comments to the erratum with links to TCMS Test Runs.
-- If tests are supposed to be started by NEWA but no NEWA comments exist, the component may only use NEWA for RHEL10 — in that case, check TCMS test runs from EWA.
+- If the maintainer rules say that tests are started by NEWA, but there are no comments from NEWA providing links to JIRA issues, then this component may only use NEWA for RHEL10 and not earlier versions — in that case, you may read the results from the TCMS test run posted by EWA.
+- In all other cases, if the tests are supposed to be started by NEWA, ignore any comments with links to TCMS or Beaker.
 
 **5.4. Analyze test results:**
 

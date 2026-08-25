@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket, is_cs_branch
 from ymir.common.validators import AbsolutePath
 from ymir.tools.base import CloneableTool as Tool
+from ymir.tools.base import tool_error_context
 
 logger = logging.getLogger(__name__)
 
@@ -122,31 +123,32 @@ class DownloadSourcesTool(Tool[DownloadSourcesToolInput, ToolRunOptions, StringT
         if not sources_path.exists():
             return StringToolOutput(result="No sources file found, nothing to download")
 
-        try:
+        with tool_error_context("Failed to parse sources file", sources_path=str(sources_path)):
             sources = pyrpkg.sources.SourcesFile(str(sources_path), "bsd")
-        except (pyrpkg.errors.MalformedLineError, ValueError, OSError) as e:
-            raise ToolError(f"Failed to parse sources file: {e}") from e
 
         loop = asyncio.get_running_loop()
         resolved_dist_git = dist_git_path.resolve()
 
         async def download_entry(entry):
             outfile = (dist_git_path / entry.file).resolve()
-            try:
+            with tool_error_context(
+                f"Invalid source filename in sources file: {entry.file}",
+                outfile=str(outfile),
+            ):
                 relative_path = outfile.relative_to(resolved_dist_git)
                 if ".git" in relative_path.parts:
                     raise ValueError("Access to .git directory is forbidden")
-            except ValueError as e:
-                raise ToolError(f"Invalid source filename in sources file: {entry.file}") from e
-            try:
+            with tool_error_context(
+                f"Failed to download {entry.file}",
+                package=tool_input.package,
+                dist_git_branch=tool_input.dist_git_branch,
+            ):
                 await loop.run_in_executor(
                     None,
                     partial(
                         cache.download, qualified_name, entry.file, entry.hash, str(outfile), entry.hashtype
                     ),
                 )
-            except Exception as e:
-                raise ToolError(f"Failed to download {entry.file}: {e}") from e
 
         unique_entries = []
         seen_files: set[str] = set()
@@ -192,10 +194,8 @@ class UploadSourcesTool(Tool[UploadSourcesToolInput, ToolRunOptions, StringToolO
         if os.getenv("DRY_RUN", "False").lower() == "true":
             return StringToolOutput(result="Dry run, not uploading sources (this is expected, not an error)")
 
-        try:
+        with tool_error_context("Failed to initialize Kerberos ticket"):
             await init_kerberos_ticket()
-        except KerberosError as e:
-            raise ToolError(f"Failed to initialize Kerberos ticket: {e}") from e
 
         config = _get_config(tool_input.dist_git_branch)
         cache = _get_cache(config)
@@ -206,10 +206,8 @@ class UploadSourcesTool(Tool[UploadSourcesToolInput, ToolRunOptions, StringToolO
         if not sources_path.exists():
             sources_path.touch()
 
-        try:
+        with tool_error_context("Failed to parse sources file", sources_path=str(sources_path)):
             sources = pyrpkg.sources.SourcesFile(str(sources_path), "bsd")
-        except (pyrpkg.errors.MalformedLineError, ValueError, OSError) as e:
-            raise ToolError(f"Failed to parse sources file: {e}") from e
         sources.entries.clear()
 
         loop = asyncio.get_running_loop()
@@ -219,27 +217,34 @@ class UploadSourcesTool(Tool[UploadSourcesToolInput, ToolRunOptions, StringToolO
             if filename in new_filenames:
                 continue
             filepath = (dist_git_path / filename).resolve()
-            try:
+            with tool_error_context(
+                f"Invalid source file path: {filename}",
+                filepath=str(filepath),
+            ):
                 relative_path = filepath.relative_to(resolved_dist_git)
                 if ".git" in relative_path.parts:
                     raise ValueError("Access to .git directory is forbidden")
-            except ValueError as e:
-                raise ToolError(f"Invalid source file path: {filename}") from e
             if not filepath.is_file():
                 raise ToolError(f"Source file not found: {filepath}")
 
-            try:
+            with tool_error_context(
+                f"Failed to hash {filename}",
+                package=tool_input.package,
+                filepath=str(filepath),
+            ):
                 hash_value = await loop.run_in_executor(None, partial(cache.hash_file, str(filepath)))
-            except Exception as e:
-                raise ToolError(f"Failed to hash {filename}: {e}") from e
-            try:
-                await loop.run_in_executor(
-                    None, partial(cache.upload, qualified_name, str(filepath), hash_value)
-                )
-            except pyrpkg.errors.AlreadyUploadedError:
-                logger.info("%s is already present in lookaside cache", filename)
-            except Exception as e:
-                raise ToolError(f"Failed to upload {filename}: {e}") from e
+
+            with tool_error_context(
+                f"Failed to upload {filename}",
+                package=tool_input.package,
+                filepath=str(filepath),
+            ):
+                try:
+                    await loop.run_in_executor(
+                        None, partial(cache.upload, qualified_name, str(filepath), hash_value)
+                    )
+                except pyrpkg.errors.AlreadyUploadedError:
+                    logger.info("%s is already present in lookaside cache", filename)
 
             sources.add_entry(cache.hashtype, filename, hash_value)
             new_filenames.add(filename)

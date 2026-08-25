@@ -15,17 +15,47 @@ logger = logging.getLogger(__name__)
 
 
 @contextmanager
-def tool_error_context(error_message: str, **additional_context):
+def tool_error_context(
+    error_message: str,
+    include_exception_message_for: tuple[type[Exception], ...] = (),
+    **additional_context,
+):
+    """Context manager for unified tool error handling with observability.
+
+    Catches exceptions and wraps them as ToolErrorWithContext with a clean
+    LLM-facing message while preserving more specific details (exception type,
+    exception message and additional context) for logs and traces.
+
+    Args:
+        error_message: Clean error message shown to the LLM.
+        include_exception_message_for: Exception types whose exception messages
+            should be appended to the LLM-facing error_message.
+        **additional_context: Key-value pairs for observability, automatically
+            redacted for credentials.
+
+    Raises:
+        ToolErrorWithContext: Wraps any caught exception (except ToolErrorWithContext
+            which passes through unchanged) and adds provided additional context
+            for observability.
+    """
     try:
         yield
     except ToolErrorWithContext:
         raise
     except Exception as e:
+        if isinstance(e, include_exception_message_for):
+            error_message = f"{error_message}: {redact_credentials(str(e))}"
+
         additional_context["exception"] = f"{type(e).__name__}: {e}"
-        redacted_additional_context = {k: redact_credentials(str(v)) for k, v in additional_context.items()}
         raise ToolErrorWithContext(
-            error_message, cause=e, additional_context=redacted_additional_context
+            error_message,
+            cause=e,
+            additional_context=make_additional_context(**additional_context),
         ) from e
+
+
+def make_additional_context(**additional_context) -> dict[str, str]:
+    return {k: redact_credentials(str(v)) for k, v in additional_context.items()}
 
 
 class CloneableTool(Tool[TInput, TRunOptions, TOutput]):

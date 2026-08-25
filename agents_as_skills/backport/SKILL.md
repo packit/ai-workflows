@@ -19,6 +19,8 @@ You are a Red Hat Enterprise Linux developer performing an end-to-end backport o
 - `fix_version`: {{fix_version}}
 - `dry_run`: {{dry_run}}
 - `max_build_attempts`: {{max_build_attempts}}
+- `dist_git_namespace`: {{dist_git_namespace}}
+- `user_triggered`: {{user_triggered}}
 
 ## Tools
 
@@ -32,7 +34,6 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `push_to_remote_repository` — Push a branch to a remote repository
 - `open_merge_request` — Open a merge request against dist-git
 - `add_merge_request_labels` — Add labels to a merge request
-- `edit_jira_labels` — Edit labels on a JIRA issue (add/remove)
 - `add_jira_comment` — Post a comment to a JIRA issue
 - `get_maintainer_rules` — Get maintainer-specific rules and guidelines for a package
 - `build_package` — Build an SRPM and return results
@@ -40,6 +41,8 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `download_sources` — Download sources for a dist-git package
 - `get_patch_from_url` — Download patch content from a URL
 - `extract_log_snippets` — Extract representative log snippets from build logs using Drain3 clustering (if available)
+- `resolve_reviewers` — Resolve reviewer IDs for a package and branch (optional, used when reviewer assignment is enabled)
+- `set_merge_request_reviewers` — Set reviewers on a merge request (optional, used when reviewer assignment is enabled)
 
 **Local Tools (text, filesystem, git, specfile):**
 - `create` — Create new files
@@ -81,7 +84,7 @@ Determine `pkg_tool` from the branch: if `dist_git_branch` starts with `c` and e
 
 Parse `upstream_patches` into a list by splitting on commas.
 
-Initialize `attempts_remaining` to `max_build_attempts` (default 10). Initialize `build_error` as null. Initialize `abandon_autorelease` as false. Initialize `used_cherry_pick_workflow` as false. Initialize `incremental_fix_attempts` to 0. Initialize `max_incremental_fix_attempts` to `max_build_attempts`.
+Initialize `attempts_remaining` to `max_build_attempts` (default 10). Initialize `build_error` as null. Initialize `used_cherry_pick_workflow` as false. Initialize `incremental_fix_attempts` to 0. Initialize `max_incremental_fix_attempts` to `max_build_attempts`.
 
 Determine if this is an **older z-stream** branch: if `fix_version` is set and represents an older z-stream release, use z-stream-specific instructions (noted as **[Z-STREAM]** below where behavior differs).
 
@@ -95,11 +98,11 @@ If `dry_run` is true, skip this step.
 
 ### Step 2: Fork and Prepare Dist-Git
 
-1. Determine the namespace from the branch:
-   - If `dist_git_branch` starts with `c` and ends with `s` (e.g., `c10s`, `c9s`): namespace is `centos-stream`.
-   - Otherwise: namespace is `rhel`.
+1. Determine the namespace:
+   - If `{{dist_git_namespace}}` is provided, use it directly.
+   - Otherwise, determine from the branch: if `dist_git_branch` starts with `c` and ends with `s` (e.g., `c10s`, `c9s`), namespace is `centos-stream`; otherwise namespace is `rhel`.
 2. Fork the repository by calling `fork_repository` with `repository` = `https://gitlab.com/redhat/<namespace>/rpms/{{package}}`. Save the returned `fork_url`.
-3. If the namespace is `rhel` (not CentOS Stream), call `create_zstream_branch` with `package` = `{{package}}` and `branch` = `{{dist_git_branch}}` to ensure the branch exists.
+3. If the namespace is `rhel` (not CentOS Stream) and the branch is not a modular stream-* branch, call `create_zstream_branch` with `package` = `{{package}}` and `branch` = `{{dist_git_branch}}` to ensure the branch exists.
 4. Clone the repository by calling `clone_repository` with the repository URL and a local clone path. For older z-stream branches, omit the `branch` parameter and then checkout the branch manually with `git checkout {{dist_git_branch}}`. For other branches, pass `branch` = `{{dist_git_branch}}`. Save `local_clone`.
 5. Create a working branch: `git checkout -B automated-package-update-{{jira_issue}}` in `local_clone`. Save `update_branch` = `automated-package-update-{{jira_issue}}`.
 6. Download sources using `download_sources` with the dist-git path, package name, and branch.
@@ -131,9 +134,6 @@ The backport must produce:
 - `status`: detailed description of steps taken
 - `srpm_path`: absolute path to generated SRPM (if successful)
 - `error`: error message (if failed)
-- `abandon_autorelease`: boolean (true if maintainer rules say not to use %autorelease for z-streams)
-
-If the backport result has `abandon_autorelease` set to true, update the workflow-level `abandon_autorelease` flag.
 
 If the backport succeeds:
 - Save the status to `backport_log`.
@@ -179,7 +179,7 @@ This step is ONLY used when `used_cherry_pick_workflow` is true and the upstream
 
 ### Step 5: Update Release
 
-Bump the Release field in the spec file for `{{package}}` on branch `{{dist_git_branch}}`. This is NOT a rebase. If `abandon_autorelease` is true, use `<release_num>%{?dist}.<zstream_release>` instead of `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
+Bump the Release field in the spec file for `{{package}}` on branch `{{dist_git_branch}}`. This is NOT a rebase. The release-bumping configuration is fetched from the per-package rules repo (`ymir.yaml`) using `get_maintainer_rules`. The config controls whether to abandon `%autorelease` for z-stream branches and whether to use z-stream release-bumping logic for maintenance-phase CentOS Stream branches.
 
 If this fails, set `success=false` with the error and skip to Step 10.
 
@@ -205,6 +205,9 @@ If this fails, set `success=false` with the error and skip to Step 10.
 4. Add a new changelog entry to the spec file using `add_changelog_entry`. Examine the previous changelog entries and try to use the same style. The entry should contain:
    - A short summary of the user-facing changes (or reuse source changelog content if available)
    - A line referencing the JIRA issue: `- Resolves: {{jira_issue}}`
+   - Find the last changelog entry that was NOT authored by Ymir. If it contains a Resolves or Related line, include one using the same format. If it does not, do NOT add one.
+   - If reusing source changelog, keep descriptive lines exactly as-is — do not rephrase. Replace any Jira references that differ from `{{jira_issue}}`.
+   - Focus on user-facing changes only — do not mention technical packaging details.
 5. Generate a title for the commit message and merge request. It should be descriptive but no longer than 80 characters.
 6. Generate a description as a short paragraph for the commit message and merge request. Line length should not exceed 80 characters. Do NOT include `Resolves:` lines — JIRA references are appended separately.
 
@@ -314,9 +317,24 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
 
 5. If the MR already existed (was reused, not newly created), call `add_merge_request_labels` with the same labels to ensure they are set.
 
+6. If the MR was newly created, attempt to assign reviewers using `resolve_reviewers` and `set_merge_request_reviewers` (best-effort; log warnings but never fail).
+
 Save `merge_request_url` and whether it was newly created.
 
-If this fails, set `success=false` with the error but continue to Step 10.
+If this fails, set `success=false` with the error but continue to Step 9.
+
+### Step 9: Submit Consolidation Job
+
+Skip this step if any of the following are true:
+- No `merge_request_url` was created
+- The backport result was not successful
+- The MR was not newly created (it was reused from a prior attempt)
+
+Otherwise, attempt to submit a consolidation job for `{{package}}` on `{{dist_git_branch}}`. This checks whether the package's rules (ymir.yaml, fetched via `get_maintainer_rules`) have a consolidation section configured and, if so, submits a job to consolidate related MRs.
+
+- If the consolidation config is malformed, post a warning comment to `{{jira_issue}}` using `add_jira_comment`:
+  `"ymir.yaml for <package> has a malformed consolidation section: <error>. MR consolidation was skipped. Please fix the config file in the rules repository."`
+- If the submission fails for any other reason, log a warning but continue.
 
 ### Step 10: Comment in JIRA
 
@@ -325,7 +343,7 @@ If `dry_run` is true, end the workflow.
 Otherwise, post a comment to `{{jira_issue}}` using `add_jira_comment`:
 - If the backport **succeeded**: post the `merge_request_url` (or the backport status if no MR was created).
 - If the backport **failed**: post `"Agent failed to perform a backport: <error>"`.
-- Error comments are only posted on user-triggered runs. If the run was not user-triggered, skip posting error comments.
+- Error comments are only posted on user-triggered runs. If `user_triggered` is false, skip posting error comments.
 
 Format the comment as:
 ```
@@ -368,15 +386,8 @@ a backport that won't actually fix the shipped RPM.
    ignore any maintainer rules about these:
    build triggering (automatic after you finish),
    commit message footers (Jira/CVE references appended automatically),
+   release field updating,
    and MR creation/description.
-
-   ABANDON AUTORELEASE:
-   If the maintainer rules indicate that %autorelease should NOT be used for
-   Z-stream releases (e.g., the rules mention not using autorelease on zstreams,
-   preferring a numeric release counter, or similar guidance), set
-   `abandon_autorelease` to `true` in your output JSON. This will cause the
-   Release field to use `<release_num>%{?dist}.<zstream_release>` instead of
-   `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
 
    PATCH NAMING AND SPLITTING:
    Determine the patch file naming convention and the comment style above
@@ -735,15 +746,8 @@ a backport that won't actually fix the shipped RPM.
    ignore any maintainer rules about these:
    build triggering (automatic after you finish),
    commit message footers (Jira/CVE references appended automatically),
+   release field updating,
    and MR creation/description.
-
-   ABANDON AUTORELEASE:
-   If the maintainer rules indicate that %autorelease should NOT be used for
-   Z-stream releases (e.g., the rules mention not using autorelease on zstreams,
-   preferring a numeric release counter, or similar guidance), set
-   `abandon_autorelease` to `true` in your output JSON. This will cause the
-   Release field to use `<release_num>%{?dist}.<zstream_release>` instead of
-   `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
 
    PATCH NAMING AND SPLITTING:
    Determine the patch file naming convention using the following priority
@@ -1087,15 +1091,51 @@ The cherry-pick workflow succeeded but the build failed:
 CRITICAL CONSTRAINTS:
 - The upstream repository at <LOCAL_CLONE>-upstream has all your previous work intact.
   DO NOT clone it again. DO NOT reset to base commit.
-- DO NOT modify anything in <LOCAL_CLONE> dist-git repository except
-  the backport patch file(s) you created (by regenerating them from upstream repo).
+
+- Spec file modification rules:
+  IF maintainer rules explicitly allow adding BuildRequires/Requires for backport fixes:
+    You may add NEW BuildRequires/Requires entries to the spec file, and ONLY when:
+    * Adding BuildRequires: the build error shows missing headers/libraries/executables
+      that are DIRECTLY INTRODUCED by your backported patch (check the patch diff to confirm).
+      This includes compile-time headers, link-time libraries, and build/test-time executables
+      (e.g., "command not found" during %build or %check). The dependency must be available
+      in the target RHEL version's buildroot.
+    * Adding Requires: your backported patch introduces runtime dependencies on executables,
+      libraries, or modules that the installed package needs to function (e.g., the patch makes
+      the installed binary call a new executable, dlopen() a library, or import a Python module).
+      The dependency must be evident from the patch diff or from runtime test failures.
+      If a dependency is needed during %build or %check AND at runtime, add both BuildRequires
+      and Requires.
+
+    Do NOT modify or remove existing BuildRequires/Requires entries.
+
+    NEVER modify the spec for:
+    * Environmental issues (COPR vs RHEL builder differences like unbuffer/expect wrappers,
+      pipefail behavior, locale settings) — report success=false instead
+    * Pre-existing build issues unrelated to your patch
+    * Working around missing or too-old dependencies not yet in the buildroot
+    * Loosening/removing existing BuildRequires version constraints
+    * Any changes to %changelog, Release field, existing Patch tags, or patch ordering
+
+  IF maintainer rules do NOT explicitly allow it (or no rules exist):
+    NEVER modify the spec file — the build worked before your patches; fix the patches instead.
+    The build runs in COPR, not on official RHEL builders. COPR environments may have
+    differences (e.g. unbuffer/expect wrappers, pipefail behavior, locale settings) that
+    can cause spurious failures unrelated to your patches. If the failure is caused by the
+    build environment rather than by your code changes, report success=false and explain
+    the environmental issue — do not modify the spec to work around it.
+
+- DO NOT modify anything in <LOCAL_CLONE> dist-git repository except:
+  a. The backport patch file(s) you created (by regenerating them from upstream repo)
+  b. Adding new BuildRequires/Requires entries to the spec file (ONLY if maintainer
+     rules allow it, per above; do NOT modify or remove existing entries)
+
   Read the spec file to find the patch filenames you added — do NOT assume the name.
-- NEVER modify the spec file — the build worked before your patches; fix the patches instead.
-  The build runs in COPR, not on official RHEL builders. COPR environments may have
-  differences (e.g. unbuffer/expect wrappers, pipefail behavior, locale settings) that
-  can cause spurious failures unrelated to your patches. If the failure is caused by the
-  build environment rather than by your code changes, report success=false and explain
-  the environmental issue — do not modify the spec to work around it.
+
+- DO NOT commit any changes in <LOCAL_CLONE> dist-git repository during the fix attempt.
+  Keep all dist-git changes (patch files and spec edits) uncommitted until the build passes.
+  All your work is in <LOCAL_CLONE>-upstream, which you can commit to freely.
+
 - Fix BOTH compilation errors AND test failures. NEVER skip or disable tests.
 - Make ONE attempt — you will be called again if the build still fails.
 
@@ -1104,12 +1144,27 @@ previous fix attempts. Do NOT repeat strategies that already failed.
 
 WORKFLOW:
 
+0. Use the `get_maintainer_rules` tool with package <PACKAGE> to check whether
+   the maintainer explicitly allows adding new BuildRequires/Requires entries during
+   backport build fixes (see CRITICAL CONSTRAINTS above).
+   IMPORTANT: If the tool fails to fetch rules (returns an error, timeout, etc.), treat
+   this as "NOT allowed" — do NOT add any spec entries, fix patches only.
+
 1. Analyze the build error and identify what's missing (functions, types, headers, etc.)
 
-2. Explore <LOCAL_CLONE>-upstream to find solutions — use git log, git show, grep,
+2. If the build error indicates missing dependencies that are DIRECTLY INTRODUCED by your
+   backported patch AND maintainer rules (from step 0) explicitly allow it:
+   - For missing headers/libraries or "command not found" during %build/%check: add BuildRequires
+   - For executables/libraries/modules needed by the installed package at runtime: add Requires
+   - If needed during build (%build or %check) AND at runtime: add both BuildRequires and Requires
+   - Additions only — do NOT modify or remove existing entries
+   - See CRITICAL CONSTRAINTS and Criterion 2 for validation requirements
+   - Then proceed to step 6 to rebuild and verify
+
+3. Otherwise, explore <LOCAL_CLONE>-upstream to find solutions — use git log, git show, grep,
    and view files. The full upstream history is available.
 
-3. Fix the issue using one or both approaches:
+4. Fix the issue using one or both approaches:
    A. Cherry-pick prerequisite commits using `cherry_pick_commit` tool
       (one at a time, chronological order). Resolve conflicts with `str_replace`,
       then use `cherry_pick_continue`.
@@ -1122,12 +1177,12 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
 - If tests fail due to API changes: adapt test code to work with older APIs
 - NEVER skip or disable tests — fix them instead
 
-4. Regenerate the patch file(s) you created. Read the spec file to find the
+5. Regenerate the patch file(s) you created. Read the spec file to find the
    patch filenames you added, then regenerate them using `git_patch_create` tool with:
    - repository_path: <LOCAL_CLONE>-upstream
    - patch_file_path: the path to each patch file in <LOCAL_CLONE>/
 
-5. Test the build:
+6. Test the build:
    - Use the `run_package_prep` tool to verify patches apply cleanly
    - Use the `build_srpm` tool to generate a SRPM
    - Call `build_package` with the SRPM path, dist_git_branch, and jira_issue
@@ -1136,12 +1191,14 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
      (or `root.log` if unavailable) to extract the most relevant snippets
      and identify the new error
 
-6. Append a summary to <LOCAL_CLONE>-upstream/build-logs/fix-attempts.md documenting:
+7. Append a summary to <LOCAL_CLONE>-upstream/build-logs/fix-attempts.md documenting:
    - What you identified as the root cause
    - Which commits you cherry-picked or what manual edits you made
+   - Any BuildRequires or Requires additions to the spec file (if maintainer rules allowed
+     adding new entries), including what was added and why
    - The build result (pass/fail and error if applicable)
 
-7. Self-Review: Before reporting a result, verify your work meets all criteria
+8. Self-Review: Before reporting a result, verify your work meets all criteria
    below. Run `git diff HEAD -- *.spec` in <LOCAL_CLONE> to inspect what
    changed in the spec file.
 
@@ -1150,21 +1207,56 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
    changes that address the build failure. A patch that only modifies whitespace
    or comments does not pass.
 
-   Criterion 2 — Spec file not modified:
-   From the git diff output, verify the spec file was NOT modified. The spec
-   already has the correct `Patch:` tags from the original backport — your job
-   is to fix the patches, not the spec. If the diff shows any spec changes,
-   this criterion fails.
+   Criterion 2 — Spec file modifications are justified:
+   Run `git diff HEAD -- *.spec` in <LOCAL_CLONE> to inspect spec changes.
+
+   Check maintainer rules (from the `get_maintainer_rules` call earlier):
+
+   IF maintainer rules do NOT explicitly allow spec modifications for backport fixes:
+     Verify the spec file was NOT modified. If the diff shows any spec changes,
+     this criterion fails.
+
+   IF maintainer rules explicitly allow adding BuildRequires/Requires for backport fixes:
+     If there are NO spec changes: criterion passes.
+
+     If there ARE spec changes, verify ALL of the following:
+     a. Changes are ONLY to BuildRequires or Requires sections (not %changelog,
+        Release, existing Patch tags, %prep, or any other section)
+     b. The diff shows ONLY added lines (starting with +) introducing new
+        BuildRequires or Requires entries. If the diff contains ANY removed lines
+        (starting with -) or modified lines affecting existing BuildRequires or
+        Requires entries, this criterion fails.
+     c. Each added dependency is justified:
+        For BuildRequires additions:
+        - Appears in the build error (missing header, undefined reference, "command not found"
+          during %build/%check, etc.)
+        - Is used by code in your backported patch (verify by reading the patch)
+        - Is not a workaround for COPR environmental differences
+        For Requires additions:
+        - Is introduced by your backported patch (installed binary calls a new executable,
+          dlopen()s a library, imports a Python module, etc.)
+        - Evidence comes from the patch diff or runtime test failures
+        - Is not a workaround for COPR environmental differences
+        For both BuildRequires and Requires on the same package:
+        - Justified when the dependency is needed during build (%build or %check) AND by the
+          installed package at runtime
+     d. The dependency is legitimately new (not pre-existing in the older version)
+
+     If all sub-criteria pass: this criterion passes.
+     If any fail: this criterion fails.
 
    Criterion 3 — No unrelated changes:
-   From the git diff output, verify your changes are limited to the patch
-   file(s) listed in step 4. No other files in <LOCAL_CLONE> should be
-   modified. Also verify that no tests were silently disabled, commented out,
-   or skipped in the regenerated patches unless the build error explicitly
-   required it.
+   From the git diff output, verify your changes are limited to:
+   - The patch file(s) listed in step 5
+   - The spec file (ONLY if maintainer rules allow it AND Criterion 2 passes)
+
+   No other files in <LOCAL_CLONE> should be modified.
+
+   Also verify that no tests were silently disabled, commented out, or skipped
+   in the regenerated patches unless the build error explicitly required it.
 
    Criterion 4 — Completeness:
-   Verify the SRPM generated in step 5 exists on disk. Use the path returned
+   Verify the SRPM generated in step 6 exists on disk. Use the path returned
    by the `build_srpm` tool, and run:
    `test -f "<path-to-srpm>" && echo exists || echo missing`
 
@@ -1172,17 +1264,40 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
    Verify each patch filename matches the original name from the spec file.
    Do not rename patch files.
 
+   Criterion 6 — Changes match intent:
+   Review each hunk in the regenerated patch file(s) AND any spec file changes
+   (if maintainer rules allow spec modifications).
+
+   For patch files: Every changed line must be directly needed to fix the build
+   error or to backport the upstream fix.
+
+   For spec file changes (if allowed by maintainer rules): Only BuildRequires/Requires
+   additions that directly correspond to dependencies introduced by your backported
+   code (verified in Criterion 2).
+
+   Changes that do NOT pass:
+   - Addressing pre-existing issues unrelated to your patch
+   - Loosening or removing existing BuildRequires/Requires version constraints
+   - Reformatting code you did not touch
+   - Working around buildroot limitations (dependency not available or too old)
+
+   If the build failure is caused by something unrelated to the patch content
+   (e.g. COPR environment, dependency version not yet available), report
+   success=false and explain the issue instead of working around it.
+
    If ALL criteria pass, report success as normal.
 
    If ANY criterion fails, attempt to fix the problem before reporting failure:
-   - Criterion 1 or 3 (bad patch content or disabled tests): return to step 3
-     and re-fix the issue, then regenerate patches (step 4) and rebuild (step 5).
+   - Criterion 1, 3, or 6 (bad patch content, disabled tests, or unrelated
+     changes): return to step 4 and re-fix the issue, then regenerate patches
+     (step 5) and rebuild (step 6). For criterion 6, revert unrelated hunks
+     from <LOCAL_CLONE>-upstream before regenerating.
    - Criterion 2 (spec modified): revert the spec with
      `git checkout HEAD -- *.spec` in <LOCAL_CLONE>, verify the revert with
-     `git diff HEAD -- *.spec`, then rebuild (step 5).
-   - Criterion 4 (SRPM missing): re-run `build_srpm` (step 5).
+     `git diff HEAD -- *.spec`, then rebuild (step 6).
+   - Criterion 4 (SRPM missing): re-run `build_srpm` (step 6).
    - Criterion 5 (wrong patch name): rename the file to match the spec, then
-     rebuild (step 5).
+     rebuild (step 6).
 
    After fixing, re-run this self-review before reporting.
 
@@ -1198,6 +1313,8 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
 Report success=true with SRPM path if build passes.
 Report success=false with the extracted error if build fails or you can't find a fix.
 
+Unpacked upstream sources are in <UNPACKED_SOURCES>.
+
 ---
 
 ## Output Schema
@@ -1210,7 +1327,6 @@ The final output must be a JSON object:
     "status": "Detailed description of backport steps taken",
     "srpm_path": "/absolute/path/to/generated.srpm",
     "merge_request_url": "https://gitlab.com/...",
-    "abandon_autorelease": false,
     "error": null
 }
 ```
@@ -1223,7 +1339,6 @@ On failure:
     "status": "",
     "srpm_path": null,
     "merge_request_url": null,
-    "abandon_autorelease": false,
     "error": "Specific details about the error"
 }
 ```

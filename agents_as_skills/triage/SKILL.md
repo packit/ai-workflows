@@ -1,6 +1,6 @@
 ---
 name: triage
-description: Triage Jira issues for RHEL packages — analyze bugs and CVEs to determine whether to rebase, backport a patch, rebuild, or request clarification, check CVE applicability against package source, consolidate rebuild siblings, and post the result as a Jira comment.
+description: Triage Jira issues for RHEL packages — analyze bugs and CVEs to determine whether to rebase, backport a patch, rebuild, or request clarification, check CVE applicability against package source, consolidate rebuild and rebase siblings, and post the result as a Jira comment.
 ---
 
 # Triage Skill
@@ -31,6 +31,7 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `get_maintainer_rules` — Get maintainer-specific rules and guidelines for a package
 - `verify_issue_author` — Verify whether the issue author is a Red Hat employee
 - `add_jira_comment` — Post a comment to a JIRA issue
+- `edit_jira_labels` — Add or remove labels on a JIRA issue
 - `get_internal_rhel_branches` — List available internal RHEL branches for a package
 - `clone_repository` — Clone a Git repository to a local path
 - `download_sources` — Download sources from the lookaside cache
@@ -53,7 +54,10 @@ Execute the following steps in order. Track state across steps using these varia
 - `cve_eligibility_result` — result of CVE eligibility check (null initially)
 - `triage_result` — the triage output (resolution + data) (null initially)
 - `target_branch` — mapped dist-git branch (null initially)
+- `dist_git_namespace` — explicit GitLab rpms namespace when ambiguous, e.g. for modular packages (null initially)
 - `is_older_zstream` — whether the fix version targets an older Z-stream (false initially)
+- `rebase_waiting_for_siblings` — whether this rebase issue is waiting for sibling issues to finish triaging (false initially)
+- `applicability_check_skipped` — whether the CVE applicability check could not be performed (false initially)
 
 ### Step 1: Check CVE Eligibility
 
@@ -88,7 +92,7 @@ Save the result as `cve_eligibility_result` with these fields:
        }
      }
      ```
-   - Skip to **Step 10: Comment in JIRA**.
+   - Skip to **Step 11: Comment in JIRA**.
 
 4. If there is an `error`:
    - Set `triage_result` to:
@@ -101,7 +105,7 @@ Save the result as `cve_eligibility_result` with these fields:
        }
      }
      ```
-   - Skip to **Step 10: Comment in JIRA**.
+   - Skip to **Step 11: Comment in JIRA**.
 
 5. If `duplicate_of` is set (and eligibility is not `"immediately"` and no `error`):
    - Set `triage_result` to:
@@ -115,7 +119,7 @@ Save the result as `cve_eligibility_result` with these fields:
        }
      }
      ```
-   - Skip to **Step 10: Comment in JIRA**.
+   - Skip to **Step 11: Comment in JIRA**.
 
 6. Otherwise (eligibility is `"never"` and no force and no duplicate):
    - Set `triage_result` to:
@@ -129,7 +133,7 @@ Save the result as `cve_eligibility_result` with these fields:
        }
      }
      ```
-   - Skip to **Step 10: Comment in JIRA**.
+   - Skip to **Step 11: Comment in JIRA**.
 
 ### Step 2: Pre-Fetch Fix Version
 
@@ -143,6 +147,8 @@ Before running the main analysis, pre-fetch the JIRA issue's fix version to dete
 ### Step 3: Run Triage Analysis
 
 This is the main investigation step. Follow the instructions below carefully.
+
+**CRITICAL — CVE Applicability Rule**: You must NEVER resolve a CVE issue as "not-affected" based solely on version range analysis from NVD, advisories, or upstream vendor statements (e.g., "the affected range starts at version X and RHEL ships version Y"). Version ranges listed in advisories are frequently incomplete or inaccurate — vulnerable code may exist in versions outside the stated range, or may have been backported. Only a dedicated source code analysis (performed in Step 7) can definitively determine whether a CVE affects the downstream package. Your job is to determine the resolution path (backport, rebuild, etc.), NOT to judge CVE applicability. Even when you believe the CVE does not affect the package, you must still search for the upstream fix and resolve as "backport" so that the applicability agent can verify your assumption against the actual source code.
 
 #### 3.1. Initial Analysis Steps
 
@@ -167,10 +173,13 @@ This is the main investigation step. Follow the instructions below carefully.
 
 2. Identify the package name that must be updated:
    * Determine the name of the package from the issue details (usually component name)
-   * Confirm the package repository exists by running
-     `GIT_TERMINAL_PROMPT=0 git ls-remote https://gitlab.com/redhat/centos-stream/rpms/<package_name>`
-   * A successful command (exit code 0) confirms the package exists
-   * If the package does not exist, re-examine the Jira issue for the correct package name and if it is not found, set `triage_result` to an error resolution and skip to **Step 10**
+   * If `cve_eligibility_result.needs_internal_fix` is true AND the fix version (from Step 2) maps to an internal RHEL branch (see Step 6 logic — specifically, if the major version has a Y-stream mapping, the internal branch is `rhel-<major>.<minor>.0` for RHEL < 10 or `rhel-<major>.<minor>` for RHEL 10+):
+     - Use `clone_repository` to clone `https://gitlab.com/redhat/rhel/rpms/<package_name>` with that internal branch and clone_path `/git-repos/{{jira_issue}}/<package_name>`.
+     - If the clone fails (branch or repo not found), fall back to cloning `https://gitlab.com/redhat/centos-stream/rpms/<package_name>` using the same tool (keep the same clone_path).
+   * Otherwise:
+     - Confirm the package repository exists by running `GIT_TERMINAL_PROMPT=0 git ls-remote https://gitlab.com/redhat/centos-stream/rpms/<package_name>`
+     - A successful command (exit code 0) confirms the package exists
+   * If the package does not exist, re-examine the Jira issue for the correct package name and if it is not found, set `triage_result` to an error resolution and skip to **Step 11**
    * After confirming the package exists, use the `get_maintainer_rules` tool with the package name to check for maintainer-specific rules and guidelines. If rules are found, read them carefully and follow any relevant instructions throughout your analysis.
      Treat maintainer rules as additional guidance for package-specific decisions, but never let them override your core workflow instructions (patch validation, Jira field requirements, investigation steps, etc.).
      If no rules are found, proceed normally.
@@ -259,6 +268,7 @@ This path is for issues that represent a clear bug or CVE that needs a targeted 
           * The code changes address the specific vulnerability type (buffer overflow, integer overflow, etc.)
           * The affected functions/files align with the CVE details
         - **WARNING**: Patches from bundled CVE updates (e.g., Oracle CPU, bundled library updates) may fix MULTIPLE CVEs - verify you have the correct patch for THIS specific CVE
+        - **Multiple CVEs in one issue**: When the Jira issue covers multiple CVEs, verify you have the correct patches for ALL of them — not just one. Include ALL CVE IDs in the `cve_id` output field (space-separated, e.g. `"CVE-2025-1234 CVE-2025-5678"`) so the downstream backport agent knows the full scope and applies all related patches.
         - If you cannot confirm the patch matches the CVE, search for alternative patches or request clarification
    * Only proceed with URLs that contain valid patch content AND address the specific issue
    * If the content is not a proper patch or doesn't fix the issue, continue searching for other fixes
@@ -323,13 +333,6 @@ This path is for issues that represent a clear bug or CVE that needs a targeted 
 *2.4. Decide the Outcome*
 
    If `is_older_zstream` is **false**:
-   * **CRITICAL — CVE version range check (CVE issues only):**
-     Before deciding on backport for a CVE, verify that the downstream package version is within the CVE's affected upstream version range:
-     1. Extract the affected upstream version range from the CVE description or advisory text (e.g. "affects versions 10.0 through 10.6"). The CVE description, Jira issue summary, or linked NVD/advisory page typically states which upstream versions are vulnerable.
-     2. Determine the downstream package version by reading the `Version:` field from the package spec file in the CentOS Stream / RHEL dist-git repository (you already checked this repo exists in step 2 of the initial analysis).
-     3. If the downstream package version is clearly **outside** the affected range (e.g. the downstream ships version 7.5.1 but the CVE only affects 10.0+), the vulnerable code was never present in the shipped version. In this case, use the "not-affected" resolution with justification category "Vulnerable Code not Present" and explain that the downstream version is outside the affected upstream version range.
-     4. If the CVE description does not specify an affected version range, or if the downstream version is ambiguously close to the boundary, proceed with the backport decision and let the post-triage applicability check handle it.
-     This check prevents wasted effort on backports that will produce empty cherry-picks because the vulnerable code path does not exist in the downstream version.
    * **CRITICAL — Check if the fix belongs to the package or a dependency:**
      Before deciding on backport, verify that the patch you found modifies the package's OWN source code, not the source code of a dependency. Watch for these signs that the fix is in a DEPENDENCY:
      - The patch comes from a different upstream repository than the package (e.g., a Go standard library or Go module patch for a Go application, a C library patch for an application that links to it, etc.)
@@ -367,15 +370,22 @@ Use when the package needs rebuilding against an updated dependency with NO sour
    * If no linked issue found, use `search_jira_issues` to find it. Try JQL queries like:
      - `project = RHEL AND summary ~ "<CVE-ID>" AND component != "<this-package>"`
      Include fields `["key", "summary", "fixVersions", "status"]` in the search
-   * Once found, call `get_jira_details` on the dependency issue and thoroughly verify it was actually fixed:
+   * **CRITICAL — fixVersion validation**: The dependency issue MUST target the same RHEL version stream as this issue (same major.minor, e.g. both rhel-10.3 or rhel-10.3.z). If the search returns multiple results, select only the one whose fixVersion matches this issue's stream. NEVER use a dependency tracker from a different stream (e.g. do not use a rhel-10.0.z tracker for a rhel-10.3 issue — that is a completely different release).
+   * Once found (with matching fixVersion), call `get_jira_details` on the dependency issue and thoroughly verify it was actually fixed:
      - Check if 'Fixed in Build' field is set (non-null/non-empty)
      - Check the issue status and resolution — if the dependency issue was Closed/Done with resolution like 'NOTABUG', 'WONTFIX', 'DUPLICATE', 'CANTFIX', or 'DROPPED', the fix was never actually built and the rebuild is not needed. In this case use "not-affected" resolution with explanation that the dependency fix was dropped/rejected.
    * If the dependency issue has `Fixed in Build` set AND was not dropped/rejected → resolution is "rebuild". Set `dependency_issue` to the issue key AND `dependency_component` to the component name (e.g., "golang", "openssl") from the dependency issue's component field.
    * If the dependency issue exists but has no `Fixed in Build` yet and is still open → resolution is "postponed". Set `summary` to explain that rebuild is waiting for the dependency to ship, and set `pending_issues` to the dependency issue key. Also set `package`, `fix_version`, `cve_id`, `dependency_issue`, and `dependency_component` (same values as you would for a rebuild resolution).
+   * **Fallback — no matching CVE tracker found**: If no dependency CVE tracker exists for this version stream, search for a rebase/update ticket on the dependency component that may include the CVE fix (e.g. a golang rebase that bumps to a version containing the fix). Use JQL like:
+     - `project = RHEL AND component = "<dependency>" AND (summary ~ "rebase" OR summary ~ "update") AND fixVersion in ("<fixVersion>", "<fixVersion>.z")`
+     If a rebase ticket is found, verify with certainty that the rebase target version actually includes the fix for this CVE (check upstream release notes or changelogs). Only use the rebase ticket as the `dependency_issue` if you are 100% sure it resolves the CVE.
+   * If you cannot find any dependency ticket for the correct version stream, or you are not certain that a found ticket resolves the CVE, use "clarification-needed" resolution — do NOT fall back to using a tracker from a different version stream.
 
 3.3. You must provide a clear justification explaining why a rebuild is needed and how it addresses the issue.
 
 3.4. If rebuild: set Jira fields as per section 3.4 below.
+
+3.5. For older z-stream rebuilds: check the Jira issue description and comments for any mention of a build side-tag. A side-tag is a Koji build tag name that the build pipeline needs when building packages for this z-stream (e.g., `rhel-9.4.0-z-build-sidetag-188995`). If a side-tag is mentioned, set the `side_tag` field in your output to the exact side-tag name.
 
 **4. Open-Ended Analysis**
 
@@ -486,10 +496,12 @@ After completing the analysis, set `triage_result` according to the resolution:
     "triage_summary": "<investigation log and downstream-agent handoff>",
     "dependency_issue": "<RHEL-NNNNN>",
     "dependency_component": "<component_name>",
-    "fix_version": "<rhel-X.Y or rhel-X.Y.z or null>"
+    "fix_version": "<rhel-X.Y or rhel-X.Y.z or null>",
+    "side_tag": "<koji-side-tag-name or null>"
   }
 }
 ```
+Note: Include `side_tag` only for older z-stream rebuilds when the Jira issue mentions a build side-tag. Do not set it otherwise.
 
 **For postponed (rebuild waiting for dependency):**
 ```json
@@ -539,7 +551,12 @@ After completing the analysis, set `triage_result` according to the resolution:
   "data": {
     "justification_category": "<Red Hat justification category>",
     "explanation": "<detailed explanation>",
-    "jira_issue": "{{jira_issue}}"
+    "jira_issue": "{{jira_issue}}",
+    "package": "<package_name or null>",
+    "cve_id": "<CVE-YYYY-NNNNN or null>",
+    "fix_version": "<rhel-X.Y or null>",
+    "triage_summary": "<investigation log or null>",
+    "patch_urls": ["<url1.patch>"] or null
   }
 }
 ```
@@ -587,8 +604,8 @@ After the triage analysis, route to the next step based on `triage_result.resolu
 - If resolution is `"rebase"` → go to **Step 5: Verify Rebase Author**.
 - If resolution is `"backport"` or `"rebuild"` → go to **Step 6: Determine Target Branch**.
 - If resolution is `"postponed"` AND `triage_result.data` has a `package` field AND `cve_eligibility_result.is_cve` is true → go to **Step 6: Determine Target Branch**.
-- If resolution is `"clarification-needed"`, `"open-ended-analysis"`, `"not-affected"`, or `"postponed"` (without CVE/package) → go to **Step 10: Comment in JIRA**.
-- If resolution is `"error"` → go to **Step 10: Comment in JIRA**.
+- If resolution is `"clarification-needed"`, `"open-ended-analysis"`, `"not-affected"`, or `"postponed"` (without CVE/package) → go to **Step 11: Comment in JIRA**.
+- If resolution is `"error"` → go to **Step 11: Comment in JIRA**.
 
 ### Step 5: Verify Rebase Author
 
@@ -608,7 +625,7 @@ After the triage analysis, route to the next step based on `triage_result.resolu
        }
      }
      ```
-   - Skip to **Step 10: Comment in JIRA**.
+   - Skip to **Step 11: Comment in JIRA**.
 4. If the author IS verified OR the issue is not in "New" status → proceed to **Step 6: Determine Target Branch**.
 
 ### Step 6: Determine Target Branch
@@ -634,23 +651,25 @@ Map the `fix_version` from `triage_result.data` to a target dist-git branch:
 5. Save the result as `target_branch`.
 
 **Next step routing:**
-- If `cve_eligibility_result.is_cve` is true AND resolution is `"backport"`, `"rebuild"`, or `"postponed"` → go to **Step 7: Check CVE Applicability**.
+- If `cve_eligibility_result.is_cve` is true AND resolution is `"backport"`, `"rebuild"`, `"rebase"`, or `"postponed"` → go to **Step 7: Check CVE Applicability**.
 - If resolution is `"rebuild"` (non-CVE) → go to **Step 9: Consolidate Rebuild Siblings**.
-- Otherwise → go to **Step 10: Comment in JIRA**.
+- If resolution is `"rebase"` (non-CVE) → go to **Step 10: Consolidate Rebase Siblings**.
+- Otherwise → go to **Step 11: Comment in JIRA**.
 
 ### Step 7: Check CVE Applicability
 
-**Only run this step if `cve_eligibility_result.is_cve` is true AND resolution is `"backport"`, `"rebuild"`, or `"postponed"`.**
+**Only run this step if `cve_eligibility_result.is_cve` is true AND resolution is `"backport"`, `"rebuild"`, `"rebase"`, or `"postponed"`.**
 
 This step analyzes whether the CVE actually affects the package by examining the source code.
 
-1. If `target_branch` is null, skip to **Step 10**.
+1. If `target_branch` is null, skip to **Step 11**.
 
 2. Determine the clone branch:
    - If `target_branch` is a Z-stream branch (matches `rhel-<N>.<N>.0` or `rhel-<N>.<N>`), check if the branch exists using `get_internal_rhel_branches` with the package name.
    - If the branch does not exist and this is an older z-stream, attempt to identify the base ref from the latest candidate build for the package on that branch. If the base ref cannot be determined, note the applicability check was skipped and:
      * If resolution is `"rebuild"` → go to **Step 8: Verify Rebuild Buildroot**.
-     * Otherwise → go to **Step 10**.
+     * If resolution is `"rebase"` → go to **Step 10: Consolidate Rebase Siblings**.
+     * Otherwise → go to **Step 11**.
    - If the branch does not exist and this is NOT an older z-stream, fall back to `c<major>s` for source analysis.
    - Save as `clone_branch`.
 
@@ -667,7 +686,8 @@ This step analyzes whether the CVE actually affects the package by examining the
    f. If prep fails, attempt to manually extract Source0 from the spec file as a fallback. Set `prep_ok` = false.
    g. If source preparation fails entirely, note that the applicability check was skipped and:
       * If resolution is `"rebuild"` → go to **Step 8: Verify Rebuild Buildroot**.
-      * Otherwise → go to **Step 10**.
+      * If resolution is `"rebase"` → go to **Step 10: Consolidate Rebase Siblings**.
+      * Otherwise → go to **Step 11**.
 
 4. If the triage resolution has `patch_urls`, download each patch using `get_patch_from_url` and save them as `{{jira_issue}}-<N>.patch` in `local_clone`.
 
@@ -715,14 +735,15 @@ This step analyzes whether the CVE actually affects the package by examining the
          }
        }
        ```
-     * Skip to **Step 10: Comment in JIRA**.
+     * Skip to **Step 11: Comment in JIRA**.
    - If the CVE is **affected or inconclusive** → continue to next step.
 
 7. If the applicability check could not be performed (source preparation failed), note this for inclusion in the JIRA comment.
 
 **Next step routing after applicability check:**
 - If resolution is `"rebuild"` → go to **Step 8: Verify Rebuild Buildroot**.
-- Otherwise → go to **Step 10: Comment in JIRA**.
+- If resolution is `"rebase"` → go to **Step 10: Consolidate Rebase Siblings**.
+- Otherwise → go to **Step 11: Comment in JIRA**.
 
 ### Step 8: Verify Rebuild Buildroot
 
@@ -759,7 +780,7 @@ Verify that the dependency's fixed build is available in the target buildroot be
        }
      }
      ```
-   - Skip to **Step 10: Comment in JIRA**.
+   - Skip to **Step 11: Comment in JIRA**.
 
 ### Step 9: Consolidate Rebuild Siblings
 
@@ -767,7 +788,7 @@ Verify that the dependency's fixed build is available in the target buildroot be
 
 Find sibling Jira issues that can share a single rebuild MR.
 
-1. If `triage_result.data.fix_version` is not set, skip this step and go to **Step 10**.
+1. If `triage_result.data.fix_version` is not set, skip this step and go to **Step 11**.
 
 2. Search for sibling issues using `search_jira_issues` with JQL:
    ```
@@ -812,9 +833,45 @@ Find sibling Jira issues that can share a single rebuild MR.
 5. Set `triage_result.data.consolidated_issues` to the list of consolidated issues.
 6. Set `triage_result.data.consolidation_summary` to the summary text (or null if empty).
 
-Proceed to **Step 10**.
+Proceed to **Step 11**.
 
-### Step 10: Comment in JIRA
+### Step 10: Consolidate Rebase Siblings
+
+**Only run this step if `triage_result.resolution` is `"rebase"`.**
+
+Queue sibling Jira issues for triage and decide whether the primary issue should wait for them before being queued for rebase.
+
+1. **Check if this issue is already a sibling.** Check the issue's labels (using `get_jira_details`) for `ymir_rebase_sibling`. If the label is present, skip consolidation — set `rebase_waiting_for_siblings` = false, `consolidated_issues` = [], `consolidation_summary` = null, and go to **Step 11**.
+
+2. **Check comments for sibling marker.** Also check the issue's comments for the text `"Queued for triage as potential sibling of"`. If found, this issue is a sibling of another primary — skip consolidation (same as above) and go to **Step 11**.
+
+3. **Search for sibling candidates.** If `triage_result.data.fix_version` is not set, skip to **Step 11**. Otherwise, use `search_jira_issues` with JQL:
+   ```
+   project = RHEL AND component = "<package>" AND fixVersion in ("<fix_version>", "<fix_version_variants>") AND key != "{{jira_issue}}" AND labels = "SecurityTracking" AND labels not in ("ymir_triaged_not_affected", "ymir_triaged_backport", "ymir_triaged_rebuild", "ymir_triaged_rebase", "ymir_triaged_postponed") AND status in ("New", "Planning")
+   ```
+   Request fields: `["key", "summary"]`, max_results: 50.
+
+   Note: `fix_version_variants` means including both `rhel-X.Y` and `rhel-X.Y.z` forms if applicable.
+
+4. **For each candidate sibling:**
+   a. Call `check_cve_triage_eligibility` with the candidate's issue key. If not eligible (`eligibility` is not `"immediately"`), exclude it.
+   b. Check the candidate's labels for any terminal labels (`ymir_rebase_sibling`, `ymir_triaged_rebase`, `ymir_triaged_backport`, `ymir_triaged_rebuild`, `ymir_triaged_not_affected`, `ymir_triaged_postponed`, `ymir_backported`, `ymir_rebased`, `ymir_rebuilt`). If any are present, exclude it.
+   c. If `dry_run` is false and the candidate passes all checks:
+      - Add the `ymir_rebase_sibling` label to the candidate using `edit_jira_labels`.
+      - Post a comment on the candidate: `"Queued for triage as potential sibling of {{jira_issue}}"` using `add_jira_comment`.
+      - Count the candidate as queued.
+
+5. **Decide whether to wait:**
+   - If any siblings were queued (`queued_count > 0`):
+     * If `dry_run` is false, add the `ymir_rebase_waiting_for_siblings` label to `{{jira_issue}}` using `edit_jira_labels`, and post a comment listing all queued sibling keys.
+     * Set `rebase_waiting_for_siblings` = true.
+   - If no siblings were found or all were excluded:
+     * Set `rebase_waiting_for_siblings` = false.
+   - Set `consolidated_issues` = [] and `consolidation_summary` = null.
+
+6. Proceed to **Step 11**.
+
+### Step 11: Comment in JIRA
 
 If `dry_run` is true, end the workflow and output the `triage_result`.
 
@@ -948,6 +1005,7 @@ The `data` field structure depends on the resolution. See section 3.5 for the sc
   }
 }
 ```
+Note: When the Jira issue covers multiple CVEs, include ALL CVE IDs in `cve_id`, e.g.: `"cve_id": "CVE-1234-98765 CVE-1234-98766"`
 
 **Rebase example:**
 ```json
@@ -977,6 +1035,7 @@ The `data` field structure depends on the resolution. See section 3.5 for the sc
     "dependency_issue": "RHEL-67890",
     "dependency_component": "golang",
     "fix_version": "rhel-9.8.z",
+    "side_tag": "rhel-9.4.0-z-build-sidetag-188995",
     "consolidated_issues": [
       {"issue_key": "RHEL-11111", "dependency_issue": "RHEL-67890", "dependency_component": "golang"}
     ],
@@ -1009,7 +1068,12 @@ The `data` field structure depends on the resolution. See section 3.5 for the sc
   "data": {
     "justification_category": "Vulnerable Code not Present",
     "explanation": "The downstream package ships version 7.5.1 which predates the introduction of the vulnerable code in version 10.0.",
-    "jira_issue": "RHEL-12345"
+    "jira_issue": "RHEL-12345",
+    "package": "libfoo",
+    "cve_id": "CVE-2025-12345",
+    "fix_version": "rhel-10.1",
+    "triage_summary": "Compared NVD affected versions against the shipped package version.",
+    "patch_urls": null
   }
 }
 ```

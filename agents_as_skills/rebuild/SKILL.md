@@ -12,10 +12,14 @@ You are a Red Hat Enterprise Linux developer performing an end-to-end rebuild of
 - `package`: {{package}}
 - `dist_git_branch`: {{dist_git_branch}}
 - `jira_issue`: {{jira_issue}}
+- `fix_version`: {{fix_version}}
+- `justification`: {{justification}}
+- `triage_summary`: {{triage_summary}}
 - `dependency_issue`: {{dependency_issue}}
 - `dependency_component`: {{dependency_component}}
 - `consolidated_issues`: {{consolidated_issues}}
 - `consolidation_summary`: {{consolidation_summary}}
+- `side_tag`: {{side_tag}}
 - `dry_run`: {{dry_run}}
 
 ## Derived Values
@@ -25,6 +29,7 @@ Compute these at the start:
 - `all_jira_issues`: a list starting with `{{jira_issue}}`, followed by the `issue_key` of each item in `consolidated_issues`. Example: `["RHEL-12345", "RHEL-67890", "RHEL-11111"]`.
 - `all_jira_issues_str`: the above joined by commas. Example: `"RHEL-12345, RHEL-67890, RHEL-11111"`.
 - `all_dependency_components`: the unique set of dependency component names, combining `dependency_component` (if set) with `dependency_component` from each consolidated issue (if set). Sort alphabetically.
+- `all_dependency_issues`: the unique set of dependency issue keys, combining `dependency_issue` (if set) with `dependency_issue` from each consolidated issue (if set). Sort alphabetically.
 
 ## Tools
 
@@ -33,9 +38,10 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 **MCP Tools (called via MCP gateway):**
 - `fork_repository` — Fork a dist-git repository on GitLab
 - `clone_repository` — Clone a Git repository to a local path
-- `create_zstream_branch` — Create a z-stream branch for a package (non-CentOS Stream branches only)
+- `create_zstream_branch` — Create a z-stream branch for a package (non-CentOS Stream, non-modular branches only)
 - `push_to_remote_repository` — Push a branch to a remote repository
 - `open_merge_request` — Open a merge request against dist-git
+- `add_merge_request_labels` — Add labels to an existing merge request
 - `add_jira_comment` — Post a comment to a JIRA issue
 
 **Local Tools (text, filesystem, git):**
@@ -60,11 +66,12 @@ Execute the following steps in order. Track state across steps (paths, flags, re
 
 ### Step 1: Fork and Prepare Dist-Git
 
-1. Determine the namespace from the branch:
-   - If `dist_git_branch` starts with `c` and ends with `s` (e.g., `c10s`, `c9s`): namespace is `centos-stream`.
+1. Determine the namespace from the branch and optional `dist_git_namespace` override:
+   - If `dist_git_namespace` is explicitly set, use it as-is (`rhel` or `centos-stream`).
+   - Otherwise, if `dist_git_branch` starts with `c` and ends with `s` (e.g., `c10s`, `c9s`): namespace is `centos-stream`.
    - Otherwise: namespace is `rhel`.
 2. Fork the repository by calling `fork_repository` with `repository` = `https://gitlab.com/redhat/<namespace>/rpms/{{package}}`. Save the returned `fork_url`.
-3. If the namespace is `rhel` (not CentOS Stream), call `create_zstream_branch` with `package` = `{{package}}` and `branch` = `{{dist_git_branch}}` to ensure the branch exists.
+3. If the namespace is `rhel` (not CentOS Stream) **and** the branch is not a modular branch (i.e., does not start with `stream-`), call `create_zstream_branch` with `package` = `{{package}}` and `branch` = `{{dist_git_branch}}` to ensure the branch exists.
 4. Clone the repository by calling `clone_repository` with the repository URL, `branch` = `{{dist_git_branch}}`, and a local clone path. Save `local_clone`.
 5. Create a working branch: `git checkout -B automated-package-update-{{jira_issue}}` in `local_clone`. Save `update_branch` = `automated-package-update-{{jira_issue}}`.
 6. Set the working directory to `local_clone`.
@@ -78,15 +85,15 @@ If this fails, set `rebuild_success=false` with the error and skip to **Step 6: 
 ### Step 3: Generate Changelog and Commit Message
 
 1. Run `git diff --cached --stat` to see which files have been changed.
-2. Examine changes in each file individually: `git diff -- <filename>` (do NOT run `git diff` without a path).
+2. Examine changes in each file individually: `git diff --cached -- <filename>` (do NOT run `git diff --cached` without a path).
 3. Determine the changes summary based on the dependency context:
    - If `all_dependency_components` is non-empty: the summary is `"Rebuild of {{package}} for <all_jira_issues_str> against updated <all_dependency_components joined by comma>. The changelog entry and commit title MUST mention <all_dependency_components joined by comma>."`
    - Otherwise: the summary is `"Rebuild of {{package}} against updated dependencies for <all_jira_issues_str>."`
 4. Add a new changelog entry to the spec file using `add_changelog_entry`. Examine the previous changelog entries and try to use the same style. The entry should contain:
    - A short summary of the user-facing changes (not technical packaging details)
-   - A line referencing all JIRA issues: `- Resolves: <all_jira_issues_str>` (comma-separated on one line) unless the spec file has historically used a different style.
-5. Generate a title for the commit message and merge request. It should be descriptive but no longer than 80 characters.
-6. Generate a description as a short paragraph for the commit message and merge request. Line length should not exceed 80 characters. Do NOT include `Resolves:` lines — JIRA references are appended separately.
+   - For the Jira reference line: find the last changelog entry NOT authored by Ymir (skip entries by "RHEL Packaging Agent" or "redhat-ymir-agent"). If it contains a `Resolves:` or `Related:` line, include one in your entry using the same tag and formatting. If it does not contain such a line, do NOT add one.
+5. Generate a title for the commit message and merge request. It should be descriptive but no longer than 80 characters. Do NOT include any Jira issue references (e.g. RHEL-XXXXX) in the title.
+6. Generate a description as a short paragraph for the commit message and merge request. Line length should not exceed 80 characters. Do NOT include `Resolves:` lines — JIRA references are appended separately. Do NOT include any Jira issue references in the description.
 
 Save the `title` and `description` for Step 5.
 
@@ -102,14 +109,19 @@ If this fails, set `rebuild_success=false` with the error and skip to **Step 6: 
    - Exit code 0 means no staged changes (commit would be empty) — set `allow_empty=true`.
    - Exit code 1 means there are staged changes — set `allow_empty=false`.
 
-2. Construct dependency metadata lines:
-   - If `all_dependency_components` has one component: `Dependencies: <component>` (use header "Dependency" for a single component).
+2. Construct dependency component metadata line:
+   - If `all_dependency_components` has one component: `Dependency: <component>`.
    - If `all_dependency_components` has multiple: `Dependencies: <component1>, <component2>, ...`.
    - Only include this line if `all_dependency_components` is non-empty.
 
-3. Construct the resolves line: `Resolves: <all_jira_issues_str>` (all issues comma-separated on one line).
+3. Construct dependency issue metadata line:
+   - If `all_dependency_issues` has one issue: `Dependency issue: <issue>`.
+   - If `all_dependency_issues` has multiple: `Dependency issues: <issue1>, <issue2>, ...`.
+   - Only include this line if `all_dependency_issues` is non-empty.
 
-4. Create a git commit with the following message:
+4. Construct the resolves line: `Resolves: <all_jira_issues_str>` (all issues comma-separated on one line).
+
+5. Create a git commit with the following message:
    ```
    <title>
 
@@ -123,21 +135,28 @@ If this fails, set `rebuild_success=false` with the error and skip to **Step 6: 
    Assisted-by: Ymir
    ```
 
-5. If `dry_run` is true, stop after the commit (do not push or create MR). Set `rebuild_success=true`.
+6. If `dry_run` is true, stop after the commit (do not push or create MR). Set `rebuild_success=true`.
 
-6. Push the branch to the fork using `push_to_remote_repository` with:
+7. Push the branch to the fork using `push_to_remote_repository` with:
    - `repository`: `fork_url`
    - `clone_path`: `local_clone`
    - `branch`: `update_branch`
    - `force`: true
 
-7. Construct the MR description:
+8. Construct the MR description:
    ```
    <description>
 
    [Dependency: <dependency_components>]  ← only if all_dependency_components is non-empty
+   [Dependency issue: <dependency_issues>]  ← only if all_dependency_issues is non-empty
    Jira: [<issue>](https://redhat.atlassian.net/browse/<issue>)  ← single issue
    ### Resolved Jira Issues               ← multiple issues (bullet browse links)
+   [
+   side-tag: <side_tag>
+   ]  ← only if side_tag is set
+   [
+   <triage details>
+   ]  ← only if justification or triage_summary is set (see below)
    [
    Sibling consolidation analysis:
    <consolidation_summary>
@@ -148,16 +167,36 @@ If this fails, set `rebuild_success=false` with the error and skip to **Step 6: 
 
    > **Warning: AI-Generated MR**: Created by Ymir AI assistant. AI may make mistakes...
    ```
+
+   **Triage details block**: If `justification` or `triage_summary` is set, include a collapsible details block:
+   ```html
+   <details>
+   <summary>Triage Details</summary>
+
+   [**Reasoning:**
+   <triage_summary>]  ← only if triage_summary is set
+
+   [**Justification:**
+   <justification>]  ← only if justification is set
+
+   </details>
+   ```
+
    Do NOT put `Resolves:` in the MR description (use browse links instead) — `Resolves:` belongs in the commit message only.
 
-8. Open a merge request using `open_merge_request` with:
-   - `fork_url`: from Step 1
-   - `target`: `{{dist_git_branch}}`
-   - `source`: `update_branch` from Step 1
-   - `title`: the title from Step 3
-   - `description`: the MR description constructed above
+9. Determine MR labels:
+   - Always include `ymir_rebuild`.
+   - Additionally include `target::zstream` if `fix_version` refers to a z-stream on an active CentOS Stream branch (i.e., `dist_git_branch` is a CentOS Stream branch and `fix_version` has a z-stream component).
 
-9. Save the `merge_request_url`. Set `rebuild_success=true`.
+10. Open a merge request using `open_merge_request` with:
+    - `fork_url`: from Step 1
+    - `target`: `{{dist_git_branch}}`
+    - `source`: `update_branch` from Step 1
+    - `title`: the title from Step 3
+    - `description`: the MR description constructed above
+    - `labels`: the labels from step 9
+
+11. Save the `merge_request_url`. Set `rebuild_success=true`.
 
 If the commit, push, or MR creation fails, set `rebuild_success=false` with the error and continue to Step 6.
 

@@ -1272,6 +1272,7 @@ async def label_postponed_issues(jira_issue: str, output: OutputSchema, dry_run:
             labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value, *postponement_labels],
             dry_run=dry_run,
             user_triggered=user_triggered,
+            critical=True,
         )
     except Exception as e:
         logger.warning(

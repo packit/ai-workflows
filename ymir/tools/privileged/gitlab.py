@@ -1716,16 +1716,18 @@ async def _collect_failed_jobs_recursive(
         trace = await _get_job_trace(project_enc, job["id"])
         trace_lines = trace.splitlines()
         tail = "\n".join(trace_lines[-log_lines:]) if len(trace_lines) > log_lines else trace
-        output.append({
-            "job_id": job["id"],
-            "name": job.get("name", ""),
-            "stage": job.get("stage", ""),
-            "status": job.get("status", ""),
-            "failure_reason": job.get("failure_reason", ""),
-            "web_url": job.get("web_url", ""),
-            "log_tail": tail,
-            "pipeline_id": pipeline_id,
-        })
+        output.append(
+            {
+                "job_id": job["id"],
+                "name": job.get("name", ""),
+                "stage": job.get("stage", ""),
+                "status": job.get("status", ""),
+                "failure_reason": job.get("failure_reason", ""),
+                "web_url": job.get("web_url", ""),
+                "log_tail": tail,
+                "pipeline_id": pipeline_id,
+            }
+        )
     # Recurse into child pipelines via bridges
     try:
         bridges = await _gitlab_api_get(
@@ -1739,12 +1741,15 @@ async def _collect_failed_jobs_recursive(
         if not downstream:
             continue
         child_proj = str(downstream.get("project_id", "")) or project_enc
-        child_output = await _collect_failed_jobs_recursive(child_proj, downstream["id"], log_lines, depth + 1)
+        child_output = await _collect_failed_jobs_recursive(
+            child_proj, downstream["id"], log_lines, depth + 1
+        )
         output.extend(child_output)
     return output
 
 
 # -- GetMrPipelinesWithStatusTool --
+
 
 class GetMrPipelinesWithStatusToolInput(BaseModel):
     project: str = Field(description="GitLab project path (e.g. 'redhat/centos-stream/rpms/bash')")
@@ -1800,12 +1805,14 @@ class GetMrPipelinesWithStatusTool(
                 for bridge in bridges:
                     downstream = bridge.get("downstream_pipeline")
                     if downstream:
-                        entry["child_pipelines"].append({
-                            "id": downstream["id"],
-                            "status": downstream.get("status", ""),
-                            "web_url": downstream.get("web_url", ""),
-                            "triggered_by": bridge.get("name", ""),
-                        })
+                        entry["child_pipelines"].append(
+                            {
+                                "id": downstream["id"],
+                                "status": downstream.get("status", ""),
+                                "web_url": downstream.get("web_url", ""),
+                                "triggered_by": bridge.get("name", ""),
+                            }
+                        )
             except Exception:
                 pass
             results.append(entry)
@@ -1814,13 +1821,13 @@ class GetMrPipelinesWithStatusTool(
 
 # -- GetMrChangesTool --
 
+
 class GetMrChangesToolInput(BaseModel):
     project: str = Field(description="GitLab project path (e.g. 'redhat/centos-stream/rpms/bash')")
     mr_iid: int = Field(description="Merge request IID")
 
 
-class GetMrChangesTool(Tool[GetMrChangesToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]
-):
+class GetMrChangesTool(Tool[GetMrChangesToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]):
     name = "get_mr_changes"
     timeout = 120
     description = """
@@ -1865,6 +1872,7 @@ class GetMrChangesTool(Tool[GetMrChangesToolInput, ToolRunOptions, JSONToolOutpu
 
 # -- GetMrDiscussionsTool --
 
+
 class GetMrDiscussionsToolInput(BaseModel):
     project: str = Field(description="GitLab project path")
     mr_iid: int = Field(description="Merge request IID")
@@ -1908,27 +1916,32 @@ class GetMrDiscussionsTool(
                 continue
             first = notes[0]
             position = first.get("position")
-            results.append({
-                "discussion_id": disc.get("id", ""),
-                "resolved": first.get("resolved", False),
-                "position": {
-                    "new_path": position.get("new_path", "") if position else "",
-                    "new_line": position.get("new_line") if position else None,
-                } if position else None,
-                "notes": [
-                    {
-                        "author": n.get("author", {}).get("username", ""),
-                        "body": n.get("body", ""),
-                        "created_at": n.get("created_at", ""),
-                        "system": n.get("system", False),
+            results.append(
+                {
+                    "discussion_id": disc.get("id", ""),
+                    "resolved": first.get("resolved", False),
+                    "position": {
+                        "new_path": position.get("new_path", "") if position else "",
+                        "new_line": position.get("new_line") if position else None,
                     }
-                    for n in notes
-                ],
-            })
+                    if position
+                    else None,
+                    "notes": [
+                        {
+                            "author": n.get("author", {}).get("username", ""),
+                            "body": n.get("body", ""),
+                            "created_at": n.get("created_at", ""),
+                            "system": n.get("system", False),
+                        }
+                        for n in notes
+                    ],
+                }
+            )
         return JSONToolOutput(result=results)
 
 
 # -- ReplyToMrDiscussionTool --
+
 
 class ReplyToMrDiscussionToolInput(BaseModel):
     project: str = Field(description="GitLab project path")
@@ -1937,9 +1950,7 @@ class ReplyToMrDiscussionToolInput(BaseModel):
     body: str = Field(description="Reply text (supports GitLab Markdown)")
 
 
-class ReplyToMrDiscussionTool(
-    Tool[ReplyToMrDiscussionToolInput, ToolRunOptions, StringToolOutput]
-):
+class ReplyToMrDiscussionTool(Tool[ReplyToMrDiscussionToolInput, ToolRunOptions, StringToolOutput]):
     name = "reply_to_mr_discussion"
     timeout = 120
     description = """
@@ -1972,6 +1983,7 @@ class ReplyToMrDiscussionTool(
 
 # -- ResolveMrDiscussionTool --
 
+
 class ResolveMrDiscussionToolInput(BaseModel):
     project: str = Field(description="GitLab project path")
     mr_iid: int = Field(description="Merge request IID")
@@ -1979,9 +1991,7 @@ class ResolveMrDiscussionToolInput(BaseModel):
     resolved: bool = Field(default=True, description="True to resolve, False to unresolve")
 
 
-class ResolveMrDiscussionTool(
-    Tool[ResolveMrDiscussionToolInput, ToolRunOptions, StringToolOutput]
-):
+class ResolveMrDiscussionTool(Tool[ResolveMrDiscussionToolInput, ToolRunOptions, StringToolOutput]):
     name = "resolve_mr_discussion"
     timeout = 120
     description = """
@@ -2015,14 +2025,13 @@ class ResolveMrDiscussionTool(
 
 # -- ApproveMergeRequestTool --
 
+
 class ApproveMergeRequestToolInput(BaseModel):
     project: str = Field(description="GitLab project path")
     mr_iid: int = Field(description="Merge request IID")
 
 
-class ApproveMergeRequestTool(
-    Tool[ApproveMergeRequestToolInput, ToolRunOptions, StringToolOutput]
-):
+class ApproveMergeRequestTool(Tool[ApproveMergeRequestToolInput, ToolRunOptions, StringToolOutput]):
     name = "approve_merge_request"
     timeout = 120
     description = """
@@ -2053,14 +2062,13 @@ class ApproveMergeRequestTool(
 
 # -- SetMrAutoMergeTool --
 
+
 class SetMrAutoMergeToolInput(BaseModel):
     project: str = Field(description="GitLab project path")
     mr_iid: int = Field(description="Merge request IID")
 
 
-class SetMrAutoMergeTool(
-    Tool[SetMrAutoMergeToolInput, ToolRunOptions, StringToolOutput]
-):
+class SetMrAutoMergeTool(Tool[SetMrAutoMergeToolInput, ToolRunOptions, StringToolOutput]):
     name = "set_mr_auto_merge"
     timeout = 120
     description = """
@@ -2093,6 +2101,7 @@ class SetMrAutoMergeTool(
 
 
 # -- GetPipelineFailedJobsDeepTool --
+
 
 class GetPipelineFailedJobsDeepToolInput(BaseModel):
     project: str = Field(description="GitLab project path")
@@ -2134,6 +2143,7 @@ class GetPipelineFailedJobsDeepTool(
 
 # -- CompareMrTestFailuresTool --
 
+
 class CompareMrTestFailuresToolInput(BaseModel):
     project: str = Field(description="GitLab project path")
     mr_iid: int = Field(description="Merge request IID")
@@ -2165,9 +2175,7 @@ class CompareMrTestFailuresTool(
     ) -> JSONToolOutput[dict[str, Any]]:
         project_enc = quote(tool_input.project, safe="")
         try:
-            mr = await _gitlab_api_get(
-                f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}"
-            )
+            mr = await _gitlab_api_get(f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}")
             target_branch = mr.get("target_branch", "")
 
             # Get current MR pipelines and collect failed job names
@@ -2214,18 +2222,21 @@ class CompareMrTestFailuresTool(
         waived_failures = sorted(current_failed & prev_failed)
         fixed = sorted(prev_failed - current_failed)
 
-        return JSONToolOutput(result={
-            "mr_iid": tool_input.mr_iid,
-            "previous_mr_iid": prev_iid,
-            "target_branch": target_branch,
-            "new_failures": new_failures,
-            "waived_failures": waived_failures,
-            "fixed": fixed,
-            "total_current_failures": len(current_failed),
-        })
+        return JSONToolOutput(
+            result={
+                "mr_iid": tool_input.mr_iid,
+                "previous_mr_iid": prev_iid,
+                "target_branch": target_branch,
+                "new_failures": new_failures,
+                "waived_failures": waived_failures,
+                "fixed": fixed,
+                "total_current_failures": len(current_failed),
+            }
+        )
 
 
 # -- CreateMrInlineCommentTool --
+
 
 class CreateMrInlineCommentToolInput(BaseModel):
     project: str = Field(description="GitLab project path")
@@ -2238,9 +2249,7 @@ class CreateMrInlineCommentToolInput(BaseModel):
     head_sha: str = Field(default="", description="head_sha from diff_refs")
 
 
-class CreateMrInlineCommentTool(
-    Tool[CreateMrInlineCommentToolInput, ToolRunOptions, StringToolOutput]
-):
+class CreateMrInlineCommentTool(Tool[CreateMrInlineCommentToolInput, ToolRunOptions, StringToolOutput]):
     name = "create_mr_inline_comment"
     timeout = 120
     description = """
@@ -2267,9 +2276,7 @@ class CreateMrInlineCommentTool(
         # Auto-fetch diff_refs if not provided
         if not (base_sha and start_sha and head_sha):
             try:
-                mr = await _gitlab_api_get(
-                    f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}"
-                )
+                mr = await _gitlab_api_get(f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}")
                 diff_refs = mr.get("diff_refs", {})
                 base_sha = base_sha or diff_refs.get("base_sha", "")
                 start_sha = start_sha or diff_refs.get("start_sha", "")

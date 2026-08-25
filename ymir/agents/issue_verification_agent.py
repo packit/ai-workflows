@@ -466,9 +466,7 @@ async def _check_and_post_pipeline_triage(
     if any(s in _PIPELINE_FAILED_STATUSES for s in child_statuses):
         pipeline_status = "failed"
 
-    logger.info(
-        "Pipeline #%d for MR !%d in %s: status=%s", pipeline_id, mr_iid, project, pipeline_status
-    )
+    logger.info("Pipeline #%d for MR !%d in %s: status=%s", pipeline_id, mr_iid, project, pipeline_status)
 
     if pipeline_status in _PIPELINE_RUNNING_STATUSES:
         return WorkflowResult(
@@ -499,8 +497,7 @@ async def _check_and_post_pipeline_triage(
             await _post_ship_mr_comment(project, mr_iid, issue_key, tools)
         else:
             logger.info(
-                "Pipeline #%d passed for !%d — PIPELINE_AUTO_SHIP=%s, dry_run=%s. "
-                "Manual QE review required.",
+                "Pipeline #%d passed for !%d — PIPELINE_AUTO_SHIP=%s, dry_run=%s. Manual QE review required.",
                 pipeline_id,
                 mr_iid,
                 auto_ship,
@@ -522,9 +519,7 @@ async def _check_and_post_pipeline_triage(
     )
 
 
-async def _post_pipeline_triage_comment(
-    project: str, mr_iid: int, pipeline_id: int, tools: list
-) -> None:
+async def _post_pipeline_triage_comment(project: str, mr_iid: int, pipeline_id: int, tools: list) -> None:
     """Fetch failed jobs and comparison data, then post a structured triage comment on the MR."""
     failed_jobs: list[dict] = []
     comparison: dict = {}
@@ -626,7 +621,9 @@ async def _post_pipeline_triage_comment(
                 discussion_id=pipeline_discussion_id,
                 body=comment_body,
             )
-            logger.info("Posted pipeline triage reply to discussion %s on !%d", pipeline_discussion_id, mr_iid)
+            logger.info(
+                "Posted pipeline triage reply to discussion %s on !%d", pipeline_discussion_id, mr_iid
+            )
         else:
             await run_tool(
                 "add_merge_request_comment",
@@ -639,9 +636,7 @@ async def _post_pipeline_triage_comment(
         logger.error("Failed to post pipeline triage comment on !%d: %s", mr_iid, e)
 
 
-async def _post_ship_mr_comment(
-    project: str, mr_iid: int, issue_key: str, tools: list
-) -> None:
+async def _post_ship_mr_comment(project: str, mr_iid: int, issue_key: str, tools: list) -> None:
     """Post a ship-mr readiness summary when the pipeline passes."""
     try:
         comparison = await run_tool(
@@ -669,7 +664,7 @@ async def _post_ship_mr_comment(
     comment_lines = [
         f"### Pipeline Passed — Ship MR Check for !{mr_iid}",
         "",
-        f"**Pipeline:** passed",
+        "**Pipeline:** passed",
         f"**Jira:** {issue_key}",
         f"**Pre-existing failures waived:** {len(waived)}",
         "",

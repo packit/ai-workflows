@@ -1551,3 +1551,669 @@ class ListProjectMergeRequestsTool(
 
         except Exception as e:
             raise ToolError(f"Failed to list MRs for {tool_input.project}: {e}") from e
+
+
+# ---------------------------------------------------------------------------
+# Review / QE tools — pipeline triage and ship-mr support
+# ---------------------------------------------------------------------------
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?(?:\x07|\x1b\\)")
+
+
+def _strip_ansi(text: str) -> str:
+    text = _ANSI_RE.sub("", text)
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+
+
+async def _gitlab_api_get(path: str, params: dict | None = None) -> Any:
+    """GET from the GitLab API, authenticating with GITLAB_TOKEN."""
+    token = os.getenv("GITLAB_TOKEN", "")
+    base = os.getenv("GITLAB_URL", "https://gitlab.com").rstrip("/")
+    url = f"{base}/api/v4{path}"
+    headers: dict[str, str] = {"User-Agent": YMIR_USER_AGENT}
+    if token:
+        headers["PRIVATE-TOKEN"] = token
+    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+        async with aiohttp_get_with_retries(session, url, headers=headers, params=params or {}) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+
+async def _gitlab_api_post(path: str, body: dict) -> Any:
+    token = os.getenv("GITLAB_TOKEN", "")
+    base = os.getenv("GITLAB_URL", "https://gitlab.com").rstrip("/")
+    url = f"{base}/api/v4{path}"
+    headers = {"User-Agent": YMIR_USER_AGENT, "Content-Type": "application/json"}
+    if token:
+        headers["PRIVATE-TOKEN"] = token
+    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+        async with session.post(url, json=body, headers=headers) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+
+async def _gitlab_api_put(path: str, body: dict) -> Any:
+    token = os.getenv("GITLAB_TOKEN", "")
+    base = os.getenv("GITLAB_URL", "https://gitlab.com").rstrip("/")
+    url = f"{base}/api/v4{path}"
+    headers = {"User-Agent": YMIR_USER_AGENT, "Content-Type": "application/json"}
+    if token:
+        headers["PRIVATE-TOKEN"] = token
+    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+        async with session.put(url, json=body, headers=headers) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+
+async def _get_job_trace(project_enc: str, job_id: int) -> str:
+    token = os.getenv("GITLAB_TOKEN", "")
+    base = os.getenv("GITLAB_URL", "https://gitlab.com").rstrip("/")
+    url = f"{base}/api/v4/projects/{project_enc}/jobs/{job_id}/trace"
+    headers: dict[str, str] = {"User-Agent": YMIR_USER_AGENT}
+    if token:
+        headers["PRIVATE-TOKEN"] = token
+    try:
+        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status >= 400:
+                    return ""
+                return _strip_ansi(await resp.text())
+    except Exception:
+        return ""
+
+
+async def _collect_failed_jobs_recursive(
+    project_enc: str, pipeline_id: int, log_lines: int, depth: int = 0
+) -> list[dict]:
+    if depth > 3:
+        return []
+    output: list[dict] = []
+    try:
+        jobs = await _gitlab_api_get(
+            f"/projects/{project_enc}/pipelines/{pipeline_id}/jobs",
+            params={"scope[]": "failed", "per_page": "100"},
+        )
+    except Exception:
+        jobs = []
+    for job in jobs:
+        trace = await _get_job_trace(project_enc, job["id"])
+        trace_lines = trace.splitlines()
+        tail = "\n".join(trace_lines[-log_lines:]) if len(trace_lines) > log_lines else trace
+        output.append({
+            "job_id": job["id"],
+            "name": job.get("name", ""),
+            "stage": job.get("stage", ""),
+            "status": job.get("status", ""),
+            "failure_reason": job.get("failure_reason", ""),
+            "web_url": job.get("web_url", ""),
+            "log_tail": tail,
+            "pipeline_id": pipeline_id,
+        })
+    # Recurse into child pipelines via bridges
+    try:
+        bridges = await _gitlab_api_get(
+            f"/projects/{project_enc}/pipelines/{pipeline_id}/bridges",
+            params={"per_page": "50"},
+        )
+    except Exception:
+        bridges = []
+    for bridge in bridges:
+        downstream = bridge.get("downstream_pipeline")
+        if not downstream:
+            continue
+        child_proj = str(downstream.get("project_id", "")) or project_enc
+        child_output = await _collect_failed_jobs_recursive(child_proj, downstream["id"], log_lines, depth + 1)
+        output.extend(child_output)
+    return output
+
+
+# -- GetMrPipelinesWithStatusTool --
+
+class GetMrPipelinesWithStatusToolInput(BaseModel):
+    project: str = Field(description="GitLab project path (e.g. 'redhat/centos-stream/rpms/bash')")
+    mr_iid: int = Field(description="Merge request IID (the number after !)")
+
+
+class GetMrPipelinesWithStatusTool(
+    Tool[GetMrPipelinesWithStatusToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]
+):
+    name = "get_mr_pipelines_with_status"
+    timeout = 120
+    description = """
+    Lists all pipelines for a merge request, including child/downstream pipelines
+    triggered via bridge jobs. Returns status, ref, SHA, web_url, and child pipeline info.
+    Use this to detect whether the latest pipeline passed, failed, or is still running.
+    """
+    input_schema = GetMrPipelinesWithStatusToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(namespace=["tool", "gitlab", self.name], creator=self)
+
+    async def _run(
+        self,
+        tool_input: GetMrPipelinesWithStatusToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[list[dict[str, Any]]]:
+        project_enc = quote(tool_input.project, safe="")
+        try:
+            pipelines = await _gitlab_api_get(
+                f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}/pipelines",
+                params={"per_page": "20"},
+            )
+        except Exception as e:
+            raise ToolError(f"Failed to get pipelines for !{tool_input.mr_iid}: {e}") from e
+
+        results = []
+        for p in pipelines:
+            entry: dict[str, Any] = {
+                "id": p["id"],
+                "status": p.get("status", ""),
+                "ref": p.get("ref", ""),
+                "sha": p.get("sha", "")[:8],
+                "web_url": p.get("web_url", ""),
+                "created_at": p.get("created_at", ""),
+                "child_pipelines": [],
+            }
+            try:
+                bridges = await _gitlab_api_get(
+                    f"/projects/{project_enc}/pipelines/{p['id']}/bridges",
+                    params={"per_page": "50"},
+                )
+                for bridge in bridges:
+                    downstream = bridge.get("downstream_pipeline")
+                    if downstream:
+                        entry["child_pipelines"].append({
+                            "id": downstream["id"],
+                            "status": downstream.get("status", ""),
+                            "web_url": downstream.get("web_url", ""),
+                            "triggered_by": bridge.get("name", ""),
+                        })
+            except Exception:
+                pass
+            results.append(entry)
+        return JSONToolOutput(result=results)
+
+
+# -- GetMrChangesTool --
+
+class GetMrChangesToolInput(BaseModel):
+    project: str = Field(description="GitLab project path (e.g. 'redhat/centos-stream/rpms/bash')")
+    mr_iid: int = Field(description="Merge request IID")
+
+
+class GetMrChangesTool(Tool[GetMrChangesToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]
+):
+    name = "get_mr_changes"
+    timeout = 120
+    description = """
+    Returns the full diff of all changed files in a merge request.
+    Each entry includes old_path, new_path, and the unified diff text.
+    Also returns diff_refs (base_sha, start_sha, head_sha) needed for inline comments.
+    """
+    input_schema = GetMrChangesToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(namespace=["tool", "gitlab", self.name], creator=self)
+
+    async def _run(
+        self,
+        tool_input: GetMrChangesToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[list[dict[str, Any]]]:
+        project_enc = quote(tool_input.project, safe="")
+        try:
+            data = await _gitlab_api_get(
+                f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}/changes"
+            )
+        except Exception as e:
+            raise ToolError(f"Failed to get MR changes for !{tool_input.mr_iid}: {e}") from e
+
+        diff_refs = data.get("diff_refs", {})
+        changes = [
+            {
+                "old_path": c.get("old_path", ""),
+                "new_path": c.get("new_path", ""),
+                "new_file": c.get("new_file", False),
+                "deleted_file": c.get("deleted_file", False),
+                "renamed_file": c.get("renamed_file", False),
+                "diff": c.get("diff", ""),
+                "diff_refs": diff_refs,
+            }
+            for c in data.get("changes", [])
+        ]
+        return JSONToolOutput(result=changes)
+
+
+# -- GetMrDiscussionsTool --
+
+class GetMrDiscussionsToolInput(BaseModel):
+    project: str = Field(description="GitLab project path")
+    mr_iid: int = Field(description="Merge request IID")
+
+
+class GetMrDiscussionsTool(
+    Tool[GetMrDiscussionsToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]
+):
+    name = "get_mr_discussions"
+    timeout = 120
+    description = """
+    Returns all discussion threads and comments on a merge request.
+    Each thread includes its discussion_id, resolved state, position (for inline comments),
+    and all notes (author, body, created_at).
+    Use this to find pipeline result threads, existing review comments, or waiver messages.
+    """
+    input_schema = GetMrDiscussionsToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(namespace=["tool", "gitlab", self.name], creator=self)
+
+    async def _run(
+        self,
+        tool_input: GetMrDiscussionsToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[list[dict[str, Any]]]:
+        project_enc = quote(tool_input.project, safe="")
+        try:
+            discussions = await _gitlab_api_get(
+                f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}/discussions",
+                params={"per_page": "100"},
+            )
+        except Exception as e:
+            raise ToolError(f"Failed to get discussions for !{tool_input.mr_iid}: {e}") from e
+
+        results = []
+        for disc in discussions:
+            notes = disc.get("notes", [])
+            if not notes:
+                continue
+            first = notes[0]
+            position = first.get("position")
+            results.append({
+                "discussion_id": disc.get("id", ""),
+                "resolved": first.get("resolved", False),
+                "position": {
+                    "new_path": position.get("new_path", "") if position else "",
+                    "new_line": position.get("new_line") if position else None,
+                } if position else None,
+                "notes": [
+                    {
+                        "author": n.get("author", {}).get("username", ""),
+                        "body": n.get("body", ""),
+                        "created_at": n.get("created_at", ""),
+                        "system": n.get("system", False),
+                    }
+                    for n in notes
+                ],
+            })
+        return JSONToolOutput(result=results)
+
+
+# -- ReplyToMrDiscussionTool --
+
+class ReplyToMrDiscussionToolInput(BaseModel):
+    project: str = Field(description="GitLab project path")
+    mr_iid: int = Field(description="Merge request IID")
+    discussion_id: str = Field(description="ID of the discussion thread to reply to")
+    body: str = Field(description="Reply text (supports GitLab Markdown)")
+
+
+class ReplyToMrDiscussionTool(
+    Tool[ReplyToMrDiscussionToolInput, ToolRunOptions, StringToolOutput]
+):
+    name = "reply_to_mr_discussion"
+    timeout = 120
+    description = """
+    Replies to an existing discussion thread on a merge request.
+    Use get_mr_discussions first to find the discussion_id.
+    Use this to post pipeline triage results in-context on the pipeline failure thread.
+    """
+    input_schema = ReplyToMrDiscussionToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(namespace=["tool", "gitlab", self.name], creator=self)
+
+    async def _run(
+        self,
+        tool_input: ReplyToMrDiscussionToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        project_enc = quote(tool_input.project, safe="")
+        try:
+            result = await _gitlab_api_post(
+                f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}"
+                f"/discussions/{tool_input.discussion_id}/notes",
+                body={"body": tool_input.body},
+            )
+        except Exception as e:
+            raise ToolError(f"Failed to reply to discussion {tool_input.discussion_id}: {e}") from e
+        return StringToolOutput(result=f"Reply posted (note ID: {result.get('id', '?')})")
+
+
+# -- ResolveMrDiscussionTool --
+
+class ResolveMrDiscussionToolInput(BaseModel):
+    project: str = Field(description="GitLab project path")
+    mr_iid: int = Field(description="Merge request IID")
+    discussion_id: str = Field(description="ID of the discussion thread to resolve")
+    resolved: bool = Field(default=True, description="True to resolve, False to unresolve")
+
+
+class ResolveMrDiscussionTool(
+    Tool[ResolveMrDiscussionToolInput, ToolRunOptions, StringToolOutput]
+):
+    name = "resolve_mr_discussion"
+    timeout = 120
+    description = """
+    Resolves or unresolves a discussion thread on a merge request.
+    Use get_mr_discussions to find discussion_id values.
+    Resolving all open discussions is required before approving a merge request.
+    """
+    input_schema = ResolveMrDiscussionToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(namespace=["tool", "gitlab", self.name], creator=self)
+
+    async def _run(
+        self,
+        tool_input: ResolveMrDiscussionToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        project_enc = quote(tool_input.project, safe="")
+        try:
+            await _gitlab_api_put(
+                f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}"
+                f"/discussions/{tool_input.discussion_id}",
+                body={"resolved": tool_input.resolved},
+            )
+        except Exception as e:
+            raise ToolError(f"Failed to resolve discussion {tool_input.discussion_id}: {e}") from e
+        action = "Resolved" if tool_input.resolved else "Unresolved"
+        return StringToolOutput(result=f"{action} discussion {tool_input.discussion_id}")
+
+
+# -- ApproveMergeRequestTool --
+
+class ApproveMergeRequestToolInput(BaseModel):
+    project: str = Field(description="GitLab project path")
+    mr_iid: int = Field(description="Merge request IID")
+
+
+class ApproveMergeRequestTool(
+    Tool[ApproveMergeRequestToolInput, ToolRunOptions, StringToolOutput]
+):
+    name = "approve_merge_request"
+    timeout = 120
+    description = """
+    Approves a merge request. Requires your GITLAB_TOKEN to have appropriate permissions.
+    Call this only after all review checks pass and all discussions are resolved.
+    """
+    input_schema = ApproveMergeRequestToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(namespace=["tool", "gitlab", self.name], creator=self)
+
+    async def _run(
+        self,
+        tool_input: ApproveMergeRequestToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        project_enc = quote(tool_input.project, safe="")
+        try:
+            await _gitlab_api_post(
+                f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}/approve",
+                body={},
+            )
+        except Exception as e:
+            raise ToolError(f"Failed to approve MR !{tool_input.mr_iid}: {e}") from e
+        return StringToolOutput(result=f"MR !{tool_input.mr_iid} approved successfully.")
+
+
+# -- SetMrAutoMergeTool --
+
+class SetMrAutoMergeToolInput(BaseModel):
+    project: str = Field(description="GitLab project path")
+    mr_iid: int = Field(description="Merge request IID")
+
+
+class SetMrAutoMergeTool(
+    Tool[SetMrAutoMergeToolInput, ToolRunOptions, StringToolOutput]
+):
+    name = "set_mr_auto_merge"
+    timeout = 120
+    description = """
+    Enables auto-merge (merge when pipeline succeeds) on a merge request.
+    The MR must have an active pipeline and all required approvals.
+    Call this after approving the MR when the pipeline is still running.
+    """
+    input_schema = SetMrAutoMergeToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(namespace=["tool", "gitlab", self.name], creator=self)
+
+    async def _run(
+        self,
+        tool_input: SetMrAutoMergeToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        project_enc = quote(tool_input.project, safe="")
+        try:
+            await _gitlab_api_put(
+                f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}/merge",
+                body={"merge_when_pipeline_succeeds": True},
+            )
+        except Exception as e:
+            raise ToolError(f"Failed to set auto-merge on !{tool_input.mr_iid}: {e}") from e
+        return StringToolOutput(
+            result=f"Auto-merge enabled on !{tool_input.mr_iid}. It will merge when the pipeline succeeds."
+        )
+
+
+# -- GetPipelineFailedJobsDeepTool --
+
+class GetPipelineFailedJobsDeepToolInput(BaseModel):
+    project: str = Field(description="GitLab project path")
+    pipeline_id: int = Field(description="Pipeline ID (numeric)")
+    log_lines: int = Field(default=100, description="Number of log tail lines to include per failed job")
+
+
+class GetPipelineFailedJobsDeepTool(
+    Tool[GetPipelineFailedJobsDeepToolInput, ToolRunOptions, JSONToolOutput[list[dict[str, Any]]]]
+):
+    name = "get_pipeline_failed_jobs_deep"
+    timeout = 180
+    description = """
+    Gets failed job details and log output for a pipeline, including child/downstream
+    pipelines triggered via bridge jobs. Returns job name, stage, failure reason,
+    web_url, and the last N lines of the job log for each failed job.
+    Use get_mr_pipelines_with_status first to find the pipeline ID.
+    """
+    input_schema = GetPipelineFailedJobsDeepToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(namespace=["tool", "gitlab", self.name], creator=self)
+
+    async def _run(
+        self,
+        tool_input: GetPipelineFailedJobsDeepToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[list[dict[str, Any]]]:
+        project_enc = quote(tool_input.project, safe="")
+        try:
+            failed = await _collect_failed_jobs_recursive(
+                project_enc, tool_input.pipeline_id, tool_input.log_lines
+            )
+        except Exception as e:
+            raise ToolError(f"Failed to get failed jobs for pipeline #{tool_input.pipeline_id}: {e}") from e
+        return JSONToolOutput(result=failed)
+
+
+# -- CompareMrTestFailuresTool --
+
+class CompareMrTestFailuresToolInput(BaseModel):
+    project: str = Field(description="GitLab project path")
+    mr_iid: int = Field(description="Merge request IID")
+
+
+class CompareMrTestFailuresTool(
+    Tool[CompareMrTestFailuresToolInput, ToolRunOptions, JSONToolOutput[dict[str, Any]]]
+):
+    name = "compare_mr_test_failures"
+    timeout = 180
+    description = """
+    Compares pipeline test failures for this MR against the previous merged MR on the
+    same target branch. Returns:
+      - new_failures: job names that failed in this MR but NOT the previous one (regressions)
+      - waived_failures: job names that failed in BOTH this and the previous MR (pre-existing)
+      - fixed: job names that failed previously but pass now
+    Use this to determine whether failures are new regressions or pre-existing issues.
+    """
+    input_schema = CompareMrTestFailuresToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(namespace=["tool", "gitlab", self.name], creator=self)
+
+    async def _run(
+        self,
+        tool_input: CompareMrTestFailuresToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[dict[str, Any]]:
+        project_enc = quote(tool_input.project, safe="")
+        try:
+            mr = await _gitlab_api_get(
+                f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}"
+            )
+            target_branch = mr.get("target_branch", "")
+
+            # Get current MR pipelines and collect failed job names
+            current_pipelines = await _gitlab_api_get(
+                f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}/pipelines",
+                params={"per_page": "5"},
+            )
+            current_failed: set[str] = set()
+            for p in current_pipelines[:1]:  # only latest pipeline
+                jobs = await _collect_failed_jobs_recursive(project_enc, p["id"], log_lines=10)
+                current_failed.update(j["name"] for j in jobs)
+
+            # Find previous merged MR on same target branch
+            prev_mrs = await _gitlab_api_get(
+                f"/projects/{project_enc}/merge_requests",
+                params={
+                    "state": "merged",
+                    "target_branch": target_branch,
+                    "order_by": "merged_at",
+                    "sort": "desc",
+                    "per_page": "5",
+                },
+            )
+            prev_mr = next((m for m in prev_mrs if m["iid"] != tool_input.mr_iid), None)
+
+            prev_failed: set[str] = set()
+            prev_iid = None
+            if prev_mr:
+                prev_iid = prev_mr["iid"]
+                prev_pipelines = await _gitlab_api_get(
+                    f"/projects/{project_enc}/merge_requests/{prev_iid}/pipelines",
+                    params={"per_page": "5"},
+                )
+                for p in prev_pipelines[:1]:
+                    jobs = await _collect_failed_jobs_recursive(project_enc, p["id"], log_lines=10)
+                    prev_failed.update(j["name"] for j in jobs)
+
+        except ToolError:
+            raise
+        except Exception as e:
+            raise ToolError(f"Failed to compare test failures for !{tool_input.mr_iid}: {e}") from e
+
+        new_failures = sorted(current_failed - prev_failed)
+        waived_failures = sorted(current_failed & prev_failed)
+        fixed = sorted(prev_failed - current_failed)
+
+        return JSONToolOutput(result={
+            "mr_iid": tool_input.mr_iid,
+            "previous_mr_iid": prev_iid,
+            "target_branch": target_branch,
+            "new_failures": new_failures,
+            "waived_failures": waived_failures,
+            "fixed": fixed,
+            "total_current_failures": len(current_failed),
+        })
+
+
+# -- CreateMrInlineCommentTool --
+
+class CreateMrInlineCommentToolInput(BaseModel):
+    project: str = Field(description="GitLab project path")
+    mr_iid: int = Field(description="Merge request IID")
+    body: str = Field(description="Comment text (supports GitLab Markdown)")
+    new_path: str = Field(description="File path in the new version of the diff")
+    new_line: int = Field(description="Line number in the new version of the file")
+    base_sha: str = Field(default="", description="base_sha from diff_refs (get_mr_changes returns this)")
+    start_sha: str = Field(default="", description="start_sha from diff_refs")
+    head_sha: str = Field(default="", description="head_sha from diff_refs")
+
+
+class CreateMrInlineCommentTool(
+    Tool[CreateMrInlineCommentToolInput, ToolRunOptions, StringToolOutput]
+):
+    name = "create_mr_inline_comment"
+    timeout = 120
+    description = """
+    Posts an inline review comment at a specific file and line in the MR diff.
+    Use get_mr_changes first to get the diff_refs (base_sha, start_sha, head_sha)
+    and file paths. Use this for code review findings on specific lines.
+    """
+    input_schema = CreateMrInlineCommentToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(namespace=["tool", "gitlab", self.name], creator=self)
+
+    async def _run(
+        self,
+        tool_input: CreateMrInlineCommentToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        project_enc = quote(tool_input.project, safe="")
+        base_sha = tool_input.base_sha
+        start_sha = tool_input.start_sha
+        head_sha = tool_input.head_sha
+
+        # Auto-fetch diff_refs if not provided
+        if not (base_sha and start_sha and head_sha):
+            try:
+                mr = await _gitlab_api_get(
+                    f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}"
+                )
+                diff_refs = mr.get("diff_refs", {})
+                base_sha = base_sha or diff_refs.get("base_sha", "")
+                start_sha = start_sha or diff_refs.get("start_sha", "")
+                head_sha = head_sha or diff_refs.get("head_sha", "")
+            except Exception as e:
+                raise ToolError(f"Failed to fetch diff_refs: {e}") from e
+
+        position = {
+            "position_type": "text",
+            "base_sha": base_sha,
+            "start_sha": start_sha,
+            "head_sha": head_sha,
+            "new_path": tool_input.new_path,
+            "old_path": tool_input.new_path,
+            "new_line": tool_input.new_line,
+        }
+        try:
+            result = await _gitlab_api_post(
+                f"/projects/{project_enc}/merge_requests/{tool_input.mr_iid}/discussions",
+                body={"body": tool_input.body, "position": position},
+            )
+        except Exception as e:
+            raise ToolError(f"Failed to create inline comment: {e}") from e
+        return StringToolOutput(result=f"Inline comment created (discussion ID: {result.get('id', '?')})")

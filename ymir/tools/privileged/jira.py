@@ -1685,6 +1685,62 @@ class SetPreliminaryTestingTool(Tool[SetPreliminaryTestingToolInput, ToolRunOpti
         )
 
 
+class UpdateTestCoverageToolInput(BaseModel):
+    issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
+    value: str = Field(
+        description="Test Coverage value to set (e.g. 'Automated', 'Manual', 'RegressionOnly', 'New Test Coverage')"
+    )
+
+
+class UpdateTestCoverageTool(Tool[UpdateTestCoverageToolInput, ToolRunOptions, StringToolOutput]):
+    name = "update_test_coverage"
+    timeout = 120
+    description = """
+    Updates the Test Coverage custom field on a Jira issue.
+    Allowed values: 'Automated', 'Manual', 'RegressionOnly', 'New Test Coverage'.
+    """
+    input_schema = UpdateTestCoverageToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "jira", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: UpdateTestCoverageToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        issue_key = tool_input.issue_key
+        value = tool_input.value
+
+        if os.getenv("DRY_RUN", "False").lower() == "true":
+            return StringToolOutput(
+                result=f"Dry run, not updating Test Coverage on {issue_key} (this is expected, not an error)"
+            )
+        if _skip_jira_writes():
+            return StringToolOutput(
+                result=f"JIRA_DRY_RUN is set, not updating Test Coverage on {issue_key} (this is expected, not an error)"
+            )
+
+        headers = get_jira_auth_headers()
+        jira_base = os.getenv("JIRA_URL")
+        url = urljoin(jira_base, f"rest/api/2/issue/{issue_key}")
+        payload = {"fields": {TEST_COVERAGE_CUSTOM_FIELD: {"value": value}}}
+
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            with tool_error_context(
+                f"Failed to update Test Coverage on {issue_key}",
+                test_coverage_value=value,
+            ):
+                async with session.put(url, json=payload, headers=headers) as response:
+                    response.raise_for_status()
+
+        return StringToolOutput(result=f"Successfully updated Test Coverage to '{value}' on {issue_key}")
+
+
 class UpdateJiraCommentToolInput(BaseModel):
     issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
     comment_id: str = Field(description="ID of the comment to update")

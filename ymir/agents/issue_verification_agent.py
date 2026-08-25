@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 WAIT_DELAY = 20 * 60  # 20 minutes
 MERGE_CHECK_DELAY = 3 * 60 * 60  # 3 hours
 ERRATA_WAIT_DELAY = 60 * 60  # 1 hour
+PIPELINE_CHECK_DELAY = 20 * 60  # 20 minutes — how often to recheck a running pipeline
 
 ATTENTION_TEMPLATE = (
     "{{panel:title=Project Ymir: ATTENTION NEEDED|"
@@ -397,6 +398,311 @@ async def _get_latest_merged_timestamp(issue: FullIssue, tools: list) -> datetim
     )
 
 
+_PIPELINE_RUNNING_STATUSES = {"running", "pending", "created", "waiting_for_resource", "preparing"}
+_PIPELINE_SUCCESS_STATUSES = {"success"}
+_PIPELINE_FAILED_STATUSES = {"failed"}
+
+
+async def _find_open_mr(component: str, issue_key: str, tools: list) -> GitlabMergeRequest | None:
+    """Find the first open MR for this issue across all GitLab groups."""
+    for group in GITLAB_GROUPS:
+        project = f"redhat/{group}/{component}"
+        try:
+            mrs_data = await run_tool(
+                "search_gitlab_project_mrs",
+                available_tools=tools,
+                project=project,
+                search=issue_key,
+                state=GitlabMergeRequestState.OPEN,
+            )
+            if mrs_data:
+                return GitlabMergeRequest(**mrs_data[0])
+        except Exception as e:
+            logger.warning("Error searching open MRs in %s: %s", project, e)
+    return None
+
+
+async def _check_and_post_pipeline_triage(
+    open_mr: GitlabMergeRequest,
+    issue_key: str,
+    tools: list,
+    dry_run: bool,
+) -> WorkflowResult:
+    """Check the pipeline status of an open MR and act on it.
+
+    - running/pending  → reschedule in PIPELINE_CHECK_DELAY
+    - failed           → fetch failed jobs + comparison, post triage comment on MR
+    - success          → optionally run ship-mr (if PIPELINE_AUTO_SHIP=true)
+    """
+    project = open_mr.project
+    mr_iid = open_mr.iid
+
+    try:
+        pipelines = await run_tool(
+            "get_mr_pipelines_with_status",
+            available_tools=tools,
+            project=project,
+            mr_iid=mr_iid,
+        )
+    except Exception as e:
+        logger.warning("Failed to get pipelines for MR !%d in %s: %s", mr_iid, project, e)
+        return WorkflowResult(
+            status=f"Failed to get pipelines for !{mr_iid}: {e}. Reschedule in {PIPELINE_CHECK_DELAY}s",
+            reschedule_in=PIPELINE_CHECK_DELAY,
+        )
+
+    if not pipelines:
+        logger.info("No pipelines yet for MR !%d in %s", mr_iid, project)
+        return WorkflowResult(
+            status=f"No pipelines found for !{mr_iid} — reschedule in {PIPELINE_CHECK_DELAY}s",
+            reschedule_in=PIPELINE_CHECK_DELAY,
+        )
+
+    latest = pipelines[0]
+    pipeline_id = latest["id"]
+    pipeline_status = latest.get("status", "")
+
+    # A parent pipeline showing 'success' may have failed child pipelines
+    child_statuses = [c.get("status", "") for c in latest.get("child_pipelines", [])]
+    if any(s in _PIPELINE_FAILED_STATUSES for s in child_statuses):
+        pipeline_status = "failed"
+
+    logger.info(
+        "Pipeline #%d for MR !%d in %s: status=%s", pipeline_id, mr_iid, project, pipeline_status
+    )
+
+    if pipeline_status in _PIPELINE_RUNNING_STATUSES:
+        return WorkflowResult(
+            status=f"Pipeline #{pipeline_id} is {pipeline_status} — reschedule in {PIPELINE_CHECK_DELAY}s",
+            reschedule_in=PIPELINE_CHECK_DELAY,
+        )
+
+    if pipeline_status in _PIPELINE_FAILED_STATUSES:
+        if not dry_run:
+            await _post_pipeline_triage_comment(project, mr_iid, pipeline_id, tools)
+        else:
+            logger.info(
+                "Dry run: would post pipeline triage comment for !%d pipeline #%d",
+                mr_iid,
+                pipeline_id,
+            )
+        return WorkflowResult(
+            status=(
+                f"Pipeline #{pipeline_id} failed — triage comment posted on !{mr_iid}. "
+                f"Reschedule in {PIPELINE_CHECK_DELAY}s to recheck."
+            ),
+            reschedule_in=PIPELINE_CHECK_DELAY,
+        )
+
+    if pipeline_status in _PIPELINE_SUCCESS_STATUSES:
+        auto_ship = os.getenv("PIPELINE_AUTO_SHIP", "false").lower() == "true"
+        if auto_ship and not dry_run:
+            await _post_ship_mr_comment(project, mr_iid, issue_key, tools)
+        else:
+            logger.info(
+                "Pipeline #%d passed for !%d — PIPELINE_AUTO_SHIP=%s, dry_run=%s. "
+                "Manual QE review required.",
+                pipeline_id,
+                mr_iid,
+                auto_ship,
+                dry_run,
+            )
+        return WorkflowResult(
+            status=(
+                f"Pipeline #{pipeline_id} passed — "
+                + ("ship-mr review posted." if auto_ship and not dry_run else "manual QE review required.")
+                + f" Reschedule in {MERGE_CHECK_DELAY}s."
+            ),
+            reschedule_in=MERGE_CHECK_DELAY,
+        )
+
+    # Unknown/canceled/skipped — wait and recheck
+    return WorkflowResult(
+        status=f"Pipeline #{pipeline_id} status: {pipeline_status} — reschedule in {PIPELINE_CHECK_DELAY}s",
+        reschedule_in=PIPELINE_CHECK_DELAY,
+    )
+
+
+async def _post_pipeline_triage_comment(
+    project: str, mr_iid: int, pipeline_id: int, tools: list
+) -> None:
+    """Fetch failed jobs and comparison data, then post a structured triage comment on the MR."""
+    failed_jobs: list[dict] = []
+    comparison: dict = {}
+
+    try:
+        failed_jobs = await run_tool(
+            "get_pipeline_failed_jobs_deep",
+            available_tools=tools,
+            project=project,
+            pipeline_id=pipeline_id,
+            log_lines=50,
+        )
+    except Exception as e:
+        logger.warning("Failed to get failed jobs for pipeline #%d: %s", pipeline_id, e)
+
+    try:
+        comparison = await run_tool(
+            "compare_mr_test_failures",
+            available_tools=tools,
+            project=project,
+            mr_iid=mr_iid,
+        )
+    except Exception as e:
+        logger.warning("Failed to compare test failures for !%d: %s", mr_iid, e)
+
+    # Categorize
+    build_check_stages = {"build", "pre_build", "check"}
+    new_failures = comparison.get("new_failures", [])
+    waived_failures = comparison.get("waived_failures", [])
+
+    blocker_jobs = [j for j in failed_jobs if j.get("stage", "") in build_check_stages]
+    new_regression_jobs = [j for j in failed_jobs if j.get("name", "") in new_failures]
+    waived_jobs = [j for j in failed_jobs if j.get("name", "") in waived_failures]
+
+    lines = [f"### Pipeline Triage — Pipeline #{pipeline_id}", ""]
+
+    if blocker_jobs:
+        lines.append("#### Build/Check Failures (blockers — not waivable)")
+        for j in blocker_jobs:
+            lines.append(f"- **{j['name']}** (stage: {j['stage']}) — {j.get('failure_reason', 'N/A')}")
+            lines.append(f"  [Job URL]({j['web_url']})")
+        lines.append("")
+
+    if new_regression_jobs:
+        lines.append("#### New Regressions (action required)")
+        for j in new_regression_jobs:
+            lines.append(f"- **{j['name']}** (stage: {j['stage']}) — {j.get('failure_reason', 'N/A')}")
+            lines.append(f"  [Job URL]({j['web_url']})")
+        lines.append("")
+
+    if waived_jobs:
+        lines.append("#### Pre-existing / Waived Failures")
+        prev_iid = comparison.get("previous_mr_iid", "N/A")
+        for j in waived_jobs:
+            lines.append(f"- **{j['name']}** — also failed in previous MR !{prev_iid} (waived)")
+        lines.append("")
+
+    total = len(failed_jobs)
+    new_count = len(blocker_jobs) + len(new_regression_jobs)
+    lines.append("#### Summary")
+    lines.append(f"- Total failed jobs: {total}")
+    lines.append(f"- Blockers (build/check): {len(blocker_jobs)}")
+    lines.append(f"- New regressions: {len(new_regression_jobs)}")
+    lines.append(f"- Pre-existing (waived): {len(waived_jobs)}")
+    lines.append("")
+    if new_count == 0:
+        lines.append("All failures are pre-existing — no new regressions. MR may be safe to merge.")
+    else:
+        lines.append(f"{new_count} blocking failure(s) need attention before this MR can merge.")
+    lines.append("")
+    lines.append("🤖 Generated by Ymir")
+
+    comment_body = "\n".join(lines)
+
+    try:
+        # Try to find the pipeline results discussion thread and reply to it
+        discussions = await run_tool(
+            "get_mr_discussions",
+            available_tools=tools,
+            project=project,
+            mr_iid=mr_iid,
+        )
+        pipeline_discussion_id = None
+        for disc in discussions:
+            notes = disc.get("notes", [])
+            if notes:
+                first_body = notes[0].get("body", "")
+                if "<!--RESULTS_COMMENT-->" in first_body or f"#{pipeline_id}" in first_body:
+                    if not disc.get("resolved", False):
+                        pipeline_discussion_id = disc.get("discussion_id")
+                        break
+
+        if pipeline_discussion_id:
+            await run_tool(
+                "reply_to_mr_discussion",
+                available_tools=tools,
+                project=project,
+                mr_iid=mr_iid,
+                discussion_id=pipeline_discussion_id,
+                body=comment_body,
+            )
+            logger.info("Posted pipeline triage reply to discussion %s on !%d", pipeline_discussion_id, mr_iid)
+        else:
+            await run_tool(
+                "add_merge_request_comment",
+                available_tools=tools,
+                merge_request_url=f"https://gitlab.com/{project}/-/merge_requests/{mr_iid}",
+                comment=comment_body,
+            )
+            logger.info("Posted pipeline triage comment on !%d (no pipeline thread found)", mr_iid)
+    except Exception as e:
+        logger.error("Failed to post pipeline triage comment on !%d: %s", mr_iid, e)
+
+
+async def _post_ship_mr_comment(
+    project: str, mr_iid: int, issue_key: str, tools: list
+) -> None:
+    """Post a ship-mr readiness summary when the pipeline passes."""
+    try:
+        comparison = await run_tool(
+            "compare_mr_test_failures",
+            available_tools=tools,
+            project=project,
+            mr_iid=mr_iid,
+        )
+        waived = comparison.get("waived_failures", [])
+        new_failures = comparison.get("new_failures", [])
+    except Exception as e:
+        logger.warning("Failed to compare test failures for !%d: %s", mr_iid, e)
+        waived = []
+        new_failures = []
+
+    if new_failures:
+        logger.info(
+            "Pipeline passed for !%d but compare_mr_test_failures found %d new failures — "
+            "not auto-approving.",
+            mr_iid,
+            len(new_failures),
+        )
+        return
+
+    comment_lines = [
+        f"### Pipeline Passed — Ship MR Check for !{mr_iid}",
+        "",
+        f"**Pipeline:** passed",
+        f"**Jira:** {issue_key}",
+        f"**Pre-existing failures waived:** {len(waived)}",
+        "",
+        "Pipeline is clean. Proceeding to approve and enable auto-merge.",
+        "",
+        "🤖 Generated by Ymir",
+    ]
+
+    try:
+        await run_tool(
+            "add_merge_request_comment",
+            available_tools=tools,
+            merge_request_url=f"https://gitlab.com/{project}/-/merge_requests/{mr_iid}",
+            comment="\n".join(comment_lines),
+        )
+        await run_tool(
+            "approve_merge_request",
+            available_tools=tools,
+            project=project,
+            mr_iid=mr_iid,
+        )
+        await run_tool(
+            "set_mr_auto_merge",
+            available_tools=tools,
+            project=project,
+            mr_iid=mr_iid,
+        )
+        logger.info("Approved and set auto-merge on !%d in %s", mr_iid, project)
+    except Exception as e:
+        logger.error("Failed to approve/auto-merge !%d: %s", mr_iid, e)
+
+
 async def run_issue_verification(
     jira_issue: str,
     dry_run: bool = False,
@@ -467,11 +773,8 @@ async def run_issue_verification(
                 await _label_merge_if_needed(issue, gateway_tools, state.dry_run)
 
             if JiraLabels.MERGED.value not in issue.labels:
-                state.result = WorkflowResult(
-                    status=f"No merged MR found, reschedule in {MERGE_CHECK_DELAY}s",
-                    reschedule_in=MERGE_CHECK_DELAY,
-                )
-                return Workflow.END
+                # Check the pipeline on the open MR before waiting
+                return "check_open_mr_pipeline"
 
             latest_merged_timestamp = await _get_latest_merged_timestamp(issue, gateway_tools)
             cur_time = datetime.now(tz=UTC)
@@ -746,9 +1049,32 @@ async def run_issue_verification(
             )
             return Workflow.END
 
+        async def check_open_mr_pipeline(state: IssueVerificationWorkflowState):
+            """Check the pipeline status of the open MR and triage or ship accordingly."""
+            issue = state.issue
+            component = issue.components[0]
+
+            open_mr = await _find_open_mr(component, issue.key, gateway_tools)
+            if open_mr is None:
+                logger.info("No open MR found for %s — waiting %ds", issue.key, MERGE_CHECK_DELAY)
+                state.result = WorkflowResult(
+                    status=f"No open or merged MR found for {issue.key} — reschedule in {MERGE_CHECK_DELAY}s",
+                    reschedule_in=MERGE_CHECK_DELAY,
+                )
+                return Workflow.END
+
+            state.result = await _check_and_post_pipeline_triage(
+                open_mr=open_mr,
+                issue_key=issue.key,
+                tools=gateway_tools,
+                dry_run=state.dry_run,
+            )
+            return Workflow.END
+
         workflow.add_step("fetch_and_validate_issue", fetch_and_validate_issue)
         workflow.add_step("check_errata_status", check_errata_status)
         workflow.add_step("run_before_errata", run_before_errata)
+        workflow.add_step("check_open_mr_pipeline", check_open_mr_pipeline)
         workflow.add_step("run_after_errata", run_after_errata)
         workflow.add_step("analyze_testing", analyze_testing)
         workflow.add_step("check_reproduction", check_reproduction)

@@ -122,6 +122,7 @@ async def main() -> None:
                         package=state.package,
                         dist_git_branch=state.dist_git_branch,
                         rebase=False,
+                        available_tools=gateway_tools,
                     )
                 except Exception as e:
                     logger.warning(f"Error updating release: {e}")

@@ -10,15 +10,8 @@ To rebase package <PACKAGE> to version <VERSION> in dist-git branch <DIST_GIT_BR
    ignore any maintainer rules about these:
    build triggering (automatic after you finish),
    commit message footers (Jira/CVE references appended automatically),
+   release field updating,
    and MR creation/description.
-
-   ABANDON AUTORELEASE:
-   If the maintainer rules indicate that %autorelease should NOT be used for
-   Z-stream releases (e.g., the rules mention not using autorelease on zstreams,
-   preferring a numeric release counter, or similar guidance), set
-   `abandon_autorelease` to `true` in your output JSON. This will cause the
-   Release field to use `<release_num>%{?dist}.<zstream_release>` instead of
-   `<release_num>%{?dist}.%{autorelease -n}` when bumping for Z-stream branches.
 
 1. Check if the current version is older than <VERSION>. To get the current version,
    you can use `rpmspec -q --queryformat "%{VERSION}\n" --srpm <PACKAGE>.spec`.

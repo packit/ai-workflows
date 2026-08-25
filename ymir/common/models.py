@@ -141,11 +141,6 @@ class RebaseOutputSchema(BaseModel):
         description="List of files that should be git added and committed"
     )
     error: str | None = Field(description="Specific details about an error")
-    abandon_autorelease: bool = Field(
-        default=False,
-        description="Set to true if maintainer rules indicate that %autorelease should not be used "
-        "for Z-stream releases and a numeric release counter should be used instead",
-    )
 
 
 # ============================================================================
@@ -188,11 +183,6 @@ class BackportOutputSchema(BaseModel):
     )
     srpm_path: Path | None = Field(description="Absolute path to generated SRPM")
     error: str | None = Field(description="Specific details about an error")
-    abandon_autorelease: bool = Field(
-        default=False,
-        description="Set to true if maintainer rules indicate that %autorelease should not be used "
-        "for Z-stream releases and a numeric release counter should be used instead",
-    )
 
 
 class RebuildOutputSchema(BaseModel):
@@ -826,6 +816,26 @@ class PackageReproducerConfig(BaseModel):
     enabled: bool = Field(
         default=False,
         description="Whether to run the Ymir reproducer workflow for this package",
+    )
+
+
+class PackageReleaseBumpingConfig(BaseModel):
+    """Machine-readable release bumping config from the per-package rules repo.
+
+    Parsed from the ``release_bumping`` section of
+    ``gitlab.com/redhat/centos-stream/rules/<package>/ymir.yaml``.
+    """
+
+    abandon_autorelease: bool = Field(
+        default=False,
+        description="If true, %autorelease is not used for Z-stream releases and a numeric "
+        "release counter is used instead",
+    )
+    treat_maintenance_rhel_as_zstream: bool = Field(
+        default=False,
+        description="If true, CentOS Stream branches for a RHEL version in maintenance phase "
+        "(e.g. c8s) get Z-Stream release bumping (checked against the internal RHEL branch) "
+        "instead of a plain Y-Stream bump",
     )
 
 

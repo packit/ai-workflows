@@ -31,6 +31,7 @@ from ymir.common.models import (
     MergeRequestDetails,
     OpenMergeRequestResult,
     PackageConsolidationConfig,
+    PackageReleaseBumpingConfig,
     PackageReproducerConfig,
     Task,
 )
@@ -341,20 +342,78 @@ async def prepare_dist_git_from_merge_request(
     return local_clone, details, fedora_clone
 
 
+class InvalidReleaseBumpingConfigError(Exception):
+    """Raised when ymir.yaml exists but the release_bumping section cannot be parsed."""
+
+
+async def fetch_release_bumping_config(
+    package: str,
+    available_tools: list,
+) -> PackageReleaseBumpingConfig:
+    """Fetch the release bumping config from the per-package rules repo.
+
+    Reads the ``release_bumping`` section from ``ymir.yaml`` at
+    ``gitlab.com/redhat/centos-stream/rules/<package>``.
+    Returns the default config (plain %autorelease/Y-stream bumping) when the
+    file is absent or has no ``release_bumping`` key.
+
+    Raises:
+        InvalidReleaseBumpingConfigError: When the file exists but the
+            ``release_bumping`` section does not conform to the expected schema.
+
+    Args:
+        package: RPM package name.
+        available_tools: MCP gateway tools (must include ``get_maintainer_rules``).
+
+    Returns:
+        Parsed release bumping config.
+    """
+    try:
+        raw = await run_tool(
+            "get_maintainer_rules",
+            package=package,
+            file_path="ymir.yaml",
+            available_tools=available_tools,
+        )
+    except Exception as e:
+        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, e)
+        return PackageReleaseBumpingConfig()
+
+    if "not found" in raw.lower():
+        return PackageReleaseBumpingConfig()
+
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        raise InvalidReleaseBumpingConfigError(f"ymir.yaml for {package} is not valid YAML: {e}") from e
+
+    if not isinstance(data, dict) or "release_bumping" not in data:
+        return PackageReleaseBumpingConfig()
+
+    try:
+        return PackageReleaseBumpingConfig.model_validate(data["release_bumping"])
+    except Exception as e:
+        raise InvalidReleaseBumpingConfigError(
+            f"ymir.yaml release_bumping section for {package} is malformed: {e}"
+        ) from e
+
+
 async def update_release(
     local_clone: Path,
     package: str,
     dist_git_branch: str,
     rebase: bool,
-    abandon_autorelease: bool = False,
+    available_tools: list,
 ) -> None:
+    config = await fetch_release_bumping_config(package, available_tools)
     await run_tool(
         UpdateReleaseTool(options={"working_directory": local_clone}),
         spec=f"{package}.spec",
         package=package,
         dist_git_branch=dist_git_branch,
         rebase=rebase,
-        abandon_autorelease=abandon_autorelease,
+        abandon_autorelease=config.abandon_autorelease,
+        treat_maintenance_rhel_as_zstream=config.treat_maintenance_rhel_as_zstream,
     )
 
 

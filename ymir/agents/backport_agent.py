@@ -301,7 +301,6 @@ class BackportState(PackageUpdateState):
     used_cherry_pick_workflow: bool = Field(default=False)
     incremental_fix_attempts: int = Field(default=0)
     fix_version: str | None = Field(default=None)
-    abandon_autorelease: bool = Field(default=False)
 
 
 async def run_workflow(
@@ -420,8 +419,6 @@ async def run_workflow(
                 **get_agent_execution_config(),
             )
             state.backport_result = BackportOutputSchema.model_validate_json(response.last_message.text)
-            if state.backport_result.abandon_autorelease:
-                state.abandon_autorelease = True
             if state.backport_result.success:
                 state.backport_log.append(state.backport_result.status)
 
@@ -613,7 +610,7 @@ async def run_workflow(
                     package=state.package,
                     dist_git_branch=state.dist_git_branch,
                     rebase=False,
-                    abandon_autorelease=state.abandon_autorelease,
+                    available_tools=gateway_tools,
                 )
             except Exception as e:
                 logger.warning(f"Error updating release: {e}")

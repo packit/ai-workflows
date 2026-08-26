@@ -43,11 +43,14 @@ GET /traces/<issue>
                 start time).
     since       Only return spans with start_time >= this value
                 (nanosecond timestamp). Useful for incremental polling.
+    error_only  If truthy (e.g. "1", "true"), only return spans with
+                status_code == 2 (ERROR).
 
     Examples:
         curl https://trace-server.example.com/traces/RHEL-12345
         curl 'https://trace-server.example.com/traces/RHEL-12345?agent_type=triage&last=1'
         curl 'https://trace-server.example.com/traces/RHEL-12345?name=think,final_answer&last=3'
+        curl 'https://trace-server.example.com/traces/RHEL-12345?error_only=1'
 
 Environment variables
 ---------------------
@@ -187,6 +190,10 @@ def init_db() -> None:
         logger.info("Retention cleanup: removed %d old rows (older than %d days)", deleted, RETENTION_DAYS)
     db.commit()
     db.close()
+
+
+def _is_truthy(value: str | None) -> bool:
+    return value is not None and value.lower() not in ("", "0", "false")
 
 
 def _get_val(value: dict):
@@ -505,19 +512,22 @@ def query_spans(issue: str, params: dict) -> list[dict]:
         query_bindings: list = [trace_id]
         subquery = "SELECT ? AS trace_id"
 
-        since_filter = ""
+        extra_filter = ""
         if since_ns := params.get("since"):
             try:
-                since_filter = " AND start_time >= ?"
+                extra_filter += " AND start_time >= ?"
                 query_bindings.append(int(since_ns))
             except (ValueError, TypeError):
                 pass
+
+        if _is_truthy(params.get("error_only")):
+            extra_filter += " AND status_code = 2"
 
         rows = db.execute(
             f"""SELECT trace_id, span_id, parent_span_id, name, start_time,
                        end_time, status_code, jira_issue, agent_type, attributes
                 FROM spans
-                WHERE trace_id IN ({subquery}){since_filter}
+                WHERE trace_id IN ({subquery}){extra_filter}
                 ORDER BY start_time""",  # noqa: S608
             query_bindings,
         ).fetchall()
@@ -591,20 +601,23 @@ def query_spans(issue: str, params: dict) -> list[dict]:
             subquery = f"SELECT DISTINCT trace_id FROM span_issues si WHERE {join_where}"  # noqa: S608
         query_bindings = bindings
 
-    since_filter = ""
+    extra_filter = ""
     if since_ns := params.get("since"):
         try:
-            since_filter = " AND start_time >= ?"
+            extra_filter += " AND start_time >= ?"
             query_bindings.append(int(since_ns))
         except (ValueError, TypeError):
             pass
+
+    if _is_truthy(params.get("error_only")):
+        extra_filter += " AND status_code = 2"
 
     # Fetch ALL spans from matching traces
     rows = db.execute(
         f"""SELECT trace_id, span_id, parent_span_id, name, start_time,
                    end_time, status_code, jira_issue, agent_type, attributes
             FROM spans
-            WHERE trace_id IN ({subquery}){since_filter}
+            WHERE trace_id IN ({subquery}){extra_filter}
             ORDER BY start_time""",  # noqa: S608
         query_bindings,
     ).fetchall()

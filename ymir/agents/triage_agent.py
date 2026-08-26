@@ -593,13 +593,39 @@ async def run_workflow(
                 f"Issue {state.jira_issue} not eligible for triage: {state.cve_eligibility_result.reason}"
             )
             if state.cve_eligibility_result.error:
-                state.triage_result = OutputSchema(
-                    resolution=Resolution.ERROR,
-                    data=ErrorData(
-                        details=f"CVE eligibility check error: {state.cve_eligibility_result.error}",
-                        jira_issue=state.jira_issue,
-                    ),
-                )
+                # Distinguish human-correctable errors from transient/operational failures:
+                # - Missing Fix Versions field → CLARIFICATION_NEEDED (non-retriable,
+                #   maps to ymir_needs_attention)
+                # - Clone/dependency check failures → ERROR (retriable,
+                #   maps to ymir_triage_errored)
+                error_msg = state.cve_eligibility_result.error
+                is_missing_fix_version = "Fix Versions field is empty" in error_msg
+
+                if is_missing_fix_version:
+                    # Non-retriable: requires human intervention (e.g., setting Fix Versions field)
+                    # Use CLARIFICATION_NEEDED to skip retry loop and post comment only once
+                    # Maps to ymir_needs_attention label (issue data incomplete, needs human attention)
+                    state.triage_result = OutputSchema(
+                        resolution=Resolution.CLARIFICATION_NEEDED,
+                        data=ClarificationNeededData(
+                            findings=f"CVE eligibility check error: {error_msg}",
+                            additional_info_needed=(
+                                "Please fix the issue and retry manually (e.g., via ymir_todo label)."
+                            ),
+                            jira_issue=state.jira_issue,
+                        ),
+                    )
+                else:
+                    # Retriable: operational/transient errors (network, API failures, etc.)
+                    # Use ERROR resolution to trigger retry logic
+                    # Maps to ymir_triage_errored label after max retries exhausted
+                    state.triage_result = OutputSchema(
+                        resolution=Resolution.ERROR,
+                        data=ErrorData(
+                            details=f"CVE eligibility check error: {error_msg}",
+                            jira_issue=state.jira_issue,
+                        ),
+                    )
             elif dup_key:
                 state.triage_result = OutputSchema(
                     resolution=Resolution.OPEN_ENDED_ANALYSIS,

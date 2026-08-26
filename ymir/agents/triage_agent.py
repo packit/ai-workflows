@@ -75,6 +75,7 @@ from ymir.common.utils import (
 )
 from ymir.common.version_utils import (
     construct_internal_branch_name,
+    extract_downstream_package,
     is_modular,
     is_older_zstream,
     normalize_fix_version,
@@ -410,7 +411,10 @@ class TriageState(BaseModel):
     )
     downstream_component: str | None = Field(
         default=None,
-        description="Jira Downstream Component Name (customfield_10669), used for modular detection.",
+        description=(
+            "Package name from Jira Downstream Component Name (customfield_10669). "
+            "Modular values are reduced from 'module:stream/package' to the package."
+        ),
     )
     jira_summary: str | None = Field(
         default=None,
@@ -645,7 +649,10 @@ async def run_workflow(
 
             input_data = InputSchema(issue=state.jira_issue)
             state.jira_summary = jira_details.get("fields", {}).get("summary")
-            state.downstream_component = jira_details.get("fields", {}).get(DOWNSTREAM_COMPONENT_CUSTOM_FIELD)
+            raw_component = jira_details.get("fields", {}).get(DOWNSTREAM_COMPONENT_CUSTOM_FIELD)
+            # Modular issues store "module:stream/package" (e.g. "postgresql:16/postgis");
+            # extract the package so is_modular() / parse_module_stream() match the summary.
+            state.downstream_component = extract_downstream_package(raw_component)
             response = await triage_agent.run(
                 await render_prompt(
                     input_data,

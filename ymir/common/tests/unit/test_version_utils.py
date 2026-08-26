@@ -2,7 +2,9 @@ import pytest
 from flexmock import flexmock
 
 from ymir.common.version_utils import (
+    extract_downstream_package,
     get_maintenance_rhel_branch,
+    is_modular,
     is_older_zstream,
     parse_branch_name,
     parse_module_stream,
@@ -199,3 +201,33 @@ async def test_get_maintenance_rhel_branch(branch, expected):
 )
 def test_parse_module_stream(summary, component, expected):
     assert parse_module_stream(summary, component) == expected
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("postgresql:16/postgis", "postgis"),
+        ("nodejs:18/nodejs", "nodejs"),
+        ("perl:5.32/perl-IO-Socket-SSL", "perl-IO-Socket-SSL"),
+        ("libtiff", "libtiff"),
+        ("regular-component", "regular-component"),
+        (None, None),
+        ("", None),
+    ],
+)
+def test_extract_downstream_package(raw, expected):
+    assert extract_downstream_package(raw) == expected
+
+
+def test_is_modular_requires_package_not_full_modular_string():
+    summary = "postgresql:16/postgis: PostGIS: vuln"
+    raw = "postgresql:16/postgis"
+    assert is_modular(summary, raw) is False
+    assert is_modular(summary, extract_downstream_package(raw)) is True
+
+
+def test_parse_module_stream_requires_package_not_full_modular_string():
+    summary = "postgresql:16/postgis: PostGIS: vuln"
+    raw = "postgresql:16/postgis"
+    assert parse_module_stream(summary, raw) is None
+    assert parse_module_stream(summary, extract_downstream_package(raw)) == ("postgresql", "16")

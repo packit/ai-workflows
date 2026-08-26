@@ -349,6 +349,18 @@ async def is_older_zstream(
 MODULAR_SUMMARY_PREFIX = r"^(?:\S+\s+)*([\w.+-]+):([^/\s]+)/"
 
 
+def extract_downstream_package(raw: str | None) -> str | None:
+    """Return the package name from Jira Downstream Component Name (customfield_10669).
+
+    Modular issues store ``module:stream/package`` (e.g. ``postgresql:16/postgis``);
+    non-modular issues store just the package name. ``is_modular`` and
+    ``parse_module_stream`` match the summary against the package part only.
+    """
+    if not raw:
+        return None
+    return raw.rsplit("/", 1)[-1]
+
+
 def is_modular(summary: str | None, component: str | None) -> bool:
     if not summary or not component:
         return False

@@ -22,7 +22,7 @@ from ymir.common.models import (
     TriageEligibility,
     TriageOutputSchema,
 )
-from ymir.common.version_utils import is_modular, parse_module_stream
+from ymir.common.version_utils import extract_downstream_package, is_modular, parse_module_stream
 
 
 @pytest.mark.parametrize(
@@ -314,6 +314,15 @@ def test_map_version_to_module_branch(version, summary, downstream_component, ex
 def test_map_version_to_module_branch_invalid_version():
     branch = _map_version_to_module_branch("not-a-version", "postgresql:12/postgresql:vuln", "postgresql")
     assert branch is None
+
+
+def test_map_version_to_module_branch_extracts_package_from_raw_field():
+    """customfield_10669 stores module:stream/package; mapping needs the package."""
+    raw = "postgresql:16/postgis"
+    summary = "postgresql:16/postgis: PostGIS: vuln"
+    assert _map_version_to_module_branch("rhel-9.8", summary, raw) is None
+    package = extract_downstream_package(raw)
+    assert _map_version_to_module_branch("rhel-9.8", summary, package) == "stream-postgresql-16-rhel-9.8.0"
 
 
 # --- Modular target branch + namespace selection ---

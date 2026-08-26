@@ -559,6 +559,10 @@ Ensure the `jira_issue` field in the result data is upper-case.
 
 After obtaining the triage result, normalize the `fix_version` if present: if the fix_version is a Y-stream version (e.g., `rhel-9.8`) that has already transitioned to Z-stream (the Z-stream version exists per `map_version`), update it to the Z-stream form (e.g., `rhel-9.8.z`).
 
+### Modular Issues Rollout Note
+
+During the current rollout phase, modular issues are triaged and commented as usual, but downstream dispatch (rebase/backport/rebuild/open-ended/clarification queues) and reproducer enqueueing may be intentionally skipped by the orchestrator after triage. Continue producing the same high-quality triage output; orchestration policy is applied outside this skill.
+
 #### 3.6. General Investigation Instructions
 
 - Be proactive in your search for fixes and do not give up easily.

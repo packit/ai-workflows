@@ -12,7 +12,7 @@ data:
   # (default), the fetcher skips these issues before they reach the triage
   # queue. When "false", modular issues pass through and are enqueued for
   # triage like any other issue.
-  SKIP_MODULAR: "false"
+  SKIP_MODULAR: "true"
 immutable: false
 kind: ConfigMap
 metadata:

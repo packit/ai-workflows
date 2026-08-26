@@ -1105,6 +1105,9 @@ async def test_eligibility_no_fix_version():
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
     assert result["eligibility"] == TriageEligibility.NEVER
     assert result["error"] is not None
+    # Verify the clarified error message that specifies which Jira field is missing
+    assert "Fix Versions field is empty" in result["error"]
+    assert "Fix Versions field is empty" in result["reason"]
 
 
 @pytest.mark.asyncio

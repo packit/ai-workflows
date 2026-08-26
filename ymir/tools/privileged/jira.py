@@ -808,8 +808,8 @@ class CheckCveTriageEligibilityTool(
                 CVEEligibilityResult(
                     is_cve=True,
                     eligibility=TriageEligibility.NEVER,
-                    reason="CVE has no target release specified",
-                    error="CVE has no target release specified",
+                    reason="CVE has no target release specified (Fix Versions field is empty)",
+                    error="CVE has no target release specified (Fix Versions field is empty)",
                 ).model_dump()
             )
 

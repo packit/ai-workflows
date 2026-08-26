@@ -36,9 +36,13 @@ GET /traces/<issue>
     parameters (all are optional and combinable):
 
     agent_type  Filter by agent type (auto-detected from span names).
+                Only selects which traces qualify; does not narrow the
+                spans returned from those traces.
     trace_id    Return only spans belonging to a specific trace.
-    name        Comma-separated span names to include
-                (e.g. TriageAgent,think,final_answer).
+    name        Comma-separated span names (e.g. TriageAgent,think,
+                final_answer). Both selects which traces qualify (a trace
+                needs at least one matching span) AND narrows the
+                returned spans to just those names.
     last        Return only the N most recent traces (by earliest span
                 start time).
     since       Only return spans with start_time >= this value
@@ -51,6 +55,7 @@ GET /traces/<issue>
         curl 'https://trace-server.example.com/traces/RHEL-12345?agent_type=triage&last=1'
         curl 'https://trace-server.example.com/traces/RHEL-12345?name=think,final_answer&last=3'
         curl 'https://trace-server.example.com/traces/RHEL-12345?error_only=1'
+        curl 'https://trace-server.example.com/traces/RHEL-12345?trace_id=abcd&name=build_package'
 
 Environment variables
 ---------------------
@@ -194,6 +199,12 @@ def init_db() -> None:
 
 def _is_truthy(value: str | None) -> bool:
     return value is not None and value.lower() not in ("", "0", "false")
+
+
+def _name_filter(names: str) -> tuple[str, list[str]]:
+    name_list = [n.strip() for n in names.split(",") if n.strip()]
+    placeholders = ",".join("?" * len(name_list))
+    return f" AND name IN ({placeholders})", name_list
 
 
 def _get_val(value: dict):
@@ -523,6 +534,11 @@ def query_spans(issue: str, params: dict) -> list[dict]:
         if _is_truthy(params.get("error_only")):
             extra_filter += " AND status_code = 2"
 
+        if names := params.get("name"):
+            name_clause, name_list = _name_filter(names)
+            extra_filter += name_clause
+            query_bindings.extend(name_list)
+
         rows = db.execute(
             f"""SELECT trace_id, span_id, parent_span_id, name, start_time,
                        end_time, status_code, jira_issue, agent_type, attributes
@@ -563,7 +579,7 @@ def query_spans(issue: str, params: dict) -> list[dict]:
         issue_bindings.append(_normalize_hex_id(trace_id, _TRACE_ID_RE))
 
     if names := params.get("name"):
-        name_list = [n.strip() for n in names.split(",")]
+        _, name_list = _name_filter(names)
         placeholders = ",".join("?" * len(name_list))
         span_conditions.append(f"s.name IN ({placeholders})")
         span_bindings.extend(name_list)
@@ -612,7 +628,12 @@ def query_spans(issue: str, params: dict) -> list[dict]:
     if _is_truthy(params.get("error_only")):
         extra_filter += " AND status_code = 2"
 
-    # Fetch ALL spans from matching traces
+    if names := params.get("name"):
+        name_clause, name_list = _name_filter(names)
+        extra_filter += name_clause
+        query_bindings.extend(name_list)
+
+    # Fetch spans from matching traces (narrowed to `name`/`error_only` if given)
     rows = db.execute(
         f"""SELECT trace_id, span_id, parent_span_id, name, start_time,
                    end_time, status_code, jira_issue, agent_type, attributes

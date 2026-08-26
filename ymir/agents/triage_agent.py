@@ -1606,7 +1606,7 @@ async def main() -> None:
                     Resolution.CLARIFICATION_NEEDED,
                     Resolution.OPEN_ENDED_ANALYSIS,
                 ):
-                    if auto_chain:
+                    if auto_chain and not is_modular(state.jira_summary, state.downstream_component):
                         if output.resolution == Resolution.OPEN_ENDED_ANALYSIS:
                             queue = RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value
                             downstream_payload = output.data.model_dump_json()
@@ -1658,11 +1658,17 @@ async def main() -> None:
                         if queue is not None:
                             await fix_await(redis.lpush(queue, downstream_payload))
                             logger.info(f"Pushed {input.issue} to {queue}")
+                    elif is_modular(state.jira_summary, state.downstream_component):
+                        logger.info(
+                            f"Modular issue {input.issue} — stopping after triage, skipping downstream queue"
+                        )
                     else:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
 
                 if output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
-                    if enqueue_reproducer:
+                    if is_modular(state.jira_summary, state.downstream_component):
+                        logger.info("Modular issue %s — skipping reproducer queue", input.issue)
+                    elif enqueue_reproducer:
                         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
                             await _enqueue_reproducer(redis, state, user_triggered, gateway_tools)
                     else:

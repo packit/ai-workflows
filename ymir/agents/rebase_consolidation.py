@@ -202,9 +202,18 @@ async def queue_siblings_for_triage(
                 JiraLabels.TRIAGED_REBUILD.value,
                 JiraLabels.TRIAGED_NOT_AFFECTED.value,
                 JiraLabels.TRIAGED_POSTPONED.value,
+                # Completion labels
                 JiraLabels.BACKPORTED.value,
                 JiraLabels.REBASED.value,
                 JiraLabels.REBUILT.value,
+                # Error labels
+                JiraLabels.BACKPORT_ERRORED.value,
+                JiraLabels.REBASE_ERRORED.value,
+                JiraLabels.REBUILD_ERRORED.value,
+                # Failed labels
+                JiraLabels.BACKPORT_FAILED.value,
+                JiraLabels.REBASE_FAILED.value,
+                JiraLabels.REBUILD_FAILED.value,
             ]
             if any(label in candidate_labels for label in terminal_labels):
                 found_labels = [label for label in terminal_labels if label in candidate_labels]
@@ -411,6 +420,18 @@ async def check_and_queue_primary_if_ready(
             JiraLabels.TRIAGED_REBUILD.value,
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
             JiraLabels.TRIAGED_POSTPONED.value,
+            # Completion labels - work finished successfully
+            JiraLabels.BACKPORTED.value,
+            JiraLabels.REBASED.value,
+            JiraLabels.REBUILT.value,
+            # Error labels - work finished with error
+            JiraLabels.BACKPORT_ERRORED.value,
+            JiraLabels.REBASE_ERRORED.value,
+            JiraLabels.REBUILD_ERRORED.value,
+            # Failed labels - work finished with failure
+            JiraLabels.BACKPORT_FAILED.value,
+            JiraLabels.REBASE_FAILED.value,
+            JiraLabels.REBUILD_FAILED.value,
         ]
         excluded = ", ".join(f'"{label}"' for label in terminal_labels)
         jql_pending = (

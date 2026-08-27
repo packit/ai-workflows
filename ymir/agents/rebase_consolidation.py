@@ -83,30 +83,30 @@ def build_rebase_siblings_jql(
     """
     excluded = []
     if exclude_triaged:
-        # Exclude ALL terminal states to ensure JQL filtering happens before the 50-result limit.
+        # Exclude non-retriable terminal states to ensure JQL filtering before the 50-result limit.
         # Post-query filtering is not equivalent because we might miss real pending siblings
         # if there are >50 total candidates including many already-processed ones.
+        #
+        # Per jira_label_workflow_routing.md:
+        # - ERRORED labels (triage/backport/rebase_errored) block retry → exclude (terminal)
+        # - FAILED labels (backport/rebase_failed) may auto-retry → DO NOT exclude
         excluded = [
-            # Triage decisions
+            # Triage decisions (non-retriable - sibling has been triaged and decided)
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBUILD.value,
             JiraLabels.TRIAGED_REBASE.value,
             JiraLabels.TRIAGED_POSTPONED.value,
-            # Completion labels
+            # Completion labels (non-retriable - work successfully finished)
             JiraLabels.BACKPORTED.value,
             JiraLabels.REBASED.value,
             JiraLabels.REBUILT.value,
-            # Error labels
+            # ERRORED labels (block retry, need human attention)
             JiraLabels.TRIAGE_ERRORED.value,
             JiraLabels.BACKPORT_ERRORED.value,
             JiraLabels.REBASE_ERRORED.value,
             JiraLabels.REBUILD_ERRORED.value,
-            # Failed labels
-            JiraLabels.BACKPORT_FAILED.value,
-            JiraLabels.REBASE_FAILED.value,
-            JiraLabels.REBUILD_FAILED.value,
-            # Sibling marker (already queued as sibling for a different primary)
+            # Sibling marker (already queued as sibling, don't re-queue)
             JiraLabels.REBASE_SIBLING.value,
         ]
     return build_siblings_jql(
@@ -211,8 +211,9 @@ async def queue_siblings_for_triage(
                 logger.info(f"Sibling {candidate_key} not eligible: {eligibility_result.reason}")
                 continue
 
-            # Defensive check for terminal labels (should already be filtered by JQL,
-            # but check again in case of Jira indexing delays or race conditions)
+            # Defensive check for non-retriable terminal labels (should already be filtered by JQL,
+            # but check again in case of Jira indexing delays or race conditions).
+            # Per jira_label_workflow_routing.md: FAILED labels are retriable, ERRORED block retry.
             candidate_labels, _ = await tasks.get_jira_issue_metadata(candidate_key)
             terminal_labels = {
                 JiraLabels.REBASE_SIBLING.value,
@@ -228,15 +229,12 @@ async def queue_siblings_for_triage(
                 JiraLabels.BACKPORT_ERRORED.value,
                 JiraLabels.REBASE_ERRORED.value,
                 JiraLabels.REBUILD_ERRORED.value,
-                JiraLabels.BACKPORT_FAILED.value,
-                JiraLabels.REBASE_FAILED.value,
-                JiraLabels.REBUILD_FAILED.value,
             }
             found_terminal = terminal_labels.intersection(candidate_labels)
             if found_terminal:
                 logger.info(
                     f"Sibling {candidate_key} already processed "
-                    f"(has terminal label: {found_terminal}), skipping"
+                    f"(has non-retriable terminal label: {found_terminal}), skipping"
                 )
                 continue
 
@@ -418,40 +416,49 @@ async def check_and_queue_primary_if_ready(
             )
             return
 
-        # Use the same JQL builder to ensure we only get siblings of THIS primary
+        # Find siblings that are still pending (not finished processing).
+        # Use exclude_triaged=False to get ALL siblings, then filter to pending ones.
         jql = build_rebase_siblings_jql(
             issue_key=primary_issue,
             component=component,
             fix_version=fix_version,
+            exclude_triaged=False,  # Don't exclude anything yet, we'll filter below
         )
-        # Check for siblings that are still processing: either still labeled as sibling
-        # (not started triage yet) OR in-progress (triage removes ymir_rebase_sibling
-        # at start, so we need to check both).
-        # Exclude siblings with terminal triage labels - they're done, even if they
-        # triaged to a different resolution (e.g. BACKPORT instead of REBASE).
+
+        # A sibling is "pending" (blocks the primary) if it has NOT finished processing.
+        # Pending states:
+        #   - ymir_rebase_sibling (queued but not started)
+        #   - ymir_triage_in_progress (currently being triaged)
+        #
+        # Terminal states (sibling is done, won't block primary):
+        #   - Any ymir_triaged_* label (triage complete, decision made)
+        #   - Any completion label (backported/rebased/rebuilt)
+        #   - Any error/failed label (won't proceed, even if retriable later)
         sibling_label = JiraLabels.REBASE_SIBLING.value
         in_progress_label = JiraLabels.TRIAGE_IN_PROGRESS.value
         terminal_labels = [
+            # Triage decisions
             JiraLabels.TRIAGED_REBASE.value,
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBUILD.value,
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
             JiraLabels.TRIAGED_POSTPONED.value,
-            # Completion labels - work finished successfully
+            # Completions
             JiraLabels.BACKPORTED.value,
             JiraLabels.REBASED.value,
             JiraLabels.REBUILT.value,
-            # Error labels - work finished with error
+            # Errors (won't proceed even if retriable)
             JiraLabels.TRIAGE_ERRORED.value,
             JiraLabels.BACKPORT_ERRORED.value,
             JiraLabels.REBASE_ERRORED.value,
             JiraLabels.REBUILD_ERRORED.value,
-            # Failed labels - work finished with failure
+            # Failures (won't proceed)
             JiraLabels.BACKPORT_FAILED.value,
             JiraLabels.REBASE_FAILED.value,
             JiraLabels.REBUILD_FAILED.value,
         ]
         excluded = ", ".join(f'"{label}"' for label in terminal_labels)
+        # Find siblings that are pending (have sibling/in-progress label) AND not terminal
         jql_pending = (
             f'{jql} AND (labels = "{sibling_label}" OR labels = "{in_progress_label}") '
             f"AND labels not in ({excluded})"

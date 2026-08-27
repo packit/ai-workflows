@@ -207,6 +207,7 @@ async def queue_siblings_for_triage(
                 JiraLabels.REBASED.value,
                 JiraLabels.REBUILT.value,
                 # Error labels
+                JiraLabels.TRIAGE_ERRORED.value,
                 JiraLabels.BACKPORT_ERRORED.value,
                 JiraLabels.REBASE_ERRORED.value,
                 JiraLabels.REBUILD_ERRORED.value,
@@ -425,6 +426,7 @@ async def check_and_queue_primary_if_ready(
             JiraLabels.REBASED.value,
             JiraLabels.REBUILT.value,
             # Error labels - work finished with error
+            JiraLabels.TRIAGE_ERRORED.value,
             JiraLabels.BACKPORT_ERRORED.value,
             JiraLabels.REBASE_ERRORED.value,
             JiraLabels.REBUILD_ERRORED.value,

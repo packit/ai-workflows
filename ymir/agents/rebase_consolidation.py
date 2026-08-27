@@ -102,6 +102,7 @@ def build_rebase_siblings_jql(
             JiraLabels.TRIAGED_REBUILD.value,
             JiraLabels.TRIAGED_REBASE.value,
             JiraLabels.TRIAGED_POSTPONED.value,
+            JiraLabels.TRIAGED.value,  # Open-ended-analysis, no automated follow-up
             # Completion labels (non-retriable - work successfully finished)
             JiraLabels.BACKPORTED.value,
             JiraLabels.REBASED.value,
@@ -111,6 +112,7 @@ def build_rebase_siblings_jql(
             JiraLabels.BACKPORT_ERRORED.value,
             JiraLabels.REBASE_ERRORED.value,
             JiraLabels.REBUILD_ERRORED.value,
+            JiraLabels.NEEDS_ATTENTION.value,  # Clarification-needed, blocked
         ]
     return build_siblings_jql(
         issue_key=issue_key,
@@ -225,6 +227,7 @@ async def queue_siblings_for_triage(
                 JiraLabels.TRIAGED_REBUILD.value,
                 JiraLabels.TRIAGED_NOT_AFFECTED.value,
                 JiraLabels.TRIAGED_POSTPONED.value,
+                JiraLabels.TRIAGED.value,
                 JiraLabels.BACKPORTED.value,
                 JiraLabels.REBASED.value,
                 JiraLabels.REBUILT.value,
@@ -232,6 +235,7 @@ async def queue_siblings_for_triage(
                 JiraLabels.BACKPORT_ERRORED.value,
                 JiraLabels.REBASE_ERRORED.value,
                 JiraLabels.REBUILD_ERRORED.value,
+                JiraLabels.NEEDS_ATTENTION.value,
             }
             found_terminal = terminal_labels.intersection(candidate_labels)
             if found_terminal:

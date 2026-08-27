@@ -232,6 +232,8 @@ class TestTerminalLabels:
             JiraLabels.TRIAGED_REBUILD.value,
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
             JiraLabels.TRIAGED_POSTPONED.value,
+            JiraLabels.TRIAGED.value,  # Open-ended-analysis
+            JiraLabels.NEEDS_ATTENTION.value,  # Clarification-needed
         ]:
             assert f'"{label}"' in jql, f"JQL must exclude {label} but it's missing from: {jql}"
 

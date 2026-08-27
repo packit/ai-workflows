@@ -24,14 +24,37 @@ def test_build_rebase_siblings_jql_escapes_component_quotes():
 
 
 def test_build_rebase_siblings_jql_excludes_correct_labels():
-    """Verify that rebase consolidation excludes terminal triage labels to prevent circular consolidation."""
+    """Verify that rebase consolidation excludes ALL terminal labels in JQL.
+
+    This prevents missing pending siblings when there are >50 total candidates.
+    """
     jql = build_rebase_siblings_jql("RHEL-100", "python3.12", "rhel-9.8")
-    # Should exclude issues already triaged (prevents circular consolidation)
+
+    # Triage decisions
     assert '"ymir_triaged_not_affected"' in jql
     assert '"ymir_triaged_backport"' in jql
     assert '"ymir_triaged_rebuild"' in jql
-    assert '"ymir_triaged_rebase"' in jql  # Prevents circular consolidation
+    assert '"ymir_triaged_rebase"' in jql
     assert '"ymir_triaged_postponed"' in jql
+
+    # Completion labels (must be in JQL, not just post-query filtering)
+    assert '"ymir_backported"' in jql
+    assert '"ymir_rebased"' in jql
+    assert '"ymir_rebuilt"' in jql
+
+    # Error labels (must be in JQL to avoid missing pending siblings)
+    assert '"ymir_triage_errored"' in jql
+    assert '"ymir_backport_errored"' in jql
+    assert '"ymir_rebase_errored"' in jql
+    assert '"ymir_rebuild_errored"' in jql
+
+    # Failed labels
+    assert '"ymir_backport_failed"' in jql
+    assert '"ymir_rebase_failed"' in jql
+    assert '"ymir_rebuild_failed"' in jql
+
+    # Sibling marker
+    assert '"ymir_rebase_sibling"' in jql
 
 
 class TestSiblingCommentExtraction:

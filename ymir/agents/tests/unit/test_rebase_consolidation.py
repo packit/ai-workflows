@@ -24,36 +24,40 @@ def test_build_rebase_siblings_jql_escapes_component_quotes():
 
 
 def test_build_rebase_siblings_jql_excludes_correct_labels():
-    """Verify that rebase consolidation excludes ALL terminal labels in JQL.
+    """Verify that JQL excludes non-retriable states but includes retriable FAILED labels.
+
+    Per jira_label_workflow_routing.md:
+    - ERRORED labels (triage/backport/rebase_errored) block retry → exclude
+    - FAILED labels (backport/rebase_failed) may auto-retry → include (don't exclude)
 
     This prevents missing pending siblings when there are >50 total candidates.
     """
     jql = build_rebase_siblings_jql("RHEL-100", "python3.12", "rhel-9.8")
 
-    # Triage decisions
+    # Triage decisions (non-retriable)
     assert '"ymir_triaged_not_affected"' in jql
     assert '"ymir_triaged_backport"' in jql
     assert '"ymir_triaged_rebuild"' in jql
     assert '"ymir_triaged_rebase"' in jql
     assert '"ymir_triaged_postponed"' in jql
 
-    # Completion labels (must be in JQL, not just post-query filtering)
+    # Completion labels (non-retriable)
     assert '"ymir_backported"' in jql
     assert '"ymir_rebased"' in jql
     assert '"ymir_rebuilt"' in jql
 
-    # Error labels (must be in JQL to avoid missing pending siblings)
+    # ERRORED labels (block retry, must exclude)
     assert '"ymir_triage_errored"' in jql
     assert '"ymir_backport_errored"' in jql
     assert '"ymir_rebase_errored"' in jql
     assert '"ymir_rebuild_errored"' in jql
 
-    # Failed labels
-    assert '"ymir_backport_failed"' in jql
-    assert '"ymir_rebase_failed"' in jql
-    assert '"ymir_rebuild_failed"' in jql
+    # FAILED labels (may auto-retry, must NOT exclude)
+    assert '"ymir_backport_failed"' not in jql
+    assert '"ymir_rebase_failed"' not in jql
+    assert '"ymir_rebuild_failed"' not in jql
 
-    # Sibling marker
+    # Sibling marker (don't re-queue)
     assert '"ymir_rebase_sibling"' in jql
 
 
@@ -246,36 +250,47 @@ class TestTerminalLabels:
         ]:
             assert f'"{label}"' in jql, f"JQL must exclude {label} but it's missing from: {jql}"
 
-    def test_jql_excludes_all_error_labels(self):
-        """JQL must exclude error labels or primaries wait forever for errored siblings.
+    def test_jql_excludes_errored_labels(self):
+        """JQL must exclude ERRORED labels which block retry.
 
-        Regression test for RHEL-248139 where ymir_backport_errored was not excluded.
+        Per jira_label_workflow_routing.md: ERRORED labels (triage/backport/rebase_errored)
+        block retry and need human attention, so they're terminal for sibling queueing.
         """
         from ymir.common.constants import JiraLabels
 
         jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
 
-        # These were the missing labels that caused RHEL-248139
+        # ERRORED labels block retry → must exclude
         for label in [
             JiraLabels.TRIAGE_ERRORED.value,
             JiraLabels.BACKPORT_ERRORED.value,
             JiraLabels.REBASE_ERRORED.value,
             JiraLabels.REBUILD_ERRORED.value,
         ]:
-            assert f'"{label}"' in jql, f"JQL must exclude {label} but it's missing from: {jql}"
+            assert f'"{label}"' in jql, (
+                f"JQL must exclude {label} (blocks retry) but it's missing from: {jql}"
+            )
 
-    def test_jql_excludes_all_failed_labels(self):
-        """JQL must exclude failed labels or primaries wait forever for failed siblings."""
+    def test_jql_includes_failed_labels(self):
+        """JQL must NOT exclude FAILED labels which may auto-retry.
+
+        Per jira_label_workflow_routing.md: FAILED labels (backport/rebase_failed)
+        "May auto-retry", so excluding them breaks the retry mechanism where a new
+        sibling triggers re-queueing of failed issues.
+        """
         from ymir.common.constants import JiraLabels
 
         jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
 
+        # FAILED labels may auto-retry → must NOT exclude
         for label in [
             JiraLabels.BACKPORT_FAILED.value,
             JiraLabels.REBASE_FAILED.value,
             JiraLabels.REBUILD_FAILED.value,
         ]:
-            assert f'"{label}"' in jql, f"JQL must exclude {label} but it's missing from: {jql}"
+            assert f'"{label}"' not in jql, (
+                f"JQL must NOT exclude {label} (may auto-retry) but it's excluded in: {jql}"
+            )
 
     def test_jql_excludes_sibling_marker(self):
         """JQL must exclude ymir_rebase_sibling to avoid queueing siblings of other primaries."""
@@ -306,10 +321,18 @@ class TestTerminalLabels:
         # Spot-check a few terminal labels to ensure they're in the JQL, not filtered post-query
         critical_labels = [
             JiraLabels.BACKPORTED.value,  # Caused RHEL-248139
-            JiraLabels.BACKPORT_ERRORED.value,  # Caused RHEL-248139
-            JiraLabels.TRIAGE_ERRORED.value,  # Prevents exhausted retries from blocking
+            JiraLabels.BACKPORT_ERRORED.value,  # ERRORED blocks retry, must exclude
+            JiraLabels.TRIAGE_ERRORED.value,  # ERRORED blocks retry, must exclude
         ]
         for label in critical_labels:
             assert f'"{label}"' in jql, (
                 f"Critical terminal label {label} must be in JQL for server-side filtering"
             )
+
+        # FAILED labels must NOT be in JQL (they're retriable)
+        retriable_labels = [
+            JiraLabels.BACKPORT_FAILED.value,
+            JiraLabels.REBASE_FAILED.value,
+        ]
+        for label in retriable_labels:
+            assert f'"{label}"' not in jql, f"Retriable label {label} must NOT be excluded in JQL"

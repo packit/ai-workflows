@@ -179,6 +179,19 @@ flowchart TD
 
 Two env-var flags affect pipeline behaviour: `DRY_RUN` and `JIRA_ALLOW_STATUS_CHANGES`. Verbosity is no longer controlled by an env var — the system is silent by default. The only way to opt into comments is per-issue, by adding `ymir_todo` (which flows through the task as `user_triggered=True`).
 
+Important/Critical Y-stream CVEs may take the deterministic inheritance fast
+path before the normal backport agent. A restricted LLM adapts only the target
+spec; inherited patches remain exact shipped Git blobs and deterministic checks
+audit the resulting files and protected spec metadata. This does not introduce
+new Jira or GitLab labels: a validated inherited MR is still `ymir_backport`, reaches
+`ymir_backported`, and enters the same consolidation queue. Pre-push failures
+fall back without changing routing state. Detection of an already-inherited fix
+is treated as a terminal error so a routing defect cannot manufacture an empty
+success or consume queue retries. After a validated inherited commit reaches the
+fork, retry metadata resumes MR publication without rerunning either backport
+path. An immutable patch application failure records a task-level disable marker
+so clone or queue retries continue only through normal backporting.
+
 Ground rules:
 
 - **Default is silent.** No result or error comments are posted on the Jira issue, and intermediate `_failed` labels are not written. Only `not-affected`, `postponed`, `open-ended-analysis`, and `clarification-needed` triage resolutions still post a comment unbidden (those have no MR to look at, so the comment is the only visible explanation).

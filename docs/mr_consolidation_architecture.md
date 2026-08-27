@@ -74,6 +74,12 @@ pair at any time.
 filing an MR. Creates a `pending` entry. If one already exists, it's a no-op (the
 existing pending job will pick up the new MR when it runs).
 
+This includes MRs produced by the Y-stream inheritance fast path. They retain
+the normal `ymir_backport` label and contain one target Jira fix, so discovery,
+ordering, stale-HEAD filtering, and per-commit consolidation need no special
+case. Inheritance provenance (source Jira key, Brew NVR, and commit SHA) remains
+in the original MR description.
+
 **`pick_next_job()`** — Finds any `pending` field whose package-branch pair has no
 `active` field, atomically deletes the `pending` entry and creates an `active` entry
 with the same value. Implemented as a **Lua script** running inside Redis, so the

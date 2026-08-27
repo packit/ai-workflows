@@ -13,6 +13,33 @@ Three agents process tasks through Redis queues:
 - **Backport Agent**: Applies specific fixes/patches to packages. It looks for patches that are linked, attached and present in the description or comments in the issue. It tries to apply the patch and resolve any conflicts that may arise during the backport process.
 - **Issue Verification Agent**: Manages the post-fix lifecycle of a JIRA issue — from merged MR through errata creation, testing analysis, and status transitions to RELEASE_PENDING. Migrated from the supervisor's `IssueHandler`.
 
+### Y-stream inheritance fast path
+
+For Important and Critical Y-stream CVEs, triage carries the shipped leading
+Z-stream clone build to the backport agent. The leading stream is the entry in
+`current_z_streams`; `upcoming_z_streams` is not an inheritance source. The agent
+uses only the leading source for the target Y-stream's RHEL major; it does not
+fall back through older Z-streams. Before invoking the normal LLM backport, the
+agent may reproduce the exact single-issue Z-stream packaging commit on
+`cXs` when the Brew build and target spec have the same Epoch:Version. The commit
+source, Jira footer, and changed files are validated deterministically. An
+inheritance-only LLM maps the source spec change onto the Y-stream spec, but
+inherited patch files must remain byte-for-byte identical to their shipped
+Z-stream Git blobs. The LLM cannot use shell, network, file-creation, or
+patch-generation tools, and its spec changes are audited before release and
+changelog bookkeeping is added.
+
+The inherited change must pass clean `%prep`, SRPM creation, and Copr validation.
+If an immutable patch is changed or does not apply cleanly, inheritance is
+disabled durably and the existing normal backport starts with the original patch
+URLs. Any other pre-push source failure also resets the checkout and starts the
+normal backport; only an environmental cleanup failure permits one fresh-clone
+retry of the same leading source. An already-present fix is a routing error, not
+a successful no-op. After a push, recovery never creates a second fallback
+backport. The queue task stores a publication checkpoint and a retry verifies the
+fork branch still points at the validated commit before it resumes at MR
+creation. Routing-invariant failures are terminal and are not requeued.
+
 
 ## Dry run mode
 

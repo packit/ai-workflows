@@ -78,17 +78,36 @@ def build_rebase_siblings_jql(
         issue_key: Primary issue to exclude
         component: Package component
         fix_version: Target fix version
-        exclude_triaged: If True, exclude already-triaged issues (for queueing new siblings).
+        exclude_triaged: If True, exclude all terminal states (for queueing new siblings).
                         If False, include all siblings (for consolidating in rebase MR).
     """
     excluded = []
     if exclude_triaged:
+        # Exclude ALL terminal states to ensure JQL filtering happens before the 50-result limit.
+        # Post-query filtering is not equivalent because we might miss real pending siblings
+        # if there are >50 total candidates including many already-processed ones.
         excluded = [
+            # Triage decisions
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBUILD.value,
             JiraLabels.TRIAGED_REBASE.value,
             JiraLabels.TRIAGED_POSTPONED.value,
+            # Completion labels
+            JiraLabels.BACKPORTED.value,
+            JiraLabels.REBASED.value,
+            JiraLabels.REBUILT.value,
+            # Error labels
+            JiraLabels.TRIAGE_ERRORED.value,
+            JiraLabels.BACKPORT_ERRORED.value,
+            JiraLabels.REBASE_ERRORED.value,
+            JiraLabels.REBUILD_ERRORED.value,
+            # Failed labels
+            JiraLabels.BACKPORT_FAILED.value,
+            JiraLabels.REBASE_FAILED.value,
+            JiraLabels.REBUILD_FAILED.value,
+            # Sibling marker (already queued as sibling for a different primary)
+            JiraLabels.REBASE_SIBLING.value,
         ]
     return build_siblings_jql(
         issue_key=issue_key,
@@ -192,35 +211,32 @@ async def queue_siblings_for_triage(
                 logger.info(f"Sibling {candidate_key} not eligible: {eligibility_result.reason}")
                 continue
 
-            # Check if already queued as sibling or already triaged (any resolution)
-            # Skip if already processed to avoid re-triaging completed issues
+            # Defensive check for terminal labels (should already be filtered by JQL,
+            # but check again in case of Jira indexing delays or race conditions)
             candidate_labels, _ = await tasks.get_jira_issue_metadata(candidate_key)
-            terminal_labels = [
+            terminal_labels = {
                 JiraLabels.REBASE_SIBLING.value,
                 JiraLabels.TRIAGED_REBASE.value,
                 JiraLabels.TRIAGED_BACKPORT.value,
                 JiraLabels.TRIAGED_REBUILD.value,
                 JiraLabels.TRIAGED_NOT_AFFECTED.value,
                 JiraLabels.TRIAGED_POSTPONED.value,
-                # Completion labels
                 JiraLabels.BACKPORTED.value,
                 JiraLabels.REBASED.value,
                 JiraLabels.REBUILT.value,
-                # Error labels
                 JiraLabels.TRIAGE_ERRORED.value,
                 JiraLabels.BACKPORT_ERRORED.value,
                 JiraLabels.REBASE_ERRORED.value,
                 JiraLabels.REBUILD_ERRORED.value,
-                # Failed labels
                 JiraLabels.BACKPORT_FAILED.value,
                 JiraLabels.REBASE_FAILED.value,
                 JiraLabels.REBUILD_FAILED.value,
-            ]
-            if any(label in candidate_labels for label in terminal_labels):
-                found_labels = [label for label in terminal_labels if label in candidate_labels]
+            }
+            found_terminal = terminal_labels.intersection(candidate_labels)
+            if found_terminal:
                 logger.info(
                     f"Sibling {candidate_key} already processed "
-                    f"(has terminal label: {found_labels}), skipping"
+                    f"(has terminal label: {found_terminal}), skipping"
                 )
                 continue
 

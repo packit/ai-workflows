@@ -18,7 +18,12 @@ from beeai_framework.tools import (
 )
 from pydantic import BaseModel, Field
 
-from ymir.common import CVEEligibilityResult, TriageEligibility, load_rhel_config
+from ymir.common import (
+    CVEEligibilityResult,
+    ShippedZStreamCandidate,
+    TriageEligibility,
+    load_rhel_config,
+)
 from ymir.common.base_utils import get_jira_auth_headers
 from ymir.common.constants import CENTOS_STREAM_KOJIHUB_URL, JIRA_SEARCH_PATH
 from ymir.common.utils import _get_koji_build
@@ -415,14 +420,24 @@ def extract_cve_id(summary: str) -> str | None:
     return match.group(1) if match else None
 
 
+class ZStreamDependencyResult(BaseModel):
+    """Dependency status plus shipped builds usable by Y-stream inheritance."""
+
+    any_shipped: bool
+    pending_keys: list[str] = Field(default_factory=list)
+    shipped_candidates: list[ShippedZStreamCandidate] = Field(default_factory=list)
+
+
 async def _check_zstream_clones_shipped(
     cve_id: str, component: str, exclude_key: str
-) -> tuple[bool, list[str]]:
+) -> ZStreamDependencyResult:
     """Check whether any Z-stream clone has shipped (Critical/Important Y-stream path).
 
     Used for Critical/Important CVEs where the Y-stream fix requires an internal
-    build — we wait for at least one Z-stream clone to reach Done-Errata before
-    the Y-stream becomes eligible for triage.  Checks all non-maintenance majors.
+    build — we wait for at least one relevant Z-stream clone to reach Done-Errata
+    before the Y-stream becomes eligible for triage. The dependency gate checks
+    configured current and upcoming Z-streams for each non-maintenance major, while
+    only shipped current Z-stream clones are returned as inheritance candidates.
     """
     escaped_cve_id = cve_id.replace('"', '\\"')
     escaped_component = component.replace('"', '\\"')
@@ -434,19 +449,28 @@ async def _check_zstream_clones_shipped(
 
     tool = SearchJiraIssuesTool()
     output = await tool.run(
-        input={"jql": jql, "fields": ["fixVersions", "status", "resolution"], "max_results": 50}
+        input={
+            "jql": jql,
+            "fields": [
+                "fixVersions",
+                FIXED_IN_BUILD_CUSTOM_FIELD,
+                "status",
+                "resolution",
+            ],
+            "max_results": 50,
+        }
     )
     issues = output.result
 
     if not issues:
         logger.info(f"No clones found for {cve_id} in component {component}, proceeding with triage")
-        return (True, [])
+        return ZStreamDependencyResult(any_shipped=True)
 
     logger.info(f"Found {len(issues)} clone(s) for {cve_id} in component {component}")
 
     rhel_config = await load_rhel_config()
     current_z_streams = rhel_config.get("current_z_streams", {})
-    upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
+    upcoming_z_streams = rhel_config.get("upcoming_z_streams") or {}
     maintenance_majors = get_maintenance_majors(rhel_config)
     if maintenance_majors:
         logger.info(f"Maintenance-phase major versions (excluded): {sorted(maintenance_majors)}")
@@ -454,19 +478,28 @@ async def _check_zstream_clones_shipped(
     relevant_z_streams = {
         variant.lower()
         for streams in (current_z_streams, upcoming_z_streams)
-        for major, v in streams.items()
+        for major, version in streams.items()
         if major not in maintenance_majors
-        for variant in get_fix_version_variants(v)
+        for variant in get_fix_version_variants(version)
     }
-    logger.info(f"Relevant Z-streams from config: {sorted(relevant_z_streams)}")
+    inheritance_z_streams = {
+        variant.lower()
+        for major, version in current_z_streams.items()
+        if major not in maintenance_majors
+        for variant in get_fix_version_variants(version)
+    }
+    logger.info(f"Dependency Z-streams from config: {sorted(relevant_z_streams)}")
+    logger.info(f"Current inheritance Z-streams from config: {sorted(inheritance_z_streams)}")
 
     any_shipped = False
     pending_keys = []
+    shipped_candidates: list[ShippedZStreamCandidate] = []
     for issue in issues:
         key = issue.get("key", "")
         fix_versions = issue.get("fields", {}).get("fixVersions", [])
         fv_names = [fv.get("name", "") for fv in fix_versions]
         has_relevant_zstream = any(fv.lower() in relevant_z_streams for fv in fv_names)
+        has_inheritance_zstream = any(fv.lower() in inheritance_z_streams for fv in fv_names)
         status_name = issue.get("fields", {}).get("status", {}).get("name", "")
 
         resolution_name = issue.get("fields", {}).get("resolution", {})
@@ -479,6 +512,19 @@ async def _check_zstream_clones_shipped(
         if status_name == "Closed" and resolution_name in ("Done-Errata", "Done"):
             logger.info(f"  {key}: fixVersions={fv_names}, resolution={resolution_name} — shipped")
             any_shipped = True
+            fixed_in_build = issue.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
+            if has_inheritance_zstream and isinstance(fixed_in_build, str) and fixed_in_build.strip():
+                shipped_candidates.append(
+                    ShippedZStreamCandidate(
+                        issue_key=key,
+                        fixed_in_build=fixed_in_build.strip(),
+                        fix_versions=sorted(filter(None, fv_names), key=str.casefold),
+                    )
+                )
+            elif has_inheritance_zstream:
+                logger.info(f"  {key}: shipped without a usable Fixed in Build NVR")
+            else:
+                logger.info(f"  {key}: shipped outside the current inheritance Z-streams")
         elif status_name == "Closed":
             logger.info(
                 f"  {key}: fixVersions={fv_names}, resolution={resolution_name} — closed but not shipped"
@@ -488,20 +534,29 @@ async def _check_zstream_clones_shipped(
             pending_keys.append(key)
 
     if any_shipped:
+        shipped_candidates.sort(
+            key=lambda candidate: (
+                tuple(version.casefold() for version in candidate.fix_versions),
+                candidate.issue_key,
+            )
+        )
         if pending_keys:
             logger.info(
                 f"At least one Z-stream clone shipped for {cve_id}, proceeding (remaining: {pending_keys})"
             )
         else:
             logger.info(f"All relevant Z-stream clones shipped for {cve_id}")
-        return (True, [])
+        return ZStreamDependencyResult(
+            any_shipped=True,
+            shipped_candidates=shipped_candidates,
+        )
 
     if pending_keys:
         logger.info(f"No Z-stream clones shipped yet for {cve_id}, waiting for: {pending_keys}")
-        return (False, pending_keys)
+        return ZStreamDependencyResult(any_shipped=False, pending_keys=pending_keys)
 
     logger.info(f"No relevant Z-stream clones found for {cve_id}, proceeding with triage")
-    return (True, [])
+    return ZStreamDependencyResult(any_shipped=True)
 
 
 _REJECTED_RESOLUTIONS = frozenset({"NOTABUG", "WONTFIX", "WON'T DO", "DUPLICATE", "CANTFIX", "DROPPED"})
@@ -886,19 +941,22 @@ class CheckCveTriageEligibilityTool(
         issue_key: str,
         fields: dict[str, Any],
         target_version: str,
-    ) -> JSONToolOutput[dict[str, Any]] | None:
-        """Return a blocker response if no sibling clone has shipped yet, or None if clear."""
+    ) -> tuple[JSONToolOutput[dict[str, Any]] | None, list[ShippedZStreamCandidate]]:
+        """Return a blocker response and any shipped inheritance candidates."""
         summary = fields.get("summary", "")
         cve_id = extract_cve_id(summary)
 
         if not cve_id:
             logger.warning(f"Cannot extract CVE ID from summary: {summary!r}")
-            return JSONToolOutput(
-                CVEEligibilityResult(
-                    is_cve=True,
-                    eligibility=TriageEligibility.NEVER,
-                    reason=f"CVE ({target_version}): cannot extract CVE ID from summary",
-                ).model_dump()
+            return (
+                JSONToolOutput(
+                    CVEEligibilityResult(
+                        is_cve=True,
+                        eligibility=TriageEligibility.NEVER,
+                        reason=f"CVE ({target_version}): cannot extract CVE ID from summary",
+                    ).model_dump()
+                ),
+                [],
             )
 
         logger.info(f"Extracted CVE ID: {cve_id}")
@@ -906,51 +964,60 @@ class CheckCveTriageEligibilityTool(
         component = components[0].get("name", "") if components else ""
         if not component:
             logger.warning(f"No component set on {issue_key}")
-            return JSONToolOutput(
-                CVEEligibilityResult(
-                    is_cve=True,
-                    eligibility=TriageEligibility.NEVER,
-                    reason=f"CVE {cve_id} ({target_version}): no component set on issue",
-                ).model_dump()
+            return (
+                JSONToolOutput(
+                    CVEEligibilityResult(
+                        is_cve=True,
+                        eligibility=TriageEligibility.NEVER,
+                        reason=f"CVE {cve_id} ({target_version}): no component set on issue",
+                    ).model_dump()
+                ),
+                [],
             )
 
         logger.info(f"Checking clones for {cve_id}, component={component}, exclude={issue_key}")
         try:
-            any_shipped, pending_keys = await _check_zstream_clones_shipped(cve_id, component, issue_key)
+            dependency = await _check_zstream_clones_shipped(cve_id, component, issue_key)
         except Exception as e:
             logger.warning(f"Clone dependency check failed for {cve_id}: {e}")
-            return JSONToolOutput(
-                CVEEligibilityResult(
-                    is_cve=True,
-                    eligibility=TriageEligibility.NEVER,
-                    reason=f"CVE {cve_id} ({target_version}): clone dependency check failed: {e}",
-                    error=str(e),
-                ).model_dump()
+            return (
+                JSONToolOutput(
+                    CVEEligibilityResult(
+                        is_cve=True,
+                        eligibility=TriageEligibility.NEVER,
+                        reason=f"CVE {cve_id} ({target_version}): clone dependency check failed: {e}",
+                        error=str(e),
+                    ).model_dump()
+                ),
+                [],
             )
 
-        if any_shipped:
+        if dependency.any_shipped:
             logger.info(
                 f"Dependency check for {issue_key} ({target_version}): "
                 f"at least one clone for {cve_id} shipped"
             )
-            return None
+            return None, dependency.shipped_candidates
 
         logger.info(
             f"Dependency check for {issue_key} ({target_version}): PENDING_DEPENDENCIES "
-            f"(no clones shipped yet, waiting for: {pending_keys})"
+            f"(no clones shipped yet, waiting for: {dependency.pending_keys})"
         )
-        return JSONToolOutput(
-            CVEEligibilityResult(
-                is_cve=True,
-                eligibility=TriageEligibility.PENDING_DEPENDENCIES,
-                reason=(
-                    f"CVE {cve_id} ({target_version}): "
-                    "waiting for at least one Z-stream clone to ship — "
-                    "RHEL first approach, internal fix is needed first"
-                ),
-                needs_internal_fix=False,
-                pending_zstream_issues=pending_keys,
-            ).model_dump()
+        return (
+            JSONToolOutput(
+                CVEEligibilityResult(
+                    is_cve=True,
+                    eligibility=TriageEligibility.PENDING_DEPENDENCIES,
+                    reason=(
+                        f"CVE {cve_id} ({target_version}): "
+                        "waiting for at least one Z-stream clone to ship — "
+                        "RHEL first approach, internal fix is needed first"
+                    ),
+                    needs_internal_fix=False,
+                    pending_zstream_issues=dependency.pending_keys,
+                ).model_dump()
+            ),
+            [],
         )
 
     async def _check_for_duplicate(
@@ -1025,7 +1092,9 @@ class CheckCveTriageEligibilityTool(
             )
 
         logger.info(f"Severity is {severity or 'unset'}, checking Z-stream dependencies")
-        blocker = await self._check_for_dependency_blocker(issue_key, fields, target_version)
+        blocker, shipped_candidates = await self._check_for_dependency_blocker(
+            issue_key, fields, target_version
+        )
         if blocker is not None:
             return blocker
 
@@ -1039,6 +1108,11 @@ class CheckCveTriageEligibilityTool(
                 ),
                 needs_internal_fix=False,
                 duplicate_of=duplicate_of,
+                shipped_zstream_candidates=(
+                    shipped_candidates
+                    if severity in (Severity.IMPORTANT.value, Severity.CRITICAL.value)
+                    else []
+                ),
             ).model_dump()
         )
 

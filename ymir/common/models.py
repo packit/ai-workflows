@@ -24,6 +24,17 @@ class TriageEligibility(StrEnum):
     NEVER = "never"
 
 
+class ShippedZStreamCandidate(BaseModel):
+    """Shipped Z-stream build that may provide a fix for a Y-stream CVE."""
+
+    issue_key: str = Field(description="Jira key of the shipped Z-stream clone")
+    fixed_in_build: str = Field(description="Brew NVR recorded in the clone's Fixed in Build field")
+    fix_versions: list[str] = Field(
+        default_factory=list,
+        description="Fix Version names recorded on the shipped clone",
+    )
+
+
 class CVEEligibilityResult(BaseModel):
     """
     Result model for CVE triage eligibility analysis.
@@ -47,6 +58,10 @@ class CVEEligibilityResult(BaseModel):
     duplicate_of: str | None = Field(
         default=None,
         description="Jira key of an older tracker for the same CVE, component, and fix version",
+    )
+    shipped_zstream_candidates: list[ShippedZStreamCandidate] = Field(
+        default_factory=list,
+        description="Shipped Z-stream builds that may be inherited by an Important/Critical Y-stream CVE",
     )
 
     @property

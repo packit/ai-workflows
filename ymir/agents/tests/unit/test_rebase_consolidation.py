@@ -206,49 +206,110 @@ class TestSiblingCommentExtraction:
 
 
 class TestTerminalLabels:
-    """Tests for terminal label handling in sibling consolidation."""
+    """Behavioral tests for terminal label handling in sibling consolidation.
 
-    def test_all_terminal_states_are_recognized(self):
-        """
-        Verify that all terminal states (triaged, completed, errored, failed)
-        are properly recognized to prevent stuck primary issues.
+    These tests verify that the production code actually excludes all terminal states,
+    preventing bugs like RHEL-248139 where primaries got stuck waiting for siblings
+    that had already finished with ymir_backported or ymir_backport_errored.
+    """
 
-        Regression test for: https://redhat.atlassian.net/browse/RHEL-248139
-        where siblings with ymir_backported or ymir_backport_errored were not
-        recognized as terminal, causing the primary to wait indefinitely.
-        """
+    def test_jql_excludes_all_triage_decision_labels(self):
+        """JQL must exclude all triage decision labels to avoid re-queueing decided siblings."""
         from ymir.common.constants import JiraLabels
 
-        # These are all the labels that indicate a sibling has finished
-        # processing and should not block the primary from proceeding
-        expected_terminal_labels = {
-            # Triage decisions
+        jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
+
+        # Verify each triage decision label appears in the JQL exclusion
+        for label in [
             JiraLabels.TRIAGED_REBASE.value,
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBUILD.value,
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
             JiraLabels.TRIAGED_POSTPONED.value,
-            # Successful completions
+        ]:
+            assert f'"{label}"' in jql, f"JQL must exclude {label} but it's missing from: {jql}"
+
+    def test_jql_excludes_all_completion_labels(self):
+        """JQL must exclude completion labels or primaries wait forever for completed siblings.
+
+        Regression test for RHEL-248139 where ymir_backported was not excluded.
+        """
+        from ymir.common.constants import JiraLabels
+
+        jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
+
+        # These were the missing labels that caused RHEL-248139
+        for label in [
             JiraLabels.BACKPORTED.value,
             JiraLabels.REBASED.value,
             JiraLabels.REBUILT.value,
-            # Errors (transient failures that may be retried, or exhausted retries)
+        ]:
+            assert f'"{label}"' in jql, f"JQL must exclude {label} but it's missing from: {jql}"
+
+    def test_jql_excludes_all_error_labels(self):
+        """JQL must exclude error labels or primaries wait forever for errored siblings.
+
+        Regression test for RHEL-248139 where ymir_backport_errored was not excluded.
+        """
+        from ymir.common.constants import JiraLabels
+
+        jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
+
+        # These were the missing labels that caused RHEL-248139
+        for label in [
             JiraLabels.TRIAGE_ERRORED.value,
             JiraLabels.BACKPORT_ERRORED.value,
             JiraLabels.REBASE_ERRORED.value,
             JiraLabels.REBUILD_ERRORED.value,
-            # Failures (permanent failures)
+        ]:
+            assert f'"{label}"' in jql, f"JQL must exclude {label} but it's missing from: {jql}"
+
+    def test_jql_excludes_all_failed_labels(self):
+        """JQL must exclude failed labels or primaries wait forever for failed siblings."""
+        from ymir.common.constants import JiraLabels
+
+        jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
+
+        for label in [
             JiraLabels.BACKPORT_FAILED.value,
             JiraLabels.REBASE_FAILED.value,
             JiraLabels.REBUILD_FAILED.value,
-        }
+        ]:
+            assert f'"{label}"' in jql, f"JQL must exclude {label} but it's missing from: {jql}"
 
-        # Note: We cannot directly access the terminal_labels lists from
-        # check_and_queue_primary_if_ready or queue_siblings_for_triage
-        # since they are defined inline. This test documents the expected
-        # behavior and will fail if the constants change but the functions
-        # are not updated accordingly.
+    def test_jql_excludes_sibling_marker(self):
+        """JQL must exclude ymir_rebase_sibling to avoid queueing siblings of other primaries."""
+        from ymir.common.constants import JiraLabels
 
-        # Verify all expected labels exist in JiraLabels enum
-        for label in expected_terminal_labels:
-            assert label in JiraLabels.all_labels(), f"Expected terminal label {label} not in JiraLabels enum"
+        jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
+
+        assert f'"{JiraLabels.REBASE_SIBLING.value}"' in jql, (
+            f"JQL must exclude {JiraLabels.REBASE_SIBLING.value}"
+        )
+
+    def test_jql_exclusion_applies_before_50_result_limit(self):
+        """Terminal labels must be excluded in JQL, not post-query, to avoid missing pending siblings.
+
+        If there are 60 siblings where 40 have terminal labels and 20 are pending:
+        - Correct: JQL excludes 40 terminal, returns 20 pending
+        - Bug: JQL returns first 50 (35 terminal + 15 pending), post-filter → miss 5 pending
+
+        This test verifies the exclusion is in the JQL string (server-side filtering).
+        """
+        from ymir.common.constants import JiraLabels
+
+        jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
+
+        # Critical: the exclusion MUST be in the JQL query string itself
+        assert "labels not in" in jql, "JQL must have 'labels not in' clause for server-side filtering"
+
+        # Spot-check a few terminal labels to ensure they're in the JQL, not filtered post-query
+        critical_labels = [
+            JiraLabels.BACKPORTED.value,  # Caused RHEL-248139
+            JiraLabels.BACKPORT_ERRORED.value,  # Caused RHEL-248139
+            JiraLabels.TRIAGE_ERRORED.value,  # Prevents exhausted retries from blocking
+        ]
+        for label in critical_labels:
+            assert f'"{label}"' in jql, (
+                f"Critical terminal label {label} must be in JQL for server-side filtering"
+            )

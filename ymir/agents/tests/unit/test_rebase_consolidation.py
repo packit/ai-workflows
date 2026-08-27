@@ -209,7 +209,8 @@ class TestTerminalLabels:
             JiraLabels.BACKPORTED.value,
             JiraLabels.REBASED.value,
             JiraLabels.REBUILT.value,
-            # Errors (transient failures that may be retried)
+            # Errors (transient failures that may be retried, or exhausted retries)
+            JiraLabels.TRIAGE_ERRORED.value,
             JiraLabels.BACKPORT_ERRORED.value,
             JiraLabels.REBASE_ERRORED.value,
             JiraLabels.REBUILD_ERRORED.value,

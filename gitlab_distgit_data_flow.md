@@ -74,7 +74,25 @@ graph TD
 |------|---------|---------|
 | **fork_repository** | Create or get existing fork | GitLab API |
 | **clone_repository** | Clone repo to local path | Git CLI |
+| **fetch_commit** | Fetch a validated full SHA into `refs/ymir/zstream/<sha>` | Git CLI |
 | **push_to_remote_repository** | Push branch to remote | Git CLI |
+
+`fetch_commit` is used by Y-stream inheritance for a Brew-recorded RHEL
+dist-git commit. The caller first restricts the source to HTTPS on
+`gitlab.com/redhat/rhel/rpms/<package>` and validates a full hexadecimal SHA;
+the privileged tool reuses GitLab authentication and credential-safe logging.
+The agent polls the namespaced ref to tolerate shared-NFS visibility delay.
+Patch files from the selected commit are restored directly from their Git blobs
+and their blob IDs are recorded. A restricted adaptation agent may modify the
+target spec, but the patch blob IDs are checked again before validation and
+staging. A changed patch abandons inheritance and starts normal backporting.
+
+Inherited publication has distinct local-commit, push, and MR phases. A failure
+before push may return to the normal backport workflow. If push reports an
+uncertain result, the agent compares the fork update branch's exact remote HEAD
+with the validated local commit. Once push is attempted, the queue task retains
+a publication checkpoint; retries verify that branch and resume only at MR
+creation, never at inheritance selection or the fallback backport.
 
 ### Merge Request Management
 

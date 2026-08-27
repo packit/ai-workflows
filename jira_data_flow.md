@@ -135,6 +135,16 @@ sequenceDiagram
     end
 ```
 
+For an exactly Important or Critical Y-stream CVE, `CVEEligibilityResult` also
+contains shipped clones from each RHEL major's configured current Z-stream that
+have a non-empty Fixed in Build value. `upcoming_z_streams` and older Z-stream
+clones are ignored for inheritance. Each source retains its Jira key, NVR, and
+fixVersions. This metadata travels in `Task.metadata` to the backport queue,
+which uses only the single source matching the target Y-stream major. Old tasks
+without the field remain valid and use the normal backport path. A shipped clone
+without an NVR still
+satisfies the existing dependency decision but cannot be inherited.
+
 ### 3. Supervisor → Jira (READ/WRITE)
 
 ```mermaid

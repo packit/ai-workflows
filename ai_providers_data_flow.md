@@ -80,6 +80,8 @@ sequenceDiagram
 
 **Use Cases:**
 - Spec file analysis and modification
+- Guided Y-stream adaptation of shipped Z-stream spec changes; inherited patch
+  content is immutable and verified outside the model
 - Patch backporting and application
 - Build failure diagnosis and fixing
 - Test result analysis

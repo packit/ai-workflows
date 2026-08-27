@@ -57,8 +57,10 @@ def test_build_rebase_siblings_jql_excludes_correct_labels():
     assert '"ymir_rebase_failed"' not in jql
     assert '"ymir_rebuild_failed"' not in jql
 
-    # Sibling marker (don't re-queue)
-    assert '"ymir_rebase_sibling"' in jql
+    # ymir_rebase_sibling must NOT be excluded - it's a queueing state, not a terminal state
+    # Excluding it would break check_and_queue_primary_if_ready() which needs to find
+    # queued-but-not-started siblings
+    assert '"ymir_rebase_sibling"' not in jql
 
 
 class TestSiblingCommentExtraction:
@@ -292,14 +294,21 @@ class TestTerminalLabels:
                 f"JQL must NOT exclude {label} (may auto-retry) but it's excluded in: {jql}"
             )
 
-    def test_jql_excludes_sibling_marker(self):
-        """JQL must exclude ymir_rebase_sibling to avoid queueing siblings of other primaries."""
+    def test_jql_does_not_exclude_sibling_marker(self):
+        """JQL must NOT exclude ymir_rebase_sibling - it's a queueing state, not terminal.
+
+        Regression test: check_and_queue_primary_if_ready() needs to find queued siblings
+        that haven't started triage yet (have ymir_rebase_sibling label). If we excluded
+        this label, the primary would be released early while siblings are still pending.
+
+        queue_siblings_for_triage() handles the re-queueing check in its defensive filter.
+        """
         from ymir.common.constants import JiraLabels
 
         jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
 
-        assert f'"{JiraLabels.REBASE_SIBLING.value}"' in jql, (
-            f"JQL must exclude {JiraLabels.REBASE_SIBLING.value}"
+        assert f'"{JiraLabels.REBASE_SIBLING.value}"' not in jql, (
+            f"JQL must NOT exclude {JiraLabels.REBASE_SIBLING.value} (queueing state, not terminal)"
         )
 
     def test_jql_exclusion_applies_before_50_result_limit(self):
@@ -336,3 +345,28 @@ class TestTerminalLabels:
         ]
         for label in retriable_labels:
             assert f'"{label}"' not in jql, f"Retriable label {label} must NOT be excluded in JQL"
+
+    def test_queued_sibling_blocks_primary(self):
+        """Regression: Queued siblings with ymir_rebase_sibling must be found as pending.
+
+        Before fix: build_rebase_siblings_jql() excluded ymir_rebase_sibling, then
+        check_and_queue_primary_if_ready() added AND labels = "ymir_rebase_sibling",
+        resulting in zero matches. Primary was released while queued siblings were pending.
+
+        After fix: ymir_rebase_sibling is NOT excluded in JQL, so the pending query
+        correctly finds queued-but-not-started siblings.
+        """
+
+        # Simulate the pending-sibling query in check_and_queue_primary_if_ready()
+        jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
+
+        # The query should be able to find siblings with ymir_rebase_sibling
+        # This is the key fix: if ymir_rebase_sibling were excluded from JQL,
+        # then check_and_queue_primary_if_ready() adding:
+        #   AND (labels = "ymir_rebase_sibling" OR labels = "ymir_triage_in_progress")
+        # would return zero results (contradictory query: exclude X AND require X)
+
+        # The key assertion: ymir_rebase_sibling must NOT appear in the exclusion list
+        assert '"ymir_rebase_sibling"' not in jql, (
+            "ymir_rebase_sibling in exclusion list would make pending query contradictory"
+        )

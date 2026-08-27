@@ -90,6 +90,11 @@ def build_rebase_siblings_jql(
         # Per jira_label_workflow_routing.md:
         # - ERRORED labels (triage/backport/rebase_errored) block retry → exclude (terminal)
         # - FAILED labels (backport/rebase_failed) may auto-retry → DO NOT exclude
+        #
+        # NOTE: Do NOT exclude ymir_rebase_sibling here - it's not a terminal triage state,
+        # it's a queueing marker. Excluding it here would break check_and_queue_primary_if_ready()
+        # which needs to find queued-but-not-started siblings to know if primary should wait.
+        # queue_siblings_for_triage() handles the re-queueing check in its defensive filter.
         excluded = [
             # Triage decisions (non-retriable - sibling has been triaged and decided)
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
@@ -106,8 +111,6 @@ def build_rebase_siblings_jql(
             JiraLabels.BACKPORT_ERRORED.value,
             JiraLabels.REBASE_ERRORED.value,
             JiraLabels.REBUILD_ERRORED.value,
-            # Sibling marker (already queued as sibling, don't re-queue)
-            JiraLabels.REBASE_SIBLING.value,
         ]
     return build_siblings_jql(
         issue_key=issue_key,
@@ -417,12 +420,12 @@ async def check_and_queue_primary_if_ready(
             return
 
         # Find siblings that are still pending (not finished processing).
-        # Use exclude_triaged=False to get ALL siblings, then filter to pending ones.
+        # build_rebase_siblings_jql() excludes terminal triage states but NOT ymir_rebase_sibling,
+        # so queued-but-not-started siblings will be found (critical for correct readiness check).
         jql = build_rebase_siblings_jql(
             issue_key=primary_issue,
             component=component,
             fix_version=fix_version,
-            exclude_triaged=False,  # Don't exclude anything yet, we'll filter below
         )
 
         # A sibling is "pending" (blocks the primary) if it has NOT finished processing.

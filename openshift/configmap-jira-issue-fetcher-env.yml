@@ -1,11 +1,16 @@
 apiVersion: v1
 data:
-  MAX_ISSUES: "100"
+  # Only caps jira-issue-fetcher-todo's per-cycle push now — it ignores
+  # QUEUE_DEPTH_THRESHOLD (set in jira-issue-fetcher-filter-env), so this is
+  # its only throttle. jira-issue-fetcher instead derives its per-cycle cap
+  # from QUEUE_DEPTH_THRESHOLD minus current queue depth.
+  MAX_ISSUES: "20"
   LOGLEVEL: "INFO"
   # Conservative default pending real task duration data from Phoenix traces;
   # see the comment next to stale_label_threshold_hours in
-  # jira_issue_fetcher.py. Shared by both cronjobs (daily + todo) since it's a
-  # property of agent task duration, not of which query triggered the sweep.
+  # jira_issue_fetcher.py. Shared by both jira-issue-fetcher cronjobs since
+  # it's a property of agent task duration, not of which query triggered the
+  # sweep.
   STALE_LABEL_THRESHOLD_HOURS: "24"
   # Controls the fetcher-level filter for modular issues (Downstream Component
   # matching module:stream/pkg, e.g. postgresql:16/postgresql). When "true"

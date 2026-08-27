@@ -6,7 +6,8 @@ metadata:
     app: jira-issue-fetcher
     component: scheduler
 spec:
-  schedule: "0 8 * * *"  # Daily at 8am UTC — automated CVE batch
+  # Every 15 minutes — tops up the triage queue toward QUEUE_DEPTH_THRESHOLD.
+  schedule: "*/15 * * * *"
   concurrencyPolicy: Forbid  # Prevent overlapping runs
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
@@ -18,7 +19,12 @@ spec:
         component: job
     spec:
       backoffLimit: 2
-      activeDeadlineSeconds: 600  # 10 minutes max runtime
+      # 10 minutes max runtime — a runaway-job safety net, not overlap
+      # prevention (concurrencyPolicy: Forbid already handles that). Must
+      # comfortably exceed _make_request_with_retries' worst case (4 attempts
+      # x 90s timeout plus backoff, ~6 minutes) so a genuinely slow Jira call
+      # can finish or fail on its own instead of being killed mid-retry.
+      activeDeadlineSeconds: 600
       template:
         metadata:
           labels:

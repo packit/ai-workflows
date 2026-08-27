@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 import gitlab
 import pytest
 from beeai_framework.tools import ToolError
+from beeai_framework.tools.errors import ToolInputValidationError
 from flexmock import flexmock
 from ogr.abstract import PRStatus
 from ogr.services.gitlab import GitlabService
@@ -18,9 +19,11 @@ from ymir.tools.privileged.gitlab import (
     AddMergeRequestLabelsTool,
     CloneRepositoryTool,
     FetchBranchTool,
+    FetchCommitTool,
     ForkRepositoryTool,
     GetAuthorizedCommentsFromMergeRequestTool,
     GetFailedPipelineJobsFromMergeRequestTool,
+    GetRemoteBranchHeadTool,
     OpenMergeRequestTool,
     PushToRemoteRepositoryTool,
     ResolveQeReviewersTool,
@@ -1257,6 +1260,117 @@ async def test_fetch_branch_logs_stderr_on_failure(mock_git_repo_basepath, caplo
     assert "remote ref" in caplog.text
     assert "git fetch" in caplog.text
     assert "failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_fetch_commit_creates_namespaced_ref(mock_git_repo_basepath):
+    clone_path = mock_git_repo_basepath / "vim"
+    clone_path.mkdir()
+    commit_sha = "a" * 40
+    commands: list[list[str]] = []
+
+    async def create_subprocess_exec(cmd, *args, **kwargs):
+        commands.append([cmd, *args])
+
+        async def communicate():
+            return (b"", b"")
+
+        process = flexmock(returncode=0)
+        process.should_receive("communicate").replace_with(communicate)
+        return process
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+
+    result = await FetchCommitTool().run(
+        input={
+            "repository": "https://gitlab.com/redhat/rhel/rpms/vim",
+            "commit_sha": commit_sha,
+            "clone_path": clone_path,
+        }
+    )
+
+    destination = f"refs/ymir/zstream/{commit_sha}"
+    assert result.result == destination
+    assert any(
+        command[-3:]
+        == [
+            "https://gitlab.com/redhat/rhel/rpms/vim",
+            f"{commit_sha}:{destination}",
+            "--no-tags",
+        ]
+        for command in commands
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_commit_rejects_invalid_sha(mock_git_repo_basepath):
+    clone_path = mock_git_repo_basepath / "vim"
+    clone_path.mkdir()
+
+    with pytest.raises(ToolInputValidationError) as error:
+        await FetchCommitTool().run(
+            input={
+                "repository": "https://gitlab.com/redhat/rhel/rpms/vim",
+                "commit_sha": "main",
+                "clone_path": clone_path,
+            }
+        )
+    assert "commit_sha" in str(error.value.__cause__)
+
+
+@pytest.mark.asyncio
+async def test_get_remote_branch_head_returns_exact_ref():
+    commit_sha = "a" * 40
+    commands: list[list[str]] = []
+
+    async def create_subprocess_exec(cmd, *args, **kwargs):
+        commands.append([cmd, *args])
+
+        async def communicate():
+            return (f"{commit_sha}\trefs/heads/automated-update\n".encode(), b"")
+
+        process = flexmock(returncode=0)
+        process.should_receive("communicate").replace_with(communicate)
+        return process
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+
+    result = await GetRemoteBranchHeadTool().run(
+        input={
+            "repository": "https://gitlab.com/ai-bot/vim",
+            "branch": "automated-update",
+        }
+    )
+
+    assert result.result == commit_sha
+    assert commands[0][-4:] == [
+        "ls-remote",
+        "--heads",
+        "https://gitlab.com/ai-bot/vim",
+        "refs/heads/automated-update",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_remote_branch_head_rejects_missing_branch():
+    async def create_subprocess_exec(cmd, *args, **kwargs):
+        return process
+
+    async def communicate():
+        return (b"", b"")
+
+    process = flexmock(returncode=0)
+    process.should_receive("communicate").replace_with(communicate)
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+
+    with pytest.raises(ToolError) as error:
+        await GetRemoteBranchHeadTool().run(
+            input={
+                "repository": "https://gitlab.com/ai-bot/vim",
+                "branch": "automated-update",
+            }
+        )
+    assert "Could not resolve exact head" in str(error.value)
 
 
 @pytest.mark.asyncio

@@ -64,6 +64,7 @@ from ymir.common.models import (
     ErrorData,
     LogInputSchema,
     LogOutputSchema,
+    ShippedZStreamCandidate,
     Task,
 )
 from ymir.common.utils import get_all_patches
@@ -301,6 +302,19 @@ class BackportState(PackageUpdateState):
     used_cherry_pick_workflow: bool = Field(default=False)
     incremental_fix_attempts: int = Field(default=0)
     fix_version: str | None = Field(default=None)
+    shipped_zstream_candidates: list[ShippedZStreamCandidate] = Field(default_factory=list)
+
+
+def _get_shipped_zstream_candidates(
+    triage_state: dict[str, Any],
+) -> list[ShippedZStreamCandidate]:
+    eligibility = triage_state.get("cve_eligibility_result")
+    if not isinstance(eligibility, dict):
+        return []
+    return [
+        ShippedZStreamCandidate.model_validate(candidate)
+        for candidate in eligibility.get("shipped_zstream_candidates") or []
+    ]
 
 
 async def run_workflow(
@@ -319,6 +333,7 @@ async def run_workflow(
     max_incremental_fix_attempts=None,
     user_triggered=False,
     dist_git_namespace=None,
+    shipped_zstream_candidates=None,
 ):
     if max_incremental_fix_attempts is None:
         max_incremental_fix_attempts = max_build_attempts
@@ -807,6 +822,7 @@ async def run_workflow(
                 triage_summary=triage_summary,
                 fix_version=fix_version,
                 attempts_remaining=max_build_attempts,
+                shipped_zstream_candidates=shipped_zstream_candidates or [],
             ),
         )
         return response.state
@@ -961,6 +977,7 @@ async def main() -> None:
                         max_incremental_fix_attempts=max_incremental_fix_attempts,
                         user_triggered=user_triggered,
                         dist_git_namespace=dist_git_namespace,
+                        shipped_zstream_candidates=_get_shipped_zstream_candidates(triage_state),
                     )
                     logger.info(
                         f"Backport processing completed for {backport_data.jira_issue}, "

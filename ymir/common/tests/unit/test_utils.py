@@ -15,6 +15,7 @@ from ymir.common.utils import (
     get_latest_candidate_build,
     get_latest_z_pending_build,
     mcp_tools,
+    parse_koji_build_source,
 )
 
 
@@ -464,6 +465,22 @@ async def test_mcp_tools_non_connection_error_raises_immediately():
 # ============================================================================
 # get_latest_candidate_build
 # ============================================================================
+
+
+def test_parse_koji_build_source():
+    assert parse_koji_build_source({"source": "git+https://gitlab.com/redhat/rhel/rpms/bash#abc123"}) == (
+        "git+https://gitlab.com/redhat/rhel/rpms/bash",
+        "abc123",
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [None, "", "git+https://gitlab.com/redhat/rhel/rpms/bash", "#abc123"],
+)
+def test_parse_koji_build_source_rejects_invalid_metadata(source):
+    with pytest.raises(ValueError, match="source"):
+        parse_koji_build_source({"source": source})
 
 
 def _mock_koji_session(list_tagged_results, get_build_result):

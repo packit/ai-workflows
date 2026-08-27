@@ -61,7 +61,7 @@ async def _run_git_cmd(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     timeout: float | None = 3600,
-) -> None:
+) -> str | None:
     """Run a git subprocess with structured logging, timing, and error handling.
 
     Args:
@@ -79,9 +79,9 @@ async def _run_git_cmd(
     try:
         coro = run_subprocess(command, cwd=cwd, env=env)
         if timeout is not None:
-            returncode, _, stderr = await asyncio.wait_for(coro, timeout=timeout)
+            returncode, stdout, stderr = await asyncio.wait_for(coro, timeout=timeout)
         else:
-            returncode, _, stderr = await coro
+            returncode, stdout, stderr = await coro
     except TimeoutError:
         elapsed = time.monotonic() - t0
         logger.error("%s timed out after %.1fs", label, elapsed)
@@ -92,6 +92,7 @@ async def _run_git_cmd(
             stderr, f"{label} failed (exit_code={returncode}, elapsed={elapsed:.1f}s)"
         )
     logger.info("%s completed in %.1fs", label, elapsed)
+    return stdout
 
 
 # GitLab access levels: Guest (10), Reporter (20), Developer (30),
@@ -764,6 +765,115 @@ class FetchBranchTool(Tool[FetchBranchToolInput, ToolRunOptions, StringToolOutpu
         )
 
         return StringToolOutput(result=f"Successfully fetched branch {branch} from {safe_url}")
+
+
+class FetchCommitToolInput(BaseModel):
+    repository: str = Field(description="Remote repository URL to fetch from")
+    commit_sha: str = Field(
+        description="Full commit SHA to fetch",
+        pattern=r"^[0-9a-fA-F]{40}$",
+    )
+    clone_path: AbsolutePath = Field(description="Absolute path to the local clone")
+
+
+class FetchCommitTool(Tool[FetchCommitToolInput, ToolRunOptions, StringToolOutput]):
+    name = "fetch_commit"
+    timeout = 3600
+    description = """
+    Fetches a full commit SHA from a remote repository into a namespaced local ref.
+    """
+    input_schema = FetchCommitToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: FetchCommitToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        repository = tool_input.repository
+        commit_sha = tool_input.commit_sha.lower()
+        clone_path = tool_input.clone_path
+        destination = f"refs/ymir/zstream/{commit_sha}"
+        safe_url = sanitize_url(repository)
+        auth_args = _get_git_auth_args(repository)
+        git_env = _get_mock_git_env()
+
+        await _run_git_cmd(
+            [
+                "git",
+                *auth_args,
+                "fetch",
+                repository,
+                f"{commit_sha}:{destination}",
+                "--no-tags",
+            ],
+            label=f"git fetch {safe_url} commit={commit_sha}",
+            cwd=clone_path,
+            env=git_env,
+            timeout=None,
+        )
+
+        return StringToolOutput(result=destination)
+
+
+class GetRemoteBranchHeadToolInput(BaseModel):
+    repository: str = Field(description="Remote repository URL to inspect")
+    branch: str = Field(
+        description="Branch whose exact head commit should be returned",
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+    )
+
+
+class GetRemoteBranchHeadTool(Tool[GetRemoteBranchHeadToolInput, ToolRunOptions, StringToolOutput]):
+    name = "get_remote_branch_head"
+    timeout = 3600
+    description = "Returns the exact commit currently referenced by a remote branch."
+    input_schema = GetRemoteBranchHeadToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: GetRemoteBranchHeadToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        repository = tool_input.repository
+        branch = tool_input.branch
+        remote_ref = f"refs/heads/{branch}"
+        safe_url = sanitize_url(repository)
+        stdout = await _run_git_cmd(
+            [
+                "git",
+                *_get_git_auth_args(repository),
+                "ls-remote",
+                "--heads",
+                repository,
+                remote_ref,
+            ],
+            label=f"git ls-remote {safe_url} branch={branch}",
+            env=_get_mock_git_env(),
+            timeout=None,
+        )
+
+        matching_heads = []
+        for line in (stdout or "").splitlines():
+            fields = line.split()
+            if len(fields) == 2 and fields[1] == remote_ref:
+                matching_heads.append(fields[0])
+        if len(matching_heads) != 1 or not re.fullmatch(r"[0-9a-fA-F]{40}", matching_heads[0]):
+            raise ToolError(f"Could not resolve exact head of {remote_ref} on {safe_url}")
+        return StringToolOutput(result=matching_heads[0].lower())
 
 
 class AddMergeRequestLabelsToolInput(BaseModel):

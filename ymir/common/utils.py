@@ -202,6 +202,18 @@ def _get_koji_build(koji_url: str, nvr: str) -> dict | None:
     return koji.ClientSession(koji_url).getBuild(nvr)
 
 
+def parse_koji_build_source(build: dict) -> tuple[str, str]:
+    """Return the repository and ref recorded in Koji build metadata."""
+    source = build.get("source")
+    if not isinstance(source, str):
+        raise ValueError("Koji build has no source")
+
+    repository, separator, source_ref = source.rpartition("#")
+    if not separator or not repository or not source_ref:
+        raise ValueError(f"Koji build has an invalid source: {source!r}")
+    return repository, source_ref
+
+
 class NoBuildFoundError(Exception):
     """Raised when no build exists in any of the queried tags (as opposed to a lookup failure)."""
 
@@ -225,7 +237,7 @@ async def _get_latest_build_from_tags(
     evr, build_id = latest
     session = koji.ClientSession(BREWHUB_URL)
     metadata = await asyncio.to_thread(session.getBuild, build_id, strict=True)
-    source_ref = metadata["source"].split("#")[-1]
+    _, source_ref = parse_koji_build_source(metadata)
     return evr, source_ref
 
 

@@ -1,4 +1,39 @@
-from ymir.agents.backport_agent import _move_build_logs, _update_fix_attempts_log
+from ymir.agents.backport_agent import (
+    _get_shipped_zstream_candidates,
+    _move_build_logs,
+    _update_fix_attempts_log,
+)
+from ymir.common.models import ShippedZStreamCandidate
+
+
+def test_get_shipped_zstream_candidates_from_triage_state():
+    triage_state = {
+        "cve_eligibility_result": {
+            "is_cve": True,
+            "eligibility": "immediately",
+            "reason": "clone shipped",
+            "shipped_zstream_candidates": [
+                {
+                    "issue_key": "RHEL-123",
+                    "fixed_in_build": "curl-8.0.1-2.el9_7",
+                    "fix_versions": ["rhel-9.7.z"],
+                }
+            ],
+        }
+    }
+
+    assert _get_shipped_zstream_candidates(triage_state) == [
+        ShippedZStreamCandidate(
+            issue_key="RHEL-123",
+            fixed_in_build="curl-8.0.1-2.el9_7",
+            fix_versions=["rhel-9.7.z"],
+        )
+    ]
+
+
+def test_get_shipped_zstream_candidates_supports_old_payloads():
+    assert _get_shipped_zstream_candidates({}) == []
+    assert _get_shipped_zstream_candidates({"cve_eligibility_result": None}) == []
 
 
 class TestMoveBuildLogs:

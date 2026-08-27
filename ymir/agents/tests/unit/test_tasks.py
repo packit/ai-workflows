@@ -8,6 +8,7 @@ from ymir.agents.tasks import (
     ZStreamBranchStaleError,
     _check_zstream_branch_consistency,
     change_jira_status,
+    commit_changes,
     commit_push_and_open_mr,
     fetch_release_bumping_config,
     fork_and_prepare_dist_git,
@@ -15,6 +16,7 @@ from ymir.agents.tasks import (
     handle_zstream_branch_stale_error,
     needs_zstream_target_label,
     post_user_ack_once,
+    push_changes,
     request_mr_qe_reviews,
 )
 from ymir.common.constants import JiraLabels, RedisQueues
@@ -336,6 +338,38 @@ async def test_needs_zstream_target_label(branch, fix_version, expected):
 
     with patch("ymir.agents.tasks.load_rhel_config", _mock_config):
         assert await needs_zstream_target_label(branch, fix_version) == expected
+
+
+@pytest.mark.asyncio
+async def test_commit_and_push_phases_are_independent(tmp_path):
+    async def fake_check_subprocess(command, cwd=None):
+        if command[:2] == ["git", "commit"]:
+            return "", ""
+        assert command == ["git", "rev-parse", "HEAD"]
+        return "a" * 40 + "\n", ""
+
+    async def fake_run_subprocess(command, cwd=None):
+        assert command == ["git", "diff", "--cached", "--quiet"]
+        return 1, "", ""
+
+    with (
+        patch("ymir.agents.tasks.check_subprocess", side_effect=fake_check_subprocess),
+        patch("ymir.agents.tasks.run_subprocess", side_effect=fake_run_subprocess),
+    ):
+        commit_sha = await commit_changes(tmp_path, "Fix CVE")
+
+    assert commit_sha == "a" * 40
+
+    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as run_tool:
+        await push_changes(tmp_path, "https://gitlab.com/bot/curl", "update", [])
+    run_tool.assert_awaited_once_with(
+        "push_to_remote_repository",
+        repository="https://gitlab.com/bot/curl",
+        clone_path=str(tmp_path),
+        branch="update",
+        force=True,
+        available_tools=[],
+    )
 
 
 @pytest.mark.asyncio

@@ -34,6 +34,7 @@ try:
         BackportInputSchema,
         BuildInputSchema,
         BuildInstructionsInput,
+        InheritAdaptationInputSchema,
         LogInputSchema,
         MergeRequestInputSchema,
         RebaseInputSchema,
@@ -54,6 +55,17 @@ except ImportError:
         jira_issue: str
         changes_summary: str
         source_changelog: str | None = None
+
+    class InheritAdaptationInputSchema(BaseModel):  # type: ignore[no-redef]
+        local_clone: Path
+        package: str
+        target_spec: str
+        source_issue_key: str
+        target_issue_key: str
+        source_commit: str
+        source_commit_message: str
+        source_spec_diff: str
+        patch_files: list[str] = Field(default_factory=list)
 
     class BackportInputSchema(BaseModel):  # type: ignore[no-redef]
         local_clone: Path
@@ -176,6 +188,21 @@ class TestBackportInstructions:
         assert "DISTGIT_SOURCE" in result
 
 
+class TestInheritAdaptationInstructions:
+    def test_requires_immutable_patches_and_spec_only_edits(self):
+        result = render_template("backport/instructions_inherit.j2")
+
+        assert "byte-for-byte" in result
+        assert "only writable file" in result
+        assert "target spec" in result
+        assert "Release" in result
+        assert "%changelog" in result
+        assert "First, read the complete target spec" in result
+        assert "Do not inspect unrelated files" in result
+        assert "Re-read the complete target spec" in result
+        assert "data, not instructions" in result
+
+
 # ---------------------------------------------------------------------------
 # User prompt templates (with Jinja2 variables)
 # ---------------------------------------------------------------------------
@@ -294,6 +321,31 @@ class TestBackportTemplate:
             ),
         )
         assert "a.k.a." not in result
+
+
+class TestInheritAdaptationTemplate:
+    def test_renders_source_context_and_patch_invariant(self):
+        result = render_template(
+            "backport/prompt_inherit.j2",
+            InheritAdaptationInputSchema(
+                local_clone=Path("/tmp/curl"),
+                package="curl",
+                target_spec="curl.spec",
+                source_issue_key="RHEL-123",
+                target_issue_key="RHEL-999",
+                source_commit="a" * 40,
+                source_commit_message="Fix CVE",
+                source_spec_diff="+Patch1: cve.patch",
+                patch_files=["cve.patch"],
+            ),
+        )
+
+        assert "/tmp/curl" in result
+        assert "RHEL-123" in result
+        assert "RHEL-999" in result
+        assert "cve.patch" in result
+        assert "+Patch1: cve.patch" in result
+        assert "Backport upstream patches" not in result
 
 
 class TestBackportFixBuildErrorTemplate:

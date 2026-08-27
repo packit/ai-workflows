@@ -1,9 +1,33 @@
+import pytest
+
 from ymir.agents.backport_agent import (
+    BackportRetryMode,
+    BackportState,
+    _build_inherited_publication_checkpoint,
+    _can_attempt_ystream_inheritance,
+    _configure_task_retry,
+    _disable_ystream_inheritance,
     _get_shipped_zstream_candidates,
+    _inherit_prep_error,
     _move_build_logs,
+    _remote_branch_matches_commit,
+    _restore_inherited_publication,
+    _schedule_inherit_cleanup_retry,
     _update_fix_attempts_log,
+    _validate_inherited_staged_files,
 )
-from ymir.common.models import ShippedZStreamCandidate
+from ymir.agents.ystream_inherit import (
+    BrewSource,
+    InheritCandidateError,
+    InheritedPatchApplyError,
+    IntegratedChange,
+)
+from ymir.common.models import (
+    BackportOutputSchema,
+    LogOutputSchema,
+    ShippedZStreamCandidate,
+    Task,
+)
 
 
 def test_get_shipped_zstream_candidates_from_triage_state():
@@ -34,6 +58,157 @@ def test_get_shipped_zstream_candidates_from_triage_state():
 def test_get_shipped_zstream_candidates_supports_old_payloads():
     assert _get_shipped_zstream_candidates({}) == []
     assert _get_shipped_zstream_candidates({"cve_eligibility_result": None}) == []
+
+
+def _state(**updates):
+    data = {
+        "jira_issue": "RHEL-999",
+        "package": "curl",
+        "dist_git_branch": "c9s",
+        "upstream_patches": ["https://example.com/fix.patch"],
+        "cve_id": "CVE-2026-1234",
+        "fix_version": "rhel-9.8",
+        "shipped_zstream_candidates": [
+            ShippedZStreamCandidate(
+                issue_key="RHEL-123",
+                fixed_in_build="curl-8.0.1-2.el9_7",
+                fix_versions=["rhel-9.7.z"],
+            )
+        ],
+    }
+    data.update(updates)
+    return BackportState(**data)
+
+
+def test_ystream_inheritance_requires_y_fix_version_and_cs_target():
+    assert _can_attempt_ystream_inheritance(_state())
+    assert not _can_attempt_ystream_inheritance(_state(fix_version="rhel-9.7.z"))
+    assert not _can_attempt_ystream_inheritance(_state(dist_git_branch="rhel-9.8"))
+    assert not _can_attempt_ystream_inheritance(_state(shipped_zstream_candidates=[]))
+    assert not _can_attempt_ystream_inheritance(_state(inheritance_disabled=True))
+
+
+def test_disabling_inheritance_is_durable_in_task_metadata():
+    state = _state()
+    metadata = {}
+
+    _disable_ystream_inheritance(state, metadata)
+
+    assert state.inheritance_disabled
+    assert metadata["ystream_inheritance_disabled"] is True
+
+
+def test_patch_prep_failure_requires_immediate_normal_backport():
+    change = IntegratedChange(
+        commit_sha="a" * 40,
+        commit_message="Fix",
+        changed_files=["curl.spec", "fix.patch"],
+        patch_files=["fix.patch"],
+    )
+
+    assert isinstance(_inherit_prep_error("prep failed: hunk rejected", change), InheritedPatchApplyError)
+    assert isinstance(_inherit_prep_error("patch applied with fuzz", change), InheritedPatchApplyError)
+    assert _inherit_prep_error("prep completed successfully", change) is None
+
+
+def test_spec_only_prep_failure_remains_candidate_failure():
+    change = IntegratedChange(
+        commit_sha="a" * 40,
+        commit_message="Fix",
+        changed_files=["curl.spec"],
+    )
+
+    error = _inherit_prep_error("prep failed", change)
+    assert isinstance(error, InheritCandidateError)
+    assert not isinstance(error, InheritedPatchApplyError)
+
+
+def test_inherited_staging_rejects_missing_or_unexpected_files():
+    _validate_inherited_staged_files("curl.spec\nfix.patch\n", ["curl.spec", "fix.patch"])
+
+    with pytest.raises(InheritCandidateError, match=r"extra\.patch"):
+        _validate_inherited_staged_files(
+            "curl.spec\nfix.patch\nextra.patch\n",
+            ["curl.spec", "fix.patch"],
+        )
+
+
+def test_cleanup_reclone_retries_single_inherit_source_once():
+    state = _state()
+
+    assert _schedule_inherit_cleanup_retry(state)
+    assert state.inherit_cleanup_retried
+
+    assert not _schedule_inherit_cleanup_retry(state)
+
+
+def test_remote_branch_must_point_at_exact_inherited_commit():
+    commit_sha = "a" * 40
+
+    assert _remote_branch_matches_commit(commit_sha.upper(), commit_sha)
+    assert not _remote_branch_matches_commit("b" * 40, commit_sha)
+    assert not _remote_branch_matches_commit(None, commit_sha)
+
+
+def _published_state(**updates):
+    state = _state(
+        fork_url="https://gitlab.com/ymir/curl",
+        update_branch="automated-package-update-RHEL-999",
+        inherit_local_commit="a" * 40,
+        inherit_candidate=_state().shipped_zstream_candidates[0],
+        inherit_source=BrewSource(
+            nvr="curl-8.0.1-2.el9_7",
+            repository_url="https://gitlab.com/redhat/rhel/rpms/curl",
+            commit_sha="b" * 40,
+            epoch=0,
+            version="8.0.1",
+        ),
+        inherit_change=IntegratedChange(
+            commit_sha="c" * 40,
+            commit_message="Fix CVE\n\nResolves: RHEL-123",
+            changed_files=["curl.spec", "fix.patch"],
+        ),
+        inherit_mr_description="Inherited fix",
+        log_result=LogOutputSchema(title="Fix CVE", description="Inherited fix"),
+        backport_result=BackportOutputSchema(
+            success=True,
+            status="Inherited from RHEL-123",
+            srpm_path=None,
+            error=None,
+        ),
+    )
+    return state.model_copy(update=updates)
+
+
+def test_resume_retry_persists_inherited_publication_checkpoint():
+    state = _published_state(retry_mode=BackportRetryMode.RESUME_INHERITED_MR)
+    state.inherited_publication_checkpoint = _build_inherited_publication_checkpoint(state)
+    task = Task(metadata={})
+
+    assert _configure_task_retry(task, state)
+    checkpoint = task.metadata["inherited_publication_checkpoint"]
+    assert checkpoint["local_commit"] == "a" * 40
+    assert checkpoint["source_issue_key"] == "RHEL-123"
+
+
+def test_restore_checkpoint_resumes_only_publication_state():
+    published = _published_state()
+    checkpoint = _build_inherited_publication_checkpoint(published)
+    state = _state(inherited_publication_checkpoint=checkpoint)
+
+    assert _restore_inherited_publication(state) == checkpoint
+    assert state.retry_mode == BackportRetryMode.RESUME_INHERITED_MR
+    assert state.fork_url == published.fork_url
+    assert state.update_branch == published.update_branch
+    assert state.inherit_local_commit == published.inherit_local_commit
+    assert state.backport_result.success
+    assert state.local_clone is None
+
+
+def test_invariant_failure_disables_queue_retry():
+    state = _state(retry_mode=BackportRetryMode.NONE)
+
+    assert not _configure_task_retry(Task(metadata={}), state)
 
 
 class TestMoveBuildLogs:

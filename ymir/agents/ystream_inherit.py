@@ -28,6 +28,7 @@ from ymir.common.version_utils import parse_rhel_version
 _FULL_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _JIRA_KEY_RE = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b", re.IGNORECASE)
 _RESOLVES_RE = re.compile(r"^Resolves:\s*(?P<value>.+)$", re.IGNORECASE | re.MULTILINE)
+_YMIR_ATTRIBUTION_RE = re.compile(r"^\s*Assisted-by:\s*Ymir\s*$", re.IGNORECASE)
 
 
 class InheritCandidateError(RuntimeError):
@@ -572,3 +573,20 @@ def rewrite_commit_message(commit_message: str, z_issue_key: str, y_issue_key: s
     if not saw_y_resolves:
         lines.extend(["", f"Resolves: {y_issue_key}"])
     return "\n".join(lines).rstrip()
+
+
+def ensure_single_ymir_attribution(commit_message: str) -> str:
+    """Add Ymir attribution when absent and collapse duplicate Ymir trailers."""
+    lines: list[str] = []
+    saw_attribution = False
+    for line in commit_message.rstrip().splitlines():
+        if _YMIR_ATTRIBUTION_RE.fullmatch(line):
+            if saw_attribution:
+                continue
+            saw_attribution = True
+        lines.append(line)
+
+    message = "\n".join(lines).rstrip()
+    if not saw_attribution:
+        message = f"{message}\n\nAssisted-by: Ymir" if message else "Assisted-by: Ymir"
+    return f"{message}\n"

@@ -87,6 +87,15 @@ def test_init(mock_env_vars):
     assert fetcher.max_results_per_page == 500
     assert fetcher.headers["Authorization"].startswith("Basic ")
     assert fetcher.skip_modular is True
+    assert fetcher.queue_depth_threshold is None
+
+
+def test_init_queue_depth_threshold(mock_env_vars, monkeypatch):
+    """QUEUE_DEPTH_THRESHOLD is parsed to an int when set."""
+    monkeypatch.setenv("QUEUE_DEPTH_THRESHOLD", "15")
+    fetcher = JiraIssueFetcher()
+
+    assert fetcher.queue_depth_threshold == 15
 
 
 @pytest.mark.asyncio
@@ -483,6 +492,50 @@ async def test_push_issues_to_queue_skip_ignored_components(fetcher, mock_redis_
 
 
 @pytest.mark.asyncio
+async def test_get_queue_depth_sums_both_queues(fetcher, mock_redis_context):
+    """_get_queue_depth returns the combined depth of triage_queue and triage_queue_todo."""
+    mock_redis, _ = mock_redis_context
+
+    mock_redis.should_receive("llen").with_args(RedisQueues.TRIAGE_QUEUE.value).and_return(
+        create_async_mock_return_value(7)
+    )
+    mock_redis.should_receive("llen").with_args(RedisQueues.TRIAGE_QUEUE_TODO.value).and_return(
+        create_async_mock_return_value(3)
+    )
+
+    depth = await fetcher._get_queue_depth(mock_redis)
+
+    assert depth == 10
+
+
+@pytest.mark.asyncio
+async def test_push_issues_to_queue_max_issues_override_takes_precedence(fetcher, mock_redis_context):
+    """max_issues_override, when passed, is used instead of self.max_issues."""
+    mock_redis, _ = mock_redis_context
+
+    fetcher.max_issues = 100
+
+    issues = [
+        {"key": "RHEL-1", "fields": {"labels": []}},
+        {"key": "RHEL-2", "fields": {"labels": []}},
+        {"key": "RHEL-3", "fields": {"labels": []}},
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    task1 = Task.from_issue("RHEL-1")
+    mock_redis.should_receive("lpush").with_args(RedisQueues.TRIAGE_QUEUE.value, task1.to_json()).and_return(
+        create_async_mock_return_value(1)
+    ).once()
+
+    result = await fetcher.push_issues_to_queue(issues, max_issues_override=1)
+
+    assert result == 1
+
+
+@pytest.mark.asyncio
 async def test_push_issues_to_queue_max_issues(fetcher, mock_redis_context):
     """Test that MAX_ISSUES limits the number of enqueued issues."""
     mock_redis, _ = mock_redis_context
@@ -679,9 +732,49 @@ async def test_run_full_workflow(fetcher):
     flexmock(fetcher).should_receive("search_issues").and_return(
         create_async_mock_return_value(mock_issues)
     ).once()
-    flexmock(fetcher).should_receive("push_issues_to_queue").with_args(mock_issues).and_return(
-        create_async_mock_return_value(1)
+    flexmock(fetcher).should_receive("push_issues_to_queue").with_args(
+        mock_issues, max_issues_override=None
+    ).and_return(create_async_mock_return_value(1)).once()
+    flexmock(fetcher).should_receive("_process_consolidation_labels").with_args(mock_issues).and_return(
+        create_async_mock_return_value(0)
     ).once()
+
+    await fetcher.run()
+
+
+@pytest.mark.asyncio
+async def test_run_skips_push_but_still_processes_consolidation_when_at_threshold(
+    fetcher, mock_redis_context
+):
+    """When depth >= threshold, run() still searches and processes consolidation, just skips the push."""
+    fetcher.queue_depth_threshold = 15
+    mock_issues = [{"key": "RHEL-1", "fields": {"labels": []}}]
+
+    flexmock(fetcher).should_receive("search_issues").and_return(
+        create_async_mock_return_value(mock_issues)
+    ).once()
+    flexmock(fetcher).should_receive("_get_queue_depth").and_return(create_async_mock_return_value(15)).once()
+    flexmock(fetcher).should_receive("push_issues_to_queue").never()
+    flexmock(fetcher).should_receive("_process_consolidation_labels").with_args(mock_issues).and_return(
+        create_async_mock_return_value(0)
+    ).once()
+
+    await fetcher.run()
+
+
+@pytest.mark.asyncio
+async def test_run_tops_up_when_below_threshold(fetcher, mock_redis_context):
+    """When depth < threshold, run() pushes up to (threshold - depth) issues."""
+    fetcher.queue_depth_threshold = 15
+    mock_issues = [{"key": "RHEL-1", "fields": {"labels": []}}]
+
+    flexmock(fetcher).should_receive("search_issues").and_return(
+        create_async_mock_return_value(mock_issues)
+    ).once()
+    flexmock(fetcher).should_receive("_get_queue_depth").and_return(create_async_mock_return_value(10)).once()
+    flexmock(fetcher).should_receive("push_issues_to_queue").with_args(
+        mock_issues, max_issues_override=5
+    ).and_return(create_async_mock_return_value(1)).once()
     flexmock(fetcher).should_receive("_process_consolidation_labels").with_args(mock_issues).and_return(
         create_async_mock_return_value(0)
     ).once()

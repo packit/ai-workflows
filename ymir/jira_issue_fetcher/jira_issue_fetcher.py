@@ -93,6 +93,12 @@ class JiraIssueFetcher:
         max_issues_str = os.getenv("MAX_ISSUES", "")
         self.max_issues: int | None = int(max_issues_str) if max_issues_str else None
 
+        # Optional: target combined triage-queue depth to top up towards.
+        # Unset/empty disables the depth-based throttle entirely.
+        self.queue_depth_threshold: int | None = (
+            int(v) if (v := os.getenv("QUEUE_DEPTH_THRESHOLD", "")) else None
+        )
+
         # Use constant page size
         self.max_results_per_page = self.MAX_RESULTS_PER_PAGE
 
@@ -568,7 +574,15 @@ class JiraIssueFetcher:
             locked_keys.add(issue_key)
         return locked_keys
 
-    async def push_issues_to_queue(self, issues: list[dict[str, Any]]) -> int:
+    async def _get_queue_depth(self, redis_conn: redis.Redis) -> int:
+        """Return the combined depth of the two queues this fetcher pushes to."""
+        triage_depth = await fix_await(redis_conn.llen(RedisQueues.TRIAGE_QUEUE.value))
+        todo_depth = await fix_await(redis_conn.llen(RedisQueues.TRIAGE_QUEUE_TODO.value))
+        return triage_depth + todo_depth
+
+    async def push_issues_to_queue(
+        self, issues: list[dict[str, Any]], max_issues_override: int | None = None
+    ) -> int:
         """
         Push each issue to the Redis triage_queue, but only if it doesn't already exist
         """
@@ -712,14 +726,15 @@ class JiraIssueFetcher:
                         remove_issues_for_retry.add(issue_key)
                         retry_needed_keys.add(issue_key)
 
+            effective_max_issues = max_issues_override if max_issues_override is not None else self.max_issues
             pushed_count = 0
             skipped_count = 0
             modular_count = 0
 
             for issue in issues:
                 try:
-                    if self.max_issues is not None and pushed_count >= self.max_issues:
-                        logger.info(f"Reached MAX_ISSUES limit ({self.max_issues})")
+                    if effective_max_issues is not None and pushed_count >= effective_max_issues:
+                        logger.info(f"Reached per-cycle push limit ({effective_max_issues})")
                         break
 
                     issue_key = issue["key"]
@@ -1035,8 +1050,24 @@ class JiraIssueFetcher:
                 logger.info("No issues found matching the query")
                 return
 
-            pushed_count = await self.push_issues_to_queue(issues)
-            logger.info(f"Completed: {pushed_count} issues added to triage_queue")
+            # Depth is read here, immediately before it's consumed, rather
+            # than before search_issues() — the search can take a while
+            # (pagination, rate limiting) during which ymir_todo can push
+            # concurrently, so checking right before push keeps the reading
+            # as fresh as possible. This doesn't gate search/consolidation
+            # below: those must always run regardless of triage-queue depth.
+            push_cap = None
+            if self.queue_depth_threshold is not None:
+                async with redis_client(self.redis_url) as redis_conn:
+                    depth = await self._get_queue_depth(redis_conn)
+                logger.info(f"Triage queue depth: {depth} (threshold: {self.queue_depth_threshold})")
+                push_cap = max(0, self.queue_depth_threshold - depth)
+
+            if push_cap != 0:
+                pushed_count = await self.push_issues_to_queue(issues, max_issues_override=push_cap)
+                logger.info(f"Completed: {pushed_count} issues added to triage_queue")
+            else:
+                logger.info("Queue depth at/above threshold - skipping triage push this cycle")
 
             consolidation_count = await self._process_consolidation_labels(issues)
             if consolidation_count:

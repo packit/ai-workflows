@@ -1,6 +1,7 @@
 apiVersion: v1
 data:
   QUERY: 'filter="Ymir CVE work to do"'
+  QUEUE_DEPTH_THRESHOLD: "15"
 immutable: false
 kind: ConfigMap
 metadata:

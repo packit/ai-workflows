@@ -200,6 +200,31 @@ class BackportOutputSchema(BaseModel):
     error: str | None = Field(description="Specific details about an error")
 
 
+class InheritAdaptationInputSchema(BaseModel):
+    """Context for adapting one validated Z-stream change to a Y-stream spec."""
+
+    local_clone: Path
+    package: str
+    target_spec: str
+    source_issue_key: str
+    target_issue_key: str
+    source_commit: str
+    source_commit_message: str
+    source_spec_diff: str
+    patch_files: list[str] = Field(default_factory=list)
+
+
+class InheritAdaptationOutputSchema(BaseModel):
+    """Result of the LLM-guided spec adaptation step."""
+
+    success: bool = Field(description="Whether the source fix was safely mapped to the target spec")
+    strategy: Literal["patch", "spec_only", "mixed", "unsupported"] = Field(
+        description="Kind of source change that was adapted"
+    )
+    status: str = Field(description="Concise description of the spec adaptation")
+    error: str | None = Field(default=None, description="Reason safe adaptation was not possible")
+
+
 class RebuildOutputSchema(BaseModel):
     """Output schema for the rebuild agent."""
 

@@ -10,6 +10,7 @@ from ymir.agents.ystream_inherit import (
     ImmutablePatchError,
     InheritCandidateError,
     apply_zstream_change,
+    ensure_single_ymir_attribution,
     find_zstream_fix_commit,
     inspect_commit_files,
     reset_inherit_attempt,
@@ -411,3 +412,21 @@ def test_rewrite_commit_message_changes_only_exact_footer_reference():
     assert rewrite_commit_message(original, "RHEL-123", "RHEL-999") == (
         "Fix RHEL-123 in prose\n\nRelated: RHEL-1234\nResolves: RHEL-999"
     )
+
+
+def test_ymir_attribution_is_added_when_source_was_not_created_by_ymir():
+    assert ensure_single_ymir_attribution("Fix CVE\n\nResolves: RHEL-999") == (
+        "Fix CVE\n\nResolves: RHEL-999\n\nAssisted-by: Ymir\n"
+    )
+
+
+def test_existing_ymir_attribution_is_not_duplicated():
+    source_message = (
+        "Fix CVE\n\n"
+        "This commit was backported by Ymir, a Red Hat Enterprise Linux software maintenance "
+        "AI agent.\n\n"
+        "Assisted-by: Ymir\n"
+    )
+
+    assert ensure_single_ymir_attribution(source_message) == source_message
+    assert ensure_single_ymir_attribution(source_message + "Assisted-by: Ymir\n") == source_message

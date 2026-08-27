@@ -449,6 +449,19 @@ async def commit_and_push(
         - str: The URL of the merge request if it was created successfully
         - bool: True if the merge request was created, False otherwise (i.e. MR was reused)
     """
+    await commit_changes(local_clone, commit_message, allow_empty)
+    if commit_only:
+        return False
+    await push_changes(local_clone, fork_url, update_branch, available_tools)
+    return True
+
+
+async def commit_changes(
+    local_clone: Path,
+    commit_message: str,
+    allow_empty: bool = False,
+) -> str:
+    """Create a local commit and return its full object ID."""
     if not allow_empty:
         # Check if any files are staged before committing, if none, bail
         exit_code, _, _ = await run_subprocess(
@@ -464,8 +477,17 @@ async def commit_and_push(
         commit_cmd.append("--allow-empty")
     commit_cmd.extend(["-m", commit_message])
     await check_subprocess(commit_cmd, cwd=local_clone)
-    if commit_only:
-        return False
+    commit_sha, _ = await check_subprocess(["git", "rev-parse", "HEAD"], cwd=local_clone)
+    return commit_sha.strip()
+
+
+async def push_changes(
+    local_clone: Path,
+    fork_url: str,
+    update_branch: str,
+    available_tools: list[Tool],
+) -> None:
+    """Push an already-created update commit to the package fork."""
     await run_tool(
         "push_to_remote_repository",
         repository=fork_url,
@@ -474,7 +496,6 @@ async def commit_and_push(
         force=True,
         available_tools=available_tools,
     )
-    return True
 
 
 async def request_mr_reviews(
@@ -568,6 +589,29 @@ async def commit_push_and_open_mr(
         allow_empty,
     ):
         return None, False
+    return await open_update_merge_request(
+        fork_url=fork_url,
+        dist_git_branch=dist_git_branch,
+        update_branch=update_branch,
+        mr_title=mr_title,
+        mr_description=mr_description,
+        available_tools=available_tools,
+        labels=labels,
+        package=package,
+    )
+
+
+async def open_update_merge_request(
+    fork_url: str,
+    dist_git_branch: str,
+    update_branch: str,
+    mr_title: str,
+    mr_description: str,
+    available_tools: list[Tool],
+    labels: list[str] | None = None,
+    package: str | None = None,
+) -> tuple[str | None, bool]:
+    """Open or reuse the MR for an update branch that is already pushed."""
     tool_kwargs = {
         "fork_url": fork_url,
         "title": mr_title,

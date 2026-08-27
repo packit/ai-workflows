@@ -1,0 +1,29 @@
+Working directory: {{ local_clone }}
+Package: {{ package }}
+Target spec file: {{ target_spec }}
+Source Jira: {{ source_issue_key }}
+Target Jira: {{ target_issue_key }}
+Source commit: {{ source_commit }}
+
+Source commit message:
+---
+{{ source_commit_message }}
+---
+
+Inherited immutable patch files:
+{% if patch_files %}
+{% for patch in patch_files %}
+- {{ patch }}
+{% endfor %}
+{% else %}
+- none; this is a spec-only source change
+{% endif %}
+
+Source spec diff:
+```diff
+{{ source_spec_diff }}
+```
+
+Adapt the functional change to {{ target_spec }}. Keep every listed patch
+byte-for-byte unchanged. Do not copy Release or %changelog changes from the
+source diff. Return the structured adaptation result when finished.

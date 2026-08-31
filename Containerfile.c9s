@@ -54,6 +54,7 @@ RUN dnf -y install --allowerasing \
       python-srpm-macros \
       pyproject-srpm-macros \
       rust-srpm-macros \
+      rust-toolset \
       perl-srpm-macros \
       perl-ExtUtils-MakeMaker \
       javapackages-tools \

@@ -67,7 +67,7 @@ from ymir.common.models import (
     Task,
 )
 from ymir.common.utils import get_all_patches
-from ymir.common.version_utils import is_older_zstream
+from ymir.common.version_utils import is_modular, is_older_zstream
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.distgit_detector import DistgitDetectorTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
@@ -319,6 +319,7 @@ async def run_workflow(
     max_incremental_fix_attempts=None,
     user_triggered=False,
     dist_git_namespace=None,
+    is_modular_issue=False,
 ):
     if max_incremental_fix_attempts is None:
         max_incremental_fix_attempts = max_build_attempts
@@ -451,7 +452,7 @@ async def run_workflow(
                     state.used_cherry_pick_workflow = False
                     logger.info("Git am workflow detected: no upstream repo exists")
 
-                return "run_build_agent"
+                return "update_release" if is_modular_issue else "run_build_agent"
             return "comment_in_jira"
 
         async def fix_build_error(state):
@@ -735,6 +736,13 @@ async def run_workflow(
             ):
                 return "comment_in_jira"
 
+            if is_modular_issue:
+                logger.info(
+                    "Modular issue %s — skipping consolidation job",
+                    state.jira_issue,
+                )
+                return "comment_in_jira"
+
             try:
                 await tasks.try_submit_consolidation_job(
                     state.package,
@@ -768,6 +776,12 @@ async def run_workflow(
                 comment_text = (
                     state.merge_request_url if state.merge_request_url else state.backport_result.status
                 )
+                if is_modular_issue:
+                    comment_text += (
+                        "\n\n*Note:* Modular package support is in development. "
+                        "No build was performed — please verify the MR and trigger "
+                        "a build manually."
+                    )
                 is_error = False
             else:
                 comment_text = f"Agent failed to perform a backport: {state.backport_result.error}"
@@ -886,6 +900,17 @@ async def main() -> None:
             dist_git_branch = triage_state["target_branch"]
             dist_git_namespace = triage_state.get("dist_git_namespace")
             user_triggered = task.user_triggered
+            _modular = is_modular(
+                triage_state.get("jira_summary"),
+                triage_state.get("downstream_component"),
+            )
+            logger.info(
+                "Modular check for %s: jira_summary=%r, downstream_component=%r, result=%s",
+                backport_data.jira_issue,
+                triage_state.get("jira_summary"),
+                triage_state.get("downstream_component"),
+                _modular,
+            )
             logger.info(
                 f"Processing backport for package: {backport_data.package}, "
                 f"JIRA: {backport_data.jira_issue}, branch: {dist_git_branch}, "
@@ -961,6 +986,7 @@ async def main() -> None:
                         max_incremental_fix_attempts=max_incremental_fix_attempts,
                         user_triggered=user_triggered,
                         dist_git_namespace=dist_git_namespace,
+                        is_modular_issue=_modular,
                     )
                     logger.info(
                         f"Backport processing completed for {backport_data.jira_issue}, "
@@ -1004,12 +1030,18 @@ async def main() -> None:
                         dry_run=dry_run,
                         user_triggered=user_triggered,
                     )
-                    await fix_await(
-                        redis.lpush(
-                            RedisQueues.COMPLETED_BACKPORT_LIST.value,
-                            state.backport_result.model_dump_json(),
+                    if _modular:
+                        logger.info(
+                            "Modular issue %s — MR created, skipping build dispatch",
+                            backport_data.jira_issue,
                         )
-                    )
+                    else:
+                        await fix_await(
+                            redis.lpush(
+                                RedisQueues.COMPLETED_BACKPORT_LIST.value,
+                                state.backport_result.model_dump_json(),
+                            )
+                        )
                 else:
                     logger.warning(
                         f"Backport failed for {backport_data.jira_issue}: {state.backport_result.error}"

@@ -1290,12 +1290,15 @@ async def main() -> None:
                 f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}"
                 + (" (user-triggered via ymir_todo)" if user_triggered else "")
             )
-            if user_triggered and task.attempts == 0:
-                sentry_sdk.metrics.count(
-                    "ymir_todo.processed",
-                    1,
-                    attributes={"issue": input.issue},
-                )
+            if task.attempts == 0:
+                if user_triggered:
+                    sentry_sdk.metrics.count(
+                        "ymir_todo.processed",
+                        1,
+                        attributes={"issue": input.issue},
+                    )
+                else:
+                    sentry_sdk.metrics.count("ymir.autoprocessed", 1)
 
             # User-triggered runs will receive an acknowledgement comment,
             # but only after we successfully write the in-progress label to

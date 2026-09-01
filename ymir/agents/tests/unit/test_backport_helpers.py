@@ -88,6 +88,25 @@ def test_ystream_inheritance_requires_y_fix_version_and_cs_target():
     assert not _can_attempt_ystream_inheritance(_state(inheritance_disabled=True))
 
 
+def test_e2e_fixture_candidate_enables_ystream_inheritance():
+    candidate = ShippedZStreamCandidate.model_validate(
+        {
+            "issue_key": "RHEL-218066",
+            "fixed_in_build": "curl-8.12.1-4.el10_2.4",
+            "fix_versions": ["rhel-10.2.z"],
+        }
+    )
+
+    assert _can_attempt_ystream_inheritance(
+        _state(
+            jira_issue="RHEL-218065",
+            dist_git_branch="c10s",
+            fix_version="rhel-10.3",
+            shipped_zstream_candidates=[candidate],
+        )
+    )
+
+
 def test_disabling_inheritance_is_durable_in_task_metadata():
     state = _state()
     metadata = {}

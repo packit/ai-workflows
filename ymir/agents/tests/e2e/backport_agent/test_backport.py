@@ -9,7 +9,12 @@ import pytest
 from tabulate import tabulate
 from unidiff import PatchSet
 
-from ymir.agents.backport_agent import BackportState, create_backport_agent, run_workflow
+from ymir.agents.backport_agent import (
+    BackportState,
+    create_backport_agent,
+    create_inherit_adaptation_agent,
+    run_workflow,
+)
 from ymir.agents.metrics_middleware import MetricsMiddleware
 from ymir.agents.observability import setup_observability
 from ymir.agents.tests.e2e.backport_agent.artifact_capture import (
@@ -23,6 +28,7 @@ from ymir.common.mock_repos import (
     load_all_fixture_configs,
     setup_mock_repos,
 )
+from ymir.common.models import ShippedZStreamCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +68,11 @@ class BackportAgentTestCase:
             agent.middlewares.append(metrics_middleware)
             return agent
 
+        def inherit_testing_factory(local_tool_options):
+            agent = create_inherit_adaptation_agent(local_tool_options)
+            agent.middlewares.append(metrics_middleware)
+            return agent
+
         try:
             with _span_processor.jira_issue_context(self.jira_issue):
                 self.finished_state = await run_workflow(
@@ -73,6 +84,8 @@ class BackportAgentTestCase:
                     fix_version=self.input.get("fix_version"),
                     dry_run=True,
                     backport_agent_factory=testing_factory,
+                    inherit_agent_factory=inherit_testing_factory,
+                    shipped_zstream_candidates=_shipped_zstream_candidates(self.input),
                 )
             if self.finished_state:
                 artifacts_dir = os.getenv("BACKPORT_ARTIFACTS_DIR", str(DEFAULT_ARTIFACTS_DIR))
@@ -81,6 +94,14 @@ class BackportAgentTestCase:
             self.error = e
         finally:
             self.metrics = metrics_middleware.get_metrics()
+
+
+def _shipped_zstream_candidates(config_input: dict) -> list[ShippedZStreamCandidate]:
+    """Parse fixture-supplied inheritance sources. Production gets these from triage."""
+    return [
+        ShippedZStreamCandidate.model_validate(candidate)
+        for candidate in config_input.get("shipped_zstream_candidates") or []
+    ]
 
 
 def _load_test_cases(fixtures_dir: str | Path) -> list[BackportAgentTestCase]:
@@ -251,6 +272,13 @@ def test_backport_agent_success(test_case: BackportAgentTestCase):
         f"got success={result.success}, error={result.error}"
     )
 
+    if test_case.expected.get("inheritance"):
+        assert test_case.finished_state.inherit_change is not None, (
+            f"{test_case.jira_issue}: expected Y-stream inheritance, but the "
+            f"workflow fell back to a normal backport "
+            f"(status={result.status!r}, error={result.error!r})"
+        )
+
 
 @pytest.mark.parametrize("test_case", _backport_params)
 def test_backport_agent_artifacts(test_case: BackportAgentTestCase):
@@ -287,6 +315,15 @@ def test_backport_agent_artifacts(test_case: BackportAgentTestCase):
             f"{test_case.jira_issue}: expected patch matching '{patch_pattern}', "
             f"found: {list(artifacts.patch_files.keys())}"
         )
+        if test_case.expected.get("patch_must_be_identical"):
+            reference_text = _load_reference_patch(test_case)
+            assert reference_text is not None, (
+                f"{test_case.jira_issue}: patch_must_be_identical requires reference_patch"
+            )
+            assert artifacts.patch_files[matching[0]] == reference_text, (
+                f"{test_case.jira_issue}: inherited patch {matching[0]} is not "
+                "byte-identical to the reference Z-stream blob"
+            )
 
 
 @pytest.mark.parametrize("test_case", _backport_params)

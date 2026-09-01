@@ -1,4 +1,4 @@
-FROM fedora:43
+FROM fedora:44
 
 # Install minimal system dependencies for the issue fetcher
 RUN dnf -y install \

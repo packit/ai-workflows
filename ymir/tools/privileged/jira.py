@@ -795,6 +795,159 @@ async def _check_zstream_fix_approach(
     )
 
 
+async def _get_applicable_zstream_variants(major_version: str) -> set[str] | None:
+    """Get the applicable Z-stream version variants for a major version.
+
+    Uses version mapper precedence: upcoming Z-stream first, falls back to current.
+    This prevents older current-stream clones from overriding applicable upcoming clones.
+
+    Returns a set of lowercase variant strings (e.g., {"rhel-9.9.z"}), or None if
+    no applicable Z-stream exists or the major version is in maintenance.
+    """
+    rhel_config = await load_rhel_config()
+    current_z_streams = rhel_config.get("current_z_streams", {})
+    upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
+    maintenance_majors = get_maintenance_majors(rhel_config)
+
+    if major_version in maintenance_majors:
+        logger.info(f"Major version {major_version} is in maintenance, no applicable Z-stream")
+        return None
+
+    # Use version mapper precedence: upcoming first, fall back to current
+    applicable_z_stream = upcoming_z_streams.get(major_version) or current_z_streams.get(major_version)
+
+    if not applicable_z_stream:
+        logger.info(f"No applicable Z-stream found for major version {major_version}")
+        return None
+
+    variants = {variant.lower() for variant in get_fix_version_variants(applicable_z_stream)}
+    logger.info(f"Applicable Z-stream for RHEL-{major_version}: {applicable_z_stream} (variants: {variants})")
+    return variants
+
+
+async def _check_zstream_not_affected(
+    cve_id: str, component: str, exclude_key: str, major_version: str
+) -> list[str]:
+    """Check if any Z-stream clone was triaged as NOT_AFFECTED.
+
+    Used for Y-stream CVEs where we detected a CS_FIRST approach or are waiting
+    for Z-stream to ship. Before skipping or postponing the Y-stream, we check
+    if the Z-stream clones were actually not affected — in that case, the
+    Y-stream should also be triaged to confirm it's not affected.
+
+    Returns list of Z-stream issue keys that have ymir_triaged_not_affected label.
+    """
+    escaped_cve_id = cve_id.replace('"', '\\"')
+    escaped_component = component.replace('"', '\\"')
+    jql = (
+        f'summary ~ "{escaped_cve_id}" AND component = "{escaped_component}"'
+        f' AND labels = "SecurityTracking" AND labels = "ymir_triaged_not_affected"'
+        f' AND key != "{exclude_key}"'
+    )
+    logger.info(f"Checking for NOT_AFFECTED Z-stream clones for {cve_id} (major={major_version})")
+
+    tool = SearchJiraIssuesTool()
+    output = await tool.run(
+        input={
+            "jql": jql,
+            "fields": ["fixVersions"],
+            "max_results": 50,
+        }
+    )
+    issues = output.result or []
+
+    relevant_z_streams = await _get_applicable_zstream_variants(major_version)
+    if not relevant_z_streams:
+        return []
+
+    not_affected_keys = []
+    for issue in issues:
+        key = issue.get("key", "")
+        fix_versions = issue.get("fields", {}).get("fixVersions", [])
+        fv_names = [fv.get("name", "") for fv in fix_versions]
+        if any(fv.lower() in relevant_z_streams for fv in fv_names):
+            logger.info(f"  {key}: fixVersions={fv_names} — NOT_AFFECTED Z-stream clone found")
+            not_affected_keys.append(key)
+
+    if not_affected_keys:
+        logger.info(
+            f"Found {len(not_affected_keys)} NOT_AFFECTED Z-stream clone(s) for {cve_id}: {not_affected_keys}"
+        )
+    else:
+        logger.info(f"No NOT_AFFECTED Z-stream clones found for {cve_id} (major={major_version})")
+
+    return not_affected_keys
+
+
+async def _check_zstream_pending_triage(
+    cve_id: str, component: str, exclude_key: str, major_version: str
+) -> list[str]:
+    """Check if Z-stream clones exist but haven't been triaged yet.
+
+    Used for Y-stream CVEs where CS_FIRST approach was detected. If Z-stream
+    clones exist but don't have any ymir_triaged* terminal labels, we should
+    wait for them to be triaged before deciding whether the Y-stream should be
+    skipped or triaged.
+
+    Returns list of Z-stream issue keys without ymir_triaged* terminal labels.
+    """
+    escaped_cve_id = cve_id.replace('"', '\\"')
+    escaped_component = component.replace('"', '\\"')
+    # Search for Z-stream clones without any terminal labels.
+    # Terminal labels indicate triage completion (success or blocked state):
+    # - ymir_triaged_* (backport/rebase/rebuild/postponed/not_affected/generic)
+    # - ymir_needs_attention (clarification needed - blocked)
+    # - ymir_triage_errored (exhausted retries - blocked)
+    # Non-terminal labels like ymir_triage_in_progress are not excluded.
+    jql = (
+        f'summary ~ "{escaped_cve_id}" AND component = "{escaped_component}"'
+        f' AND labels = "SecurityTracking"'
+        f' AND labels != "ymir_triaged_backport"'
+        f' AND labels != "ymir_triaged_rebase"'
+        f' AND labels != "ymir_triaged_rebuild"'
+        f' AND labels != "ymir_triaged_postponed"'
+        f' AND labels != "ymir_triaged_not_affected"'
+        f' AND labels != "ymir_triaged"'
+        f' AND labels != "ymir_needs_attention"'
+        f' AND labels != "ymir_triage_errored"'
+        f' AND key != "{exclude_key}"'
+    )
+    logger.info(f"Checking for pending-triage Z-stream clones for {cve_id} (major={major_version})")
+
+    tool = SearchJiraIssuesTool()
+    output = await tool.run(
+        input={
+            "jql": jql,
+            "fields": ["fixVersions", "labels"],
+            "max_results": 50,
+        }
+    )
+    issues = output.result or []
+
+    relevant_z_streams = await _get_applicable_zstream_variants(major_version)
+    if not relevant_z_streams:
+        return []
+
+    pending_keys = []
+    for issue in issues:
+        key = issue.get("key", "")
+        fix_versions = issue.get("fields", {}).get("fixVersions", [])
+        fv_names = [fv.get("name", "") for fv in fix_versions]
+        labels = issue.get("fields", {}).get("labels", [])
+        if any(fv.lower() in relevant_z_streams for fv in fv_names):
+            logger.info(f"  {key}: fixVersions={fv_names}, labels={labels} — pending triage")
+            pending_keys.append(key)
+
+    if pending_keys:
+        logger.info(
+            f"Found {len(pending_keys)} pending-triage Z-stream clone(s) for {cve_id}: {pending_keys}"
+        )
+    else:
+        logger.info(f"No pending-triage Z-stream clones found for {cve_id} (major={major_version})")
+
+    return pending_keys
+
+
 class CheckCveTriageEligibilityToolInput(BaseModel):
     issue_key: str = Field(description="Jira issue key (e.g. RHEL-12345)")
 
@@ -999,6 +1152,33 @@ class CheckCveTriageEligibilityTool(
             )
             return None, dependency.shipped_candidates
 
+        # Before postponing, check if any Z-stream clones were NOT_AFFECTED
+        parsed = parse_rhel_version(target_version)
+        major_version = parsed[0] if parsed else None
+        if major_version:
+            try:
+                not_affected_clones = await _check_zstream_not_affected(
+                    cve_id, component, issue_key, major_version
+                )
+            except Exception as e:
+                logger.warning(f"Z-stream NOT_AFFECTED check failed for {cve_id}: {e}")
+                return JSONToolOutput(
+                    CVEEligibilityResult(
+                        is_cve=True,
+                        eligibility=TriageEligibility.NEVER,
+                        reason=f"CVE {cve_id} ({target_version}): NOT_AFFECTED check failed: {e}",
+                        error=str(e),
+                    ).model_dump()
+                )
+
+            if not_affected_clones:
+                logger.info(
+                    f"Z-stream clone(s) {not_affected_clones} for {cve_id} were NOT_AFFECTED, "
+                    "Y-stream should also be triaged"
+                )
+                # Return None to proceed with triage (same as if a clone had shipped)
+                return None
+
         logger.info(
             f"Dependency check for {issue_key} ({target_version}): PENDING_DEPENDENCIES "
             f"(no clones shipped yet, waiting for: {dependency.pending_keys})"
@@ -1193,6 +1373,77 @@ class CheckCveTriageEligibilityTool(
             )
 
         if approach is FixApproach.CS_FIRST:
+            # Before skipping the Y-stream, check if Z-stream clones were NOT_AFFECTED
+            try:
+                not_affected_clones = await _check_zstream_not_affected(
+                    cve_id, component, issue_key, major_version
+                )
+            except Exception as e:
+                logger.warning(f"Z-stream NOT_AFFECTED check failed for {cve_id}: {e}")
+                return JSONToolOutput(
+                    CVEEligibilityResult(
+                        is_cve=True,
+                        eligibility=TriageEligibility.NEVER,
+                        reason=f"CVE {cve_id} ({target_version}): NOT_AFFECTED check failed: {e}",
+                        error=str(e),
+                    ).model_dump()
+                )
+
+            if not_affected_clones:
+                logger.info(
+                    f"Z-stream clone(s) {not_affected_clones} for {cve_id} were NOT_AFFECTED, "
+                    "Y-stream should also be triaged"
+                )
+                return JSONToolOutput(
+                    CVEEligibilityResult(
+                        is_cve=True,
+                        eligibility=TriageEligibility.IMMEDIATELY,
+                        reason=(
+                            f"Y-stream CVE ({target_version}, {severity} severity): "
+                            f"Z-stream clone {not_affected_clones[0]} was not affected, "
+                            "checking if Y-stream is also not affected"
+                        ),
+                        needs_internal_fix=False,
+                        duplicate_of=duplicate_of,
+                    ).model_dump()
+                )
+
+            # Check if Z-stream clones exist but haven't been triaged yet
+            try:
+                pending_triage = await _check_zstream_pending_triage(
+                    cve_id, component, issue_key, major_version
+                )
+            except Exception as e:
+                logger.warning(f"Z-stream pending triage check failed for {cve_id}: {e}")
+                return JSONToolOutput(
+                    CVEEligibilityResult(
+                        is_cve=True,
+                        eligibility=TriageEligibility.NEVER,
+                        reason=f"CVE {cve_id} ({target_version}): pending triage check failed: {e}",
+                        error=str(e),
+                    ).model_dump()
+                )
+
+            if pending_triage:
+                logger.info(
+                    f"Z-stream clone(s) {pending_triage} for {cve_id} pending triage, "
+                    "waiting for results before deciding Y-stream eligibility"
+                )
+                return JSONToolOutput(
+                    CVEEligibilityResult(
+                        is_cve=True,
+                        eligibility=TriageEligibility.PENDING_DEPENDENCIES,
+                        reason=(
+                            f"Y-stream CVE ({target_version}, {severity} severity): "
+                            f"waiting for Z-stream clone triage results to determine if CVE is affected "
+                            f"(CentOS Stream first approach detected via {detail})"
+                        ),
+                        needs_internal_fix=False,
+                        pending_zstream_issues=pending_triage,
+                    ).model_dump()
+                )
+
+            # Z-stream clones were triaged and ARE affected (CS-first path applies)
             return JSONToolOutput(
                 CVEEligibilityResult(
                     is_cve=True,

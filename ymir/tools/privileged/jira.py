@@ -837,6 +837,12 @@ async def _check_zstream_not_affected(
 
     Returns list of Z-stream issue keys that have ymir_triaged_not_affected label.
     """
+    # Check if there's an applicable Z-stream first (early return to avoid unnecessary Jira search)
+    relevant_z_streams = await _get_applicable_zstream_variants(major_version)
+    if not relevant_z_streams:
+        logger.info(f"No applicable Z-stream for major version {major_version}, skipping NOT_AFFECTED check")
+        return []
+
     escaped_cve_id = cve_id.replace('"', '\\"')
     escaped_component = component.replace('"', '\\"')
     jql = (
@@ -855,10 +861,6 @@ async def _check_zstream_not_affected(
         }
     )
     issues = output.result or []
-
-    relevant_z_streams = await _get_applicable_zstream_variants(major_version)
-    if not relevant_z_streams:
-        return []
 
     not_affected_keys = []
     for issue in issues:
@@ -891,6 +893,14 @@ async def _check_zstream_pending_triage(
 
     Returns list of Z-stream issue keys without ymir_triaged* terminal labels.
     """
+    # Check if there's an applicable Z-stream first (early return to avoid unnecessary Jira search)
+    relevant_z_streams = await _get_applicable_zstream_variants(major_version)
+    if not relevant_z_streams:
+        logger.info(
+            f"No applicable Z-stream for major version {major_version}, skipping pending-triage check"
+        )
+        return []
+
     escaped_cve_id = cve_id.replace('"', '\\"')
     escaped_component = component.replace('"', '\\"')
     # Search for Z-stream clones without any terminal labels.
@@ -923,10 +933,6 @@ async def _check_zstream_pending_triage(
         }
     )
     issues = output.result or []
-
-    relevant_z_streams = await _get_applicable_zstream_variants(major_version)
-    if not relevant_z_streams:
-        return []
 
     pending_keys = []
     for issue in issues:
@@ -1357,22 +1363,7 @@ class CheckCveTriageEligibilityTool(
                 ).model_dump()
             )
 
-        if approach is FixApproach.PENDING:
-            return JSONToolOutput(
-                CVEEligibilityResult(
-                    is_cve=True,
-                    eligibility=TriageEligibility.PENDING_DEPENDENCIES,
-                    reason=(
-                        f"Y-stream CVE ({target_version}, {severity} severity): "
-                        f"waiting for RHEL-{major_version} Z-stream clone Fixed in Build "
-                        "to determine fix path (CentOS Stream first or RHEL first approach)"
-                    ),
-                    needs_internal_fix=False,
-                    pending_zstream_issues=pending_keys,
-                ).model_dump()
-            )
-
-        if approach is FixApproach.CS_FIRST:
+        if approach is FixApproach.PENDING or approach is FixApproach.CS_FIRST:
             # Before skipping the Y-stream, check if Z-stream clones were NOT_AFFECTED
             try:
                 not_affected_clones = await _check_zstream_not_affected(
@@ -1443,6 +1434,22 @@ class CheckCveTriageEligibilityTool(
                     ).model_dump()
                 )
 
+            # No NOT_AFFECTED clones and no pending-triage clones found
+            if approach is FixApproach.PENDING:
+                # Still waiting for Fixed in Build to determine fix approach
+                return JSONToolOutput(
+                    CVEEligibilityResult(
+                        is_cve=True,
+                        eligibility=TriageEligibility.PENDING_DEPENDENCIES,
+                        reason=(
+                            f"Y-stream CVE ({target_version}, {severity} severity): "
+                            f"waiting for RHEL-{major_version} Z-stream clone Fixed in Build "
+                            "to determine fix path (CentOS Stream first or RHEL first approach)"
+                        ),
+                        needs_internal_fix=False,
+                        pending_zstream_issues=pending_keys,
+                    ).model_dump()
+                )
             # Z-stream clones were triaged and ARE affected (CS-first path applies)
             return JSONToolOutput(
                 CVEEligibilityResult(

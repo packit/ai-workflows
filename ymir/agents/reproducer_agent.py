@@ -1210,12 +1210,8 @@ async def main() -> None:
                 f"Processing reproducer for JIRA issue: {input_data.jira_issue}, "
                 f"attempt: {task.attempts + 1}" + (" (user-triggered)" if user_triggered else "")
             )
-            if user_triggered and task.attempts == 0:
-                sentry_sdk.metrics.count(
-                    "ymir_todo.processed",
-                    1,
-                    attributes={"issue": input_data.jira_issue},
-                )
+            if task.attempts == 0:
+                sentry_sdk.metrics.count("ymir.reproducer.processed", 1)
 
             # Duplicate-processing guard: skip if the issue already has a
             # reproducer-terminal label and is not currently in-progress or

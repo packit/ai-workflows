@@ -116,6 +116,7 @@ services:
       - DRY_RUN=${DRY_RUN:-false}
       - MOCK_JIRA=${MOCK_JIRA:-false}
       - JIRA_DRY_RUN=${JIRA_DRY_RUN:-false}
+      - SHARED_RULES_ENABLED=${SHARED_RULES_ENABLED:-true}
       - TESTING_FARM_DRY_RUN=${TESTING_FARM_DRY_RUN:-false}
       - TESTING_FARM_COMPOSE_FILTER=${TESTING_FARM_COMPOSE_FILTER:-}
       - GIT_REPO_BASEPATH=/git-repos

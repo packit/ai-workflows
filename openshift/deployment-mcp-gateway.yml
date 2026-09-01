@@ -33,6 +33,10 @@ spec:
           value: "8000"
         - name: FORK_NAMESPACE
           value: redhat/rhel/bot-branches
+        # Kill switch: set to "false" to have get_shared_rules return an
+        # empty list without contacting the shared-rules registry.
+        - name: SHARED_RULES_ENABLED
+          value: "true"
         - name: REQUESTS_CA_BUNDLE
           value: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
         envFrom:

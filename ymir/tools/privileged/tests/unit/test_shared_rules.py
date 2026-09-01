@@ -63,6 +63,18 @@ async def test_registry_cached_as_none():
 
 
 @pytest.mark.asyncio
+@patch.object(SharedRulesTool, "_fetch_registry")
+async def test_shared_rules_can_be_disabled(mock_fetch, monkeypatch):
+    monkeypatch.setenv("SHARED_RULES_ENABLED", "false")
+    tool = _fresh_tool()
+
+    result = await tool.run({"package": "python-requests"})
+
+    assert json.loads(result.result) == []
+    mock_fetch.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_non_list_values_skipped():
     tool = _tool_with_cached_registry({"python": ["pkg-a"], "bad_entry": "not-a-list"})
     result = await tool.run({"package": "pkg-a"})

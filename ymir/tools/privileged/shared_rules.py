@@ -107,6 +107,10 @@ class SharedRulesTool(Tool[SharedRulesInput, ToolRunOptions, StringToolOutput]):
         options: ToolRunOptions | None,
         context: RunContext,
     ) -> StringToolOutput:
+        if os.getenv("SHARED_RULES_ENABLED", "True").lower() != "true":
+            logger.info("Shared rules usage is disabled")
+            return StringToolOutput(result="[]")
+
         with tool_error_context("Failed to fetch shared rules registry"):
             try:
                 registry = await self._fetch_registry()

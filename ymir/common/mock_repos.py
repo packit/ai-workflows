@@ -23,6 +23,15 @@ Each JSON file contains::
 
     {
         "zstream_override": {"9": "rhel-9.2.z"},   // optional
+        "input": {
+            "shipped_zstream_candidates": [        // optional; Y-stream inherit e2e
+                {
+                    "issue_key": "RHEL-123",
+                    "fixed_in_build": "pkg-1.0-1.el9_7",
+                    "fix_versions": ["rhel-9.7.z"]
+                }
+            ]
+        },
         "repos": [
             {
                 "package": "libtiff",

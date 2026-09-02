@@ -430,6 +430,22 @@ supervisor-collect:
 	$(COMPOSE_SUPERVISOR) run --rm \
 		supervisor python -m ymir.supervisor.main $(DEBUG_FLAG) collect --no-repeat
 
+.PHONY: triage-issue
+triage-issue:
+	$(COMPOSE_AGENTS) run --rm \
+		-e JIRA_ISSUE=$(ISSUE) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e AUTO_CHAIN=false \
+		triage-agent
+
+.PHONY: process
+process:
+	$(COMPOSE_AGENTS) run --rm \
+		-e JIRA_ISSUE=$(ISSUE) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e AUTO_CHAIN=true \
+		triage-agent
+
 .PHONY: process-issue
 process-issue:
 	$(COMPOSE_SUPERVISOR) run --rm \

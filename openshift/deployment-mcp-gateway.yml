@@ -34,7 +34,7 @@ spec:
         - name: FORK_NAMESPACE
           value: redhat/rhel/bot-branches
         - name: REQUESTS_CA_BUNDLE
-          value: /etc/pki/tls/certs/ca-bundle.crt
+          value: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
         envFrom:
         - secretRef:
             name: gitlab-env

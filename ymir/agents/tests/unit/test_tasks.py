@@ -20,7 +20,7 @@ from ymir.agents.tasks import (
     request_mr_qe_reviews,
 )
 from ymir.common.constants import JiraLabels, RedisQueues
-from ymir.common.models import Task
+from ymir.common.models import ErrorListEntry, Task
 
 
 @asynccontextmanager
@@ -686,6 +686,8 @@ async def test_handle_zstream_branch_stale_error_labels_comments_and_error_list(
     exc = ZStreamBranchStaleError("golang", "rhel-9.8.0", "build-ref-sha", "branch-head-sha")
     redis = AsyncMock()
     redis.lpush = AsyncMock()
+    redis.incr = AsyncMock(return_value=7)
+    task = _make_task(attempts=2)
 
     with (
         patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock) as mock_labels,
@@ -702,6 +704,8 @@ async def test_handle_zstream_branch_stale_error_labels_comments_and_error_list(
             dry_run=False,
             user_triggered=False,
             redis_conn=redis,
+            task=task,
+            queue=RedisQueues.REBUILD_QUEUE_C9S.value,
         )
 
     assert mock_labels.await_count == 2
@@ -714,8 +718,15 @@ async def test_handle_zstream_branch_stale_error_labels_comments_and_error_list(
         is_error=True,
         user_triggered=True,
     )
+    redis.incr.assert_awaited_once_with(RedisQueues.ERROR_ID_COUNTER.value)
     redis.lpush.assert_awaited_once()
     assert redis.lpush.await_args.args[0] == RedisQueues.ERROR_LIST.value
+    entry = ErrorListEntry.model_validate_json(redis.lpush.await_args.args[1])
+    assert entry.error_id == 7
+    assert entry.queue == RedisQueues.REBUILD_QUEUE_C9S.value
+    assert entry.task == task
+    assert entry.error.jira_issue == "RHEL-1"
+    assert entry.error.details == str(exc)
 
 
 @pytest.mark.asyncio
@@ -723,6 +734,7 @@ async def test_handle_zstream_branch_stale_error_skips_comment_on_dry_run():
     exc = ZStreamBranchStaleError("golang", "rhel-9.8.0", "build-ref-sha", "branch-head-sha")
     redis = AsyncMock()
     redis.lpush = AsyncMock()
+    redis.incr = AsyncMock(return_value=1)
 
     with (
         patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock) as mock_labels,

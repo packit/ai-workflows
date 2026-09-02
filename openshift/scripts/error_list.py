@@ -189,6 +189,12 @@ def issue_of(obj, raw: str) -> str:
         for key in ("jira_issue", "issue", "issue_key"):
             if obj.get(key):
                 return _issue_str(obj[key])
+        # ErrorListEntry wrapper: the real ErrorData is nested under "error".
+        err = obj.get("error")
+        if isinstance(err, dict):
+            for key in ("jira_issue", "issue", "issue_key"):
+                if err.get(key):
+                    return _issue_str(err[key])
     m = RHEL_RE.search(raw)
     return m.group(0) if m else "?"
 
@@ -201,17 +207,39 @@ def reason_of(obj, raw: str) -> str:
     if a:
         return a.group(1)[:100]
     if isinstance(obj, dict):
-        for f in REASON_FIELDS:
-            v = obj.get(f)
-            if v:
-                lines = str(v).splitlines()
-                first = lines[0] if lines else ""
-                if first.strip():
-                    return first[:100]
+        # ErrorListEntry wrapper: look at the top level, then the nested ErrorData.
+        candidates = [obj]
+        if isinstance(obj.get("error"), dict):
+            candidates.append(obj["error"])
+        for candidate in candidates:
+            for f in REASON_FIELDS:
+                v = candidate.get(f)
+                if isinstance(v, dict):
+                    continue  # e.g. the wrapper's own "error" key — recurse via `candidates`, don't stringify
+                if v:
+                    lines = str(v).splitlines()
+                    first = lines[0] if lines else ""
+                    if first.strip():
+                        return first[:100]
         if "attempts" in obj or "metadata" in obj:
             return f"(Task, attempts={obj.get('attempts', '?')}, no error field)"
     line = next((ln for ln in raw.splitlines() if ln.strip()), "")
     return line[:100] or "(empty)"
+
+
+def meta_of(obj) -> dict:
+    """Extract error_id/timestamp/requeueable from an ErrorListEntry wrapper.
+
+    Older entries pushed before ErrorListEntry existed are bare ErrorData
+    objects with no "error_id" key — treated as legacy/non-requeueable.
+    """
+    if isinstance(obj, dict) and "error_id" in obj:
+        return {
+            "error_id": obj.get("error_id"),
+            "timestamp": obj.get("timestamp"),
+            "requeueable": bool(obj.get("queue") and obj.get("task")),
+        }
+    return {"error_id": None, "timestamp": None, "requeueable": False}
 
 
 def signature(reason: str) -> str:
@@ -223,7 +251,9 @@ def analyze(blob: str) -> list[dict]:
     out = []
     for elem in to_elements(blob):
         obj = _try_json(elem)
-        out.append({"issue": issue_of(obj, elem), "reason": reason_of(obj, elem), "parsed": obj is not None})
+        entry = {"issue": issue_of(obj, elem), "reason": reason_of(obj, elem), "parsed": obj is not None}
+        entry.update(meta_of(obj))
+        out.append(entry)
     return out
 
 
@@ -284,6 +314,20 @@ def main() -> None:
     print("\nBy error type:")
     for sig, n in by_sig.most_common():
         print(f"  {n:>3}x  {sig}")
+
+    requeueable = sum(1 for e in entries if e["requeueable"])
+    if total:
+        print(f"\n{requeueable}/{total} entries are requeueable (have error_id + queue + task).")
+        print("\nEntries (use `make requeue-error ERROR_ID=<id>` on [requeueable] rows):")
+        for e in entries:
+            if e["error_id"] is None:
+                id_str, status = "id=-", "legacy"
+            elif e["requeueable"]:
+                id_str, status = f"id={e['error_id']}", "requeueable"
+            else:
+                id_str, status = f"id={e['error_id']}", "non-requeueable"
+            ts = e["timestamp"] or "-"
+            print(f"  [{id_str:<10}] [{status:<15}] {ts}  {e['issue']:<{width}}  {e['reason'][:80]}")
 
 
 if __name__ == "__main__":

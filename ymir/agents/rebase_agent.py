@@ -56,6 +56,7 @@ from ymir.common.models import (
     BuildOutputSchema,
     ConsolidatedIssue,
     ErrorData,
+    ErrorListEntry,
     LogInputSchema,
     LogOutputSchema,
     RebaseData,
@@ -680,15 +681,19 @@ async def main() -> None:
             )
 
             async def retry(
-                task, error, comment_text=None, rebase_data=rebase_data, user_triggered=user_triggered
+                task,
+                error: ErrorData,
+                comment_text=None,
+                rebase_data=rebase_data,
+                user_triggered=user_triggered,
             ):
                 task.attempts += 1
+                retry_queue = rebase_queue_todo if task.user_triggered else rebase_queue
                 if task.attempts < max_retries:
                     logger.warning(
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {rebase_data.jira_issue}"
                     )
-                    retry_queue = rebase_queue_todo if task.user_triggered else rebase_queue
                     await fix_await(redis.lpush(retry_queue, task.model_dump_json()))
                 else:
                     # Final attempt exhausted — mark errored and stop retrying.
@@ -745,7 +750,9 @@ async def main() -> None:
                                 f"Failed to post final rebase failure comment for "
                                 f"{rebase_data.jira_issue}: {comment_error}"
                             )
-                    await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
+                    error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
+                    entry = ErrorListEntry(error_id=error_id, queue=retry_queue, task=task, error=error)
+                    await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
 
             try:
                 logger.info(f"Starting rebase processing for {rebase_data.jira_issue}")
@@ -780,6 +787,8 @@ async def main() -> None:
                     dry_run=dry_run,
                     user_triggered=user_triggered,
                     redis_conn=redis,
+                    task=task,
+                    queue=rebase_queue_todo if user_triggered else rebase_queue,
                 )
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
@@ -787,7 +796,7 @@ async def main() -> None:
                 reason = e.explain() if isinstance(e, FrameworkError) else e
                 await retry(
                     task,
-                    ErrorData(details=error, jira_issue=rebase_data.jira_issue).model_dump_json(),
+                    ErrorData(details=error, jira_issue=rebase_data.jira_issue),
                     comment_text=f"Agent failed to perform a rebase: {reason}",
                 )
             else:
@@ -831,7 +840,7 @@ async def main() -> None:
                         ErrorData(
                             details=getattr(state.rebase_result, "error", None) or "Unknown rebase error",
                             jira_issue=rebase_data.jira_issue,
-                        ).model_dump_json(),
+                        ),
                     )
 
         shutdown_event = asyncio.Event()

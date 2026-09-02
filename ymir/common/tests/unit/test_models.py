@@ -7,6 +7,7 @@ from ymir.common.models import (
     ClarificationNeededData,
     ConsolidatedIssue,
     ErrorData,
+    ErrorListEntry,
     NotAffectedData,
     OpenEndedAnalysisData,
     PostponedData,
@@ -15,6 +16,7 @@ from ymir.common.models import (
     ReproducerInputSchema,
     ReproducerOutputSchema,
     Resolution,
+    Task,
     TriageOutputSchema,
 )
 
@@ -776,3 +778,40 @@ def test_postponed_minimal_fields():
     data = PostponedData.model_validate(payload)
     assert data.blocker_references is None
     assert data.pending_issues == ["RHEL-333"]
+
+
+# --- ErrorListEntry tests ---
+
+
+def test_error_list_entry_requeueable_roundtrip():
+    task = Task(metadata={"issue": "RHEL-1"}, attempts=3, user_triggered=True)
+    entry = ErrorListEntry(
+        error_id=42,
+        queue="rebase_queue_c9s",
+        task=task,
+        error=ErrorData(details="boom", jira_issue="RHEL-1"),
+    )
+
+    roundtripped = ErrorListEntry.model_validate_json(entry.model_dump_json())
+
+    assert roundtripped.error_id == 42
+    assert roundtripped.queue == "rebase_queue_c9s"
+    assert roundtripped.task == task
+    assert roundtripped.error.jira_issue == "RHEL-1"
+    assert roundtripped.timestamp == entry.timestamp
+
+
+def test_error_list_entry_defaults_timestamp():
+    entry = ErrorListEntry(error_id=1, error=ErrorData(details="boom", jira_issue="RHEL-1"))
+    assert entry.timestamp is not None
+    assert entry.queue is None
+    assert entry.task is None
+
+
+def test_error_list_entry_non_requeueable_when_task_missing():
+    """Mirrors the malformed-payload push site, which has no Task to attach."""
+    entry = ErrorListEntry(
+        error_id=2, error=ErrorData(details="Malformed task payload", jira_issue="unknown")
+    )
+    assert entry.queue is None
+    assert entry.task is None

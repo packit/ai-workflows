@@ -512,6 +512,22 @@ class ErrorData(BaseModel):
     jira_issue: str = Field(description="Jira issue identifier")
 
 
+class ErrorListEntry(BaseModel):
+    """Persisted error_list entry; carries enough context to requeue the original task.
+
+    `queue`/`task` are None when no task was available at push time (e.g. a
+    payload that failed to parse into a Task in the first place).
+    """
+
+    error_id: int = Field(description="Monotonically increasing id, unique within error_list")
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    queue: str | None = Field(
+        default=None, description="Redis queue to LPUSH `task` back onto, if requeueable"
+    )
+    task: Task | None = Field(default=None, description="Original task payload, if one was available")
+    error: ErrorData
+
+
 TRIAGE_DISCLAIMER = (
     "\n\n_By following Ymir suggestions, you agree to comply with the "
     "[Guidelines on Use of AI Generated Content"

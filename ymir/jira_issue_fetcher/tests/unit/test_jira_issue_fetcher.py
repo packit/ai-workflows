@@ -307,6 +307,38 @@ async def test_get_existing_issue_keys_includes_reproducer_queues(fetcher, mock_
 
 
 @pytest.mark.asyncio
+async def test_get_existing_issue_keys_handles_error_list_entry_wrapper(fetcher, mock_redis_context):
+    """error_list entries pushed as ErrorListEntry (queue/task/error_id wrapper)
+
+    must still be deduped by jira_issue, same as legacy bare-ErrorData entries.
+    """
+    wrapped_entry_json = json.dumps(
+        {
+            "error_id": 1,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "queue": "rebase_queue_c9s",
+            "task": {"metadata": {"issue": "RHEL-WRAPPED"}, "attempts": 3, "user_triggered": False},
+            "error": {"details": "boom", "jira_issue": "RHEL-WRAPPED"},
+        }
+    )
+
+    mock_redis, _ = mock_redis_context
+    for queue in RedisQueues.all_queues():
+        if queue == RedisQueues.ERROR_LIST.value:
+            mock_redis.should_receive("lrange").with_args(queue, 0, -1).and_return(
+                create_async_mock_return_value([wrapped_entry_json])
+            )
+        else:
+            mock_redis.should_receive("lrange").with_args(queue, 0, -1).and_return(
+                create_async_mock_return_value([])
+            )
+
+    result = await fetcher._get_existing_issue_keys(mock_redis)
+
+    assert "RHEL-WRAPPED" in result
+
+
+@pytest.mark.asyncio
 async def test_push_issues_to_queue(fetcher, mock_redis_context):
     """Test pushing new issues to the triage queue."""
     mock_redis, _ = mock_redis_context

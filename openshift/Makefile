@@ -80,6 +80,16 @@ show-reproducer-queue:
 show-error-list:
 	@oc exec deployment/valkey -- valkey-cli --no-raw LRANGE error_list 0 -1 | python3 scripts/error_list.py --file -
 
+# Requeue a specific error_list entry (by the [id=...] shown in show-error-list)
+# back onto its original trigger queue, with attempts reset to 0.
+# Required: ERROR_ID
+requeue-error:
+	@if [ -z "$(ERROR_ID)" ]; then \
+		echo "Usage: make requeue-error ERROR_ID=42"; \
+		exit 1; \
+	fi
+	python3 scripts/requeue_error.py $(ERROR_ID)
+
 logs-triage:
 	oc logs -f deployment/triage-agent
 
@@ -204,7 +214,7 @@ unsuspend-sweeps:
 	show-triage-queue show-rebase-queue-c9s show-rebase-queue-c10s \
 	show-backport-queue-c9s show-backport-queue-c10s \
 	show-rebuild-queue-c9s show-rebuild-queue-c10s \
-	show-clarification-queue show-reproducer-queue show-error-list \
+	show-clarification-queue show-reproducer-queue show-error-list requeue-error \
 	logs-triage logs-backport-c9s logs-backport-c10s \
 	logs-rebase-c9s logs-rebase-c10s logs-rebuild-c9s logs-rebuild-c10s \
 	logs-reproducer logs-mcp logs-supervisor logs-valkey logs-phoenix \

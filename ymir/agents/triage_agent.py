@@ -52,6 +52,7 @@ from ymir.common.models import (
     ClarificationNeededData,
     CVEEligibilityResult,
     ErrorData,
+    ErrorListEntry,
     IssueStatus,
     NotAffectedData,
     OpenEndedAnalysisData,
@@ -1489,22 +1490,22 @@ async def main() -> None:
                     )
                 return
 
-            async def retry(task, error, input=input, user_triggered=user_triggered):
+            async def retry(task, error: ErrorData, input=input, user_triggered=user_triggered):
                 task.attempts += 1
+                # Preserve priority on retries: ymir_todo tasks go back to
+                # the priority queue, normal tasks to the standard one.
+                # Read from `task.user_triggered` (not the closure-captured
+                # variable) so we're robust to anything that might rebind
+                # the local in a future refactor.
+                retry_queue = (
+                    RedisQueues.TRIAGE_QUEUE_TODO.value
+                    if task.user_triggered
+                    else RedisQueues.TRIAGE_QUEUE.value
+                )
                 if task.attempts < max_retries:
                     logger.warning(
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {input.issue}"
-                    )
-                    # Preserve priority on retries: ymir_todo tasks go back to
-                    # the priority queue, normal tasks to the standard one.
-                    # Read from `task.user_triggered` (not the closure-captured
-                    # variable) so we're robust to anything that might rebind
-                    # the local in a future refactor.
-                    retry_queue = (
-                        RedisQueues.TRIAGE_QUEUE_TODO.value
-                        if task.user_triggered
-                        else RedisQueues.TRIAGE_QUEUE.value
                     )
                     await fix_await(redis.lpush(retry_queue, task.model_dump_json()))
                 else:
@@ -1521,7 +1522,9 @@ async def main() -> None:
                         )
                     except Exception as label_error:
                         logger.warning(f"Failed to set error labels on {input.issue}: {label_error}")
-                    await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
+                    error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
+                    entry = ErrorListEntry(error_id=error_id, queue=retry_queue, task=task, error=error)
+                    await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
 
             # ymir_triage_in_progress is the dedup anchor for the next fetcher
             # sweep. If we cannot write it, we must not proceed — otherwise the
@@ -1574,7 +1577,7 @@ async def main() -> None:
                     f"{input.issue} after retries: {e}; re-queuing to avoid duplicate triage."
                 )
                 error_msg = f"Failed to set in-progress label: {e}"
-                await retry(task, ErrorData(details=error_msg, jira_issue=input.issue).model_dump_json())
+                await retry(task, ErrorData(details=error_msg, jira_issue=input.issue))
                 # Long sleep on purpose: critical-write retries already burned
                 # ~7s, so we're past transient blips. Typical Jira outages last
                 # minutes; cycling faster just spams the API.
@@ -1607,7 +1610,7 @@ async def main() -> None:
                 logger.error(f"Exception during triage processing for {input.issue}: {error}")
                 await retry(
                     task,
-                    ErrorData(details=error, jira_issue=input.issue).model_dump_json(),
+                    ErrorData(details=error, jira_issue=input.issue),
                 )
             else:
                 logger.info(f"Triage resolved as {output.resolution.value} for {input.issue}")
@@ -1758,7 +1761,23 @@ async def main() -> None:
 
                 # Dispatch to downstream queues
                 if output.resolution == Resolution.ERROR:
-                    await retry(task, output.data.model_dump_json())
+                    # `data` is a plain union independent of `resolution` — nothing
+                    # guarantees the model actually returned ErrorData here. Fall
+                    # back to a synthesized ErrorData rather than let a mismatched
+                    # type blow up ErrorListEntry validation inside retry() and
+                    # lose the task without persisting it to error_list.
+                    error_data = (
+                        output.data
+                        if isinstance(output.data, ErrorData)
+                        else ErrorData(
+                            details=(
+                                f"Triage returned resolution=error with unexpected data type "
+                                f"{type(output.data).__name__}: {output.data!r}"
+                            ),
+                            jira_issue=input.issue,
+                        )
+                    )
+                    await retry(task, error_data)
                 elif output.resolution in POSTPONED_RESOLUTIONS:
                     await fix_await(
                         redis.lpush(

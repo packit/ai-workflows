@@ -836,6 +836,12 @@ async def run_workflow(
                     state.attempts_remaining -= 1
                     if state.attempts_remaining > 0:
                         return _retry_step_for_build(state)
+                    state.consolidation_result = MRConsolidationOutputSchema(
+                        success=False,
+                        status="failed",
+                        status_detail="Package build failed",
+                        error=build_output.error,
+                    )
                     return "handle_failure"
             except Exception as e:
                 logger.error("Build verification error: %s", e)
@@ -843,6 +849,12 @@ async def run_workflow(
                 state.attempts_remaining -= 1
                 if state.attempts_remaining > 0:
                     return _retry_step_for_build(state)
+                state.consolidation_result = MRConsolidationOutputSchema(
+                    success=False,
+                    status="failed",
+                    status_detail="Unexpected error",
+                    error=str(e),
+                )
                 return "handle_failure"
 
             if release_strategy == "per_commit":

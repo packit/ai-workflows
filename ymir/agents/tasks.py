@@ -1111,27 +1111,6 @@ async def try_submit_consolidation_job(
     )
     if submitted:
         logger.info("Submitted consolidation job for %s/%s", package, dist_git_branch)
-
-        # Post a Jira comment notifying that consolidation has been triggered
-        if jira_issue:
-            try:
-                await run_tool(
-                    "add_jira_comment",
-                    issue_key=jira_issue,
-                    comment=JIRA_COMMENT_TEMPLATE.substitute(
-                        AGENT_TYPE="MR Consolidation",
-                        JIRA_COMMENT=(
-                            f"Your MR has been queued for consolidation with other open MRs "
-                            f"for {package} on {dist_git_branch}. "
-                            f"A consolidated MR will be created automatically once processing completes."
-                        ),
-                    ),
-                    private=True,
-                    available_tools=gateway_tools,
-                )
-                logger.info("Posted consolidation notification to %s", jira_issue)
-            except Exception as e:
-                logger.warning("Failed to post consolidation notification to %s: %s", jira_issue, e)
     else:
         logger.info("Consolidation job already queued for %s/%s", package, dist_git_branch)
 

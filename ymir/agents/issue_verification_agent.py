@@ -83,6 +83,23 @@ def _render_testing_analyst_prompt(input: TestingAnalystInput, after_baseline: b
     return render_template(template_name, input)
 
 
+async def _fetch_one_shared_rule_set(gateway_tools: list, name: str, package: str) -> str | None:
+    try:
+        content = await run_tool(
+            "get_maintainer_rules",
+            available_tools=gateway_tools,
+            package="shared-rules",
+            file_path=f"{name}/AGENTS.md",
+        )
+    except Exception:
+        logger.warning("Failed to fetch shared rules '%s' for %s", name, package)
+        return None
+
+    if content and "not found" not in content.lower():
+        return f"--- Shared rules ({name}) ---\n{content}"
+    return None
+
+
 async def _fetch_shared_rules(gateway_tools: list, package: str) -> str:
     """Fetch shared rules that apply to a package from the central registry."""
     try:
@@ -96,21 +113,10 @@ async def _fetch_shared_rules(gateway_tools: list, package: str) -> str:
         logger.warning("Failed to look up shared rules for %s", package)
         return ""
 
-    parts = []
-    for name in rule_names:
-        try:
-            content = await run_tool(
-                "get_maintainer_rules",
-                available_tools=gateway_tools,
-                package="shared-rules",
-                file_path=f"{name}/AGENTS.md",
-            )
-            if content and "not found" not in content.lower():
-                parts.append(f"--- Shared rules ({name}) ---\n{content}")
-        except Exception:
-            logger.warning("Failed to fetch shared rules '%s' for %s", name, package)
-
-    return "\n\n".join(parts)
+    parts = await asyncio.gather(
+        *(_fetch_one_shared_rule_set(gateway_tools, name, package) for name in rule_names)
+    )
+    return "\n\n".join(part for part in parts if part)
 
 
 async def _analyze_testing_results(
@@ -149,7 +155,8 @@ async def _analyze_testing_results(
 
     shared_rules = await _fetch_shared_rules(gateway_tools, package)
     if shared_rules:
-        maintainer_rules = shared_rules + "\n\n--- Package-specific rules ---\n" + maintainer_rules
+        precedence_note = "Package-specific rules (take precedence over shared rules above if they conflict)"
+        maintainer_rules = f"{shared_rules}\n\n--- {precedence_note} ---\n{maintainer_rules}"
 
     input = TestingAnalystInput(
         issue=jira_issue,

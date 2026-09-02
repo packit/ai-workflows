@@ -27,6 +27,7 @@ from ymir.common.merge_queue import (  # noqa: F401 — re-exported for agents a
 from ymir.common.models import (
     CachedMRMetadata,
     ErrorData,
+    ErrorListEntry,
     LogOutputSchema,
     MergeRequestDetails,
     OpenMergeRequestResult,
@@ -120,6 +121,8 @@ async def handle_zstream_branch_stale_error(
     dry_run: bool,
     user_triggered: bool,
     redis_conn,
+    task: Task | None = None,
+    queue: str | None = None,
 ) -> None:
     """Terminal handling for a stale z-stream branch: label, comment, ERROR_LIST.
 
@@ -161,12 +164,14 @@ async def handle_zstream_branch_stale_error(
                         )
         except Exception as gateway_error:
             logger.warning(f"Failed to post stale-branch comment: {gateway_error}")
-    await fix_await(
-        redis_conn.lpush(
-            RedisQueues.ERROR_LIST.value,
-            ErrorData(details=str(exc), jira_issue=primary_jira_issue).model_dump_json(),
-        )
+    error_id = await fix_await(redis_conn.incr(RedisQueues.ERROR_ID_COUNTER.value))
+    entry = ErrorListEntry(
+        error_id=error_id,
+        queue=queue,
+        task=task,
+        error=ErrorData(details=str(exc), jira_issue=primary_jira_issue),
     )
+    await fix_await(redis_conn.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
 
 
 async def needs_zstream_target_label(dist_git_branch: str, fix_version: str | None) -> bool:

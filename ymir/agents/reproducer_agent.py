@@ -43,6 +43,7 @@ from ymir.common.logging_setup import configure_logging, current_jira_issue
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     ErrorData,
+    ErrorListEntry,
     MergeRequestDetails,
     Task,
 )
@@ -1232,12 +1233,17 @@ async def main() -> None:
 
             async def retry(
                 task,
-                error,
+                error: ErrorData,
                 input_data=input_data,
                 user_triggered=user_triggered,
                 delay_seconds: float | None = None,
             ):
                 task.attempts += 1
+                retry_queue = (
+                    RedisQueues.REPRODUCER_QUEUE_TODO.value
+                    if task.user_triggered
+                    else RedisQueues.REPRODUCER_QUEUE.value
+                )
                 if task.attempts < max_retries:
                     logger.warning(
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
@@ -1253,11 +1259,6 @@ async def main() -> None:
                             delay_seconds,
                         )
                     else:
-                        retry_queue = (
-                            RedisQueues.REPRODUCER_QUEUE_TODO.value
-                            if task.user_triggered
-                            else RedisQueues.REPRODUCER_QUEUE.value
-                        )
                         await fix_await(redis.lpush(retry_queue, payload_json))
                 else:
                     logger.error(
@@ -1276,7 +1277,9 @@ async def main() -> None:
                         logger.warning(
                             f"Failed to set error labels on {input_data.jira_issue}: {label_error}"
                         )
-                    await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
+                    error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
+                    entry = ErrorListEntry(error_id=error_id, queue=retry_queue, task=task, error=error)
+                    await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
 
             if not input_data.package:
                 logger.error(
@@ -1288,7 +1291,7 @@ async def main() -> None:
                     ErrorData(
                         details="Missing package in reproducer task metadata",
                         jira_issue=input_data.jira_issue,
-                    ).model_dump_json(),
+                    ),
                 )
                 return
 
@@ -1334,7 +1337,7 @@ async def main() -> None:
                         ErrorData(
                             details=f"Failed to set in-progress label while blocked: {e}",
                             jira_issue=input_data.jira_issue,
-                        ).model_dump_json(),
+                        ),
                     )
                     await asyncio.sleep(60)
                     return
@@ -1370,7 +1373,7 @@ async def main() -> None:
                     )
                     error_msg = f"Failed to set in-progress label: {e}"
                     error_data = ErrorData(details=error_msg, jira_issue=input_data.jira_issue)
-                    await retry(task, error_data.model_dump_json())
+                    await retry(task, error_data)
                     await asyncio.sleep(60)
                     return
 
@@ -1396,7 +1399,7 @@ async def main() -> None:
                 logger.error(f"Exception during reproducer processing for {input_data.jira_issue}: {error}")
                 await retry(
                     task,
-                    ErrorData(details=error, jira_issue=input_data.jira_issue).model_dump_json(),
+                    ErrorData(details=error, jira_issue=input_data.jira_issue),
                 )
             else:
                 if output.retryable_error:
@@ -1409,7 +1412,7 @@ async def main() -> None:
                         ErrorData(
                             details=output.summary or "Reproducer deferred: retryable infra error",
                             jira_issue=input_data.jira_issue,
-                        ).model_dump_json(),
+                        ),
                         delay_seconds=retry_delay_seconds,
                     )
                 else:

@@ -39,6 +39,7 @@ from ymir.common.merge_queue import submit_merge_job
 from ymir.common.models import (
     BackportOutputSchema,
     ErrorData,
+    ErrorListEntry,
     OpenEndedAnalysisData,
     RebaseOutputSchema,
     Task,
@@ -530,8 +531,13 @@ class JiraIssueFetcher:
                                             schema = OpenEndedAnalysisData.model_validate_json(item)
                                             issue_key = schema.jira_issue.upper()
                                         case RedisQueues.ERROR_LIST.value:
-                                            schema = ErrorData.model_validate_json(item)
-                                            issue_key = schema.jira_issue.upper()
+                                            try:
+                                                entry = ErrorListEntry.model_validate_json(item)
+                                                issue_key = entry.error.jira_issue.upper()
+                                            except ValueError:
+                                                # Legacy entry pushed before ErrorListEntry existed.
+                                                schema = ErrorData.model_validate_json(item)
+                                                issue_key = schema.jira_issue.upper()
                                         case _:
                                             continue
                                 except ValueError:

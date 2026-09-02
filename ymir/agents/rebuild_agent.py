@@ -38,6 +38,7 @@ from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     ConsolidatedIssue,
     ErrorData,
+    ErrorListEntry,
     LogInputSchema,
     LogOutputSchema,
     RebuildData,
@@ -406,19 +407,35 @@ async def main() -> None:
         async def process_task(payload):
             try:
                 task = Task.model_validate_json(payload)
+            except Exception as e:
+                logger.error(f"Failed to parse task payload, skipping: {e}")
+                error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
+                entry = ErrorListEntry(
+                    error_id=error_id,
+                    error=ErrorData(details=f"Malformed task payload: {e}", jira_issue="unknown"),
+                )
+                await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
+                return
+
+            try:
                 triage_state = task.metadata
                 rebuild_data = RebuildData.model_validate(triage_state["triage_result"]["data"])
                 current_jira_issue.set(rebuild_data.jira_issue)
             except Exception as e:
-                logger.error(f"Failed to parse task payload, skipping: {e}")
-                await fix_await(
-                    redis.lpush(
-                        RedisQueues.ERROR_LIST.value,
-                        ErrorData(
-                            details=f"Malformed task payload: {e}", jira_issue="unknown"
-                        ).model_dump_json(),
-                    )
+                # Task itself parsed fine — keep it (and its queue) on the error
+                # entry so it can be requeued once the metadata/schema issue is fixed.
+                logger.error(f"Failed to parse task metadata, skipping: {e}")
+                error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
+                entry = ErrorListEntry(
+                    error_id=error_id,
+                    queue=rebuild_queue_todo if task.user_triggered else rebuild_queue,
+                    task=task,
+                    error=ErrorData(
+                        details=f"Malformed task metadata: {e}",
+                        jira_issue=task.metadata.get("jira_issue", "unknown"),
+                    ),
                 )
+                await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
                 return
 
             async with issue_lock(redis, rebuild_data.jira_issue, prefix="lock:rebuild:") as lock_token:
@@ -443,15 +460,19 @@ async def main() -> None:
             )
 
             async def retry(
-                task, error, comment_text=None, rebuild_data=rebuild_data, user_triggered=user_triggered
+                task,
+                error: ErrorData,
+                comment_text=None,
+                rebuild_data=rebuild_data,
+                user_triggered=user_triggered,
             ):
                 task.attempts += 1
+                retry_queue = rebuild_queue_todo if task.user_triggered else rebuild_queue
                 if task.attempts < max_retries:
                     logger.warning(
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {rebuild_data.jira_issue}"
                     )
-                    retry_queue = rebuild_queue_todo if task.user_triggered else rebuild_queue
                     await fix_await(redis.lpush(retry_queue, task.model_dump_json()))
                 else:
                     # Final attempt exhausted — mark errored and stop retrying.
@@ -501,7 +522,9 @@ async def main() -> None:
                                 f"Failed to connect to MCP gateway for final rebuild failure comment: "
                                 f"{gateway_error}"
                             )
-                    await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
+                    error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
+                    entry = ErrorListEntry(error_id=error_id, queue=retry_queue, task=task, error=error)
+                    await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
 
             try:
                 with span_processor.start_transaction(rebuild_data.jira_issue, workflow="RebuildWorkflow"):
@@ -537,6 +560,8 @@ async def main() -> None:
                     dry_run=dry_run,
                     user_triggered=user_triggered,
                     redis_conn=redis,
+                    task=task,
+                    queue=rebuild_queue_todo if user_triggered else rebuild_queue,
                 )
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
@@ -544,7 +569,7 @@ async def main() -> None:
                 reason = e.explain() if isinstance(e, FrameworkError) else e
                 await retry(
                     task,
-                    ErrorData(details=error, jira_issue=rebuild_data.jira_issue).model_dump_json(),
+                    ErrorData(details=error, jira_issue=rebuild_data.jira_issue),
                     comment_text=f"Agent failed to perform a rebuild: {reason}",
                 )
             else:
@@ -596,7 +621,7 @@ async def main() -> None:
                         ErrorData(
                             details=state.rebuild_error or "Unknown rebuild error",
                             jira_issue=rebuild_data.jira_issue,
-                        ).model_dump_json(),
+                        ),
                     )
 
         shutdown_event = asyncio.Event()

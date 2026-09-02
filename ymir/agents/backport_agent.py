@@ -88,6 +88,7 @@ from ymir.common.models import (
     BuildInputSchema,
     BuildOutputSchema,
     ErrorData,
+    ErrorListEntry,
     InheritAdaptationInputSchema,
     InheritAdaptationOutputSchema,
     LogInputSchema,
@@ -1636,7 +1637,7 @@ async def main() -> None:
                 + (" (user-triggered via ymir_todo)" if user_triggered else "")
             )
 
-            async def finalize_failure(error, comment_text=None):
+            async def finalize_failure(error: ErrorData, retry_queue: str, task, comment_text=None):
                 logger.error("Moving failed task to error list: %s", backport_data.jira_issue)
                 await tasks.set_jira_labels(
                     jira_issue=backport_data.jira_issue,
@@ -1666,23 +1667,29 @@ async def main() -> None:
                             backport_data.jira_issue,
                             comment_error,
                         )
-                await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, error))
+                error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
+                entry = ErrorListEntry(error_id=error_id, queue=retry_queue, task=task, error=error)
+                await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
 
             async def retry(
-                task, error, comment_text=None, backport_data=backport_data, user_triggered=user_triggered
+                task,
+                error: ErrorData,
+                comment_text=None,
+                backport_data=backport_data,
+                user_triggered=user_triggered,
             ):
                 task.attempts += 1
+                retry_queue = backport_queue_todo if task.user_triggered else backport_queue
                 if task.attempts < max_retries:
                     logger.warning(
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {backport_data.jira_issue}"
                     )
-                    retry_queue = backport_queue_todo if task.user_triggered else backport_queue
                     await fix_await(redis.lpush(retry_queue, task.model_dump_json()))
                     return
 
                 logger.error(f"Task failed after {max_retries} attempts: {backport_data.jira_issue}")
-                await finalize_failure(error, comment_text)
+                await finalize_failure(error, retry_queue, task, comment_text)
 
             try:
                 logger.info(f"Starting backport processing for {backport_data.jira_issue}")
@@ -1723,6 +1730,8 @@ async def main() -> None:
                     dry_run=dry_run,
                     user_triggered=user_triggered,
                     redis_conn=redis,
+                    task=task,
+                    queue=backport_queue_todo if user_triggered else backport_queue,
                 )
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
@@ -1730,7 +1739,7 @@ async def main() -> None:
                 reason = e.explain() if isinstance(e, FrameworkError) else e
                 await retry(
                     task,
-                    ErrorData(details=error, jira_issue=backport_data.jira_issue).model_dump_json(),
+                    ErrorData(details=error, jira_issue=backport_data.jira_issue),
                     comment_text=f"Agent failed to perform a backport: {reason}",
                 )
             else:
@@ -1762,9 +1771,10 @@ async def main() -> None:
                     failure = ErrorData(
                         details=getattr(state.backport_result, "error", None) or "Unknown backport error",
                         jira_issue=backport_data.jira_issue,
-                    ).model_dump_json()
+                    )
                     if not _configure_task_retry(task, state):
-                        await finalize_failure(failure)
+                        retry_queue = backport_queue_todo if task.user_triggered else backport_queue
+                        await finalize_failure(failure, retry_queue, task)
                         return
                     await tasks.set_jira_labels(
                         jira_issue=backport_data.jira_issue,

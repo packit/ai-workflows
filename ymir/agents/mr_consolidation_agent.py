@@ -398,7 +398,7 @@ async def _resolve_source_issues(
         # When have no collected issues post updates under those from issue_keys
         if not state.jira_issues_collected:
             state.jira_issues_collected = issue_keys
-        return "update_jira_issues"
+        return Workflow.END
 
     state.all_open_mrs = matched_mrs
     state.mr_urls = [mr["url"] for mr in matched_mrs]
@@ -522,7 +522,7 @@ async def run_workflow(
                 )
                 if not state.jira_issues_collected and all_mrs:
                     state.jira_issues_collected = _extract_jira_from_mr_descriptions(all_mrs)
-                return "update_jira_issues"
+                return Workflow.END
 
             state.all_open_mrs = all_mrs
             return "fork_and_prepare_dist_git"
@@ -651,7 +651,7 @@ async def run_workflow(
                     )
                     if not state.jira_issues_collected and state.all_open_mrs:
                         state.jira_issues_collected = _extract_jira_from_mr_descriptions(state.all_open_mrs)
-                    return "update_jira_issues"
+                    return Workflow.END
 
                 # Sort by type priority (backport first, then rebuild)
                 # and select the two highest-priority MRs.

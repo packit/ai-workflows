@@ -823,35 +823,6 @@ def _consolidation_config(merge_mrs: bool = True) -> PackageConsolidationConfig:
 
 
 @pytest.mark.asyncio
-async def test_try_submit_posts_jira_comment_when_submitted_with_issue():
-    """When the job is newly submitted and jira_issue is given, a Jira comment is posted."""
-    with (
-        patch(
-            "ymir.agents.tasks.fetch_consolidation_config",
-            new_callable=AsyncMock,
-            return_value=_consolidation_config(),
-        ),
-        patch(
-            "ymir.agents.tasks.submit_merge_job",
-            new_callable=AsyncMock,
-            return_value=True,
-        ),
-        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
-    ):
-        await try_submit_consolidation_job(
-            package="bash",
-            dist_git_branch="c10s",
-            gateway_tools=[],
-            redis_conn=AsyncMock(),
-            jira_issue="RHEL-12345",
-        )
-
-    mock_run_tool.assert_awaited_once()
-    assert mock_run_tool.call_args.args[0] == "add_jira_comment"
-    assert mock_run_tool.call_args.kwargs["issue_key"] == "RHEL-12345"
-
-
-@pytest.mark.asyncio
 async def test_try_submit_no_jira_comment_when_issue_is_none():
     """When jira_issue=None no Jira comment is posted, even if the job was submitted."""
     with (

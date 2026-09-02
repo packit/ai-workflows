@@ -1344,11 +1344,11 @@ async def test_eligibility_ystream_low_moderate_pending(severity):
     ).and_return(_create_async_return((FixApproach.PENDING, ["RHEL-999"], ""))).once()
     # Z-stream clone not NOT_AFFECTED
     flexmock(jira_tools).should_receive("_check_zstream_not_affected").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345", "9"
+        "CVE-2025-12345", "curl", "RHEL-12345", "9", "CVE-2025-12345 buffer overflow in curl [rhel-9.8]"
     ).and_return(_create_async_return([])).once()
     # Z-stream clone not pending triage (still waiting for Fixed in Build)
     flexmock(jira_tools).should_receive("_check_zstream_pending_triage").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345", "9"
+        "CVE-2025-12345", "curl", "RHEL-12345", "9", "CVE-2025-12345 buffer overflow in curl [rhel-9.8]"
     ).and_return(_create_async_return([])).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
@@ -1417,7 +1417,7 @@ async def test_eligibility_ystream_cs_first_zstream_not_affected(severity):
     ).and_return(_create_async_return((FixApproach.CS_FIRST, [], "matching CS build in CS Koji"))).once()
     # Z-stream clone was NOT_AFFECTED, so Y-stream should be triaged too
     flexmock(jira_tools).should_receive("_check_zstream_not_affected").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345", "9"
+        "CVE-2025-12345", "curl", "RHEL-12345", "9", "CVE-2025-12345 buffer overflow in curl [rhel-9.8]"
     ).and_return(_create_async_return(["RHEL-999"])).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
@@ -1449,11 +1449,11 @@ async def test_eligibility_ystream_cs_first_zstream_pending_triage(severity):
     ).and_return(_create_async_return((FixApproach.CS_FIRST, [], "matching CS build in CS Koji"))).once()
     # Z-stream clone not NOT_AFFECTED
     flexmock(jira_tools).should_receive("_check_zstream_not_affected").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345", "9"
+        "CVE-2025-12345", "curl", "RHEL-12345", "9", "CVE-2025-12345 buffer overflow in curl [rhel-9.8]"
     ).and_return(_create_async_return([])).once()
     # Z-stream clone pending triage
     flexmock(jira_tools).should_receive("_check_zstream_pending_triage").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345", "9"
+        "CVE-2025-12345", "curl", "RHEL-12345", "9", "CVE-2025-12345 buffer overflow in curl [rhel-9.8]"
     ).and_return(_create_async_return(["RHEL-888"])).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
@@ -1492,7 +1492,7 @@ async def test_eligibility_ystream_pending_zstream_not_affected(severity):
     ).and_return(_create_async_return((FixApproach.PENDING, ["RHEL-777"], "open clone, no build"))).once()
     # But the clone has ymir_triaged_not_affected label
     flexmock(jira_tools).should_receive("_check_zstream_not_affected").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345", "9"
+        "CVE-2025-12345", "curl", "RHEL-12345", "9", "CVE-2025-12345 buffer overflow in curl [rhel-9.8]"
     ).and_return(_create_async_return(["RHEL-777"])).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
@@ -1559,7 +1559,7 @@ async def test_eligibility_ystream_cs_first_zstream_pending_triage_error(severit
     ).and_return(_create_async_return((FixApproach.CS_FIRST, [], "matching CS build in CS Koji"))).once()
     # Z-stream NOT_AFFECTED check succeeds (returns empty)
     flexmock(jira_tools).should_receive("_check_zstream_not_affected").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345", "9"
+        "CVE-2025-12345", "curl", "RHEL-12345", "9", "CVE-2025-12345 buffer overflow in curl [rhel-9.8]"
     ).and_return(_create_async_return([])).once()
 
     # Simulate Jira search failure for pending triage check
@@ -1598,7 +1598,7 @@ async def test_eligibility_dependency_blocker_zstream_not_affected():
     ).and_return(_create_async_return((False, ["RHEL-777"]))).once()
     # But Z-stream was NOT_AFFECTED, so should proceed anyway
     flexmock(jira_tools).should_receive("_check_zstream_not_affected").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345", "9"
+        "CVE-2025-12345", "curl", "RHEL-12345", "9", "CVE-2025-12345 buffer overflow in curl [rhel-9.8]"
     ).and_return(_create_async_return(["RHEL-777"])).once()
 
     result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result

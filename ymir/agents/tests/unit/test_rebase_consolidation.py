@@ -23,6 +23,27 @@ def test_build_rebase_siblings_jql_escapes_component_quotes():
     assert 'fixVersion in ("rhel-9.8", "rhel-9.8.z")' in jql
 
 
+def test_build_rebase_siblings_jql_filters_modular_stream():
+    """Modular issues must filter on Downstream Component Name to avoid mixing streams."""
+    jql = build_rebase_siblings_jql(
+        "RHEL-100", "postgis", "rhel-9.8", downstream_component="postgresql:16/postgis"
+    )
+    assert 'cf[10669] = "postgresql:16/postgis"' in jql
+    assert 'component = "postgis"' in jql
+
+
+def test_build_rebase_siblings_jql_no_filter_for_nonmodular():
+    """Non-modular issues should not add a Downstream Component Name filter."""
+    jql = build_rebase_siblings_jql("RHEL-100", "curl", "rhel-9.8", downstream_component="curl")
+    assert "cf[10669]" not in jql
+
+
+def test_build_rebase_siblings_jql_no_filter_when_none():
+    """When downstream_component is None, no extra filter is added."""
+    jql = build_rebase_siblings_jql("RHEL-100", "curl", "rhel-9.8", downstream_component=None)
+    assert "cf[10669]" not in jql
+
+
 def test_build_rebase_siblings_jql_excludes_correct_labels():
     """Verify that rebase consolidation excludes terminal triage labels to prevent circular consolidation."""
     jql = build_rebase_siblings_jql("RHEL-100", "python3.12", "rhel-9.8")

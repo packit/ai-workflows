@@ -16,6 +16,19 @@ def test_build_rebuild_siblings_jql():
     assert 'status in ("New", "Planning")' in jql
 
 
+def test_build_rebuild_siblings_jql_filters_modular_stream():
+    jql = build_rebuild_siblings_jql(
+        "RHEL-100", "postgis", "rhel-9.8", downstream_component="postgresql:16/postgis"
+    )
+    assert 'cf[10669] = "postgresql:16/postgis"' in jql
+    assert 'component = "postgis"' in jql
+
+
+def test_build_rebuild_siblings_jql_no_filter_for_nonmodular():
+    jql = build_rebuild_siblings_jql("RHEL-100", "curl", "rhel-9.8", downstream_component="curl")
+    assert "cf[10669]" not in jql
+
+
 def test_build_rebuild_siblings_jql_escapes_component_quotes():
     jql = build_rebuild_siblings_jql("RHEL-100", 'comp"name', "rhel-9.8.z")
     assert r'component = "comp\"name"' in jql

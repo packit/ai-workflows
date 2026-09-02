@@ -274,8 +274,15 @@ async def determine_target_branch(
             return None, None
 
         older_zstream = await is_older_zstream(triage_data.fix_version)
+        if cve_needs_internal_fix and not older_zstream:
+            config = await load_rhel_config()
+            y_streams = config.get("current_y_streams", {})
+            parsed_version = parse_rhel_version(triage_data.fix_version)
+            has_y_stream = bool(parsed_version and parsed_version[0] in y_streams)
+        else:
+            has_y_stream = False
         namespace: Literal["rhel", "centos-stream"] = (
-            "rhel" if cve_needs_internal_fix or older_zstream else "centos-stream"
+            "rhel" if older_zstream or (cve_needs_internal_fix and has_y_stream) else "centos-stream"
         )
         jira_issue = getattr(triage_data, "jira_issue", "unknown")
         logger.info(
@@ -414,6 +421,14 @@ class TriageState(BaseModel):
         description=(
             "Package name from Jira Downstream Component Name (customfield_10669). "
             "Modular values are reduced from 'module:stream/package' to the package."
+        ),
+    )
+    raw_downstream_component: str | None = Field(
+        default=None,
+        description=(
+            "Original Downstream Component Name value (customfield_10669) before "
+            "extraction, e.g. 'postgresql:16/postgis'. Used by sibling JQL to "
+            "filter by module stream."
         ),
     )
     jira_summary: str | None = Field(
@@ -650,6 +665,7 @@ async def run_workflow(
             input_data = InputSchema(issue=state.jira_issue)
             state.jira_summary = jira_details.get("fields", {}).get("summary")
             raw_component = jira_details.get("fields", {}).get(DOWNSTREAM_COMPONENT_CUSTOM_FIELD)
+            state.raw_downstream_component = raw_component or None
             # Modular issues store "module:stream/package" (e.g. "postgresql:16/postgis");
             # extract the package so is_modular() / parse_module_stream() match the summary.
             state.downstream_component = extract_downstream_package(raw_component)
@@ -1018,6 +1034,7 @@ async def run_workflow(
                 local_clone=state.applicability_local_clone,
                 unpacked_sources=state.applicability_unpacked_sources,
                 target_branch=state.target_branch,
+                downstream_component=state.raw_downstream_component,
             )
             rebuild_data.consolidated_issues = included
             rebuild_data.consolidation_summary = summary or None
@@ -1066,6 +1083,7 @@ async def run_workflow(
                 available_tools=gateway_tools,
                 dry_run=dry_run,
                 user_triggered=user_triggered,
+                downstream_component=state.raw_downstream_component,
             )
 
             # If siblings were queued, don't queue primary yet (wait for siblings)

@@ -1075,11 +1075,19 @@ async def try_submit_consolidation_job(
     dist_git_branch: str,
     gateway_tools: list,
     redis_conn,
+    jira_issue: str | None = None,
 ) -> None:
     """Fetch consolidation config and submit a job if enabled.
 
     Shared logic used by both the backport and rebuild agents after
-    creating an MR.
+    creating an MR. Posts a Jira comment when consolidation is triggered.
+
+    Args:
+        package: The package name
+        dist_git_branch: The dist-git branch
+        gateway_tools: List of available MCP tools
+        redis_conn: Redis connection for job submission
+        jira_issue: Optional Jira issue key to post consolidation notification
 
     Raises:
         InvalidConsolidationConfigError: When ymir.yaml exists but the

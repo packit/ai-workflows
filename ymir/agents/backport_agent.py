@@ -1449,6 +1449,7 @@ async def run_workflow(
                     state.dist_git_branch,
                     gateway_tools,
                     redis_conn,
+                    jira_issue=state.jira_issue,
                 )
             except InvalidConsolidationConfigError as e:
                 logger.warning("Invalid consolidation config for %s: %s", state.package, e)

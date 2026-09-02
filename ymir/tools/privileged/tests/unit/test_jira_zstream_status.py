@@ -104,6 +104,7 @@ async def test_check_zstream_not_affected_found():
             "key": "RHEL-111",
             "fields": {
                 "fixVersions": [{"name": "rhel-9.7.z"}],
+                "summary": "CVE-2026-12345 buffer overflow in curl [rhel-9.7.z]",
             },
         },
     ]
@@ -114,7 +115,9 @@ async def test_check_zstream_not_affected_found():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    not_affected = await _check_zstream_not_affected("CVE-2026-12345", "curl", "RHEL-999", "9")
+    not_affected = await _check_zstream_not_affected(
+        "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+    )
     assert not_affected == ["RHEL-111"]
 
 
@@ -129,7 +132,9 @@ async def test_check_zstream_not_affected_none_found():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    not_affected = await _check_zstream_not_affected("CVE-2026-12345", "curl", "RHEL-999", "9")
+    not_affected = await _check_zstream_not_affected(
+        "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+    )
     assert not_affected == []
 
 
@@ -145,7 +150,9 @@ async def test_check_zstream_not_affected_clone_is_affected():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    not_affected = await _check_zstream_not_affected("CVE-2026-12345", "curl", "RHEL-999", "9")
+    not_affected = await _check_zstream_not_affected(
+        "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+    )
     assert not_affected == []
 
 
@@ -157,6 +164,7 @@ async def test_check_zstream_not_affected_wrong_version():
             "key": "RHEL-111",
             "fields": {
                 "fixVersions": [{"name": "rhel-8.10.z"}],  # Wrong major version
+                "summary": "CVE-2026-12345 buffer overflow in curl [rhel-8.10.z]",
             },
         },
     ]
@@ -167,7 +175,9 @@ async def test_check_zstream_not_affected_wrong_version():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    not_affected = await _check_zstream_not_affected("CVE-2026-12345", "curl", "RHEL-999", "9")
+    not_affected = await _check_zstream_not_affected(
+        "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+    )
     assert not_affected == []
 
 
@@ -195,7 +205,9 @@ async def test_check_zstream_not_affected_old_current_ignored():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    not_affected = await _check_zstream_not_affected("CVE-2026-12345", "curl", "RHEL-999", "9")
+    not_affected = await _check_zstream_not_affected(
+        "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+    )
     # Only the upcoming Z-stream (9.7.z) should be returned
     assert not_affected == ["RHEL-222"]
 
@@ -212,7 +224,9 @@ async def test_check_zstream_not_affected_no_applicable_zstream():
     ).once()
 
     # Version 7 has no Z-stream in config, should return early
-    not_affected = await _check_zstream_not_affected("CVE-2026-12345", "curl", "RHEL-999", "7")
+    not_affected = await _check_zstream_not_affected(
+        "CVE-2026-12345", "curl", "RHEL-999", "7", "CVE-2026-12345 buffer overflow in curl [rhel-7.8]"
+    )
     assert not_affected == []
 
 
@@ -238,7 +252,9 @@ async def test_check_zstream_pending_triage_found():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    pending = await _check_zstream_pending_triage("CVE-2026-12345", "curl", "RHEL-999", "9")
+    pending = await _check_zstream_pending_triage(
+        "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+    )
     assert pending == ["RHEL-111"]
 
 
@@ -253,7 +269,9 @@ async def test_check_zstream_pending_triage_terminal_excluded():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    pending = await _check_zstream_pending_triage("CVE-2026-12345", "curl", "RHEL-999", "9")
+    pending = await _check_zstream_pending_triage(
+        "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+    )
     assert pending == []
 
 
@@ -268,7 +286,9 @@ async def test_check_zstream_pending_triage_none_found():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    pending = await _check_zstream_pending_triage("CVE-2026-12345", "curl", "RHEL-999", "9")
+    pending = await _check_zstream_pending_triage(
+        "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+    )
     assert pending == []
 
 
@@ -284,7 +304,9 @@ async def test_check_zstream_pending_triage_clone_is_affected():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    pending = await _check_zstream_pending_triage("CVE-2026-12345", "curl", "RHEL-999", "9")
+    pending = await _check_zstream_pending_triage(
+        "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+    )
     assert pending == []
 
 
@@ -314,7 +336,9 @@ async def test_check_zstream_pending_triage_old_current_ignored():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    pending = await _check_zstream_pending_triage("CVE-2026-12345", "curl", "RHEL-999", "9")
+    pending = await _check_zstream_pending_triage(
+        "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+    )
     # Only the upcoming Z-stream (9.7.z) should be returned
     assert pending == ["RHEL-222"]
 
@@ -331,7 +355,9 @@ async def test_check_zstream_pending_triage_no_applicable_zstream():
     ).once()
 
     # Version 7 has no Z-stream in config, should return early
-    pending = await _check_zstream_pending_triage("CVE-2026-12345", "curl", "RHEL-999", "7")
+    pending = await _check_zstream_pending_triage(
+        "CVE-2026-12345", "curl", "RHEL-999", "7", "CVE-2026-12345 buffer overflow in curl [rhel-7.8]"
+    )
     assert pending == []
 
 
@@ -352,7 +378,9 @@ async def test_check_zstream_not_affected_jira_search_failure():
     flexmock(SearchJiraIssuesTool).should_receive("run").replace_with(raise_error).once()
 
     with pytest.raises(RuntimeError, match="Jira API connection timeout"):
-        await _check_zstream_not_affected("CVE-2026-12345", "curl", "RHEL-999", "9")
+        await _check_zstream_not_affected(
+            "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+        )
 
 
 @pytest.mark.asyncio
@@ -369,4 +397,164 @@ async def test_check_zstream_pending_triage_jira_search_failure():
     flexmock(SearchJiraIssuesTool).should_receive("run").replace_with(raise_error).once()
 
     with pytest.raises(RuntimeError, match="Jira server unavailable"):
-        await _check_zstream_pending_triage("CVE-2026-12345", "curl", "RHEL-999", "9")
+        await _check_zstream_pending_triage(
+            "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+        )
+
+
+# Tests for modular tracker filtering
+
+
+@pytest.mark.asyncio
+async def test_check_zstream_not_affected_modular_match():
+    """Modular tracker: clone with same module stream is matched."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+                "summary": "postgresql:15/postgis: CVE-2026-12345 buffer overflow [rhel-9.7.z]",
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    # Current issue is modular: postgresql:15/postgis
+    not_affected = await _check_zstream_not_affected(
+        "CVE-2026-12345",
+        "postgis",
+        "RHEL-999",
+        "9",
+        "postgresql:15/postgis: CVE-2026-12345 buffer overflow [rhel-9.8]",
+    )
+    assert not_affected == ["RHEL-111"]
+
+
+@pytest.mark.asyncio
+async def test_check_zstream_not_affected_modular_mismatch():
+    """Modular tracker: clone with different module stream is filtered out."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+                # Different module stream: postgresql:16 vs postgresql:15
+                "summary": "postgresql:16/postgis: CVE-2026-12345 buffer overflow [rhel-9.7.z]",
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    # Current issue is modular: postgresql:15/postgis
+    not_affected = await _check_zstream_not_affected(
+        "CVE-2026-12345",
+        "postgis",
+        "RHEL-999",
+        "9",
+        "postgresql:15/postgis: CVE-2026-12345 buffer overflow [rhel-9.8]",
+    )
+    assert not_affected == []
+
+
+@pytest.mark.asyncio
+async def test_check_zstream_not_affected_modular_vs_nonmodular():
+    """Modular tracker doesn't match non-modular clone (and vice versa)."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+                # Non-modular summary
+                "summary": "CVE-2026-12345 buffer overflow in postgis [rhel-9.7.z]",
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    # Current issue is modular: postgresql:15/postgis
+    not_affected = await _check_zstream_not_affected(
+        "CVE-2026-12345",
+        "postgis",
+        "RHEL-999",
+        "9",
+        "postgresql:15/postgis: CVE-2026-12345 buffer overflow [rhel-9.8]",
+    )
+    assert not_affected == []
+
+
+@pytest.mark.asyncio
+async def test_check_zstream_pending_triage_modular_match():
+    """Modular tracker: pending clone with same module stream is matched."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+                "summary": "postgresql:15/postgis: CVE-2026-12345 buffer overflow [rhel-9.7.z]",
+                "labels": ["SecurityTracking", "ymir_triage_in_progress"],
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    # Current issue is modular: postgresql:15/postgis
+    pending = await _check_zstream_pending_triage(
+        "CVE-2026-12345",
+        "postgis",
+        "RHEL-999",
+        "9",
+        "postgresql:15/postgis: CVE-2026-12345 buffer overflow [rhel-9.8]",
+    )
+    assert pending == ["RHEL-111"]
+
+
+@pytest.mark.asyncio
+async def test_check_zstream_pending_triage_modular_mismatch():
+    """Modular tracker: pending clone with different module stream is filtered out."""
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+                # Different module stream: postgresql:16 vs postgresql:15
+                "summary": "postgresql:16/postgis: CVE-2026-12345 buffer overflow [rhel-9.7.z]",
+                "labels": ["SecurityTracking", "ymir_triage_in_progress"],
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    # Current issue is modular: postgresql:15/postgis
+    pending = await _check_zstream_pending_triage(
+        "CVE-2026-12345",
+        "postgis",
+        "RHEL-999",
+        "9",
+        "postgresql:15/postgis: CVE-2026-12345 buffer overflow [rhel-9.8]",
+    )
+    assert pending == []

@@ -826,7 +826,7 @@ async def _get_applicable_zstream_variants(major_version: str) -> set[str] | Non
 
 
 async def _check_zstream_not_affected(
-    cve_id: str, component: str, exclude_key: str, major_version: str
+    cve_id: str, component: str, exclude_key: str, major_version: str, summary: str
 ) -> list[str]:
     """Check if any Z-stream clone was triaged as NOT_AFFECTED.
 
@@ -834,6 +834,8 @@ async def _check_zstream_not_affected(
     for Z-stream to ship. Before skipping or postponing the Y-stream, we check
     if the Z-stream clones were actually not affected — in that case, the
     Y-stream should also be triaged to confirm it's not affected.
+
+    For modular trackers, only matches clones with the same module stream.
 
     Returns list of Z-stream issue keys that have ymir_triaged_not_affected label.
     """
@@ -843,6 +845,9 @@ async def _check_zstream_not_affected(
         logger.info(f"No applicable Z-stream for major version {major_version}, skipping NOT_AFFECTED check")
         return []
 
+    # Parse module stream from current issue to filter modular clones
+    current_module_stream = parse_module_stream(summary, component)
+
     escaped_cve_id = cve_id.replace('"', '\\"')
     escaped_component = component.replace('"', '\\"')
     jql = (
@@ -850,13 +855,16 @@ async def _check_zstream_not_affected(
         f' AND labels = "SecurityTracking" AND labels = "ymir_triaged_not_affected"'
         f' AND key != "{exclude_key}"'
     )
-    logger.info(f"Checking for NOT_AFFECTED Z-stream clones for {cve_id} (major={major_version})")
+    logger.info(
+        f"Checking for NOT_AFFECTED Z-stream clones for {cve_id} "
+        f"(major={major_version}, modular={current_module_stream is not None})"
+    )
 
     tool = SearchJiraIssuesTool()
     output = await tool.run(
         input={
             "jql": jql,
-            "fields": ["fixVersions"],
+            "fields": ["fixVersions", "summary"],
             "max_results": 50,
         }
     )
@@ -867,9 +875,24 @@ async def _check_zstream_not_affected(
         key = issue.get("key", "")
         fix_versions = issue.get("fields", {}).get("fixVersions", [])
         fv_names = [fv.get("name", "") for fv in fix_versions]
-        if any(fv.lower() in relevant_z_streams for fv in fv_names):
-            logger.info(f"  {key}: fixVersions={fv_names} — NOT_AFFECTED Z-stream clone found")
-            not_affected_keys.append(key)
+
+        # Check if fix version matches
+        if not any(fv.lower() in relevant_z_streams for fv in fv_names):
+            continue
+
+        # Check if module stream matches (both modular with same module/stream, or both non-modular)
+        issue_summary = issue.get("fields", {}).get("summary", "")
+        issue_module_stream = parse_module_stream(issue_summary, component)
+
+        if current_module_stream != issue_module_stream:
+            logger.info(
+                f"  {key}: module stream mismatch (current={current_module_stream}, "
+                f"clone={issue_module_stream}) — skipping"
+            )
+            continue
+
+        logger.info(f"  {key}: fixVersions={fv_names} — NOT_AFFECTED Z-stream clone found")
+        not_affected_keys.append(key)
 
     if not_affected_keys:
         logger.info(
@@ -882,7 +905,7 @@ async def _check_zstream_not_affected(
 
 
 async def _check_zstream_pending_triage(
-    cve_id: str, component: str, exclude_key: str, major_version: str
+    cve_id: str, component: str, exclude_key: str, major_version: str, summary: str
 ) -> list[str]:
     """Check if Z-stream clones exist but haven't been triaged yet.
 
@@ -890,6 +913,8 @@ async def _check_zstream_pending_triage(
     clones exist but don't have any ymir_triaged* terminal labels, we should
     wait for them to be triaged before deciding whether the Y-stream should be
     skipped or triaged.
+
+    For modular trackers, only matches clones with the same module stream.
 
     Returns list of Z-stream issue keys without ymir_triaged* terminal labels.
     """
@@ -900,6 +925,9 @@ async def _check_zstream_pending_triage(
             f"No applicable Z-stream for major version {major_version}, skipping pending-triage check"
         )
         return []
+
+    # Parse module stream from current issue to filter modular clones
+    current_module_stream = parse_module_stream(summary, component)
 
     escaped_cve_id = cve_id.replace('"', '\\"')
     escaped_component = component.replace('"', '\\"')
@@ -922,13 +950,16 @@ async def _check_zstream_pending_triage(
         f' AND labels != "ymir_triage_errored"'
         f' AND key != "{exclude_key}"'
     )
-    logger.info(f"Checking for pending-triage Z-stream clones for {cve_id} (major={major_version})")
+    logger.info(
+        f"Checking for pending-triage Z-stream clones for {cve_id} "
+        f"(major={major_version}, modular={current_module_stream is not None})"
+    )
 
     tool = SearchJiraIssuesTool()
     output = await tool.run(
         input={
             "jql": jql,
-            "fields": ["fixVersions", "labels"],
+            "fields": ["fixVersions", "labels", "summary"],
             "max_results": 50,
         }
     )
@@ -940,9 +971,24 @@ async def _check_zstream_pending_triage(
         fix_versions = issue.get("fields", {}).get("fixVersions", [])
         fv_names = [fv.get("name", "") for fv in fix_versions]
         labels = issue.get("fields", {}).get("labels", [])
-        if any(fv.lower() in relevant_z_streams for fv in fv_names):
-            logger.info(f"  {key}: fixVersions={fv_names}, labels={labels} — pending triage")
-            pending_keys.append(key)
+
+        # Check if fix version matches
+        if not any(fv.lower() in relevant_z_streams for fv in fv_names):
+            continue
+
+        # Check if module stream matches (both modular with same module/stream, or both non-modular)
+        issue_summary = issue.get("fields", {}).get("summary", "")
+        issue_module_stream = parse_module_stream(issue_summary, component)
+
+        if current_module_stream != issue_module_stream:
+            logger.info(
+                f"  {key}: module stream mismatch (current={current_module_stream}, "
+                f"clone={issue_module_stream}) — skipping"
+            )
+            continue
+
+        logger.info(f"  {key}: fixVersions={fv_names}, labels={labels} — pending triage")
+        pending_keys.append(key)
 
     if pending_keys:
         logger.info(
@@ -1164,7 +1210,7 @@ class CheckCveTriageEligibilityTool(
         if major_version:
             try:
                 not_affected_clones = await _check_zstream_not_affected(
-                    cve_id, component, issue_key, major_version
+                    cve_id, component, issue_key, major_version, summary
                 )
             except Exception as e:
                 logger.warning(f"Z-stream NOT_AFFECTED check failed for {cve_id}: {e}")
@@ -1367,7 +1413,7 @@ class CheckCveTriageEligibilityTool(
             # Before skipping the Y-stream, check if Z-stream clones were NOT_AFFECTED
             try:
                 not_affected_clones = await _check_zstream_not_affected(
-                    cve_id, component, issue_key, major_version
+                    cve_id, component, issue_key, major_version, summary
                 )
             except Exception as e:
                 logger.warning(f"Z-stream NOT_AFFECTED check failed for {cve_id}: {e}")
@@ -1402,7 +1448,7 @@ class CheckCveTriageEligibilityTool(
             # Check if Z-stream clones exist but haven't been triaged yet
             try:
                 pending_triage = await _check_zstream_pending_triage(
-                    cve_id, component, issue_key, major_version
+                    cve_id, component, issue_key, major_version, summary
                 )
             except Exception as e:
                 logger.warning(f"Z-stream pending triage check failed for {cve_id}: {e}")

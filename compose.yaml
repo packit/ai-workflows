@@ -15,7 +15,7 @@ x-beeai-env: &beeai-env
   ERRATA_ALLOW_STATUS_CHANGES: ${ERRATA_ALLOW_STATUS_CHANGES:-false}
   AUTO_CHAIN: ${AUTO_CHAIN:-true}
   TRIAGE_ENQUEUE_REPRODUCER: ${TRIAGE_ENQUEUE_REPRODUCER:-true}
-  REQUESTS_CA_BUNDLE: /etc/pki/tls/certs/ca-bundle.crt
+  REQUESTS_CA_BUNDLE: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
   SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
 
 # Base template for BeeAI agents

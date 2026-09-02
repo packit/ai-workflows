@@ -218,9 +218,13 @@ def write_mcp_config(client: str, creds: dict):
         "MCP_TRANSPORT": "stdio",
         "UPSTREAM_SEARCH_API_URL": "http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1",
     }
-    ca_bundle = Path("/etc/pki/tls/certs/ca-bundle.crt")
-    if ca_bundle.exists():
-        unpriv_env["REQUESTS_CA_BUNDLE"] = str(ca_bundle)
+    for ca_bundle in (
+        Path("/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"),
+        Path("/etc/pki/tls/certs/ca-bundle.crt"),
+    ):
+        if ca_bundle.exists():
+            unpriv_env["REQUESTS_CA_BUNDLE"] = str(ca_bundle)
+            break
 
     config_path = CLIENT_MCP_CONFIG_PATHS[client]
 

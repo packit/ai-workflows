@@ -30,7 +30,7 @@ spec:
         - name: CONTAINER_VERSION
           value: "c9s"
         - name: REQUESTS_CA_BUNDLE
-          value: /etc/pki/tls/certs/ca-bundle.crt
+          value: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
         envFrom:
         - configMapRef:
             name: agents-env

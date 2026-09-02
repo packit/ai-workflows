@@ -160,7 +160,7 @@ claude mcp add ymir-privileged \
 claude mcp add ymir-unprivileged \
   --env MCP_TRANSPORT=stdio \
   --env UPSTREAM_SEARCH_API_URL=http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1 \
-  --env REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt \
+  --env REQUESTS_CA_BUNDLE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
   -- "$VENV/bin/ymir-unprivileged-gateway"
 ```
 
@@ -186,7 +186,7 @@ Or edit `~/.claude.json` directly, adding to the top-level `mcpServers` object
       "env": {
         "MCP_TRANSPORT": "stdio",
         "UPSTREAM_SEARCH_API_URL": "http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1",
-        "REQUESTS_CA_BUNDLE": "/etc/pki/tls/certs/ca-bundle.crt"
+        "REQUESTS_CA_BUNDLE": "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
       }
     }
   }

@@ -119,7 +119,17 @@ async def test_create_zstream_branch_push_silently_rejected(monkeypatch):
 
     flexmock(distgit_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
 
-    gitcmd = flexmock().should_receive("ls_remote").and_return(False).and_return("").mock()
+    # First ls_remote checks GitLab (branch not there), subsequent calls verify
+    # dist-git after push — all return empty to simulate silent ACL rejection.
+    gitcmd = (
+        flexmock()
+        .should_receive("ls_remote")
+        .and_return(False)
+        .and_return("")
+        .and_return("")
+        .and_return("")
+        .mock()
+    )
     gitcmd.should_receive("push").with_args("origin", f"{ref}:refs/heads/{branch}").once().and_return("")
     flexmock(git.cmd.Git).new_instances(gitcmd)
 

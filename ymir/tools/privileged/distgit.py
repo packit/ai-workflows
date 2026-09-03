@@ -54,10 +54,11 @@ async def _retry_transient(
     label: str,
     max_retries: int = _TRANSIENT_MAX_RETRIES,
     base_delay: int = _TRANSIENT_BASE_DELAY,
+    retry_on_empty: bool = False,
 ) -> _T:
     for attempt in range(max_retries):
         try:
-            return await fn()
+            result = await fn()
         except Exception as e:
             if attempt < max_retries - 1 and _is_transient_git_error(e):
                 backoff = random.uniform(0, base_delay * 2**attempt)  # noqa: S311
@@ -68,6 +69,16 @@ async def _retry_transient(
                 await asyncio.sleep(backoff)
             else:
                 raise
+        else:
+            if retry_on_empty and not result and attempt < max_retries - 1:
+                backoff = random.uniform(0, base_delay * 2**attempt)  # noqa: S311
+                logger.warning(
+                    f"{label} returned empty (attempt {attempt + 1}/{max_retries}); "
+                    f"retrying in {backoff:.1f}s"
+                )
+                await asyncio.sleep(backoff)
+            else:
+                return result
     raise AssertionError("unreachable")
 
 
@@ -238,7 +249,6 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                         ref,
                         source_branch,
                     )
-                if source_branch and source_branch.endswith("-main"):
                     branch_creation_details = f"from {source_branch} at {ref[:12]}"
                 else:
                     branch_creation_details = f"at {ref[:12]}"
@@ -258,6 +268,7 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                     if not await _retry_transient(
                         lambda: asyncio.to_thread(repo.git.ls_remote, "--heads", "origin", branch),
                         f"verify {branch} on dist-git",
+                        retry_on_empty=True,
                     ):
                         raise ToolError(
                             f"Push appeared to succeed but branch {branch} not found "

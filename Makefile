@@ -432,16 +432,24 @@ supervisor-collect:
 
 .PHONY: triage-issue
 triage-issue:
+	@if [ -z "$(JIRA_ISSUE)" ]; then \
+		echo "Usage: make triage-issue JIRA_ISSUE=RHEL-12345 [DRY_RUN=true]"; \
+		exit 1; \
+	fi
 	$(COMPOSE_AGENTS) run --rm \
-		-e JIRA_ISSUE=$(ISSUE) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e AUTO_CHAIN=false \
 		triage-agent
 
 .PHONY: process
 process:
+	@if [ -z "$(JIRA_ISSUE)" ]; then \
+		echo "Usage: make process JIRA_ISSUE=RHEL-12345 [DRY_RUN=true]"; \
+		exit 1; \
+	fi
 	$(COMPOSE_AGENTS) run --rm \
-		-e JIRA_ISSUE=$(ISSUE) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
 		-e DRY_RUN=$(DRY_RUN) \
 		-e AUTO_CHAIN=true \
 		triage-agent

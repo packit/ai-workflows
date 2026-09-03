@@ -1595,7 +1595,9 @@ async def test_eligibility_dependency_blocker_zstream_not_affected():
     # Has Z-stream clones but none shipped yet (would normally block)
     flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
         "CVE-2025-12345", "curl", "RHEL-12345"
-    ).and_return(_create_async_return((False, ["RHEL-777"]))).once()
+    ).and_return(
+        _create_async_return(ZStreamDependencyResult(any_shipped=False, pending_keys=["RHEL-777"]))
+    ).once()
     # But Z-stream was NOT_AFFECTED, so should proceed anyway
     flexmock(jira_tools).should_receive("_check_zstream_not_affected").with_args(
         "CVE-2025-12345", "curl", "RHEL-12345", "9", "CVE-2025-12345 buffer overflow in curl [rhel-9.8]"
@@ -1628,7 +1630,9 @@ async def test_eligibility_dependency_blocker_zstream_not_affected_error():
     # Has Z-stream clones but none shipped yet
     flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
         "CVE-2025-12345", "curl", "RHEL-12345"
-    ).and_return(_create_async_return((False, ["RHEL-777"]))).once()
+    ).and_return(
+        _create_async_return(ZStreamDependencyResult(any_shipped=False, pending_keys=["RHEL-777"]))
+    ).once()
 
     # Simulate Jira search failure
     async def raise_error(*args, **kwargs):

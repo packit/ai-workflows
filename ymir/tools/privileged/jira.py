@@ -1214,13 +1214,16 @@ class CheckCveTriageEligibilityTool(
                 )
             except Exception as e:
                 logger.warning(f"Z-stream NOT_AFFECTED check failed for {cve_id}: {e}")
-                return JSONToolOutput(
-                    CVEEligibilityResult(
-                        is_cve=True,
-                        eligibility=TriageEligibility.NEVER,
-                        reason=f"CVE {cve_id} ({target_version}): NOT_AFFECTED check failed: {e}",
-                        error=str(e),
-                    ).model_dump()
+                return (
+                    JSONToolOutput(
+                        CVEEligibilityResult(
+                            is_cve=True,
+                            eligibility=TriageEligibility.NEVER,
+                            reason=f"CVE {cve_id} ({target_version}): NOT_AFFECTED check failed: {e}",
+                            error=str(e),
+                        ).model_dump()
+                    ),
+                    [],
                 )
 
             if not_affected_clones:
@@ -1229,7 +1232,7 @@ class CheckCveTriageEligibilityTool(
                     "Y-stream should also be triaged"
                 )
                 # Return None to proceed with triage (same as if a clone had shipped)
-                return None
+                return None, []
 
         logger.info(
             f"Dependency check for {issue_key} ({target_version}): PENDING_DEPENDENCIES "

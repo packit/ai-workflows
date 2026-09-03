@@ -68,6 +68,7 @@ async def test_create_zstream_branch(branch_exists, monkeypatch):
         assert "already exists" in result
     else:
         assert result.startswith("Successfully")
+        assert f"at {ref[:12]}" in result
 
 
 @pytest.mark.asyncio
@@ -272,6 +273,8 @@ async def test_create_zstream_branch_advances_ref_on_main(monkeypatch):
 
     result = (await CreateZstreamBranchTool().run(input={"package": package, "branch": branch})).result
     assert result.startswith("Successfully")
+    assert "from rhel-10-main" in result
+    assert f"at {advanced_ref[:12]}" in result
 
 
 @pytest.mark.asyncio
@@ -528,7 +531,7 @@ async def test_create_zstream_branch_commit_not_in_clone(monkeypatch):
 
     monkeypatch.setenv("GITLAB_TOKEN", "<TOKEN>")
 
-    with pytest.raises(ToolError, match="not found in dist-git clone"):
+    with pytest.raises(ToolError, match="Failed to push branch to dist-git"):
         await CreateZstreamBranchTool().run(input={"package": package, "branch": branch})
 
 
@@ -577,5 +580,5 @@ async def test_create_zstream_branch_push_hook_rejection(monkeypatch):
 
     monkeypatch.setenv("GITLAB_TOKEN", "<TOKEN>")
 
-    with pytest.raises(ToolError, match="hook declined"):
+    with pytest.raises(ToolError, match="Failed to push branch to dist-git"):
         await CreateZstreamBranchTool().run(input={"package": package, "branch": branch})

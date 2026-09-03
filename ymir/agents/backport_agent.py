@@ -29,6 +29,7 @@ from ymir.agents.constants import (
     I_AM_YMIR,
     ZSTREAM_TARGET_LABEL,
     format_jira_links_for_mr,
+    format_zstream_branch_note,
     mr_description_footer,
 )
 from ymir.agents.log_agent import create_log_agent
@@ -667,6 +668,7 @@ async def run_workflow(
                 state.update_branch,
                 state.fork_url,
                 _,
+                state.zstream_branch_created,
             ) = await tasks.fork_and_prepare_dist_git(
                 jira_issue=state.jira_issue,
                 package=state.package,
@@ -932,7 +934,8 @@ async def run_workflow(
                     f"{triage_details_text}"
                     f"{format_jira_links_for_mr(state.jira_issue)}\n"
                     f"{wrap_details('Backporting steps', state.backport_log[-1])}"
-                    f"\n\n{mr_description_footer(state.package)}"
+                    f"\n\n{format_zstream_branch_note(state.zstream_branch_created)}"
+                    f"{mr_description_footer(state.package)}"
                 )
                 state.backport_result = BackportOutputSchema(
                     success=True,
@@ -1405,7 +1408,8 @@ async def run_workflow(
                     f"{triage_details_text}"
                     f"{format_jira_links_for_mr(state.jira_issue)}\n"
                     f"{wrap_details('Backporting steps', state.backport_log[-1])}"
-                    f"\n\n{mr_description_footer(state.package)}"
+                    f"\n\n{format_zstream_branch_note(state.zstream_branch_created)}"
+                    f"{mr_description_footer(state.package)}"
                 )
                 (
                     state.merge_request_url,

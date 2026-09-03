@@ -214,6 +214,7 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
 
             with tool_error_context("Failed to clone dist-git repo", package=package, clone_url=clone_url):
                 repo = await _retry_transient(_clone, f"clone {package} from dist-git")
+            branch_creation_details = None
             if branch in [ref.name.split("/")[-1] for ref in repo.remotes.origin.refs]:
                 # Branch already exists in dist-git but not yet mirrored to GitLab.
                 # This happens when a previous push succeeded server-side but the SSH
@@ -237,6 +238,10 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                         ref,
                         source_branch,
                     )
+                if source_branch and source_branch.endswith("-main"):
+                    branch_creation_details = f"from {source_branch} at {ref[:12]}"
+                else:
+                    branch_creation_details = f"at {ref[:12]}"
                 with tool_error_context(
                     "Failed to push branch to dist-git", package=package, branch=branch, ref=ref
                 ):
@@ -262,7 +267,10 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
             while time.monotonic() - start_time < SYNC_TIMEOUT:
                 try:
                     if await asyncio.to_thread(repo.git.ls_remote, gitlab_repo_url, branch, branches=True):
-                        return StringToolOutput(result=f"Successfully created Z-Stream branch {branch}")
+                        msg = f"Successfully created Z-Stream branch {branch}"
+                        if branch_creation_details:
+                            msg += f" ({branch_creation_details})"
+                        return StringToolOutput(result=msg)
                 except git.exc.GitCommandError as e:
                     if not _is_transient_git_error(e):
                         logger.error(

@@ -1,0 +1,14 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: ymir-api
+spec:
+  tags:
+    - name: prod
+      from:
+        kind: DockerImage
+        name: quay.io/jotnar/ymir-api:latest
+      importPolicy:
+        scheduled: true
+  lookupPolicy:
+    local: true

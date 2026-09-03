@@ -1608,6 +1608,9 @@ async def test_eligibility_dependency_blocker_zstream_not_affected():
     # needs_internal_fix is False because Z-stream was NOT_AFFECTED (no fix needed)
     assert result["eligibility"] == TriageEligibility.IMMEDIATELY
     assert result["needs_internal_fix"] is False
+    # Verify the reason mentions NOT_AFFECTED, not "clone shipped"
+    assert "NOT_AFFECTED" in result["reason"]
+    assert "RHEL-777" in result["reason"]
 
 
 @pytest.mark.asyncio
@@ -1645,6 +1648,45 @@ async def test_eligibility_dependency_blocker_zstream_not_affected_error():
     assert result["error"] is not None
     assert "NOT_AFFECTED check failed" in result["reason"]
     assert "Jira server unavailable" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_eligibility_dependency_blocker_zstream_not_affected_with_duplicate():
+    """Y-stream with rejected duplicate + NOT_AFFECTED Z-stream — preserve duplicate_of field."""
+    issue = _make_jira_issue(
+        labels=["SecurityTracking"],
+        fix_versions=[{"name": "rhel-9.8"}],
+        summary="CVE-2025-12345 buffer overflow in curl [rhel-9.8]",
+        severity="Important",
+        components=[{"name": "curl"}],
+    )
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(_mock_jira_get(issue))
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+    # Has a rejected/closed duplicate tracker (flag only, don't block)
+    flexmock(jira_tools).should_receive("_check_duplicate_tracker").and_return(
+        _create_async_return(("RHEL-99999", False))
+    ).once()
+    # Has Z-stream clones but none shipped yet (would normally block)
+    flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
+        "CVE-2025-12345", "curl", "RHEL-12345"
+    ).and_return(
+        _create_async_return(ZStreamDependencyResult(any_shipped=False, pending_keys=["RHEL-777"]))
+    ).once()
+    # But Z-stream was NOT_AFFECTED, so should proceed anyway
+    flexmock(jira_tools).should_receive("_check_zstream_not_affected").with_args(
+        "CVE-2025-12345", "curl", "RHEL-12345", "9", "CVE-2025-12345 buffer overflow in curl [rhel-9.8]"
+    ).and_return(_create_async_return(["RHEL-777"])).once()
+
+    result = (await CheckCveTriageEligibilityTool().run(input={"issue_key": "RHEL-12345"})).result
+    # Should proceed to triage with NOT_AFFECTED reason
+    assert result["eligibility"] == TriageEligibility.IMMEDIATELY
+    assert result["needs_internal_fix"] is False
+    assert "NOT_AFFECTED" in result["reason"]
+    assert "RHEL-777" in result["reason"]
+    # CRITICAL: duplicate_of must be preserved for workflow notification
+    assert result["duplicate_of"] == "RHEL-99999"
 
 
 @pytest.mark.parametrize("severity", ["Low", "Moderate"])

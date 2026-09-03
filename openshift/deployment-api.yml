@@ -43,6 +43,12 @@ spec:
         envFrom:
         - configMapRef:
             name: endpoints-env
+        - configMapRef:
+            name: jira-env
+        - secretRef:
+            name: jira-env
+        - secretRef:
+            name: api-env
         resources:
           limits:
             cpu: "200m"

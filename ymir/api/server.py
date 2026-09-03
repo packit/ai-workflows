@@ -5,19 +5,19 @@ jobs to Ymir's Redis queues. Route modules register their handlers
 via ``add_routes(app)`` callables.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 
-import redis.asyncio
 from aiohttp import web
 
+from ymir.api.app_keys import REDIS_KEY
+from ymir.api.consolidation import add_routes as add_consolidation_routes
+from ymir.api.jira_webhook import add_routes as add_jira_webhook_routes
 from ymir.common.base_utils import redis_client
+from ymir.common.logging_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
-REDIS_KEY = web.AppKey("redis", redis.asyncio.Redis)
 _REDIS_CTX_KEY = web.AppKey("redis_ctx")
 
 
@@ -34,9 +34,8 @@ def create_app(redis_conn=None) -> web.Application:
     app = web.Application()
     app.router.add_get("/healthz", healthz)
 
-    from ymir.api.consolidation import add_routes as add_consolidation_routes
-
     add_consolidation_routes(app)
+    add_jira_webhook_routes(app)
 
     if redis_conn is not None:
         app[REDIS_KEY] = redis_conn
@@ -59,8 +58,6 @@ def create_app(redis_conn=None) -> web.Application:
 
 
 def main() -> None:
-    from ymir.common.logging_setup import configure_logging
-
     configure_logging(level=logging.INFO)
 
     host = os.environ.get("API_HOST", "0.0.0.0")  # noqa: S104

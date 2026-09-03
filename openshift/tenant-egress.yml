@@ -139,10 +139,6 @@ spec:
     - type: Allow
       to:
         dnsName: o490301.ingest.us.sentry.io
-    # Brave Search (used by DuckDuckGoSearchTool)
-    - type: Allow
-      to:
-        dnsName: search.brave.com
 
     # ==========================================================================
     # Remote sources referenced by RHEL and CentOS Stream spec files (generated)

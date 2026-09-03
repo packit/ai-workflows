@@ -1,0 +1,24 @@
+FROM fedora:44
+
+RUN dnf -y install \
+      python3 \
+      python3-pip \
+      python3-redis \
+      python3-pydantic \
+      python3-aiohttp \
+    && dnf clean all
+
+RUN useradd -m -G wheel apibot
+
+WORKDIR /home/apibot
+
+COPY ymir/api/ /home/apibot/ymir/api/
+COPY ymir/common/ /home/apibot/ymir/common/
+
+RUN chgrp -R root /home/apibot && chmod -R g+rwX /home/apibot
+
+USER apibot
+
+EXPOSE 8080
+
+CMD ["python3", "-m", "ymir.api.server"]

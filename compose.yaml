@@ -467,6 +467,20 @@ services:
       - .secrets/sweep.env
     restart: "no"
     profiles: ["manual"]
+  api:
+    image: ymir-api
+    build:
+      context: .
+      dockerfile: Containerfile.api
+    environment:
+      - REDIS_URL=redis://valkey:6379/0
+      - API_PORT=8080
+    depends_on:
+      - valkey
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    profiles: ["agents"]
 
 
 volumes:

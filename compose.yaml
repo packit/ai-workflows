@@ -475,6 +475,10 @@ services:
     environment:
       - REDIS_URL=redis://valkey:6379/0
       - API_PORT=8080
+      - JIRA_WEBHOOK_SECRET=${JIRA_WEBHOOK_SECRET:-}
+      - JIRA_BOT_ACCOUNT_ID=${JIRA_BOT_ACCOUNT_ID:-}
+    env_file:
+      - .secrets/mcp-gateway.env
     depends_on:
       - valkey
     ports:

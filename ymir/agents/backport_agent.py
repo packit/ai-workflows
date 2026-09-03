@@ -16,7 +16,6 @@ from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
-from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field
@@ -224,7 +223,6 @@ async def create_backport_agent(
     """
     base_tools = [
         ThinkTool(),
-        DuckDuckGoSearchTool(),
         RunShellCommandTool(options=local_tool_options),
         CreateTool(options=local_tool_options),
         ViewTool(options=local_tool_options),

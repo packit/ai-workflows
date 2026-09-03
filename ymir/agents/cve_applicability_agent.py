@@ -7,7 +7,6 @@ from beeai_framework.agents.requirement.requirements.conditional import (
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
-from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 
 from ymir.agents.reasoning_agent import ReasoningAgent
@@ -35,7 +34,6 @@ def create_applicability_agent(
             ViewTool(options=local_tool_options),
             SearchTextTool(options=local_tool_options),
             RunShellCommandTool(options=local_tool_options),
-            DuckDuckGoSearchTool(),
             *extra_gateway_tools,
         ],
         memory=UnconstrainedMemory(),

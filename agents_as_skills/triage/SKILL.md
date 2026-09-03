@@ -44,7 +44,6 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `create` — Create new files
 
 **Other:**
-- Web search via DuckDuckGo or equivalent — for searching upstream repositories, bug trackers, CVE databases, and Fedora packages
 - Bash tool for shell commands (e.g., `git clone`, `git log`, `git blame`, `grep`)
 
 ## Workflow

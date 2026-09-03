@@ -1,7 +1,5 @@
 """Unit tests for the consolidation API server."""
 
-from __future__ import annotations
-
 import pytest
 import pytest_asyncio
 from aiohttp.test_utils import TestClient, TestServer

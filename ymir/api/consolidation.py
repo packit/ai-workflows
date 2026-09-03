@@ -1,17 +1,19 @@
 """Consolidation route module for the Ymir API.
 
 Registers ``POST /api/consolidation`` which submits MR consolidation
-jobs into the Redis hash queue.
+jobs into the Redis hash queue.  Also registers the ``consolidate``
+command for the Jira webhook command parser.
 """
 
-from __future__ import annotations
-
+import argparse
 import logging
+from typing import Literal
 
 from aiohttp import web
 from pydantic import BaseModel, ValidationError
 
-from ymir.api.server import REDIS_KEY
+from ymir.api import command_parser
+from ymir.api.app_keys import REDIS_KEY
 from ymir.common.base_utils import fix_await
 from ymir.common.constants import RedisQueues
 from ymir.common.merge_queue import _consolidation_field_key, submit_merge_job
@@ -27,26 +29,14 @@ class ConsolidationRequest(BaseModel):
     package: str
     target_branch: str
     source_issues: list[str] | None = None
-    release_strategy: str | None = None
+    release_strategy: Literal["merged", "per_commit"] | None = None
 
 
-async def submit_consolidation(request: web.Request) -> web.Response:
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response(
-            {"error": "invalid JSON body"},
-            status=400,
-        )
-
-    try:
-        payload = ConsolidationRequest.model_validate(body)
-    except ValidationError as exc:
-        return web.json_response(
-            {"error": "validation failed", "details": exc.errors()},
-            status=400,
-        )
-
+async def _submit_consolidation_job(
+    payload: ConsolidationRequest,
+    request: web.Request,
+) -> web.Response:
+    """Shared submission logic used by both the REST endpoint and the command handler."""
     redis_conn = request.app[REDIS_KEY]
 
     # Label-triggered mode: check for conflicts before submitting, because
@@ -85,6 +75,72 @@ async def submit_consolidation(request: web.Request) -> web.Response:
         {"submitted": False, "reason": "already_queued"},
         status=200,
     )
+
+
+async def submit_consolidation(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response(
+            {"error": "invalid JSON body"},
+            status=400,
+        )
+
+    try:
+        payload = ConsolidationRequest.model_validate(body)
+    except ValidationError as exc:
+        return web.json_response(
+            {"error": "validation failed", "details": exc.errors()},
+            status=400,
+        )
+
+    return await _submit_consolidation_job(payload, request)
+
+
+# ---------------------------------------------------------------------------
+# Jira webhook command: consolidate <package> <branch> [options]
+# ---------------------------------------------------------------------------
+
+
+def _build_consolidate_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="consolidate", exit_on_error=False)
+    parser.add_argument("package")
+    parser.add_argument("target_branch")
+    parser.add_argument("--source-issues", nargs="+", default=None)
+    parser.add_argument("--release-strategy", choices=["merged", "per_commit"], default=None)
+    return parser
+
+
+_consolidate_parser = _build_consolidate_parser()
+
+
+def parse_consolidate_args(args: list[str]) -> ConsolidationRequest:
+    """Parse CLI-style consolidate arguments into a request model."""
+    ns = _consolidate_parser.parse_args(args)
+    return ConsolidationRequest(
+        package=ns.package,
+        target_branch=ns.target_branch,
+        source_issues=ns.source_issues,
+        release_strategy=ns.release_strategy,
+    )
+
+
+async def handle_consolidate_command(
+    args: list[str],
+    request: web.Request,
+) -> web.Response:
+    """Command handler invoked by the Jira webhook command parser."""
+    try:
+        payload = parse_consolidate_args(args)
+    except (argparse.ArgumentError, SystemExit) as exc:
+        return web.json_response(
+            {"error": f"invalid consolidate arguments: {exc}"},
+            status=400,
+        )
+    return await _submit_consolidation_job(payload, request)
+
+
+command_parser.register("consolidate", handle_consolidate_command)
 
 
 def add_routes(app: web.Application) -> None:

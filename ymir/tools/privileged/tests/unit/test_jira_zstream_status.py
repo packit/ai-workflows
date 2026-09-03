@@ -311,6 +311,96 @@ async def test_check_zstream_pending_triage_clone_is_affected():
 
 
 @pytest.mark.asyncio
+async def test_check_zstream_pending_triage_action_completed():
+    """Z-stream clone with successful action completion (ymir_backported/rebased/rebuilt) is excluded.
+
+    Successful completions indicate the Z-stream path is working and delivering the fix,
+    so the Y-stream should be skipped (CS-first approach succeeded).
+
+    Note: When actions complete successfully, they REMOVE the ymir_triaged_* label
+    and replace it with the success label (ymir_backported, etc.).
+    """
+    # JQL excludes success labels, so search returns empty
+    search_result = []
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    pending = await _check_zstream_pending_triage(
+        "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+    )
+    assert pending == []
+
+
+@pytest.mark.asyncio
+async def test_check_zstream_pending_triage_action_failed():
+    """Z-stream clone with action failure label (ymir_backport_failed, etc.) is treated as pending.
+
+    Failed/errored actions indicate the Z-stream path is blocked, so Y-stream should not
+    be skipped. These issues need attention or might be retried.
+
+    Note: When backport/rebase/rebuild agents finish, they REMOVE the ymir_triaged_* label
+    and replace it with the outcome label (ymir_backport_failed, etc.).
+    """
+    # JQL does NOT exclude failure labels, so they appear in search results
+    # The ymir_triaged_backport label was removed by the backport agent when it failed
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.7.z"}],
+                "labels": ["SecurityTracking", "ymir_backport_failed"],
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    pending = await _check_zstream_pending_triage(
+        "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+    )
+    # Failed action is treated as pending (Y-stream should not be skipped)
+    assert pending == ["RHEL-111"]
+
+
+@pytest.mark.parametrize(
+    "postponed_label",
+    ["ymir_postponed_dependency", "ymir_postponed_no_patch", "ymir_postponed_pr_pending"],
+)
+@pytest.mark.asyncio
+async def test_check_zstream_pending_triage_postponed_excluded(postponed_label):
+    """Z-stream clone with postponed label (dependency/no_patch/pr_pending) is excluded.
+
+    Postponed resolutions are terminal triage decisions. The Z-stream has been triaged
+    and a decision was made to postpone it (waiting for dependency, no patch available,
+    or PR pending). These are complete triage outcomes, not pending states.
+
+    If these aren't excluded, Y-stream CVEs will wait indefinitely for "Z-stream triage
+    results" that already exist.
+    """
+    # JQL excludes postponed labels, so search returns empty
+    search_result = []
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    pending = await _check_zstream_pending_triage(
+        "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+    )
+    assert pending == []
+
+
+@pytest.mark.asyncio
 async def test_check_zstream_pending_triage_old_current_ignored():
     """Old current Z-stream clone is ignored when upcoming exists."""
     search_result = [

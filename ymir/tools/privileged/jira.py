@@ -850,9 +850,12 @@ async def _check_zstream_not_affected(
 
     escaped_cve_id = cve_id.replace('"', '\\"')
     escaped_component = component.replace('"', '\\"')
+    # Build fixVersion filter from variants to narrow the search and avoid hitting max_results limit
+    fv_filter = " OR ".join(f'fixVersion = "{fv}"' for fv in relevant_z_streams)
     jql = (
         f'summary ~ "{escaped_cve_id}" AND component = "{escaped_component}"'
         f' AND labels = "SecurityTracking" AND labels = "ymir_triaged_not_affected"'
+        f" AND ({fv_filter})"
         f' AND key != "{exclude_key}"'
     )
     logger.info(
@@ -931,12 +934,25 @@ async def _check_zstream_pending_triage(
 
     escaped_cve_id = cve_id.replace('"', '\\"')
     escaped_component = component.replace('"', '\\"')
-    # Search for Z-stream clones without any terminal labels.
-    # Terminal labels indicate triage completion (success or blocked state):
-    # - ymir_triaged_* (backport/rebase/rebuild/postponed/not_affected/generic)
-    # - ymir_needs_attention (clarification needed - blocked)
-    # - ymir_triage_errored (exhausted retries - blocked)
-    # Non-terminal labels like ymir_triage_in_progress are not excluded.
+    # Build fixVersion filter from variants to narrow the search and avoid hitting max_results limit
+    fv_filter = " OR ".join(f'fixVersion = "{fv}"' for fv in relevant_z_streams)
+    # Search for Z-stream clones without any terminal SUCCESS labels.
+    # Terminal success labels indicate the Z-stream fix path is working:
+    # - ymir_triaged_* (backport/rebase/rebuild/not_affected - triage decision made)
+    # - ymir_postponed_* (dependency/no_patch/pr_pending - postponed with reason, also terminal)
+    # - ymir_*ed (backported/rebased/rebuilt - action completed successfully)
+    # - ymir_needs_attention (clarification needed - terminal blocked state)
+    # - ymir_triage_errored (exhausted retries - terminal error state)
+    #
+    # Note: Failed/errored action labels (ymir_*_failed, ymir_*_errored) are NOT
+    # excluded because they indicate the Z-stream path is blocked/stuck, so the
+    # Y-stream should not be skipped (it might be needed as a fallback or the
+    # failure might be retried).
+    #
+    # ymir_triaged_postponed is deprecated (never applied by current code, replaced
+    # by ymir_postponed_* labels with specific reasons).
+    #
+    # Non-terminal labels like ymir_triage_in_progress are also not excluded.
     jql = (
         f'summary ~ "{escaped_cve_id}" AND component = "{escaped_component}"'
         f' AND labels = "SecurityTracking"'
@@ -946,8 +962,15 @@ async def _check_zstream_pending_triage(
         f' AND labels != "ymir_triaged_postponed"'
         f' AND labels != "ymir_triaged_not_affected"'
         f' AND labels != "ymir_triaged"'
+        f' AND labels != "ymir_postponed_dependency"'
+        f' AND labels != "ymir_postponed_no_patch"'
+        f' AND labels != "ymir_postponed_pr_pending"'
+        f' AND labels != "ymir_backported"'
+        f' AND labels != "ymir_rebased"'
+        f' AND labels != "ymir_rebuilt"'
         f' AND labels != "ymir_needs_attention"'
         f' AND labels != "ymir_triage_errored"'
+        f" AND ({fv_filter})"
         f' AND key != "{exclude_key}"'
     )
     logger.info(
@@ -1146,6 +1169,7 @@ class CheckCveTriageEligibilityTool(
         issue_key: str,
         fields: dict[str, Any],
         target_version: str,
+        duplicate_of: str | None = None,
     ) -> tuple[JSONToolOutput[dict[str, Any]] | None, list[ShippedZStreamCandidate]]:
         """Return a blocker response and any shipped inheritance candidates."""
         summary = fields.get("summary", "")
@@ -1231,8 +1255,23 @@ class CheckCveTriageEligibilityTool(
                     f"Z-stream clone(s) {not_affected_clones} for {cve_id} were NOT_AFFECTED, "
                     "Y-stream should also be triaged"
                 )
-                # Return None to proceed with triage (same as if a clone had shipped)
-                return None, []
+                # Return a result with NOT_AFFECTED-specific reason (don't return None)
+                return (
+                    JSONToolOutput(
+                        CVEEligibilityResult(
+                            is_cve=True,
+                            eligibility=TriageEligibility.IMMEDIATELY,
+                            reason=(
+                                f"Y-stream CVE ({target_version}): "
+                                f"Z-stream clone {not_affected_clones[0]} was NOT_AFFECTED, "
+                                "checking if Y-stream is also not affected"
+                            ),
+                            needs_internal_fix=False,
+                            duplicate_of=duplicate_of,
+                        ).model_dump()
+                    ),
+                    [],
+                )
 
         logger.info(
             f"Dependency check for {issue_key} ({target_version}): PENDING_DEPENDENCIES "
@@ -1328,7 +1367,7 @@ class CheckCveTriageEligibilityTool(
 
         logger.info(f"Severity is {severity or 'unset'}, checking Z-stream dependencies")
         blocker, shipped_candidates = await self._check_for_dependency_blocker(
-            issue_key, fields, target_version
+            issue_key, fields, target_version, duplicate_of=duplicate_of
         )
         if blocker is not None:
             return blocker

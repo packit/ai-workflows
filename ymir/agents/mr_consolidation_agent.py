@@ -41,7 +41,6 @@ from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
-    init_sentry,
     is_reasoning_enabled,
     mcp_tools,
     render_template,
@@ -62,7 +61,7 @@ from ymir.common.models import (
     MRConsolidationInputSchema,
     MRConsolidationOutputSchema,
 )
-from ymir.common.utils import get_all_patches
+from ymir.common.utils import get_all_patches, init_sentry
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
 from ymir.tools.unprivileged.specfile import GetPackageInfoTool

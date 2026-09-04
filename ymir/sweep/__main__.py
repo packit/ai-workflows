@@ -16,17 +16,12 @@ import os
 import sys
 
 from ymir.common.base_utils import redis_client
+from ymir.common.utils import init_sentry
 from ymir.supervisor.http_utils import with_requests_session
 from ymir.sweep.dependency import DependencySweep
 from ymir.sweep.no_patch import NoPatchSweep
 from ymir.sweep.pr_pending import PRPendingSweep
 from ymir.sweep.y_stream import YStreamSweep
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s %(message)s",
-    stream=sys.stdout,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +54,13 @@ async def run_sweep(strategy_names: list[str]) -> None:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s %(message)s",
+        stream=sys.stdout,
+    )
+    init_sentry()
+
     parser = argparse.ArgumentParser(description="Run postponed-issue sweep")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(

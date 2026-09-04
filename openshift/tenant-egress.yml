@@ -120,6 +120,9 @@ spec:
     - type: Allow
       to:
         dnsName: cgit.git.savannah.gnu.org
+    - type: Allow
+      to:
+        dnsName: gitweb.git.savannah.gnu.org
     # sourceware.org — upstream git for glibc, binutils, elfutils, newlib, etc.
     # Resolves to 38.145.34.32 (Cogent); not covered by existing CIDRs.
     - type: Allow

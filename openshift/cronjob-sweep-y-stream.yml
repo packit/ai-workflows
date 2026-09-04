@@ -52,6 +52,10 @@ spec:
               capabilities:
                 drop:
                 - ALL
+            volumeMounts:
+            - mountPath: /home/beeai/rhel-config.json
+              name: rhel-config
+              subPath: rhel-config.json
           securityContext:
             runAsNonRoot: true
             seccompProfile:
@@ -59,3 +63,7 @@ spec:
           dnsPolicy: ClusterFirst
           schedulerName: default-scheduler
           terminationGracePeriodSeconds: 30
+          volumes:
+            - name: rhel-config
+              configMap:
+                name: rhel-config

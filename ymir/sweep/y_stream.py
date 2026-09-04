@@ -19,6 +19,8 @@ embargo, severity, Y/Z-stream branching, and the "at least one clone
 shipped" rule).
 """
 
+import sentry_sdk
+
 from ymir.common import CVEEligibilityResult, TriageEligibility
 from ymir.common.constants import JiraLabels
 from ymir.supervisor.supervisor_types import FullIssue
@@ -58,6 +60,7 @@ class YStreamSweep(SweepStrategy):
         try:
             output = await CheckCveTriageEligibilityTool().run(input={"issue_key": issue_key})
         except Exception as exc:
+            sentry_sdk.capture_exception(exc)
             return SweepResult(
                 issue_key=issue_key,
                 action="error",

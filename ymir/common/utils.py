@@ -4,6 +4,7 @@ Common utility functions shared across the BeeAI system.
 
 import asyncio
 import logging
+import os
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -401,3 +402,39 @@ def extract_text_from_adf(adf_body) -> str:
     if isinstance(adf_body, list):
         return " ".join(extract_text_from_adf(item) for item in adf_body)
     return ""
+
+
+def init_sentry() -> None:
+    """Initialize Sentry, if the DSN is set."""
+    if not (dsn := os.getenv("SENTRY_DSN")):
+        # no DSN, no reporting
+        return
+
+    import sentry_sdk
+    from sentry_sdk.integrations.asyncio import AsyncioIntegration
+    from sentry_sdk.integrations.litellm import LiteLLMIntegration
+    from sentry_sdk.integrations.logging import (
+        ignore_logger,
+        ignore_logger_for_sentry_logs,
+    )
+
+    sentry_sdk.init(
+        dsn=dsn,
+        environment=os.getenv("SENTRY_ENVIRONMENT"),
+        enable_logs=True,
+        # Set traces_sample_rate to 1.0 to capture 100%
+        # of transactions for tracing.
+        traces_sample_rate=1.0,
+        # Add data like inputs and responses;
+        # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
+        stream_gen_ai_spans=True,
+        send_default_pii=True,
+        integrations=[
+            AsyncioIntegration(),
+            LiteLLMIntegration(),
+        ],
+    )
+
+    for ignored_logger in ("agent.redis", "agent.task_loop", "agent.trajectory"):
+        ignore_logger(ignored_logger)
+        ignore_logger_for_sentry_logs(ignored_logger)

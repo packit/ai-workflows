@@ -43,6 +43,8 @@ spec:
                 name: jira-env
             - secretRef:
                 name: jira-env
+            - secretRef:
+                name: sentry-env
             resources:
               limits:
                 cpu: "200m"

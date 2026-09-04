@@ -42,7 +42,6 @@ from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
-    init_sentry,
     is_reasoning_enabled,
     mcp_tools,
     render_template,
@@ -95,7 +94,7 @@ from ymir.common.models import (
     ShippedZStreamCandidate,
     Task,
 )
-from ymir.common.utils import get_all_patches
+from ymir.common.utils import get_all_patches, init_sentry
 from ymir.common.version_utils import is_older_zstream, parse_rhel_version
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.distgit_detector import DistgitDetectorTool

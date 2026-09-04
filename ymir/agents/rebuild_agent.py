@@ -24,7 +24,6 @@ from ymir.agents.tasks import InvalidConsolidationConfigError
 from ymir.agents.utils import (
     format_mr_triage_details,
     get_agent_execution_config,
-    init_sentry,
     mcp_tools,
     render_template,
     resolve_chat_model_override,
@@ -45,6 +44,7 @@ from ymir.common.models import (
     RebuildOutputSchema,
     Task,
 )
+from ymir.common.utils import init_sentry
 
 logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")

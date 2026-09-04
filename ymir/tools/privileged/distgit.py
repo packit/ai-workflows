@@ -37,7 +37,6 @@ _TRANSIENT_STDERR_PATTERNS = (
     "no route to host",
     "broken pipe",
     "ssh_exchange_identification",
-    "failed to push some refs",
 )
 
 _T = TypeVar("_T")
@@ -55,10 +54,11 @@ async def _retry_transient(
     label: str,
     max_retries: int = _TRANSIENT_MAX_RETRIES,
     base_delay: int = _TRANSIENT_BASE_DELAY,
+    retry_on_empty: bool = False,
 ) -> _T:
     for attempt in range(max_retries):
         try:
-            return await fn()
+            result = await fn()
         except Exception as e:
             if attempt < max_retries - 1 and _is_transient_git_error(e):
                 backoff = random.uniform(0, base_delay * 2**attempt)  # noqa: S311
@@ -69,6 +69,16 @@ async def _retry_transient(
                 await asyncio.sleep(backoff)
             else:
                 raise
+        else:
+            if retry_on_empty and not result and attempt < max_retries - 1:
+                backoff = random.uniform(0, base_delay * 2**attempt)  # noqa: S311
+                logger.warning(
+                    f"{label} returned empty (attempt {attempt + 1}/{max_retries}); "
+                    f"retrying in {backoff:.1f}s"
+                )
+                await asyncio.sleep(backoff)
+            else:
+                return result
     raise AssertionError("unreachable")
 
 
@@ -215,6 +225,7 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
 
             with tool_error_context("Failed to clone dist-git repo", package=package, clone_url=clone_url):
                 repo = await _retry_transient(_clone, f"clone {package} from dist-git")
+            branch_creation_details = None
             if branch in [ref.name.split("/")[-1] for ref in repo.remotes.origin.refs]:
                 # Branch already exists in dist-git but not yet mirrored to GitLab.
                 # This happens when a previous push succeeded server-side but the SSH
@@ -230,31 +241,47 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                         _, ref = await get_latest_z_pending_build(package, branch)
                     else:
                         _, ref = await get_latest_candidate_build(package, branch)
-                if source_branch := self._find_source_branch(repo, branch):
+                source_branch = self._find_source_branch(repo, branch)
+                if source_branch and source_branch.endswith("-main"):
                     ref = await self._find_latest_same_nvr_ref(
                         repo,
                         package,
                         ref,
                         source_branch,
                     )
+                    branch_creation_details = f"from {source_branch} at {ref[:12]}"
+                else:
+                    branch_creation_details = f"at {ref[:12]}"
                 with tool_error_context(
                     "Failed to push branch to dist-git", package=package, branch=branch, ref=ref
                 ):
-                    push_infos = await _retry_transient(
-                        lambda: asyncio.to_thread(repo.remotes.origin.push, f"{ref}:refs/heads/{branch}"),
+                    try:
+                        await asyncio.to_thread(repo.commit, ref)
+                    except Exception:
+                        raise ToolError(
+                            f"Commit {ref} (from latest Brew build) not found in dist-git clone of {package}"
+                        ) from None
+                    await _retry_transient(
+                        lambda: asyncio.to_thread(repo.git.push, "origin", f"{ref}:refs/heads/{branch}"),
                         f"push {branch} to dist-git",
                     )
-                    if getattr(push_infos, "error", None):
-                        logger.error("git push stderr: %s", sanitize_url(str(push_infos.error)))
-                    for info in push_infos:
-                        if info.flags & git.remote.PushInfo.ERROR:
-                            logger.error("Push to dist-git rejected: %s", info.summary.strip())
-                            raise ToolError("Push to dist-git was rejected")
+                    if not await _retry_transient(
+                        lambda: asyncio.to_thread(repo.git.ls_remote, "--heads", "origin", branch),
+                        f"verify {branch} on dist-git",
+                        retry_on_empty=True,
+                    ):
+                        raise ToolError(
+                            f"Push appeared to succeed but branch {branch} not found "
+                            f"on dist-git — possible silent rejection by server ACL"
+                        )
             start_time = time.monotonic()
             while time.monotonic() - start_time < SYNC_TIMEOUT:
                 try:
                     if await asyncio.to_thread(repo.git.ls_remote, gitlab_repo_url, branch, branches=True):
-                        return StringToolOutput(result=f"Successfully created Z-Stream branch {branch}")
+                        msg = f"Successfully created Z-Stream branch {branch}"
+                        if branch_creation_details:
+                            msg += f" ({branch_creation_details})"
+                        return StringToolOutput(result=msg)
                 except git.exc.GitCommandError as e:
                     if not _is_transient_git_error(e):
                         logger.error(

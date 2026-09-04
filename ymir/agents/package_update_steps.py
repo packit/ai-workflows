@@ -26,6 +26,7 @@ class PackageUpdateState(BaseModel):
     log_result: LogOutputSchema | None = Field(default=None)
     merge_request_url: str | None = Field(default=None)
     merge_request_newly_created: bool = Field(default=False)  # was the MR newly created?
+    zstream_branch_created: str | None = Field(default=None)
 
 
 class PackageUpdateStep:

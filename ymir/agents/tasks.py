@@ -239,7 +239,7 @@ async def fork_and_prepare_dist_git(
     agent_type: str,
     with_fedora: bool = False,
     dist_git_namespace: str | None = None,
-) -> tuple[Path, str, str, Path | None]:
+) -> tuple[Path, str, str, Path | None, str | None]:
     if not jira_issue or Path(jira_issue).is_absolute() or ".." in jira_issue:
         raise ValueError(f"Invalid jira_issue: {jira_issue}")
     # Scoped by agent_type so different agent types processing the same
@@ -255,13 +255,16 @@ async def fork_and_prepare_dist_git(
     local_clone = working_dir / package
     # create_zstream_branch only applies to plain internal rhel-X.Y[.0] branches;
     # modular stream-* branches already exist in the rhel project.
+    zstream_branch_created = None
     if not is_cs_branch(dist_git_branch) and not is_modular_branch(dist_git_branch):
-        await run_tool(
+        result = await run_tool(
             "create_zstream_branch",
             package=package,
             branch=dist_git_branch,
             available_tools=available_tools,
         )
+        if "already exists" not in result:
+            zstream_branch_created = result
     if await is_older_zstream(dist_git_branch):
         await run_tool(
             "clone_repository",
@@ -286,7 +289,7 @@ async def fork_and_prepare_dist_git(
         fedora_clone = working_dir / f"{package}-fedora"
         if not await _clone_fedora_dist_git(package, fedora_clone):
             fedora_clone = None
-    return local_clone, update_branch, fork_url, fedora_clone
+    return local_clone, update_branch, fork_url, fedora_clone, zstream_branch_created
 
 
 async def find_leading_zstream_branch(dist_git_branch: str) -> str | None:

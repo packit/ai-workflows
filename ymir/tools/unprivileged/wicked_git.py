@@ -154,7 +154,7 @@ class RunPackagePrepInput(BaseModel):
 
 class RunPackagePrepTool(Tool[RunPackagePrepInput, ToolRunOptions, StringToolOutput]):
     name = "run_package_prep"
-    timeout = 300
+    timeout = 600
     description = """
     Runs the package prep step (source extraction + patch application) to verify
     that all patches apply cleanly. If prep fails, the build subdirectory is

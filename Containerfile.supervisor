@@ -10,6 +10,7 @@ RUN update-ca-trust
 
 RUN dnf -y install --allowerasing \
       # Run time dependencies
+      git \
       krb5-workstation \
       python3 \
       python3-backoff \
@@ -33,6 +34,8 @@ RUN dnf -y install --allowerasing \
       arize-phoenix-otel \
       redis \
       specfile \
+      "sentry-sdk>=2.13.0" \
+      "GitPython>=3.1.0" \
     && dnf -y remove gcc gcc-c++ python3-devel \
     && dnf clean all
 

@@ -430,6 +430,30 @@ supervisor-collect:
 	$(COMPOSE_SUPERVISOR) run --rm \
 		supervisor python -m ymir.supervisor.main $(DEBUG_FLAG) collect --no-repeat
 
+.PHONY: triage-issue
+triage-issue:
+	@if [ -z "$(JIRA_ISSUE)" ]; then \
+		echo "Usage: make triage-issue JIRA_ISSUE=RHEL-12345 [DRY_RUN=true]"; \
+		exit 1; \
+	fi
+	$(COMPOSE_AGENTS) run --rm \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e AUTO_CHAIN=false \
+		triage-agent
+
+.PHONY: process
+process:
+	@if [ -z "$(JIRA_ISSUE)" ]; then \
+		echo "Usage: make process JIRA_ISSUE=RHEL-12345 [DRY_RUN=true]"; \
+		exit 1; \
+	fi
+	$(COMPOSE_AGENTS) run --rm \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e AUTO_CHAIN=true \
+		triage-agent
+
 .PHONY: process-issue
 process-issue:
 	$(COMPOSE_SUPERVISOR) run --rm \

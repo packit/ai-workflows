@@ -21,7 +21,7 @@ from beeai_framework.tools import (
     ToolRunOptions,
 )
 from mcp.server.lowlevel.server import request_ctx
-from ogr.exceptions import GitlabAPIException, OgrException
+from ogr.exceptions import GitlabAPIException
 from ogr.factory import get_project
 from ogr.services.gitlab.project import GitlabProject
 from ogr.services.gitlab.pull_request import GitlabPullRequest
@@ -37,7 +37,9 @@ from ymir.common.models import (
 )
 from ymir.common.validators import AbsolutePath
 from ymir.tools.base import CloneableTool as Tool
+from ymir.tools.base import make_additional_context, tool_error_context
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
+from ymir.tools.errors import ToolErrorWithContext
 from ymir.tools.http import aiohttp_get_with_retries
 from ymir.tools.privileged.utils import clean_stale_repositories, sanitize_url
 
@@ -391,60 +393,65 @@ class ForkRepositoryTool(Tool[ForkRepositoryToolInput, ToolRunOptions, StringToo
     ) -> StringToolOutput:
         repository = tool_input.repository
         logger.info(f"Connecting to GitLab API to fork repository: {repository}")
-        project = await asyncio.to_thread(get_project, url=repository, token=os.getenv("GITLAB_TOKEN"))
-        if not project:
-            raise ToolError("Failed to get the specified repository")
+        with tool_error_context(
+            "Failed to fork repository",
+            include_exception_message_for=(ToolError,),
+            repository=repository,
+        ):
+            project = await asyncio.to_thread(get_project, url=repository, token=os.getenv("GITLAB_TOKEN"))
+            if not project:
+                raise ToolError("Failed to get the specified repository")
 
-        if urlparse(project.service.instance_url).hostname != "gitlab.com":
-            raise ToolError("Unexpected git forge, expected gitlab.com/redhat")
+            if urlparse(project.service.instance_url).hostname != "gitlab.com":
+                raise ToolError("Unexpected git forge, expected gitlab.com/redhat")
 
-        namespace = project.gitlab_repo.namespace["full_path"].split("/")
-        if not namespace or namespace[0] != "redhat":
-            raise ToolError("Unexpected GitLab project, expected gitlab.com/redhat")
+            namespace = project.gitlab_repo.namespace["full_path"].split("/")
+            if not namespace or namespace[0] != "redhat":
+                raise ToolError("Unexpected GitLab project, expected gitlab.com/redhat")
 
-        fork_namespace = os.getenv("FORK_NAMESPACE")
+            fork_namespace = os.getenv("FORK_NAMESPACE")
 
-        def get_fork():
-            target = fork_namespace or project.service.user.get_username()
-            for fork in project.get_forks():
-                if fork.gitlab_repo.namespace["full_path"] == target:
+            def get_fork():
+                target = fork_namespace or project.service.user.get_username()
+                for fork in project.get_forks():
+                    if fork.gitlab_repo.namespace["full_path"] == target:
+                        return fork
+                return None
+
+            if fork := await asyncio.to_thread(get_fork):
+                return StringToolOutput(result=fork.get_git_urls()["git"])
+
+            if os.getenv("DRY_RUN", "False").lower() == "true":
+                logger.info("DRY_RUN is set, skipping fork creation — returning original repo URL")
+                return StringToolOutput(result=project.get_git_urls()["git"])
+
+            def create_fork():
+                prefix = "_".join(ns.replace("centos-stream", "centos") for ns in namespace[1:])
+                fork_name = (f"{prefix}_" if prefix else "") + project.gitlab_repo.name
+                data = {"name": fork_name, "path": fork_name}
+                if fork_namespace:
+                    data["namespace"] = fork_namespace
+                try:
+                    fork = project.gitlab_repo.forks.create(data=data)
+                except GitlabAPIException:
+                    if not fork_namespace:
+                        raise
+                    logger.info("Fork creation failed, checking if it was created by another deployment")
+                    fork = get_fork()
+                    if not fork:
+                        raise
                     return fork
-            return None
+                return GitlabProject(
+                    namespace=fork.namespace["full_path"],
+                    service=project.service,
+                    repo=fork.path,
+                )
 
-        if fork := await asyncio.to_thread(get_fork):
+            fork = await asyncio.to_thread(create_fork)
+            if not fork:
+                raise ToolError("Failed to fork the specified repository")
+            await asyncio.to_thread(_wait_for_fork_ready, fork)
             return StringToolOutput(result=fork.get_git_urls()["git"])
-
-        if os.getenv("DRY_RUN", "False").lower() == "true":
-            logger.info("DRY_RUN is set, skipping fork creation — returning original repo URL")
-            return StringToolOutput(result=project.get_git_urls()["git"])
-
-        def create_fork():
-            prefix = "_".join(ns.replace("centos-stream", "centos") for ns in namespace[1:])
-            fork_name = (f"{prefix}_" if prefix else "") + project.gitlab_repo.name
-            data = {"name": fork_name, "path": fork_name}
-            if fork_namespace:
-                data["namespace"] = fork_namespace
-            try:
-                fork = project.gitlab_repo.forks.create(data=data)
-            except GitlabAPIException:
-                if not fork_namespace:
-                    raise
-                logger.info("Fork creation failed, checking if it was created by another deployment")
-                fork = get_fork()
-                if not fork:
-                    raise
-                return fork
-            return GitlabProject(
-                namespace=fork.namespace["full_path"],
-                service=project.service,
-                repo=fork.path,
-            )
-
-        fork = await asyncio.to_thread(create_fork)
-        if not fork:
-            raise ToolError("Failed to fork the specified repository")
-        await asyncio.to_thread(_wait_for_fork_ready, fork)
-        return StringToolOutput(result=fork.get_git_urls()["git"])
 
 
 class OpenMergeRequestToolInput(BaseModel):
@@ -513,29 +520,38 @@ class OpenMergeRequestTool(
         source = tool_input.source
         labels = tool_input.labels
         logger.info(f"Connecting to GitLab API to open merge request from fork: {fork_url}")
-        project = await asyncio.to_thread(get_project, url=fork_url, token=os.getenv("GITLAB_TOKEN"))
-        if not project:
-            raise ToolError("Failed to get the specified fork")
-        is_new_mr = True
-        try:
-            pr = await asyncio.to_thread(self._create_mr, project, title, description, target, source, labels)
-        except GitlabAPIException as ex:
-            logger.info("Gitlab API exception: %s", ex)
-            if ex.response_code == 409:
-                prs = await asyncio.to_thread(project.parent.get_pr_list)
-                for pr in prs:
-                    if pr.source_branch == source and pr.target_branch == target:
-                        logger.info("Reusing existing MR %s", pr)
-                        pr.description = description
-                        pr.title = title
-                        is_new_mr = False
-                        break
+        with tool_error_context(
+            "Failed to open merge request",
+            include_exception_message_for=(ToolError,),
+            fork_url=fork_url,
+            source=source,
+            target=target,
+        ):
+            project = await asyncio.to_thread(get_project, url=fork_url, token=os.getenv("GITLAB_TOKEN"))
+            if not project:
+                raise ToolError("Failed to get the specified fork")
+            is_new_mr = True
+            try:
+                pr = await asyncio.to_thread(
+                    self._create_mr, project, title, description, target, source, labels
+                )
+            except GitlabAPIException as ex:
+                logger.info("Gitlab API exception: %s", ex)
+                if ex.response_code == 409:
+                    prs = await asyncio.to_thread(project.parent.get_pr_list)
+                    for pr in prs:
+                        if pr.source_branch == source and pr.target_branch == target:
+                            logger.info("Reusing existing MR %s", pr)
+                            pr.description = description
+                            pr.title = title
+                            is_new_mr = False
+                            break
+                    else:
+                        raise
                 else:
                     raise
-            else:
-                raise
-        if not pr:
-            raise ToolError("Failed to open the merge request")
+            if not pr:
+                raise ToolError("No merge request was created or found")
 
         return JSONToolOutput(result=OpenMergeRequestResult(url=pr.url, is_new_mr=is_new_mr))
 
@@ -571,7 +587,12 @@ class GetInternalRhelBranchesTool(
         repository_url = f"https://gitlab.com/redhat/rhel/rpms/{package}"
         logger.info(f"Connecting to GitLab API to get branches for package: {repository_url}")
 
-        try:
+        with tool_error_context(
+            f"Failed to get branches for package {package}",
+            include_exception_message_for=(ToolError,),
+            package=package,
+            repository_url=repository_url,
+        ):
             project = await asyncio.to_thread(
                 get_project, url=repository_url, token=os.getenv("GITLAB_TOKEN")
             )
@@ -579,12 +600,9 @@ class GetInternalRhelBranchesTool(
                 raise ToolError(f"Failed to get repository for package: {package}")
 
             branches = await asyncio.to_thread(project.get_branches)
-            logger.info(f"Found {len(branches)} branches for package {package}: {branches}")
-            return JSONToolOutput(result=branches)
 
-        except OgrException as ex:
-            logger.warning(f"Failed to get branches for package {package}: {ex}")
-            raise ToolError(f"Failed to get branches for package {package}: {ex}") from ex
+        logger.info(f"Found {len(branches)} branches for package {package}: {branches}")
+        return JSONToolOutput(result=branches)
 
 
 class CloneRepositoryToolInput(BaseModel):
@@ -622,52 +640,59 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
         branch = tool_input.branch
         clone_path = tool_input.clone_path
 
-        basepath = Path(os.getenv("GIT_REPO_BASEPATH", "/git-repos")).resolve()
-        resolved = clone_path.resolve()
-        if resolved == basepath or not resolved.is_relative_to(basepath):
-            raise ToolError(f"clone_path must be under {basepath} (the shared volume). Got: {clone_path}")
-        clone_path = resolved
+        with tool_error_context(
+            "Failed to clone repository",
+            include_exception_message_for=(ToolError,),
+            repository=repository,
+            branch=str(branch),
+            clone_path=str(clone_path),
+        ):
+            basepath = Path(os.getenv("GIT_REPO_BASEPATH", "/git-repos")).resolve()
+            resolved = clone_path.resolve()
+            if resolved == basepath or not resolved.is_relative_to(basepath):
+                raise ToolError(f"clone_path must be under {basepath} (the shared volume). Got: {clone_path}")
+            clone_path = resolved
 
-        await clean_stale_repositories()
+            await clean_stale_repositories()
 
-        auth_args = _get_git_auth_args(repository)
-        git_env = _get_mock_git_env()
+            auth_args = _get_git_auth_args(repository)
+            git_env = _get_mock_git_env()
 
-        safe_url = sanitize_url(repository)
+            safe_url = sanitize_url(repository)
 
-        await asyncio.to_thread(_remove_existing_clone_path, clone_path)
+            await asyncio.to_thread(_remove_existing_clone_path, clone_path)
 
-        if branch:
-            clone_path.mkdir(parents=True, exist_ok=True)
-            await _run_git_cmd(
-                ["git", "init"],
-                label=f"git init {clone_path}",
-                cwd=clone_path,
-                env=git_env,
-                timeout=None,
-            )
+            if branch:
+                clone_path.mkdir(parents=True, exist_ok=True)
+                await _run_git_cmd(
+                    ["git", "init"],
+                    label=f"git init {clone_path}",
+                    cwd=clone_path,
+                    env=git_env,
+                    timeout=None,
+                )
 
-            await _run_git_cmd(
-                ["git", *auth_args, "fetch", repository, f"{branch}:refs/heads/{branch}"],
-                label=f"git fetch {safe_url} branch={branch}",
-                cwd=clone_path,
-                env=git_env,
-            )
+                await _run_git_cmd(
+                    ["git", *auth_args, "fetch", repository, f"{branch}:refs/heads/{branch}"],
+                    label=f"git fetch {safe_url} branch={branch}",
+                    cwd=clone_path,
+                    env=git_env,
+                )
 
-            await _run_git_cmd(
-                ["git", "checkout", branch],
-                label=f"git checkout branch={branch}",
-                cwd=clone_path,
-                env=git_env,
-                timeout=None,
-            )
-        else:
-            clone_path.parent.mkdir(parents=True, exist_ok=True)
-            await _run_git_cmd(
-                ["git", *auth_args, "clone", repository, str(clone_path)],
-                label=f"git clone {safe_url}",
-                env=git_env,
-            )
+                await _run_git_cmd(
+                    ["git", "checkout", branch],
+                    label=f"git checkout branch={branch}",
+                    cwd=clone_path,
+                    env=git_env,
+                    timeout=None,
+                )
+            else:
+                clone_path.parent.mkdir(parents=True, exist_ok=True)
+                await _run_git_cmd(
+                    ["git", *auth_args, "clone", repository, str(clone_path)],
+                    label=f"git clone {safe_url}",
+                    env=git_env,
+                )
 
         return StringToolOutput(result=f"Successfully cloned the specified repository to {clone_path}")
 
@@ -704,20 +729,29 @@ class PushToRemoteRepositoryTool(Tool[PushToRemoteRepositoryToolInput, ToolRunOp
         clone_path = tool_input.clone_path
         force = tool_input.force
         safe_url = sanitize_url(repository)
-        auth_args = _get_git_auth_args(repository)
-        git_env = _get_mock_git_env()
 
-        command = ["git", *auth_args, "push", repository, branch]
-        if force:
-            command.append("--force")
+        with tool_error_context(
+            "Failed to push to remote repository",
+            include_exception_message_for=(ToolError,),
+            repository=safe_url,
+            branch=branch,
+            clone_path=str(clone_path),
+            force=str(force),
+        ):
+            auth_args = _get_git_auth_args(repository)
+            git_env = _get_mock_git_env()
 
-        await _run_git_cmd(
-            command,
-            label=f"git push {safe_url} branch={branch} force={force}",
-            cwd=clone_path,
-            env=git_env,
-            timeout=None,
-        )
+            command = ["git", *auth_args, "push", repository, branch]
+            if force:
+                command.append("--force")
+
+            await _run_git_cmd(
+                command,
+                label=f"git push {safe_url} branch={branch} force={force}",
+                cwd=clone_path,
+                env=git_env,
+                timeout=None,
+            )
 
         return StringToolOutput(result=f"Successfully pushed the specified branch to {safe_url}")
 
@@ -753,16 +787,24 @@ class FetchBranchTool(Tool[FetchBranchToolInput, ToolRunOptions, StringToolOutpu
         branch = tool_input.branch
         clone_path = tool_input.clone_path
         safe_url = sanitize_url(repository)
-        auth_args = _get_git_auth_args(repository)
-        git_env = _get_mock_git_env()
 
-        await _run_git_cmd(
-            ["git", *auth_args, "fetch", repository, f"{branch}:refs/heads/{branch}"],
-            label=f"git fetch {safe_url} branch={branch}",
-            cwd=clone_path,
-            env=git_env,
-            timeout=None,
-        )
+        with tool_error_context(
+            "Failed to fetch branch",
+            include_exception_message_for=(ToolError,),
+            repository=safe_url,
+            branch=branch,
+            clone_path=str(clone_path),
+        ):
+            auth_args = _get_git_auth_args(repository)
+            git_env = _get_mock_git_env()
+
+            await _run_git_cmd(
+                ["git", *auth_args, "fetch", repository, f"{branch}:refs/heads/{branch}"],
+                label=f"git fetch {safe_url} branch={branch}",
+                cwd=clone_path,
+                env=git_env,
+                timeout=None,
+            )
 
         return StringToolOutput(result=f"Successfully fetched branch {branch} from {safe_url}")
 
@@ -903,17 +945,18 @@ class AddMergeRequestLabelsTool(Tool[AddMergeRequestLabelsToolInput, ToolRunOpti
     ) -> StringToolOutput:
         merge_request_url = tool_input.merge_request_url
         labels = tool_input.labels
-        try:
+        with tool_error_context(
+            "Failed to add labels to merge request",
+            include_exception_message_for=(ValueError,),
+            merge_request_url=merge_request_url,
+            labels=str(labels),
+        ):
             mr = await _get_merge_request_from_url(merge_request_url)
             for label in labels:
                 await asyncio.to_thread(mr.add_label, label)
-            return StringToolOutput(
-                result=f"Successfully added labels {labels} to merge request {merge_request_url}"
-            )
-        except ToolError:
-            raise
-        except Exception as e:
-            raise ToolError(f"Failed to add labels to merge request: {e}") from e
+        return StringToolOutput(
+            result=f"Successfully added labels {labels} to merge request {merge_request_url}"
+        )
 
 
 class SetMergeRequestReviewersToolInput(BaseModel):
@@ -943,7 +986,12 @@ class SetMergeRequestReviewersTool(Tool[SetMergeRequestReviewersToolInput, ToolR
     ) -> StringToolOutput:
         merge_request_url = tool_input.merge_request_url
         reviewer_ids = tool_input.reviewer_ids
-        try:
+        with tool_error_context(
+            "Failed to set reviewers on merge request",
+            include_exception_message_for=(ValueError,),
+            merge_request_url=merge_request_url,
+            reviewer_ids=str(reviewer_ids),
+        ):
             mr = await _get_merge_request_from_url(merge_request_url)
 
             def set_reviewers():
@@ -951,11 +999,9 @@ class SetMergeRequestReviewersTool(Tool[SetMergeRequestReviewersToolInput, ToolR
                 mr._raw_pr.save()
 
             await asyncio.to_thread(set_reviewers)
-            return StringToolOutput(
-                result=f"Successfully set reviewers {reviewer_ids} on merge request {merge_request_url}"
-            )
-        except Exception as e:
-            raise ToolError(f"Failed to set reviewers on merge request: {e}") from e
+        return StringToolOutput(
+            result=f"Successfully set reviewers {reviewer_ids} on merge request {merge_request_url}"
+        )
 
 
 class ResolveReviewersToolInput(BaseModel):
@@ -985,7 +1031,12 @@ class ResolveReviewersTool(Tool[ResolveReviewersToolInput, ToolRunOptions, JSONT
     ) -> JSONToolOutput[list[int]]:
         from ymir.tools.privileged.reviewer_resolver import resolve_reviewers
 
-        reviewer_ids = await resolve_reviewers(tool_input.package, tool_input.dist_git_branch)
+        with tool_error_context(
+            "Failed to resolve reviewers",
+            package=tool_input.package,
+            dist_git_branch=tool_input.dist_git_branch,
+        ):
+            reviewer_ids = await resolve_reviewers(tool_input.package, tool_input.dist_git_branch)
         return JSONToolOutput(result=reviewer_ids)
 
 
@@ -1042,14 +1093,14 @@ class AddMergeRequestCommentTool(Tool[AddMergeRequestCommentToolInput, ToolRunOp
     ) -> StringToolOutput:
         merge_request_url = tool_input.merge_request_url
         comment = tool_input.comment
-        try:
+        with tool_error_context(
+            "Failed to add comment to merge request",
+            include_exception_message_for=(ValueError,),
+            merge_request_url=merge_request_url,
+        ):
             mr = await _get_merge_request_from_url(merge_request_url)
             await asyncio.to_thread(mr._raw_pr.notes.create, {"body": comment})
-            return StringToolOutput(result=f"Successfully added comment to merge request {merge_request_url}")
-        except ToolError:
-            raise
-        except Exception as e:
-            raise ToolError(f"Failed to add comment to merge request: {e}") from e
+        return StringToolOutput(result=f"Successfully added comment to merge request {merge_request_url}")
 
 
 class AddBlockingMergeRequestCommentToolInput(BaseModel):
@@ -1083,7 +1134,12 @@ class AddBlockingMergeRequestCommentTool(
     ) -> StringToolOutput:
         merge_request_url = tool_input.merge_request_url
         comment = tool_input.comment
-        try:
+        with tool_error_context(
+            "Failed to add blocking comment to merge request",
+            include_exception_message_for=(ValueError,),
+            merge_request_url=merge_request_url,
+            blocking_comment=tool_input.comment,
+        ):
             mr = await _get_merge_request_from_url(merge_request_url)
 
             def check_existing_comment():
@@ -1110,11 +1166,9 @@ class AddBlockingMergeRequestCommentTool(
                 {"body": comment},
             )
 
-            return StringToolOutput(
-                result=f"Successfully added blocking comment to merge request {merge_request_url}"
-            )
-        except Exception as e:
-            raise ToolError(f"Failed to add blocking comment to merge request: {e}") from e
+        return StringToolOutput(
+            result=f"Successfully added blocking comment to merge request {merge_request_url}"
+        )
 
 
 class RetryPipelineJobToolInput(BaseModel):
@@ -1145,7 +1199,11 @@ class RetryPipelineJobTool(Tool[RetryPipelineJobToolInput, ToolRunOptions, Strin
         project_url = tool_input.project_url
         job_id = tool_input.job_id
         logger.info(f"Connecting to GitLab API to retry job {job_id} for project: {project_url}")
-        try:
+        with tool_error_context(
+            f"Failed to retry job {job_id}",
+            project_url=project_url,
+            job_id=job_id,
+        ):
             project = await asyncio.to_thread(get_project, url=project_url, token=os.getenv("GITLAB_TOKEN"))
 
             def retry_gitlab_job():
@@ -1155,12 +1213,8 @@ class RetryPipelineJobTool(Tool[RetryPipelineJobToolInput, ToolRunOptions, Strin
 
             job = await asyncio.to_thread(retry_gitlab_job)
 
-            logger.info(f"Successfully retried job {job_id} for project {project_url}")
-            return StringToolOutput(result=f"Successfully retried job {job_id}. Status: {job.status}")
-
-        except Exception as e:
-            logger.error(f"Failed to retry job {job_id} for project {project_url}: {e}")
-            raise ToolError(f"Failed to retry job: {e}") from e
+        logger.info(f"Successfully retried job {job_id} for project {project_url}")
+        return StringToolOutput(result=f"Successfully retried job {job_id}. Status: {job.status}")
 
 
 class GetFailedPipelineJobsFromMergeRequestToolInput(BaseModel):
@@ -1195,7 +1249,11 @@ class GetFailedPipelineJobsFromMergeRequestTool(
         context: RunContext,
     ) -> JSONToolOutput[list[FailedPipelineJob]]:
         merge_request_url = tool_input.merge_request_url
-        try:
+        with tool_error_context(
+            "Failed to get failed jobs from merge request",
+            include_exception_message_for=(ValueError,),
+            merge_request_url=merge_request_url,
+        ):
             mr = await _get_merge_request_from_url(merge_request_url)
 
             def get_latest_pipeline_jobs():
@@ -1228,12 +1286,8 @@ class GetFailedPipelineJobsFromMergeRequestTool(
 
             failed_jobs = await asyncio.to_thread(get_latest_pipeline_jobs)
 
-            logger.info(f"Found {len(failed_jobs)} failed jobs in latest pipeline for MR {merge_request_url}")
-            return JSONToolOutput(result=failed_jobs)
-
-        except Exception as e:
-            logger.error(f"Failed to get failed jobs from MR {merge_request_url}: {e}")
-            raise ToolError(f"Failed to get failed jobs from merge request: {e}") from e
+        logger.info(f"Found {len(failed_jobs)} failed jobs in latest pipeline for MR {merge_request_url}")
+        return JSONToolOutput(result=failed_jobs)
 
 
 def _get_authorized_member_ids(project: GitlabProject) -> set[int]:
@@ -1321,13 +1375,13 @@ class GetAuthorizedCommentsFromMergeRequestTool(
         context: RunContext,
     ) -> JSONToolOutput[list[MergeRequestComment]]:
         merge_request_url = tool_input.merge_request_url
-        try:
+        with tool_error_context(
+            "Failed to get authorized comments from merge request",
+            include_exception_message_for=(ValueError,),
+            merge_request_url=merge_request_url,
+        ):
             comments = await _fetch_authorized_comments_from_merge_request_url(merge_request_url)
-            return JSONToolOutput(result=comments)
-        except ToolError:
-            raise
-        except Exception as e:
-            raise ToolError(f"Failed to get authorized comments from merge request: {e}") from e
+        return JSONToolOutput(result=comments)
 
 
 class GetMergeRequestDetailsToolInput(BaseModel):
@@ -1361,26 +1415,26 @@ class GetMergeRequestDetailsTool(
         context: RunContext,
     ) -> JSONToolOutput[MergeRequestDetails]:
         merge_request_url = tool_input.merge_request_url
-        try:
+        with tool_error_context(
+            "Failed to get merge request details",
+            include_exception_message_for=(ValueError,),
+            merge_request_url=merge_request_url,
+        ):
             mr = await _get_merge_request_from_url(merge_request_url)
             comments = await _fetch_authorized_comments_from_merge_request_url(merge_request_url)
             username = mr.source_project.service.user.get_username()
-            return JSONToolOutput(
-                result=MergeRequestDetails(
-                    source_repo=mr.source_project.get_git_urls()["git"],
-                    source_branch=mr.source_branch,
-                    target_repo_name=mr.target_project.gitlab_repo.name,
-                    target_branch=mr.target_branch,
-                    title=mr.title,
-                    description=mr.description,
-                    last_updated_at=mr._raw_pr.updated_at,
-                    comments=[c for c in comments if f"@{username}" in c.message],
-                )
+        return JSONToolOutput(
+            result=MergeRequestDetails(
+                source_repo=mr.source_project.get_git_urls()["git"],
+                source_branch=mr.source_branch,
+                target_repo_name=mr.target_project.gitlab_repo.name,
+                target_branch=mr.target_branch,
+                title=mr.title,
+                description=mr.description,
+                last_updated_at=mr._raw_pr.updated_at,
+                comments=[c for c in comments if f"@{username}" in c.message],
             )
-        except ToolError:
-            raise
-        except Exception as e:
-            raise ToolError(f"Failed to get merge request details: {e}") from e
+        )
 
 
 MAX_PATCH_CONTENT_LENGTH = 2000
@@ -1435,7 +1489,11 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
         request_url = _get_api_diff_url(patch_url)
         headers = _get_auth_headers(request_url)
 
-        try:
+        with tool_error_context(
+            f"Failed to fetch patch from {patch_url}",
+            patch_url=patch_url,
+            request_url=request_url,
+        ):
             async with (
                 aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
                 aiohttp_get_with_retries(session, request_url, headers=headers) as response,
@@ -1448,8 +1506,6 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
                         result=f"Error: Failed to fetch patch from {patch_url}: HTTP {response.status}"
                     )
                 text = await response.text()
-        except (aiohttp.ClientError, TimeoutError) as e:
-            raise ToolError(f"Failed to fetch patch from {patch_url}: {e}") from e
         try:
             hunks = json.loads(text)
         except json.decoder.JSONDecodeError:
@@ -1541,7 +1597,15 @@ class FetchGitlabMrNotesTool(Tool[FetchGitlabMrNotesInput, ToolRunOptions, Strin
         except (aiohttp.ClientError, TimeoutError) as e:
             # Here we handle ClientError as ToolError, because client error
             # signals networking issues which should be flagged (DNS resolution failure, timeouts etc)
-            raise ToolError(f"Failed to fetch MR notes for !{input.mr_iid} in {input.project}: {e}") from e
+            raise ToolErrorWithContext(
+                f"Failed to fetch MR notes for !{input.mr_iid} in {input.project}",
+                cause=e,
+                additional_context=make_additional_context(
+                    project=input.project,
+                    mr_iid=input.mr_iid,
+                    exception=f"{type(e).__name__}: {e}",
+                ),
+            ) from e
         except Exception as e:
             logger.error("Error fetching GitLab MR notes: %s", e)
             return StringToolOutput(result=f"Error fetching GitLab MR notes: {e}")
@@ -1598,7 +1662,12 @@ class SearchGitlabProjectMrsTool(
         headers = _get_auth_headers(f"https://gitlab.com/{project}")
         logger.info("Searching MRs for %s in %s (state=%s)", search, project, state)
 
-        try:
+        with tool_error_context(
+            f"Failed to search MRs in {project}",
+            project=project,
+            search=search,
+            state=state,
+        ):
             async with (
                 aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
                 aiohttp_get_with_retries(session, url, headers=headers, params=params) as response,
@@ -1619,13 +1688,8 @@ class SearchGitlabProjectMrsTool(
                 for mr in data
             ]
 
-            logger.info("Found %d MR(s) for %s in %s", len(results), search, project)
-            return JSONToolOutput(result=results)
-
-        except ToolError:
-            raise
-        except Exception as e:
-            raise ToolError(f"Failed to search MRs in {project}: {e}") from e
+        logger.info("Found %d MR(s) for %s in %s", len(results), search, project)
+        return JSONToolOutput(result=results)
 
 
 class ListProjectMergeRequestsToolInput(BaseModel):
@@ -1709,7 +1773,14 @@ class ListProjectMergeRequestsTool(
             tool_input.author_username,
         )
 
-        try:
+        with tool_error_context(
+            f"Failed to list MRs for {tool_input.project}",
+            project=tool_input.project,
+            state=tool_input.state,
+            target_branch=tool_input.target_branch,
+            labels=str(tool_input.labels),
+            author_username=tool_input.author_username,
+        ):
             async with (
                 aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
                 aiohttp_get_with_retries(session, url, headers=headers, params=params) as response,
@@ -1733,8 +1804,5 @@ class ListProjectMergeRequestsTool(
                 for mr in data
             ]
 
-            logger.info("Found %d MR(s) for project %s", len(results), tool_input.project)
-            return JSONToolOutput(result=results)
-
-        except Exception as e:
-            raise ToolError(f"Failed to list MRs for {tool_input.project}: {e}") from e
+        logger.info("Found %d MR(s) for project %s", len(results), tool_input.project)
+        return JSONToolOutput(result=results)

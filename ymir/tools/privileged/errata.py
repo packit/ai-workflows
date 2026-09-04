@@ -163,7 +163,11 @@ class GetErratumTool(Tool[GetErratumToolInput, ToolRunOptions, JSONToolOutput[di
             erratum_id = erratum_id.rstrip("/").split("/")[-1]
 
         logger.info("Getting erratum %s (full=%s)", erratum_id, tool_input.full)
-        with tool_error_context(f"Failed to get erratum {erratum_id}", full=tool_input.full):
+        with tool_error_context(
+            f"Failed to get erratum {erratum_id}",
+            erratum_id=erratum_id,
+            full=tool_input.full,
+        ):
             erratum = await asyncio.to_thread(_get_erratum, erratum_id, full=tool_input.full)
 
         return JSONToolOutput(result=erratum.model_dump(mode="json"))
@@ -198,7 +202,11 @@ class GetErratumBuildNvrTool(Tool[GetErratumBuildNvrToolInput, ToolRunOptions, J
         package_name = tool_input.package_name
         logger.info("Getting build NVR for %s in erratum %s", package_name, erratum_id)
 
-        with tool_error_context(f"Failed to get build NVR for {package_name} in erratum {erratum_id}"):
+        with tool_error_context(
+            f"Failed to get build NVR for {package_name} in erratum {erratum_id}",
+            erratum_id=erratum_id,
+            package_name=package_name,
+        ):
             builds_by_release = await asyncio.to_thread(_et_api_get, f"erratum/{erratum_id}/builds_list")
             for release_info in builds_by_release.values():
                 for builds_map in release_info["builds"]:
@@ -516,7 +524,10 @@ class GetErratumTransitionRulesTool(
     ) -> JSONToolOutput[dict[str, Any]]:
         erratum_id = tool_input.erratum_id
         logger.info("Getting transition rules for erratum %s", erratum_id)
-        with tool_error_context(f"Failed to get transition rules for erratum {erratum_id}"):
+        with tool_error_context(
+            f"Failed to get transition rules for erratum {erratum_id}",
+            erratum_id=erratum_id,
+        ):
             rule_set = await asyncio.to_thread(_get_erratum_transition_rules, erratum_id)
         return JSONToolOutput(result=rule_set.model_dump(mode="json"))
 
@@ -546,7 +557,10 @@ class GetErratumBuildMapTool(
     ) -> JSONToolOutput[dict[str, Any]]:
         erratum_id = tool_input.erratum_id
         logger.info("Getting build map for erratum %s", erratum_id)
-        with tool_error_context(f"Failed to get build map for erratum {erratum_id}"):
+        with tool_error_context(
+            f"Failed to get build map for erratum {erratum_id}",
+            erratum_id=erratum_id,
+        ):
             build_map = await asyncio.to_thread(_get_erratum_build_map, erratum_id)
         return JSONToolOutput(result=build_map.model_dump(mode="json"))
 
@@ -580,7 +594,11 @@ class GetPreviousErratumTool(
         erratum_id = tool_input.erratum_id
         package_name = tool_input.package_name
         logger.info("Getting previous erratum for %s in erratum %s", package_name, erratum_id)
-        with tool_error_context(f"Failed to get previous erratum for {package_name} in erratum {erratum_id}"):
+        with tool_error_context(
+            f"Failed to get previous erratum for {package_name} in erratum {erratum_id}",
+            erratum_id=erratum_id,
+            package_name=package_name,
+        ):
             prev_id, prev_nvr = await asyncio.to_thread(_get_previous_erratum, erratum_id, package_name)
         return JSONToolOutput(result={"id": prev_id, "nvr": prev_nvr})
 
@@ -610,7 +628,10 @@ class GetErratumStagePushDetailsTool(
     ) -> JSONToolOutput[dict[str, Any]]:
         erratum_id = tool_input.erratum_id
         logger.info("Getting stage push details for erratum %s", erratum_id)
-        with tool_error_context(f"Failed to get stage push details for erratum {erratum_id}"):
+        with tool_error_context(
+            f"Failed to get stage push details for erratum {erratum_id}",
+            erratum_id=erratum_id,
+        ):
             details = await asyncio.to_thread(_get_erratum_stage_push_details, erratum_id)
         return JSONToolOutput(result=details.model_dump(mode="json"))
 
@@ -642,7 +663,10 @@ class ErratumPushToStageTool(Tool[ErratumPushToStageToolInput, ToolRunOptions, S
                 result=f"Dry run, not pushing erratum {erratum_id} to stage (this is expected, not an error)"
             )
         logger.info("Pushing erratum %s to stage", erratum_id)
-        with tool_error_context(f"Failed to push erratum {erratum_id} to stage"):
+        with tool_error_context(
+            f"Failed to push erratum {erratum_id} to stage",
+            erratum_id=erratum_id,
+        ):
             await asyncio.to_thread(_et_api_post, f"erratum/{erratum_id}/push", {"defaults": "stage"})
         return StringToolOutput(result=f"Successfully pushed erratum {erratum_id} to stage")
 
@@ -677,7 +701,11 @@ class ErratumChangeStateTool(Tool[ErratumChangeStateToolInput, ToolRunOptions, S
                 f"(this is expected, not an error)"
             )
         logger.info("Changing state of erratum %s to %s", erratum_id, new_state)
-        with tool_error_context(f"Failed to change state of erratum {erratum_id} to {new_state}"):
+        with tool_error_context(
+            f"Failed to change state of erratum {erratum_id} to {new_state}",
+            erratum_id=erratum_id,
+            new_state=new_state,
+        ):
             await asyncio.to_thread(
                 _et_api_post,
                 f"erratum/{erratum_id}/change_state",
@@ -715,7 +743,10 @@ class ErratumAddCommentTool(Tool[ErratumAddCommentToolInput, ToolRunOptions, Str
                 result=f"Dry run, not adding comment to erratum {erratum_id} (this is expected, not an error)"
             )
         logger.info("Adding comment to erratum %s", erratum_id)
-        with tool_error_context(f"Failed to add comment to erratum {erratum_id}"):
+        with tool_error_context(
+            f"Failed to add comment to erratum {erratum_id}",
+            erratum_id=erratum_id,
+        ):
             await asyncio.to_thread(
                 _et_api_post,
                 f"erratum/{erratum_id}/add_comment",
@@ -754,7 +785,10 @@ class ErratumRefreshSecurityAlertsTool(
                 f"(this is expected, not an error)"
             )
         logger.info("Refreshing security alerts for erratum %s", erratum_id)
-        with tool_error_context(f"Failed to refresh security alerts for erratum {erratum_id}"):
+        with tool_error_context(
+            f"Failed to refresh security alerts for erratum {erratum_id}",
+            erratum_id=erratum_id,
+        ):
             await asyncio.to_thread(
                 _et_api_post,
                 f"erratum/{erratum_id}/security_alerts/refresh",

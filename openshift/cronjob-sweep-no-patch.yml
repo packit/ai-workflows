@@ -48,7 +48,7 @@ spec:
             resources:
               limits:
                 cpu: "200m"
-                memory: "128Mi"
+                memory: "512Mi"
             securityContext:
               allowPrivilegeEscalation: false
               runAsNonRoot: true

@@ -1225,10 +1225,6 @@ async def run_workflow(
                     spec_path = state.local_clone / f"{state.package}.spec"
                     with Specfile(spec_path) as spec:
                         patch_files = [p.location for p in get_all_patches(spec) if p.location]
-
-                    if not patch_files:
-                        raise RuntimeError(f"Backport completed but no Patch tags found in {spec_path}")
-
                     files_to_git_add = [f"{state.package}.spec", *patch_files]
                 logger.info(f"Staging files: {files_to_git_add}")
 

@@ -4,6 +4,8 @@ YStreamSweep delegates entirely to ``CheckCveTriageEligibilityTool``; these
 tests stub that tool and assert the verdict → SweepResult.action mapping.
 """
 
+from unittest.mock import patch
+
 import pytest
 
 from ymir.common import CVEEligibilityResult, TriageEligibility
@@ -137,10 +139,13 @@ async def test_never_with_error_is_error(monkeypatch):
 async def test_tool_raises_is_error(monkeypatch):
     _patch_tool(monkeypatch, raises=RuntimeError("Jira unreachable"))
 
-    result = await YStreamSweep().is_unblocked(make_issue(), _COMMENT_DATA)
+    with patch("ymir.sweep.y_stream.sentry_sdk.capture_exception") as mock_capture:
+        result = await YStreamSweep().is_unblocked(make_issue(), _COMMENT_DATA)
 
-    assert result.action == "error"
-    assert "Jira unreachable" in result.detail
+        assert result.action == "error"
+        assert "Jira unreachable" in result.detail
+        mock_capture.assert_called_once()
+        assert isinstance(mock_capture.call_args[0][0], RuntimeError)
 
 
 @pytest.mark.asyncio

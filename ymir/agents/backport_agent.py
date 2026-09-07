@@ -16,7 +16,6 @@ from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
-from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field
@@ -44,7 +43,6 @@ from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
-    init_sentry,
     is_reasoning_enabled,
     mcp_tools,
     render_template,
@@ -97,7 +95,7 @@ from ymir.common.models import (
     ShippedZStreamCandidate,
     Task,
 )
-from ymir.common.utils import get_all_patches
+from ymir.common.utils import get_all_patches, init_sentry
 from ymir.common.version_utils import is_older_zstream, parse_rhel_version
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.distgit_detector import DistgitDetectorTool
@@ -225,7 +223,6 @@ async def create_backport_agent(
     """
     base_tools = [
         ThinkTool(),
-        DuckDuckGoSearchTool(),
         RunShellCommandTool(options=local_tool_options),
         CreateTool(options=local_tool_options),
         ViewTool(options=local_tool_options),

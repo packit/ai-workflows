@@ -29,7 +29,6 @@ from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
-    init_sentry,
     is_reasoning_enabled,
     mcp_tools,
     render_template,
@@ -61,6 +60,7 @@ from ymir.common.reproducer_lock import (
     sweep_stale_reproducer_locks,
     try_acquire_reproducer_lock,
 )
+from ymir.common.utils import init_sentry
 from ymir.common.version_utils import construct_internal_branch_name, parse_rhel_version
 from ymir.tools.privileged.jira import fetch_jira_issue_issuelinks
 from ymir.tools.unprivileged.commands import RunShellCommandTool

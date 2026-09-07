@@ -40,6 +40,8 @@ spec:
                 name: jira-env
             - secretRef:
                 name: gitlab-env
+            - secretRef:
+                name: sentry-env
             resources:
               limits:
                 cpu: "200m"

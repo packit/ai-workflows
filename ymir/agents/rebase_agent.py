@@ -13,7 +13,6 @@ from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
-from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 from pydantic import Field
@@ -39,7 +38,6 @@ from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
-    init_sentry,
     is_reasoning_enabled,
     mcp_tools,
     render_template,
@@ -65,7 +63,7 @@ from ymir.common.models import (
     RebaseOutputSchema,
     Task,
 )
-from ymir.common.utils import extract_text_from_adf
+from ymir.common.utils import extract_text_from_adf, init_sentry
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
 from ymir.tools.unprivileged.text import (
@@ -98,7 +96,6 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
             ThinkTool(),
-            DuckDuckGoSearchTool(),
             RunShellCommandTool(options=local_tool_options),
             CreateTool(options=local_tool_options),
             ViewTool(options=local_tool_options),

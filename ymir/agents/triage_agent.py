@@ -33,7 +33,6 @@ from ymir.agents.utils import (
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
-    init_sentry,
     is_reasoning_enabled,
     mcp_tools,
     render_template,
@@ -74,6 +73,7 @@ from ymir.common.utils import (
     check_build_in_buildroot,
     extract_text_from_adf,
     get_latest_candidate_build,
+    init_sentry,
 )
 from ymir.common.version_utils import (
     construct_internal_branch_name,

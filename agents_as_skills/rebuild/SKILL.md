@@ -57,7 +57,6 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `update_release` — Bump the Release field in a spec file
 
 **Other:**
-- Web search via DuckDuckGo or equivalent
 - Bash tool for shell commands (e.g., `git`, `centpkg`, `rhpkg`)
 
 ## Workflow

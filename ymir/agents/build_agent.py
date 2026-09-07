@@ -6,7 +6,6 @@ from beeai_framework.agents.requirement.requirements.conditional import (
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
-from beeai_framework.tools.search.duckduckgo import DuckDuckGoSearchTool
 from beeai_framework.tools.think import ThinkTool
 
 from ymir.agents.reasoning_agent import ReasoningAgent
@@ -71,7 +70,6 @@ def create_build_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
             ThinkTool(),
-            DuckDuckGoSearchTool(),
             RunShellCommandTool(options=local_tool_options),
             CreateTool(options=local_tool_options),
             ViewTool(options=local_tool_options),

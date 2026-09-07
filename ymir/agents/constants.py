@@ -70,6 +70,12 @@ def strip_resolves_from_mr_text(text: str) -> str:
     return "\n".join(result).strip("\n")
 
 
+def format_zstream_branch_note(note: str | None) -> str:
+    if not note:
+        return ""
+    return f"> **Note:** {note}\n\n"
+
+
 def mr_description_footer(package: str) -> str:
     return (
         "---\n"  # noqa: S608

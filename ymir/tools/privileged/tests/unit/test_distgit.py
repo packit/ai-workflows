@@ -12,13 +12,6 @@ from ymir.tools.privileged.distgit import (
 )
 
 
-def _mock_is_older_zstream(result):
-    async def _mock(branch):
-        return result
-
-    return _mock
-
-
 @pytest.mark.parametrize(
     "branch_exists",
     [False, True],
@@ -50,15 +43,11 @@ async def test_create_zstream_branch(branch_exists, monkeypatch):
     mock_repo.should_receive("commit").with_args(ref).and_return(flexmock()).times(0 if branch_exists else 1)
     flexmock(git.Repo).should_receive("clone_from").and_return(mock_repo)
 
-    flexmock(distgit_tools).should_receive("is_older_zstream").replace_with(
-        _mock_is_older_zstream(False)
-    ).times(0 if branch_exists else 1)
-
-    async def mock_get_latest_candidate_build(package, dist_git_branch):
+    async def mock_get_latest_z_pending_build(package, dist_git_branch):
         return EVR(version="1.0", release="1.el10"), ref
 
-    flexmock(distgit_tools).should_receive("get_latest_candidate_build").replace_with(
-        mock_get_latest_candidate_build
+    flexmock(distgit_tools).should_receive("get_latest_z_pending_build").replace_with(
+        mock_get_latest_z_pending_build
     ).times(0 if branch_exists else 1)
 
     monkeypatch.setenv("GITLAB_TOKEN", "<TOKEN>")
@@ -142,15 +131,11 @@ async def test_create_zstream_branch_push_silently_rejected(monkeypatch):
     mock_repo.should_receive("commit").with_args(ref).and_return(flexmock()).once()
     flexmock(git.Repo).should_receive("clone_from").and_return(mock_repo)
 
-    flexmock(distgit_tools).should_receive("is_older_zstream").replace_with(
-        _mock_is_older_zstream(False)
-    ).once()
-
-    async def mock_get_latest_candidate_build(package, dist_git_branch):
+    async def mock_get_latest_z_pending_build(package, dist_git_branch):
         return EVR(version="1.0", release="1.el10"), ref
 
-    flexmock(distgit_tools).should_receive("get_latest_candidate_build").replace_with(
-        mock_get_latest_candidate_build
+    flexmock(distgit_tools).should_receive("get_latest_z_pending_build").replace_with(
+        mock_get_latest_z_pending_build
     ).once()
 
     monkeypatch.setenv("GITLAB_TOKEN", "<TOKEN>")
@@ -245,15 +230,11 @@ async def test_create_zstream_branch_advances_ref_on_main(monkeypatch):
     gitcmd = flexmock().should_receive("ls_remote").and_return(False).and_return(True).mock()
     flexmock(git.cmd.Git).new_instances(gitcmd)
 
-    flexmock(distgit_tools).should_receive("is_older_zstream").replace_with(
-        _mock_is_older_zstream(False)
-    ).once()
-
-    async def mock_get_latest_candidate_build(package, dist_git_branch):
+    async def mock_get_latest_z_pending_build(package, dist_git_branch):
         return EVR(version="1.0", release="1.el10"), build_ref
 
-    flexmock(distgit_tools).should_receive("get_latest_candidate_build").replace_with(
-        mock_get_latest_candidate_build
+    flexmock(distgit_tools).should_receive("get_latest_z_pending_build").replace_with(
+        mock_get_latest_z_pending_build
     ).once()
 
     mock_main_ref = flexmock(name="origin/rhel-10-main")
@@ -303,15 +284,11 @@ async def test_create_zstream_branch_skips_nvr_walk_on_zstream_source(monkeypatc
     gitcmd = flexmock().should_receive("ls_remote").and_return(False).and_return(True).mock()
     flexmock(git.cmd.Git).new_instances(gitcmd)
 
-    flexmock(distgit_tools).should_receive("is_older_zstream").replace_with(
-        _mock_is_older_zstream(False)
-    ).once()
-
-    async def mock_get_latest_candidate_build(package, dist_git_branch):
+    async def mock_get_latest_z_pending_build(package, dist_git_branch):
         return EVR(version="0.103", release="1.el10"), build_ref
 
-    flexmock(distgit_tools).should_receive("get_latest_candidate_build").replace_with(
-        mock_get_latest_candidate_build
+    flexmock(distgit_tools).should_receive("get_latest_z_pending_build").replace_with(
+        mock_get_latest_z_pending_build
     ).once()
 
     # Source branch is rhel-10.2 (a z-stream, not -main) → NVR walk must be skipped
@@ -429,15 +406,11 @@ async def test_create_zstream_branch_no_source_branch(monkeypatch):
     gitcmd = flexmock().should_receive("ls_remote").and_return(False).and_return(True).mock()
     flexmock(git.cmd.Git).new_instances(gitcmd)
 
-    flexmock(distgit_tools).should_receive("is_older_zstream").replace_with(
-        _mock_is_older_zstream(False)
-    ).once()
-
-    async def mock_get_latest_candidate_build(package, dist_git_branch):
+    async def mock_get_latest_z_pending_build(package, dist_git_branch):
         return EVR(version="1.0", release="1.el10"), ref
 
-    flexmock(distgit_tools).should_receive("get_latest_candidate_build").replace_with(
-        mock_get_latest_candidate_build
+    flexmock(distgit_tools).should_receive("get_latest_z_pending_build").replace_with(
+        mock_get_latest_z_pending_build
     ).once()
 
     # No higher branches and no rhel-X-main
@@ -458,8 +431,8 @@ async def test_create_zstream_branch_no_source_branch(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_zstream_branch_older_zstream_uses_z_pending(monkeypatch):
-    """Older z-stream branches use get_latest_z_pending_build instead of candidate."""
+async def test_create_zstream_branch_older_zstream(monkeypatch):
+    """Z-stream branch creation works for all z-stream branches."""
     package = "bash"
     branch = "rhel-9.6.0"
     user = "bot"
@@ -472,11 +445,6 @@ async def test_create_zstream_branch_older_zstream_uses_z_pending(monkeypatch):
 
     gitcmd = flexmock().should_receive("ls_remote").and_return(False).and_return(True).mock()
     flexmock(git.cmd.Git).new_instances(gitcmd)
-
-    flexmock(distgit_tools).should_receive("is_older_zstream").replace_with(
-        _mock_is_older_zstream(True)
-    ).once()
-    flexmock(distgit_tools).should_receive("get_latest_candidate_build").never()
 
     async def mock_get_latest_z_pending_build(package, dist_git_branch):
         return EVR(version="1.0", release="1.el9"), ref
@@ -528,15 +496,11 @@ async def test_create_zstream_branch_commit_not_in_clone(monkeypatch):
     ).once()
     flexmock(git.Repo).should_receive("clone_from").and_return(mock_repo)
 
-    flexmock(distgit_tools).should_receive("is_older_zstream").replace_with(
-        _mock_is_older_zstream(False)
-    ).once()
-
-    async def mock_get_latest_candidate_build(package, dist_git_branch):
+    async def mock_get_latest_z_pending_build(package, dist_git_branch):
         return EVR(version="1.0", release="1.el10"), ref
 
-    flexmock(distgit_tools).should_receive("get_latest_candidate_build").replace_with(
-        mock_get_latest_candidate_build
+    flexmock(distgit_tools).should_receive("get_latest_z_pending_build").replace_with(
+        mock_get_latest_z_pending_build
     ).once()
 
     monkeypatch.setenv("GITLAB_TOKEN", "<TOKEN>")
@@ -577,15 +541,11 @@ async def test_create_zstream_branch_push_hook_rejection(monkeypatch):
     mock_repo.should_receive("commit").with_args(ref).and_return(flexmock()).once()
     flexmock(git.Repo).should_receive("clone_from").and_return(mock_repo)
 
-    flexmock(distgit_tools).should_receive("is_older_zstream").replace_with(
-        _mock_is_older_zstream(False)
-    ).once()
-
-    async def mock_get_latest_candidate_build(package, dist_git_branch):
+    async def mock_get_latest_z_pending_build(package, dist_git_branch):
         return EVR(version="1.0", release="1.el10"), ref
 
-    flexmock(distgit_tools).should_receive("get_latest_candidate_build").replace_with(
-        mock_get_latest_candidate_build
+    flexmock(distgit_tools).should_receive("get_latest_z_pending_build").replace_with(
+        mock_get_latest_z_pending_build
     ).once()
 
     monkeypatch.setenv("GITLAB_TOKEN", "<TOKEN>")

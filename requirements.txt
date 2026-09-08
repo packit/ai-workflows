@@ -9,6 +9,7 @@ beeai-framework[duckduckgo]==0.1.83
 copr>=1.129
 fastmcp>=2.11.3
 logdetective-mcp>=0.5.0
+mcp<1.30
 ogr>=0.55.0
 openinference-instrumentation-beeai==0.1.21
 redis>=6.4.0

@@ -29,6 +29,7 @@ RUN dnf -y install --allowerasing \
     && pip3 install -v --no-cache-dir \
       "litellm!=1.82.7,!=1.82.8" \
       beeai-framework[vertexai,mcp,duckduckgo]==0.1.83 \
+      "mcp<1.30" \
       google-cloud-aiplatform \
       openinference-instrumentation-beeai==0.1.21 \
       arize-phoenix-otel \

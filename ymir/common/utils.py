@@ -257,6 +257,13 @@ async def get_latest_z_pending_build(package: str, dist_git_branch: str) -> tupl
     )
 
 
+async def get_latest_buildroot_build(package: str, dist_git_branch: str) -> tuple[EVR, str]:
+    return await _get_latest_build_from_tags(
+        package,
+        f"{dist_git_branch}-buildrequires",
+    )
+
+
 def _resolve_buildroot_checks(
     target_branch: str, fix_version: str, rhel_config: dict | None = None
 ) -> list[tuple[str, str]]:

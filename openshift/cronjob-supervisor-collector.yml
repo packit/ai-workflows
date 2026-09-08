@@ -8,8 +8,8 @@ metadata:
 spec:
   schedule: "*/20 * * * *"  # Every 20 minutes
   concurrencyPolicy: Forbid  # Prevent overlapping runs
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 5
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
   suspend: false
   jobTemplate:
     metadata:

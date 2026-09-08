@@ -9,8 +9,8 @@ spec:
   # Every 15 minutes — tops up the triage queue toward QUEUE_DEPTH_THRESHOLD.
   schedule: "*/15 * * * *"
   concurrencyPolicy: Forbid  # Prevent overlapping runs
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 5
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
   suspend: false
   jobTemplate:
     metadata:

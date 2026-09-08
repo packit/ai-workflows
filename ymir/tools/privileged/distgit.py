@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from specfile import Specfile
 
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket
-from ymir.common.utils import get_latest_z_pending_build
+from ymir.common.utils import NoBuildFoundError, get_latest_buildroot_build, get_latest_z_pending_build
 from ymir.common.version_utils import parse_zstream_branch_name
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.base import tool_error_context
@@ -236,8 +236,14 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                     "skipping push and waiting for mirror sync"
                 )
             else:
-                with tool_error_context("Failed to find candidate build", package=package, branch=branch):
-                    _, ref = await get_latest_z_pending_build(package, branch)
+                with tool_error_context(
+                    "Failed to find suitable source build", package=package, branch=branch
+                ):
+                    try:
+                        _, ref = await get_latest_z_pending_build(package, branch)
+                    except NoBuildFoundError:
+                        # this could be a buildroot-only package
+                        _, ref = await get_latest_buildroot_build(package, branch)
                 source_branch = self._find_source_branch(repo, branch)
                 if source_branch and source_branch.endswith("-main"):
                     ref = await self._find_latest_same_nvr_ref(

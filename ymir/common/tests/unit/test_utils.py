@@ -12,6 +12,7 @@ from ymir.common.base_utils import KerberosError, extract_principal, init_kerber
 from ymir.common.utils import (
     NoBuildFoundError,
     _is_connection_error,
+    get_latest_buildroot_build,
     get_latest_candidate_build,
     get_latest_z_pending_build,
     mcp_tools,
@@ -564,3 +565,20 @@ async def test_get_latest_z_pending_build_no_builds():
     )
     with pytest.raises(NoBuildFoundError, match="no builds"):
         await get_latest_z_pending_build("bash", "rhel-9.6.0")
+
+
+@pytest.mark.asyncio
+async def test_get_latest_buildroot_build():
+    _mock_koji_session(
+        {
+            "rhel-9.6.0-buildrequires": [
+                {"build_id": 1, "epoch": 0, "version": "1.0", "release": "1.el9"},
+            ],
+        },
+        {"source": "git+https://pkgs.example.com/rpms/bash#abc123"},
+    )
+
+    evr, ref = await get_latest_buildroot_build("bash", "rhel-9.6.0")
+
+    assert evr == EVR(epoch=0, version="1.0", release="1.el9")
+    assert ref == "abc123"

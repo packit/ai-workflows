@@ -4,6 +4,7 @@ from beeai_framework.tools import ToolError
 from flexmock import flexmock
 from specfile.utils import EVR
 
+from ymir.common.utils import NoBuildFoundError
 from ymir.tools.privileged import distgit as distgit_tools
 from ymir.tools.privileged.distgit import (
     CreateZstreamBranchTool,
@@ -467,6 +468,95 @@ async def test_create_zstream_branch_older_zstream(monkeypatch):
 
     result = (await CreateZstreamBranchTool().run(input={"package": package, "branch": branch})).result
     assert result.startswith("Successfully")
+
+
+@pytest.mark.asyncio
+async def test_create_zstream_branch_falls_back_to_buildrequires(monkeypatch):
+    package = "bash"
+    branch = "rhel-10.0"
+    ref = "abc123def456"  # pragma: allowlist secret
+
+    async def init_kerberos_ticket():
+        return "bot@EXAMPLE.COM"
+
+    async def mock_get_latest_z_pending_build(package, dist_git_branch):
+        raise NoBuildFoundError("no z-pending build")
+
+    async def mock_get_latest_buildroot_build(package, dist_git_branch):
+        assert dist_git_branch == branch
+        return EVR(version="1.0", release="1.el10"), ref
+
+    flexmock(distgit_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
+    flexmock(distgit_tools).should_receive("get_latest_z_pending_build").replace_with(
+        mock_get_latest_z_pending_build
+    ).once()
+    flexmock(distgit_tools).should_receive("get_latest_buildroot_build").replace_with(
+        mock_get_latest_buildroot_build
+    ).once()
+
+    gitcmd = flexmock().should_receive("ls_remote").and_return(False).and_return(True).mock()
+    gitcmd.should_receive("push").with_args("origin", f"{ref}:refs/heads/{branch}").once().and_return("")
+    flexmock(git.cmd.Git).new_instances(gitcmd)
+    mock_repo = flexmock(git=gitcmd, remotes=flexmock(origin=flexmock(refs=[])))
+    mock_repo.should_receive("commit").with_args(ref).and_return(flexmock()).once()
+    flexmock(git.Repo).should_receive("clone_from").and_return(mock_repo)
+    monkeypatch.setenv("GITLAB_TOKEN", "<TOKEN>")
+
+    result = (await CreateZstreamBranchTool().run(input={"package": package, "branch": branch})).result
+
+    assert result.startswith("Successfully")
+
+
+@pytest.mark.asyncio
+async def test_create_zstream_branch_errors_when_both_build_lookups_fail(monkeypatch):
+    package = "bash"
+    branch = "rhel-10.0"
+
+    async def init_kerberos_ticket():
+        return "bot@EXAMPLE.COM"
+
+    async def fail(*args):
+        raise NoBuildFoundError("no build found")
+
+    flexmock(distgit_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
+    flexmock(distgit_tools).should_receive("get_latest_z_pending_build").replace_with(fail).once()
+    flexmock(distgit_tools).should_receive("get_latest_buildroot_build").replace_with(fail).once()
+
+    gitcmd = flexmock().should_receive("ls_remote").and_return(False).mock()
+    flexmock(git.cmd.Git).new_instances(gitcmd)
+    flexmock(git.Repo).should_receive("clone_from").and_return(
+        flexmock(git=gitcmd, remotes=flexmock(origin=flexmock(refs=[])))
+    )
+    monkeypatch.setenv("GITLAB_TOKEN", "<TOKEN>")
+
+    with pytest.raises(ToolError, match="Failed to find suitable source build"):
+        await CreateZstreamBranchTool().run(input={"package": package, "branch": branch})
+
+
+@pytest.mark.asyncio
+async def test_create_zstream_branch_does_not_fallback_on_lookup_error(monkeypatch):
+    package = "bash"
+    branch = "rhel-10.0"
+
+    async def init_kerberos_ticket():
+        return "bot@EXAMPLE.COM"
+
+    async def fail(*args):
+        raise RuntimeError("Brew unavailable")
+
+    flexmock(distgit_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
+    flexmock(distgit_tools).should_receive("get_latest_z_pending_build").replace_with(fail).once()
+    flexmock(distgit_tools).should_receive("get_latest_buildroot_build").never()
+
+    gitcmd = flexmock().should_receive("ls_remote").and_return(False).mock()
+    flexmock(git.cmd.Git).new_instances(gitcmd)
+    flexmock(git.Repo).should_receive("clone_from").and_return(
+        flexmock(git=gitcmd, remotes=flexmock(origin=flexmock(refs=[])))
+    )
+    monkeypatch.setenv("GITLAB_TOKEN", "<TOKEN>")
+
+    with pytest.raises(ToolError, match="Failed to find suitable source build"):
+        await CreateZstreamBranchTool().run(input={"package": package, "branch": branch})
 
 
 @pytest.mark.asyncio

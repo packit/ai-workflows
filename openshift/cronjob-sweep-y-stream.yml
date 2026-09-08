@@ -8,8 +8,8 @@ metadata:
 spec:
   schedule: "0 */12 * * *"  # Every 12 hours
   concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 5
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
   suspend: false
   jobTemplate:
     metadata:

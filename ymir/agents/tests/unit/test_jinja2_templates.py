@@ -32,8 +32,9 @@ def render_template(template_name: str, input: BaseModel | None = None) -> str:
 try:
     from ymir.common.models import (
         BackportInputSchema,
-        BuildInputSchema,
+        BuildFailureAnalysisInput,
         BuildInstructionsInput,
+        BuildResult,
         InheritAdaptationInputSchema,
         LogInputSchema,
         MergeRequestInputSchema,
@@ -46,10 +47,16 @@ except ImportError:
     class BuildInstructionsInput(BaseModel):  # type: ignore[no-redef]
         has_extract_log_snippets: bool = False
 
-    class BuildInputSchema(BaseModel):  # type: ignore[no-redef]
+    class BuildResult(BaseModel):  # type: ignore[no-redef]
+        success: bool
+        error_message: str | None = None
+        artifacts_urls: list[str] | None = None
+
+    class BuildFailureAnalysisInput(BaseModel):  # type: ignore[no-redef]
         srpm_path: Path
         dist_git_branch: str
         jira_issue: str
+        build_result: BuildResult
 
     class LogInputSchema(BaseModel):  # type: ignore[no-redef]
         jira_issue: str
@@ -120,22 +127,25 @@ class TestBuildInstructions:
             "build/instructions.j2",
             BuildInstructionsInput(has_extract_log_snippets=True),
         )
-        assert "expert on building packages" in result
-        assert "build_package" in result
+        assert "expert on analyzing package build failures" in result
+        assert "Do not submit or retry a build" in result
         assert "builder-live.log" in result
         assert "extract_log_snippets" in result
-        assert "start with" not in result
+        assert "Start with" not in result
 
     def test_loads_without_extract_log_snippets(self):
         result = render_template(
             "build/instructions.j2",
             BuildInstructionsInput(has_extract_log_snippets=False),
         )
-        assert "expert on building packages" in result
-        assert "build_package" in result
+        assert "expert on analyzing package build failures" in result
+        assert "Do not submit or retry a build" in result
         assert "builder-live.log" in result
         assert "extract_log_snippets" not in result
-        assert "start with" in result
+        assert "download_artifacts" not in result
+        assert "local sandbox" in result
+        assert "artifacts_urls" in result
+        assert "Start with" in result
 
 
 class TestLogInstructions:
@@ -212,15 +222,24 @@ class TestBuildTemplate:
     def test_renders_variables(self):
         result = render_template(
             "build/prompt.j2",
-            BuildInputSchema(
+            BuildFailureAnalysisInput(
                 srpm_path=Path("/tmp/pkg-1.0-1.el9.src.rpm"),
                 dist_git_branch="c9s",
                 jira_issue="RHEL-12345",
+                build_result=BuildResult(
+                    success=False,
+                    error_message="Build 123 failed",
+                    artifacts_urls=["https://copr/123/builder-live.log.gz"],
+                ),
             ),
         )
         assert "/tmp/pkg-1.0-1.el9.src.rpm" in result
         assert "c9s" in result
         assert "RHEL-12345" in result
+        assert "Build 123 failed" in result
+        assert "https://copr/123/builder-live.log.gz" in result
+        assert '"success": false' in result
+        assert "Do not submit another build" in result
 
 
 class TestLogTemplate:
@@ -661,10 +680,11 @@ class TestRenderTemplate:
         """Templates with variables are rendered correctly."""
         result = render_template(
             "build/prompt.j2",
-            BuildInputSchema(
+            BuildFailureAnalysisInput(
                 srpm_path=Path("/tmp/test.src.rpm"),
                 dist_git_branch="c10s",
                 jira_issue="RHEL-99999",
+                build_result=BuildResult(success=False),
             ),
         )
         assert "RHEL-99999" in result
@@ -674,10 +694,11 @@ class TestRenderTemplate:
         """Path objects are serialized as strings, not PosixPath repr."""
         result = render_template(
             "build/prompt.j2",
-            BuildInputSchema(
+            BuildFailureAnalysisInput(
                 srpm_path=Path("/tmp/test.src.rpm"),
                 dist_git_branch="c10s",
                 jira_issue="RHEL-1",
+                build_result=BuildResult(success=False),
             ),
         )
         assert "PosixPath" not in result

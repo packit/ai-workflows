@@ -18,8 +18,7 @@ from beeai_framework.workflows import Workflow
 from pydantic import Field
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import create_build_agent
-from ymir.agents.build_agent import get_prompt as get_build_prompt
+from ymir.agents.build_agent import run_build
 from ymir.agents.constants import (
     I_AM_YMIR,
     ZSTREAM_TARGET_LABEL,
@@ -52,7 +51,6 @@ from ymir.common.logging_setup import configure_logging, current_jira_issue, get
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     BuildInputSchema,
-    BuildOutputSchema,
     ConsolidatedIssue,
     ErrorData,
     ErrorListEntry,
@@ -397,20 +395,15 @@ async def main() -> None:
                 return "comment_in_jira"
 
             async def run_build_agent(state):
-                build_agent = create_build_agent(gateway_tools, local_tool_options)
-                response = await build_agent.run(
-                    render_template(
-                        get_build_prompt(),
-                        BuildInputSchema(
-                            srpm_path=state.rebase_result.srpm_path,
-                            dist_git_branch=state.dist_git_branch,
-                            jira_issue=state.jira_issue,
-                        ),
+                build_result = await run_build(
+                    build_input=BuildInputSchema(
+                        srpm_path=state.rebase_result.srpm_path,
+                        dist_git_branch=state.dist_git_branch,
+                        jira_issue=state.jira_issue,
                     ),
-                    expected_output=BuildOutputSchema,
-                    **get_agent_execution_config(),
+                    available_tools=gateway_tools,
+                    local_tool_options=local_tool_options,
                 )
-                build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
                 if build_result.success:
                     return "update_release"
                 if build_result.is_timeout:

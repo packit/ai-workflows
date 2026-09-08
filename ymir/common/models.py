@@ -733,20 +733,43 @@ class BuildInstructionsInput(BaseModel):
 
     has_extract_log_snippets: bool = Field(
         default=False,
-        description="Whether the extract_log_snippets tool is available",
+        description="Whether both gateway log download and extraction tools are available",
     )
 
 
 class BuildInputSchema(BaseModel):
-    """Input schema for the build agent."""
+    """Inputs for deterministic Copr build execution."""
 
     srpm_path: Path = Field(description="Path to SRPM to build")
     dist_git_branch: str = Field(description="dist-git branch to update")
     jira_issue: str | None = Field(description="Jira issue to reference as resolved")
 
 
+class BuildResult(BaseModel):
+    """Structured result shared by the Copr tool and its workflow callers."""
+
+    success: bool = Field(description="Whether the build succeeded")
+    is_timeout: bool = Field(default=False, description="Whether the build failed due to a timeout")
+    error_message: str | None = Field(description="Error message in case of failure", default=None)
+    artifacts_urls: list[str] | None = Field(
+        description="URLs to build artifacts (logs and RPM files)", default=None
+    )
+
+
+class BuildFailureAnalysisInput(BuildInputSchema):
+    """Give the analyst an existing failed build, never a request to submit one."""
+
+    build_result: BuildResult
+
+
+class BuildFailureAnalysisOutput(BaseModel):
+    error: str = Field(
+        min_length=1, description="Explanation of the existing build failure based on its logs"
+    )
+
+
 class BuildOutputSchema(BaseModel):
-    """Output schema for the build agent."""
+    """Build outcome for workflow routing, with optional LLM failure diagnosis."""
 
     success: bool = Field(description="Whether the build was successfully completed")
     error: str | None = Field(description="Specific details about an error")

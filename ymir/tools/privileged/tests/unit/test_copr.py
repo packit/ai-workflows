@@ -10,6 +10,7 @@ from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
 from copr.v3.exceptions import CoprException
 from flexmock import flexmock
 
+from ymir.common.models import BuildResult
 from ymir.tools.privileged import copr as copr_tools
 from ymir.tools.privileged.copr import (
     COPR_API_MAX_RETRIES,
@@ -150,6 +151,7 @@ async def test_build_package(build_failure, build_timeout, exclusive_arch, dist_
         }
     )
     result = out.result
+    assert isinstance(result, BuildResult)
     assert result.success == (not build_failure)
     assert result.is_timeout == build_timeout
     assert any(url.endswith("builder-live.log.gz") for url in result.artifacts_urls)

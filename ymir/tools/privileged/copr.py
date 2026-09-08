@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from ymir.common import load_rhel_config
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket
+from ymir.common.models import BuildResult
 from ymir.common.validators import AbsolutePath
 from ymir.common.version_utils import parse_branch_name
 from ymir.tools.base import CloneableTool as Tool
@@ -79,15 +80,6 @@ async def _copr_api_call(func, *args, **kwargs):
             )
             await asyncio.sleep(delay)
     raise RuntimeError("unreachable")
-
-
-class BuildResult(BaseModel):
-    success: bool = Field(description="Whether the build succeeded")
-    is_timeout: bool = Field(default=False, description="Whether the build failed due to a timeout")
-    error_message: str | None = Field(description="Error message in case of failure", default=None)
-    artifacts_urls: list[str] | None = Field(
-        description="URLs to build artifacts (logs and RPM files)", default=None
-    )
 
 
 class BuildPackageToolInput(BaseModel):

@@ -1,1 +1,5 @@
-Build the SRPM {{ srpm_path }}, use {{ dist_git_branch }} dist-git branch and {{ jira_issue }} Jira issue.
+Analyze the existing failed build of SRPM {{ srpm_path }} for dist-git branch
+{{ dist_git_branch }} and Jira issue {{ jira_issue }}. Do not submit another build.
+
+Result from the build tool (including artifact URLs):
+{{ build_result | tojson(indent=2) }}

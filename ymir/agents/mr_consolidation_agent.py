@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -19,8 +20,7 @@ from pydantic import Field
 from specfile import Specfile
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import create_build_agent
-from ymir.agents.build_agent import get_prompt as get_build_prompt
+from ymir.agents.build_agent import run_build
 from ymir.agents.constants import (
     I_AM_YMIR,
     ZSTREAM_TARGET_LABEL,
@@ -54,7 +54,6 @@ from ymir.common.logging_setup import configure_logging, current_jira_issue, get
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     BuildInputSchema,
-    BuildOutputSchema,
     LogInputSchema,
     LogOutputSchema,
     MergeConsolidationJob,
@@ -88,6 +87,17 @@ logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")
 
 _NFS_CACHE_WAIT = 60
+_COPR_PROJECT_NAME_MAX_LENGTH = 100
+
+
+def _build_project_name(package: str, branch: str) -> str:
+    """Generate a stable Copr name, preserving distinct sanitized or truncated inputs."""
+    name = f"consolidation-{package}-{branch}"
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "-", name)
+    if sanitized == name and len(name) <= _COPR_PROJECT_NAME_MAX_LENGTH:
+        return name
+    suffix = "-" + hashlib.sha256(name.encode()).hexdigest()[:12]
+    return sanitized[: _COPR_PROJECT_NAME_MAX_LENGTH - len(suffix)].rstrip("-") + suffix
 
 
 async def create_consolidation_agent(
@@ -771,16 +781,6 @@ async def run_workflow(
                 logger.warning("No SRPM generated, skipping build verification")
                 return "stage_changes"
 
-            build_agent = create_build_agent(gateway_tools, local_tool_options)
-            build_prompt = render_template(
-                get_build_prompt(),
-                BuildInputSchema(
-                    srpm_path=state.consolidation_result.srpm_path,
-                    dist_git_branch=dist_git_branch,
-                    jira_issue=state.jira_issue,
-                ),
-            )
-
             def _retry_step_for_build(state):
                 """Determine which flow to retry on build failure."""
                 has_rebuild_other = any(t == "rebuild" for t in state.mr_types.values())
@@ -791,12 +791,17 @@ async def run_workflow(
                 return "run_consolidation_agent"
 
             try:
-                build_result = await build_agent.run(
-                    build_prompt,
-                    expected_output=BuildOutputSchema,
-                    **get_agent_execution_config(),
+                build_output = await run_build(
+                    build_input=BuildInputSchema(
+                        srpm_path=state.consolidation_result.srpm_path,
+                        dist_git_branch=dist_git_branch,
+                        # Copr requires a project name even without Jira footers.
+                        # Keep the fallback out of the workflow's Jira metadata.
+                        jira_issue=state.jira_issue or _build_project_name(package, dist_git_branch),
+                    ),
+                    available_tools=gateway_tools,
+                    local_tool_options=local_tool_options,
                 )
-                build_output = BuildOutputSchema.model_validate_json(build_result.last_message.text)
                 if not build_output.success:
                     state.build_error = build_output.error
                     state.attempts_remaining -= 1

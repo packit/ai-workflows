@@ -9,17 +9,18 @@ from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, overload
 
 import httpx
 import koji
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
-from beeai_framework.tools import Tool
+from beeai_framework.tools import Tool, ToolError
 from beeai_framework.tools.mcp import MCPTool
 from beeai_framework.tools.types import JSONToolOutput, StringToolOutput
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.types import CallToolResult, TextContent
+from pydantic import BaseModel
 from specfile import Specfile
 from specfile.sourcelist import Sourcelist
 from specfile.sources import Patches, Sources
@@ -38,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 FIXED_IN_BUILD_CUSTOM_FIELD = "customfield_10578"
 DOWNSTREAM_COMPONENT_CUSTOM_FIELD = "customfield_10669"  # Downstream Component Name
+
+ToolResultT = TypeVar("ToolResultT", bound=BaseModel)
 
 
 class _MetaInjectingSession:
@@ -82,13 +85,44 @@ def get_absolute_path(path: Path, tool: Tool) -> Path:
     return Path(cwd) / path
 
 
+@overload
 async def run_tool(
     tool: str | Tool,
     available_tools: list[Tool] | None = None,
+    *,
+    expected_output: type[ToolResultT],
     **kwargs: Any,
-) -> str | dict | list:
+) -> ToolResultT: ...
+
+
+@overload
+async def run_tool(
+    tool: str | Tool,
+    available_tools: list[Tool] | None = None,
+    *,
+    expected_output: None = None,
+    **kwargs: Any,
+) -> str | dict | list: ...
+
+
+async def run_tool(
+    tool: str | Tool,
+    available_tools: list[Tool] | None = None,
+    *,
+    expected_output: type[ToolResultT] | None = None,
+    **kwargs: Any,
+) -> ToolResultT | str | dict | list:
+    """Run a tool once, optionally decoding and validating its result as a model.
+
+    Without ``expected_output``, preserve the unwrapped result, including plain
+    text. With a schema, accept either JSON text or structured data and let
+    validation errors propagate to the caller.
+    """
     if isinstance(tool, str):
-        tool = next(t for t in available_tools or [] if t.name == tool)
+        selected_tool = next((t for t in available_tools or [] if t.name == tool), None)
+        if selected_tool is None:
+            raise ToolError(f"Required tool '{tool}' is unavailable")
+        tool = selected_tool
     output = await tool.run(input=kwargs).middleware(
         GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())
     )
@@ -100,8 +134,14 @@ async def run_tool(
         case _:
             result = str(output)
     if isinstance(result, list):
-        return [_unpack_tool_result(item) for item in result]
-    return _unpack_tool_result(result)
+        result = [_unpack_tool_result(item) for item in result]
+    else:
+        result = _unpack_tool_result(result)
+    if expected_output is not None:
+        if isinstance(result, str):
+            return expected_output.model_validate_json(result)
+        return expected_output.model_validate(result)
+    return result
 
 
 def _unpack_tool_result(result: Any) -> Any:

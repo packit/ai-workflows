@@ -168,11 +168,17 @@ If the agent reports failure, the workflow transitions to `handle_failure`.
 
 ### Step 4: `run_build_agent`
 
-A separate build agent verifies the SRPM produced by the consolidation agent actually
-builds in the target build system (Koji/Brew scratch build). If the build fails, the
-workflow loops back to `run_consolidation_agent` with the build error message, up to
-`max_build_attempts` times (default 3). This mirrors the retry pattern used by the
-backport agent.
+The shared `BuildWorkflow` submits the prepared SRPM to Copr deterministically,
+using an LLM only to diagnose failed builds with logs. The Copr project name is
+the first Jira key collected from commit footers, or
+`consolidation-{package}-{branch}` when there are no Jira footers. Unsupported
+characters are replaced and generated names are limited to 100 characters, with
+a hash suffix when changed to distinguish packages and branches. The fallback
+stays stable across retries and does not populate Jira metadata or commit footers.
+
+On failure, the workflow retries the selected consolidation flow with the build
+error, up to `max_build_attempts` times (default 3). Consolidation requires a
+successful build; timeouts do not permit publication.
 
 ### Step 5: `stage_changes`
 

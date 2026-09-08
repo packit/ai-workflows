@@ -22,8 +22,7 @@ from pydantic import BaseModel, Field
 from specfile import Specfile
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import create_build_agent
-from ymir.agents.build_agent import get_prompt as get_build_prompt
+from ymir.agents.build_agent import run_build
 from ymir.agents.constants import (
     I_AM_YMIR,
     ZSTREAM_TARGET_LABEL,
@@ -85,7 +84,6 @@ from ymir.common.models import (
     BackportInputSchema,
     BackportOutputSchema,
     BuildInputSchema,
-    BuildOutputSchema,
     ErrorData,
     ErrorListEntry,
     InheritAdaptationInputSchema,
@@ -1124,20 +1122,15 @@ async def run_workflow(
                 )
                 return "comment_in_jira"
 
-            fresh_build_agent = create_build_agent(gateway_tools, local_tool_options)
-            response = await fresh_build_agent.run(
-                render_template(
-                    get_build_prompt(),
-                    BuildInputSchema(
-                        srpm_path=state.backport_result.srpm_path,
-                        dist_git_branch=state.dist_git_branch,
-                        jira_issue=state.jira_issue,
-                    ),
+            build_result = await run_build(
+                build_input=BuildInputSchema(
+                    srpm_path=state.backport_result.srpm_path,
+                    dist_git_branch=state.dist_git_branch,
+                    jira_issue=state.jira_issue,
                 ),
-                expected_output=BuildOutputSchema,
-                **get_agent_execution_config(),
+                available_tools=gateway_tools,
+                local_tool_options=local_tool_options,
             )
-            build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
             if build_result.success:
                 state.incremental_fix_attempts = 0
                 return "update_release"
@@ -1171,20 +1164,15 @@ async def run_workflow(
 
         async def run_inherit_build_agent(state):
             """Require a successful Copr validation before publishing inheritance."""
-            fresh_build_agent = create_build_agent(gateway_tools, local_tool_options)
-            response = await fresh_build_agent.run(
-                render_template(
-                    get_build_prompt(),
-                    BuildInputSchema(
-                        srpm_path=state.backport_result.srpm_path,
-                        dist_git_branch=state.dist_git_branch,
-                        jira_issue=state.jira_issue,
-                    ),
+            build_result = await run_build(
+                build_input=BuildInputSchema(
+                    srpm_path=state.backport_result.srpm_path,
+                    dist_git_branch=state.dist_git_branch,
+                    jira_issue=state.jira_issue,
                 ),
-                expected_output=BuildOutputSchema,
-                **get_agent_execution_config(),
+                available_tools=gateway_tools,
+                local_tool_options=local_tool_options,
             )
-            build_result = BuildOutputSchema.model_validate_json(response.last_message.text)
             if build_result.success:
                 return "stage_changes"
 

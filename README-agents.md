@@ -41,6 +41,38 @@ fork branch still points at the validated commit before it resumes at MR
 creation. Routing-invariant failures are terminal and are not requeued.
 
 
+### Copr build validation
+
+Backport (including Y-stream inheritance), rebase, MR updates, and MR
+consolidation use a shared `BuildWorkflow`. Its `execute_build` step calls
+`build_package` through the existing MCP gateway; the tool submits and polls
+Copr as before. Shared `run_tool()` validates the response as a `BuildResult`
+using its opt-in `expected_output` schema; other callers' raw results are unchanged.
+Successful validation makes no build-stage LLM calls. Timeouts, tool errors,
+and failures without log artifacts are returned directly to the workflow.
+
+For a failed build with log artifacts, the workflow runs `diagnose_failure`,
+where `BuildFailureAnalyst` explains the existing failure. It cannot invoke
+`build_package` or change the outcome flags; workflow code owns success, timeout,
+and infrastructure-error classification.
+Gateway-based diagnosis requires both `download_artifacts` and
+`extract_log_snippets`. If either is missing, the analyst retrieves and inspects
+the log URLs in its local sandbox instead.
+If diagnosis fails, the original build error is retained. Callers keep their
+existing retry and timeout policies: ordinary backport/rebase/MR-update paths
+may proceed after a timeout, while inheritance and consolidation require success.
+
+Consolidations without Jira footers derive their Copr project name from
+`consolidation-{package}-{branch}`, replacing unsupported characters and limiting
+the name to 100 characters. Changed names include a hash suffix to distinguish
+packages and branches across sanitization or truncation. This fallback is stable
+across retries and is not added to Jira metadata or commit footers.
+
+Standalone rebuild does not have this Copr validation stage. The backport
+incremental repair agent's own edit/build loop is also unchanged. Dry-run mode
+still performs real build validation; it does not turn a build into a success
+without running it.
+
 ## Dry run mode
 
 **Without setting `DRY_RUN=true` env var, agents will make real changes:**

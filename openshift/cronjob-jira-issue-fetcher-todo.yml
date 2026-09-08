@@ -8,8 +8,8 @@ metadata:
 spec:
   schedule: "*/5 * * * *"  # Every 5 minutes — picks up ymir_todo maintainer requests promptly
   concurrencyPolicy: Forbid  # Prevent overlapping runs
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 5
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
   suspend: false
   jobTemplate:
     metadata:

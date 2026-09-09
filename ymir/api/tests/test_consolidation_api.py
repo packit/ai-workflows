@@ -235,3 +235,54 @@ async def test_redis_failure(client, fake_redis):
     assert resp.status == 500
     body = await resp.json()
     assert body["error"] == "internal server error"
+
+
+# -- source_issues cardinality validation -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_source_issues_zero_rejected(client):
+    """An empty source_issues list must be rejected."""
+    resp = await client.post(
+        "/api/consolidation",
+        json={
+            "package": "expat",
+            "target_branch": "rhel-9.8.0",
+            "source_issues": [],
+        },
+    )
+    assert resp.status == 400
+    body = await resp.json()
+    assert body["error"] == "validation failed"
+
+
+@pytest.mark.asyncio
+async def test_source_issues_one_rejected(client):
+    """A single source_issue must be rejected."""
+    resp = await client.post(
+        "/api/consolidation",
+        json={
+            "package": "expat",
+            "target_branch": "rhel-9.8.0",
+            "source_issues": ["RHEL-111"],
+        },
+    )
+    assert resp.status == 400
+    body = await resp.json()
+    assert body["error"] == "validation failed"
+
+
+@pytest.mark.asyncio
+async def test_source_issues_three_rejected(client):
+    """More than 2 source_issues must be rejected."""
+    resp = await client.post(
+        "/api/consolidation",
+        json={
+            "package": "expat",
+            "target_branch": "rhel-9.8.0",
+            "source_issues": ["RHEL-111", "RHEL-222", "RHEL-333"],
+        },
+    )
+    assert resp.status == 400
+    body = await resp.json()
+    assert body["error"] == "validation failed"

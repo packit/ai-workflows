@@ -37,6 +37,7 @@ RUN dnf -y install --allowerasing \
       autoconf \
       automake \
       gettext-devel \
+      libgcrypt-devel \
       libtool \
       libtool-ltdl \
       libtool-ltdl-devel \

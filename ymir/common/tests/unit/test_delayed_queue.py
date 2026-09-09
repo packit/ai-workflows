@@ -1,9 +1,9 @@
 """Unit tests for delayed Redis ZSET scheduling helpers."""
 
 import time
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from flexmock import flexmock
 
 from ymir.common.delayed_queue import promote_due_tasks, schedule_task
 from ymir.common.models import Task
@@ -11,15 +11,20 @@ from ymir.common.models import Task
 
 @pytest.mark.asyncio
 async def test_schedule_task_zadds_with_future_score():
-    redis = MagicMock()
-    redis.zadd = AsyncMock(return_value=1)
+    calls = []
+
+    async def _spy_zadd(key, mapping):
+        calls.append((key, mapping))
+        return 1
+
+    redis = flexmock()
+    redis.should_receive("zadd").replace_with(_spy_zadd).once()
 
     before = time.time()
     await schedule_task(redis, "reproducer_queue_delayed", '{"attempts":0}', delay_seconds=1800)
     after = time.time()
 
-    redis.zadd.assert_awaited_once()
-    key, mapping = redis.zadd.await_args.args
+    key, mapping = calls[0]
     assert key == "reproducer_queue_delayed"
     score = mapping['{"attempts":0}']
     assert before + 1800 <= score <= after + 1800
@@ -43,14 +48,23 @@ async def test_promote_due_tasks_moves_ready_members():
         user_triggered=False,
     ).model_dump_json()
 
-    redis = MagicMock()
-    # Only return due members (helper uses zrangebyscore with max=now)
-    redis.zrangebyscore = AsyncMock(return_value=[todo_payload.encode(), normal_payload.encode()])
-    pipe = MagicMock()
-    pipe.lpush = MagicMock()
-    pipe.zrem = MagicMock()
-    pipe.execute = AsyncMock(return_value=[1, 1])
-    redis.pipeline = MagicMock(return_value=pipe)
+    # future_payload was not returned by zrangebyscore — stays delayed
+    async def _mock_zrangebyscore(*_args, **_kwargs):
+        return [todo_payload.encode(), normal_payload.encode()]
+
+    async def _mock_execute(*_args, **_kwargs):
+        return [1, 1]
+
+    pipe = flexmock()
+    pipe.should_receive("lpush").with_args("reproducer_queue_todo", todo_payload).once().ordered()
+    pipe.should_receive("lpush").with_args("reproducer_queue", normal_payload).once().ordered()
+    pipe.should_receive("lpush").with_args("reproducer_queue", future_payload).never()
+    pipe.should_receive("zrem")
+    pipe.should_receive("execute").replace_with(_mock_execute)
+
+    redis = flexmock()
+    redis.should_receive("zrangebyscore").replace_with(_mock_zrangebyscore).once()
+    redis.should_receive("pipeline").and_return(pipe)
 
     def target(payload: str) -> str:
         task = Task.model_validate_json(payload)
@@ -64,20 +78,16 @@ async def test_promote_due_tasks_moves_ready_members():
     )
 
     assert promoted == 2
-    redis.zrangebyscore.assert_awaited_once()
-    assert pipe.lpush.call_count == 2
-    assert pipe.lpush.call_args_list[0].args == ("reproducer_queue_todo", todo_payload)
-    assert pipe.lpush.call_args_list[1].args == ("reproducer_queue", normal_payload)
-    # future_payload was not returned by zrangebyscore — stays delayed
-    assert all(future_payload not in str(c) for c in pipe.lpush.call_args_list)
 
 
 @pytest.mark.asyncio
 async def test_promote_due_tasks_noop_when_empty():
-    redis = MagicMock()
-    redis.zrangebyscore = AsyncMock(return_value=[])
-    redis.pipeline = MagicMock()
+    async def _mock_zrangebyscore(*_args, **_kwargs):
+        return []
+
+    redis = flexmock()
+    redis.should_receive("zrangebyscore").replace_with(_mock_zrangebyscore).once()
+    redis.should_receive("pipeline").never()
 
     promoted = await promote_due_tasks(redis, "reproducer_queue_delayed", lambda _: "reproducer_queue")
     assert promoted == 0
-    redis.pipeline.assert_not_called()

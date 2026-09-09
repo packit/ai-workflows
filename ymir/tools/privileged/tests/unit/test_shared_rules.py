@@ -1,9 +1,9 @@
 import json
 import time
-from unittest.mock import patch
 
 import pytest
 from beeai_framework.tools import ToolError
+from flexmock import flexmock
 
 from ymir.tools.privileged.shared_rules import SharedRulesTool
 
@@ -63,15 +63,14 @@ async def test_registry_cached_as_none():
 
 
 @pytest.mark.asyncio
-@patch.object(SharedRulesTool, "_fetch_registry")
-async def test_shared_rules_can_be_disabled(mock_fetch, monkeypatch):
+async def test_shared_rules_can_be_disabled(monkeypatch):
     monkeypatch.setenv("SHARED_RULES_ENABLED", "false")
+    flexmock(SharedRulesTool).should_receive("_fetch_registry").never()
     tool = _fresh_tool()
 
     result = await tool.run({"package": "python-requests"})
 
     assert json.loads(result.result) == []
-    mock_fetch.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -96,9 +95,16 @@ async def test_caching_multiple_lookups_same_registry():
 
 
 @pytest.mark.asyncio
-@patch.object(SharedRulesTool, "_fetch_registry")
-async def test_transient_error_not_cached(mock_fetch):
-    mock_fetch.side_effect = [TimeoutError("connection timed out"), SAMPLE_REGISTRY]
+async def test_transient_error_not_cached():
+    async def _mock_fetch_registry(*_args, **_kwargs):
+        return SAMPLE_REGISTRY
+
+    flexmock(SharedRulesTool).should_receive("_fetch_registry").and_raise(
+        TimeoutError("connection timed out")
+    ).once().ordered()
+    flexmock(SharedRulesTool).should_receive("_fetch_registry").replace_with(
+        _mock_fetch_registry
+    ).once().ordered()
     tool = _fresh_tool()
 
     with pytest.raises(ToolError, match="Failed to fetch shared rules registry"):
@@ -106,4 +112,3 @@ async def test_transient_error_not_cached(mock_fetch):
 
     result = await tool.run({"package": "python-requests"})
     assert json.loads(result.result) == ["python"]
-    assert mock_fetch.call_count == 2

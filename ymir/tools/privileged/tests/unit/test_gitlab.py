@@ -1,7 +1,7 @@
 import asyncio
 import os
+import shutil
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
 import gitlab
 import pytest
@@ -13,6 +13,7 @@ from ogr.services.gitlab import GitlabService
 from ogr.services.gitlab.project import GitlabProject
 
 from ymir.common.models import OpenMergeRequestResult
+from ymir.tools.privileged import reviewer_resolver as _resolver
 from ymir.tools.privileged.gitlab import (
     AddBlockingMergeRequestCommentTool,
     AddMergeRequestCommentTool,
@@ -407,7 +408,7 @@ async def test_clone_repository(mock_git_repo_basepath):
     branch = "rhel-8.10.0"
     clone_path = mock_git_repo_basepath / "bash"
 
-    async def create_subprocess_exec(cmd, *args, **kwargs):
+    async def _mock_create_subprocess_exec(cmd, *args, **kwargs):
         assert cmd == "git"
         assert kwargs.get("cwd") == clone_path
         if args[0] == "init":
@@ -420,12 +421,12 @@ async def test_clone_repository(mock_git_repo_basepath):
         else:
             pytest.fail(f"Unexpected git command: {args}")
 
-        async def communicate():
+        async def _mock_communicate():
             return (b"", b"")
 
-        return flexmock(communicate=communicate, returncode=0)
+        return flexmock(communicate=_mock_communicate, returncode=0)
 
-    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(_mock_create_subprocess_exec)
 
     result = (
         await CloneRepositoryTool().run(
@@ -478,13 +479,13 @@ async def test_clone_repository_rejects_basepath_root(mock_git_repo_basepath):
 async def test_clone_repository_accepts_path_inside_basepath(mock_git_repo_basepath):
     valid_path = mock_git_repo_basepath / "RHEL-12345" / "bash"
 
-    async def create_subprocess_exec(cmd, *args, **kwargs):
-        async def communicate():
+    async def _mock_create_subprocess_exec(cmd, *args, **kwargs):
+        async def _mock_communicate():
             return (b"", b"")
 
-        return flexmock(communicate=communicate, returncode=0)
+        return flexmock(communicate=_mock_communicate, returncode=0)
 
-    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(_mock_create_subprocess_exec)
 
     result = (
         await CloneRepositoryTool().run(
@@ -500,7 +501,7 @@ async def test_push_to_remote_repository():
     branch = "automated-package-update-RHEL-12345"
     clone_path = Path("/git-repos/bash")
 
-    async def create_subprocess_exec(cmd, *args, **kwargs):
+    async def _mock_create_subprocess_exec(cmd, *args, **kwargs):
         assert cmd == "git"
         assert args[0] == "push"
         assert args[1].endswith(repository.removeprefix("https://"))
@@ -509,12 +510,12 @@ async def test_push_to_remote_repository():
         assert kwargs.get("stdout") == asyncio.subprocess.PIPE
         assert kwargs.get("stderr") == asyncio.subprocess.PIPE
 
-        async def communicate():
+        async def _mock_communicate():
             return (b"", b"")
 
-        return flexmock(communicate=communicate, returncode=0)
+        return flexmock(communicate=_mock_communicate, returncode=0)
 
-    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(_mock_create_subprocess_exec)
     result = (
         await PushToRemoteRepositoryTool().run(
             input={"repository": repository, "clone_path": clone_path, "branch": branch}
@@ -1075,13 +1076,13 @@ def test_sanitize_url(text, expected):
 def _make_failing_subprocess(stderr_text):
     """Return an async mock that simulates a git command failure with stderr."""
 
-    async def create_subprocess_exec(cmd, *args, **kwargs):
-        async def communicate():
+    async def _mock_create_subprocess_exec(cmd, *args, **kwargs):
+        async def _mock_communicate():
             return (b"", stderr_text.encode())
 
-        return flexmock(communicate=communicate, returncode=128)
+        return flexmock(communicate=_mock_communicate, returncode=128)
 
-    return create_subprocess_exec
+    return _mock_create_subprocess_exec
 
 
 def _make_subprocess_sequence(results):
@@ -1091,15 +1092,15 @@ def _make_subprocess_sequence(results):
     """
     call_iter = iter(results)
 
-    async def create_subprocess_exec(cmd, *args, **kwargs):
+    async def _mock_create_subprocess_exec(cmd, *args, **kwargs):
         returncode, stderr_text = next(call_iter)
 
-        async def communicate():
+        async def _mock_communicate():
             return (b"", stderr_text.encode())
 
-        return flexmock(communicate=communicate, returncode=returncode)
+        return flexmock(communicate=_mock_communicate, returncode=returncode)
 
-    return create_subprocess_exec
+    return _mock_create_subprocess_exec
 
 
 @pytest.mark.asyncio
@@ -1219,17 +1220,17 @@ async def test_clone_repository_removes_existing_dir_with_branch(mock_git_repo_b
 
     commands: list[list[str]] = []
 
-    async def create_subprocess_exec(cmd, *args, **kwargs):
+    async def _mock_create_subprocess_exec(cmd, *args, **kwargs):
         commands.append([cmd, *args])
 
-        async def communicate():
+        async def _mock_communicate():
             return (b"", b"")
 
         process = flexmock(returncode=0)
-        process.should_receive("communicate").replace_with(communicate)
+        process.should_receive("communicate").replace_with(_mock_communicate)
         return process
 
-    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(_mock_create_subprocess_exec)
 
     await CloneRepositoryTool().run(
         input={
@@ -1251,18 +1252,16 @@ def test_remove_existing_clone_path_tolerates_disappearing_directory(mock_git_re
         path.rmdir()
         raise FileNotFoundError
 
-    with patch("ymir.tools.privileged.gitlab.shutil.rmtree", side_effect=remove_then_raise):
-        _remove_existing_clone_path(clone_path)
+    flexmock(shutil).should_receive("rmtree").replace_with(remove_then_raise)
+    _remove_existing_clone_path(clone_path)
 
 
 def test_remove_existing_clone_path_rejects_partial_cleanup(mock_git_repo_basepath):
     clone_path = mock_git_repo_basepath / "bash"
     clone_path.mkdir()
 
-    with (
-        patch("ymir.tools.privileged.gitlab.shutil.rmtree", side_effect=FileNotFoundError),
-        pytest.raises(FileNotFoundError),
-    ):
+    flexmock(shutil).should_receive("rmtree").and_raise(FileNotFoundError)
+    with pytest.raises(FileNotFoundError):
         _remove_existing_clone_path(clone_path)
 
 
@@ -1299,17 +1298,17 @@ async def test_fetch_commit_creates_namespaced_ref(mock_git_repo_basepath):
     commit_sha = "a" * 40
     commands: list[list[str]] = []
 
-    async def create_subprocess_exec(cmd, *args, **kwargs):
+    async def _mock_create_subprocess_exec(cmd, *args, **kwargs):
         commands.append([cmd, *args])
 
-        async def communicate():
+        async def _mock_communicate():
             return (b"", b"")
 
         process = flexmock(returncode=0)
-        process.should_receive("communicate").replace_with(communicate)
+        process.should_receive("communicate").replace_with(_mock_communicate)
         return process
 
-    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(_mock_create_subprocess_exec)
 
     result = await FetchCommitTool().run(
         input={
@@ -1353,17 +1352,17 @@ async def test_get_remote_branch_head_returns_exact_ref():
     commit_sha = "a" * 40
     commands: list[list[str]] = []
 
-    async def create_subprocess_exec(cmd, *args, **kwargs):
+    async def _mock_create_subprocess_exec(cmd, *args, **kwargs):
         commands.append([cmd, *args])
 
-        async def communicate():
+        async def _mock_communicate():
             return (f"{commit_sha}\trefs/heads/automated-update\n".encode(), b"")
 
         process = flexmock(returncode=0)
-        process.should_receive("communicate").replace_with(communicate)
+        process.should_receive("communicate").replace_with(_mock_communicate)
         return process
 
-    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(_mock_create_subprocess_exec)
 
     result = await GetRemoteBranchHeadTool().run(
         input={
@@ -1383,15 +1382,15 @@ async def test_get_remote_branch_head_returns_exact_ref():
 
 @pytest.mark.asyncio
 async def test_get_remote_branch_head_rejects_missing_branch():
-    async def create_subprocess_exec(cmd, *args, **kwargs):
+    async def _mock_create_subprocess_exec(cmd, *args, **kwargs):
         return process
 
-    async def communicate():
+    async def _mock_communicate():
         return (b"", b"")
 
     process = flexmock(returncode=0)
-    process.should_receive("communicate").replace_with(communicate)
-    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(create_subprocess_exec)
+    process.should_receive("communicate").replace_with(_mock_communicate)
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(_mock_create_subprocess_exec)
 
     with pytest.raises(ToolError) as error:
         await GetRemoteBranchHeadTool().run(
@@ -1454,21 +1453,19 @@ async def test_set_merge_request_reviewers():
 
 @pytest.mark.asyncio
 async def test_resolve_reviewers_tool():
-    with patch(
-        "ymir.tools.privileged.reviewer_resolver.resolve_reviewers",
-        new_callable=AsyncMock,
-        return_value=[42, 99],
-    ):
-        result = await ResolveReviewersTool().run(input={"package": "bash", "dist_git_branch": "c10s"})
+    async def _mock_resolve(*_args, **_kwargs):
+        return [42, 99]
+
+    flexmock(_resolver).should_receive("resolve_reviewers").replace_with(_mock_resolve)
+    result = await ResolveReviewersTool().run(input={"package": "bash", "dist_git_branch": "c10s"})
     assert result.result == [42, 99]
 
 
 @pytest.mark.asyncio
 async def test_resolve_qe_reviewers_tool():
-    with patch(
-        "ymir.tools.privileged.reviewer_resolver.resolve_qe_reviewers",
-        new_callable=AsyncMock,
-        return_value=[99],
-    ):
-        result = await ResolveQeReviewersTool().run(input={"package": "bash", "dist_git_branch": "c10s"})
+    async def _mock_resolve(*_args, **_kwargs):
+        return [99]
+
+    flexmock(_resolver).should_receive("resolve_qe_reviewers").replace_with(_mock_resolve)
+    result = await ResolveQeReviewersTool().run(input={"package": "bash", "dist_git_branch": "c10s"})
     assert result.result == [99]

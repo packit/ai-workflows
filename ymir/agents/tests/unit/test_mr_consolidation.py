@@ -1,9 +1,12 @@
 import asyncio
+import subprocess
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
 
 import pytest
+from flexmock import flexmock
 
+from ymir.agents import mr_consolidation_agent as mc_agent
+from ymir.agents import tasks as agent_tasks
 from ymir.agents.mr_consolidation_agent import (
     _collect_footers_from_branches,
     _extract_cves_from_cve_footer_lines,
@@ -240,9 +243,11 @@ async def test_full_cycle_submit_pick_complete_repeat(fake_redis):
 
 @pytest.mark.asyncio
 async def test_fetch_config_returns_default_when_not_found():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = "No maintainer rules found for package 'bash' (file 'ymir.yaml' not found)"
-        config = await fetch_consolidation_config("bash", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "No maintainer rules found for package 'bash' (file 'ymir.yaml' not found)"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    config = await fetch_consolidation_config("bash", [])
 
     assert config.merge_mrs is True
     assert config.release_strategy.value == "per_commit"
@@ -250,9 +255,11 @@ async def test_fetch_config_returns_default_when_not_found():
 
 @pytest.mark.asyncio
 async def test_fetch_config_parses_valid_yaml():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = "consolidation:\n  merge_mrs: false\n  release_strategy: merged\n"
-        config = await fetch_consolidation_config("bash", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "consolidation:\n  merge_mrs: false\n  release_strategy: merged\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    config = await fetch_consolidation_config("bash", [])
 
     assert config.merge_mrs is False
     assert config.release_strategy.value == "merged"
@@ -260,34 +267,42 @@ async def test_fetch_config_parses_valid_yaml():
 
 @pytest.mark.asyncio
 async def test_fetch_config_returns_default_on_exception():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.side_effect = RuntimeError("network error")
-        config = await fetch_consolidation_config("bash", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        raise RuntimeError("network error")
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    config = await fetch_consolidation_config("bash", [])
 
     assert config.merge_mrs is True
 
 
 @pytest.mark.asyncio
 async def test_fetch_config_raises_on_malformed_yaml():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = "consolidation:\n  merge_mrs: not_a_bool\n"
-        with pytest.raises(InvalidConsolidationConfigError, match="malformed"):
-            await fetch_consolidation_config("bash", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "consolidation:\n  merge_mrs: not_a_bool\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    with pytest.raises(InvalidConsolidationConfigError, match="malformed"):
+        await fetch_consolidation_config("bash", [])
 
 
 @pytest.mark.asyncio
 async def test_fetch_config_raises_on_invalid_yaml_syntax():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = "consolidation:\n  merge_mrs: [\n"
-        with pytest.raises(InvalidConsolidationConfigError, match="not valid YAML"):
-            await fetch_consolidation_config("bash", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "consolidation:\n  merge_mrs: [\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    with pytest.raises(InvalidConsolidationConfigError, match="not valid YAML"):
+        await fetch_consolidation_config("bash", [])
 
 
 @pytest.mark.asyncio
 async def test_fetch_config_returns_default_when_no_consolidation_key():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = "some_other_setting: true\n"
-        config = await fetch_consolidation_config("bash", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "some_other_setting: true\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    config = await fetch_consolidation_config("bash", [])
 
     assert config.merge_mrs is True
     assert config.release_strategy.value == "per_commit"
@@ -313,10 +328,11 @@ async def test_cancelled_task_does_not_call_complete_job(fake_redis):
     active_key = _field_key("bash", "c10s", "active")
     assert await fake_redis.hget(HASH_KEY, active_key) is not None
 
-    mock_complete = AsyncMock()
-
     async def simulate_workflow():
         raise asyncio.CancelledError
+
+    async def _mock_complete(*_args, **_kwargs):
+        pytest.fail("complete_job was not supposed to be called")
 
     # Replicate process_task's error-handling structure: CancelledError must
     # propagate without calling complete_job (mock_complete here).
@@ -326,11 +342,10 @@ async def test_cancelled_task_does_not_call_complete_job(fake_redis):
         except asyncio.CancelledError:
             raise
         except Exception:
-            await mock_complete(fake_redis, job.package, job.target_branch)
+            await _mock_complete(fake_redis, job.package, job.target_branch)
         else:
-            await mock_complete(fake_redis, job.package, job.target_branch)
+            await _mock_complete(fake_redis, job.package, job.target_branch)
 
-    mock_complete.assert_not_called()
     assert await fake_redis.hget(HASH_KEY, active_key) is not None
 
 
@@ -596,16 +611,11 @@ class TestCollectFootersFromBranches:
 
     @pytest.mark.asyncio
     async def test_raises_when_rev_list_fails(self, tmp_path):
-        async def fake_run(cmd, **kwargs):
+        async def _mock_run(cmd, **kwargs):
             return 128, None, "fatal: bad revision 'missing'"
 
-        with (
-            patch(
-                "ymir.agents.mr_consolidation_agent.run_subprocess",
-                new=AsyncMock(side_effect=fake_run),
-            ),
-            pytest.raises(RuntimeError, match=r"git rev-list.*failed"),
-        ):
+        flexmock(mc_agent).should_receive("run_subprocess").replace_with(_mock_run)
+        with pytest.raises(RuntimeError, match=r"git rev-list.*failed"):
             await _collect_footers_from_branches(
                 tmp_path,
                 None,
@@ -615,18 +625,13 @@ class TestCollectFootersFromBranches:
 
     @pytest.mark.asyncio
     async def test_raises_when_git_log_fails(self, tmp_path):
-        async def fake_run(cmd, **kwargs):
+        async def _mock_run(cmd, **kwargs):
             if cmd[1] == "rev-list":
                 return 0, "abc123def456\n", None
             return 128, None, "fatal: bad object abc123def456"
 
-        with (
-            patch(
-                "ymir.agents.mr_consolidation_agent.run_subprocess",
-                new=AsyncMock(side_effect=fake_run),
-            ),
-            pytest.raises(RuntimeError, match=r"git log -1.*failed"),
-        ):
+        flexmock(mc_agent).should_receive("run_subprocess").replace_with(_mock_run)
+        with pytest.raises(RuntimeError, match=r"git log -1.*failed"):
             await _collect_footers_from_branches(
                 tmp_path,
                 None,
@@ -636,7 +641,7 @@ class TestCollectFootersFromBranches:
 
     @pytest.mark.asyncio
     async def test_collects_footers_from_commit_messages(self, tmp_path):
-        async def fake_run(cmd, **kwargs):
+        async def _mock_run(cmd, **kwargs):
             if cmd[1] == "rev-list":
                 return 0, "abc123\n", None
             return (
@@ -645,16 +650,13 @@ class TestCollectFootersFromBranches:
                 None,
             )
 
-        with patch(
-            "ymir.agents.mr_consolidation_agent.run_subprocess",
-            new=AsyncMock(side_effect=fake_run),
-        ):
-            cves, jira = await _collect_footers_from_branches(
-                tmp_path,
-                None,
-                "rhel-9.8.0",
-                ["mr-branch"],
-            )
+        flexmock(mc_agent).should_receive("run_subprocess").replace_with(_mock_run)
+        cves, jira = await _collect_footers_from_branches(
+            tmp_path,
+            None,
+            "rhel-9.8.0",
+            ["mr-branch"],
+        )
         assert cves == ["CVE-2026-11111"]
         assert jira == ["RHEL-12345"]
 
@@ -745,7 +747,6 @@ class TestExtractResolvesFromCommit:
     @pytest.fixture
     def git_repo(self, tmp_path):
         """Create a minimal git repo with an initial spec file."""
-        import subprocess
 
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -779,7 +780,6 @@ class TestExtractResolvesFromCommit:
         return repo
 
     def _make_commit(self, repo, spec_content, message="update"):
-        import subprocess
 
         spec = repo / "test.spec"
         spec.write_text(spec_content)

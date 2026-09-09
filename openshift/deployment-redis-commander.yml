@@ -21,7 +21,7 @@ spec:
     matchLabels:
       app: redis-commander
   strategy:
-    type: Recreate
+    type: RollingUpdate
   template:
     metadata:
       labels:

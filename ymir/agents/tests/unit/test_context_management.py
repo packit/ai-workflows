@@ -1,7 +1,5 @@
 """Unit tests for ReasoningAgent context compaction."""
 
-from unittest.mock import MagicMock
-
 import pytest
 from beeai_framework.backend import (
     AssistantMessage,
@@ -10,8 +8,9 @@ from beeai_framework.backend import (
     ToolMessage,
     UserMessage,
 )
-from beeai_framework.backend.message import MessageTextContent
+from beeai_framework.backend.message import MessageReasoningContent, MessageTextContent
 from beeai_framework.memory import UnconstrainedMemory
+from flexmock import flexmock
 
 from ymir.agents.reasoning_agent.context_management import (
     MANAGE_CONTEXT_TOOL_NAME,
@@ -129,7 +128,6 @@ def test_strip_manage_context_keeps_sibling_results_in_batched_tool_message():
 
 
 def test_strip_drops_thinking_only_assistant_after_solo_manage_context():
-    from beeai_framework.backend.message import MessageReasoningContent
 
     assistant = AssistantMessage(
         [
@@ -148,7 +146,6 @@ def test_strip_drops_thinking_only_assistant_after_solo_manage_context():
 
 @pytest.mark.asyncio
 async def test_apply_solo_manage_context_does_not_leave_thinking_only_message():
-    from beeai_framework.backend.message import MessageReasoningContent
 
     task = _task_message()
     old = _exchange("shell", "old", "noise")
@@ -182,7 +179,7 @@ async def test_manage_context_tool_only_schedules():
     output = await tool._run(
         ManageContextSchema(durable_summary="important fact", keep_recent_exchanges=1),
         None,
-        MagicMock(),
+        flexmock(),
     )
     assert "scheduled" in output.get_text_content().lower()
     assert state.pending_context_compaction is not None

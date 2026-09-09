@@ -2,7 +2,6 @@
 
 import asyncio
 import base64
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import requests
@@ -31,8 +30,7 @@ GATEWAY_SSH_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGatewayKey gateway@mcp"
 @pytest.fixture(autouse=True)
 def _mock_gateway_ssh_key():
     """Mock _ensure_gateway_ssh_key so tests don't generate real keys."""
-    with patch.object(tf_module, "_ensure_gateway_ssh_key", return_value=GATEWAY_SSH_KEY):
-        yield
+    flexmock(tf_module).should_receive("_ensure_gateway_ssh_key").and_return(GATEWAY_SSH_KEY)
 
 
 @pytest.fixture(autouse=True)
@@ -64,6 +62,10 @@ async def test_reserve_machine_dry_run(monkeypatch):
     assert "30m" in result["message"]
 
 
+async def _async_noop(*_args, **_kwargs):
+    pass
+
+
 @pytest.mark.asyncio
 async def test_reserve_machine_request_body(monkeypatch):
     """Verify the request body structure matches the reserve-system pattern."""
@@ -74,12 +76,12 @@ async def test_reserve_machine_request_body(monkeypatch):
 
     captured = {}
 
-    def fake_post(path, json):
+    def _mock_post(path, json):
         captured["path"] = path
         captured["body"] = json
         return {"id": "req-001"}
 
-    flexmock(tf_module).should_receive("_testing_farm_api_post").replace_with(fake_post).once()
+    flexmock(tf_module).should_receive("_testing_farm_api_post").replace_with(_mock_post).once()
 
     await ReserveTestingFarmMachineTool().run(
         input={
@@ -156,11 +158,11 @@ async def test_reserve_machine_default_arch(monkeypatch):
 
     captured = {}
 
-    def fake_post(path, json):
+    def _mock_post(path, json):
         captured["body"] = json
         return {"id": "req-002"}
 
-    flexmock(tf_module).should_receive("_testing_farm_api_post").replace_with(fake_post).once()
+    flexmock(tf_module).should_receive("_testing_farm_api_post").replace_with(_mock_post).once()
 
     await ReserveTestingFarmMachineTool().run(
         input={
@@ -182,11 +184,11 @@ async def test_reserve_machine_ssh_key_encoding(monkeypatch):
 
     captured = {}
 
-    def fake_post(path, json):
+    def _mock_post(path, json):
         captured["body"] = json
         return {"id": "req-003"}
 
-    flexmock(tf_module).should_receive("_testing_farm_api_post").replace_with(fake_post).once()
+    flexmock(tf_module).should_receive("_testing_farm_api_post").replace_with(_mock_post).once()
 
     agent_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQ+test user@host"
 
@@ -255,7 +257,7 @@ async def test_reservation_details_pending_then_canceled(monkeypatch):
         {"state": "pending"}
     ).and_return({"state": "canceled"})
 
-    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(asyncio, "sleep", _async_noop)
 
     out = await GetTestingFarmReservationDetailsTool().run(input={"request_id": "req-200"})
     assert out.result == {"state": "canceled", "ssh_connection": "not-yet-available"}
@@ -284,7 +286,7 @@ async def test_reservation_details_running_no_task_then_ready(monkeypatch):
         "https://artifacts.testing-farm.io/abc123/pipeline.log", timeout=30
     ).and_return(flexmock(ok=True, text=log_not_ready)).and_return(flexmock(ok=True, text=log_ready))
 
-    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(asyncio, "sleep", _async_noop)
 
     out = await GetTestingFarmReservationDetailsTool().run(input={"request_id": "req-300"})
     assert out.result == {"state": "running", "ssh_connection": "root@10.0.0.1"}
@@ -407,13 +409,23 @@ def test_cancel_testing_farm_request_id_calls_delete(monkeypatch):
 # -- RunRemoteCommandTool tests --
 
 
-def _make_fake_process(stdout=b"", stderr=b"", returncode=0):
+def _make_mock_process(stdout=b"", stderr=b"", returncode=0):
     """Create a mock asyncio subprocess process."""
-    proc = MagicMock()
-    proc.communicate = AsyncMock(return_value=(stdout, stderr))
-    proc.returncode = returncode
-    proc.kill = MagicMock()
-    proc.wait = AsyncMock()
+    kill_calls = []
+    wait_calls = []
+
+    async def _mock_communicate():
+        return (stdout, stderr)
+
+    def _mock_kill():
+        kill_calls.append(True)
+
+    async def _mock_wait():
+        wait_calls.append(True)
+
+    proc = flexmock(returncode=returncode, communicate=_mock_communicate, kill=_mock_kill, wait=_mock_wait)
+    proc._kill_calls = kill_calls
+    proc._wait_calls = wait_calls
     return proc
 
 
@@ -444,34 +456,44 @@ async def test_run_remote_command_success(monkeypatch):
     monkeypatch.delenv("TESTING_FARM_DRY_RUN", raising=False)
     register_allowed_ssh_host("root@10.0.0.1")
 
-    fake_proc = _make_fake_process(
+    fake_proc = _make_mock_process(
         stdout=b"5.14.0-362.el9.x86_64\n",
         stderr=b"",
         returncode=0,
     )
 
-    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc) as mock_exec:
-        out = await RunRemoteCommandTool().run(
-            input={
-                "ssh_host": "root@10.0.0.1",
-                "command": "uname -r",
-            }
-        )
+    captured_calls = []
 
-        # Verify SSH args include -i for gateway key
-        mock_exec.assert_called_once_with(
-            "ssh",
-            "-i",
-            str(_SSH_KEY_PATH),
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "root@10.0.0.1",
-            "uname -r",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+    async def _mock_create_subprocess_exec(*args, **kwargs):
+        captured_calls.append((args, kwargs))
+        return fake_proc
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(
+        _mock_create_subprocess_exec
+    ).once()
+
+    out = await RunRemoteCommandTool().run(
+        input={
+            "ssh_host": "root@10.0.0.1",
+            "command": "uname -r",
+        }
+    )
+
+    assert captured_calls[0][0] == (
+        "ssh",
+        "-i",
+        str(_SSH_KEY_PATH),
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "root@10.0.0.1",
+        "uname -r",
+    )
+    assert captured_calls[0][1] == {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+    }
 
     result = out.result
     assert result["stdout"] == "5.14.0-362.el9.x86_64\n"
@@ -501,19 +523,21 @@ async def test_run_remote_command_nonzero_exit(monkeypatch):
     monkeypatch.delenv("TESTING_FARM_DRY_RUN", raising=False)
     register_allowed_ssh_host("root@10.0.0.1")
 
-    fake_proc = _make_fake_process(
-        stdout=b"",
-        stderr=b"ls: cannot access '/nope': No such file or directory\n",
-        returncode=1,
-    )
-
-    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc):
-        out = await RunRemoteCommandTool().run(
-            input={
-                "ssh_host": "root@10.0.0.1",
-                "command": "ls /nope",
-            }
+    async def _mock_create_subprocess_exec(*args, **kwargs):
+        return _make_mock_process(
+            stdout=b"",
+            stderr=b"ls: cannot access '/nope': No such file or directory\n",
+            returncode=1,
         )
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(_mock_create_subprocess_exec)
+
+    out = await RunRemoteCommandTool().run(
+        input={
+            "ssh_host": "root@10.0.0.1",
+            "command": "ls /nope",
+        }
+    )
 
     result = out.result
     assert result["exit_code"] == 1
@@ -550,49 +574,50 @@ async def test_copy_files_success(monkeypatch):
     monkeypatch.delenv("TESTING_FARM_DRY_RUN", raising=False)
     register_allowed_ssh_host("root@10.0.0.1")
 
-    mkdir_proc = _make_fake_process(stdout=b"", stderr=b"", returncode=0)
-    scp_proc = _make_fake_process(stdout=b"", stderr=b"", returncode=0)
+    mkdir_proc = _make_mock_process(stdout=b"", stderr=b"", returncode=0)
+    scp_proc = _make_mock_process(stdout=b"", stderr=b"", returncode=0)
 
+    calls = []
     call_count = 0
 
-    async def fake_create_subprocess_exec(*args, **kwargs):
+    async def _mock_create_subprocess_exec(*args, **kwargs):
         nonlocal call_count
         call_count += 1
+        calls.append(args)
         if call_count == 1:
             return mkdir_proc
         return scp_proc
 
-    with patch("asyncio.create_subprocess_exec", side_effect=fake_create_subprocess_exec) as mock_exec:
-        out = await CopyFilesToRemoteTool().run(
-            input={
-                "ssh_host": "root@10.0.0.1",
-                "local_paths": ["/tmp/test.sh"],
-                "remote_dir": "/opt/work",
-            }
-        )
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(_mock_create_subprocess_exec)
 
-        # Two calls: mkdir and scp
-        assert mock_exec.call_count == 2
+    out = await CopyFilesToRemoteTool().run(
+        input={
+            "ssh_host": "root@10.0.0.1",
+            "local_paths": ["/tmp/test.sh"],
+            "remote_dir": "/opt/work",
+        }
+    )
 
-        # First call: ssh mkdir (with -i for gateway key)
-        mkdir_call = mock_exec.call_args_list[0]
-        mkdir_args = mkdir_call[0]
-        assert mkdir_args[0] == "ssh"
-        assert str(_SSH_KEY_PATH) in mkdir_args
-        assert "StrictHostKeyChecking=no" in mkdir_args
-        assert "root@10.0.0.1" in mkdir_args
-        assert "mkdir" in mkdir_args
-        assert "-p" in mkdir_args
-        assert "/opt/work" in mkdir_args
+    # Two calls: mkdir and scp
+    assert len(calls) == 2
 
-        # Second call: scp (with -i for gateway key)
-        scp_call = mock_exec.call_args_list[1]
-        scp_args = scp_call[0]
-        assert scp_args[0] == "scp"
-        assert str(_SSH_KEY_PATH) in scp_args
-        assert "-r" in scp_args
-        assert "/tmp/test.sh" in scp_args
-        assert "root@10.0.0.1:/opt/work" in scp_args
+    # First call: ssh mkdir (with -i for gateway key)
+    mkdir_args = calls[0]
+    assert mkdir_args[0] == "ssh"
+    assert str(_SSH_KEY_PATH) in mkdir_args
+    assert "StrictHostKeyChecking=no" in mkdir_args
+    assert "root@10.0.0.1" in mkdir_args
+    assert "mkdir" in mkdir_args
+    assert "-p" in mkdir_args
+    assert "/opt/work" in mkdir_args
+
+    # Second call: scp (with -i for gateway key)
+    scp_args = calls[1]
+    assert scp_args[0] == "scp"
+    assert str(_SSH_KEY_PATH) in scp_args
+    assert "-r" in scp_args
+    assert "/tmp/test.sh" in scp_args
+    assert "root@10.0.0.1:/opt/work" in scp_args
 
     result = out.result
     assert result["copied"] is True
@@ -631,15 +656,16 @@ def test_assert_local_paths_scoped_to_package_tree(tmp_path, monkeypatch):
     other_issue_file.write_text("leak\n")
     other_pkg_file.write_text("leak\n")
 
-    def meta_get(key: str) -> str | None:
+    def _mock_meta_get(key: str) -> str | None:
         return {"package": "bind", "jira_issue": "RHEL-1"}.get(key)
 
-    with patch.object(tf_module, "_meta_get", side_effect=meta_get):
-        tf_module._assert_local_paths_scoped([str(own_file)])
-        with pytest.raises(ToolError, match="not under the allowed tests tree"):
-            tf_module._assert_local_paths_scoped([str(other_issue_file)])
-        with pytest.raises(ToolError, match="not under the allowed tests tree"):
-            tf_module._assert_local_paths_scoped([str(other_pkg_file)])
+    flexmock(tf_module).should_receive("_meta_get").replace_with(_mock_meta_get)
+
+    tf_module._assert_local_paths_scoped([str(own_file)])
+    with pytest.raises(ToolError, match="not under the allowed tests tree"):
+        tf_module._assert_local_paths_scoped([str(other_issue_file)])
+    with pytest.raises(ToolError, match="not under the allowed tests tree"):
+        tf_module._assert_local_paths_scoped([str(other_pkg_file)])
 
 
 def test_assert_local_paths_without_package_only_tmp(tmp_path, monkeypatch):
@@ -650,10 +676,10 @@ def test_assert_local_paths_without_package_only_tmp(tmp_path, monkeypatch):
     f = clone / "runtest.sh"
     f.write_text("x\n")
 
-    with patch.object(tf_module, "_meta_get", return_value=None):
-        with pytest.raises(ToolError, match="not under the allowed tests tree"):
-            tf_module._assert_local_paths_scoped([str(f)])
-        tf_module._assert_local_paths_scoped(["/tmp/scratch.sh"])
+    flexmock(tf_module).should_receive("_meta_get").and_return(None)
+    with pytest.raises(ToolError, match="not under the allowed tests tree"):
+        tf_module._assert_local_paths_scoped([str(f)])
+    tf_module._assert_local_paths_scoped(["/tmp/scratch.sh"])
 
 
 # -- Error-path / validation tests --
@@ -666,19 +692,21 @@ async def test_run_remote_command_timeout_kills_process(monkeypatch):
     monkeypatch.delenv("TESTING_FARM_DRY_RUN", raising=False)
     register_allowed_ssh_host("root@10.0.0.1")
 
-    fake_proc = _make_fake_process()
-    fake_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+    fake_proc = _make_mock_process()
+    fake_proc.should_receive("communicate").and_raise(asyncio.TimeoutError)
 
-    with (
-        patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
-        pytest.raises(ToolError, match="timed out"),
-    ):
+    async def _mock_create_subprocess_exec(*_args, **_kwargs):
+        return fake_proc
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(_mock_create_subprocess_exec)
+
+    with pytest.raises(ToolError, match="timed out"):
         await RunRemoteCommandTool().run(
             input={"ssh_host": "root@10.0.0.1", "command": "sleep 999", "timeout": 5}
         )
 
-    fake_proc.kill.assert_called_once()
-    fake_proc.wait.assert_awaited_once()
+    assert len(fake_proc._kill_calls) == 1
+    assert len(fake_proc._wait_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -688,13 +716,15 @@ async def test_copy_files_timeout_kills_process(monkeypatch):
     monkeypatch.delenv("TESTING_FARM_DRY_RUN", raising=False)
     register_allowed_ssh_host("root@10.0.0.1")
 
-    fake_proc = _make_fake_process()
-    fake_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+    fake_proc = _make_mock_process()
+    fake_proc.should_receive("communicate").and_raise(asyncio.TimeoutError)
 
-    with (
-        patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
-        pytest.raises(ToolError, match="timed out"),
-    ):
+    async def _mock_create_subprocess_exec(*_args, **_kwargs):
+        return fake_proc
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(_mock_create_subprocess_exec)
+
+    with pytest.raises(ToolError, match="timed out"):
         await CopyFilesToRemoteTool().run(
             input={
                 "ssh_host": "root@10.0.0.1",
@@ -703,8 +733,8 @@ async def test_copy_files_timeout_kills_process(monkeypatch):
             }
         )
 
-    fake_proc.kill.assert_called_once()
-    fake_proc.wait.assert_awaited_once()
+    assert len(fake_proc._kill_calls) == 1
+    assert len(fake_proc._wait_calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -786,12 +816,11 @@ async def test_reservation_details_transient_http_error_retries(monkeypatch):
     tf_module._testing_farm_headers.cache_clear()
     tf_module._testing_farm_url.cache_clear()
 
-    mock_response_503 = MagicMock()
-    mock_response_503.status_code = 503
+    mock_response_503 = flexmock(status_code=503)
 
     call_count = 0
 
-    def fake_get(path, params=None):
+    def _mock_get(path, params=None):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -799,8 +828,8 @@ async def test_reservation_details_transient_http_error_retries(monkeypatch):
             raise err
         return {"state": "complete"}
 
-    flexmock(tf_module).should_receive("_testing_farm_api_get").replace_with(fake_get)
-    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    flexmock(tf_module).should_receive("_testing_farm_api_get").replace_with(_mock_get)
+    monkeypatch.setattr(asyncio, "sleep", _async_noop)
 
     out = await GetTestingFarmReservationDetailsTool().run(input={"request_id": "req-transient"})
     assert out.result["state"] == "complete"

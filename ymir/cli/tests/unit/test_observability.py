@@ -7,8 +7,8 @@ matches the format expected by the trace-server's ``_extract_spans``.
 import json
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
+from flexmock import flexmock
 from google.protobuf.json_format import MessageToDict
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
 from opentelemetry.sdk import trace as trace_sdk
@@ -33,9 +33,12 @@ def _create_test_spans(jira_issue: str = "RHEL-99999", count: int = 1):
     provider = trace_sdk.TracerProvider(resource=resource)
     captured = []
 
+    span_exporter = flexmock()
+    span_exporter.should_receive("shutdown")
+
     class _CapturingProcessor(SimpleSpanProcessor):
         def __init__(self):
-            super().__init__(MagicMock())
+            super().__init__(span_exporter)
 
         def on_end(self, span):
             captured.append(span)
@@ -48,6 +51,7 @@ def _create_test_spans(jira_issue: str = "RHEL-99999", count: int = 1):
             span.set_attribute("jira.issue", jira_issue)
             span.set_attribute("test.index", i)
 
+    provider.shutdown()
     return captured
 
 

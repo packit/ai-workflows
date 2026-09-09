@@ -1,8 +1,9 @@
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, patch
 
 import pytest
+from flexmock import flexmock
 
+from ymir.agents import tasks as agent_tasks
 from ymir.agents.tasks import (
     InvalidReleaseBumpingConfigError,
     ZStreamBranchStaleError,
@@ -24,7 +25,7 @@ from ymir.common.models import ErrorListEntry, Task
 
 
 @asynccontextmanager
-async def _fake_mcp_tools(_url, **_kwargs):
+async def _mock_mcp_tools(_url, **_kwargs):
     yield []
 
 
@@ -43,6 +44,14 @@ def git_repo_basepath(tmp_path, monkeypatch):
     return tmp_path
 
 
+async def _async_noop(*_args, **_kwargs):
+    pass
+
+
+async def _older_zstream_false(*_args, **_kwargs):
+    return False
+
+
 @pytest.mark.asyncio
 async def test_fork_and_prepare_dist_git_wipes_stale_working_dir(git_repo_basepath):
     """Re-running for the same JIRA issue must remove the previous working directory."""
@@ -56,23 +65,23 @@ async def test_fork_and_prepare_dist_git_wipes_stale_working_dir(git_repo_basepa
     stale_file = working_dir / "leftover-artifact.txt"
     stale_file.write_text("stale")
 
-    mock_tools = [AsyncMock()]
+    mock_tools = [flexmock()]
 
-    with (
-        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
-        patch("ymir.agents.tasks.check_subprocess", new_callable=AsyncMock),
-        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
-        patch("ymir.agents.tasks._check_zstream_branch_consistency", new_callable=AsyncMock),
-    ):
-        mock_run_tool.return_value = "https://fork.example.com"
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "https://fork.example.com"
 
-        await fork_and_prepare_dist_git(
-            jira_issue=jira_issue,
-            package=package,
-            dist_git_branch=branch,
-            available_tools=mock_tools,
-            agent_type=agent_type,
-        )
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    flexmock(agent_tasks).should_receive("check_subprocess").replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+    flexmock(agent_tasks).should_receive("_check_zstream_branch_consistency").replace_with(_async_noop)
+
+    await fork_and_prepare_dist_git(
+        jira_issue=jira_issue,
+        package=package,
+        dist_git_branch=branch,
+        available_tools=mock_tools,
+        agent_type=agent_type,
+    )
 
     assert working_dir.is_dir(), "working_dir should be recreated"
     assert not stale_file.exists(), "stale artifacts from previous run should be gone"
@@ -81,53 +90,60 @@ async def test_fork_and_prepare_dist_git_wipes_stale_working_dir(git_repo_basepa
 @pytest.mark.asyncio
 async def test_fork_and_prepare_honors_explicit_centos_stream_namespace(git_repo_basepath):
     """Modular stream-* branches must use the explicit namespace, not is_cs_branch."""
-    mock_tools = [AsyncMock()]
-    with (
-        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
-        patch("ymir.agents.tasks.check_subprocess", new_callable=AsyncMock),
-        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
-    ):
-        mock_run_tool.return_value = "https://fork.example.com"
+    mock_tools = [flexmock()]
+    calls = []
 
-        await fork_and_prepare_dist_git(
-            jira_issue="RHEL-160675",
-            package="squid",
-            dist_git_branch="stream-squid-4-rhel-8.10.0",
-            available_tools=mock_tools,
-            agent_type="Rebase",
-            dist_git_namespace="centos-stream",
-        )
+    async def _mock_run_tool(*_args, **_kwargs):
+        calls.append((_args, _kwargs))
+        return "https://fork.example.com"
 
-    fork_call = mock_run_tool.await_args_list[0]
-    assert fork_call.args[0] == "fork_repository"
-    assert fork_call.kwargs["repository"] == "https://gitlab.com/redhat/centos-stream/rpms/squid"
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    flexmock(agent_tasks).should_receive("check_subprocess").replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("is_older_zstream").replace_with(_older_zstream_false)
 
-    tool_names = [call.args[0] for call in mock_run_tool.await_args_list]
+    await fork_and_prepare_dist_git(
+        jira_issue="RHEL-160675",
+        package="squid",
+        dist_git_branch="stream-squid-4-rhel-8.10.0",
+        available_tools=mock_tools,
+        agent_type="Rebase",
+        dist_git_namespace="centos-stream",
+    )
+
+    fork_args, fork_kwargs = calls[0]
+    assert fork_args[0] == "fork_repository"
+    assert fork_kwargs["repository"] == "https://gitlab.com/redhat/centos-stream/rpms/squid"
+
+    tool_names = [a[0] for a, _ in calls]
+    # tool_names = [call.args[0] for call in mock_run_tool.await_args_list]
     assert "create_zstream_branch" not in tool_names
 
 
 @pytest.mark.asyncio
 async def test_fork_and_prepare_modular_rhel_skips_create_zstream_branch(git_repo_basepath):
-    mock_tools = [AsyncMock()]
-    with (
-        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
-        patch("ymir.agents.tasks.check_subprocess", new_callable=AsyncMock),
-        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
-    ):
-        mock_run_tool.return_value = "https://fork.example.com"
+    mock_tools = [flexmock()]
+    calls = []
 
-        await fork_and_prepare_dist_git(
-            jira_issue="RHEL-160675",
-            package="squid",
-            dist_git_branch="stream-squid-4-rhel-8.10.0",
-            available_tools=mock_tools,
-            agent_type="Rebase",
-            dist_git_namespace="rhel",
-        )
+    async def _mock_run_tool(*_args, **_kwargs):
+        calls.append((_args, _kwargs))
+        return "https://fork.example.com"
 
-    fork_call = mock_run_tool.await_args_list[0]
-    assert fork_call.kwargs["repository"] == "https://gitlab.com/redhat/rhel/rpms/squid"
-    tool_names = [call.args[0] for call in mock_run_tool.await_args_list]
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    flexmock(agent_tasks).should_receive("check_subprocess").replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+
+    await fork_and_prepare_dist_git(
+        jira_issue="RHEL-160675",
+        package="squid",
+        dist_git_branch="stream-squid-4-rhel-8.10.0",
+        available_tools=mock_tools,
+        agent_type="Rebase",
+        dist_git_namespace="rhel",
+    )
+
+    _, fork_kwargs = calls[0]
+    assert fork_kwargs["repository"] == "https://gitlab.com/redhat/rhel/rpms/squid"
+    tool_names = [args[0] for args, _ in calls]
     assert "create_zstream_branch" not in tool_names
 
 
@@ -135,20 +151,18 @@ async def test_fork_and_prepare_modular_rhel_skips_create_zstream_branch(git_rep
 async def test_post_user_ack_once_posts_on_first_call():
     """User-triggered, not dry-run, never posted → posts and persists the flag."""
     task = _make_task()
-    with (
-        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
-        patch("ymir.agents.tasks.comment_in_jira", new_callable=AsyncMock) as mock_comment,
-    ):
-        await post_user_ack_once(
-            task=task,
-            jira_issue="RHEL-1",
-            agent_type="Triage",
-            comment_text="hello",
-            user_triggered=True,
-            dry_run=False,
-        )
+    flexmock(agent_tasks).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(agent_tasks).should_receive("comment_in_jira").once().replace_with(_async_noop)
 
-    mock_comment.assert_awaited_once()
+    await post_user_ack_once(
+        task=task,
+        jira_issue="RHEL-1",
+        agent_type="Triage",
+        comment_text="hello",
+        user_triggered=True,
+        dry_run=False,
+    )
+
     assert task.metadata["ack_posted"] is True
 
 
@@ -156,60 +170,54 @@ async def test_post_user_ack_once_posts_on_first_call():
 async def test_post_user_ack_once_skips_when_already_posted():
     """Second call with the same task must not re-post — even after re-queue."""
     task = _make_task(metadata={"issue": "RHEL-1", "ack_posted": True})
-    with (
-        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
-        patch("ymir.agents.tasks.comment_in_jira", new_callable=AsyncMock) as mock_comment,
-    ):
-        await post_user_ack_once(
-            task=task,
-            jira_issue="RHEL-1",
-            agent_type="Triage",
-            comment_text="hello",
-            user_triggered=True,
-            dry_run=False,
-        )
+    flexmock(agent_tasks).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(agent_tasks).should_receive("comment_in_jira").never()
 
-    mock_comment.assert_not_awaited()
+    await post_user_ack_once(
+        task=task,
+        jira_issue="RHEL-1",
+        agent_type="Triage",
+        comment_text="hello",
+        user_triggered=True,
+        dry_run=False,
+    )
+
     assert task.metadata["ack_posted"] is True
 
 
 @pytest.mark.asyncio
 async def test_post_user_ack_once_skips_when_not_user_triggered():
     task = _make_task()
-    with (
-        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
-        patch("ymir.agents.tasks.comment_in_jira", new_callable=AsyncMock) as mock_comment,
-    ):
-        await post_user_ack_once(
-            task=task,
-            jira_issue="RHEL-1",
-            agent_type="Triage",
-            comment_text="hello",
-            user_triggered=False,
-            dry_run=False,
-        )
+    flexmock(agent_tasks).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(agent_tasks).should_receive("comment_in_jira").never()
 
-    mock_comment.assert_not_awaited()
+    await post_user_ack_once(
+        task=task,
+        jira_issue="RHEL-1",
+        agent_type="Triage",
+        comment_text="hello",
+        user_triggered=False,
+        dry_run=False,
+    )
+
     assert "ack_posted" not in task.metadata
 
 
 @pytest.mark.asyncio
 async def test_post_user_ack_once_skips_on_dry_run():
     task = _make_task()
-    with (
-        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
-        patch("ymir.agents.tasks.comment_in_jira", new_callable=AsyncMock) as mock_comment,
-    ):
-        await post_user_ack_once(
-            task=task,
-            jira_issue="RHEL-1",
-            agent_type="Triage",
-            comment_text="hello",
-            user_triggered=True,
-            dry_run=True,
-        )
+    flexmock(agent_tasks).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(agent_tasks).should_receive("comment_in_jira").never()
 
-    mock_comment.assert_not_awaited()
+    await post_user_ack_once(
+        task=task,
+        jira_issue="RHEL-1",
+        agent_type="Triage",
+        comment_text="hello",
+        user_triggered=True,
+        dry_run=True,
+    )
+
     assert "ack_posted" not in task.metadata
 
 
@@ -217,27 +225,34 @@ async def test_post_user_ack_once_skips_on_dry_run():
 async def test_change_jira_status_skips_when_flag_unset(monkeypatch):
     """Default behavior: JIRA_ALLOW_STATUS_CHANGES unset → no MCP call."""
     monkeypatch.delenv("JIRA_ALLOW_STATUS_CHANGES", raising=False)
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool:
-        await change_jira_status("RHEL-1", "In Progress", available_tools=[])
-    mock_run_tool.assert_not_awaited()
+    flexmock(agent_tasks).should_receive("run_tool").never()
+
+    await change_jira_status("RHEL-1", "In Progress", available_tools=[])
 
 
 @pytest.mark.asyncio
 async def test_change_jira_status_skips_when_flag_false(monkeypatch):
     monkeypatch.setenv("JIRA_ALLOW_STATUS_CHANGES", "false")
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool:
-        await change_jira_status("RHEL-1", "In Progress", available_tools=[])
-    mock_run_tool.assert_not_awaited()
+    flexmock(agent_tasks).should_receive("run_tool").never()
+
+    await change_jira_status("RHEL-1", "In Progress", available_tools=[])
 
 
 @pytest.mark.asyncio
 async def test_change_jira_status_runs_when_flag_true(monkeypatch):
     monkeypatch.setenv("JIRA_ALLOW_STATUS_CHANGES", "true")
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool:
-        await change_jira_status("RHEL-1", "In Progress", available_tools=[])
-    mock_run_tool.assert_awaited_once()
+
+    calls = []
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        calls.append((_args, _kwargs))
+
+    flexmock(agent_tasks).should_receive("run_tool").once().replace_with(_mock_run_tool)
+
+    await change_jira_status("RHEL-1", "In Progress", available_tools=[])
+
     # The MCP tool is called with the expected arguments
-    _, kwargs = mock_run_tool.call_args
+    _, kwargs = calls[0]
     assert kwargs["issue_key"] == "RHEL-1"
     assert kwargs["status"] == "In Progress"
 
@@ -246,25 +261,23 @@ async def test_change_jira_status_runs_when_flag_true(monkeypatch):
 async def test_post_user_ack_once_does_not_persist_on_failure():
     """On post failure, ack_posted stays unset so the next retry can try again."""
     task = _make_task()
-    with (
-        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
-        patch(
-            "ymir.agents.tasks.comment_in_jira",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("jira down"),
-        ) as mock_comment,
-    ):
-        # Must swallow the exception (caller relies on this)
-        await post_user_ack_once(
-            task=task,
-            jira_issue="RHEL-1",
-            agent_type="Triage",
-            comment_text="hello",
-            user_triggered=True,
-            dry_run=False,
-        )
 
-    mock_comment.assert_awaited_once()
+    async def _mock_jira_comment(*_args, **_kwargs):
+        raise RuntimeError("jira down")
+
+    flexmock(agent_tasks).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(agent_tasks).should_receive("comment_in_jira").once().replace_with(_mock_jira_comment)
+
+    # Must swallow the exception (caller relies on this)
+    await post_user_ack_once(
+        task=task,
+        jira_issue="RHEL-1",
+        agent_type="Triage",
+        comment_text="hello",
+        user_triggered=True,
+        dry_run=False,
+    )
+
     assert "ack_posted" not in task.metadata
 
 
@@ -280,17 +293,19 @@ async def test_post_user_ack_once_does_not_persist_on_failure():
 )
 async def test_get_jira_issue_metadata_returns_labels_and_status(status_name, expected_status):
     """get_jira_issue_metadata extracts both labels and status from one API call."""
-    fake_details = {
-        "fields": {
-            "labels": ["ymir_todo", "SecurityTracking"],
-            "status": {"name": status_name},
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        return {
+            "fields": {
+                "labels": ["ymir_todo", "SecurityTracking"],
+                "status": {"name": status_name},
+            }
         }
-    }
-    with (
-        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
-        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock, return_value=fake_details),
-    ):
-        labels, status = await get_jira_issue_metadata("RHEL-99999")
+
+    flexmock(agent_tasks).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    labels, status = await get_jira_issue_metadata("RHEL-99999")
 
     assert labels == ["ymir_todo", "SecurityTracking"]
     assert status == expected_status
@@ -299,15 +314,14 @@ async def test_get_jira_issue_metadata_returns_labels_and_status(status_name, ex
 @pytest.mark.asyncio
 async def test_get_jira_issue_metadata_returns_defaults_on_failure():
     """On MCP/network failure, return empty labels and None status."""
-    with (
-        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
-        patch(
-            "ymir.agents.tasks.run_tool",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("connection refused"),
-        ),
-    ):
-        labels, status = await get_jira_issue_metadata("RHEL-99999")
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        raise RuntimeError("connection refused")
+
+    flexmock(agent_tasks).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    labels, status = await get_jira_issue_metadata("RHEL-99999")
 
     assert labels == []
     assert status is None
@@ -336,40 +350,40 @@ async def test_needs_zstream_target_label(branch, fix_version, expected):
     async def _mock_config():
         return MOCK_RHEL_CONFIG
 
-    with patch("ymir.agents.tasks.load_rhel_config", _mock_config):
-        assert await needs_zstream_target_label(branch, fix_version) == expected
+    flexmock(agent_tasks).should_receive("load_rhel_config").replace_with(_mock_config)
+
+    assert await needs_zstream_target_label(branch, fix_version) == expected
 
 
 @pytest.mark.asyncio
 async def test_commit_and_push_phases_are_independent(tmp_path):
-    async def fake_check_subprocess(command, cwd=None):
+    async def _mock_check_subprocess(command, cwd=None):
         if command[:2] == ["git", "commit"]:
             return "", ""
         assert command == ["git", "rev-parse", "HEAD"]
         return "a" * 40 + "\n", ""
 
-    async def fake_run_subprocess(command, cwd=None):
+    async def _mock_run_subprocess(command, cwd=None):
         assert command == ["git", "diff", "--cached", "--quiet"]
         return 1, "", ""
 
-    with (
-        patch("ymir.agents.tasks.check_subprocess", side_effect=fake_check_subprocess),
-        patch("ymir.agents.tasks.run_subprocess", side_effect=fake_run_subprocess),
-    ):
-        commit_sha = await commit_changes(tmp_path, "Fix CVE")
+    flexmock(agent_tasks).should_receive("check_subprocess").replace_with(_mock_check_subprocess)
+    flexmock(agent_tasks).should_receive("run_subprocess").replace_with(_mock_run_subprocess)
+
+    commit_sha = await commit_changes(tmp_path, "Fix CVE")
 
     assert commit_sha == "a" * 40
 
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as run_tool:
-        await push_changes(tmp_path, "https://gitlab.com/bot/curl", "update", [])
-    run_tool.assert_awaited_once_with(
+    flexmock(agent_tasks).should_receive("run_tool").once().with_args(
         "push_to_remote_repository",
         repository="https://gitlab.com/bot/curl",
         clone_path=str(tmp_path),
         branch="update",
         force=True,
         available_tools=[],
-    )
+    ).replace_with(_async_noop)
+
+    await push_changes(tmp_path, "https://gitlab.com/bot/curl", "update", [])
 
 
 @pytest.mark.asyncio
@@ -377,7 +391,7 @@ async def test_commit_push_and_open_mr_assigns_reviewers(tmp_path, monkeypatch):
     monkeypatch.setenv("ASSIGN_MR_REVIEWERS", "true")
     tool_calls = []
 
-    async def mock_run_tool(name, *, available_tools=None, **kwargs):
+    async def _mock_run_tool(name, *, available_tools=None, **kwargs):
         tool_calls.append((name, kwargs))
         if name == "open_merge_request":
             return {"url": "https://gitlab.com/redhat/rpms/bash/-/merge_requests/1", "is_new_mr": True}
@@ -385,21 +399,23 @@ async def test_commit_push_and_open_mr_assigns_reviewers(tmp_path, monkeypatch):
             return [42, 99]
         return None
 
-    with (
-        patch("ymir.agents.tasks.commit_and_push", new_callable=AsyncMock, return_value=True),
-        patch("ymir.agents.tasks.run_tool", side_effect=mock_run_tool),
-    ):
-        url, is_new = await commit_push_and_open_mr(
-            local_clone=tmp_path,
-            commit_message="test",
-            fork_url="https://gitlab.com/bot/bash.git",
-            dist_git_branch="c10s",
-            update_branch="automated-package-update-RHEL-1",
-            mr_title="Fix RHEL-1",
-            mr_description="desc",
-            available_tools=[],
-            package="bash",
-        )
+    async def _mock_commit_and_push(*_args, **_kwargs):
+        return True
+
+    flexmock(agent_tasks).should_receive("commit_and_push").replace_with(_mock_commit_and_push)
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    url, is_new = await commit_push_and_open_mr(
+        local_clone=tmp_path,
+        commit_message="test",
+        fork_url="https://gitlab.com/bot/bash.git",
+        dist_git_branch="c10s",
+        update_branch="automated-package-update-RHEL-1",
+        mr_title="Fix RHEL-1",
+        mr_description="desc",
+        available_tools=[],
+        package="bash",
+    )
 
     assert url is not None
     assert is_new is True
@@ -413,19 +429,20 @@ async def test_request_mr_qe_reviews_assigns_qe_only(tmp_path, monkeypatch):
     monkeypatch.setenv("ASSIGN_MR_REVIEWERS", "true")
     tool_calls = []
 
-    async def mock_run_tool(name, *, available_tools=None, **kwargs):
+    async def _mock_run_tool(name, *, available_tools=None, **kwargs):
         tool_calls.append((name, kwargs))
         if name == "resolve_qe_reviewers":
             return [99]
         return None
 
-    with patch("ymir.agents.tasks.run_tool", side_effect=mock_run_tool):
-        await request_mr_qe_reviews(
-            "bind",
-            "c10s",
-            "https://gitlab.com/redhat/rhel/tests/bind/-/merge_requests/1",
-            [],
-        )
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    await request_mr_qe_reviews(
+        "bind",
+        "c10s",
+        "https://gitlab.com/redhat/rhel/tests/bind/-/merge_requests/1",
+        [],
+    )
 
     assert tool_calls[0][0] == "resolve_qe_reviewers"
     assert tool_calls[0][1] == {"package": "bind", "dist_git_branch": "c10s"}
@@ -438,7 +455,7 @@ async def test_request_mr_qe_reviews_assigns_qe_only(tmp_path, monkeypatch):
 async def test_commit_push_and_open_mr_reviewer_failure_does_not_fail(tmp_path, monkeypatch):
     monkeypatch.setenv("ASSIGN_MR_REVIEWERS", "true")
 
-    async def mock_run_tool(name, *, available_tools=None, **kwargs):
+    async def _mock_run_tool(name, *, available_tools=None, **kwargs):
         if name == "open_merge_request":
             return {"url": "https://gitlab.com/redhat/rpms/bash/-/merge_requests/1", "is_new_mr": True}
         if name == "resolve_reviewers":
@@ -447,21 +464,23 @@ async def test_commit_push_and_open_mr_reviewer_failure_does_not_fail(tmp_path, 
             raise RuntimeError("GitLab API down")
         return None
 
-    with (
-        patch("ymir.agents.tasks.commit_and_push", new_callable=AsyncMock, return_value=True),
-        patch("ymir.agents.tasks.run_tool", side_effect=mock_run_tool),
-    ):
-        url, is_new = await commit_push_and_open_mr(
-            local_clone=tmp_path,
-            commit_message="test",
-            fork_url="https://gitlab.com/bot/bash.git",
-            dist_git_branch="c10s",
-            update_branch="automated-package-update-RHEL-1",
-            mr_title="Fix RHEL-1",
-            mr_description="desc",
-            available_tools=[],
-            package="bash",
-        )
+    async def _mock_commit_and_push(*_args, **_kwargs):
+        return True
+
+    flexmock(agent_tasks).should_receive("commit_and_push").replace_with(_mock_commit_and_push)
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    url, is_new = await commit_push_and_open_mr(
+        local_clone=tmp_path,
+        commit_message="test",
+        fork_url="https://gitlab.com/bot/bash.git",
+        dist_git_branch="c10s",
+        update_branch="automated-package-update-RHEL-1",
+        mr_title="Fix RHEL-1",
+        mr_description="desc",
+        available_tools=[],
+        package="bash",
+    )
 
     assert url is not None
     assert is_new is True
@@ -471,27 +490,29 @@ async def test_commit_push_and_open_mr_reviewer_failure_does_not_fail(tmp_path, 
 async def test_commit_push_and_open_mr_no_reviewers_on_reused_mr(tmp_path):
     tool_calls = []
 
-    async def mock_run_tool(name, *, available_tools=None, **kwargs):
+    async def _mock_run_tool(name, *, available_tools=None, **kwargs):
         tool_calls.append((name, kwargs))
         if name == "open_merge_request":
             return {"url": "https://gitlab.com/redhat/rpms/bash/-/merge_requests/1", "is_new_mr": False}
         return None
 
-    with (
-        patch("ymir.agents.tasks.commit_and_push", new_callable=AsyncMock, return_value=True),
-        patch("ymir.agents.tasks.run_tool", side_effect=mock_run_tool),
-    ):
-        url, is_new = await commit_push_and_open_mr(
-            local_clone=tmp_path,
-            commit_message="test",
-            fork_url="https://gitlab.com/bot/bash.git",
-            dist_git_branch="c10s",
-            update_branch="automated-package-update-RHEL-1",
-            mr_title="Fix RHEL-1",
-            mr_description="desc",
-            available_tools=[],
-            package="bash",
-        )
+    async def _mock_commit_and_push(*_args, **_kwargs):
+        return True
+
+    flexmock(agent_tasks).should_receive("commit_and_push").replace_with(_mock_commit_and_push)
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    url, is_new = await commit_push_and_open_mr(
+        local_clone=tmp_path,
+        commit_message="test",
+        fork_url="https://gitlab.com/bot/bash.git",
+        dist_git_branch="c10s",
+        update_branch="automated-package-update-RHEL-1",
+        mr_title="Fix RHEL-1",
+        mr_description="desc",
+        available_tools=[],
+        package="bash",
+    )
 
     assert url is not None
     assert is_new is False
@@ -503,26 +524,28 @@ async def test_commit_push_and_open_mr_no_reviewers_on_reused_mr(tmp_path):
 async def test_commit_push_and_open_mr_no_reviewers_without_package(tmp_path):
     tool_calls = []
 
-    async def mock_run_tool(name, *, available_tools=None, **kwargs):
+    async def _mock_run_tool(name, *, available_tools=None, **kwargs):
         tool_calls.append((name, kwargs))
         if name == "open_merge_request":
             return {"url": "https://gitlab.com/redhat/rpms/bash/-/merge_requests/1", "is_new_mr": True}
         return None
 
-    with (
-        patch("ymir.agents.tasks.commit_and_push", new_callable=AsyncMock, return_value=True),
-        patch("ymir.agents.tasks.run_tool", side_effect=mock_run_tool),
-    ):
-        url, is_new = await commit_push_and_open_mr(
-            local_clone=tmp_path,
-            commit_message="test",
-            fork_url="https://gitlab.com/bot/bash.git",
-            dist_git_branch="c10s",
-            update_branch="automated-package-update-RHEL-1",
-            mr_title="Fix RHEL-1",
-            mr_description="desc",
-            available_tools=[],
-        )
+    async def _mock_commit_and_push(*_args, **_kwargs):
+        return True
+
+    flexmock(agent_tasks).should_receive("commit_and_push").replace_with(_mock_commit_and_push)
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    url, is_new = await commit_push_and_open_mr(
+        local_clone=tmp_path,
+        commit_message="test",
+        fork_url="https://gitlab.com/bot/bash.git",
+        dist_git_branch="c10s",
+        update_branch="automated-package-update-RHEL-1",
+        mr_title="Fix RHEL-1",
+        mr_description="desc",
+        available_tools=[],
+    )
 
     assert url is not None
     assert is_new is True
@@ -533,23 +556,25 @@ async def test_commit_push_and_open_mr_no_reviewers_without_package(tmp_path):
 @pytest.mark.asyncio
 async def test_zstream_consistency_stale_not_ancestor(tmp_path):
     """Branch HEAD does not contain the build ref (exit 1) -> stale."""
-    with (
-        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
-        patch(
-            "ymir.agents.tasks.get_latest_candidate_build",
-            new_callable=AsyncMock,
-            return_value=("1.0-1", "build-ref-sha"),
-        ),
-        patch(
-            "ymir.agents.tasks.run_subprocess",
-            new_callable=AsyncMock,
-            side_effect=[
-                (1, None, None),  # merge-base --is-ancestor
-                (0, "branch-head-sha\n", None),  # rev-parse HEAD
-            ],
-        ),
-        pytest.raises(ZStreamBranchStaleError) as exc_info,
-    ):
+
+    async def _mock_candidate(*_args, **_kwargs):
+        return "1.0-1", "build-ref-sha"
+
+    subprocess_results = iter(
+        [
+            (1, None, None),  # merge-base --is-ancestor
+            (0, "branch-head-sha\n", None),  # rev-parse HEAD
+        ]
+    )
+
+    async def _mock_run_subprocess(*_args, **_kwargs):
+        return next(subprocess_results)
+
+    flexmock(agent_tasks).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+    flexmock(agent_tasks).should_receive("get_latest_candidate_build").replace_with(_mock_candidate)
+    flexmock(agent_tasks).should_receive("run_subprocess").replace_with(_mock_run_subprocess)
+
+    with pytest.raises(ZStreamBranchStaleError) as exc_info:
         await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
 
     assert exc_info.value.package == "golang"
@@ -561,167 +586,161 @@ async def test_zstream_consistency_stale_not_ancestor(tmp_path):
 @pytest.mark.asyncio
 async def test_zstream_consistency_stale_ref_not_in_repo(tmp_path):
     """Build ref missing from clone (exit 128) -> stale."""
-    with (
-        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
-        patch(
-            "ymir.agents.tasks.get_latest_candidate_build",
-            new_callable=AsyncMock,
-            return_value=("1.0-1", "missing-build-ref"),
-        ),
-        patch(
-            "ymir.agents.tasks.run_subprocess",
-            new_callable=AsyncMock,
-            side_effect=[
-                (128, None, "fatal: Not a valid commit name missing-build-ref"),
-                (0, "branch-head-sha\n", None),
-            ],
-        ),
-        pytest.raises(ZStreamBranchStaleError),
-    ):
+
+    async def _mock_candidate(*_args, **_kwargs):
+        return "1.0-1", "missing-build-ref"
+
+    subprocess_results = iter(
+        [
+            (128, None, "fatal: Not a valid commit name missing-build-ref"),
+            (0, "branch-head-sha\n", None),
+        ]
+    )
+
+    async def _mock_run_subprocess(*_args, **_kwargs):
+        return next(subprocess_results)
+
+    flexmock(agent_tasks).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+    flexmock(agent_tasks).should_receive("get_latest_candidate_build").replace_with(_mock_candidate)
+    flexmock(agent_tasks).should_receive("run_subprocess").replace_with(_mock_run_subprocess)
+
+    with pytest.raises(ZStreamBranchStaleError):
         await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
 
 
 @pytest.mark.asyncio
 async def test_zstream_consistency_up_to_date(tmp_path):
     """Build ref is ancestor of HEAD (exit 0) -> no error."""
-    with (
-        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
-        patch(
-            "ymir.agents.tasks.get_latest_candidate_build",
-            new_callable=AsyncMock,
-            return_value=("1.0-1", "build-ref-sha"),
-        ),
-        patch(
-            "ymir.agents.tasks.run_subprocess",
-            new_callable=AsyncMock,
-            return_value=(0, None, None),
-        ) as mock_run,
-    ):
-        await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
 
-    mock_run.assert_awaited_once()
+    async def _mock_candidate(*_args, **_kwargs):
+        return "1.0-1", "build-ref-sha"
+
+    async def _mock_run_subprocess(*_args, **_kwargs):
+        return 0, None, None
+
+    flexmock(agent_tasks).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+    flexmock(agent_tasks).should_receive("get_latest_candidate_build").replace_with(_mock_candidate)
+    flexmock(agent_tasks).should_receive("run_subprocess").once().replace_with(_mock_run_subprocess)
+
+    await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
 
 
 @pytest.mark.asyncio
 async def test_zstream_consistency_skips_non_zstream(tmp_path):
     """CentOS Stream branches skip the check entirely."""
-    with (
-        patch("ymir.agents.tasks.get_latest_candidate_build", new_callable=AsyncMock) as mock_brew,
-        patch("ymir.agents.tasks.get_latest_z_pending_build", new_callable=AsyncMock) as mock_pending,
-    ):
-        await _check_zstream_branch_consistency("bash", "c10s", tmp_path)
 
-    mock_brew.assert_not_awaited()
-    mock_pending.assert_not_awaited()
+    flexmock(agent_tasks).should_receive("get_latest_candidate_build").never()
+    flexmock(agent_tasks).should_receive("get_latest_z_pending_build").never()
+
+    await _check_zstream_branch_consistency("bash", "c10s", tmp_path)
 
 
 @pytest.mark.asyncio
 async def test_zstream_consistency_brew_unreachable_soft_fails(tmp_path, caplog):
     """Brew query failure logs a warning and does not raise."""
-    with (
-        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
-        patch(
-            "ymir.agents.tasks.get_latest_candidate_build",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("Brew unreachable"),
-        ),
-        patch("ymir.agents.tasks.run_subprocess", new_callable=AsyncMock) as mock_run,
-    ):
-        await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
 
-    mock_run.assert_not_awaited()
+    async def _mock_candidate(*_args, **_kwargs):
+        raise RuntimeError("Brew unreachable")
+
+    flexmock(agent_tasks).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+    flexmock(agent_tasks).should_receive("run_subprocess").never()
+    flexmock(agent_tasks).should_receive("get_latest_candidate_build").replace_with(_mock_candidate)
+
+    await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
+
     assert "Could not query Brew" in caplog.text
 
 
 @pytest.mark.asyncio
 async def test_zstream_consistency_older_uses_z_pending(tmp_path):
     """Older z-streams query z-pending, not candidate."""
-    with (
-        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=True),
-        patch(
-            "ymir.agents.tasks.get_latest_z_pending_build",
-            new_callable=AsyncMock,
-            return_value=("1.0-1", "build-ref-sha"),
-        ) as mock_pending,
-        patch(
-            "ymir.agents.tasks.get_latest_candidate_build",
-            new_callable=AsyncMock,
-        ) as mock_candidate,
-        patch(
-            "ymir.agents.tasks.run_subprocess",
-            new_callable=AsyncMock,
-            return_value=(0, None, None),
-        ),
-    ):
-        await _check_zstream_branch_consistency("bash", "rhel-9.6.0", tmp_path)
 
-    mock_pending.assert_awaited_once_with("bash", "rhel-9.6.0")
-    mock_candidate.assert_not_awaited()
+    async def _older_zstream_true(*_args, **_kwargs):
+        return True
+
+    async def _mock_pending(*_args, **_kwargs):
+        return "1.0-1", "build-ref-sha"
+
+    async def _mock_run_subprocess(*_args, **_kwargs):
+        return 0, None, None
+
+    flexmock(agent_tasks).should_receive("is_older_zstream").replace_with(_older_zstream_true)
+    flexmock(agent_tasks).should_receive("get_latest_z_pending_build").once().with_args(
+        "bash", "rhel-9.6.0"
+    ).replace_with(_mock_pending)
+    flexmock(agent_tasks).should_receive("get_latest_candidate_build").never()
+    flexmock(agent_tasks).should_receive("run_subprocess").replace_with(_mock_run_subprocess)
+
+    await _check_zstream_branch_consistency("bash", "rhel-9.6.0", tmp_path)
 
 
 @pytest.mark.asyncio
 async def test_zstream_consistency_unexpected_git_exit_soft_fails(tmp_path, caplog):
     """Unexpected merge-base exit codes log a warning and do not raise."""
-    with (
-        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
-        patch(
-            "ymir.agents.tasks.get_latest_candidate_build",
-            new_callable=AsyncMock,
-            return_value=("1.0-1", "build-ref-sha"),
-        ),
-        patch(
-            "ymir.agents.tasks.run_subprocess",
-            new_callable=AsyncMock,
-            return_value=(2, None, "fatal: not a git repository"),
-        ) as mock_run,
-    ):
-        await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
 
-    mock_run.assert_awaited_once()
+    async def _mock_candidate(*_args, **_kwargs):
+        return "1.0-1", "build-ref-sha"
+
+    async def _mock_run_subprocess(*_args, **_kwargs):
+        return 2, None, "fatal: not a git repository"
+
+    flexmock(agent_tasks).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+    flexmock(agent_tasks).should_receive("get_latest_candidate_build").replace_with(_mock_candidate)
+    flexmock(agent_tasks).should_receive("run_subprocess").once().replace_with(_mock_run_subprocess)
+
+    await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
+
     assert "Unexpected git merge-base exit 2" in caplog.text
 
 
 @pytest.mark.asyncio
 async def test_handle_zstream_branch_stale_error_labels_comments_and_error_list():
     exc = ZStreamBranchStaleError("golang", "rhel-9.8.0", "build-ref-sha", "branch-head-sha")
-    redis = AsyncMock()
-    redis.lpush = AsyncMock()
-    redis.incr = AsyncMock(return_value=7)
+
+    async def _mock_incr(*_args, **_kwargs):
+        return 7
+
+    lpush_args = []
+
+    async def _mock_lpush(queue, payload):
+        lpush_args.append((queue, payload))
+
+    redis = flexmock()
+    redis.should_receive("incr").with_args(RedisQueues.ERROR_ID_COUNTER.value).once().replace_with(_mock_incr)
+    redis.should_receive("lpush").replace_with(_mock_lpush).once()
+
     task = _make_task(attempts=2)
 
-    with (
-        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock) as mock_labels,
-        patch("ymir.agents.tasks.comment_in_jira", new_callable=AsyncMock) as mock_comment,
-        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
-    ):
-        await handle_zstream_branch_stale_error(
-            exc,
-            jira_issues=["RHEL-1", "RHEL-2", "RHEL-1"],
-            primary_jira_issue="RHEL-1",
-            agent_type="Rebuild",
-            errored_label=JiraLabels.REBUILD_ERRORED.value,
-            triaged_label=JiraLabels.TRIAGED_REBUILD.value,
-            dry_run=False,
-            user_triggered=False,
-            redis_conn=redis,
-            task=task,
-            queue=RedisQueues.REBUILD_QUEUE_C9S.value,
-        )
-
-    assert mock_labels.await_count == 2
-    assert mock_comment.await_count == 2
-    mock_comment.assert_any_await(
+    flexmock(agent_tasks).should_receive("set_jira_labels").twice().replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("comment_in_jira").once().replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("comment_in_jira").with_args(
         jira_issue="RHEL-1",
         agent_type="Rebuild",
         comment_text=str(exc),
         available_tools=[],
         is_error=True,
         user_triggered=True,
+    ).once().replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+
+    await handle_zstream_branch_stale_error(
+        exc,
+        jira_issues=["RHEL-1", "RHEL-2", "RHEL-1"],
+        primary_jira_issue="RHEL-1",
+        agent_type="Rebuild",
+        errored_label=JiraLabels.REBUILD_ERRORED.value,
+        triaged_label=JiraLabels.TRIAGED_REBUILD.value,
+        dry_run=False,
+        user_triggered=False,
+        redis_conn=redis,
+        task=task,
+        queue=RedisQueues.REBUILD_QUEUE_C9S.value,
     )
-    redis.incr.assert_awaited_once_with(RedisQueues.ERROR_ID_COUNTER.value)
-    redis.lpush.assert_awaited_once()
-    assert redis.lpush.await_args.args[0] == RedisQueues.ERROR_LIST.value
-    entry = ErrorListEntry.model_validate_json(redis.lpush.await_args.args[1])
+
+    lpush_val, lpush_entry = lpush_args.pop(0)
+    entry = ErrorListEntry.model_validate_json(lpush_entry)
+
+    assert lpush_val == RedisQueues.ERROR_LIST.value
     assert entry.error_id == 7
     assert entry.queue == RedisQueues.REBUILD_QUEUE_C9S.value
     assert entry.task == task
@@ -732,30 +751,29 @@ async def test_handle_zstream_branch_stale_error_labels_comments_and_error_list(
 @pytest.mark.asyncio
 async def test_handle_zstream_branch_stale_error_skips_comment_on_dry_run():
     exc = ZStreamBranchStaleError("golang", "rhel-9.8.0", "build-ref-sha", "branch-head-sha")
-    redis = AsyncMock()
-    redis.lpush = AsyncMock()
-    redis.incr = AsyncMock(return_value=1)
 
-    with (
-        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock) as mock_labels,
-        patch("ymir.agents.tasks.comment_in_jira", new_callable=AsyncMock) as mock_comment,
-        patch("ymir.agents.tasks.mcp_tools", _fake_mcp_tools),
-    ):
-        await handle_zstream_branch_stale_error(
-            exc,
-            jira_issues=["RHEL-1"],
-            primary_jira_issue="RHEL-1",
-            agent_type="Rebase",
-            errored_label=JiraLabels.REBASE_ERRORED.value,
-            triaged_label=JiraLabels.TRIAGED_REBASE.value,
-            dry_run=True,
-            user_triggered=False,
-            redis_conn=redis,
-        )
+    async def _mock_incr(*_args, **_kwargs):
+        return 1
 
-    mock_labels.assert_awaited_once()
-    mock_comment.assert_not_awaited()
-    redis.lpush.assert_awaited_once()
+    redis = flexmock()
+    redis.should_receive("lpush").replace_with(_async_noop).once()
+    redis.should_receive("incr").replace_with(_mock_incr)
+
+    flexmock(agent_tasks).should_receive("set_jira_labels").once().replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("comment_in_jira").never()
+    flexmock(agent_tasks).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+
+    await handle_zstream_branch_stale_error(
+        exc,
+        jira_issues=["RHEL-1"],
+        primary_jira_issue="RHEL-1",
+        agent_type="Rebase",
+        errored_label=JiraLabels.REBASE_ERRORED.value,
+        triaged_label=JiraLabels.TRIAGED_REBASE.value,
+        dry_run=True,
+        user_triggered=False,
+        redis_conn=redis,
+    )
 
 
 # -- fetch_release_bumping_config ---------------------------------------------
@@ -763,9 +781,12 @@ async def test_handle_zstream_branch_stale_error_skips_comment_on_dry_run():
 
 @pytest.mark.asyncio
 async def test_fetch_release_bumping_config_returns_default_when_not_found():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = "No maintainer rules found for package 'bash' (file 'ymir.yaml' not found)"
-        config = await fetch_release_bumping_config("bash", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "No maintainer rules found for package 'bash' (file 'ymir.yaml' not found)"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    config = await fetch_release_bumping_config("bash", [])
 
     assert config.abandon_autorelease is False
     assert config.treat_maintenance_rhel_as_zstream is False
@@ -774,14 +795,17 @@ async def test_fetch_release_bumping_config_returns_default_when_not_found():
 
 @pytest.mark.asyncio
 async def test_fetch_release_bumping_config_parses_valid_yaml():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = (
+    async def _mock_run_tool(*_args, **_kwargs):
+        return (
             "release_bumping:\n"
             "  abandon_autorelease: true\n"
             "  treat_maintenance_rhel_as_zstream: true\n"
             "  disregard_zstream_nvr_policy: true\n"
         )
-        config = await fetch_release_bumping_config("bash", [])
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    config = await fetch_release_bumping_config("bash", [])
 
     assert config.abandon_autorelease is True
     assert config.treat_maintenance_rhel_as_zstream is True
@@ -790,9 +814,12 @@ async def test_fetch_release_bumping_config_parses_valid_yaml():
 
 @pytest.mark.asyncio
 async def test_fetch_release_bumping_config_returns_default_on_exception():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.side_effect = RuntimeError("network error")
-        config = await fetch_release_bumping_config("bash", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        raise RuntimeError("network error")
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    config = await fetch_release_bumping_config("bash", [])
 
     assert config.abandon_autorelease is False
     assert config.treat_maintenance_rhel_as_zstream is False
@@ -801,25 +828,34 @@ async def test_fetch_release_bumping_config_returns_default_on_exception():
 
 @pytest.mark.asyncio
 async def test_fetch_release_bumping_config_raises_on_malformed_section():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = "release_bumping:\n  abandon_autorelease: not_a_bool\n"
-        with pytest.raises(InvalidReleaseBumpingConfigError, match="malformed"):
-            await fetch_release_bumping_config("bash", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "release_bumping:\n  abandon_autorelease: not_a_bool\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    with pytest.raises(InvalidReleaseBumpingConfigError, match="malformed"):
+        await fetch_release_bumping_config("bash", [])
 
 
 @pytest.mark.asyncio
 async def test_fetch_release_bumping_config_raises_on_invalid_yaml_syntax():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = "release_bumping:\n  abandon_autorelease: [\n"
-        with pytest.raises(InvalidReleaseBumpingConfigError, match="not valid YAML"):
-            await fetch_release_bumping_config("bash", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "release_bumping:\n  abandon_autorelease: [\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    with pytest.raises(InvalidReleaseBumpingConfigError, match="not valid YAML"):
+        await fetch_release_bumping_config("bash", [])
 
 
 @pytest.mark.asyncio
 async def test_fetch_release_bumping_config_returns_default_when_no_release_bumping_key():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = "some_other_setting: true\n"
-        config = await fetch_release_bumping_config("bash", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "some_other_setting: true\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    config = await fetch_release_bumping_config("bash", [])
 
     assert config.abandon_autorelease is False
     assert config.treat_maintenance_rhel_as_zstream is False

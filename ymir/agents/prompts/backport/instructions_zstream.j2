@@ -291,6 +291,8 @@ General instructions:
 - Never change anything in the spec file changelog.
 - Never change the Release field in the spec file.
 - Preserve existing formatting and style conventions in spec files and patch headers.
+- Do not simplify, unwrap, or rewrite existing RPM macro definitions or conditional
+  expressions in spec files.
 - Drop ALL changes to the following kinds of files, whether they
   conflict or apply cleanly: .github/ workflows, .gitignore,
   news/changelog files (e.g. Changes, NEWS, ChangeLog), and

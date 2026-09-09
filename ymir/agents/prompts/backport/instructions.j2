@@ -295,6 +295,8 @@ General instructions:
 - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
 - Never change anything in the spec file changelog.
 - Preserve existing formatting and style conventions in spec files and patch headers.
+- Do not simplify, unwrap, or rewrite existing RPM macro definitions or conditional
+  expressions in spec files.
 - Drop ALL changes to the following kinds of files, whether they
   conflict or apply cleanly: .github/ workflows, .gitignore,
   news/changelog files (e.g. Changes, NEWS, ChangeLog), and

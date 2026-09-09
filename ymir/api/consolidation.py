@@ -10,7 +10,7 @@ import logging
 from typing import Literal
 
 from aiohttp import web
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, field_validator
 
 from ymir.api import command_parser
 from ymir.api.app_keys import REDIS_KEY
@@ -30,6 +30,14 @@ class ConsolidationRequest(BaseModel):
     target_branch: str
     source_issues: list[str] | None = None
     release_strategy: Literal["merged", "per_commit"] | None = None
+
+    @field_validator("source_issues")
+    @classmethod
+    def validate_source_issues_length(cls, v: list[str] | None) -> list[str] | None:
+        if v is not None and len(v) != 2:
+            msg = "source_issues must contain exactly 2 issue keys"
+            raise ValueError(msg)
+        return v
 
 
 async def _submit_consolidation_job(
@@ -106,7 +114,7 @@ def _build_consolidate_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="consolidate", exit_on_error=False)
     parser.add_argument("package")
     parser.add_argument("target_branch")
-    parser.add_argument("--source-issues", nargs="+", default=None)
+    parser.add_argument("--source-issues", nargs=2, default=None)
     parser.add_argument("--release-strategy", choices=["merged", "per_commit"], default=None)
     return parser
 

@@ -16,13 +16,13 @@ build-test-image-c9s:
 	$(CONTAINER_ENGINE) build --rm --tag $(TEST_IMAGE_C9S) -f Containerfile.c9s-tests
 
 .PHONY: check check-agents check-cli check-tools-general check-unprivileged-tools check-privileged-tools check-jira-issue-fetcher check-ymir-common \
-	check-supervisor check-mcp-install check-sweep check-sweep-integration \
+	check-supervisor check-mcp-install check-sweep check-sweep-integration check-api \
 	check-deployment-scripts check-mr-cleanup \
 	check-in-container check-agents-in-container check-cli-in-container \
 	check-tools-general-in-container check-unprivileged-tools-in-container \
 	check-privileged-tools-in-container check-jira-issue-fetcher-in-container check-ymir-common-in-container \
 	check-supervisor-in-container check-mcp-install-in-container check-sweep-in-container check-sweep-integration-in-container \
-	check-deployment-scripts-in-container check-mr-cleanup-in-container
+	check-deployment-scripts-in-container check-mr-cleanup-in-container check-api-in-container
 
 define RUN_TESTS
 	PYTHONPATH=$(CURDIR) PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --verbose --showlocals $(addprefix $(1),$(TEST_TARGET))
@@ -53,11 +53,17 @@ check-sweep:
 check-sweep-integration: TEST_TARGET = ./tests/integration
 check-sweep-integration:
 	$(call RUN_TESTS,ymir/sweep/)
+check-api:
+	$(call RUN_TESTS,ymir/api/)
 
 check-mcp-install:
 	PYTHONPATH= bash scripts/test_mcp_install.sh
 
+<<<<<<< HEAD
 check: check-agents check-cli check-tools-general check-unprivileged-tools check-privileged-tools check-jira-issue-fetcher check-ymir-common check-supervisor check-deployment-scripts check-mr-cleanup check-sweep check-mcp-install
+=======
+check: check-agents check-cli check-unprivileged-tools check-privileged-tools check-jira-issue-fetcher check-ymir-common check-supervisor check-sweep check-api check-mcp-install
+>>>>>>> 9f1d22e0 (Address PR review findings)
 
 define RUN_TESTS_IN_CONTAINER
 	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(1) make -f Makefile.tests $(2)
@@ -87,6 +93,8 @@ check-sweep-in-container:
 	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE),check-sweep)
 check-sweep-integration-in-container:
 	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE),check-sweep-integration)
+check-api-in-container:
+	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE),check-api)
 check-mcp-install-in-container:
 	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE),check-mcp-install)
 
@@ -94,5 +102,10 @@ check-in-container: check-agents-in-container check-cli-in-container check-tools
 	check-unprivileged-tools-in-container \
 	check-privileged-tools-in-container \
 	check-jira-issue-fetcher-in-container check-ymir-common-in-container check-supervisor-in-container \
+<<<<<<< HEAD
 	check-deployment-scripts-in-container check-mr-cleanup-in-container check-sweep-in-container \
+=======
+	check-sweep-in-container \
+	check-api-in-container \
+>>>>>>> 9f1d22e0 (Address PR review findings)
 	check-mcp-install-in-container

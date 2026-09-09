@@ -1,13 +1,15 @@
 """Consolidation can validate builds even when commits have no Jira footers."""
 
+import contextlib
 import json
 import re
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
 
 import pytest
 from beeai_framework.tools.mcp import MCPTool
 from beeai_framework.workflows import Workflow
+from flexmock import flexmock
 from mcp.types import CallToolResult, TextContent
 from mcp.types import Tool as MCPToolInfo
 
@@ -56,17 +58,25 @@ def test_fallback_build_projects_remain_distinct(first, second):
 async def test_build_project_identifier_preserves_jira_metadata(
     monkeypatch, jira_issue, release_strategy, retry_first, package
 ):
-    session = AsyncMock()
     results = [{"success": True}]
     if retry_first:
         results.insert(0, {"success": False, "error_message": "Build failed"})
-    session.call_tool.side_effect = [
-        CallToolResult(content=[TextContent(type="text", text=json.dumps(result))]) for result in results
-    ]
+    call_tool_results = iter(
+        [CallToolResult(content=[TextContent(type="text", text=json.dumps(result))]) for result in results]
+    )
+
+    call_tool_args = []
+
+    async def _mock_call_tool(*_args, **_kwargs):
+        call_tool_args.append((_args, _kwargs))
+        return next(call_tool_results)
+
+    _mock_session = flexmock()
+    _mock_session.should_receive("call_tool").replace_with(_mock_call_tool)
     # The real build_package contract requires a string project identifier,
     # even though the workflow's Jira metadata is optional.
     tool = MCPTool(
-        session,
+        _mock_session,
         MCPToolInfo(
             name="build_package",
             inputSchema={
@@ -80,11 +90,14 @@ async def test_build_project_identifier_preserves_jira_metadata(
             },
         ),
     )
-    gateway = MagicMock()
-    gateway.__aenter__.return_value = [tool]
-    monkeypatch.setattr(mr_consolidation_agent, "mcp_tools", MagicMock(return_value=gateway))
-    monkeypatch.setattr(mr_consolidation_agent, "create_log_agent", MagicMock())
-    monkeypatch.setattr(mr_consolidation_agent, "get_mock_local_tool_env", lambda _: None)
+
+    @contextlib.asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield [tool]
+
+    flexmock(mr_consolidation_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(mr_consolidation_agent).should_receive("create_log_agent").and_return(flexmock())
+    flexmock(mr_consolidation_agent).should_receive("get_mock_local_tool_env").and_return(None)
     monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
 
     run_workflow = Workflow.run
@@ -113,17 +126,20 @@ async def test_build_project_identifier_preserves_jira_metadata(
         return run_workflow(workflow, state, options)
 
     monkeypatch.setattr(Workflow, "run", start_at_build)
+
     state = await mr_consolidation_agent.run_workflow(
         package=package,
         dist_git_branch="c10s",
         release_strategy=release_strategy,
         dry_run=True,
-        consolidation_agent_factory=MagicMock(),
+        consolidation_agent_factory=lambda *_args, **_kwargs: SimpleNamespace(),
     )
 
     assert len(completed) == 1, "Build validation did not reach its success route"
-    assert session.call_tool.await_count == len(results)
-    project = session.call_tool.await_args_list[0].kwargs["arguments"]["jira_issue"]
+    assert len(call_tool_args) == len(results)
+
+    _, first_kwargs = call_tool_args[0]
+    project = first_kwargs["arguments"]["jira_issue"]
     assert re.fullmatch(r"[A-Za-z0-9_.-]+", project)
     assert len(project) <= 100
     if jira_issue:
@@ -132,8 +148,8 @@ async def test_build_project_identifier_preserves_jira_metadata(
         assert project == "consolidation-package-c10s"
     else:
         assert project.startswith("consolidation-")
-    for call in session.call_tool.await_args_list:
-        assert call.kwargs["arguments"] == {
+    for _, kwargs in call_tool_args:
+        assert kwargs["arguments"] == {
             "srpm_path": "/git-repos/package/package-1-1.src.rpm",
             "dist_git_branch": "c10s",
             "jira_issue": project,

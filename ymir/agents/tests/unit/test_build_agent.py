@@ -4,13 +4,13 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from beeai_framework.emitter import Emitter
 from beeai_framework.errors import AbortError, FrameworkError
 from beeai_framework.tools import ToolError
 from beeai_framework.tools.mcp import MCPTool
+from flexmock import flexmock
 from mcp.types import CallToolResult, TextContent
 from mcp.types import Tool as MCPToolInfo
 from pydantic import ValidationError
@@ -28,25 +28,6 @@ def build_input():
     )
 
 
-@pytest.fixture
-def build_mocks(monkeypatch):
-    tool = SimpleNamespace(name="build_package")
-    submit = AsyncMock()
-    analyst = SimpleNamespace(
-        run=AsyncMock(
-            return_value=SimpleNamespace(
-                last_message=SimpleNamespace(text='{"error": "Missing prerequisite function foo"}'),
-            ),
-        ),
-    )
-    factory = MagicMock(return_value=analyst)
-    monkeypatch.setattr(build_agent, "run_tool", submit)
-    monkeypatch.setattr(build_agent, "create_build_failure_agent", factory)
-    # Successful builds must not even require model configuration.
-    monkeypatch.delenv("CHAT_MODEL", raising=False)
-    return SimpleNamespace(tool=tool, submit=submit, analyst=analyst, factory=factory)
-
-
 async def _run(build_input, tools):
     return await build_agent.run_build(
         build_input=build_input,
@@ -56,10 +37,24 @@ async def _run(build_input, tools):
 
 
 @pytest.mark.asyncio
-async def test_success_submits_once_without_llm(build_input, build_mocks):
-    build_mocks.submit.return_value = BuildResult(success=True, artifacts_urls=["https://copr/log.gz"])
+async def test_success_submits_once_without_llm(build_input, monkeypatch):
+    async def _mock_submit(*_args, **_kwargs):
+        return BuildResult(success=True, artifacts_urls=["https://copr/log.gz"])
 
-    result = await _run(build_input, [build_mocks.tool])
+    _mock_tool = SimpleNamespace(name="build_package")
+    flexmock(build_agent).should_receive("run_tool").with_args(
+        "build_package",
+        available_tools=[_mock_tool],
+        expected_output=BuildResult,
+        srpm_path=str(build_input.srpm_path),
+        dist_git_branch="c10s",
+        jira_issue="RHEL-123",
+    ).replace_with(_mock_submit).once()
+    flexmock(build_agent).should_receive("create_build_failure_agent").never()
+    # Successful builds must not even require model configuration.
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
+
+    result = await _run(build_input, [_mock_tool])
 
     assert result.model_dump() == {
         "success": True,
@@ -67,47 +62,47 @@ async def test_success_submits_once_without_llm(build_input, build_mocks):
         "is_timeout": False,
         "is_infra_error": False,
     }
-    build_mocks.submit.assert_awaited_once_with(
-        "build_package",
-        available_tools=[build_mocks.tool],
-        expected_output=BuildResult,
-        srpm_path=str(build_input.srpm_path),
-        dist_git_branch="c10s",
-        jira_issue="RHEL-123",
-    )
-    build_mocks.factory.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_timeout_preserved_without_llm_even_with_logs(build_input, build_mocks):
-    build_mocks.submit.return_value = BuildResult(
-        success=False,
-        is_timeout=True,
-        error_message="Reached timeout for build 123",
-        artifacts_urls=["https://copr/123/builder-live.log.gz"],
-    )
+async def test_timeout_preserved_without_llm_even_with_logs(build_input, monkeypatch):
+    async def _mock_submit(*_args, **_kwargs):
+        return BuildResult(
+            success=False,
+            is_timeout=True,
+            error_message="Reached timeout for build 123",
+            artifacts_urls=["https://copr/123/builder-live.log.gz"],
+        )
 
-    result = await _run(build_input, [build_mocks.tool])
+    _mock_tool = SimpleNamespace(name="build_package")
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
+    flexmock(build_agent).should_receive("run_tool").replace_with(_mock_submit)
+    flexmock(build_agent).should_receive("create_build_failure_agent").never()
+
+    result = await _run(build_input, [_mock_tool])
 
     assert not result.success
     assert result.is_timeout
     assert not result.is_infra_error
     assert result.error == "Reached timeout for build 123"
-    build_mocks.factory.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_tool_error_is_infrastructure_failure_without_resubmitting(build_input, build_mocks):
-    build_mocks.submit.side_effect = ToolError("Failed to submit Copr build: HTTP 503")
+async def test_tool_error_is_infrastructure_failure_without_resubmitting(build_input, monkeypatch):
+    async def _mock_submit(*_args, **_kwargs):
+        raise ToolError("Failed to submit Copr build: HTTP 503")
 
-    result = await _run(build_input, [build_mocks.tool])
+    _mock_tool = SimpleNamespace(name="build_package")
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
+    flexmock(build_agent).should_receive("run_tool").replace_with(_mock_submit).once()
+    flexmock(build_agent).should_receive("create_build_failure_agent").never()
+
+    result = await _run(build_input, [_mock_tool])
 
     assert not result.success
     assert result.is_infra_error
     assert not result.is_timeout
     assert "HTTP 503" in result.error
-    build_mocks.submit.assert_awaited_once()
-    build_mocks.factory.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -115,72 +110,97 @@ async def test_tool_error_is_infrastructure_failure_without_resubmitting(build_i
 )
 @pytest.mark.asyncio
 async def test_missing_build_tool_is_infrastructure_failure(build_input, monkeypatch, tool_names):
-    session = AsyncMock()
-    tools = [MCPTool(session, MCPToolInfo(name=name, inputSchema={})) for name in tool_names]
-    factory = MagicMock()
-    monkeypatch.setattr(build_agent, "create_build_failure_agent", factory)
+    _mock_session = flexmock()
+    _mock_session.should_receive("call_tool").never()
+    _mock_tools = [MCPTool(_mock_session, MCPToolInfo(name=name, inputSchema={})) for name in tool_names]
+    flexmock(build_agent).should_receive("create_build_failure_agent").never()
     monkeypatch.delenv("CHAT_MODEL", raising=False)
 
     # Exercise the real lookup rather than mocking run_tool.
-    output = await _run(build_input, tools)
+    output = await _run(build_input, _mock_tools)
 
     assert not output.success
     assert output.is_infra_error
     assert not output.is_timeout
     assert "build_package" in output.error
-    session.call_tool.assert_not_awaited()
-    factory.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_unexpected_submission_error_propagates(build_input, build_mocks):
-    error = RuntimeError("Unexpected submission error")
-    build_mocks.submit.side_effect = error
+async def test_unexpected_submission_error_propagates(build_input, monkeypatch):
+    _mock_error = RuntimeError("Unexpected submission error")
+
+    async def _mock_submit(*_args, **_kwargs):
+        raise _mock_error
+
+    _mock_tool = SimpleNamespace(name="build_package")
+    flexmock(build_agent).should_receive("run_tool").replace_with(_mock_submit).once()
+    flexmock(build_agent).should_receive("create_build_failure_agent").never()
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
 
     with pytest.raises(FrameworkError) as exc:
-        await _run(build_input, [build_mocks.tool])
+        await _run(build_input, [_mock_tool])
 
-    assert exc.value.__cause__ is error
-    build_mocks.submit.assert_awaited_once()
-    build_mocks.factory.assert_not_called()
+    assert exc.value.__cause__ == _mock_error
 
 
 @pytest.mark.parametrize("artifacts", [None, [], ["https://copr/package.rpm"]])
 @pytest.mark.asyncio
-async def test_failure_without_logs_returns_original_error(build_input, build_mocks, artifacts):
-    build_mocks.submit.return_value = BuildResult(
-        success=False,
-        error_message="Build 123 finished with state: failed",
-        artifacts_urls=artifacts,
-    )
+async def test_failure_without_logs_returns_original_error(build_input, monkeypatch, artifacts):
+    async def _mock_submit(*_args, **_kwargs):
+        return BuildResult(
+            success=False,
+            error_message="Build 123 finished with state: failed",
+            artifacts_urls=artifacts,
+        )
 
-    result = await _run(build_input, [build_mocks.tool])
+    _mock_tool = SimpleNamespace(name="build_package")
+    flexmock(build_agent).should_receive("run_tool").replace_with(_mock_submit).once()
+    flexmock(build_agent).should_receive("create_build_failure_agent").never()
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
+
+    result = await _run(build_input, [_mock_tool])
 
     assert not result.success
     assert not result.is_infra_error
     assert result.error == "Build 123 finished with state: failed"
-    build_mocks.factory.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_failure_analysis_receives_existing_result_and_cannot_resubmit(build_input, build_mocks):
+async def test_failure_analysis_receives_existing_result_and_cannot_resubmit(build_input, monkeypatch):
     log_url = "https://copr/123/builder-live.log.gz?download=1"
-    build_mocks.submit.return_value = BuildResult(
-        success=False,
-        error_message="Build 123 finished with state: failed",
-        artifacts_urls=[log_url],
-    )
 
-    result = await _run(build_input, [build_mocks.tool])
+    async def _mock_submit(*_args, **_kwargs):
+        return BuildResult(
+            success=False,
+            error_message="Build 123 finished with state: failed",
+            artifacts_urls=[log_url],
+        )
+
+    analyst_run_args = []
+
+    async def _mock_analyst(*_args, **_kwargs):
+        analyst_run_args.append((_args, _kwargs))
+        return SimpleNamespace(
+            last_message=SimpleNamespace(text='{"error": "Missing prerequisite function foo"}')
+        )
+
+    def _mock_factory(*_args, **_kwargs):
+        _mock_run = flexmock()
+        _mock_run.should_receive("run").replace_with(_mock_analyst).once()
+        return _mock_run
+
+    _mock_tool = SimpleNamespace(name="build_package")
+    flexmock(build_agent).should_receive("run_tool").replace_with(_mock_submit).once()
+    flexmock(build_agent).should_receive("create_build_failure_agent").replace_with(_mock_factory).once()
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
+
+    result = await _run(build_input, [_mock_tool])
 
     assert not result.success
     assert not result.is_timeout
     assert not result.is_infra_error
     assert result.error == "Missing prerequisite function foo"
-    build_mocks.submit.assert_awaited_once()
-    build_mocks.factory.assert_called_once()
-    build_mocks.analyst.run.assert_awaited_once()
-    args, kwargs = build_mocks.analyst.run.await_args
+    args, kwargs = analyst_run_args[0]
     assert "Build 123 finished with state: failed" in args[0]
     assert log_url in args[0]
     assert str(build_input.srpm_path) in args[0]
@@ -188,75 +208,99 @@ async def test_failure_analysis_receives_existing_result_and_cannot_resubmit(bui
     assert set(BuildFailureAnalysisOutput.model_fields) == {"error"}
 
 
-@pytest.mark.parametrize("analysis_error", [RuntimeError("Model unavailable"), None])
+@pytest.mark.parametrize("analysis_error", [True, False])
 @pytest.mark.asyncio
-async def test_diagnosis_failure_retains_build_failure(build_input, build_mocks, analysis_error):
-    build_mocks.submit.return_value = BuildResult(
-        success=False,
-        error_message="Build 123 failed",
-        artifacts_urls=["https://copr/123/root.log.gz"],
-    )
-    if analysis_error:
-        build_mocks.analyst.run.side_effect = analysis_error
-    else:
-        build_mocks.analyst.run.return_value.last_message.text = "not json"
+async def test_diagnosis_failure_retains_build_failure(build_input, monkeypatch, analysis_error):
+    async def _mock_submit(*_args, **_kwargs):
+        return BuildResult(
+            success=False,
+            error_message="Build 123 failed",
+            artifacts_urls=["https://copr/123/root.log.gz"],
+        )
 
-    result = await _run(build_input, [build_mocks.tool])
+    async def _mock_analyst(*_args, **_kwargs):
+        if analysis_error:
+            raise RuntimeError("Model unavailable")
+        return SimpleNamespace(last_message=SimpleNamespace(text="not json"))
+
+    def _mock_factory(*_args, **_kwargs):
+        return SimpleNamespace(run=_mock_analyst)
+
+    _mock_tool = SimpleNamespace(name="build_package")
+    flexmock(build_agent).should_receive("run_tool").replace_with(_mock_submit).once()
+    flexmock(build_agent).should_receive("create_build_failure_agent").replace_with(_mock_factory)
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
+
+    result = await _run(build_input, [_mock_tool])
 
     assert not result.success
     assert not result.is_infra_error
     assert "Build 123 failed" in result.error
-    build_mocks.submit.assert_awaited_once()
 
 
 @pytest.mark.parametrize("raw", ["not json", {}, {"success": "unknown"}, []])
 @pytest.mark.asyncio
 async def test_malformed_tool_result_is_not_reported_as_success(build_input, monkeypatch, raw):
-    session = AsyncMock()
-    session.call_tool.return_value = CallToolResult(
-        content=[TextContent(type="text", text=raw if isinstance(raw, str) else json.dumps(raw))],
+
+    async def _mock_call_tool(*_args, **_kwargs):
+        return CallToolResult(
+            content=[TextContent(type="text", text=raw if isinstance(raw, str) else json.dumps(raw))],
+        )
+
+    _mock_session = flexmock()
+    _mock_session.should_receive("call_tool").replace_with(_mock_call_tool).once()
+    _mock_tool = MCPTool(
+        _mock_session, MCPToolInfo(name="build_package", inputSchema=BuildInputSchema.model_json_schema())
     )
-    tool = MCPTool(
-        session, MCPToolInfo(name="build_package", inputSchema=BuildInputSchema.model_json_schema())
-    )
-    factory = MagicMock()
-    monkeypatch.setattr(build_agent, "create_build_failure_agent", factory)
+
+    flexmock(build_agent).should_receive("create_build_failure_agent").never()
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
 
     with pytest.raises(FrameworkError) as exc:
-        await _run(build_input, [tool])
+        await _run(build_input, [_mock_tool])
 
     assert isinstance(exc.value.__cause__, ValidationError)
-    factory.assert_not_called()
-    session.call_tool.assert_awaited_once()
 
 
 @pytest.mark.parametrize("during_analysis", [False, True])
 @pytest.mark.parametrize("cancellation", [asyncio.CancelledError, AbortError])
 @pytest.mark.asyncio
-async def test_cancellation_propagates(build_input, build_mocks, during_analysis, cancellation):
-    if during_analysis:
-        build_mocks.submit.return_value = BuildResult(
-            success=False,
-            artifacts_urls=["https://copr/123/root.log.gz"],
+async def test_cancellation_propagates(build_input, monkeypatch, during_analysis, cancellation):
+    async def _mock_submit(*_args, **_kwargs):
+        if during_analysis:
+            return BuildResult(
+                success=False,
+                artifacts_urls=["https://copr/123/root.log.gz"],
+            )
+        raise cancellation
+
+    async def _mock_analyst(*_args, **_kwargs):
+        if during_analysis:
+            raise cancellation
+        return SimpleNamespace(
+            last_message=SimpleNamespace(text='{"error": "Missing prerequisite function foo"}'),
         )
-        build_mocks.analyst.run.side_effect = cancellation
-    else:
-        build_mocks.submit.side_effect = cancellation
+
+    def _mock_factory(*_args, **_kwargs):
+        return SimpleNamespace(run=_mock_analyst)
+
+    _mock_tool = SimpleNamespace(name="build_package")
+    flexmock(build_agent).should_receive("run_tool").replace_with(_mock_submit).once()
+    flexmock(build_agent).should_receive("create_build_failure_agent").replace_with(_mock_factory)
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
 
     with pytest.raises(asyncio.CancelledError):
-        await _run(build_input, [build_mocks.tool])
-
-    build_mocks.submit.assert_awaited_once()
+        await _run(build_input, [_mock_tool])
 
 
 @pytest.mark.parametrize("during_analysis", [False, True])
 @pytest.mark.asyncio
-async def test_cancelling_caller_stops_active_workflow_step(build_input, build_mocks, during_analysis):
+async def test_cancelling_caller_stops_active_workflow_step(build_input, monkeypatch, during_analysis):
     started = asyncio.Event()
     stopped = asyncio.Event()
     active_step = None
 
-    async def blocked_step(*args, **kwargs):
+    async def _mock_blocked_step(*_args, **_kwargs):
         nonlocal active_step
         active_step = asyncio.current_task()
         started.set()
@@ -265,23 +309,33 @@ async def test_cancelling_caller_stops_active_workflow_step(build_input, build_m
         finally:
             stopped.set()
 
-    if during_analysis:
-        build_mocks.submit.return_value = BuildResult(
-            success=False, artifacts_urls=["https://copr/123/root.log.gz"]
-        )
-        build_mocks.analyst.run.side_effect = blocked_step
-    else:
-        build_mocks.submit.side_effect = blocked_step
+    async def _mock_submit(*_args, **_kwargs):
+        return BuildResult(success=False, artifacts_urls=["https://copr/123/root.log.gz"])
 
-    task = asyncio.create_task(_run(build_input, [build_mocks.tool]))
+    async def _mock_analyst(*_args, **_kwargs):
+        return SimpleNamespace(
+            last_message=SimpleNamespace(text='{"error": "Missing prerequisite function foo"}'),
+        )
+
+    def _mock_factory(*_args, **_kwargs):
+        return SimpleNamespace(run=_mock_blocked_step if during_analysis else _mock_analyst)
+
+    _mock_tool = SimpleNamespace(name="build_package")
+    flexmock(build_agent).should_receive("run_tool").replace_with(
+        _mock_submit if during_analysis else _mock_blocked_step
+    ).once()
+    flexmock(build_agent).should_receive("create_build_failure_agent").replace_with(_mock_factory).times(
+        during_analysis
+    )
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
+
+    task = asyncio.create_task(_run(build_input, [_mock_tool]))
     try:
         await asyncio.wait_for(started.wait(), timeout=2)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=2)
         await asyncio.wait_for(stopped.wait(), timeout=2)
-        build_mocks.submit.assert_awaited_once()
-        assert build_mocks.factory.call_count == during_analysis
     finally:
         task.cancel()
         if active_step is not None:
@@ -296,26 +350,30 @@ async def test_cancelling_caller_stops_active_workflow_step(build_input, build_m
     [(True, False, None), (False, True, "Build timed out"), (False, False, "Build failed")],
 )
 @pytest.mark.asyncio
-async def test_actual_gateway_result_decoding(
-    build_input, monkeypatch, structured, success, is_timeout, error_message
-):
+async def test_actual_gateway_result_decoding(build_input, structured, success, is_timeout, error_message):
     result = {
         "success": success,
         "is_timeout": is_timeout,
         "error_message": error_message,
         "artifacts_urls": [],
     }
-    session = AsyncMock()
-    session.call_tool.return_value = CallToolResult(
-        content=[TextContent(type="text", text=json.dumps(result))],
-        structuredContent={"result": result} if structured else None,
-    )
+
+    call_tool_args = []
+
+    async def _mock_call_tool(*_args, **_kwargs):
+        call_tool_args.append((_args, _kwargs))
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(result))],
+            structuredContent={"result": result} if structured else None,
+        )
+
+    _mock_session = flexmock()
+    _mock_session.should_receive("call_tool").replace_with(_mock_call_tool).once()
     tool = MCPTool(
-        session,
+        _mock_session,
         MCPToolInfo(name="build_package", inputSchema=BuildInputSchema.model_json_schema()),
     )
-    factory = MagicMock()
-    monkeypatch.setattr(build_agent, "create_build_failure_agent", factory)
+    flexmock(build_agent).should_receive("create_build_failure_agent").never()
 
     output = await _run(build_input, [tool])
 
@@ -323,33 +381,34 @@ async def test_actual_gateway_result_decoding(
     assert output.is_timeout == is_timeout
     assert output.error == error_message
     assert not output.is_infra_error
-    session.call_tool.assert_awaited_once()
-    assert session.call_tool.await_args.kwargs["arguments"] == build_input.model_dump(mode="json")
-    factory.assert_not_called()
+
+    _, kwargs = call_tool_args[0]
+    assert kwargs["arguments"] == build_input.model_dump(mode="json")
 
 
 @pytest.mark.asyncio
-async def test_actual_gateway_error_is_infrastructure_failure(build_input, monkeypatch):
-    session = AsyncMock()
-    session.call_tool.return_value = CallToolResult(
-        isError=True,
-        content=[TextContent(type="text", text="Failed to submit Copr build: HTTP 503")],
-    )
-    tool = MCPTool(
-        session,
+async def test_actual_gateway_error_is_infrastructure_failure(build_input):
+    async def _mock_call_tool(*_args, **_kwargs):
+        return CallToolResult(
+            isError=True,
+            content=[TextContent(type="text", text="Failed to submit Copr build: HTTP 503")],
+        )
+
+    _mock_session = flexmock()
+    _mock_session.should_receive("call_tool").replace_with(_mock_call_tool).once()
+    _mock_tool = MCPTool(
+        _mock_session,
         MCPToolInfo(name="build_package", inputSchema=BuildInputSchema.model_json_schema()),
     )
-    factory = MagicMock()
-    monkeypatch.setattr(build_agent, "create_build_failure_agent", factory)
 
-    output = await _run(build_input, [tool])
+    flexmock(build_agent).should_receive("create_build_failure_agent").never()
+
+    output = await _run(build_input, [_mock_tool])
 
     assert not output.success
     assert output.is_infra_error
     assert not output.is_timeout
     assert "HTTP 503" in output.error
-    session.call_tool.assert_awaited_once()
-    factory.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -366,21 +425,25 @@ async def test_actual_gateway_error_is_infrastructure_failure(build_input, monke
     ids=["success", "timeout", "no-logs", "diagnosis"],
 )
 @pytest.mark.asyncio
-async def test_build_workflow_routes_real_steps(build_input, monkeypatch, build_result, steps):
-    session = AsyncMock()
-    session.call_tool.return_value = CallToolResult(
-        content=[TextContent(type="text", text=json.dumps(build_result))]
+async def test_build_workflow_routes_real_steps(build_input, build_result, steps):
+    async def _mock_call_tool(*_args, **_kwargs):
+        return CallToolResult(content=[TextContent(type="text", text=json.dumps(build_result))])
+
+    _mock_session = flexmock()
+    _mock_session.should_receive("call_tool").replace_with(_mock_call_tool).once()
+    _mock_tool = MCPTool(
+        _mock_session, MCPToolInfo(name="build_package", inputSchema=BuildInputSchema.model_json_schema())
     )
-    tool = MCPTool(
-        session, MCPToolInfo(name="build_package", inputSchema=BuildInputSchema.model_json_schema())
+
+    async def _mock_analyst_run(*_args, **_kwargs):
+        return SimpleNamespace(last_message=SimpleNamespace(text='{"error": "Diagnosis"}'))
+
+    def _mock_factory(*_args, **_kwargs):
+        return SimpleNamespace(run=_mock_analyst_run)
+
+    flexmock(build_agent).should_receive("create_build_failure_agent").replace_with(_mock_factory).times(
+        "diagnose_failure" in steps
     )
-    analyst = SimpleNamespace(
-        run=AsyncMock(
-            return_value=SimpleNamespace(last_message=SimpleNamespace(text='{"error": "Diagnosis"}'))
-        )
-    )
-    factory = MagicMock(return_value=analyst)
-    monkeypatch.setattr(build_agent, "create_build_failure_agent", factory)
     visited = []
 
     def on_step(data, event):
@@ -389,32 +452,35 @@ async def test_build_workflow_routes_real_steps(build_input, monkeypatch, build_
 
     cleanup = Emitter.root().on("*.*", on_step)
     try:
-        output = await _run(build_input, [tool])
+        output = await _run(build_input, [_mock_tool])
     finally:
         cleanup()
 
     assert visited == steps
     assert output.success == build_result["success"]
-    session.call_tool.assert_awaited_once()
-    assert factory.call_count == ("diagnose_failure" in steps)
 
 
 @pytest.mark.parametrize("has_extractor", [False, True])
 @pytest.mark.parametrize("has_downloader", [False, True])
-def test_failure_agent_has_no_build_or_edit_tools(monkeypatch, has_extractor, has_downloader):
+def test_failure_agent_has_no_build_or_edit_tools(has_extractor, has_downloader):
     names = ["build_package", "unrelated_tool"]
     if has_downloader:
         names.append("download_artifacts")
     if has_extractor:
         names.append("extract_log_snippets")
     tools = [SimpleNamespace(name=name) for name in names]
-    factory = MagicMock()
-    monkeypatch.setattr(build_agent, "ReasoningAgent", factory)
-    monkeypatch.setattr(build_agent, "get_chat_model", MagicMock())
+
+    factory_call_args = []
+
+    def _mock_factory(*_args, **_kwargs):
+        factory_call_args.append((_args, _kwargs))
+
+    flexmock(build_agent).should_receive("ReasoningAgent").replace_with(_mock_factory)
+    flexmock(build_agent).should_receive("get_chat_model").replace_with(flexmock())
 
     build_agent.create_build_failure_agent(tools, {"working_directory": Path("/tmp")})
 
-    kwargs = factory.call_args.kwargs
+    _, kwargs = factory_call_args[0]
     available = {t.name for t in kwargs["tools"]}
     has_gateway_log_tools = has_extractor and has_downloader
     assert ("download_artifacts" in available) == has_gateway_log_tools

@@ -1,8 +1,14 @@
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from flexmock import flexmock
 
+from ymir.agents import (
+    tasks as agent_tasks,
+)
+from ymir.agents import (
+    triage_agent as t_agent,
+)
 from ymir.agents.constants import JIRA_COMMENT_TEMPLATE
 from ymir.agents.triage_agent import (
     TriageState,
@@ -11,6 +17,8 @@ from ymir.agents.triage_agent import (
     _postponed_comment_exists,
     _should_update_jira,
     determine_target_branch,
+    main,
+    run_workflow,
 )
 from ymir.common.constants import YMIR_COMMENT_MARKER
 from ymir.common.models import (
@@ -96,109 +104,114 @@ async def _always_acquired_lock(*_args, **_kwargs):
     yield "test-lock-token"
 
 
+@pytest.fixture
+def _mock_env_vars_redis(monkeypatch):
+    monkeypatch.setenv("COLLECTOR_ENDPOINT", "http://localhost:6006")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://mcp-gateway:8000/sse")
+    monkeypatch.setenv("DRY_RUN", "true")
+
+
+@pytest.fixture
+def _mock_env_vars(monkeypatch):
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://localhost")
+    monkeypatch.setenv("GIT_REPO_BASEPATH", "/tmp")
+
+
+async def _async_noop(*_args, **_kwargs):
+    pass
+
+
 async def _capture_process_task(main_fn):
     """Run main() in queue mode, capture the process_task closure it registers."""
     captured = {}
 
-    async def fake_run_task_loop(_redis, _queues, process_fn, **_kw):
+    async def _mock_run_task_loop(_redis, _queues, process_fn, **_kw):
         captured["process_task"] = process_fn
 
-    with (
-        patch("ymir.agents.triage_agent.init_sentry"),
-        patch("ymir.agents.triage_agent.configure_logging"),
-        patch("ymir.agents.triage_agent.resolve_chat_model_override"),
-        patch("ymir.agents.triage_agent.setup_observability", return_value=MagicMock()),
-        patch("ymir.agents.triage_agent.run_task_loop", side_effect=fake_run_task_loop),
-        patch("ymir.agents.triage_agent.redis_client") as mock_redis_ctx,
-        patch.dict(
-            "os.environ",
-            {
-                "COLLECTOR_ENDPOINT": "http://localhost:6006",
-                "REDIS_URL": "redis://localhost",
-                "MCP_GATEWAY_URL": "http://mcp-gateway:8000/sse",
-                "DRY_RUN": "true",
-            },
-            clear=False,
-        ),
-    ):
-        mock_redis_ctx.return_value.__aenter__ = AsyncMock()
-        mock_redis_ctx.return_value.__aexit__ = AsyncMock()
-        await main_fn()
+    @asynccontextmanager
+    async def _mock_redis_client(*_args, **_kwargs):
+        redis_mock = flexmock()
+        redis_mock.should_receive("lpush").replace_with(_async_noop)
+        redis_mock.should_receive("incr").replace_with(_async_noop)
+        yield redis_mock
+
+    transaction = flexmock()
+    transaction.should_receive("__enter__").and_return(None)
+    transaction.should_receive("__exit__").and_return(False)
+
+    span_processor = flexmock()
+    span_processor.should_receive("start_transaction").and_return(transaction)
+
+    flexmock(t_agent).should_receive("init_sentry")
+    flexmock(t_agent).should_receive("configure_logging")
+    flexmock(t_agent).should_receive("resolve_chat_model_override")
+    flexmock(t_agent).should_receive("setup_observability").and_return(span_processor)
+    flexmock(t_agent).should_receive("run_task_loop").replace_with(_mock_run_task_loop)
+    flexmock(t_agent).should_receive("redis_client").replace_with(_mock_redis_client)
+
+    await main_fn()
 
     return captured["process_task"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["Closed", "Done"])
-async def test_process_task_skips_closed_issues(status):
+async def test_process_task_skips_closed_issues(status, _mock_env_vars_redis):
     """Closed/Done issues are skipped without calling run_workflow."""
-    from ymir.agents.triage_agent import main
+
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return [], status
+
+    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(t_agent).should_receive("run_workflow").never()
 
     process_task = await _capture_process_task(main)
-
-    with (
-        patch("ymir.agents.triage_agent.issue_lock", side_effect=_always_acquired_lock),
-        patch(
-            "ymir.agents.tasks.get_jira_issue_metadata",
-            new_callable=AsyncMock,
-            return_value=([], status),
-        ),
-        patch("ymir.agents.triage_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
-    ):
-        await process_task(_make_payload())
-
-    mock_workflow.assert_not_awaited()
+    await process_task(_make_payload())
 
 
 @pytest.mark.asyncio
-async def test_process_task_skips_closed_user_triggered_with_cleanup():
+async def test_process_task_skips_closed_user_triggered_with_cleanup(_mock_env_vars_redis):
     """User-triggered run on a closed issue removes ymir_todo and posts ack."""
-    from ymir.agents.triage_agent import main
+
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return ["ymir_todo"], "Closed"
+
+    calls = []
+
+    async def _mock_jira_labels(*_args, **_kwargs):
+        calls.append((_args, _kwargs))
+
+    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(t_agent).should_receive("run_workflow").never()
+    flexmock(agent_tasks).should_receive("set_jira_labels").once().replace_with(_mock_jira_labels)
+    flexmock(agent_tasks).should_receive("post_user_ack_once").once().replace_with(_async_noop)
 
     process_task = await _capture_process_task(main)
+    await process_task(_make_payload(user_triggered=True))
 
-    with (
-        patch("ymir.agents.triage_agent.issue_lock", side_effect=_always_acquired_lock),
-        patch(
-            "ymir.agents.tasks.get_jira_issue_metadata",
-            new_callable=AsyncMock,
-            return_value=(["ymir_todo"], "Closed"),
-        ),
-        patch("ymir.agents.triage_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
-        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock) as mock_labels,
-        patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock) as mock_ack,
-    ):
-        await process_task(_make_payload(user_triggered=True))
-
-    mock_workflow.assert_not_awaited()
-    mock_labels.assert_awaited_once()
-    _, kwargs = mock_labels.call_args
+    _, kwargs = calls[0]
     assert kwargs["labels_to_remove"] == ["ymir_todo"]
     assert kwargs["dry_run"] is True
-    mock_ack.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_process_task_proceeds_for_open_issues():
+async def test_process_task_proceeds_for_open_issues(_mock_env_vars_redis):
     """An open issue (e.g. New) is not blocked by the closed-issue check."""
-    from ymir.agents.triage_agent import main
+
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return [], "New"
+
+    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
+    flexmock(t_agent).should_receive("run_workflow").once().replace_with(_async_noop)
 
     process_task = await _capture_process_task(main)
-
-    with (
-        patch("ymir.agents.triage_agent.issue_lock", side_effect=_always_acquired_lock),
-        patch(
-            "ymir.agents.tasks.get_jira_issue_metadata",
-            new_callable=AsyncMock,
-            return_value=([], "New"),
-        ),
-        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
-        patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
-        patch("ymir.agents.triage_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
-    ):
-        await process_task(_make_payload())
-
-    mock_workflow.assert_awaited_once()
+    await process_task(_make_payload())
 
 
 # --- Modular detection tests ---
@@ -355,51 +368,51 @@ def _cve_eligibility(*, needs_internal_fix: bool) -> CVEEligibilityResult:
 
 @pytest.mark.asyncio
 async def test_determine_target_branch_modular_internal_fix_uses_rhel():
-    with patch(
-        "ymir.agents.triage_agent.is_older_zstream",
-        new_callable=AsyncMock,
-        return_value=False,
-    ):
-        branch, namespace = await determine_target_branch(
-            _cve_eligibility(needs_internal_fix=True),
-            _modular_backport_data(),
-            jira_summary=_MODULAR_SUMMARY,
-            downstream_component="squid",
-        )
+    async def _older_zstream_false(*_args, **_kwargs):
+        return False
+
+    flexmock(t_agent).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+
+    branch, namespace = await determine_target_branch(
+        _cve_eligibility(needs_internal_fix=True),
+        _modular_backport_data(),
+        jira_summary=_MODULAR_SUMMARY,
+        downstream_component="squid",
+    )
     assert branch == "stream-squid-4-rhel-8.10.0"
     assert namespace == "rhel"
 
 
 @pytest.mark.asyncio
 async def test_determine_target_branch_modular_cs_eligible_uses_centos_stream():
-    with patch(
-        "ymir.agents.triage_agent.is_older_zstream",
-        new_callable=AsyncMock,
-        return_value=False,
-    ):
-        branch, namespace = await determine_target_branch(
-            _cve_eligibility(needs_internal_fix=False),
-            _modular_backport_data(),
-            jira_summary=_MODULAR_SUMMARY,
-            downstream_component="squid",
-        )
+    async def _older_zstream_false(*_args, **_kwargs):
+        return False
+
+    flexmock(t_agent).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+
+    branch, namespace = await determine_target_branch(
+        _cve_eligibility(needs_internal_fix=False),
+        _modular_backport_data(),
+        jira_summary=_MODULAR_SUMMARY,
+        downstream_component="squid",
+    )
     assert branch == "stream-squid-4-rhel-8.10.0"
     assert namespace == "centos-stream"
 
 
 @pytest.mark.asyncio
 async def test_determine_target_branch_modular_older_zstream_uses_rhel():
-    with patch(
-        "ymir.agents.triage_agent.is_older_zstream",
-        new_callable=AsyncMock,
-        return_value=True,
-    ):
-        branch, namespace = await determine_target_branch(
-            _cve_eligibility(needs_internal_fix=False),
-            _modular_backport_data(fix_version="rhel-8.6.z"),
-            jira_summary=_MODULAR_SUMMARY,
-            downstream_component="squid",
-        )
+    async def _older_zstream_true(*_args, **_kwargs):
+        return True
+
+    flexmock(t_agent).should_receive("is_older_zstream").replace_with(_older_zstream_true)
+
+    branch, namespace = await determine_target_branch(
+        _cve_eligibility(needs_internal_fix=False),
+        _modular_backport_data(fix_version="rhel-8.6.z"),
+        jira_summary=_MODULAR_SUMMARY,
+        downstream_component="squid",
+    )
     assert branch == "stream-squid-4-rhel-8.6.0"
     assert namespace == "rhel"
 
@@ -414,17 +427,18 @@ async def test_determine_target_branch_non_modular_has_no_explicit_namespace():
         cve_id="CVE-2026-1",
         fix_version="rhel-10.2.z",
     )
-    with patch(
-        "ymir.agents.triage_agent._map_version_to_branch",
-        new_callable=AsyncMock,
-        return_value="rhel-10.2",
-    ):
-        branch, namespace = await determine_target_branch(
-            _cve_eligibility(needs_internal_fix=True),
-            data,
-            jira_summary="CVE-2026-1 nginx: something [rhel-10.2.z]",
-            downstream_component="nginx",
-        )
+
+    async def _mock_version_to_branch(*_args, **_kwargs):
+        return "rhel-10.2"
+
+    flexmock(t_agent).should_receive("_map_version_to_branch").replace_with(_mock_version_to_branch)
+
+    branch, namespace = await determine_target_branch(
+        _cve_eligibility(needs_internal_fix=True),
+        data,
+        jira_summary="CVE-2026-1 nginx: something [rhel-10.2.z]",
+        downstream_component="nginx",
+    )
     assert branch == "rhel-10.2"
     assert namespace is None
 
@@ -438,47 +452,31 @@ async def _lock_already_held(*_args, **_kwargs):
 
 
 @pytest.mark.asyncio
-async def test_process_task_drops_duplicate_when_locked():
+async def test_process_task_drops_duplicate_when_locked(_mock_env_vars_redis):
     """When the per-issue lock is already held, process_task silently drops the task."""
-    from ymir.agents.triage_agent import main
+    flexmock(t_agent).should_receive("issue_lock").replace_with(_lock_already_held)
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").never()
+    flexmock(t_agent).should_receive("run_workflow").never()
 
     process_task = await _capture_process_task(main)
-
-    with (
-        patch("ymir.agents.triage_agent.issue_lock", side_effect=_lock_already_held),
-        patch(
-            "ymir.agents.tasks.get_jira_issue_metadata",
-            new_callable=AsyncMock,
-        ) as mock_metadata,
-        patch("ymir.agents.triage_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
-    ):
-        await process_task(_make_payload())
-
-    mock_metadata.assert_not_awaited()
-    mock_workflow.assert_not_awaited()
+    await process_task(_make_payload())
 
 
 @pytest.mark.asyncio
-async def test_process_task_acquires_lock_and_proceeds():
+async def test_process_task_acquires_lock_and_proceeds(_mock_env_vars_redis):
     """When the lock is available, process_task proceeds to call run_workflow."""
-    from ymir.agents.triage_agent import main
+
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return [], "New"
+
+    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
+    flexmock(t_agent).should_receive("run_workflow").once().replace_with(_async_noop)
 
     process_task = await _capture_process_task(main)
-
-    with (
-        patch("ymir.agents.triage_agent.issue_lock", side_effect=_always_acquired_lock),
-        patch(
-            "ymir.agents.tasks.get_jira_issue_metadata",
-            new_callable=AsyncMock,
-            return_value=([], "New"),
-        ),
-        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
-        patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
-        patch("ymir.agents.triage_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
-    ):
-        await process_task(_make_payload())
-
-    mock_workflow.assert_awaited_once()
+    await process_task(_make_payload())
 
 
 def test_build_reproducer_input_from_backport():
@@ -600,13 +598,11 @@ def test_build_reproducer_input_skips_postponed():
 
 
 @pytest.mark.asyncio
-async def test_pending_dependencies_maps_to_postponed_y_stream():
+async def test_pending_dependencies_maps_to_postponed_y_stream(_mock_env_vars):
     """PENDING_DEPENDENCIES eligibility must produce POSTPONED_Y_STREAM, not
     POSTPONED_DEPENDENCY.  The former is swept by YStreamSweep; the latter by
     DependencySweep (rebuild waiting for a component's fixed build).  Mixing
     them up silently deadlocks one of the two sweep paths."""
-    from ymir.agents.triage_agent import run_workflow
-
     pending_issues = ["RHEL-99998"]
     eligibility_result = CVEEligibilityResult(
         is_cve=True,
@@ -619,38 +615,29 @@ async def test_pending_dependencies_maps_to_postponed_y_stream():
     async def _mock_mcp_tools(*_args, **_kwargs):
         yield []
 
-    with (
-        patch("ymir.agents.triage_agent.mcp_tools", side_effect=_mock_mcp_tools),
-        patch(
-            "ymir.agents.triage_agent.run_tool",
-            new_callable=AsyncMock,
-            return_value=eligibility_result.model_dump(),
-        ),
-        patch("ymir.agents.triage_agent.get_mock_local_tool_env", return_value=None),
-        patch.dict(
-            "os.environ",
-            {"GIT_REPO_BASEPATH": "/tmp", "MCP_GATEWAY_URL": "http://localhost"},
-            clear=False,
-        ),
-    ):
-        state = await run_workflow(
-            "RHEL-99999",
-            dry_run=True,
-            triage_agent_factory=MagicMock(),
-        )
+    async def _mock_run_tool(*_args, **_kwargs):
+        return eligibility_result.model_dump()
+
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
+
+    state = await run_workflow(
+        "RHEL-99999",
+        dry_run=True,
+        triage_agent_factory=lambda *_args, **_kwargs: flexmock(),
+    )
 
     assert state.triage_result.resolution == Resolution.POSTPONED_Y_STREAM
     assert state.triage_result.data.pending_issues == pending_issues
 
 
 @pytest.mark.asyncio
-async def test_pr_pending_without_blocker_reference_raises():
+async def test_pr_pending_without_blocker_reference_raises(_mock_env_vars):
     """A postponed_pr_pending resolution with no blocker_references URL is not
     sweepable (PRPendingSweep has no MR/PR to poll), so run_triage_analysis must
     raise rather than silently produce a permanently-stuck issue. The raise is
     caught by the workflow's outer handler and routed through retry()."""
-    from ymir.agents.triage_agent import run_workflow
-
     eligibility_result = CVEEligibilityResult(
         is_cve=True,
         eligibility=TriageEligibility.IMMEDIATELY,
@@ -663,37 +650,37 @@ async def test_pr_pending_without_blocker_reference_raises():
         '"summary": "Fix pending in upstream MR; waiting for merge", '
         '"pending_issues": ["RHEL-1"], "jira_issue": "RHEL-99999"}}'
     )
-    response = MagicMock()
-    response.last_message.text = llm_json
-    agent = MagicMock()
-    agent.run = AsyncMock(return_value=response)
+
+    async def _mock_agent_run(*_args, **_kwargs):
+        return flexmock(last_message=flexmock(text=llm_json))
+
+    def _mock_factory(*_args, **_kwargs):
+        return agent
 
     @asynccontextmanager
     async def _mock_mcp_tools(*_args, **_kwargs):
         yield []
 
-    with (
-        patch("ymir.agents.triage_agent.mcp_tools", side_effect=_mock_mcp_tools),
-        patch(
-            "ymir.agents.triage_agent.run_tool",
-            new_callable=AsyncMock,
-            return_value=eligibility_result.model_dump(),
-        ),
-        patch("ymir.agents.triage_agent.get_mock_local_tool_env", return_value=None),
-        patch("ymir.agents.triage_agent.render_prompt", new_callable=AsyncMock, return_value="prompt"),
-        patch("ymir.agents.triage_agent.render_template", return_value="output format"),
-        patch("ymir.agents.triage_agent.get_agent_execution_config", return_value={}),
-        patch.dict(
-            "os.environ",
-            {"GIT_REPO_BASEPATH": "/tmp", "MCP_GATEWAY_URL": "http://localhost"},
-            clear=False,
-        ),
-        pytest.raises(Exception) as excinfo,
-    ):
+    async def _mock_run_tool(*_args, **_kwargs):
+        return eligibility_result.model_dump()
+
+    async def _mock_prompt(*_args, **_kwargs):
+        return "prompt"
+
+    agent = flexmock()
+    agent.should_receive("run").replace_with(_mock_agent_run)
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    flexmock(t_agent).should_receive("render_template").and_return("output format")
+    flexmock(t_agent).should_receive("get_agent_execution_config").and_return({})
+    flexmock(t_agent).should_receive("render_prompt").replace_with(_mock_prompt)
+
+    with pytest.raises(Exception) as excinfo:
         await run_workflow(
             "RHEL-99999",
             dry_run=True,
-            triage_agent_factory=MagicMock(return_value=agent),
+            triage_agent_factory=_mock_factory,
         )
 
     # The beeai Workflow wraps a node's exception in a FrameworkError, chaining
@@ -749,49 +736,62 @@ def _details_with_comments(*bodies) -> dict:
 @pytest.mark.asyncio
 async def test_postponed_comment_exists_true_same_resolution():
     """Returns True when a prior Ymir ADF comment records the same resolution."""
-    details = _details_with_comments(
-        "some unrelated human comment",
-        _adf_ymir_postponed_body(Resolution.POSTPONED_NO_PATCH),
-    )
-    with patch("ymir.agents.triage_agent.run_tool", new_callable=AsyncMock, return_value=details):
-        assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is True
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        return _details_with_comments(
+            "some unrelated human comment",
+            _adf_ymir_postponed_body(Resolution.POSTPONED_NO_PATCH),
+        )
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is True
 
 
 @pytest.mark.asyncio
 async def test_postponed_comment_exists_false_different_resolution():
     """A prior Ymir comment for a DIFFERENT resolution does not suppress."""
-    details = _details_with_comments(_adf_ymir_postponed_body(Resolution.POSTPONED_PR_PENDING))
-    with patch("ymir.agents.triage_agent.run_tool", new_callable=AsyncMock, return_value=details):
-        assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is False
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        return _details_with_comments(_adf_ymir_postponed_body(Resolution.POSTPONED_PR_PENDING))
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is False
 
 
 @pytest.mark.asyncio
 async def test_postponed_comment_exists_false_without_marker():
     """The resolution value without the Ymir marker (e.g. a human quote) is ignored."""
-    human = {
-        "type": "doc",
-        "version": 1,
-        "content": [
-            _adf_paragraph({"type": "text", "text": "I think this should be postponed_no_patch, agreed?"})
-        ],
-    }
-    with patch(
-        "ymir.agents.triage_agent.run_tool",
-        new_callable=AsyncMock,
-        return_value=_details_with_comments(human),
-    ):
-        assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is False
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        return _details_with_comments(
+            {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    _adf_paragraph(
+                        {"type": "text", "text": "I think this should be postponed_no_patch, agreed?"}
+                    )
+                ],
+            }
+        )
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is False
 
 
 @pytest.mark.asyncio
 async def test_postponed_comment_exists_false_no_comments():
     """No comments at all -> nothing to deduplicate against."""
-    with patch(
-        "ymir.agents.triage_agent.run_tool",
-        new_callable=AsyncMock,
-        return_value=_details_with_comments(),
-    ):
-        assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is False
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        return _details_with_comments()
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is False
 
 
 def test_ymir_comment_marker_triage():

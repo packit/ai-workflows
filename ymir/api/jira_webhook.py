@@ -63,10 +63,13 @@ def _extract_command(comment_body: dict, bot_account_id: str) -> str | None:
 
 async def jira_webhook(request: web.Request) -> web.Response:
     expected_secret = os.environ.get("JIRA_WEBHOOK_SECRET")
-    if expected_secret:
-        provided = request.headers.get(_WEBHOOK_SECRET_HEADER, "")
-        if not hmac.compare_digest(provided, expected_secret):
-            return web.json_response({"error": "unauthorized"}, status=401)
+    if not expected_secret:
+        logger.error("JIRA_WEBHOOK_SECRET is not configured, rejecting request")
+        return web.json_response({"error": "webhook secret not configured"}, status=500)
+
+    provided = request.headers.get(_WEBHOOK_SECRET_HEADER, "")
+    if not hmac.compare_digest(provided, expected_secret):
+        return web.json_response({"error": "unauthorized"}, status=401)
 
     try:
         body = await request.json()

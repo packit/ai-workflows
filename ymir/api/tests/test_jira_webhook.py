@@ -320,17 +320,20 @@ async def test_bot_account_not_configured(client, monkeypatch):
     assert body["reason"] == "bot account not configured"
 
 
-# -- No auth when secret not configured ---------------------------------------
+# -- Fail-closed when secret not configured ------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_no_auth_when_secret_not_configured(client, monkeypatch):
+async def test_fail_closed_when_secret_not_configured(client, monkeypatch):
+    """When JIRA_WEBHOOK_SECRET is unset, requests must be rejected (fail closed)."""
     monkeypatch.delenv("JIRA_WEBHOOK_SECRET")
     resp = await client.post(
         "/api/jira/webhook",
         json=_comment_payload(_adf_mention_body("consolidate expat rhel-9.8.0")),
     )
-    assert resp.status == 201
+    assert resp.status == 500
+    body = await resp.json()
+    assert "webhook secret not configured" in body["error"]
 
 
 # -- Error comment scheduling -------------------------------------------------

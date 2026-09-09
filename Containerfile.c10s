@@ -61,6 +61,7 @@ RUN dnf -y install --allowerasing \
       javapackages-local \
       java-devel \
       ant \
+      maven \
       libbase \
       libloader \
       xmvn-tools \

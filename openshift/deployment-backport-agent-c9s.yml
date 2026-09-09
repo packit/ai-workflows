@@ -39,6 +39,8 @@ spec:
         - configMapRef:
             name: endpoints-env
         - secretRef:
+            name: github-readonly-env
+        - secretRef:
             name: sentry-env
         image: 'beeai-agent:c9s'
         imagePullPolicy: IfNotPresent

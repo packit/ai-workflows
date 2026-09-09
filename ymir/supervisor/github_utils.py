@@ -1,7 +1,12 @@
 """GitHub REST API helpers for the supervisor and sweep layers.
 
-Authentication is optional: if ``GITHUB_TOKEN`` is set it is sent as a
-Bearer token.
+Authentication is optional: if ``GITHUB_READONLY_TOKEN`` is set it is sent
+as a Bearer token to avoid rate limiting (5,000 req/hr vs 60 unauthenticated).
+
+Token Requirements:
+- Scope: public_repo (read-only access to public repositories)
+- Purpose: Rate limiting only - no write operations
+
 Without a token the client still works for public repositories, which
 should cover most upstream open-source projects that Ymir tracks.
 """
@@ -19,7 +24,7 @@ GITHUB_API_URL = "https://api.github.com"
 
 def _github_headers() -> dict[str, str]:
     headers = {"Accept": "application/vnd.github+json"}
-    token = os.environ.get("GITHUB_TOKEN")
+    token = os.environ.get("GITHUB_READONLY_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers

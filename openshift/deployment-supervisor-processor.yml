@@ -35,6 +35,8 @@ spec:
             name: endpoints-env
         - secretRef:
             name: gitlab-env
+        - secretRef:
+            name: github-readonly-env
         - configMapRef:
             name: jira-env
         - secretRef:

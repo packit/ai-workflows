@@ -1,6 +1,15 @@
-"""Tools for working with upstream repositories and fix URLs."""
+"""Tools for working with upstream repositories and fix URLs.
+
+GitHub API Rate Limiting:
+These tools use GITHUB_READONLY_TOKEN (if available) to authenticate GitHub API
+requests and avoid rate limiting (5,000 req/hr authenticated vs 60 req/hr unauthenticated).
+
+The token must have public_repo (read-only) scope and is used only for fetching
+public repository information - it cannot push code, create PRs, or modify resources.
+"""
 
 import asyncio
+import os
 import re
 import shutil
 from urllib.parse import quote, urlparse
@@ -104,20 +113,54 @@ class ExtractUpstreamRepositoryTool(
                     repo = pr_match.group(2)
                     pr_number = pr_match.group(3)
                     project_path = f"{owner}/{repo}"
-                else:
-                    project_path = mr_match.group(1).removesuffix(".git")
-                    pr_number = mr_match.group(2)
 
-                # Fetch PR/MR information to get the head commit
-                if pr_match:
-                    # GitHub API
+                    # GitHub API with optional authentication
                     api_url = f"https://api.github.com/repos/{project_path}/pulls/{pr_number}"
-                else:
-                    # GitLab API - URL-encode the full project path
-                    api_url = (
-                        f"https://{parsed.netloc}/api/v4/projects/"
-                        f"{quote(project_path, safe='')}/merge_requests/{pr_number}"
+                    headers = {
+                        "Accept": "application/json",
+                        "User-Agent": YMIR_USER_AGENT,
+                    }
+                    # Add authentication if GITHUB_READONLY_TOKEN is available
+                    token = os.getenv("GITHUB_READONLY_TOKEN")
+                    if token:
+                        headers["Authorization"] = f"Bearer {token}"
+
+                    try:
+                        async with (
+                            aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
+                            aiohttp_get_with_retries(session, api_url, headers=headers) as response,
+                        ):
+                            response.raise_for_status()
+                            data = await response.json()
+                            commit_hash = data["head"]["sha"]
+                    except (aiohttp.ClientError, TimeoutError, KeyError) as e:
+                        raise ToolError(
+                            f"Failed to fetch PR information from {api_url}. "
+                            f"The PR might be private, deleted, or the API is unavailable. Error: {e}"
+                        ) from e
+
+                    # Construct repository URL
+                    repo_url = f"https://{parsed.netloc}/{project_path}.git"
+
+                    # Return with PR information
+                    return ExtractUpstreamRepositoryOutput(
+                        result=UpstreamRepository(
+                            repo_url=repo_url,
+                            commit_hash=commit_hash,
+                            original_url=tool_input.upstream_fix_url,
+                            pr_number=pr_number,
+                            is_pr=True,
+                        )
                     )
+                # GitLab MR - keep existing logic
+                project_path = mr_match.group(1).removesuffix(".git")
+                pr_number = mr_match.group(2)
+
+                # GitLab API - URL-encode the full project path
+                api_url = (
+                    f"https://{parsed.netloc}/api/v4/projects/"
+                    f"{quote(project_path, safe='')}/merge_requests/{pr_number}"
+                )
 
                 headers = {
                     "Accept": "application/json",
@@ -131,20 +174,18 @@ class ExtractUpstreamRepositoryTool(
                     ):
                         response.raise_for_status()
                         data = await response.json()
-
-                        # Extract commit hash from API response
-                        commit_hash = data["head"]["sha"] if pr_match else data["sha"]
+                        commit_hash = data["sha"]
 
                 except (aiohttp.ClientError, TimeoutError, KeyError) as e:
                     raise ToolError(
-                        f"Failed to fetch PR/MR information from {api_url}. "
-                        f"The PR/MR might be private, deleted, or the API is unavailable. Error: {e}"
+                        f"Failed to fetch MR information from {api_url}. "
+                        f"The MR might be private, deleted, or the API is unavailable. Error: {e}"
                     ) from e
 
                 # Construct repository URL
                 repo_url = f"https://{parsed.netloc}/{project_path}.git"
 
-                # Return with PR information
+                # Return with MR information
                 return ExtractUpstreamRepositoryOutput(
                     result=UpstreamRepository(
                         repo_url=repo_url,
@@ -176,10 +217,15 @@ class ExtractUpstreamRepositoryTool(
                 commits = []
                 commit_hash = target_ref
                 try:
-                    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-                        # Determine if this is GitHub or GitLab based on the domain
-                        if "github" in parsed.netloc.lower():
-                            # GitHub API - URL-encode refs to handle special characters like / in branch names
+                    # Determine if this is GitHub or GitLab based on the domain
+                    if "github" in parsed.netloc.lower():
+                        # GitHub API with optional authentication
+                        # Add authentication if GITHUB_READONLY_TOKEN is available
+                        token = os.getenv("GITHUB_READONLY_TOKEN")
+                        if token:
+                            headers["Authorization"] = f"Bearer {token}"
+
+                        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
                             api_url = (
                                 f"https://api.github.com/repos/{project_path}/compare/"
                                 f"{quote(base_ref, safe='')}...{quote(target_ref, safe='')}"
@@ -190,9 +236,15 @@ class ExtractUpstreamRepositoryTool(
                                 response.raise_for_status()
                                 data = await response.json()
                                 # GitHub: commits are in 'commits' array (oldest first)
-                                commits = [commit["sha"] for commit in data.get("commits", [])]
-                        else:
-                            # GitLab API - URL-encode the full project path
+                                commits = [
+                                    commit.get("sha")
+                                    for commit in data.get("commits", [])
+                                    if commit and commit.get("sha")
+                                ]
+                                commit_hash = commits[-1] if commits else target_ref
+                    else:
+                        # GitLab API - URL-encode the full project path
+                        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
                             api_url = (
                                 f"https://{parsed.netloc}/api/v4/projects/"
                                 f"{quote(project_path, safe='')}/repository/compare"
@@ -204,11 +256,15 @@ class ExtractUpstreamRepositoryTool(
                                 response.raise_for_status()
                                 data = await response.json()
                                 # GitLab: commits are in 'commits' array (newest first)
-                                commits = [commit["id"] for commit in data.get("commits", [])]
+                                commits = [
+                                    commit.get("id")
+                                    for commit in data.get("commits", [])
+                                    if commit and commit.get("id")
+                                ]
                                 # Reverse to get oldest first
                                 commits = list(reversed(commits))
-                        # Use the last commit (newest) as the commit_hash
-                        commit_hash = commits[-1] if commits else target_ref
+                                # Use the last commit (newest) as the commit_hash
+                                commit_hash = commits[-1] if commits else target_ref
                 except (aiohttp.ClientError, TimeoutError, KeyError):
                     # If API fails, fall back to using target_ref as commit_hash
                     # This allows the tool to still work even if API is unavailable

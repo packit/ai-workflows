@@ -15,6 +15,19 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   GITLAB_TOKEN
   ```
 
+  `github-readonly-env`:
+  ```
+  GITHUB_READONLY_TOKEN
+  ```
+
+  **Important**: This token must have **read-only** `public_repo` scope only.
+  It is used solely for rate limiting (5,000 req/hr vs 60 unauthenticated) when
+  fetching upstream repository information. The token is deployed to agent pods
+  because unprivileged tools need it for their core function (extracting upstream
+  fix information from GitHub PRs and compare URLs). Since it's read-only and
+  scoped to public repositories only, it cannot push code, create PRs, or modify
+  any GitHub resources.
+
   `jira-env`:
   ```
   JIRA_TOKEN

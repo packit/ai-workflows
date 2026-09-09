@@ -9,8 +9,9 @@ parameter to support both ``gitlab.com`` and internal hosts such as
 ``gitlab.cee.redhat.com``.
 
 GitHub: uses ``github_utils.github_api_get()``.  Authentication is
-optional (set ``GITHUB_TOKEN`` ); all upstream
-projects tracked by Ymir are public, so unauthenticated access suffices.
+optional (set ``GITHUB_READONLY_TOKEN``); all upstream projects tracked by
+Ymir are public. Authentication increases rate limits (5,000 req/hr vs 60
+unauthenticated) but is not required for access.
 
 Handles issues tagged ``ymir_postponed_pr_pending``.
 

@@ -640,7 +640,7 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
         if branch:
             clone_path.mkdir(parents=True, exist_ok=True)
             await _run_git_cmd(
-                ["git", "init"],
+                ["git", "init", "-b", "_ymir_init"],
                 label=f"git init {clone_path}",
                 cwd=clone_path,
                 env=git_env,
@@ -648,7 +648,7 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
             )
 
             await _run_git_cmd(
-                ["git", *auth_args, "fetch", repository, f"{branch}:refs/heads/{branch}"],
+                ["git", *auth_args, "fetch", repository, f"refs/heads/{branch}:refs/heads/{branch}"],
                 label=f"git fetch {safe_url} branch={branch}",
                 cwd=clone_path,
                 env=git_env,
@@ -757,7 +757,7 @@ class FetchBranchTool(Tool[FetchBranchToolInput, ToolRunOptions, StringToolOutpu
         git_env = _get_mock_git_env()
 
         await _run_git_cmd(
-            ["git", *auth_args, "fetch", repository, f"{branch}:refs/heads/{branch}"],
+            ["git", *auth_args, "fetch", repository, f"refs/heads/{branch}:refs/heads/{branch}"],
             label=f"git fetch {safe_url} branch={branch}",
             cwd=clone_path,
             env=git_env,

@@ -17,7 +17,14 @@ GITLAB_URL = "https://gitlab.com"
 # be constrained to trusted instances -- otherwise an attacker-controlled host
 # (e.g. supplied through an LLM-authored ``blocker_reference``) would receive
 # the token.  This is the single source of truth for that allowlist.
-ALLOWED_GITLAB_HOSTS = frozenset({"gitlab.com", "gitlab.cee.redhat.com"})
+ALLOWED_GITLAB_HOSTS = frozenset(
+    {
+        "gitlab.com",
+        "gitlab.cee.redhat.com",
+        "gitlab.gnome.org",
+        "gitlab.freedesktop.org",
+    }
+)
 
 
 @cache

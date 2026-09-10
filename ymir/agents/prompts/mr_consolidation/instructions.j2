@@ -79,6 +79,8 @@ General instructions:
 - Never run `git fetch`, `git pull`, or `git clone`. All branches you need are already
   available locally. If a branch appears empty, work with what is available.
 - Preserve existing formatting and style conventions in spec files and patch headers.
+- Do not simplify, unwrap, or rewrite existing RPM macro definitions or conditional
+  expressions in spec files.
 - If there is a complex conflict, properly resolve it by keeping the functionality of both patches.
 - There is a firewall in place that may block some outgoing network requests
   (e.g. curl, wget, git clone to external hosts). If a shell command fails

@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import traceback
+from uuid import UUID, uuid4
 
 from beeai_framework.errors import FrameworkError
 from beeai_framework.workflows import Workflow
@@ -88,13 +89,16 @@ async def main() -> None:
         user_triggered=False,
         redis_conn=None,
         dist_git_namespace=None,
+        workspace_id: UUID | None = None,
     ):
+        workspace_id = workspace_id or uuid4()
         local_tool_options = {"working_directory": None}
         if mock_env := get_mock_local_tool_env(jira_issue):
             local_tool_options["env"] = mock_env
 
         async with mcp_tools(
-            os.environ["MCP_GATEWAY_URL"], call_meta={"jira_issue": jira_issue}
+            os.environ["MCP_GATEWAY_URL"],
+            call_meta={"jira_issue": jira_issue, "workspace_id": str(workspace_id)},
         ) as gateway_tools:
             log_agent = create_log_agent(gateway_tools, local_tool_options)
 
@@ -113,6 +117,7 @@ async def main() -> None:
                     dist_git_branch=state.dist_git_branch,
                     available_tools=gateway_tools,
                     agent_type="Rebuild",
+                    workspace_id=state.workspace_id,
                     dist_git_namespace=state.dist_git_namespace,
                 )
                 local_tool_options["working_directory"] = state.local_clone
@@ -351,6 +356,7 @@ async def main() -> None:
                     dist_git_branch=dist_git_branch,
                     dist_git_namespace=dist_git_namespace,
                     jira_issue=jira_issue,
+                    workspace_id=workspace_id,
                     fix_version=fix_version,
                     justification=justification,
                     triage_summary=triage_summary,
@@ -546,6 +552,7 @@ async def main() -> None:
                         user_triggered=user_triggered,
                         redis_conn=redis,
                         dist_git_namespace=dist_git_namespace,
+                        workspace_id=task.execution_id,
                     )
                     logger.info(
                         f"Rebuild processing completed for {rebuild_data.jira_issue}, "

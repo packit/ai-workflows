@@ -801,6 +801,12 @@ def test_error_list_entry_requeueable_roundtrip():
     assert roundtripped.timestamp == entry.timestamp
 
 
+def test_task_assigns_and_preserves_execution_id():
+    task = Task(metadata={"issue": "RHEL-1"})
+
+    assert Task.model_validate_json(task.model_dump_json()).execution_id == task.execution_id
+
+
 def test_error_list_entry_defaults_timestamp():
     entry = ErrorListEntry(error_id=1, error=ErrorData(details="boom", jira_issue="RHEL-1"))
     assert entry.timestamp is not None

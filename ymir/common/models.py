@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any, Literal
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, RootModel
 
@@ -99,6 +100,10 @@ class Task(BaseModel):
     """A task to be processed by an agent."""
 
     metadata: dict[str, Any] = Field(description="Task metadata containing issue information")
+    execution_id: UUID = Field(
+        default_factory=uuid4,
+        description="Stable identifier for this queued task across retries and requeues",
+    )
     attempts: int = Field(default=0, description="Number of processing attempts")
     user_triggered: bool = Field(
         default=False,

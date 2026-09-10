@@ -4,6 +4,7 @@ import sys
 import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 import pytest
 import requests
@@ -42,6 +43,18 @@ def fetcher(mock_env_vars):
 async def _empty_async_iter(*_args, **_kwargs):
     return
     yield
+
+
+@pytest.fixture(autouse=True)
+def deterministic_task_execution_id():
+    """Keep serialized Task expectations stable while exercising queue behavior."""
+    field = Task.model_fields["execution_id"]
+    default_factory = field.default_factory
+    field.default_factory = lambda: UUID(int=0)
+    Task.model_rebuild(force=True)
+    yield
+    field.default_factory = default_factory
+    Task.model_rebuild(force=True)
 
 
 def _lock_keys_async_iter(*issue_keys):

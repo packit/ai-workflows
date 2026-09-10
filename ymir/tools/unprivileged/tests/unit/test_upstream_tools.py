@@ -31,13 +31,16 @@ from ymir.tools.unprivileged.upstream_tools import (
 def _mock_aiohttp_get(json_data, status=200):
     """Mock aiohttp.ClientSession.get to return json_data.
 
-    Returns captured_urls list for asserting which URLs were called.
+    Returns (captured_urls, captured_headers) tuple for asserting which URLs
+    and headers were used in API calls.
     """
     captured_urls = []
+    captured_headers = []
 
     @asynccontextmanager
     async def fake_get(url, **kwargs):
         captured_urls.append(url)
+        captured_headers.append(kwargs.get("headers", {}))
         yield flexmock(
             json=lambda: _async_return(json_data),
             raise_for_status=lambda: None,
@@ -45,7 +48,7 @@ def _mock_aiohttp_get(json_data, status=200):
         )
 
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(fake_get)
-    return captured_urls
+    return captured_urls, captured_headers
 
 
 def _mock_aiohttp_get_error(error_msg="error"):
@@ -180,6 +183,33 @@ class TestExtractUpstreamRepositoryTool:
         assert data.pr_number == "99"
 
     @pytest.mark.asyncio
+    async def test_github_pr_url_uses_auth_token_when_available(self, tool, monkeypatch):
+        """Verify GitHub PR API calls include Authorization header when GITHUB_READONLY_TOKEN is set."""
+        monkeypatch.setenv("GITHUB_READONLY_TOKEN", "test_token_12345")  # pragma: allowlist secret
+        _urls, captured_headers = _mock_aiohttp_get({"head": {"sha": "authenticated_sha"}})
+
+        await tool.run(
+            input=ExtractUpstreamRepositoryInput(upstream_fix_url="https://github.com/owner/repo/pull/42")
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert len(captured_headers) == 1
+        assert "Authorization" in captured_headers[0]
+        assert captured_headers[0]["Authorization"] == "Bearer test_token_12345"
+
+    @pytest.mark.asyncio
+    async def test_github_pr_url_without_auth_token(self, tool, monkeypatch):
+        """Verify GitHub PR API calls work without Authorization header when token is not set."""
+        monkeypatch.delenv("GITHUB_READONLY_TOKEN", raising=False)
+        _urls, captured_headers = _mock_aiohttp_get({"head": {"sha": "unauthenticated_sha"}})
+
+        await tool.run(
+            input=ExtractUpstreamRepositoryInput(upstream_fix_url="https://github.com/owner/repo/pull/42")
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert len(captured_headers) == 1
+        assert "Authorization" not in captured_headers[0]
+
+    @pytest.mark.asyncio
     async def test_gitlab_mr_url(self, tool):
         _mock_aiohttp_get({"sha": "mr_commit_sha_abcdef"})
 
@@ -220,6 +250,37 @@ class TestExtractUpstreamRepositoryTool:
         assert data.compare_commits == ["aaa111", "bbb222", "ccc333"]
         assert data.commit_hash == "ccc333"
         assert data.repo_url == "https://github.com/owner/repo.git"
+
+    @pytest.mark.asyncio
+    async def test_github_compare_url_uses_auth_token_when_available(self, tool, monkeypatch):
+        """Verify GitHub compare API calls include Authorization header when GITHUB_READONLY_TOKEN is set."""
+        monkeypatch.setenv("GITHUB_READONLY_TOKEN", "test_compare_token")  # pragma: allowlist secret
+        _urls, captured_headers = _mock_aiohttp_get({"commits": [{"sha": "abc123"}]})
+
+        await tool.run(
+            input=ExtractUpstreamRepositoryInput(
+                upstream_fix_url="https://github.com/owner/repo/compare/v1.0...v2.0"
+            )
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert len(captured_headers) == 1
+        assert "Authorization" in captured_headers[0]
+        assert captured_headers[0]["Authorization"] == "Bearer test_compare_token"
+
+    @pytest.mark.asyncio
+    async def test_github_compare_url_without_auth_token(self, tool, monkeypatch):
+        """Verify GitHub compare API calls work without Authorization header when token is not set."""
+        monkeypatch.delenv("GITHUB_READONLY_TOKEN", raising=False)
+        _urls, captured_headers = _mock_aiohttp_get({"commits": [{"sha": "def456"}]})
+
+        await tool.run(
+            input=ExtractUpstreamRepositoryInput(
+                upstream_fix_url="https://github.com/owner/repo/compare/v1.0...v2.0"
+            )
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert len(captured_headers) == 1
+        assert "Authorization" not in captured_headers[0]
 
     @pytest.mark.asyncio
     async def test_gitlab_compare_url(self, tool):
@@ -319,7 +380,7 @@ class TestExtractUpstreamRepositoryTool:
     @pytest.mark.asyncio
     async def test_gitlab_nested_path_mr_url(self, tool):
         """GitLab MR URL with deeply nested project path (more than owner/repo)."""
-        captured_urls = _mock_aiohttp_get({"sha": "mr_head_commit"})
+        captured_urls, _headers = _mock_aiohttp_get({"sha": "mr_head_commit"})
 
         result = await tool.run(
             input=ExtractUpstreamRepositoryInput(
@@ -335,7 +396,7 @@ class TestExtractUpstreamRepositoryTool:
     @pytest.mark.asyncio
     async def test_gitlab_nested_path_compare_url(self, tool):
         """GitLab compare URL with deeply nested project path."""
-        captured_urls = _mock_aiohttp_get({"commits": [{"id": "abc123"}]})
+        captured_urls, _headers = _mock_aiohttp_get({"commits": [{"id": "abc123"}]})
 
         result = await tool.run(
             input=ExtractUpstreamRepositoryInput(

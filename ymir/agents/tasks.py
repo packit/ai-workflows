@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import yaml
+from beeai_framework.errors import FrameworkError
 from beeai_framework.tools import Tool
 from specfile import Specfile
 
@@ -50,7 +51,7 @@ from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
 logger = logging.getLogger(__name__)
 
 
-class ZStreamBranchStaleError(Exception):
+class ZStreamBranchStaleError(FrameworkError):
     """Raised when a z-stream branch is behind the latest Brew build."""
 
     def __init__(self, package: str, branch: str, build_ref: str, branch_head: str):
@@ -62,9 +63,10 @@ class ZStreamBranchStaleError(Exception):
             f"Z-stream branch {branch} for {package} is out of sync with compose. "
             f"Branch HEAD ({branch_head[:12]}) does not contain the latest "
             f"build ref ({build_ref[:12]}). "
-            f"The branch maintainer needs to update it before Ymir can proceed. "
-            f"Please fix the branch and re-trigger by removing all ymir_ labels "
-            f"and adding ymir_todo."
+            "The branch maintainer needs to update it before Ymir can proceed. "
+            "Please fix the branch and re-trigger by removing all ymir_ labels "
+            "and adding ymir_todo.",
+            is_retryable=False,
         )
 
 

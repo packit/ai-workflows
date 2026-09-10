@@ -256,7 +256,13 @@ def _remove_existing_clone_path(clone_path: Path) -> None:
     }
     if not any(clone_path.resolve().is_relative_to(p) for p in allowed_parents):
         raise ToolError(f"Refusing to remove {clone_path}: not under an allowed base directory")
-    shutil.rmtree(clone_path)
+    try:
+        shutil.rmtree(clone_path)
+    except FileNotFoundError:
+        # A missing root means another shared-volume client completed cleanup.
+        # A missing child can leave stale files in the root, so preserve it.
+        if clone_path.exists():
+            raise
 
 
 def _get_git_auth_args(repository_url: str) -> list[str]:

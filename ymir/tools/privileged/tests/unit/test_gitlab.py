@@ -410,10 +410,10 @@ async def test_clone_repository(mock_git_repo_basepath):
         assert cmd == "git"
         assert kwargs.get("cwd") == clone_path
         if args[0] == "init":
-            assert len(args) == 1
+            assert args[1:] == ("-b", "_ymir_init")
         elif args[0] == "fetch":
             assert args[1].endswith(repository.removeprefix("https://"))
-            assert args[2] == f"{branch}:refs/heads/{branch}"
+            assert args[2] == f"refs/heads/{branch}:refs/heads/{branch}"
         elif args[0] == "checkout":
             assert args[1] == branch
         else:
@@ -1234,7 +1234,7 @@ async def test_clone_repository_removes_existing_dir_with_branch(mock_git_repo_b
     )
 
     assert not (clone_path / "stale").exists()
-    assert any(cmd[:2] == ["git", "init"] for cmd in commands)
+    assert any(cmd[:4] == ["git", "init", "-b", "_ymir_init"] for cmd in commands)
 
 
 @pytest.mark.asyncio

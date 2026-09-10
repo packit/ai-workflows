@@ -697,7 +697,7 @@ class TriageOutputSchema(BaseModel):
                 return (
                     f"{resolution}"
                     f"*Summary*: {self.data.summary}\n"
-                    f"{heading}\n{pending_text}"
+                    f"{heading}\n{pending_text}\n"
                     f"{blocker_line}"
                     f"{POSTPONEMENT_NOTE}"
                     f"{TRIAGE_DISCLAIMER}"

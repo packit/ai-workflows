@@ -159,7 +159,7 @@ def test_postponed_formatting_multiple_issues():
         "waiting for at least one Z-stream clone to ship\n"
         "*Waiting for at least one of*:\n"
         "* RHEL-111\n"
-        "* RHEL-222"
+        "* RHEL-222\n"
         f"{POSTPONEMENT_NOTE}"
         f"{TRIAGE_DISCLAIMER}"
     )
@@ -177,7 +177,7 @@ def test_postponed_formatting_single_issue():
         "*Resolution*: postponed_dependency\n"
         "*Summary*: Rebuild waiting for dependency to ship\n"
         "*Waiting for*:\n"
-        "* RHEL-333"
+        "* RHEL-333\n"
         f"{POSTPONEMENT_NOTE}"
         f"{TRIAGE_DISCLAIMER}"
     )

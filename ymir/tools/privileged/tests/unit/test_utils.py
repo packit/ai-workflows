@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import pytest
 from flexmock import flexmock
 
-from ymir.tools.privileged.utils import clean_stale_repositories
+from ymir.tools.privileged.utils import ACTIVE_WORKSPACE_MARKER, clean_stale_repositories
 
 
 @pytest.fixture
@@ -97,6 +97,73 @@ async def test_clean_stale_repositories_cleans_container_children(mock_git_repo_
     assert applicability.is_dir()
     assert not old_mr.is_dir()
     assert mr_dir.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_clean_stale_repositories_cleans_execution_workspaces(mock_git_repo_basepath):
+    old_workspace = mock_git_repo_basepath / "Backport" / "RHEL-12345" / "old"
+    current_workspace = mock_git_repo_basepath / "Backport" / "RHEL-12345" / "current"
+    old_workspace.mkdir(parents=True)
+    current_workspace.mkdir()
+    old_time = datetime.now() - timedelta(days=15)
+    os.utime(old_workspace, (old_time.timestamp(), old_time.timestamp()))
+
+    result = await clean_stale_repositories()
+
+    assert result == 1
+    assert not old_workspace.exists()
+    assert current_workspace.is_dir()
+    assert current_workspace.parent.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_clean_stale_repositories_removes_empty_execution_issue_directory(mock_git_repo_basepath):
+    workspace = mock_git_repo_basepath / "Backport" / "RHEL-12345" / "old"
+    workspace.mkdir(parents=True)
+    old_time = datetime.now() - timedelta(days=15)
+    os.utime(workspace, (old_time.timestamp(), old_time.timestamp()))
+
+    result = await clean_stale_repositories()
+
+    assert result == 1
+    assert not workspace.parent.exists()
+
+
+@pytest.mark.asyncio
+async def test_clean_stale_repositories_preserves_active_workspace(mock_git_repo_basepath):
+    workspace = mock_git_repo_basepath / "Backport" / "RHEL-12345" / "active"
+    workspace.mkdir(parents=True)
+    old_time = datetime.now() - timedelta(days=15)
+    os.utime(workspace, (old_time.timestamp(), old_time.timestamp()))
+    (workspace / ACTIVE_WORKSPACE_MARKER).touch()
+
+    result = await clean_stale_repositories()
+
+    assert result == 0
+    assert workspace.is_dir()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path_parts",
+    [("Backport",), ("Backport", "RHEL-12345"), ("Backport", "RHEL-12345", "old")],
+)
+async def test_clean_stale_repositories_does_not_follow_workspace_symlinks(
+    mock_git_repo_basepath, tmp_path, path_parts
+):
+    external = tmp_path.parent / f"{tmp_path.name}-external"
+    external.mkdir()
+    (external / "keep").write_text("keep")
+    link_path = mock_git_repo_basepath.joinpath(*path_parts)
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    link_path.symlink_to(external, target_is_directory=True)
+    old_time = datetime.now() - timedelta(days=15)
+    os.utime(external, (old_time.timestamp(), old_time.timestamp()))
+
+    result = await clean_stale_repositories()
+
+    assert result == 0
+    assert (external / "keep").read_text() == "keep"
 
 
 @pytest.mark.asyncio

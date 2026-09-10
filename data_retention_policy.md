@@ -25,8 +25,10 @@
 REPO_CLEANUP_DAYS = 7
 ```
 
-- Automatic cleanup on every `clone_repository` call
-- Deletes all stale working directories older than 7 days based on modification time
+- Automatic cleanup before every `clone_repository` call
+- Deletes stale working directories older than 7 days based on modification time
+- Cleans individual execution directories below `Backport/<issue>/`, `Rebase/<issue>/`, and `Rebuild/<issue>/`
+- Skips execution workspaces with an active marker newer than the retention cutoff
 - Steps into container directories (`applicability/`, `merge_requests/`) and cleans their children individually
 - Implemented in `clean_stale_repositories()` function
 

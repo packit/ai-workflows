@@ -31,6 +31,7 @@ from ymir.tools.privileged.gitlab import (
     RetryPipelineJobTool,
     SetMergeRequestReviewersTool,
     _get_git_auth_args,
+    _remove_existing_clone_path,
     _wait_for_fork_ready,
 )
 from ymir.tools.privileged.utils import sanitize_url
@@ -1235,6 +1236,29 @@ async def test_clone_repository_removes_existing_dir_with_branch(mock_git_repo_b
 
     assert not (clone_path / "stale").exists()
     assert any(cmd[:4] == ["git", "init", "-b", "_ymir_init"] for cmd in commands)
+
+
+def test_remove_existing_clone_path_tolerates_disappearing_directory(mock_git_repo_basepath):
+    clone_path = mock_git_repo_basepath / "bash"
+    clone_path.mkdir()
+
+    def remove_then_raise(path):
+        path.rmdir()
+        raise FileNotFoundError
+
+    with patch("ymir.tools.privileged.gitlab.shutil.rmtree", side_effect=remove_then_raise):
+        _remove_existing_clone_path(clone_path)
+
+
+def test_remove_existing_clone_path_rejects_partial_cleanup(mock_git_repo_basepath):
+    clone_path = mock_git_repo_basepath / "bash"
+    clone_path.mkdir()
+
+    with (
+        patch("ymir.tools.privileged.gitlab.shutil.rmtree", side_effect=FileNotFoundError),
+        pytest.raises(FileNotFoundError),
+    ):
+        _remove_existing_clone_path(clone_path)
 
 
 @pytest.mark.asyncio

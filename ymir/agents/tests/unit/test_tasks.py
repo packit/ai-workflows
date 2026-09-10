@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -21,6 +22,7 @@ from ymir.agents.tasks import (
 )
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import ErrorListEntry, Task
+from ymir.tools.privileged.utils import ACTIVE_WORKSPACE_MARKER
 
 
 @asynccontextmanager
@@ -44,14 +46,15 @@ def git_repo_basepath(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_fork_and_prepare_dist_git_wipes_stale_working_dir(git_repo_basepath):
-    """Re-running for the same JIRA issue must remove the previous working directory."""
+async def test_fork_and_prepare_dist_git_wipes_own_stale_working_dir(git_repo_basepath):
+    """An internal retry removes only the current workflow's workspace."""
     jira_issue = "RHEL-12345"
     package = "some-package"
     branch = "rhel-10.0"
     agent_type = "Rebase"
 
-    working_dir = git_repo_basepath / agent_type / jira_issue
+    workspace_id = uuid4()
+    working_dir = git_repo_basepath / agent_type / jira_issue / str(workspace_id)
     working_dir.mkdir(parents=True)
     stale_file = working_dir / "leftover-artifact.txt"
     stale_file.write_text("stale")
@@ -72,10 +75,69 @@ async def test_fork_and_prepare_dist_git_wipes_stale_working_dir(git_repo_basepa
             dist_git_branch=branch,
             available_tools=mock_tools,
             agent_type=agent_type,
+            workspace_id=workspace_id,
         )
 
     assert working_dir.is_dir(), "working_dir should be recreated"
     assert not stale_file.exists(), "stale artifacts from previous run should be gone"
+    assert (working_dir / ACTIVE_WORKSPACE_MARKER).is_file()
+
+
+@pytest.mark.asyncio
+async def test_fork_and_prepare_dist_git_isolates_workspaces(git_repo_basepath):
+    first_workspace = uuid4()
+    second_workspace = uuid4()
+    first_file = git_repo_basepath / "Rebase" / "RHEL-12345" / str(first_workspace) / "keep"
+    first_file.parent.mkdir(parents=True)
+    first_file.write_text("first")
+
+    with (
+        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock, return_value="https://fork.example.com"),
+        patch("ymir.agents.tasks.check_subprocess", new_callable=AsyncMock),
+        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
+        patch("ymir.agents.tasks._check_zstream_branch_consistency", new_callable=AsyncMock),
+    ):
+        local_clone, *_ = await fork_and_prepare_dist_git(
+            jira_issue="RHEL-12345",
+            package="some-package",
+            dist_git_branch="rhel-10.0",
+            available_tools=[],
+            agent_type="Rebase",
+            workspace_id=second_workspace,
+        )
+
+    assert local_clone.parent.name == str(second_workspace)
+    assert first_file.read_text() == "first"
+
+
+@pytest.mark.asyncio
+async def test_fork_and_prepare_dist_git_reuses_task_workspace(git_repo_basepath):
+    task = Task(metadata={"issue": "RHEL-12345"})
+
+    with (
+        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock, return_value="https://fork.example.com"),
+        patch("ymir.agents.tasks.check_subprocess", new_callable=AsyncMock),
+        patch("ymir.agents.tasks.is_older_zstream", new_callable=AsyncMock, return_value=False),
+        patch("ymir.agents.tasks._check_zstream_branch_consistency", new_callable=AsyncMock),
+    ):
+        first_clone, *_ = await fork_and_prepare_dist_git(
+            jira_issue="RHEL-12345",
+            package="some-package",
+            dist_git_branch="rhel-10.0",
+            available_tools=[],
+            agent_type="Rebase",
+            workspace_id=task.execution_id,
+        )
+        second_clone, *_ = await fork_and_prepare_dist_git(
+            jira_issue="RHEL-12345",
+            package="some-package",
+            dist_git_branch="rhel-10.0",
+            available_tools=[],
+            agent_type="Rebase",
+            workspace_id=Task.model_validate_json(task.model_dump_json()).execution_id,
+        )
+
+    assert first_clone == second_clone
 
 
 @pytest.mark.asyncio

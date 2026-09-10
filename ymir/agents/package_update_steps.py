@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
@@ -10,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 class PackageUpdateState(BaseModel):
     jira_issue: str | None
+    workspace_id: UUID = Field(default_factory=uuid4)
     package: str
     dist_git_branch: str
     dist_git_namespace: str | None = Field(

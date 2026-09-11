@@ -22,7 +22,7 @@ spec:
         image: 'supervisor:prod'
         imagePullPolicy: IfNotPresent
         command:
-        - /usr/bin/python
+        - /usr/bin/python3
         args:
         - -m
         - supervisor.main

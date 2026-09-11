@@ -1,12 +1,11 @@
 """Unit tests for TFReservationCleanupMiddleware."""
 
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
-
 import pytest
 from beeai_framework.tools.types import JSONToolOutput
+from flexmock import flexmock
 from pydantic import BaseModel, Field
 
+from ymir.agents import tf_cleanup_middleware as tf_cleanup_mw
 from ymir.agents.tf_cleanup_middleware import (
     _CANCEL_SUCCESS,
     _RESERVE_SUCCESS,
@@ -55,7 +54,7 @@ def test_extract_request_id_from_flat_and_nested_output():
 
 
 def test_extract_request_id_from_input_model_or_dict():
-    assert _extract_request_id_from_input(SimpleNamespace(request_id="req-3")) == "req-3"
+    assert _extract_request_id_from_input(flexmock(request_id="req-3")) == "req-3"
     assert _extract_request_id_from_input({"request_id": "req-4"}) == "req-4"
     assert _extract_request_id_from_input(_CancelInput(request_id="req-5")) == "req-5"
     assert _extract_request_id_from_input({"request_id": "dry-run-reservation"}) is None
@@ -65,33 +64,36 @@ def test_extract_request_id_from_input_model_or_dict():
 @pytest.mark.asyncio
 async def test_middleware_tracks_mcp_reserve_and_cancel():
     mw = TFReservationCleanupMiddleware()
-    ctx = MagicMock()
+
     handlers: dict[str, object] = {}
 
-    def on(matcher, handler):
+    def _mock_on(matcher, handler):
         handlers[matcher.pattern] = handler
 
-    ctx.emitter.on.side_effect = on
+    emitter = flexmock()
+    emitter.should_receive("on").replace_with(_mock_on)
+    ctx = flexmock(emitter=emitter)
+
     mw.bind(ctx)
 
     assert _RESERVE_SUCCESS.pattern in handlers
     assert _CANCEL_SUCCESS.pattern in handlers
 
     await mw._on_reserve(
-        SimpleNamespace(output=JSONToolOutput({"id": "req-100"}), input={}),
-        MagicMock(),
+        flexmock(output=JSONToolOutput({"id": "req-100"}), input={}),
+        flexmock(),
     )
     assert mw._reserved == {"req-100"}
 
     await mw._on_cancel(
-        SimpleNamespace(output=JSONToolOutput({"cancelled": True}), input=_CancelInput(request_id="req-100")),
-        MagicMock(),
+        flexmock(output=JSONToolOutput({"cancelled": True}), input=_CancelInput(request_id="req-100")),
+        flexmock(),
     )
     assert mw._cancelled == {"req-100"}
 
-    with patch("ymir.agents.tf_cleanup_middleware.run_tool") as cancel:
-        await mw.cleanup(available_tools=[])
-        cancel.assert_not_called()
+    flexmock(tf_cleanup_mw).should_receive("run_tool").never()
+
+    await mw.cleanup(available_tools=[])
 
 
 @pytest.mark.asyncio
@@ -100,20 +102,20 @@ async def test_middleware_cleanup_cancels_leaked_reservations():
     mw._reserved.add("req-leak")
     tools = [object()]
 
-    with patch("ymir.agents.tf_cleanup_middleware.run_tool") as cancel:
-        await mw.cleanup(available_tools=tools)
-        cancel.assert_called_once_with(
-            "cancel_testing_farm_request",
-            request_id="req-leak",
-            available_tools=tools,
-        )
+    flexmock(tf_cleanup_mw).should_receive("run_tool").with_args(
+        "cancel_testing_farm_request",
+        request_id="req-leak",
+        available_tools=tools,
+    ).once()
+
+    await mw.cleanup(available_tools=tools)
 
 
 @pytest.mark.asyncio
 async def test_middleware_ignores_dry_run_reservation_id():
     mw = TFReservationCleanupMiddleware()
     await mw._on_reserve(
-        SimpleNamespace(output=JSONToolOutput({"id": "dry-run-reservation"}), input={}),
-        MagicMock(),
+        flexmock(output=JSONToolOutput({"id": "dry-run-reservation"}), input={}),
+        flexmock(),
     )
     assert mw._reserved == set()

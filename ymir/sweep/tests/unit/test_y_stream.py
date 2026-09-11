@@ -4,9 +4,9 @@ YStreamSweep delegates entirely to ``CheckCveTriageEligibilityTool``; these
 tests stub that tool and assert the verdict → SweepResult.action mapping.
 """
 
-from unittest.mock import patch
-
 import pytest
+import sentry_sdk
+from flexmock import flexmock
 
 from ymir.common import CVEEligibilityResult, TriageEligibility
 from ymir.sweep.comment_parser import CommentData
@@ -40,7 +40,7 @@ def _elig(eligibility, *, reason="reason", error=None, pending=None, duplicate_o
     ).model_dump()
 
 
-def _fake_eligibility_tool(result_dict=None, *, raises=None):
+def _mock_eligibility_tool(result_dict=None, *, raises=None):
     """Return a fake ``CheckCveTriageEligibilityTool`` class.
 
     Its ``run()`` either raises ``raises`` or returns an object exposing
@@ -62,7 +62,7 @@ def _fake_eligibility_tool(result_dict=None, *, raises=None):
 def _patch_tool(monkeypatch, **kwargs):
     monkeypatch.setattr(
         "ymir.sweep.y_stream.CheckCveTriageEligibilityTool",
-        _fake_eligibility_tool(**kwargs),
+        _mock_eligibility_tool(**kwargs),
     )
 
 
@@ -139,13 +139,13 @@ async def test_never_with_error_is_error(monkeypatch):
 async def test_tool_raises_is_error(monkeypatch):
     _patch_tool(monkeypatch, raises=RuntimeError("Jira unreachable"))
 
-    with patch("ymir.sweep.y_stream.sentry_sdk.capture_exception") as mock_capture:
-        result = await YStreamSweep().is_unblocked(make_issue(), _COMMENT_DATA)
+    captured = []
+    flexmock(sentry_sdk).should_receive("capture_exception").replace_with(captured.append).once()
+    result = await YStreamSweep().is_unblocked(make_issue(), _COMMENT_DATA)
 
-        assert result.action == "error"
-        assert "Jira unreachable" in result.detail
-        mock_capture.assert_called_once()
-        assert isinstance(mock_capture.call_args[0][0], RuntimeError)
+    assert result.action == "error"
+    assert "Jira unreachable" in result.detail
+    assert isinstance(captured[0], RuntimeError)
 
 
 @pytest.mark.asyncio

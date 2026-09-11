@@ -1,8 +1,8 @@
-from unittest.mock import AsyncMock, patch
-
 import pytest
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
+from flexmock import flexmock
 
+import ymir.tools.privileged.zstream_search as z_search
 from ymir.tools.privileged.zstream_search import (
     ZStreamSearchResult,
     ZStreamSearchTool,
@@ -111,66 +111,73 @@ def test_version_sort_key(issue_version, target_major, target_minor, expected):
 # ============================================================================
 
 
-def _patches(*mock_calls):
-    """Common patches for ZStreamSearchTool tests."""
-    return (
-        patch(
-            "ymir.tools.privileged.zstream_search.is_older_zstream",
-            new_callable=AsyncMock,
-            return_value=True,
-        ),
-        patch("ymir.tools.privileged.zstream_search.run_tool", AsyncMock(side_effect=mock_calls)),
-        patch("ymir.tools.privileged.zstream_search._fetch_mr_commits", new_callable=AsyncMock),
-    )
+async def _older_zstream_true(*_args, **_kwargs):
+    return True
+
+
+def _mock_patches(tool_results: list | None = None, mrs: list | None = None):
+    mock_results = iter(tool_results if tool_results else [])
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        return next(mock_results)
+
+    patches = iter(mrs if mrs else [])
+
+    async def _mock_fetch(*_args, **_kwargs):
+        return next(patches)
+
+    flexmock(z_search).should_receive("is_older_zstream").replace_with(_older_zstream_true)
+    flexmock(z_search).should_receive("run_tool").replace_with(_mock_run_tool)
+    flexmock(z_search).should_receive("_fetch_mr_commits").replace_with(_mock_fetch)
+
+
+async def _run_zstream_search_tool(input):
+    tool = ZStreamSearchTool()
+    output = await tool.run(input=input).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    return output.to_json_safe()
 
 
 @pytest.mark.asyncio
 async def test_not_applicable_y_stream():
     """Y-stream fixVersion should return NOT_APPLICABLE."""
-    tool = ZStreamSearchTool()
-    output = await tool.run(
-        input=ZStreamSearchToolInput(
+    result = await _run_zstream_search_tool(
+        ZStreamSearchToolInput(
             component="fence-agents",
             summary="fix something",
             fix_version="rhel-9.8",
-        ),
-    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
-    result = output.to_json_safe()
+        )
+    )
     assert result.result == ZStreamSearchResult.NOT_APPLICABLE
 
 
 @pytest.mark.asyncio
 async def test_not_applicable_current_zstream():
     """Current z-stream fixVersion should return NOT_APPLICABLE."""
-    tool = ZStreamSearchTool()
-    with patch(
-        "ymir.tools.privileged.zstream_search.is_older_zstream",
-        new_callable=AsyncMock,
-        return_value=False,
-    ):
-        output = await tool.run(
-            input=ZStreamSearchToolInput(
-                component="fence-agents",
-                summary="fix something [rhel-9.7.z]",
-                fix_version="rhel-9.7.z",
-            ),
-        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
-    result = output.to_json_safe()
+
+    async def _older_zstream_false(*_args, **_kwargs):
+        return False
+
+    flexmock(z_search).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+    result = await _run_zstream_search_tool(
+        ZStreamSearchToolInput(
+            component="fence-agents",
+            summary="fix something [rhel-9.7.z]",
+            fix_version="rhel-9.7.z",
+        )
+    )
     assert result.result == ZStreamSearchResult.NOT_APPLICABLE
 
 
 @pytest.mark.asyncio
 async def test_not_applicable_invalid_version():
     """Invalid fixVersion should return NOT_APPLICABLE."""
-    tool = ZStreamSearchTool()
-    output = await tool.run(
-        input=ZStreamSearchToolInput(
+    result = await _run_zstream_search_tool(
+        ZStreamSearchToolInput(
             component="fence-agents",
             summary="fix something",
             fix_version="invalid",
-        ),
-    ).middleware(GlobalTrajectoryMiddleware(pretty=True))
-    result = output.to_json_safe()
+        )
+    )
     assert result.result == ZStreamSearchResult.NOT_APPLICABLE
 
 
@@ -195,21 +202,18 @@ async def test_found_in_closest_stream():
         ]
     }
 
-    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result)
-    with p_older, p_run_tool, p_fetch as mock_fetch:
-        mock_fetch.return_value = [
-            "https://gitlab.com/redhat/rhel/rpms/fence-agents/-/commit/abc123.patch",
-        ]
-        tool = ZStreamSearchTool()
-        output = await tool.run(
-            input=ZStreamSearchToolInput(
-                component="fence-agents",
-                summary="fence_ibm_vpc: fix missing statuses [rhel-9.6.z]",
-                fix_version="rhel-9.6.z",
-            ),
-        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    _mock_patches(
+        tool_results=[search_result, pr_result],
+        mrs=[["https://gitlab.com/redhat/rhel/rpms/fence-agents/-/commit/abc123.patch"]],
+    )
 
-    result = output.to_json_safe()
+    result = await _run_zstream_search_tool(
+        ZStreamSearchToolInput(
+            component="fence-agents",
+            summary="fence_ibm_vpc: fix missing statuses [rhel-9.6.z]",
+            fix_version="rhel-9.6.z",
+        )
+    )
     assert result.result == ZStreamSearchResult.FOUND
     assert result.source_issue == "RHEL-99999"
     assert result.source_version == "rhel-9.7.z"
@@ -253,21 +257,18 @@ async def test_cascade_to_further_version():
         ]
     }
 
-    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result_open_only, pr_result_with_merged)
-    with p_older, p_run_tool, p_fetch as mock_fetch:
-        mock_fetch.return_value = [
-            "https://gitlab.com/redhat/centos-stream/rpms/fence-agents/-/commit/def456.patch",
-        ]
-        tool = ZStreamSearchTool()
-        output = await tool.run(
-            input=ZStreamSearchToolInput(
-                component="fence-agents",
-                summary="fix issue [rhel-9.6.z]",
-                fix_version="rhel-9.6.z",
-            ),
-        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    _mock_patches(
+        tool_results=[search_result, pr_result_open_only, pr_result_with_merged],
+        mrs=[["https://gitlab.com/redhat/centos-stream/rpms/fence-agents/-/commit/def456.patch"]],
+    )
 
-    result = output.to_json_safe()
+    result = await _run_zstream_search_tool(
+        ZStreamSearchToolInput(
+            component="fence-agents",
+            summary="fix issue [rhel-9.6.z]",
+            fix_version="rhel-9.6.z",
+        )
+    )
     assert result.result == ZStreamSearchResult.FOUND
     assert result.source_issue == "RHEL-22222"
     assert result.source_version == "rhel-9.8"
@@ -294,45 +295,35 @@ async def test_not_found_anywhere():
         ]
     }
 
-    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result_open_only)
-    with p_older, p_run_tool, p_fetch:
-        tool = ZStreamSearchTool()
-        output = await tool.run(
-            input=ZStreamSearchToolInput(
-                component="fence-agents",
-                summary="fix issue [rhel-9.6.z]",
-                fix_version="rhel-9.6.z",
-            ),
-        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    _mock_patches(tool_results=[search_result, pr_result_open_only])
 
-    result = output.to_json_safe()
+    result = await _run_zstream_search_tool(
+        ZStreamSearchToolInput(
+            component="fence-agents",
+            summary="fix issue [rhel-9.6.z]",
+            fix_version="rhel-9.6.z",
+        )
+    )
     assert result.result == ZStreamSearchResult.NOT_FOUND
 
 
 @pytest.mark.asyncio
 async def test_no_related_issues_found():
     """Returns NOT_FOUND when Jira search returns empty results."""
-    search_result = []
 
-    mock_run_tool = AsyncMock(return_value=search_result)
+    async def _mock_run_tool(*_args, **_kwargs):
+        return []
 
-    tool = ZStreamSearchTool()
-    with (
-        patch(
-            "ymir.tools.privileged.zstream_search.is_older_zstream",
-            new_callable=AsyncMock,
-            return_value=True,
-        ),
-        patch("ymir.tools.privileged.zstream_search.run_tool", mock_run_tool),
-    ):
-        output = await tool.run(
-            input=ZStreamSearchToolInput(
-                component="fence-agents",
-                summary="fix issue [rhel-9.6.z]",
-                fix_version="rhel-9.6.z",
-            ),
-        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
-    result = output.to_json_safe()
+    flexmock(z_search).should_receive("is_older_zstream").replace_with(_older_zstream_true)
+    flexmock(z_search).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    result = await _run_zstream_search_tool(
+        ZStreamSearchToolInput(
+            component="fence-agents",
+            summary="fix issue [rhel-9.6.z]",
+            fix_version="rhel-9.6.z",
+        )
+    )
     assert result.result == ZStreamSearchResult.NOT_FOUND
 
 
@@ -365,21 +356,18 @@ async def test_version_proximity_sorting():
         ]
     }
 
-    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result_with_merged)
-    with p_older, p_run_tool, p_fetch as mock_fetch:
-        mock_fetch.return_value = [
-            "https://gitlab.com/repo/-/commit/abc.patch",
-        ]
-        tool = ZStreamSearchTool()
-        output = await tool.run(
-            input=ZStreamSearchToolInput(
-                component="fence-agents",
-                summary="fix issue [rhel-9.6.z]",
-                fix_version="rhel-9.6.z",
-            ),
-        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    _mock_patches(
+        tool_results=[search_result, pr_result_with_merged],
+        mrs=[["https://gitlab.com/repo/-/commit/abc.patch"]],
+    )
 
-    result = output.to_json_safe()
+    result = await _run_zstream_search_tool(
+        ZStreamSearchToolInput(
+            component="fence-agents",
+            summary="fix issue [rhel-9.6.z]",
+            fix_version="rhel-9.6.z",
+        )
+    )
     assert result.result == ZStreamSearchResult.FOUND
     assert result.source_issue == "RHEL-CLOSE"
     assert result.source_version == "rhel-9.7.z"
@@ -388,42 +376,35 @@ async def test_version_proximity_sorting():
 @pytest.mark.asyncio
 async def test_older_issues_excluded():
     """Issues with versions older than target should be excluded."""
-    search_result = [
-        {
-            "key": "RHEL-OLDER",
-            "id": "55555",
-            "fields": {
-                "fixVersions": [{"name": "rhel-9.4.z"}],
-            },
-        },
-        {
-            "key": "RHEL-SAME",
-            "id": "66666",
-            "fields": {
-                "fixVersions": [{"name": "rhel-9.6.z"}],
-            },
-        },
-    ]
 
-    mock_run_tool = AsyncMock(return_value=search_result)
+    async def _mock_run_tool(*_args, **_kwargs):
+        return [
+            {
+                "key": "RHEL-OLDER",
+                "id": "55555",
+                "fields": {
+                    "fixVersions": [{"name": "rhel-9.4.z"}],
+                },
+            },
+            {
+                "key": "RHEL-SAME",
+                "id": "66666",
+                "fields": {
+                    "fixVersions": [{"name": "rhel-9.6.z"}],
+                },
+            },
+        ]
 
-    tool = ZStreamSearchTool()
-    with (
-        patch(
-            "ymir.tools.privileged.zstream_search.is_older_zstream",
-            new_callable=AsyncMock,
-            return_value=True,
-        ),
-        patch("ymir.tools.privileged.zstream_search.run_tool", mock_run_tool),
-    ):
-        output = await tool.run(
-            input=ZStreamSearchToolInput(
-                component="fence-agents",
-                summary="fix issue [rhel-9.6.z]",
-                fix_version="rhel-9.6.z",
-            ),
-        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
-    result = output.to_json_safe()
+    flexmock(z_search).should_receive("is_older_zstream").replace_with(_older_zstream_true)
+    flexmock(z_search).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    result = await _run_zstream_search_tool(
+        ZStreamSearchToolInput(
+            component="fence-agents",
+            summary="fix issue [rhel-9.6.z]",
+            fix_version="rhel-9.6.z",
+        )
+    )
     # Both issues should be excluded (older and same version)
     assert result.result == ZStreamSearchResult.NOT_FOUND
 
@@ -458,25 +439,24 @@ async def test_multiple_merged_mrs():
         ]
     }
 
-    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result)
-    with p_older, p_run_tool, p_fetch as mock_fetch:
-        mock_fetch.side_effect = [
+    _mock_patches(
+        tool_results=[search_result, pr_result],
+        mrs=[
             ["https://gitlab.com/redhat/rhel/rpms/pkg/-/commit/aaa.patch"],
             [
                 "https://gitlab.com/redhat/rhel/rpms/pkg/-/commit/bbb.patch",
                 "https://gitlab.com/redhat/rhel/rpms/pkg/-/commit/ccc.patch",
             ],
-        ]
-        tool = ZStreamSearchTool()
-        output = await tool.run(
-            input=ZStreamSearchToolInput(
-                component="pkg",
-                summary="fix issue [rhel-9.6.z]",
-                fix_version="rhel-9.6.z",
-            ),
-        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+        ],
+    )
 
-    result = output.to_json_safe()
+    result = await _run_zstream_search_tool(
+        ZStreamSearchToolInput(
+            component="pkg",
+            summary="fix issue [rhel-9.6.z]",
+            fix_version="rhel-9.6.z",
+        )
+    )
     assert result.result == ZStreamSearchResult.FOUND
     assert len(result.related_commits) == 3
 
@@ -502,18 +482,15 @@ async def test_open_mrs_only_returns_not_found():
         ]
     }
 
-    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result)
-    with p_older, p_run_tool, p_fetch:
-        tool = ZStreamSearchTool()
-        output = await tool.run(
-            input=ZStreamSearchToolInput(
-                component="pkg",
-                summary="fix issue [rhel-9.6.z]",
-                fix_version="rhel-9.6.z",
-            ),
-        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    _mock_patches(tool_results=[search_result, pr_result])
 
-    result = output.to_json_safe()
+    result = await _run_zstream_search_tool(
+        ZStreamSearchToolInput(
+            component="pkg",
+            summary="fix issue [rhel-9.6.z]",
+            fix_version="rhel-9.6.z",
+        )
+    )
     assert result.result == ZStreamSearchResult.NOT_FOUND
 
 
@@ -542,24 +519,28 @@ async def test_mixed_merged_and_open_mrs():
         ]
     }
 
-    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result)
-    with p_older, p_run_tool, p_fetch as mock_fetch:
-        mock_fetch.return_value = [
-            "https://gitlab.com/redhat/rhel/rpms/pkg/-/commit/merged1.patch",
-        ]
-        tool = ZStreamSearchTool()
-        output = await tool.run(
-            input=ZStreamSearchToolInput(
-                component="pkg",
-                summary="fix issue [rhel-9.6.z]",
-                fix_version="rhel-9.6.z",
-            ),
-        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    _mock_patches(
+        tool_results=[search_result, pr_result],
+        mrs=[["https://gitlab.com/redhat/rhel/rpms/pkg/-/commit/merged1.patch"]],
+    )
 
-    result = output.to_json_safe()
+    async def _mock_fetch(*_args, **_kwargs):
+        return ["https://gitlab.com/redhat/rhel/rpms/pkg/-/commit/merged1.patch"]
+
+    # override mock in _mock_patches since we check args and call count
+    flexmock(z_search).should_receive("_fetch_mr_commits").with_args(
+        "https://gitlab.com/redhat/rhel/rpms/pkg/-/merge_requests/50"
+    ).replace_with(_mock_fetch).once()
+
+    result = await _run_zstream_search_tool(
+        ZStreamSearchToolInput(
+            component="pkg",
+            summary="fix issue [rhel-9.6.z]",
+            fix_version="rhel-9.6.z",
+        )
+    )
     assert result.result == ZStreamSearchResult.FOUND
     assert len(result.related_commits) == 1
-    mock_fetch.assert_called_once_with("https://gitlab.com/redhat/rhel/rpms/pkg/-/merge_requests/50")
 
 
 @pytest.mark.asyncio
@@ -587,23 +568,18 @@ async def test_fetch_mr_commits_error_handling():
         ]
     }
 
-    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result)
-    with p_older, p_run_tool, p_fetch as mock_fetch:
-        # First MR fails, second succeeds
-        mock_fetch.side_effect = [
-            [],
-            ["https://gitlab.com/redhat/rhel/rpms/pkg/-/commit/ok.patch"],
-        ]
-        tool = ZStreamSearchTool()
-        output = await tool.run(
-            input=ZStreamSearchToolInput(
-                component="pkg",
-                summary="fix issue [rhel-9.6.z]",
-                fix_version="rhel-9.6.z",
-            ),
-        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    _mock_patches(
+        tool_results=[search_result, pr_result],
+        mrs=[[], ["https://gitlab.com/redhat/rhel/rpms/pkg/-/commit/ok.patch"]],
+    )
 
-    result = output.to_json_safe()
+    result = await _run_zstream_search_tool(
+        ZStreamSearchToolInput(
+            component="pkg",
+            summary="fix issue [rhel-9.6.z]",
+            fix_version="rhel-9.6.z",
+        )
+    )
     assert result.result == ZStreamSearchResult.FOUND
     assert len(result.related_commits) == 1
 
@@ -630,18 +606,15 @@ async def test_no_mrs_falls_back_to_dev_status():
         ]
     }
 
-    p_older, p_run_tool, p_fetch = _patches(search_result, pr_result_none, dev_status_result)
-    with p_older, p_run_tool, p_fetch:
-        tool = ZStreamSearchTool()
-        output = await tool.run(
-            input=ZStreamSearchToolInput(
-                component="pkg",
-                summary="fix issue [rhel-9.6.z]",
-                fix_version="rhel-9.6.z",
-            ),
-        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+    _mock_patches(tool_results=[search_result, pr_result_none, dev_status_result])
 
-    result = output.to_json_safe()
+    result = await _run_zstream_search_tool(
+        ZStreamSearchToolInput(
+            component="pkg",
+            summary="fix issue [rhel-9.6.z]",
+            fix_version="rhel-9.6.z",
+        )
+    )
     assert result.result == ZStreamSearchResult.FOUND
     assert result.source_issue == "RHEL-99002"
     assert len(result.related_commits) == 1

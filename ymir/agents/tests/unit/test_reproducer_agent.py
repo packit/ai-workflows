@@ -3,10 +3,12 @@
 import contextlib
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from flexmock import flexmock
 
+from ymir.agents import reproducer_agent as r_agent
+from ymir.agents import tasks as agent_tasks
 from ymir.agents.reproducer_agent import (
     PreparedTestsClone,
     _bootstrap_tests_clone,
@@ -282,7 +284,7 @@ def test_discover_existing_reproducer_test_dir_prefers_clone_root_regression_pat
 
 
 @pytest.mark.asyncio
-async def test_match_open_reproducer_mr_for_input_uses_clone_root(monkeypatch):
+async def test_match_open_reproducer_mr_for_input_uses_clone_root():
     mrs = [
         {
             "url": "https://gitlab.com/a/1",
@@ -293,10 +295,11 @@ async def test_match_open_reproducer_mr_for_input_uses_clone_root(monkeypatch):
             "title": "bind: [RHEL-500] ymir reproducer test",
         },
     ]
-    monkeypatch.setattr(
-        "ymir.agents.reproducer_agent._resolve_reproducer_clone_root",
-        AsyncMock(return_value="RHEL-100"),
-    )
+
+    async def _mock_resolve(*_args, **_kwargs):
+        return "RHEL-100"
+
+    flexmock(r_agent).should_receive("_resolve_reproducer_clone_root").replace_with(_mock_resolve)
     input_data = ReproducerInputSchema(jira_issue="RHEL-300", package="bind")
     matched = await _match_open_reproducer_mr_for_input(input_data, mrs)
     assert matched == mrs[0]
@@ -325,19 +328,17 @@ async def test_resolve_reproducer_mr_target_extends_clone_chain_mr_with_multiple
         },
     ]
 
-    async def fake_run_tool(name, available_tools=None, **kwargs):
+    async def _mock_run_tool(name, available_tools=None, **_kwargs):
         if name == "list_project_merge_requests":
             return open_mrs
         raise AssertionError(name)
 
-    with (
-        patch("ymir.agents.reproducer_agent.run_tool", new=AsyncMock(side_effect=fake_run_tool)),
-        patch(
-            "ymir.agents.reproducer_agent._resolve_reproducer_clone_root",
-            new=AsyncMock(return_value="RHEL-100"),
-        ),
-    ):
-        mr_url, branch, matched_mr = await _resolve_reproducer_mr_target(result, agent_input, "bind", [])
+    async def _mock_resolve(*_args, **_kwargs):
+        return "RHEL-100"
+
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    flexmock(r_agent).should_receive("_resolve_reproducer_clone_root").replace_with(_mock_resolve)
+    mr_url, branch, matched_mr = await _resolve_reproducer_mr_target(result, agent_input, "bind", [])
 
     assert mr_url == open_mrs[0]["url"]
     assert branch == "reproducer/RHEL-100"
@@ -464,13 +465,13 @@ async def test_resolve_reproducer_mr_target_uses_open_cve_mr():
         }
     ]
 
-    async def fake_run_tool(name, available_tools=None, **kwargs):
+    async def _mock_run_tool(name, available_tools=None, **_kwargs):
         if name == "list_project_merge_requests":
             return open_mrs
         raise AssertionError(name)
 
-    with patch("ymir.agents.reproducer_agent.run_tool", new=AsyncMock(side_effect=fake_run_tool)):
-        mr_url, branch, matched_mr = await _resolve_reproducer_mr_target(result, agent_input, "expat", [])
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    mr_url, branch, matched_mr = await _resolve_reproducer_mr_target(result, agent_input, "expat", [])
 
     assert mr_url == open_mrs[0]["url"]
     assert branch == "reproducer/RHEL-221017"
@@ -497,13 +498,13 @@ async def test_resolve_reproducer_mr_target_extends_regression_mr_for_sibling():
         }
     ]
 
-    async def fake_run_tool(name, available_tools=None, **kwargs):
+    async def _mock_run_tool(name, available_tools=None, **_kwargs):
         if name == "list_project_merge_requests":
             return open_mrs
         raise AssertionError(name)
 
-    with patch("ymir.agents.reproducer_agent.run_tool", new=AsyncMock(side_effect=fake_run_tool)):
-        mr_url, branch, matched_mr = await _resolve_reproducer_mr_target(result, agent_input, "bind", [])
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    mr_url, branch, matched_mr = await _resolve_reproducer_mr_target(result, agent_input, "bind", [])
 
     assert mr_url == open_mrs[0]["url"]
     assert branch == "reproducer/RHEL-100"
@@ -524,13 +525,13 @@ async def test_resolve_reproducer_mr_target_new_branch_without_open_mr():
         cve_id="CVE-2026-56132",
     )
 
-    async def fake_run_tool(name, available_tools=None, **kwargs):
+    async def _mock_run_tool(name, available_tools=None, **_kwargs):
         if name == "list_project_merge_requests":
             return []
         raise AssertionError(name)
 
-    with patch("ymir.agents.reproducer_agent.run_tool", new=AsyncMock(side_effect=fake_run_tool)):
-        mr_url, branch, matched_mr = await _resolve_reproducer_mr_target(result, agent_input, "expat", [])
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    mr_url, branch, matched_mr = await _resolve_reproducer_mr_target(result, agent_input, "expat", [])
 
     assert mr_url is None
     assert branch == "reproducer/RHEL-221017"
@@ -539,18 +540,15 @@ async def test_resolve_reproducer_mr_target_new_branch_without_open_mr():
 
 
 def test_reproducer_agent_enables_context_management():
-    with (
-        patch("ymir.agents.reproducer_agent.get_chat_model") as mock_get_model,
-        patch("ymir.agents.reproducer_agent.is_reasoning_enabled", return_value=False),
-        patch("ymir.agents.reproducer_agent.get_tool_call_checker_config"),
-    ):
-        llm = MagicMock()
-        llm.allow_parallel_tool_calls = False
-        mock_get_model.return_value = llm
+    llm = flexmock()
+    llm.allow_parallel_tool_calls = False
+    flexmock(r_agent).should_receive("get_chat_model").and_return(llm)
+    flexmock(r_agent).should_receive("is_reasoning_enabled").and_return(False)
+    flexmock(r_agent).should_receive("get_tool_call_checker_config")
 
-        agent = create_reproducer_agent(gateway_tools=[])
-        assert agent._enable_context_management is True
-        assert llm.allow_parallel_tool_calls is True
+    agent = create_reproducer_agent(gateway_tools=[])
+    assert agent._enable_context_management is True
+    assert llm.allow_parallel_tool_calls is True
 
 
 async def _git_init_with_main(repo: Path) -> None:
@@ -628,14 +626,14 @@ async def test_prepare_reproducer_branch_bootstrapped_adapt_preserves_worktree(t
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Path, monkeypatch):
+async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Path):
     working_dir = tmp_path / "Reproducer" / "RHEL-2"
     working_dir.mkdir(parents=True)
     repo = working_dir / "tests-bind"
     repo.mkdir()
     cve_id = "CVE-2026-0001"
 
-    async def fake_run_tool(name, available_tools=None, **kwargs):
+    async def _mock_run_tool(name, available_tools=None, **_kwargs):
         if name == "clone_repository":
             (repo / "README").write_text("cloned\n")
             return "ok"
@@ -669,7 +667,7 @@ async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Pat
             return "ok"
         raise AssertionError(f"unexpected tool {name}")
 
-    monkeypatch.setattr("ymir.agents.reproducer_agent.run_tool", fake_run_tool)
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
 
     input_data = ReproducerInputSchema(
         jira_issue="RHEL-2",
@@ -690,49 +688,51 @@ async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Pat
 # =============================================================================
 
 
+async def _async_noop(*_args, **_kwargs):
+    pass
+
+
 def _make_reproducer_payload(issue: str = "RHEL-99999", user_triggered: bool = False) -> bytes:
     input_data = ReproducerInputSchema(jira_issue=issue, package="bind")
     task = Task(metadata=input_data.model_dump(), user_triggered=user_triggered)
     return task.model_dump_json().encode()
 
 
-@contextlib.contextmanager
+@pytest.fixture
 def _mock_reproducer_config_enabled():
-    enabled_config = MagicMock(enabled=True)
-
     @contextlib.asynccontextmanager
-    async def fake_mcp_tools(*_args, **_kwargs):
+    async def _mock_mcp_tools(*_args, **_kwargs):
         yield []
 
-    with (
-        patch(
-            "ymir.agents.tasks.fetch_reproducer_config", new_callable=AsyncMock, return_value=enabled_config
-        ),
-        patch("ymir.agents.reproducer_agent.mcp_tools", side_effect=fake_mcp_tools),
-    ):
-        yield
+    async def _mock_config(*_args, **_kwargs):
+        return flexmock(enabled=True)
+
+    flexmock(agent_tasks).should_receive("fetch_reproducer_config").replace_with(_mock_config)
+    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
+    flexmock(r_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
 
 
-@contextlib.contextmanager
+@pytest.fixture
 def _mock_workflow_lock():
-    with (
-        patch(
-            "ymir.agents.reproducer_agent.resolve_reproducer_lock_id",
-            new_callable=AsyncMock,
-            return_value="RHEL-99999",
-        ),
-        patch(
-            "ymir.agents.reproducer_agent.try_acquire_reproducer_lock",
-            new_callable=AsyncMock,
-            return_value='{"package":"bind","lock_id":"RHEL-99999","jira_issue":"RHEL-99999"}',
-        ),
-        patch(
-            "ymir.agents.reproducer_agent.release_reproducer_lock",
-            new_callable=AsyncMock,
-            return_value=True,
-        ),
-    ):
-        yield
+    async def _mock_resolve_lock(*_args, **_kwargs):
+        return "RHEL-99999"
+
+    async def _mock_acquire_lock(*_args, **_kwargs):
+        return '{"package":"bind","lock_id":"RHEL-99999","jira_issue":"RHEL-99999"}'
+
+    async def _mock_release_lock(*_args, **_kwargs):
+        return True
+
+    flexmock(r_agent).should_receive("resolve_reproducer_lock_id").replace_with(_mock_resolve_lock)
+    flexmock(r_agent).should_receive("try_acquire_reproducer_lock").replace_with(_mock_acquire_lock)
+    flexmock(r_agent).should_receive("release_reproducer_lock").replace_with(_mock_release_lock)
+
+
+@pytest.fixture
+def _mock_env_vars(monkeypatch):
+    monkeypatch.setenv("COLLECTOR_ENDPOINT", "http://localhost:4317")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
 
 
 async def _run_process_task(payload: bytes) -> None:
@@ -744,29 +744,31 @@ async def _run_process_task(payload: bytes) -> None:
     the production execution environment.  Test-specific patches (e.g. get_jira_issue_metadata,
     run_workflow) must be applied by the caller before invoking this helper.
     """
-    span_processor = MagicMock()
-    span_processor.start_transaction.return_value.__enter__ = MagicMock(return_value=None)
-    span_processor.start_transaction.return_value.__exit__ = MagicMock(return_value=False)
+    transaction = flexmock()
+    transaction.should_receive("__enter__").and_return(None)
+    transaction.should_receive("__exit__").and_return(False)
 
-    async def fake_run_task_loop(_redis, _queues, process_fn, **_kw):
+    span_processor = flexmock()
+    span_processor.should_receive("start_transaction").and_return(transaction)
+
+    async def _mock_run_task_loop(_redis, _queues, process_fn, **_kw):
         await process_fn(payload)
 
-    with (
-        patch("ymir.agents.reproducer_agent.init_sentry"),
-        patch("ymir.agents.reproducer_agent.configure_logging"),
-        patch("ymir.agents.reproducer_agent.resolve_chat_model_override"),
-        patch("ymir.agents.reproducer_agent.setup_observability", return_value=span_processor),
-        patch("ymir.agents.reproducer_agent.run_task_loop", side_effect=fake_run_task_loop),
-        patch("ymir.agents.reproducer_agent.redis_client") as mock_redis_ctx,
-        patch.dict(
-            "os.environ",
-            {"COLLECTOR_ENDPOINT": "http://localhost:4317", "REDIS_URL": "redis://localhost"},
-            clear=False,
-        ),
-    ):
-        mock_redis_ctx.return_value.__aenter__ = AsyncMock()
-        mock_redis_ctx.return_value.__aexit__ = AsyncMock()
-        await main()
+    @contextlib.asynccontextmanager
+    async def _mock_redis_client(*_args, **_kwargs):
+        redis_mock = flexmock()
+        redis_mock.should_receive("lpush").replace_with(_async_noop)
+        redis_mock.should_receive("model_dump_json").replace_with(_async_noop)
+        yield redis_mock
+
+    flexmock(r_agent).should_receive("init_sentry")
+    flexmock(r_agent).should_receive("configure_logging")
+    flexmock(r_agent).should_receive("resolve_chat_model_override")
+    flexmock(r_agent).should_receive("setup_observability").and_return(span_processor)
+    flexmock(r_agent).should_receive("run_task_loop").replace_with(_mock_run_task_loop)
+    flexmock(r_agent).should_receive("redis_client").replace_with(_mock_redis_client)
+
+    await main()
 
 
 @pytest.mark.asyncio
@@ -780,129 +782,107 @@ async def _run_process_task(payload: bytes) -> None:
         "ymir_reproducer_already_exists",
     ],
 )
-async def test_process_task_skips_duplicate_with_terminal_label(terminal_label):
+async def test_process_task_skips_duplicate_with_terminal_label(_mock_env_vars, terminal_label):
     """When a terminal label is already set and the task is not user-triggered,
     process_task must skip without calling run_workflow.
 
     This is a regression guard for the get_jira_labels → get_jira_issue_metadata
     rename: the function must be called and its tuple return value unpacked correctly.
     """
-    with (
-        patch(
-            "ymir.agents.tasks.get_jira_issue_metadata",
-            new_callable=AsyncMock,
-            return_value=([terminal_label], "New"),
-        ) as mock_get_metadata,
-        patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
-    ):
-        await _run_process_task(_make_reproducer_payload())
 
-    mock_get_metadata.assert_awaited_once_with("RHEL-99999")
-    mock_workflow.assert_not_awaited()
+    async def _mock_issue(*_args, **_kwargs):
+        return [terminal_label], "New"
+
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").once().with_args(
+        "RHEL-99999"
+    ).replace_with(_mock_issue)
+    flexmock(r_agent).should_receive("run_workflow").never()
+
+    await _run_process_task(_make_reproducer_payload())
 
 
 @pytest.mark.asyncio
-async def test_process_task_proceeds_despite_terminal_label_when_user_triggered():
+async def test_process_task_proceeds_despite_terminal_label_when_user_triggered(
+    _mock_env_vars, _mock_reproducer_config_enabled, _mock_workflow_lock
+):
     """A user-triggered run must always proceed even when a terminal label is set."""
-    with (
-        patch(
-            "ymir.agents.tasks.get_jira_issue_metadata",
-            new_callable=AsyncMock,
-            return_value=(["ymir_reproducer_created"], "New"),
-        ),
-        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
-        patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
-        patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
-        _mock_reproducer_config_enabled(),
-        _mock_workflow_lock(),
-    ):
-        mock_workflow.return_value = MagicMock(
-            result=MagicMock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
-        )
-        await _run_process_task(_make_reproducer_payload(user_triggered=True))
 
-    mock_workflow.assert_awaited_once()
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return ["ymir_reproducer_created"], "New"
+
+    async def _mock_workflow(*_args, **_kwargs):
+        result = flexmock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
+        result.should_receive("model_dump_json").and_return("{}")
+        return flexmock(result=result)
+
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(r_agent).should_receive("run_workflow").replace_with(_mock_workflow).once()
+    await _run_process_task(_make_reproducer_payload(user_triggered=True))
 
 
 @pytest.mark.asyncio
-async def test_process_task_proceeds_when_terminal_label_and_in_progress():
+async def test_process_task_proceeds_when_terminal_label_and_in_progress(
+    _mock_env_vars, _mock_reproducer_config_enabled, _mock_workflow_lock
+):
     """If the in-progress label is set alongside a terminal label, the task
     must still be processed — the in-progress label signals an active run."""
-    with (
-        patch(
-            "ymir.agents.tasks.get_jira_issue_metadata",
-            new_callable=AsyncMock,
-            return_value=(["ymir_reproducer_created", "ymir_reproducer_in_progress"], "New"),
-        ),
-        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
-        patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
-        patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
-        _mock_reproducer_config_enabled(),
-        _mock_workflow_lock(),
-    ):
-        mock_workflow.return_value = MagicMock(
-            result=MagicMock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
-        )
-        await _run_process_task(_make_reproducer_payload())
 
-    mock_workflow.assert_awaited_once()
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return ["ymir_reproducer_created", "ymir_reproducer_in_progress"], "New"
+
+    async def _mock_workflow(*_args, **_kwargs):
+        result = flexmock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
+        result.should_receive("model_dump_json").and_return("{}")
+        return flexmock(result=result)
+
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(r_agent).should_receive("run_workflow").once().replace_with(_mock_workflow)
+    await _run_process_task(_make_reproducer_payload())
 
 
 @pytest.mark.asyncio
-async def test_process_task_proceeds_when_no_terminal_labels():
+async def test_process_task_proceeds_when_no_terminal_labels(
+    _mock_env_vars, _mock_reproducer_config_enabled, _mock_workflow_lock
+):
     """An issue with no terminal labels goes through the full workflow."""
-    with (
-        patch(
-            "ymir.agents.tasks.get_jira_issue_metadata",
-            new_callable=AsyncMock,
-            return_value=([], "New"),
-        ),
-        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
-        patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
-        patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
-        _mock_reproducer_config_enabled(),
-        _mock_workflow_lock(),
-    ):
-        mock_workflow.return_value = MagicMock(
-            result=MagicMock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
-        )
-        await _run_process_task(_make_reproducer_payload())
 
-    mock_workflow.assert_awaited_once()
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return [], "New"
+
+    async def _mock_workflow(*_args, **_kwargs):
+        result = flexmock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
+        result.should_receive("model_dump_json").and_return("{}")
+        return flexmock(result=result)
+
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(r_agent).should_receive("run_workflow").once().replace_with(_mock_workflow)
+    await _run_process_task(_make_reproducer_payload())
 
 
 @pytest.mark.asyncio
-async def test_process_task_blocks_when_workflow_lock_busy():
+async def test_process_task_blocks_when_workflow_lock_busy(_mock_env_vars, _mock_reproducer_config_enabled):
     """Busy create/adapt locks park the task until the holder releases."""
-    with (
-        patch(
-            "ymir.agents.tasks.get_jira_issue_metadata",
-            new_callable=AsyncMock,
-            return_value=([], "New"),
-        ),
-        patch("ymir.agents.tasks.set_jira_labels", new_callable=AsyncMock),
-        patch("ymir.agents.tasks.post_user_ack_once", new_callable=AsyncMock),
-        patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
-        patch(
-            "ymir.agents.reproducer_agent.resolve_reproducer_lock_id",
-            new_callable=AsyncMock,
-            return_value="CVE-2026-56132",
-        ),
-        patch(
-            "ymir.agents.reproducer_agent.try_acquire_reproducer_lock",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-        patch(
-            "ymir.agents.reproducer_agent.enqueue_blocked_reproducer_task",
-            new_callable=AsyncMock,
-        ) as mock_enqueue_blocked,
-        _mock_reproducer_config_enabled(),
-    ):
-        await _run_process_task(_make_reproducer_payload())
 
-    mock_workflow.assert_not_awaited()
-    mock_enqueue_blocked.assert_awaited_once()
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return [], "New"
+
+    async def _mock_resolve_lock(*_args, **_kwargs):
+        return "CVE-2026-56132"
+
+    async def _mock_acquire_lock(*_args, **_kwargs):
+        return None
+
+    async def _mock_enqueue_task(*_args, **_kwargs):
+        pass
+
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(r_agent).should_receive("run_workflow").never()
+    flexmock(r_agent).should_receive("resolve_reproducer_lock_id").replace_with(_mock_resolve_lock)
+    flexmock(r_agent).should_receive("try_acquire_reproducer_lock").replace_with(_mock_acquire_lock)
+    flexmock(r_agent).should_receive("enqueue_blocked_reproducer_task").once().replace_with(
+        _mock_enqueue_task
+    )
+    await _run_process_task(_make_reproducer_payload())
 
 
 # -- fetch_reproducer_config ---------------------------------------------------
@@ -910,64 +890,64 @@ async def test_process_task_blocks_when_workflow_lock_busy():
 
 @pytest.mark.asyncio
 async def test_fetch_reproducer_config_returns_default_when_not_found():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = "No maintainer rules found for package 'bind' (file 'ymir.yaml' not found)"
-        config = await fetch_reproducer_config("bind", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "No maintainer rules found for package 'bind' (file 'ymir.yaml' not found)"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    config = await fetch_reproducer_config("bind", [])
 
     assert config.enabled is False
 
 
 @pytest.mark.asyncio
 async def test_fetch_reproducer_config_parses_enabled():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = "reproducer:\n  enabled: true\n"
-        config = await fetch_reproducer_config("bind", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "reproducer:\n  enabled: true\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    config = await fetch_reproducer_config("bind", [])
 
     assert config.enabled is True
 
 
 @pytest.mark.asyncio
 async def test_fetch_reproducer_config_parses_disabled():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = "reproducer:\n  enabled: false\n"
-        config = await fetch_reproducer_config("bind", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "reproducer:\n  enabled: false\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    config = await fetch_reproducer_config("bind", [])
 
     assert config.enabled is False
 
 
 @pytest.mark.asyncio
 async def test_fetch_reproducer_config_raises_on_malformed_section():
-    with patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = "reproducer:\n  enabled: not_a_bool\n"
-        with pytest.raises(InvalidReproducerConfigError, match="malformed"):
-            await fetch_reproducer_config("bind", [])
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "reproducer:\n  enabled: not_a_bool\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    with pytest.raises(InvalidReproducerConfigError, match="malformed"):
+        await fetch_reproducer_config("bind", [])
 
 
 @pytest.mark.asyncio
-async def test_process_task_skips_when_reproducer_disabled():
-    disabled_config = MagicMock(enabled=False)
+async def test_process_task_skips_when_reproducer_disabled(_mock_env_vars):
 
     @contextlib.asynccontextmanager
-    async def fake_mcp_tools(*_args, **_kwargs):
+    async def _mock_mcp_tools(*_args, **_kwargs):
         yield []
 
-    with (
-        patch(
-            "ymir.agents.tasks.get_jira_issue_metadata",
-            new_callable=AsyncMock,
-            return_value=([], "New"),
-        ),
-        patch(
-            "ymir.agents.tasks.fetch_reproducer_config", new_callable=AsyncMock, return_value=disabled_config
-        ),
-        patch("ymir.agents.reproducer_agent.mcp_tools", side_effect=fake_mcp_tools),
-        patch("ymir.agents.reproducer_agent.run_workflow", new_callable=AsyncMock) as mock_workflow,
-        patch(
-            "ymir.agents.reproducer_agent.try_acquire_reproducer_lock",
-            new_callable=AsyncMock,
-        ) as mock_acquire_lock,
-    ):
-        await _run_process_task(_make_reproducer_payload())
+    async def _disabled_config(*_args, **_kwargs):
+        return flexmock(enabled=False)
 
-    mock_workflow.assert_not_awaited()
-    mock_acquire_lock.assert_not_awaited()
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return [], "New"
+
+    flexmock(agent_tasks).should_receive("fetch_reproducer_config").replace_with(_disabled_config)
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(r_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(r_agent).should_receive("run_workflow").never()
+    flexmock(r_agent).should_receive("try_acquire_reproducer_lock").never()
+    await _run_process_task(_make_reproducer_payload())

@@ -39,3 +39,7 @@ on subsequent runs.
 ## Merging Policy
 
 Prefer rebase-merging over creating a merge commit, unless preserving the branch's history is necessary.
+
+## Mocking
+
+`flexmock` is the preferred framework for mocking in tests.

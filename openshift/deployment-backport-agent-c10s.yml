@@ -25,7 +25,7 @@ spec:
         - -m
         - ymir.agents.backport_agent
         command:
-        - /usr/bin/python
+        - /usr/bin/python3
         env:
         - name: CONTAINER_VERSION
           value: "c10s"

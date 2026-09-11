@@ -89,6 +89,13 @@ apply pvc-mcp-server-git-repos.yml
 apply service-mcp-gateway.yml
 apply deployment-mcp-gateway.yml
 
+# API
+apply imagestream-api.yml
+import_image ymir-api
+apply service-api.yml
+apply route-api.yml
+apply deployment-api.yml
+
 # BeeAI Agents
 apply imagestream-beeai-agent.yml
 import_image beeai-agent

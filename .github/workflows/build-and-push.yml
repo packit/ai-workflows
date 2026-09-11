@@ -132,6 +132,20 @@ jobs:
           docker_context: "."
           image_name: "trace-server"
 
+  build-and-push-api:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build and push ymir-api to quay.io registry
+        uses: sclorg/build-and-push-action@adf1dee2b786ccbb2e2a708c3510a90e2ab3392d # v4.1.5
+        with:
+          registry: "quay.io"
+          registry_namespace: "jotnar"
+          registry_username: ${{ secrets.REGISTRY_LOGIN }}
+          registry_token: ${{ secrets.REGISTRY_TOKEN }}
+          dockerfile: "Containerfile.api"
+          docker_context: "."
+          image_name: "ymir-api"
+
   build-and-push-sweep:
     runs-on: ubuntu-latest
     steps:

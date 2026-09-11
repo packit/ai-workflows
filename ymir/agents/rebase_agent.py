@@ -5,6 +5,7 @@ import sys
 import traceback
 from pathlib import Path
 from typing import Any
+from uuid import UUID, uuid4
 
 from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
@@ -261,13 +262,16 @@ async def main() -> None:
         redis_conn=None,
         user_triggered=False,
         dist_git_namespace=None,
+        workspace_id: UUID | None = None,
     ):
+        workspace_id = workspace_id or uuid4()
         local_tool_options: dict[str, Any] = {"working_directory": None}
         if mock_env := get_mock_local_tool_env(jira_issue):
             local_tool_options["env"] = mock_env
 
         async with mcp_tools(
-            os.environ["MCP_GATEWAY_URL"], call_meta={"jira_issue": jira_issue}
+            os.environ["MCP_GATEWAY_URL"],
+            call_meta={"jira_issue": jira_issue, "workspace_id": str(workspace_id)},
         ) as gateway_tools:
             rebase_agent = create_rebase_agent(gateway_tools, local_tool_options)
             log_agent = create_log_agent(gateway_tools, local_tool_options)
@@ -361,6 +365,7 @@ async def main() -> None:
                     dist_git_branch=state.dist_git_branch,
                     available_tools=gateway_tools,
                     agent_type="Rebase",
+                    workspace_id=state.workspace_id,
                     with_fedora=True,
                     dist_git_namespace=state.dist_git_namespace,
                 )
@@ -607,6 +612,7 @@ async def main() -> None:
                     dist_git_namespace=dist_git_namespace,
                     version=version,
                     jira_issue=jira_issue,
+                    workspace_id=workspace_id,
                     fix_version=fix_version,
                     justification=justification,
                     triage_summary=triage_summary,
@@ -770,6 +776,7 @@ async def main() -> None:
                         redis_conn=redis,
                         user_triggered=user_triggered,
                         dist_git_namespace=dist_git_namespace,
+                        workspace_id=task.execution_id,
                     )
                     logger.info(
                         f"Rebase processing completed for {rebase_data.jira_issue}, "

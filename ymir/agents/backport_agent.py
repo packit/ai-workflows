@@ -8,6 +8,7 @@ import traceback
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from uuid import UUID, uuid4
 
 from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
@@ -568,16 +569,18 @@ async def run_workflow(
     inheritance_disabled=False,
     task_metadata=None,
     inherit_agent_factory=None,
+    workspace_id: UUID | None = None,
 ):
     if max_incremental_fix_attempts is None:
         max_incremental_fix_attempts = max_build_attempts
+    workspace_id = workspace_id or uuid4()
 
     local_tool_options: dict[str, Any] = {"working_directory": None}
     if mock_env := get_mock_local_tool_env(jira_issue):
         local_tool_options["env"] = mock_env
 
     async with mcp_tools(
-        os.environ["MCP_GATEWAY_URL"], call_meta={"jira_issue": jira_issue}
+        os.environ["MCP_GATEWAY_URL"], call_meta={"jira_issue": jira_issue, "workspace_id": str(workspace_id)}
     ) as gateway_tools:
         if backport_agent_factory:
             result = backport_agent_factory(gateway_tools, local_tool_options)
@@ -672,6 +675,7 @@ async def run_workflow(
                 dist_git_branch=state.dist_git_branch,
                 available_tools=gateway_tools,
                 agent_type="Backport",
+                workspace_id=state.workspace_id,
                 dist_git_namespace=state.dist_git_namespace,
             )
             local_tool_options["working_directory"] = state.local_clone
@@ -1540,6 +1544,7 @@ async def run_workflow(
                 dist_git_namespace=dist_git_namespace,
                 upstream_patches=upstream_patches,
                 jira_issue=jira_issue,
+                workspace_id=workspace_id,
                 cve_id=cve_id,
                 justification=justification,
                 triage_summary=triage_summary,
@@ -1710,6 +1715,7 @@ async def main() -> None:
                         inherited_publication_checkpoint=triage_state.get(_INHERITED_PUBLICATION_CHECKPOINT),
                         inheritance_disabled=bool(triage_state.get(_YSTREAM_INHERITANCE_DISABLED, False)),
                         task_metadata=triage_state,
+                        workspace_id=task.execution_id,
                     )
                     logger.info(
                         f"Backport processing completed for {backport_data.jira_issue}, "

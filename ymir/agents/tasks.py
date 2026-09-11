@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
+from uuid import UUID, uuid4
 
 import yaml
 from beeai_framework.tools import Tool
@@ -43,7 +44,7 @@ from ymir.common.version_utils import (
     parse_rhel_version,
     parse_zstream_branch_name,
 )
-from ymir.tools.privileged.utils import APPLICABILITY_DIR, MERGE_REQUESTS_DIR
+from ymir.tools.privileged.utils import ACTIVE_WORKSPACE_MARKER, APPLICABILITY_DIR, MERGE_REQUESTS_DIR
 from ymir.tools.unprivileged.specfile import UpdateReleaseTool
 from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
 
@@ -237,18 +238,20 @@ async def fork_and_prepare_dist_git(
     dist_git_branch: str,
     available_tools: list[Tool],
     agent_type: str,
+    workspace_id: UUID | None = None,
     with_fedora: bool = False,
     dist_git_namespace: str | None = None,
 ) -> tuple[Path, str, str, Path | None, str | None]:
     if not jira_issue or Path(jira_issue).is_absolute() or ".." in jira_issue:
         raise ValueError(f"Invalid jira_issue: {jira_issue}")
-    # Scoped by agent_type so different agent types processing the same
-    # jira_issue concurrently (e.g. rebase and backport) never share a
-    # working directory and can't rm -rf each other's checkout.
-    working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / agent_type / jira_issue
+    workspace_id = workspace_id or uuid4()
+    # A workflow invocation owns only its unique workspace. Queue retries and
+    # concurrent direct runs cannot delete each other's checkout.
+    working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / agent_type / jira_issue / str(workspace_id)
     if working_dir.is_dir():
         _force_rmtree(working_dir)
     working_dir.mkdir(parents=True, exist_ok=True)
+    (working_dir / ACTIVE_WORKSPACE_MARKER).touch()
     namespace = resolve_dist_git_namespace(dist_git_branch, dist_git_namespace)
     repository = f"https://gitlab.com/redhat/{namespace}/rpms/{package}"
     fork_url = await run_tool("fork_repository", repository=repository, available_tools=available_tools)

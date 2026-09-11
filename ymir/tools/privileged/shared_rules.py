@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.base import tool_error_context
 from ymir.tools.constants import AIOHTTP_TIMEOUT, GITLAB_API_URL, RULES_NAMESPACE, YMIR_USER_AGENT
+from ymir.tools.gateway_utils import redact_credentials
 from ymir.tools.http import aiohttp_get_with_retries
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,10 @@ class SharedRulesTool(Tool[SharedRulesInput, ToolRunOptions, StringToolOutput]):
 
             if response.status != 200:
                 text = await response.text()
-                raise ToolError(f"Failed to fetch shared rules registry (HTTP {response.status}): {text}")
+                raise ToolError(
+                    f"Failed to fetch shared rules registry (HTTP {response.status}): "
+                    f"{redact_credentials(text)[:500]}"
+                )
 
             raw = await response.text()
 

@@ -15,10 +15,10 @@ build-test-image-fedora:
 build-test-image-c9s:
 	$(CONTAINER_ENGINE) build --rm --tag $(TEST_IMAGE_C9S) -f Containerfile.c9s-tests
 
-.PHONY: check check-agents check-cli check-unprivileged-tools check-privileged-tools check-jira-issue-fetcher check-ymir-common \
-	check-supervisor check-mcp-install check-sweep check-sweep-integration \
+.PHONY: check check-agents check-cli check-tools-general check-unprivileged-tools check-privileged-tools check-jira-issue-fetcher \
+	check-ymir-common check-supervisor check-mcp-install check-sweep check-sweep-integration \
 	check-in-container check-agents-in-container check-cli-in-container \
-	check-unprivileged-tools-in-container \
+	check-tools-general-in-container check-unprivileged-tools-in-container \
 	check-privileged-tools-in-container check-jira-issue-fetcher-in-container check-ymir-common-in-container \
 	check-supervisor-in-container check-mcp-install-in-container check-sweep-in-container check-sweep-integration-in-container
 
@@ -30,6 +30,8 @@ check-agents:
 	$(call RUN_TESTS,ymir/agents/)
 check-cli:
 	$(call RUN_TESTS,ymir/cli/)
+check-tools-general:
+	$(call RUN_TESTS,ymir/tools/)
 check-unprivileged-tools:
 	$(call RUN_TESTS,ymir/tools/unprivileged/)
 check-privileged-tools:
@@ -49,7 +51,7 @@ check-sweep-integration:
 check-mcp-install:
 	PYTHONPATH= bash scripts/test_mcp_install.sh
 
-check: check-agents check-cli check-unprivileged-tools check-privileged-tools check-jira-issue-fetcher check-ymir-common check-supervisor check-sweep check-mcp-install
+check: check-agents check-cli check-tools-general check-unprivileged-tools check-privileged-tools check-jira-issue-fetcher check-ymir-common check-supervisor check-sweep check-mcp-install
 
 define RUN_TESTS_IN_CONTAINER
 	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(1) make -f Makefile.tests $(2)
@@ -59,6 +61,8 @@ check-agents-in-container:
 	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE_C9S),check-agents)
 check-cli-in-container:
 	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE_C9S),check-cli)
+check-tools-general-in-container:
+	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE_C9S),check-tools-general)
 check-unprivileged-tools-in-container:
 	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE_C9S),check-unprivileged-tools)
 check-privileged-tools-in-container:
@@ -76,7 +80,8 @@ check-sweep-integration-in-container:
 check-mcp-install-in-container:
 	$(call RUN_TESTS_IN_CONTAINER,$(TEST_IMAGE),check-mcp-install)
 
-check-in-container: check-agents-in-container check-cli-in-container check-unprivileged-tools-in-container \
+check-in-container: check-agents-in-container check-cli-in-container check-tools-general-in-container \
+	check-unprivileged-tools-in-container \
 	check-privileged-tools-in-container \
 	check-jira-issue-fetcher-in-container check-ymir-common-in-container check-supervisor-in-container \
 	check-sweep-in-container \

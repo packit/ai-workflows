@@ -58,7 +58,6 @@ class MaintainerRulesTool(Tool[MaintainerRulesInput, ToolRunOptions, StringToolO
 
         with tool_error_context(
             f"Failed to fetch maintainer rules for {tool_input.package}",
-            include_exception_message_for=(ToolError,),
             package=tool_input.package,
             file_path=tool_input.file_path,
         ):

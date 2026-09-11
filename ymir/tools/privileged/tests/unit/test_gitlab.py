@@ -445,30 +445,33 @@ async def test_clone_repository(mock_git_repo_basepath):
     ids=["outside-base", "unrelated-absolute"],
 )
 async def test_clone_repository_rejects_path_outside_basepath(mock_git_repo_basepath, bad_path):
-    with pytest.raises(ToolError, match="must be under"):
+    with pytest.raises(ToolError) as exc_info:
         await CloneRepositoryTool().run(
             input={"repository": "https://gitlab.com/redhat/rhel/rpms/bash", "clone_path": bad_path}
         )
+    assert "must be under" in str(exc_info.value.__cause__)
 
 
 @pytest.mark.asyncio
 async def test_clone_repository_rejects_path_traversal(mock_git_repo_basepath):
     traversal_path = mock_git_repo_basepath / ".." / "tmp" / "bash"
-    with pytest.raises(ToolError, match="must be under"):
+    with pytest.raises(ToolError) as exc_info:
         await CloneRepositoryTool().run(
             input={"repository": "https://gitlab.com/redhat/rhel/rpms/bash", "clone_path": traversal_path}
         )
+    assert "must be under" in str(exc_info.value.__cause__)
 
 
 @pytest.mark.asyncio
 async def test_clone_repository_rejects_basepath_root(mock_git_repo_basepath):
-    with pytest.raises(ToolError, match="must be under"):
+    with pytest.raises(ToolError) as exc_info:
         await CloneRepositoryTool().run(
             input={
                 "repository": "https://gitlab.com/redhat/rhel/rpms/bash",
                 "clone_path": mock_git_repo_basepath,
             }
         )
+    assert "must be under" in str(exc_info.value.__cause__)
 
 
 @pytest.mark.asyncio
@@ -570,7 +573,7 @@ async def test_add_merge_request_labels_invalid_url():
             input={"merge_request_url": merge_request_url, "labels": labels}
         )
 
-    assert "Could not parse merge request URL" in str(exc_info.value)
+    assert "Could not parse merge request URL" in str(exc_info.value.__cause__)
 
 
 @pytest.mark.asyncio
@@ -704,7 +707,7 @@ async def test_add_blocking_merge_request_comment_invalid_url():
             input={"merge_request_url": merge_request_url, "comment": comment}
         )
 
-    assert "Could not parse merge request URL" in str(exc_info.value)
+    assert "Could not parse merge request URL" in str(exc_info.value.__cause__)
 
 
 @pytest.mark.asyncio
@@ -857,7 +860,7 @@ async def test_get_failed_pipeline_jobs_from_merge_request_invalid_url():
     with pytest.raises(Exception) as exc_info:
         await GetFailedPipelineJobsFromMergeRequestTool().run(input={"merge_request_url": merge_request_url})
 
-    assert "Could not parse merge request URL" in str(exc_info.value)
+    assert "Could not parse merge request URL" in str(exc_info.value.__cause__)
 
 
 @pytest.mark.parametrize(
@@ -1041,7 +1044,7 @@ async def test_get_authorized_comments_invalid_url():
         await GetAuthorizedCommentsFromMergeRequestTool().run(
             input={"merge_request_url": "https://github.com/user/repo/pull/123"}
         )
-    assert "Could not parse merge request URL" in str(exc_info.value)
+    assert "Could not parse merge request URL" in str(exc_info.value.__cause__)
 
 
 # --- sanitize_url tests ---
@@ -1114,7 +1117,7 @@ async def test_clone_repository_logs_stderr_on_failure(mock_git_repo_basepath, c
         )
     )
 
-    with pytest.raises(ToolError, match="not found"):
+    with pytest.raises(ToolError) as exc_info:
         await CloneRepositoryTool().run(
             input={
                 "repository": "https://github.com/vim/vim",
@@ -1122,6 +1125,7 @@ async def test_clone_repository_logs_stderr_on_failure(mock_git_repo_basepath, c
                 "clone_path": clone_path,
             }
         )
+    assert "not found" in str(exc_info.value.__cause__)
 
     assert "not found" in caplog.text
     assert "git fetch" in caplog.text
@@ -1138,13 +1142,14 @@ async def test_clone_repository_no_branch_logs_stderr_on_failure(mock_git_repo_b
         _make_failing_subprocess(stderr_msg)
     )
 
-    with pytest.raises(ToolError, match="403"):
+    with pytest.raises(ToolError) as exc_info:
         await CloneRepositoryTool().run(
             input={
                 "repository": "https://github.com/vim/vim",
                 "clone_path": clone_path,
             }
         )
+    assert "403" in str(exc_info.value.__cause__)
 
     assert "403" in caplog.text
     assert "git clone" in caplog.text
@@ -1272,7 +1277,7 @@ async def test_fetch_branch_logs_stderr_on_failure(mock_git_repo_basepath, caplo
         _make_failing_subprocess(stderr_msg)
     )
 
-    with pytest.raises(ToolError, match="remote ref"):
+    with pytest.raises(ToolError) as exc_info:
         await FetchBranchTool().run(
             input={
                 "repository": "https://github.com/vim/vim",
@@ -1280,6 +1285,7 @@ async def test_fetch_branch_logs_stderr_on_failure(mock_git_repo_basepath, caplo
                 "clone_path": clone_path,
             }
         )
+    assert "remote ref" in str(exc_info.value.__cause__)
 
     assert "remote ref" in caplog.text
     assert "git fetch" in caplog.text
@@ -1407,7 +1413,7 @@ async def test_push_logs_stderr_on_failure(caplog):
         _make_failing_subprocess(stderr_msg)
     )
 
-    with pytest.raises(ToolError, match="failed to push"):
+    with pytest.raises(ToolError) as exc_info:
         await PushToRemoteRepositoryTool().run(
             input={
                 "repository": "https://gitlab.com/ai-bot/bash.git",
@@ -1415,6 +1421,7 @@ async def test_push_logs_stderr_on_failure(caplog):
                 "branch": "my-branch",
             }
         )
+    assert "failed to push" in str(exc_info.value.__cause__)
 
     assert "failed to push" in caplog.text
     assert "git push" in caplog.text

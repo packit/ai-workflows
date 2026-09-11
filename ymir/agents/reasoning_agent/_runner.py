@@ -59,6 +59,9 @@ from ymir.agents.reasoning_agent.types import (
     ReasoningAgentTemplates,
     RequirementEvaluation,
 )
+from ymir.tools.errors import explain_to_llm
+
+logger = logging.getLogger(__name__)
 
 
 class FinalAnswerToolSchema(BaseModel):
@@ -358,7 +361,7 @@ class ReasoningAgentRunner:
 
             return response
         except TimeoutError:
-            logging.getLogger(__name__).error(
+            logger.error(
                 "LLM call timed out after %ds (iteration %d)",
                 llm_timeout,
                 self._state.iteration,
@@ -500,16 +503,8 @@ class ReasoningAgentRunner:
             )
 
             if tool_call.error is not None:
-                original_context = getattr(tool_call.error, "context", None)
-                try:
-                    if original_context and "additional_context" in original_context:
-                        tool_call.error.context = {
-                            k: v for k, v in original_context.items() if k != "additional_context"
-                        }
-                    reason = tool_call.error.explain()
-                finally:
-                    tool_call.error.context = original_context
-
+                reason = explain_to_llm(tool_call.error)
+                logger.info("Tool call failed -> sending the following error message to LLM:\n%s", reason)
                 result = self._templates.tool_error.render(ReasoningAgentToolErrorPromptInput(reason=reason))
             else:
                 result = (

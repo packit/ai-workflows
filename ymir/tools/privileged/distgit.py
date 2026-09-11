@@ -210,7 +210,6 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
         with (
             tool_error_context(
                 "Failed to create Z-Stream branch",
-                include_exception_message_for=(ToolError,),
                 package=package,
                 branch=branch,
             ),
@@ -226,8 +225,11 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                     shutil.rmtree(clone_dest)
                 return await asyncio.to_thread(git.Repo.clone_from, clone_url, clone_dest)
 
-            with tool_error_context("Failed to clone dist-git repo", package=package, clone_url=clone_url):
+            with tool_error_context(
+                "Failed to clone dist-git repo", package=package, branch=branch, clone_url=clone_url
+            ):
                 repo = await _retry_transient(_clone, f"clone {package} from dist-git")
+
             branch_creation_details = None
             if branch in [ref.name.split("/")[-1] for ref in repo.remotes.origin.refs]:
                 # Branch already exists in dist-git but not yet mirrored to GitLab.

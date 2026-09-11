@@ -73,6 +73,14 @@ incremental repair agent's own edit/build loop is also unchanged. Dry-run mode
 still performs real build validation; it does not turn a build into a success
 without running it.
 
+Incremental backport repairs keep `fix-attempts.md` and archived build logs in
+`<local_clone>-build-logs`, beside the dist-git and upstream checkouts. This
+preserves diagnostic history between repair attempts without allowing Git
+staging in either checkout to include those files in generated patches. The
+repair prompt provides the file path for reading previous attempts and
+appending the outcome. The directory is removed with the issue's working
+directory on a fresh run.
+
 ## Dry run mode
 
 **Without setting `DRY_RUN=true` env var, agents will make real changes:**

@@ -81,6 +81,7 @@ from ymir.common.logging_setup import configure_logging, current_jira_issue, get
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     BackportData,
+    BackportFixBuildInputSchema,
     BackportInputSchema,
     BackportOutputSchema,
     BuildInputSchema,
@@ -283,6 +284,11 @@ async def create_backport_agent(
         role="Red Hat Enterprise Linux developer",
         instructions=await get_instructions(fix_version),
     )
+
+
+def _get_build_logs_dir(local_clone: Path) -> Path:
+    """Keep repair diagnostics outside both dist-git and upstream Git worktrees."""
+    return local_clone.with_name(f"{local_clone.name}-build-logs")
 
 
 def _move_build_logs(source_dir: Path, target_dir: Path) -> None:
@@ -1034,7 +1040,7 @@ async def run_workflow(
                     )
                     return "fork_and_prepare_dist_git"
 
-                log_dir = upstream_repo / "build-logs"
+                log_dir = _get_build_logs_dir(state.local_clone)
                 log_dir.mkdir(parents=True, exist_ok=True)
                 attempt_num = state.incremental_fix_attempts + 1
 
@@ -1055,8 +1061,9 @@ async def run_workflow(
                 response = await fix_agent.run(
                     render_template(
                         await get_fix_build_error_prompt(fix_version=state.fix_version),
-                        BackportInputSchema(
+                        BackportFixBuildInputSchema(
                             local_clone=state.local_clone,
+                            build_logs_dir=log_dir,
                             unpacked_sources=state.unpacked_sources,
                             package=state.package,
                             dist_git_branch=state.dist_git_branch,
@@ -1155,7 +1162,7 @@ async def run_workflow(
                 if upstream_repo.exists():
                     _move_build_logs(
                         state.local_clone,
-                        upstream_repo / "build-logs" / "attempt-0",
+                        _get_build_logs_dir(state.local_clone) / "attempt-0",
                     )
                 logger.info("Cherry-pick workflow was used - starting incremental fix")
                 return "fix_build_error"

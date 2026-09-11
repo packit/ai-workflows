@@ -31,6 +31,7 @@ def render_template(template_name: str, input: BaseModel | None = None) -> str:
 
 try:
     from ymir.common.models import (
+        BackportFixBuildInputSchema,
         BackportInputSchema,
         BuildFailureAnalysisInput,
         BuildInstructionsInput,
@@ -85,6 +86,9 @@ except ImportError:
         build_error: str | None = None
         triage_summary: str | None = None
         has_extract_log_snippets: bool = False
+
+    class BackportFixBuildInputSchema(BackportInputSchema):  # type: ignore[no-redef]
+        build_logs_dir: Path
 
     class RebaseInputSchema(BaseModel):  # type: ignore[no-redef]
         local_clone: Path
@@ -371,8 +375,9 @@ class TestBackportFixBuildErrorTemplate:
     def test_renders_with_extract_log_snippets(self):
         result = render_template(
             "backport/prompt_fix_build_error.j2",
-            BackportInputSchema(
+            BackportFixBuildInputSchema(
                 local_clone=Path("/tmp/clone"),
+                build_logs_dir=Path("/tmp/clone-build-logs"),
                 unpacked_sources=Path("/tmp/sources"),
                 package="libfoo",
                 dist_git_branch="c9s",
@@ -384,15 +389,17 @@ class TestBackportFixBuildErrorTemplate:
         )
         assert "cherry-pick workflow succeeded but the build failed" in result
         assert "undefined reference" in result
-        assert "fix-attempts.md" in result
+        assert "Before you start: Read /tmp/clone-build-logs/fix-attempts.md" in result
+        assert "/tmp/clone-upstream/build-logs" not in result
         assert "extract_log_snippets" in result
         assert "start with" not in result
 
     def test_renders_without_extract_log_snippets(self):
         result = render_template(
             "backport/prompt_fix_build_error.j2",
-            BackportInputSchema(
+            BackportFixBuildInputSchema(
                 local_clone=Path("/tmp/clone"),
+                build_logs_dir=Path("/tmp/clone-build-logs"),
                 unpacked_sources=Path("/tmp/sources"),
                 package="libfoo",
                 dist_git_branch="c9s",
@@ -404,7 +411,8 @@ class TestBackportFixBuildErrorTemplate:
         )
         assert "cherry-pick workflow succeeded but the build failed" in result
         assert "undefined reference" in result
-        assert "fix-attempts.md" in result
+        assert "Before you start: Read /tmp/clone-build-logs/fix-attempts.md" in result
+        assert "/tmp/clone-upstream/build-logs" not in result
         assert "extract_log_snippets" not in result
         assert "get logs and identify the new error" in result
 

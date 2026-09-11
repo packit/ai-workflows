@@ -64,12 +64,14 @@ CRITICAL CONSTRAINTS:
 
 - DO NOT commit any changes in {{ local_clone }} dist-git repository during the fix attempt.
   Keep all dist-git changes (patch files and spec edits) uncommitted until the build passes.
-  All your work is in {{ local_clone }}-upstream, which you can commit to freely.
+  Commit source fixes in {{ local_clone }}-upstream, staging only the intended source files.
+  Keep build logs and repair notes in {{ build_logs_dir }}, outside both Git repositories.
+  Do not copy these diagnostics into either repository or include them in generated patches.
 
 - Fix BOTH compilation errors AND test failures. NEVER skip or disable tests.
 - Make ONE attempt — you will be called again if the build still fails.
 
-Before you start: Read {{ local_clone }}-upstream/build-logs/fix-attempts.md for a log of
+Before you start: Read {{ build_logs_dir }}/fix-attempts.md for a log of
 previous fix attempts. Do NOT repeat strategies that already failed.
 
 WORKFLOW:
@@ -130,7 +132,7 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
      and identify the new error
 {% endif %}
 
-7. Append a summary to {{ local_clone }}-upstream/build-logs/fix-attempts.md documenting:
+7. Append a summary to {{ build_logs_dir }}/fix-attempts.md documenting:
    - What you identified as the root cause
    - Which commits you cherry-picked or what manual edits you made
    - Any BuildRequires or Requires additions to the spec file (if rules allowed

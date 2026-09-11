@@ -189,6 +189,12 @@ class BackportInputSchema(BaseModel):
     )
 
 
+class BackportFixBuildInputSchema(BackportInputSchema):
+    """Build-repair context with a diagnostics directory outside the Git worktrees."""
+
+    build_logs_dir: Path = Field(description="Path to build logs and persistent repair notes")
+
+
 class BackportOutputSchema(BaseModel):
     """Output schema for the backport agent."""
 

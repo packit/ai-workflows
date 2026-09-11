@@ -3,9 +3,11 @@
 MR Cleanup Script
 
 Phase 1 — Stale MR cleanup:
-  Scans open GitLab merge requests authored by Ymir bots and closes those
-  whose referenced Jira issues have all been closed.  No Jira labels are
-  modified — metrics dashboards depend on those labels remaining in place.
+  Scans open GitLab merge requests authored by Ymir bots, closes those whose
+  referenced Jira issues have all been closed, and posts a review comment when
+  the subset of closed references changes for an MR with a mix of closed and
+  non-closed Jira references.  No Jira labels are modified — metrics
+  dashboards depend on those labels remaining in place.
 
 Phase 2 — Closed-MR Jira labelling:
   Scans closed (not merged) bot MRs and adds ymir_mr_closed to the
@@ -47,6 +49,20 @@ REQUEST_TIMEOUT = 90
 MR_LOOKBACK_DAYS = 180
 
 CLOSE_NOTE_MARKER = "Closing this merge request"
+PARTIAL_CLOSURE_NOTE_PREFIX = "Some referenced Jira issues are already closed"
+RETRIGGER_GUIDANCE = (
+    " To retrigger Ymir for the relevant Jira issue(s), manually "
+    "add the `ymir_todo` label as described in the "
+    "[triggering documentation](https://ymir.pages.redhat.com/docs/triggering/). "
+    "If you want to rerun consolidation manually, follow the "
+    "[label-triggered consolidation documentation](https://ymir.pages.redhat.com/docs/"
+    "agents/mr-consolidation/#label-triggered-consolidation). "
+    "For rebase consolidations, follow the "
+    "[manual rebase consolidation instructions](https://ymir.pages.redhat.com/docs/"
+    "triggering/#how-to-manually-trigger-rebase-consolidation). "
+    "Otherwise, reach out in "
+    "[#forum-ymir-package-automation](https://redhat.enterprise.slack.com/archives/C095699FLMR)."
+)
 
 JIRA_MR_CLOSED_LABEL = "ymir_mr_closed"
 CLOSURE_HANDLED_MR_LABEL = "ymir_mr_closure_handled"
@@ -54,6 +70,7 @@ CLOSURE_HANDLED_MR_LABEL = "ymir_mr_closure_handled"
 
 class Action(enum.Enum):
     CLOSED = "closed"
+    PARTIAL_CLOSURE_COMMENTED = "partial_closure_commented"
     SKIPPED_NO_JIRA = "skipped_no_jira"
     SKIPPED_OPEN_JIRAS = "skipped_open_jiras"
     SKIPPED_ALREADY_CLEANED = "skipped_already_cleaned"
@@ -254,9 +271,6 @@ class MRCleanup:
             if note.get("author") and note["author"].get("username", "") in self.bot_authors
         ]
 
-    def _mr_has_existing_close_note(self, bot_notes: list[str]) -> bool:
-        return any(CLOSE_NOTE_MARKER in body for body in bot_notes)
-
     def _post_mr_note(self, mr: dict, body: str):
         project_id = mr["project_id"]
         iid = mr["iid"]
@@ -292,6 +306,16 @@ class MRCleanup:
             json={"add_labels": label},
         )
 
+    def _post_mr_note_once(self, mr: dict, body: str, marker: str):
+        bot_notes = self._fetch_bot_notes(mr)
+        if not any(marker in note for note in bot_notes):
+            self._post_mr_note(mr, body)
+
+    def _close_mr_with_note(self, mr: dict, note: str):
+        self._post_mr_note_once(mr, note, CLOSE_NOTE_MARKER)
+        self._close_mr(mr)
+        self._add_label(mr, "ymir_cleaned_up")
+
     def process_mr(self, mr: dict, jira_keys: set[str], jira_statuses: dict[str, str]) -> Action:
         mr_url = mr["web_url"]
 
@@ -307,28 +331,39 @@ class MRCleanup:
         open_keys = jira_keys - closed_keys
 
         if not closed_keys:
-            logger.debug("All Jiras still open for MR %s (%s)", mr_url, ", ".join(sorted(jira_keys)))
-            return Action.SKIPPED_OPEN_JIRAS
-
-        # Some Jiras still open — skip for now (potentially in future: comment about partial-closure)
-        if open_keys:
-            return Action.SKIPPED_OPEN_JIRAS
-
-        bot_notes = self._fetch_bot_notes(mr)
-        keys_str = ", ".join(sorted(closed_keys))
-        logger.info("All Jiras closed for MR %s (%s) — closing", mr_url, keys_str)
-
-        if not self._mr_has_existing_close_note(bot_notes):
-            self._post_mr_note(
-                mr,
-                f"Closing this merge request — all referenced Jira issues "
-                f"({keys_str}) have been closed. "
-                f"If this MR is still needed, reopen it (the `ymir_cleaned_up` label "
-                f"prevents repeated closure) or reach out in "
-                f"[#forum-ymir-package-automation](https://redhat.enterprise.slack.com/archives/C095699FLMR).",
+            logger.debug(
+                "No referenced Jiras are reported closed for MR %s (%s)",
+                mr_url,
+                ", ".join(sorted(jira_keys)),
             )
-        self._close_mr(mr)
-        self._add_label(mr, "ymir_cleaned_up")
+            return Action.SKIPPED_OPEN_JIRAS
+
+        keys_str = ", ".join(sorted(closed_keys))
+        if open_keys:
+            remaining_keys_str = ", ".join(sorted(open_keys))
+            logger.info(
+                "Some Jiras closed for MR %s (%s); other referenced Jiras were not reported "
+                "as closed (%s) — leaving open for review",
+                mr_url,
+                keys_str,
+                remaining_keys_str,
+            )
+            partial_note_marker = f"{PARTIAL_CLOSURE_NOTE_PREFIX}: {keys_str}."
+            note = (
+                f"{partial_note_marker} Other referenced Jira "
+                f"issue(s) were not reported as closed: {remaining_keys_str}. The merge "
+                f"request was left open for manual review.{RETRIGGER_GUIDANCE}"
+            )
+            self._post_mr_note_once(mr, note, partial_note_marker)
+            return Action.PARTIAL_CLOSURE_COMMENTED
+
+        logger.info("All Jiras closed for MR %s (%s) — closing", mr_url, keys_str)
+        note = (
+            f"Closing this merge request — all referenced Jira issues ({keys_str}) have been closed."
+            " If this MR is still needed, reopen it; the `ymir_cleaned_up` label prevents "
+            f"repeated closure.{RETRIGGER_GUIDANCE}"
+        )
+        self._close_mr_with_note(mr, note)
         return Action.CLOSED
 
     def fetch_closed_mrs(self) -> list[dict]:

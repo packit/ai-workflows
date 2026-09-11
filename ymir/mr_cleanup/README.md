@@ -5,8 +5,12 @@ Daily cronjob with two phases for managing stale bot-authored GitLab MRs.
 ## Phases
 
 **Phase 1 -- Close stale MRs** (`CLOSE_STALE_MRS=true`, default):
-Closes open bot MRs whose referenced Jira issues have all been closed.
-Posts a closing comment, adds `ymir_cleaned_up` label. No Jira labels modified.
+Closes open bot MRs whose referenced Jira issues have all been closed. For MRs
+with a mix of closed and non-closed Jira references, posts a review comment
+when the subset of closed issues changes, suppresses repeated comments for the
+same subset, and leaves the MR open. Closure comments and review comments
+explain how to retrigger Ymir with the `ymir_todo` Jira label if the work is
+still needed. No Jira labels are modified by this phase.
 
 **Phase 2 -- Label closed-MR Jiras** (`RESET_CLOSED_MR_JIRAS=true`, default):
 For closed (not merged) bot MRs, adds `ymir_mr_closed` to the referenced

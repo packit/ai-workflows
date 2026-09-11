@@ -4,7 +4,7 @@
 
 Three QE agents were extracted from the old Supervisor into standalone modules. They are fully independent — no imports from `ymir.supervisor`, use MCP gateway tools, and live under the `agents` compose profile. Each is a **one-shot executor** (takes an env var, processes one item, exits). No trigger mechanism is deployed — they can only be run manually via compose.
 
-The old Supervisor code (`ymir/supervisor/`) is dead code: commented out in `deploy.sh`, not deployed. Source files, OpenShift manifests, Containerfile, CI build job, and Makefile targets still exist in the repo.
+The old Supervisor code (`ymir/supervisor/`) is dead code: commented out in `deploy-oc.sh`, not deployed. Source files, OpenShift manifests, Containerfile, CI build job, and Makefile targets still exist in the repo.
 
 | Agent | Source | Input | What it does |
 |---|---|---|---|
@@ -169,7 +169,7 @@ The agents are functionally ready. The missing piece is triggering and deploymen
 - `deployment-qe-processor.yml` (from e.g. `deployment-triage-agent.yml`)
 - `cronjob-qe-fetcher.yml` (from `cronjob-jira-issue-fetcher.yml`)
 
-Add to `deploy.sh` and the CI image build workflow.
+Add to `deploy-oc.sh` and the CI image build workflow.
 
 ### Agent fixes (can be done in parallel)
 

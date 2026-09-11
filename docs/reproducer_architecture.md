@@ -498,7 +498,7 @@ ad-hoc jobs or when `TRIAGE_ENQUEUE_REPRODUCER=false`.
 On OpenShift, `openshift/deployment-reproducer-agent.yml` runs the same queue
 worker (`beeai-agent:c10s`, module `ymir.agents.reproducer_agent`). Testing Farm
 calls go through `mcp-gateway`, which must mount the `testing-farm-env` secret
-(`TESTING_FARM_API_TOKEN`). Apply via `./openshift/deploy.sh`, then enqueue and
+(`TESTING_FARM_API_TOKEN`). Apply via `make -C openshift deploy`, then enqueue and
 watch from the `openshift/` directory (requires `oc login`):
 
 ```bash

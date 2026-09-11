@@ -18,6 +18,13 @@ COMPOSE_SUPERVISOR=$(COMPOSE) -f $(COMPOSE_FILE) --profile=supervisor
 CONTAINER_TOOL ?= $(shell command -v podman >/dev/null 2>&1 && echo "podman" || echo "docker")
 REGISTRY ?= quay.io/jotnar
 
+.PHONY: deploy changelog
+deploy:
+	$(MAKE) -C openshift deploy DEPLOY_ARGS="$(DEPLOY_ARGS)"
+
+changelog:
+	$(MAKE) -C openshift changelog CHANGELOG_ARGS="$(CHANGELOG_ARGS)"
+
 .PHONY: build
 build:
 	@if [ -f .secrets/build.env ]; then echo "Warning: .secrets/build.env is deprecated, please move its contents to .env"; fi

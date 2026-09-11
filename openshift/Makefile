@@ -7,6 +7,8 @@ SHELL := /bin/bash
 # Reverse to oldest-first (next-to-pop) order. tac is GNU-only; fall back to
 # `tail -r` on macOS/BSD where tac is absent.
 TAC := $(shell command -v tac 2>/dev/null || echo "tail -r")
+DEPLOY_ARGS ?=
+CHANGELOG_ARGS ?=
 
 # Dump an input queue and its ymir_todo priority twin (drained first by the
 # agents' BRPOP), oldest-first to match pop order.
@@ -28,7 +30,10 @@ define show_single_queue
 endef
 
 deploy:
-	./deploy.sh
+	python3 scripts/deployment_release.py deploy $(DEPLOY_ARGS)
+
+changelog:
+	python3 scripts/deployment_release.py changelog $(CHANGELOG_ARGS)
 
 run-jira-issue-fetcher:
 	oc delete job jira-issue-fetcher-manual || true
@@ -208,7 +213,7 @@ unsuspend-sweeps:
 	oc patch cronjob sweep-pr-pending --type merge -p '{"spec":{"suspend":false}}'
 	oc patch cronjob sweep-no-patch --type merge -p '{"spec":{"suspend":false}}'
 
-.PHONY: deploy run-jira-issue-fetcher run-jira-issue-fetcher-todo \
+.PHONY: deploy changelog run-jira-issue-fetcher run-jira-issue-fetcher-todo \
 	suspend-jira-issue-fetcher unsuspend-jira-issue-fetcher \
 	suspend-jira-issue-fetcher-todo unsuspend-jira-issue-fetcher-todo \
 	show-triage-queue show-rebase-queue-c9s show-rebase-queue-c10s \

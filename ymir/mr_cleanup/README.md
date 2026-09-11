@@ -56,5 +56,5 @@ CLOSE_STALE_MRS=false GITLAB_BOT_AUTHORS=rhel-se-jotnar-admin make run-mr-cleanu
 
 ## Deployment
 
-Runs as an OpenShift CronJob daily at 4am UTC. Deployed via `openshift/deploy.sh`
+Runs as an OpenShift CronJob daily at 4am UTC. Deployed via `make -C openshift deploy`
 using credentials from existing `gitlab-env` and `jira-env` secrets.

@@ -505,7 +505,7 @@ redis-cli:
 build-test-image:
 	$(MAKE) -f Makefile.tests build-test-image
 
-.PHONY: check-in-container check-agents-in-container check-unprivileged-tools-in-container check-privileged-tools-in-container check-jira-issue-fetcher-in-container check-ymir-common-in-container check-supervisor-in-container check-mcp-install-in-container check-cli-in-container check-sweep-in-container check-sweep-integration-in-container
+.PHONY: check-in-container check-agents-in-container check-unprivileged-tools-in-container check-privileged-tools-in-container check-jira-issue-fetcher-in-container check-ymir-common-in-container check-supervisor-in-container check-mcp-install-in-container check-cli-in-container check-sweep-in-container check-sweep-integration-in-container check-deployment-scripts-in-container check-mr-cleanup-in-container
 check-in-container: build-test-image
 	$(MAKE) -f Makefile.tests check-in-container
 check-agents-in-container: build-test-image
@@ -520,6 +520,10 @@ check-ymir-common-in-container: build-test-image
 	$(MAKE) -f Makefile.tests check-ymir-common-in-container
 check-supervisor-in-container: build-test-image
 	$(MAKE) -f Makefile.tests check-supervisor-in-container
+check-deployment-scripts-in-container: build-test-image
+	$(MAKE) -f Makefile.tests check-deployment-scripts-in-container
+check-mr-cleanup-in-container: build-test-image
+	$(MAKE) -f Makefile.tests check-mr-cleanup-in-container
 check-sweep-in-container: build-test-image
 	$(MAKE) -f Makefile.tests check-sweep-in-container
 check-sweep-integration-in-container: build-test-image

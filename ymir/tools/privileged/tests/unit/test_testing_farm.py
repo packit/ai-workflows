@@ -671,11 +671,12 @@ async def test_run_remote_command_timeout_kills_process(monkeypatch):
 
     with (
         patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
-        pytest.raises(ToolError, match="timed out"),
+        pytest.raises(ToolError) as exc_info,
     ):
         await RunRemoteCommandTool().run(
             input={"ssh_host": "root@10.0.0.1", "command": "sleep 999", "timeout": 5}
         )
+    assert "timed out" in str(exc_info.value.__cause__)
 
     fake_proc.kill.assert_called_once()
     fake_proc.wait.assert_awaited_once()
@@ -693,7 +694,7 @@ async def test_copy_files_timeout_kills_process(monkeypatch):
 
     with (
         patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
-        pytest.raises(ToolError, match="timed out"),
+        pytest.raises(ToolError) as exc_info,
     ):
         await CopyFilesToRemoteTool().run(
             input={
@@ -702,6 +703,7 @@ async def test_copy_files_timeout_kills_process(monkeypatch):
                 "timeout": 5,
             }
         )
+    assert "timed out" in str(exc_info.value.__cause__)
 
     fake_proc.kill.assert_called_once()
     fake_proc.wait.assert_awaited_once()

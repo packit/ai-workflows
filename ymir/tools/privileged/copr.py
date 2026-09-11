@@ -14,6 +14,7 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import (
     JSONToolOutput,
+    ToolError,
     ToolRunOptions,
 )
 from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
@@ -22,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from ymir.common import load_rhel_config
 from ymir.common.base_utils import init_kerberos_ticket
+from ymir.common.models import BuildResult
 from ymir.common.validators import AbsolutePath
 from ymir.common.version_utils import parse_branch_name
 from ymir.tools.base import CloneableTool as Tool
@@ -396,7 +398,6 @@ class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, Dow
                 try:
                     with tool_error_context(
                         "Failed to download build artifact",
-                        include_exception_message_for=(ValueError,),
                         artifacts_url=url,
                     ):
                         async with aiohttp_get_with_retries(session, url) as response:
@@ -411,7 +412,7 @@ class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, Dow
                                         target = target.with_suffix("")
                                 (target_path / target).write_bytes(content)
                             else:
-                                raise ValueError(f"{response.status} {response.reason}")
+                                raise ToolError(f"{response.status} {response.reason}")
                 except Exception:
                     # Cleanup temporary dir
                     rmtree(target_path)

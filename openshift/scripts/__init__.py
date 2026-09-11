@@ -1,0 +1,1 @@
+"""OpenShift deployment helper scripts."""

@@ -133,10 +133,84 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
 - Run the deployment script:
 
   ```bash
-  ./openshift/deploy.sh
+  make deploy
   ```
 
-  This applies all configurations: egress rules, ConfigMaps, ImageStreams, PersistentVolumes, Services, and Deployments.
+  This `make deploy` target is the primary deployment entry point. It fetches
+  `upstream/main`, shows the image/source revision and the
+  local deployment-configuration revision, warns if they diverge, shows source
+  changes since the last deployment tag, and asks for confirmation. It then
+  applies the local manifests, creates `deployed/<timestamp>` pointing at
+  the captured `upstream/main` commit, and prints the changelog. If the local
+  deployment configuration diverges, that is reported during the deployment.
+  Answering `N` cancels without changing OpenShift or creating a tag.
+
+  Use `make deploy` for the default `upstream` workflow. Use the Python CLI
+  directly when selecting another remote or passing subcommand options.
+
+  `deploy-oc.sh` is the low-level apply/import script used by the Python
+  driver. It can be run directly with `./openshift/deploy-oc.sh`, but bypasses
+  revision review, confirmation, changelog generation, and tag creation.
+
+  Requirements:
+
+  - Python 3.13, Git, and `make` for the Make targets. The release script uses
+    the Python standard library for GitHub API calls.
+  - GitHub API requests are anonymous by default for this public repository.
+    Set `GITHUB_TOKEN` to use authenticated read-only requests; for a private
+    repository, the token needs read access to pull requests.
+
+    For example, expose a read-only token to the CLI with:
+
+    ```bash
+    export GITHUB_TOKEN=<read-only-github-token>
+    ```
+
+    `GITLAB_TOKEN` is an OpenShift application secret and is unrelated to the
+    GitHub release-note lookup.
+  - For deployment, `oc` installed and logged in to the target OpenShift
+    project, plus push access to the selected Git remote.
+  - No tracked Git changes and an existing `deployed/*` tag on the selected
+    remote. Untracked files are ignored.
+
+  The changelog command does not require `oc` or a clean worktree; it needs
+  the Git refs and GitHub API access, and may use local refs. The deployment
+  and its dry run require the baseline tag to exist on the selected remote.
+
+  For Git/release-note checks without deploying or creating a tag:
+
+  ```bash
+  python3 openshift/scripts/deployment_release.py deploy --dry-run
+  python3 openshift/scripts/deployment_release.py --remote origin deploy --dry-run
+  ```
+
+  Before the first deployment, create and push an initial `deployed/<timestamp>`
+  tag at the source commit that represents the last deployed state. Deployment
+  refuses to run without an existing `deployed/*` tag. For example, for a
+  deployment from 2026-09-15:
+
+  ```bash
+  git tag -a deployed/20260915T120000Z <last-deployed-source-sha> \
+    -m "Initial deployment baseline"
+  git push upstream deployed/20260915T120000Z
+  ```
+
+  The full CLI is `python3 openshift/scripts/deployment_release.py` when run
+  from the repository root. For example, to deploy using `origin`:
+
+  ```bash
+  python3 openshift/scripts/deployment_release.py --remote origin deploy
+  ```
+
+  To print a changelog without deploying or creating a tag, use the full CLI:
+
+  ```bash
+  python3 openshift/scripts/deployment_release.py changelog deployed/20260910T100000Z
+  python3 openshift/scripts/deployment_release.py --remote origin changelog deployed/20260910T100000Z
+  ```
+
+  The optional head argument defaults to `upstream/main` (or `<remote>/main`
+  when `--remote` is overridden).
 
 ## Jira Issue Fetcher Deployment
 
@@ -164,7 +238,10 @@ make suspend-jira-issue-fetcher-todo     # stop scheduled runs
 make unsuspend-jira-issue-fetcher-todo   # resume scheduled runs
 ```
 
-These patch the live CronJob (`oc patch ... suspend`). Re-applying the manifests (`./deploy.sh`) resets each CronJob to the `suspend` value in its manifest (both default to `false`), so to change the default permanently edit `suspend` in the manifest.
+These patch the live CronJob (`oc patch ... suspend`). Running the deployment
+target (`make deploy`) resets each CronJob to the `suspend` value in
+its manifest (both default to `false`), so to change the default permanently
+edit `suspend` in the manifest.
 
 **Manual on-demand runs** work regardless of the suspend state — `suspend` only stops the scheduler, not manual triggers:
 

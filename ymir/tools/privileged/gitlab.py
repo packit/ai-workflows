@@ -21,7 +21,7 @@ from beeai_framework.tools import (
     ToolRunOptions,
 )
 from mcp.server.lowlevel.server import request_ctx
-from ogr.exceptions import GitlabAPIException
+from ogr.exceptions import GitlabAPIException, OgrException
 from ogr.factory import get_project
 from ogr.services.gitlab.project import GitlabProject
 from ogr.services.gitlab.pull_request import GitlabPullRequest
@@ -40,6 +40,7 @@ from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.base import make_additional_context, tool_error_context
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.tools.errors import ToolErrorWithContext
+from ymir.tools.gateway_utils import redact_credentials
 from ymir.tools.http import aiohttp_get_with_retries
 from ymir.tools.privileged.utils import clean_stale_repositories, sanitize_url
 
@@ -299,7 +300,7 @@ async def _get_merge_request_from_url(merge_request_url: str) -> GitlabPullReque
             merge_request_url,
         )
     ):
-        raise ValueError(f"Could not parse merge request URL: {merge_request_url}")
+        raise ToolError(f"Could not parse merge request URL: {merge_request_url}")
 
     project_path = match.group(1)
     mr_id = int(match.group(2))
@@ -395,7 +396,6 @@ class ForkRepositoryTool(Tool[ForkRepositoryToolInput, ToolRunOptions, StringToo
         logger.info(f"Connecting to GitLab API to fork repository: {repository}")
         with tool_error_context(
             "Failed to fork repository",
-            include_exception_message_for=(ToolError,),
             repository=repository,
         ):
             project = await asyncio.to_thread(get_project, url=repository, token=os.getenv("GITLAB_TOKEN"))
@@ -522,7 +522,6 @@ class OpenMergeRequestTool(
         logger.info(f"Connecting to GitLab API to open merge request from fork: {fork_url}")
         with tool_error_context(
             "Failed to open merge request",
-            include_exception_message_for=(ToolError,),
             fork_url=fork_url,
             source=source,
             target=target,
@@ -589,17 +588,19 @@ class GetInternalRhelBranchesTool(
 
         with tool_error_context(
             f"Failed to get branches for package {package}",
-            include_exception_message_for=(ToolError,),
             package=package,
             repository_url=repository_url,
         ):
-            project = await asyncio.to_thread(
-                get_project, url=repository_url, token=os.getenv("GITLAB_TOKEN")
-            )
-            if not project:
-                raise ToolError(f"Failed to get repository for package: {package}")
+            try:
+                project = await asyncio.to_thread(
+                    get_project, url=repository_url, token=os.getenv("GITLAB_TOKEN")
+                )
+                if not project:
+                    raise ToolError(f"Failed to get repository for package: {package}")
 
-            branches = await asyncio.to_thread(project.get_branches)
+                branches = await asyncio.to_thread(project.get_branches)
+            except OgrException as ex:
+                raise ToolError(f"{type(ex).__name__}: {redact_credentials(str(ex))[:500]}") from ex
 
         logger.info(f"Found {len(branches)} branches for package {package}: {branches}")
         return JSONToolOutput(result=branches)
@@ -642,7 +643,6 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
 
         with tool_error_context(
             "Failed to clone repository",
-            include_exception_message_for=(ToolError,),
             repository=repository,
             branch=str(branch),
             clone_path=str(clone_path),
@@ -732,7 +732,6 @@ class PushToRemoteRepositoryTool(Tool[PushToRemoteRepositoryToolInput, ToolRunOp
 
         with tool_error_context(
             "Failed to push to remote repository",
-            include_exception_message_for=(ToolError,),
             repository=safe_url,
             branch=branch,
             clone_path=str(clone_path),
@@ -790,7 +789,6 @@ class FetchBranchTool(Tool[FetchBranchToolInput, ToolRunOptions, StringToolOutpu
 
         with tool_error_context(
             "Failed to fetch branch",
-            include_exception_message_for=(ToolError,),
             repository=safe_url,
             branch=branch,
             clone_path=str(clone_path),
@@ -947,7 +945,6 @@ class AddMergeRequestLabelsTool(Tool[AddMergeRequestLabelsToolInput, ToolRunOpti
         labels = tool_input.labels
         with tool_error_context(
             "Failed to add labels to merge request",
-            include_exception_message_for=(ValueError,),
             merge_request_url=merge_request_url,
             labels=str(labels),
         ):
@@ -988,7 +985,6 @@ class SetMergeRequestReviewersTool(Tool[SetMergeRequestReviewersToolInput, ToolR
         reviewer_ids = tool_input.reviewer_ids
         with tool_error_context(
             "Failed to set reviewers on merge request",
-            include_exception_message_for=(ValueError,),
             merge_request_url=merge_request_url,
             reviewer_ids=str(reviewer_ids),
         ):
@@ -1095,7 +1091,6 @@ class AddMergeRequestCommentTool(Tool[AddMergeRequestCommentToolInput, ToolRunOp
         comment = tool_input.comment
         with tool_error_context(
             "Failed to add comment to merge request",
-            include_exception_message_for=(ValueError,),
             merge_request_url=merge_request_url,
         ):
             mr = await _get_merge_request_from_url(merge_request_url)
@@ -1136,7 +1131,6 @@ class AddBlockingMergeRequestCommentTool(
         comment = tool_input.comment
         with tool_error_context(
             "Failed to add blocking comment to merge request",
-            include_exception_message_for=(ValueError,),
             merge_request_url=merge_request_url,
             blocking_comment=tool_input.comment,
         ):
@@ -1251,7 +1245,6 @@ class GetFailedPipelineJobsFromMergeRequestTool(
         merge_request_url = tool_input.merge_request_url
         with tool_error_context(
             "Failed to get failed jobs from merge request",
-            include_exception_message_for=(ValueError,),
             merge_request_url=merge_request_url,
         ):
             mr = await _get_merge_request_from_url(merge_request_url)
@@ -1377,7 +1370,6 @@ class GetAuthorizedCommentsFromMergeRequestTool(
         merge_request_url = tool_input.merge_request_url
         with tool_error_context(
             "Failed to get authorized comments from merge request",
-            include_exception_message_for=(ValueError,),
             merge_request_url=merge_request_url,
         ):
             comments = await _fetch_authorized_comments_from_merge_request_url(merge_request_url)
@@ -1417,24 +1409,23 @@ class GetMergeRequestDetailsTool(
         merge_request_url = tool_input.merge_request_url
         with tool_error_context(
             "Failed to get merge request details",
-            include_exception_message_for=(ValueError,),
             merge_request_url=merge_request_url,
         ):
             mr = await _get_merge_request_from_url(merge_request_url)
             comments = await _fetch_authorized_comments_from_merge_request_url(merge_request_url)
             username = mr.source_project.service.user.get_username()
-        return JSONToolOutput(
-            result=MergeRequestDetails(
-                source_repo=mr.source_project.get_git_urls()["git"],
-                source_branch=mr.source_branch,
-                target_repo_name=mr.target_project.gitlab_repo.name,
-                target_branch=mr.target_branch,
-                title=mr.title,
-                description=mr.description,
-                last_updated_at=mr._raw_pr.updated_at,
-                comments=[c for c in comments if f"@{username}" in c.message],
+            return JSONToolOutput(
+                result=MergeRequestDetails(
+                    source_repo=mr.source_project.get_git_urls()["git"],
+                    source_branch=mr.source_branch,
+                    target_repo_name=mr.target_project.gitlab_repo.name,
+                    target_branch=mr.target_branch,
+                    title=mr.title,
+                    description=mr.description,
+                    last_updated_at=mr._raw_pr.updated_at,
+                    comments=[c for c in comments if f"@{username}" in c.message],
+                )
             )
-        )
 
 
 MAX_PATCH_CONTENT_LENGTH = 2000

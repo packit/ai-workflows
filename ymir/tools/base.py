@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import logging
 from contextlib import contextmanager
@@ -17,19 +18,16 @@ logger = logging.getLogger(__name__)
 @contextmanager
 def tool_error_context(
     error_message: str,
-    include_exception_message_for: tuple[type[Exception], ...] = (),
     **additional_context,
 ):
     """Context manager for unified tool error handling with observability.
 
     Catches exceptions and wraps them as ToolErrorWithContext with a clean
-    LLM-facing message while preserving more specific details (exception type,
-    exception message and additional context) for logs and traces.
+    LLM-facing message, preserving the original exception's type, message and
+    additional context for logs and traces only.
 
     Args:
         error_message: Clean error message shown to the LLM.
-        include_exception_message_for: Exception types whose exception messages
-            should be appended to the LLM-facing error_message.
         **additional_context: Key-value pairs for observability, automatically
             redacted for credentials.
 
@@ -42,10 +40,9 @@ def tool_error_context(
         yield
     except ToolErrorWithContext:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        if isinstance(e, include_exception_message_for):
-            error_message = f"{error_message}: {redact_credentials(str(e))}"
-
         additional_context["exception"] = f"{type(e).__name__}: {e}"
         raise ToolErrorWithContext(
             error_message,

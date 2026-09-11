@@ -25,6 +25,7 @@ from ymir.common.models import (
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.base import make_additional_context, tool_error_context
 from ymir.tools.errors import ToolErrorWithContext
+from ymir.tools.gateway_utils import redact_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -828,7 +829,6 @@ class RunRemoteCommandTool(Tool[RunRemoteCommandToolInput, ToolRunOptions, JSONT
 
         with tool_error_context(
             f"Failed to run remote command on {ssh_host}",
-            include_exception_message_for=(ToolError,),
             ssh_host=ssh_host,
             command=command,
             timeout=timeout,
@@ -943,7 +943,6 @@ class CopyFilesToRemoteTool(Tool[CopyFilesToRemoteToolInput, ToolRunOptions, JSO
         active_proc = None
         with tool_error_context(
             f"Failed to copy files to {ssh_host}:{remote_dir}",
-            include_exception_message_for=(ToolError,),
             ssh_host=ssh_host,
             remote_dir=remote_dir,
             local_paths=str(local_paths),
@@ -963,8 +962,9 @@ class CopyFilesToRemoteTool(Tool[CopyFilesToRemoteToolInput, ToolRunOptions, JSO
                 )
                 _, stderr = await asyncio.wait_for(active_proc.communicate(), timeout=timeout)
                 if active_proc.returncode != 0:
-                    raise RuntimeError(
-                        f"Failed to create remote directory {remote_dir}: {stderr.decode().strip()}"
+                    raise ToolError(
+                        f"Failed to create remote directory {remote_dir}: "
+                        f"{redact_credentials(stderr.decode().strip())[:500]}"
                     )
 
                 # Copy files via scp
@@ -979,7 +979,7 @@ class CopyFilesToRemoteTool(Tool[CopyFilesToRemoteToolInput, ToolRunOptions, JSO
                 )
                 _, stderr = await asyncio.wait_for(active_proc.communicate(), timeout=timeout)
                 if active_proc.returncode != 0:
-                    raise RuntimeError(f"SCP failed: {stderr.decode().strip()}")
+                    raise ToolError(f"SCP failed: {redact_credentials(stderr.decode().strip())[:500]}")
             except TimeoutError as e:
                 if active_proc:
                     active_proc.kill()

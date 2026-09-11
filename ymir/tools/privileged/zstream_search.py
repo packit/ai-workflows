@@ -110,7 +110,7 @@ async def _fetch_mr_commits(mr_url: str) -> list[str]:
 
     try:
         mr = await _get_merge_request_from_url(mr_url)
-    except ValueError:
+    except ToolError:
         logger.warning(f"Could not parse MR URL: {mr_url}")
         return []
     except Exception as e:

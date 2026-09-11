@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import logging
 from contextlib import contextmanager
@@ -15,17 +16,43 @@ logger = logging.getLogger(__name__)
 
 
 @contextmanager
-def tool_error_context(error_message: str, **additional_context):
+def tool_error_context(
+    error_message: str,
+    **additional_context,
+):
+    """Context manager for unified tool error handling with observability.
+
+    Catches exceptions and wraps them as ToolErrorWithContext with a clean
+    LLM-facing message, preserving the original exception's type, message and
+    additional context for logs and traces only.
+
+    Args:
+        error_message: Clean error message shown to the LLM.
+        **additional_context: Key-value pairs for observability, automatically
+            redacted for credentials.
+
+    Raises:
+        ToolErrorWithContext: Wraps any caught exception (except ToolErrorWithContext
+            which passes through unchanged) and adds provided additional context
+            for observability.
+    """
     try:
         yield
     except ToolErrorWithContext:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         additional_context["exception"] = f"{type(e).__name__}: {e}"
-        redacted_additional_context = {k: redact_credentials(str(v)) for k, v in additional_context.items()}
         raise ToolErrorWithContext(
-            error_message, cause=e, additional_context=redacted_additional_context
+            error_message,
+            cause=e,
+            additional_context=make_additional_context(**additional_context),
         ) from e
+
+
+def make_additional_context(**additional_context) -> dict[str, str]:
+    return {k: redact_credentials(str(v)) for k, v in additional_context.items()}
 
 
 class CloneableTool(Tool[TInput, TRunOptions, TOutput]):

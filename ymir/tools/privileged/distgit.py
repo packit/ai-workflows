@@ -15,11 +15,12 @@ from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 from specfile import Specfile
 
-from ymir.common.base_utils import KerberosError, init_kerberos_ticket
+from ymir.common.base_utils import init_kerberos_ticket
 from ymir.common.utils import NoBuildFoundError, get_latest_buildroot_build, get_latest_z_pending_build
 from ymir.common.version_utils import parse_zstream_branch_name
 from ymir.tools.base import CloneableTool as Tool
-from ymir.tools.base import tool_error_context
+from ymir.tools.base import make_additional_context, tool_error_context
+from ymir.tools.errors import ToolErrorWithContext
 from ymir.tools.privileged.utils import sanitize_url
 
 logger = logging.getLogger(__name__)
@@ -193,11 +194,8 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
     ) -> StringToolOutput:
         package = tool_input.package
         branch = tool_input.branch
-        try:
+        with tool_error_context("Failed to initialize Kerberos ticket"):
             principal = await init_kerberos_ticket()
-        except KerberosError as e:
-            logger.error("Kerberos initialization failed: %s", e)
-            raise ToolError("Failed to initialize Kerberos ticket") from e
         username = principal.split("@", maxsplit=1)[0]
         token = os.environ["GITLAB_TOKEN"]
         gitlab_repo_url = f"https://oauth2:{token}@gitlab.com/redhat/rhel/rpms/{package}"
@@ -210,7 +208,11 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                     result=f"Z-Stream branch {branch} already exists, no need to create it"
                 )
         with (
-            tool_error_context("Failed to create Z-Stream branch", package=package, branch=branch),
+            tool_error_context(
+                "Failed to create Z-Stream branch",
+                package=package,
+                branch=branch,
+            ),
             tempfile.TemporaryDirectory() as path,
         ):
             # Username is taken from the Kerberos principal and embedded in
@@ -223,8 +225,11 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                     shutil.rmtree(clone_dest)
                 return await asyncio.to_thread(git.Repo.clone_from, clone_url, clone_dest)
 
-            with tool_error_context("Failed to clone dist-git repo", package=package, clone_url=clone_url):
+            with tool_error_context(
+                "Failed to clone dist-git repo", package=package, branch=branch, clone_url=clone_url
+            ):
                 repo = await _retry_transient(_clone, f"clone {package} from dist-git")
+
             branch_creation_details = None
             if branch in [ref.name.split("/")[-1] for ref in repo.remotes.origin.refs]:
                 # Branch already exists in dist-git but not yet mirrored to GitLab.
@@ -287,12 +292,6 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                         return StringToolOutput(result=msg)
                 except git.exc.GitCommandError as e:
                     if not _is_transient_git_error(e):
-                        logger.error(
-                            "Failed to poll GitLab mirror for %s/%s: %s",
-                            package,
-                            branch,
-                            sanitize_url(str(e)),
-                        )
                         raise ToolError("Failed to poll GitLab mirror") from e
                     logger.warning(f"Transient error polling GitLab mirror sync: {sanitize_url(str(e))}")
                 elapsed = int(time.monotonic() - start_time)
@@ -300,10 +299,11 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                     f"Waiting for GitLab mirror sync of {package} branch {branch} ({elapsed}s elapsed)"
                 )
                 await asyncio.sleep(30)
-            logger.error(
-                "GitLab mirror sync timed out for %s branch %s after %ds",
-                package,
-                branch,
-                SYNC_TIMEOUT,
+            raise ToolErrorWithContext(
+                "GitLab mirror sync timed out",
+                additional_context=make_additional_context(
+                    package=package,
+                    branch=branch,
+                    timeout=SYNC_TIMEOUT,
+                ),
             )
-            raise ToolError("GitLab mirror sync timed out")

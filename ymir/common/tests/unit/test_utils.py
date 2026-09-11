@@ -379,21 +379,24 @@ FAKE_TOOLS = [flexmock()]
 
 
 class _SSEContextManager:
-    def __init__(self, exc=None):
+    def __init__(self, exc=None, wrap_body_error=False):
         self._exc = exc
+        self._wrap_body_error = wrap_body_error
 
     async def __aenter__(self):
         if self._exc:
             raise self._exc
         return flexmock(), flexmock()
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, _exc_type, exc, _traceback):
+        if exc and self._wrap_body_error:
+            raise ExceptionGroup("SSE task group", [exc])
         return False
 
 
-def make_sse_cm(exc=None):
+def make_sse_cm(exc=None, wrap_body_error=False):
     """Async context manager mock for sse_client. Raises exc on entry if given."""
-    return _SSEContextManager(exc)
+    return _SSEContextManager(exc, wrap_body_error)
 
 
 class _SessionContextManager:
@@ -461,6 +464,20 @@ async def test_mcp_tools_non_connection_error_raises_immediately():
     with pytest.raises(ValueError):
         async with mcp_tools(FAKE_URL, max_retries=5):
             pass
+
+
+@pytest.mark.asyncio
+async def test_mcp_tools_preserves_exception_raised_by_caller():
+    error = ValueError("caller failed")
+    flexmock(_ymir_utils).should_receive("sse_client").once().and_return(make_sse_cm(wrap_body_error=True))
+    flexmock(_ymir_utils).should_receive("ClientSession").and_return(make_session_cm())
+    flexmock(_ymir_utils.MCPTool).should_receive("from_session").and_return(_coro(FAKE_TOOLS))
+
+    with pytest.raises(ValueError) as exc_info:
+        async with mcp_tools(FAKE_URL):
+            raise error
+
+    assert exc_info.value is error
 
 
 # ============================================================================

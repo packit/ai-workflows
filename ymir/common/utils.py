@@ -141,6 +141,7 @@ async def mcp_tools(
     connected = False
     for attempt in range(max_retries):
         try:
+            caller_error = None
             async with sse_client(sse_url) as (read, write), ClientSession(read, write) as session:
                 await session.initialize()
                 effective_session: Any = session
@@ -150,8 +151,15 @@ async def mcp_tools(
                 if filter:
                     tools = [t for t in tools if filter(t.name)]
                 connected = True
-                yield tools
-                return
+                try:
+                    yield tools
+                except Exception as error:
+                    # Let the SSE task group exit normally so it cannot wrap an
+                    # exception raised by the caller in an ExceptionGroup.
+                    caller_error = error
+            if caller_error is not None:
+                raise caller_error
+            return
         except Exception as e:
             if not connected and _is_connection_error(e) and attempt < max_retries - 1:
                 logger.warning(

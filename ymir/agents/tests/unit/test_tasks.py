@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from beeai_framework.errors import FrameworkError
 
 from ymir.agents.tasks import (
     InvalidReleaseBumpingConfigError,
@@ -556,6 +557,8 @@ async def test_zstream_consistency_stale_not_ancestor(tmp_path):
     assert exc_info.value.branch == "rhel-9.8.0"
     assert exc_info.value.build_ref == "build-ref-sha"
     assert exc_info.value.branch_head == "branch-head-sha"
+    assert FrameworkError.ensure(exc_info.value) is exc_info.value
+    assert not FrameworkError.is_retryable(exc_info.value)
 
 
 @pytest.mark.asyncio

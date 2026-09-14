@@ -88,7 +88,7 @@ def build_applicability_prompt(
             f"cannot verify the full dependency chain — classify as 'Inconclusive'.\n"
         )
 
-    sources_rel = unpacked_sources.relative_to(local_clone)
+    sources_rel = unpacked_sources
     if patch_files:
         patch_info = "Upstream fix patches are available at: " + ", ".join(patch_files)
     else:

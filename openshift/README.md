@@ -15,6 +15,27 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   GITLAB_TOKEN
   ```
 
+  `github-readonly-env`:
+  ```
+  GITHUB_READONLY_TOKEN
+  ```
+
+  **Important**: Use a fine-grained, expiring token with no access to private
+  repositories and no additional repository permissions. Fine-grained tokens
+  have read-only access to all public GitHub repositories, which is required
+  because agents must inspect arbitrary public upstream projects. Do not use
+  the classic `public_repo` scope: it grants write access to public repositories.
+  It is used solely for rate limiting (5,000 req/hr vs 60 unauthenticated) when
+  fetching upstream repository information.
+
+  **Security**: The token is deployed **only to the MCP gateway**, not to agent pods.
+  Agent processes have shell execution capabilities, so exposing secrets to them
+  would create credential leakage risks via prompt injection. Instead, unprivileged
+  tools in agents call privileged MCP tools (get_github_pull_request, get_github_compare)
+  that run in the isolated MCP gateway process. The gateway has no shell execution,
+  preventing token extraction. The supervisor and sweep processes also have direct
+  token access since they lack shell execution capabilities.
+
   `jira-env`:
   ```
   JIRA_TOKEN

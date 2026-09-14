@@ -1,5 +1,6 @@
 import re
 import shutil
+import tempfile
 from pathlib import Path
 
 from beeai_framework.context import RunContext
@@ -93,7 +94,9 @@ class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOption
             raise ToolError(f"ERROR: {e}") from e
 
 
-def build_rpmdefines(dist_git_path: Path, branch: str, spec_path: Path) -> list[str]:
+def build_rpmdefines(
+    dist_git_path: Path, branch: str, spec_path: Path, *, builddir: Path | None = None
+) -> list[str]:
     if not (parsed := parse_branch_name(branch)):
         raise ToolError(f"Cannot parse branch name: {branch}")
     major, minor = parsed
@@ -107,7 +110,7 @@ def build_rpmdefines(dist_git_path: Path, branch: str, spec_path: Path) -> list[
         "--define",
         f"_specdir {root}",
         "--define",
-        f"_builddir {root}",
+        f"_builddir {builddir or root}",
         "--define",
         f"_srcrpmdir {root}",
         "--define",
@@ -178,8 +181,15 @@ class RunPackagePrepTool(Tool[RunPackagePrepInput, ToolRunOptions, StringToolOut
         if not dist_git.exists():
             raise ToolError(f"Dist-git path does not exist: {dist_git}")
 
+        if self.options is None:
+            self._options = {}
+        builddir = self.options.get("builddir")
+        if not builddir:
+            builddir = tempfile.mkdtemp(prefix="rpmbuild-")
+            self.options["builddir"] = builddir
+
         spec_path = dist_git / f"{tool_input.package}.spec"
-        defines = build_rpmdefines(dist_git, tool_input.dist_git_branch, spec_path)
+        defines = build_rpmdefines(dist_git, tool_input.dist_git_branch, spec_path, builddir=Path(builddir))
         cmd = ["rpmbuild", *defines, "--nodeps", "-bp", str(spec_path)]
 
         exit_code, stdout, stderr = await run_subprocess(cmd, cwd=dist_git)
@@ -187,11 +197,8 @@ class RunPackagePrepTool(Tool[RunPackagePrepInput, ToolRunOptions, StringToolOut
         if exit_code == 0:
             return StringToolOutput(result=f"Prep succeeded.\n{stdout}")
 
-        # Prep failed — remove build subdirectories to prevent stale state.
-        # rpmbuild creates directories like <package>-<version>/ under the dist-git root.
-        for child in dist_git.iterdir():
-            if child.is_dir() and child.name.startswith(tool_input.package + "-"):
-                shutil.rmtree(child, ignore_errors=True)
+        shutil.rmtree(builddir, ignore_errors=True)
+        self.options.pop("builddir", None)
 
         return StringToolOutput(
             result=f"Prep FAILED (exit code {exit_code}). "

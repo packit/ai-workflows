@@ -33,7 +33,7 @@ from ymir.common.models import (
     TriageEligibility,
     TriageOutputSchema,
 )
-from ymir.common.version_utils import is_modular, parse_module_stream
+from ymir.common.version_utils import extract_downstream_package, is_modular, parse_module_stream
 
 
 @pytest.mark.parametrize(
@@ -367,6 +367,15 @@ def test_map_version_to_module_branch_invalid_version():
     assert branch is None
 
 
+def test_map_version_to_module_branch_extracts_package_from_raw_field():
+    """customfield_10669 stores module:stream/package; mapping needs the package."""
+    raw = "postgresql:16/postgis"
+    summary = "postgresql:16/postgis: PostGIS: vuln"
+    assert _map_version_to_module_branch("rhel-9.8", summary, raw) is None
+    package = extract_downstream_package(raw)
+    assert _map_version_to_module_branch("rhel-9.8", summary, package) == "stream-postgresql-16-rhel-9.8.0"
+
+
 # --- Modular target branch + namespace selection ---
 
 
@@ -396,19 +405,53 @@ def _cve_eligibility(*, needs_internal_fix: bool) -> CVEEligibilityResult:
 
 
 @pytest.mark.asyncio
-async def test_determine_target_branch_modular_internal_fix_uses_rhel():
-    async def _older_zstream_false(*_args, **_kwargs):
-        return False
-
-    flexmock(t_agent).should_receive("is_older_zstream").replace_with(_older_zstream_false)
-
-    branch, namespace = await determine_target_branch(
-        _cve_eligibility(needs_internal_fix=True),
-        _modular_backport_data(),
-        jira_summary=_MODULAR_SUMMARY,
-        downstream_component="squid",
-    )
+async def test_determine_target_branch_modular_internal_fix_no_ystream_uses_cs():
+    """RHEL 8 has no Y-stream, so even CVEs needing internal fix go to centos-stream."""
+    with (
+        patch(
+            "ymir.agents.triage_agent.is_older_zstream",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "ymir.agents.triage_agent.load_rhel_config",
+            new_callable=AsyncMock,
+            return_value={"current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"}},
+        ),
+    ):
+        branch, namespace = await determine_target_branch(
+            _cve_eligibility(needs_internal_fix=True),
+            _modular_backport_data(),
+            jira_summary=_MODULAR_SUMMARY,
+            downstream_component="squid",
+        )
     assert branch == "stream-squid-4-rhel-8.10.0"
+    assert namespace == "centos-stream"
+
+
+@pytest.mark.asyncio
+async def test_determine_target_branch_modular_internal_fix_with_ystream_uses_rhel():
+    """RHEL 9 has a Y-stream, so CVEs needing internal fix go to rhel."""
+    summary = "CVE-2026-32748 squid:4/squid: Squid: Denial of Service [rhel-9.8.z]"
+    with (
+        patch(
+            "ymir.agents.triage_agent.is_older_zstream",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "ymir.agents.triage_agent.load_rhel_config",
+            new_callable=AsyncMock,
+            return_value={"current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"}},
+        ),
+    ):
+        branch, namespace = await determine_target_branch(
+            _cve_eligibility(needs_internal_fix=True),
+            _modular_backport_data(fix_version="rhel-9.8.z"),
+            jira_summary=summary,
+            downstream_component="squid",
+        )
+    assert branch == "stream-squid-4-rhel-9.8.0"
     assert namespace == "rhel"
 
 

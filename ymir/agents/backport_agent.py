@@ -36,7 +36,14 @@ from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState
 from ymir.agents.reasoning_agent import ReasoningAgent
+from ymir.agents.rebase_consolidation import (
+    add_jira_tickets_to_latest_changelog_entry,
+    changelog_entry_headers,
+    uses_autochangelog,
+)
 from ymir.agents.tasks import InvalidConsolidationConfigError
+from ymir.agents.title_agent import create_title_agent
+from ymir.agents.title_agent import get_prompt as get_title_prompt
 from ymir.agents.utils import (
     check_subprocess,
     format_mr_triage_details,
@@ -94,6 +101,8 @@ from ymir.common.models import (
     LogOutputSchema,
     ShippedZStreamCandidate,
     Task,
+    TitleInputSchema,
+    TitleOutputSchema,
 )
 from ymir.common.utils import get_all_patches, init_sentry
 from ymir.common.version_utils import is_older_zstream, parse_rhel_version
@@ -886,12 +895,52 @@ async def run_workflow(
                     rebase=False,
                     available_tools=gateway_tools,
                 )
-                title = state.inherit_change.commit_message.splitlines()[0]
+                if redis_conn is not None and not dry_run:
+
+                    async def generate_title(jira_summary):
+                        response = await create_title_agent().run(
+                            render_template(
+                                get_title_prompt(),
+                                TitleInputSchema(
+                                    jira_summary=jira_summary,
+                                    changes_summary=state.inherit_change.commit_message,
+                                ),
+                            ),
+                            expected_output=TitleOutputSchema,
+                            **get_agent_execution_config(),
+                        )
+                        return TitleOutputSchema.model_validate_json(response.last_message.text).title
+
+                    state.canonical_title = await tasks.resolve_current_canonical_mr_title(
+                        redis_conn,
+                        available_tools=gateway_tools,
+                        package=state.package,
+                        jira_issue=state.jira_issue,
+                        cve_id=state.cve_id,
+                        generate_title=generate_title,
+                    )
+                title = state.canonical_title or state.inherit_change.commit_message.splitlines()[0]
+                spec_path = state.local_clone / f"{state.package}.spec"
+                changelog_headers_before = (
+                    changelog_entry_headers(spec_path)
+                    if state.canonical_title and not uses_autochangelog(spec_path)
+                    else None
+                )
                 await run_tool(
                     AddChangelogEntryTool(options=local_tool_options),
                     spec=f"{state.package}.spec",
-                    content=[f"- {title} ({state.jira_issue})"],
+                    content=[
+                        f"- {tasks.escape_rpm_changelog_text(title)}"
+                        if state.canonical_title
+                        else f"- {title} ({state.jira_issue})"
+                    ],
                 )
+                if changelog_headers_before is not None:
+                    add_jira_tickets_to_latest_changelog_entry(
+                        spec_path,
+                        [state.jira_issue],
+                        changelog_headers_before,
+                    )
                 await run_tool(
                     "download_sources",
                     dist_git_path=str(state.local_clone),
@@ -923,13 +972,14 @@ async def run_workflow(
                 )
                 state.backport_log.append(origin)
                 state.log_result = LogOutputSchema(title=title, description=origin)
-                state.inherit_commit_message = ensure_single_ymir_attribution(
-                    rewrite_commit_message(
-                        state.inherit_change.commit_message,
-                        candidate.issue_key,
-                        state.jira_issue,
-                    )
+                inherited_commit_message = rewrite_commit_message(
+                    state.inherit_change.commit_message,
+                    candidate.issue_key,
+                    state.jira_issue,
                 )
+                inherited_lines = inherited_commit_message.splitlines()
+                inherited_commit_message = "\n".join([title, *inherited_lines[1:]])
+                state.inherit_commit_message = ensure_single_ymir_attribution(inherited_commit_message)
                 triage_details_text = format_mr_triage_details(
                     state.justification,
                     state.triage_summary,
@@ -1267,6 +1317,34 @@ async def run_workflow(
             if source_changelog:
                 logger.info(f"Extracted source changelog for reuse: {source_changelog}")
 
+            if redis_conn is not None and not dry_run:
+
+                async def generate_title(jira_summary):
+                    response = await create_title_agent().run(
+                        render_template(
+                            get_title_prompt(),
+                            TitleInputSchema(
+                                jira_summary=jira_summary,
+                                changes_summary=state.backport_log[-1],
+                                source_changelog=source_changelog,
+                            ),
+                        ),
+                        expected_output=TitleOutputSchema,
+                        **get_agent_execution_config(),
+                    )
+                    return TitleOutputSchema.model_validate_json(response.last_message.text).title
+
+                state.canonical_title = await tasks.resolve_current_canonical_mr_title(
+                    redis_conn,
+                    available_tools=gateway_tools,
+                    package=state.package,
+                    jira_issue=state.jira_issue,
+                    cve_id=state.cve_id,
+                    generate_title=generate_title,
+                )
+            if state.canonical_title:
+                state.changelog_entry_count = tasks.changelog_entry_count(state.local_clone, state.package)
+
             response = await log_agent.run(
                 render_template(
                     get_log_prompt(),
@@ -1274,20 +1352,24 @@ async def run_workflow(
                         jira_issue=state.jira_issue,
                         changes_summary=state.backport_log[-1],
                         source_changelog=source_changelog,
+                        canonical_title=(
+                            tasks.escape_rpm_changelog_text(state.canonical_title)
+                            if state.canonical_title
+                            else None
+                        ),
                     ),
                 ),
                 expected_output=LogOutputSchema,
                 **get_agent_execution_config(),
             )
             log_output = LogOutputSchema.model_validate_json(response.last_message.text)
-
-            if redis_conn and not dry_run:
-                log_output = await tasks.cache_mr_metadata(
-                    redis_conn,
-                    log_output=log_output,
-                    operation_type="backport",
-                    package=state.package,
-                    details=str(state.upstream_patches),
+            if state.canonical_title:
+                log_output.title = state.canonical_title
+                tasks.ensure_canonical_changelog_title(
+                    state.local_clone,
+                    state.package,
+                    state.canonical_title,
+                    state.changelog_entry_count,
                 )
             state.log_result = log_output
 

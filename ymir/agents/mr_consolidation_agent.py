@@ -193,7 +193,7 @@ def _extract_cves_from_cve_footer_lines(text: str) -> list[str]:
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("CVE:"):
-            cves.extend(re.findall(r"CVE-\d{4}-\d+", stripped))
+            cves.extend(re.findall(r"CVE-[0-9]{4}-[0-9]{4,}", stripped))
     return sorted(set(cves))
 
 

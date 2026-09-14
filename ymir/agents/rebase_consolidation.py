@@ -24,6 +24,7 @@ from ymir.common.models import (
 )
 from ymir.common.utils import extract_text_from_adf
 from ymir.common.version_utils import get_fix_version_variants
+from ymir.tools.privileged.jira import extract_cve_ids
 
 logger = logging.getLogger(__name__)
 
@@ -706,6 +707,7 @@ async def find_triaged_rebase_siblings(
                     logger.info(f"Sibling {candidate_key} confirmed as sibling of {jira_issue}")
                     consolidated_issue = ConsolidatedIssue(
                         issue_key=candidate_key,
+                        cve_id=extract_cve_ids(candidate_details.get("fields", {}).get("summary", "")),
                         dependency_issue=None,
                         dependency_component=None,
                     )

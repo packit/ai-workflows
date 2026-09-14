@@ -26,6 +26,11 @@ class PackageUpdateState(BaseModel):
     fork_url: str | None = Field(default=None)
     build_error: str | None = Field(default=None)
     log_result: LogOutputSchema | None = Field(default=None)
+    canonical_title: str | None = Field(default=None, description="Resolved title shared by the issue family")
+    changelog_entry_count: int | None = Field(
+        default=None,
+        description="Explicit changelog entry count before the Log Agent runs; None for %autochangelog",
+    )
     merge_request_url: str | None = Field(default=None)
     merge_request_newly_created: bool = Field(default=False)  # was the MR newly created?
     zstream_branch_created: str | None = Field(default=None)

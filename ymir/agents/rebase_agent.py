@@ -74,6 +74,7 @@ from ymir.common.models import (
     TitleOutputSchema,
 )
 from ymir.common.utils import extract_text_from_adf, init_sentry
+from ymir.common.version_utils import detect_modular_issue
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
 from ymir.tools.unprivileged.text import (
@@ -282,6 +283,7 @@ async def main() -> None:
         user_triggered=False,
         dist_git_namespace=None,
         workspace_id: UUID | None = None,
+        is_modular_issue=False,
     ):
         workspace_id = workspace_id or uuid4()
         local_tool_options: dict[str, Any] = {"working_directory": None}
@@ -417,6 +419,9 @@ async def main() -> None:
                     # Accumulate files from this rebase iteration
                     if state.rebase_result.files_to_git_add:
                         state.all_files_git_to_add.update(state.rebase_result.files_to_git_add)
+                    if is_modular_issue:
+                        logger.info(f"Skipping Copr build for modular issue {state.jira_issue}")
+                        return "update_release"
                     return "run_build_agent"
                 return "comment_in_jira"
 
@@ -627,6 +632,12 @@ async def main() -> None:
                     comment_text = (
                         state.merge_request_url if state.merge_request_url else state.rebase_result.status
                     )
+                    if is_modular_issue:
+                        comment_text += (
+                            "\n\n*Note:* Modular package support is in development. "
+                            "No build was performed — please verify the MR and trigger "
+                            "a build manually."
+                        )
                     # Post same success message to all issues in parallel with per-issue error handling
                     await post_comments_to_all_issues(
                         primary_issue=state.jira_issue,
@@ -752,6 +763,11 @@ async def main() -> None:
             dist_git_branch = triage_state["target_branch"]
             dist_git_namespace = triage_state.get("dist_git_namespace")
             user_triggered = task.user_triggered
+            _modular = detect_modular_issue(
+                jira_summary=triage_state.get("jira_summary"),
+                raw_downstream_component=triage_state.get("raw_downstream_component"),
+                downstream_component=triage_state.get("downstream_component"),
+            )
             logger.info(
                 f"Processing rebase for package: {rebase_data.package}, "
                 f"version: {rebase_data.version}, JIRA: {rebase_data.jira_issue}, "
@@ -845,6 +861,7 @@ async def main() -> None:
                         user_triggered=user_triggered,
                         dist_git_namespace=dist_git_namespace,
                         workspace_id=task.execution_id,
+                        is_modular_issue=_modular,
                     )
                     logger.info(
                         f"Rebase processing completed for {rebase_data.jira_issue}, "
@@ -889,12 +906,18 @@ async def main() -> None:
                         dry_run=dry_run,
                         user_triggered=user_triggered,
                     )
-                    await fix_await(
-                        redis.lpush(
-                            RedisQueues.COMPLETED_REBASE_LIST.value,
-                            state.rebase_result.model_dump_json(),
+                    if _modular:
+                        logger.info(
+                            "Modular issue %s — MR created, skipping build dispatch",
+                            rebase_data.jira_issue,
                         )
-                    )
+                    else:
+                        await fix_await(
+                            redis.lpush(
+                                RedisQueues.COMPLETED_REBASE_LIST.value,
+                                state.rebase_result.model_dump_json(),
+                            )
+                        )
                 else:
                     logger.warning(f"Rebase failed for {rebase_data.jira_issue}: {state.rebase_result.error}")
                     # Label all consolidated issues with failure status

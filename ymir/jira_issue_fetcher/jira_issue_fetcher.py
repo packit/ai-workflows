@@ -747,7 +747,11 @@ class JiraIssueFetcher:
                     fields = issue.get("fields") or {}
 
                     downstream_component = fields.get("customfield_10669") or ""
-                    if self.skip_modular and self.MODULAR_COMPONENT_PATTERN.match(downstream_component):
+                    if (
+                        self.skip_modular
+                        and self.MODULAR_COMPONENT_PATTERN.match(downstream_component)
+                        and issue_key not in user_triggered_keys
+                    ):
                         logger.info(f"Skipping issue {issue_key} - modular issue: {downstream_component}")
                         modular_count += 1
                         continue

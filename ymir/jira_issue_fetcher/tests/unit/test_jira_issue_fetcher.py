@@ -505,6 +505,37 @@ async def test_push_issues_to_queue_enqueue_modular(mock_env_vars, monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_push_issues_to_queue_ymir_todo_bypasses_skip_modular(fetcher, mock_redis_context):
+    """ymir_todo label lets modular issues through even when SKIP_MODULAR is true."""
+    mock_redis, _ = mock_redis_context
+    assert fetcher.skip_modular is True
+
+    issues = [
+        {
+            "key": "MOD-TODO",
+            "fields": {
+                "labels": ["ymir_todo"],
+                "customfield_10669": "postgresql:16/postgis",
+            },
+        },
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args("MOD-TODO").and_return(True)
+    flexmock(fetcher).should_receive("_edit_jira_labels").once()
+
+    task = Task.from_issue("MOD-TODO", user_triggered=True)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE_TODO.value, task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+    assert result == 1
+
+
+@pytest.mark.asyncio
 async def test_push_issues_to_queue_skip_ignored_components(fetcher, mock_redis_context):
     """Test that issues with ignored components are skipped."""
     mock_redis, _ = mock_redis_context

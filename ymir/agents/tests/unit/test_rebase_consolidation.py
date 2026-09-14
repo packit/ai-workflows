@@ -5,6 +5,7 @@ from ymir.agents.rebase_consolidation import (
     add_jira_tickets_to_latest_changelog_entry,
     build_rebase_siblings_jql,
     changelog_entry_headers,
+    find_triaged_rebase_siblings,
     has_new_latest_changelog_entry,
     uses_autochangelog,
 )
@@ -169,6 +170,27 @@ def test_build_rebase_siblings_jql_escapes_component_quotes():
     jql = build_rebase_siblings_jql("RHEL-100", 'comp"name', "rhel-9.8.z")
     assert r'component = "comp\"name"' in jql
     assert 'fixVersion in ("rhel-9.8", "rhel-9.8.z")' in jql
+
+
+def test_build_rebase_siblings_jql_filters_modular_stream():
+    """Modular issues must filter on Downstream Component Name to avoid mixing streams."""
+    jql = build_rebase_siblings_jql(
+        "RHEL-100", "postgis", "rhel-9.8", downstream_component="postgresql:16/postgis"
+    )
+    assert 'cf[10669] = "postgresql:16/postgis"' in jql
+    assert 'component = "postgis"' in jql
+
+
+def test_build_rebase_siblings_jql_no_filter_for_nonmodular():
+    """Non-modular issues should not add a Downstream Component Name filter."""
+    jql = build_rebase_siblings_jql("RHEL-100", "curl", "rhel-9.8", downstream_component="curl")
+    assert "cf[10669]" not in jql
+
+
+def test_build_rebase_siblings_jql_no_filter_when_none():
+    """When downstream_component is None, no extra filter is added."""
+    jql = build_rebase_siblings_jql("RHEL-100", "curl", "rhel-9.8", downstream_component=None)
+    assert "cf[10669]" not in jql
 
 
 def test_build_rebase_siblings_jql_excludes_correct_labels():
@@ -520,3 +542,39 @@ class TestTerminalLabels:
         assert '"ymir_rebase_sibling"' not in jql, (
             "ymir_rebase_sibling in exclusion list would make pending query contradictory"
         )
+
+
+@pytest.mark.asyncio
+async def test_find_triaged_rebase_siblings_no_unbound_error_on_jira_failure():
+    """Regression: primary_details must be initialised before try/except.
+
+    When get_jira_details fails, the except block logs 'proceeding anyway'.
+    The code then checks ``if downstream_component is None and primary_details:``.
+    Without ``primary_details = None`` before try, this raises UnboundLocalError.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from ymir.common.models import RebaseData
+
+    rebase_data = RebaseData(
+        package="postgis",
+        version="3.5.2",
+        jira_issue="RHEL-250764",
+        fix_version="rhel-9.8.z",
+    )
+
+    # Simulate get_jira_details failure (MCP gateway down, network error, etc.)
+    with patch(
+        "ymir.agents.rebase_consolidation.run_tool",
+        new_callable=AsyncMock,
+        side_effect=Exception("MCP gateway unreachable"),
+    ):
+        # Should NOT raise UnboundLocalError — should return empty results
+        result, summary = await find_triaged_rebase_siblings(
+            jira_issue="RHEL-250764",
+            rebase_data=rebase_data,
+            available_tools=[],
+            downstream_component=None,
+        )
+    assert result == []
+    assert summary == ""

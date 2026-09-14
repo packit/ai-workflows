@@ -91,6 +91,7 @@ def build_siblings_jql(
     component: str,
     fix_version: str,
     excluded_labels: list[str],
+    downstream_component: str | None = None,
 ) -> str:
     """
     Build JQL query to find sibling issues for consolidation.
@@ -100,6 +101,10 @@ def build_siblings_jql(
         component: Package component name
         fix_version: Fix version to match (supports variants)
         excluded_labels: Jira labels to exclude (e.g., terminal triage labels)
+        downstream_component: Raw Downstream Component Name (customfield_10669).
+            For modular issues (``module:stream/package``), narrows results to
+            the same module stream so e.g. postgresql:16 and postgresql:12
+            siblings are not mixed.
 
     Returns:
         JQL query string
@@ -118,6 +123,10 @@ def build_siblings_jql(
         f'AND labels = "SecurityTracking" '
     )
 
+    if downstream_component and "/" in downstream_component:
+        escaped_dc = downstream_component.replace('"', '\\"')
+        jql += f'AND cf[10669] = "{escaped_dc}" '
+
     # Only add label exclusion clause if there are labels to exclude
     if excluded_labels:
         excluded = ", ".join(f'"{label}"' for label in excluded_labels)
@@ -132,6 +141,7 @@ def build_rebase_siblings_jql(
     component: str,
     fix_version: str,
     exclude_triaged: bool = True,
+    downstream_component: str | None = None,
 ) -> str:
     """
     Build JQL query to find rebase sibling candidates.
@@ -142,6 +152,7 @@ def build_rebase_siblings_jql(
         fix_version: Target fix version
         exclude_triaged: If True, exclude all terminal states (for queueing new siblings).
                         If False, include all siblings (for consolidating in rebase MR).
+        downstream_component: Raw Downstream Component Name for modular stream filtering.
     """
     excluded = []
     if exclude_triaged:
@@ -181,6 +192,7 @@ def build_rebase_siblings_jql(
         component=component,
         fix_version=fix_version,
         excluded_labels=excluded,
+        downstream_component=downstream_component,
     )
 
 
@@ -214,6 +226,7 @@ async def queue_siblings_for_triage(
     available_tools: list[Tool],
     dry_run: bool = False,
     user_triggered: bool = False,
+    downstream_component: str | None = None,
 ) -> int:
     """
     Queue sibling issues for triage and mark primary as waiting.
@@ -227,6 +240,7 @@ async def queue_siblings_for_triage(
         available_tools: Available tools for Jira operations
         dry_run: If True, skip all mutations (Redis, Jira labels, comments)
         user_triggered: Whether this was triggered by user action
+        downstream_component: Raw Downstream Component Name for modular stream filtering.
 
     Returns:
         Number of siblings queued for triage (or would be queued in dry-run)
@@ -240,6 +254,7 @@ async def queue_siblings_for_triage(
             issue_key=primary_issue,
             component=rebase_data.package,
             fix_version=rebase_data.fix_version,
+            downstream_component=downstream_component,
         )
         candidates = await run_tool(
             "search_jira_issues",
@@ -478,6 +493,7 @@ async def check_and_queue_primary_if_ready(
         component = components[0].get("name") if components else None
         fix_versions = fields.get("fixVersions", [])
         fix_version = fix_versions[0].get("name") if fix_versions else None
+        downstream_component = fields.get("customfield_10669")
 
         if not component or not fix_version:
             logger.warning(
@@ -492,6 +508,7 @@ async def check_and_queue_primary_if_ready(
             issue_key=primary_issue,
             component=component,
             fix_version=fix_version,
+            downstream_component=downstream_component,
         )
 
         # A sibling is "pending" (blocks the primary) if it has NOT finished processing.
@@ -616,6 +633,7 @@ async def find_triaged_rebase_siblings(
     jira_issue: str,
     rebase_data: RebaseData,
     available_tools: list[Tool],
+    downstream_component: str | None = None,
 ) -> tuple[list[ConsolidatedIssue], str]:
     """
     Find siblings that have already been triaged as REBASE to the same version.
@@ -631,6 +649,7 @@ async def find_triaged_rebase_siblings(
         return [], ""
 
     # Validate that the primary issue is still open/valid before consolidating siblings
+    primary_details = None
     try:
         primary_details = await run_tool(
             "get_jira_details",
@@ -647,6 +666,10 @@ async def find_triaged_rebase_siblings(
     except Exception as e:
         logger.warning(f"Failed to check primary issue status for {jira_issue}: {e}, proceeding anyway")
 
+    # If caller didn't supply downstream_component, read it from primary details
+    if downstream_component is None and primary_details:
+        downstream_component = primary_details.get("fields", {}).get("customfield_10669")
+
     try:
         # Build JQL to find siblings with ymir_triaged_rebase
         jql = build_siblings_jql(
@@ -654,6 +677,7 @@ async def find_triaged_rebase_siblings(
             component=rebase_data.package,
             fix_version=rebase_data.fix_version,
             excluded_labels=[],  # Don't exclude any labels
+            downstream_component=downstream_component,
         )
         # Add filter for ymir_triaged_rebase label
         jql_with_label = f'{jql} AND labels = "{JiraLabels.TRIAGED_REBASE.value}"'

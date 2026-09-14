@@ -233,6 +233,8 @@ class TestGatewaySharedOptions:
         gateway_module.main()
 
         assert registered_tools, "No tools were registered"
+        registered_tool_names = {tool.name for tool in registered_tools}
+        assert {"get_github_pull_request", "get_github_compare", "get_github_patch"} <= registered_tool_names
         first_options = registered_tools[0].options
         assert first_options is not None
         for tool in registered_tools[1:]:

@@ -42,6 +42,8 @@ spec:
         envFrom:
         - secretRef:
             name: gitlab-env
+        - secretRef:
+            name: github-readonly-env
         - configMapRef:
             name: jira-env
         - secretRef:

@@ -426,7 +426,18 @@ async def render_prompt(
     if cve_needs_internal_fix and fix_version:
         if is_modular(jira_summary, downstream_component):
             internal_branch = _map_version_to_module_branch(fix_version, jira_summary, downstream_component)
-            if internal_branch:
+            if internal_branch and not older_zstream:
+                # Same Y-stream gate as determine_target_branch: only RHEL
+                # versions with a Y-stream use the internal rhel namespace;
+                # others (e.g. RHEL 8) go to centos-stream where the
+                # internal_target_branch hint would be misleading.
+                config = await load_rhel_config()
+                y_streams = config.get("current_y_streams", {})
+                parsed_version = parse_rhel_version(fix_version)
+                has_y_stream = bool(parsed_version and parsed_version[0] in y_streams)
+            else:
+                has_y_stream = older_zstream  # older Z-streams always use rhel
+            if internal_branch and (older_zstream or has_y_stream):
                 updates["needs_internal_fix"] = True
                 updates["internal_target_branch"] = internal_branch
         else:

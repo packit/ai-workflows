@@ -379,7 +379,7 @@ def _cve_only_needles(cve_id: str | None) -> list[str]:
     return sorted({p.strip().upper() for p in cve_id.replace(";", ",").split(",") if p.strip()})
 
 
-_REPRODUCER_MR_BRACKET_CVE = re.compile(r"\[(CVE-\d{4}-\d+)\]", re.IGNORECASE)
+_REPRODUCER_MR_BRACKET_CVE = re.compile(r"\[(CVE-[0-9]{4}-[0-9]{4,})\]", re.IGNORECASE)
 _REPRODUCER_MR_BRACKET_JIRA = re.compile(r"\[(RHEL-\d+)\]", re.IGNORECASE)
 
 

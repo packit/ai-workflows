@@ -11,6 +11,7 @@
 | **Git repository clones** | 7 days | ✅ Configured | `git-repos` volume |
 | **Phoenix observability traces** | Infinite (default) | ⚠️ Not configured | PostgreSQL (`phoenix-db-data`, 20Gi) |
 | **Redis task queues** (Jira interaction history) | Indefinite | ⚠️ Not configured | `valkey-data` (2Gi) |
+| **Canonical MR titles** | 30 days | ✅ Configured | `valkey-data` (2Gi) |
 | **Temporary build artifacts** | Agent execution only | ✅ Automatic | Within git clones |
 | **MR comments/history** | N/A | Stored in GitLab.com | External |
 

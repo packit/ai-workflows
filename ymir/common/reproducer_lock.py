@@ -101,7 +101,7 @@ def _immediate_clone_parent(current: str, issuelinks: list[dict] | None) -> str 
     if len(parents) == 1:
         return parents[0]
     logger.warning(
-        "Issue %s has multiple Cloners parents %s; using %s for reproducer lock",
+        "Issue %s has multiple Cloners parents %s; using %s as clone parent",
         current,
         parents,
         sorted(parents)[0],

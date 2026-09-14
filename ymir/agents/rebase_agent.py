@@ -39,6 +39,8 @@ from ymir.agents.rebase_consolidation import (
     has_new_latest_changelog_entry,
     uses_autochangelog,
 )
+from ymir.agents.title_agent import create_title_agent
+from ymir.agents.title_agent import get_prompt as get_title_prompt
 from ymir.agents.utils import (
     format_mr_triage_details,
     get_agent_execution_config,
@@ -67,6 +69,8 @@ from ymir.common.models import (
     RebaseInputSchema,
     RebaseOutputSchema,
     Task,
+    TitleInputSchema,
+    TitleOutputSchema,
 )
 from ymir.common.utils import extract_text_from_adf, init_sentry
 from ymir.tools.unprivileged.commands import RunShellCommandTool
@@ -151,6 +155,7 @@ async def main() -> None:
 
     class State(PackageUpdateState):
         version: str
+        cve_id: str | None = Field(default=None)
         fix_version: str | None = Field(default=None)
         justification: str | None = Field(default=None)
         triage_summary: str | None = Field(default=None)
@@ -266,6 +271,7 @@ async def main() -> None:
         dist_git_branch,
         version,
         jira_issue,
+        cve_id=None,
         fix_version=None,
         justification=None,
         triage_summary=None,
@@ -483,30 +489,62 @@ async def main() -> None:
                 all_issues = _consolidated_issue_keys(state.jira_issue, state.consolidated_issues)
                 spec_path = state.local_clone / f"{state.package}.spec"
                 changelog_headers_before = changelog_entry_headers(spec_path)
+                if redis_conn is not None and not dry_run:
+
+                    async def generate_title(jira_summary):
+                        response = await create_title_agent().run(
+                            render_template(
+                                get_title_prompt(),
+                                TitleInputSchema(
+                                    jira_summary=jira_summary,
+                                    changes_summary=state.rebase_log[-1],
+                                ),
+                            ),
+                            expected_output=TitleOutputSchema,
+                            **get_agent_execution_config(),
+                        )
+                        return TitleOutputSchema.model_validate_json(response.last_message.text).title
+
+                    state.canonical_title = await tasks.resolve_current_canonical_mr_title(
+                        redis_conn,
+                        available_tools=gateway_tools,
+                        package=state.package,
+                        jira_issue=state.jira_issue,
+                        cve_id=state.cve_id,
+                        jira_issues=[item.issue_key for item in state.consolidated_issues],
+                        consolidated_cve_ids={
+                            item.issue_key: item.cve_id for item in state.consolidated_issues
+                        },
+                        generate_title=generate_title,
+                    )
+                if state.canonical_title:
+                    state.changelog_entry_count = tasks.changelog_entry_count(
+                        state.local_clone, state.package
+                    )
                 response = await log_agent.run(
                     render_template(
                         get_log_prompt(),
                         LogInputSchema(
                             jira_issue=", ".join(all_issues),
                             changes_summary=state.rebase_log[-1],
+                            canonical_title=(
+                                tasks.escape_rpm_changelog_text(state.canonical_title)
+                                if state.canonical_title
+                                else None
+                            ),
                         ),
                     ),
                     expected_output=LogOutputSchema,
                     **get_agent_execution_config(),
                 )
                 log_output = LogOutputSchema.model_validate_json(response.last_message.text)
-
-                if redis_conn and not dry_run:
-                    # Cache MR metadata for sharing MR titles
-                    # for the same package version across different streams if redis
-                    # is available.
-                    # Do not modify the cache during a dry run.
-                    log_output = await tasks.cache_mr_metadata(
-                        redis_conn,
-                        log_output=log_output,
-                        operation_type="rebase",
-                        package=state.package,
-                        details=state.version,
+                if state.canonical_title:
+                    log_output.title = state.canonical_title
+                    tasks.ensure_canonical_changelog_title(
+                        state.local_clone,
+                        state.package,
+                        state.canonical_title,
+                        state.changelog_entry_count,
                     )
                 state.log_result = log_output
 
@@ -641,6 +679,7 @@ async def main() -> None:
                     version=version,
                     jira_issue=jira_issue,
                     workspace_id=workspace_id,
+                    cve_id=cve_id,
                     fix_version=fix_version,
                     justification=justification,
                     triage_summary=triage_summary,
@@ -663,6 +702,7 @@ async def main() -> None:
                 dist_git_branch=branch,
                 version=version,
                 jira_issue=jira_issue,
+                cve_id=os.getenv("CVE_ID"),
                 fix_version=os.getenv("FIX_VERSION"),
                 justification=os.getenv("JUSTIFICATION", None),
                 triage_summary=os.getenv("TRIAGE_SUMMARY", None),
@@ -796,6 +836,7 @@ async def main() -> None:
                         dist_git_branch=dist_git_branch,
                         version=rebase_data.version,
                         jira_issue=rebase_data.jira_issue,
+                        cve_id=rebase_data.cve_id,
                         fix_version=rebase_data.fix_version,
                         justification=rebase_data.justification,
                         triage_summary=rebase_data.triage_summary,

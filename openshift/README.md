@@ -35,6 +35,11 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   SENTRY_DSN
   ```
 
+  `api-env` (webhook secret for the API server):
+  ```
+  JIRA_WEBHOOK_SECRET
+  ```
+
   `phoenix-db-env` (PostgreSQL credentials for Phoenix observability):
   ```bash
   oc create secret generic phoenix-db-env \

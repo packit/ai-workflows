@@ -31,13 +31,16 @@ from ymir.tools.unprivileged.upstream_tools import (
 def _mock_aiohttp_get(json_data, status=200):
     """Mock aiohttp.ClientSession.get to return json_data.
 
-    Returns captured_urls list for asserting which URLs were called.
+    Returns (captured_urls, captured_headers) tuple for asserting which URLs
+    and headers were used in API calls.
     """
     captured_urls = []
+    captured_headers = []
 
     @asynccontextmanager
     async def fake_get(url, **kwargs):
         captured_urls.append(url)
+        captured_headers.append(kwargs.get("headers", {}))
         yield flexmock(
             json=lambda: _async_return(json_data),
             raise_for_status=lambda: None,
@@ -45,7 +48,7 @@ def _mock_aiohttp_get(json_data, status=200):
         )
 
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(fake_get)
-    return captured_urls
+    return captured_urls, captured_headers
 
 
 def _mock_aiohttp_get_error(error_msg="error"):
@@ -70,7 +73,8 @@ async def _async_return(value):
 
 class TestExtractUpstreamRepositoryTool:
     @pytest.fixture
-    def tool(self):
+    def tool(self, monkeypatch):
+        monkeypatch.setenv("MCP_GATEWAY_URL", "http://mcp-gateway:8000/sse")
         return ExtractUpstreamRepositoryTool(options={"working_directory": None})
 
     @pytest.mark.asyncio
@@ -153,7 +157,13 @@ class TestExtractUpstreamRepositoryTool:
 
     @pytest.mark.asyncio
     async def test_github_pr_url(self, tool):
-        _mock_aiohttp_get({"head": {"sha": "pr_commit_sha_1234567890abcdef"}})  # pragma: allowlist secret
+        # Mock privileged MCP tool call
+        async def mock_call_github_tool(name, **kwargs):
+            return {"head_sha": "pr_commit_sha_1234567890abcdef"}  # pragma: allowlist secret
+
+        flexmock(upstream_tools_mod).should_receive("_call_github_tool").replace_with(
+            mock_call_github_tool
+        ).once()
 
         result = await tool.run(
             input=ExtractUpstreamRepositoryInput(upstream_fix_url="https://github.com/torvalds/linux/pull/42")
@@ -166,8 +176,31 @@ class TestExtractUpstreamRepositoryTool:
         assert data.pr_number == "42"
 
     @pytest.mark.asyncio
+    async def test_github_pr_url_uses_unauthenticated_api_without_gateway(self, tool, monkeypatch):
+        """Standalone gateway lookups work without a privileged gateway or token."""
+        monkeypatch.delenv("MCP_GATEWAY_URL", raising=False)
+        urls, headers = _mock_aiohttp_get(
+            {"head": {"sha": "standalone_pr_sha"}, "state": "open", "merged": False}
+        )
+        flexmock(upstream_tools_mod).should_receive("_call_github_tool").never()
+
+        result = await tool.run(
+            input=ExtractUpstreamRepositoryInput(upstream_fix_url="https://github.com/owner/repo/pull/42")
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert result.result.commit_hash == "standalone_pr_sha"
+        assert "repos/owner/repo/pulls/42" in urls[0]
+        assert "Authorization" not in headers[0]
+
+    @pytest.mark.asyncio
     async def test_github_pr_url_with_patch_suffix(self, tool):
-        _mock_aiohttp_get({"head": {"sha": "abc123def456"}})  # pragma: allowlist secret
+        # Mock privileged MCP tool call
+        async def mock_call_github_tool(name, **kwargs):
+            return {"head_sha": "abc123def456"}  # pragma: allowlist secret
+
+        flexmock(upstream_tools_mod).should_receive("_call_github_tool").replace_with(
+            mock_call_github_tool
+        ).once()
 
         result = await tool.run(
             input=ExtractUpstreamRepositoryInput(
@@ -178,6 +211,49 @@ class TestExtractUpstreamRepositoryTool:
         data = result.result
         assert data.is_pr is True
         assert data.pr_number == "99"
+
+    @pytest.mark.asyncio
+    async def test_github_pr_url_calls_privileged_tool(self, tool):
+        """Verify GitHub PR URLs call the privileged MCP tool (not direct API)."""
+
+        # Mock the privileged MCP tool call
+        async def mock_call_github_tool(name, **kwargs):
+            assert name == "get_github_pull_request"
+            assert kwargs["pr_url"] == "https://github.com/owner/repo/pull/42"
+            return {"head_sha": "mcp_pr_sha"}
+
+        flexmock(upstream_tools_mod).should_receive("_call_github_tool").replace_with(
+            mock_call_github_tool
+        ).once()
+
+        result = await tool.run(
+            input=ExtractUpstreamRepositoryInput(upstream_fix_url="https://github.com/owner/repo/pull/42")
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        data = result.result
+        assert data.commit_hash == "mcp_pr_sha"
+        assert data.is_pr is True
+
+    @pytest.mark.asyncio
+    async def test_github_pr_reuses_injected_privileged_tool(self):
+        """Agent calls reuse their existing gateway connection."""
+        gateway_tool = flexmock(name="get_github_pull_request")
+        tool = ExtractUpstreamRepositoryTool(github_tools=[gateway_tool], options={"working_directory": None})
+
+        async def mock_run_tool(name, available_tools, **kwargs):
+            assert name == "get_github_pull_request"
+            assert available_tools == [gateway_tool]
+            assert kwargs["pr_url"] == "https://github.com/owner/repo/pull/42"
+            return {"head_sha": "injected_mcp_pr_sha"}
+
+        flexmock(upstream_tools_mod).should_receive("run_tool").replace_with(mock_run_tool).once()
+        flexmock(upstream_tools_mod).should_receive("_call_github_tool").never()
+
+        result = await tool.run(
+            input=ExtractUpstreamRepositoryInput(upstream_fix_url="https://github.com/owner/repo/pull/42")
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert result.result.commit_hash == "injected_mcp_pr_sha"
 
     @pytest.mark.asyncio
     async def test_gitlab_mr_url(self, tool):
@@ -197,15 +273,13 @@ class TestExtractUpstreamRepositoryTool:
 
     @pytest.mark.asyncio
     async def test_github_compare_url(self, tool):
-        _mock_aiohttp_get(
-            {
-                "commits": [
-                    {"sha": "aaa111"},
-                    {"sha": "bbb222"},
-                    {"sha": "ccc333"},
-                ]
-            }
-        )
+        # Mock privileged MCP tool call
+        async def mock_call_github_tool(name, **kwargs):
+            return {"commits": ["aaa111", "bbb222", "ccc333"]}
+
+        flexmock(upstream_tools_mod).should_receive("_call_github_tool").replace_with(
+            mock_call_github_tool
+        ).once()
 
         result = await tool.run(
             input=ExtractUpstreamRepositoryInput(
@@ -220,6 +294,50 @@ class TestExtractUpstreamRepositoryTool:
         assert data.compare_commits == ["aaa111", "bbb222", "ccc333"]
         assert data.commit_hash == "ccc333"
         assert data.repo_url == "https://github.com/owner/repo.git"
+
+    @pytest.mark.asyncio
+    async def test_github_compare_uses_unauthenticated_api_without_gateway(self, tool, monkeypatch):
+        """Standalone gateway compare lookups do not require MCP_GATEWAY_URL."""
+        monkeypatch.delenv("MCP_GATEWAY_URL", raising=False)
+        urls, headers = _mock_aiohttp_get({"commits": [{"sha": "first"}, {"sha": "latest"}]})
+        flexmock(upstream_tools_mod).should_receive("_call_github_tool").never()
+
+        result = await tool.run(
+            input=ExtractUpstreamRepositoryInput(
+                upstream_fix_url="https://github.com/owner/repo/compare/v1.0...v2.0"
+            )
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert result.result.compare_commits == ["first", "latest"]
+        assert result.result.commit_hash == "latest"
+        assert "repos/owner/repo/compare/v1.0...v2.0" in urls[0]
+        assert "Authorization" not in headers[0]
+
+    @pytest.mark.asyncio
+    async def test_github_compare_url_calls_privileged_tool(self, tool):
+        """Verify GitHub compare URLs call the privileged MCP tool (not direct API)."""
+
+        # Mock the privileged MCP tool call
+        async def mock_call_github_tool(name, **kwargs):
+            assert name == "get_github_compare"
+            assert kwargs["base_ref"] == "v1.0"
+            assert kwargs["target_ref"] == "v2.0"
+            return {"commits": ["abc123", "def456"]}
+
+        flexmock(upstream_tools_mod).should_receive("_call_github_tool").replace_with(
+            mock_call_github_tool
+        ).once()
+
+        result = await tool.run(
+            input=ExtractUpstreamRepositoryInput(
+                upstream_fix_url="https://github.com/owner/repo/compare/v1.0...v2.0"
+            )
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        data = result.result
+        assert data.compare_commits == ["abc123", "def456"]
+        assert data.commit_hash == "def456"  # Last commit
+        assert data.is_compare is True
 
     @pytest.mark.asyncio
     async def test_gitlab_compare_url(self, tool):
@@ -247,7 +365,13 @@ class TestExtractUpstreamRepositoryTool:
     @pytest.mark.asyncio
     async def test_compare_url_api_failure_falls_back_to_target_ref(self, tool):
         """When API is unavailable, compare URL still returns target_ref as commit_hash."""
-        _mock_aiohttp_get_error("timeout")
+
+        @asynccontextmanager
+        async def unavailable_gateway(*args, **kwargs):
+            raise ConnectionError("connection refused")
+            yield
+
+        flexmock(upstream_tools_mod).should_receive("mcp_tools").replace_with(unavailable_gateway).once()
 
         result = await tool.run(
             input=ExtractUpstreamRepositoryInput(
@@ -262,9 +386,15 @@ class TestExtractUpstreamRepositoryTool:
 
     @pytest.mark.asyncio
     async def test_pr_api_failure_raises_tool_error(self, tool):
-        _mock_aiohttp_get_error("404")
 
-        with pytest.raises(ToolError, match="Failed to fetch PR/MR information"):
+        async def mock_call_github_tool(name, **kwargs):
+            raise ToolError("not found")
+
+        flexmock(upstream_tools_mod).should_receive("_call_github_tool").replace_with(
+            mock_call_github_tool
+        ).once()
+
+        with pytest.raises(ToolError, match="Failed to fetch PR information"):
             await tool.run(
                 input=ExtractUpstreamRepositoryInput(
                     upstream_fix_url="https://github.com/owner/repo/pull/999"
@@ -287,8 +417,9 @@ class TestExtractUpstreamRepositoryTool:
             ).middleware(GlobalTrajectoryMiddleware(pretty=True))
 
     @pytest.mark.asyncio
-    async def test_double_dot_compare_separator(self, tool):
+    async def test_double_dot_compare_separator(self, tool, monkeypatch):
         """Compare URLs with '..' separator should also work."""
+        monkeypatch.delenv("MCP_GATEWAY_URL", raising=False)
         _mock_aiohttp_get({"commits": [{"sha": "only1"}]})
 
         result = await tool.run(
@@ -303,8 +434,9 @@ class TestExtractUpstreamRepositoryTool:
         assert data.target_ref == "v1.1"
 
     @pytest.mark.asyncio
-    async def test_compare_url_target_ref_ending_in_patch_chars(self, tool):
+    async def test_compare_url_target_ref_ending_in_patch_chars(self, tool, monkeypatch):
         """Compare URL where target_ref ends in characters from the set '.patch'."""
+        monkeypatch.delenv("MCP_GATEWAY_URL", raising=False)
         _mock_aiohttp_get_error("skip API")
 
         result = await tool.run(
@@ -319,7 +451,7 @@ class TestExtractUpstreamRepositoryTool:
     @pytest.mark.asyncio
     async def test_gitlab_nested_path_mr_url(self, tool):
         """GitLab MR URL with deeply nested project path (more than owner/repo)."""
-        captured_urls = _mock_aiohttp_get({"sha": "mr_head_commit"})
+        captured_urls, _headers = _mock_aiohttp_get({"sha": "mr_head_commit"})
 
         result = await tool.run(
             input=ExtractUpstreamRepositoryInput(
@@ -335,7 +467,7 @@ class TestExtractUpstreamRepositoryTool:
     @pytest.mark.asyncio
     async def test_gitlab_nested_path_compare_url(self, tool):
         """GitLab compare URL with deeply nested project path."""
-        captured_urls = _mock_aiohttp_get({"commits": [{"id": "abc123"}]})
+        captured_urls, _headers = _mock_aiohttp_get({"commits": [{"id": "abc123"}]})
 
         result = await tool.run(
             input=ExtractUpstreamRepositoryInput(

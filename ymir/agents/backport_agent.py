@@ -8,6 +8,7 @@ import traceback
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 from beeai_framework.agents.requirement.requirements.conditional import (
@@ -221,6 +222,9 @@ async def create_backport_agent(
                            for iterative build testing during error fixing
         fix_version: Fix version string for z-stream instruction selection
     """
+    github_tools = [
+        tool for tool in mcp_tools if tool.name in {"get_github_pull_request", "get_github_compare"}
+    ]
     base_tools = [
         ThinkTool(),
         RunShellCommandTool(options=local_tool_options),
@@ -240,7 +244,7 @@ async def create_backport_agent(
         DistgitDetectorTool(options=local_tool_options),
         # Upstream cherry-pick workflow tools
         GetPackageInfoTool(options=local_tool_options),
-        ExtractUpstreamRepositoryTool(options=local_tool_options),
+        ExtractUpstreamRepositoryTool(github_tools=github_tools, options=local_tool_options),
         CloneUpstreamRepositoryTool(options=local_tool_options),
         FindBaseCommitTool(options=local_tool_options),
         ApplyDownstreamPatchesTool(options=local_tool_options),
@@ -715,7 +719,7 @@ async def run_workflow(
             for idx, upstream_patch in enumerate(state.upstream_patches):
                 patch_name = f"{state.jira_issue}-{idx}.patch"
                 content = await run_tool(
-                    "get_patch_from_url",
+                    _patch_fetch_tool_name(upstream_patch),
                     available_tools=gateway_tools,
                     patch_url=upstream_patch,
                 )
@@ -1553,6 +1557,22 @@ async def run_workflow(
         return response.state
 
 
+def _parse_upstream_patches(upstream_patches_raw: str) -> list[str]:
+    """Parse direct-mode patches and reject empty comma-separated entries."""
+    upstream_patches = [patch.strip() for patch in upstream_patches_raw.split(",")]
+    if any(not patch for patch in upstream_patches):
+        raise SystemExit("Invalid UPSTREAM_PATCHES: each comma-separated entry must be a non-empty URL.")
+    return upstream_patches
+
+
+def _patch_fetch_tool_name(patch_url: str) -> str:
+    """Select the authenticated GitHub patch tool for GitHub patch URLs."""
+    parsed_url = urlparse(patch_url)
+    if parsed_url.scheme == "https" and parsed_url.hostname in {"github.com", "www.github.com"}:
+        return "get_github_patch"
+    return "get_patch_from_url"
+
+
 async def main() -> None:
     init_sentry()
 
@@ -1565,13 +1585,24 @@ async def main() -> None:
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
     max_incremental_fix_attempts = int(os.getenv("MAX_INCREMENTAL_FIX_ATTEMPTS", str(max_build_attempts)))
 
-    if (
-        (package := os.getenv("PACKAGE", None))
-        and (branch := os.getenv("BRANCH", None))
-        and (upstream_patches_raw := os.getenv("UPSTREAM_PATCHES", None))
-        and (jira_issue := os.getenv("JIRA_ISSUE", None))
-    ):
-        upstream_patches = upstream_patches_raw.split(",")
+    direct_mode_values = {
+        "PACKAGE": os.getenv("PACKAGE"),
+        "BRANCH": os.getenv("BRANCH"),
+        "UPSTREAM_PATCHES": os.getenv("UPSTREAM_PATCHES"),
+        "JIRA_ISSUE": os.getenv("JIRA_ISSUE"),
+    }
+    if any(direct_mode_values.values()):
+        missing = [name for name, value in direct_mode_values.items() if not value]
+        if missing:
+            raise SystemExit(
+                "Invalid direct-mode configuration; missing "
+                f"{', '.join(missing)}. Omit all direct-mode variables to run in queue mode."
+            )
+
+        package = os.environ["PACKAGE"]
+        branch = os.environ["BRANCH"]
+        jira_issue = os.environ["JIRA_ISSUE"]
+        upstream_patches = _parse_upstream_patches(os.environ["UPSTREAM_PATCHES"])
         logger.info("Running in direct mode with environment variables")
         with span_processor.start_transaction(jira_issue, workflow="BackportWorkflow"):
             state = await run_workflow(

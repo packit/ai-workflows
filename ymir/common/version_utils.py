@@ -396,9 +396,10 @@ def detect_modular_issue(
     Returns:
         ``True`` when the issue is modular.
     """
-    if raw_downstream_component and _MODULAR_COMPONENT_RE.fullmatch(raw_downstream_component):
+    raw = raw_downstream_component or downstream_component
+    if raw and _MODULAR_COMPONENT_RE.fullmatch(raw):
         return True
-    package = downstream_component or extract_downstream_package(raw_downstream_component)
+    package = extract_downstream_package(downstream_component or raw)
     return is_modular(jira_summary, package)
 
 

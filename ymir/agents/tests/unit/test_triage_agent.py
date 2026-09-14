@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from flexmock import flexmock
@@ -18,6 +19,7 @@ from ymir.agents.triage_agent import (
     _should_update_jira,
     determine_target_branch,
     main,
+    render_prompt,
     run_workflow,
 )
 from ymir.common.constants import YMIR_COMMENT_MARKER
@@ -487,6 +489,69 @@ async def test_determine_target_branch_modular_older_zstream_uses_rhel():
     )
     assert branch == "stream-squid-4-rhel-8.6.0"
     assert namespace == "rhel"
+
+
+@pytest.mark.asyncio
+async def test_render_prompt_modular_rhel8_no_internal_fix():
+    """RHEL 8 has no Y-stream, so render_prompt must NOT set needs_internal_fix
+    for modular issues even when CVE eligibility says needs_internal_fix=True.
+    Otherwise the prompt tells the LLM to clone from rhel namespace instead of
+    centos-stream."""
+    from ymir.common.models import TriageInputSchema as InputSchema
+
+    input_data = InputSchema(issue="RHEL-999")
+    summary = "CVE-2026-32748 squid:4/squid: Denial of Service [rhel-8.10.z]"
+    with (
+        patch(
+            "ymir.agents.triage_agent.is_older_zstream",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "ymir.agents.triage_agent.load_rhel_config",
+            new_callable=AsyncMock,
+            return_value={"current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"}},
+        ),
+    ):
+        prompt = await render_prompt(
+            input_data,
+            fix_version="rhel-8.10.z",
+            cve_eligibility_result=_cve_eligibility(needs_internal_fix=True),
+            jira_summary=summary,
+            downstream_component="squid",
+        )
+    assert "stream-squid-4-rhel-8.10.0" not in prompt
+    assert "redhat/rhel/rpms" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_render_prompt_modular_rhel9_has_internal_fix():
+    """RHEL 9 has a Y-stream, so render_prompt SHOULD set needs_internal_fix
+    for modular issues when CVE eligibility says needs_internal_fix=True."""
+    from ymir.common.models import TriageInputSchema as InputSchema
+
+    input_data = InputSchema(issue="RHEL-999")
+    summary = "CVE-2026-32748 squid:4/squid: Denial of Service [rhel-9.8.z]"
+    with (
+        patch(
+            "ymir.agents.triage_agent.is_older_zstream",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "ymir.agents.triage_agent.load_rhel_config",
+            new_callable=AsyncMock,
+            return_value={"current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"}},
+        ),
+    ):
+        prompt = await render_prompt(
+            input_data,
+            fix_version="rhel-9.8.z",
+            cve_eligibility_result=_cve_eligibility(needs_internal_fix=True),
+            jira_summary=summary,
+            downstream_component="squid",
+        )
+    assert "stream-squid-4-rhel-9.8.0" in prompt
 
 
 @pytest.mark.asyncio

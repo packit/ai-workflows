@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from ymir.common.base_utils import run_subprocess
 from ymir.tools.base import CloneableTool as Tool
 
-TIMEOUT = 10 * 60  # seconds
+TIMEOUT = 15 * 60  # seconds
 ELLIPSIZED_LINES = 200
 URL_FETCH_COMMANDS = ["curl", "wget"]
 

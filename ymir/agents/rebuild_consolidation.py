@@ -34,6 +34,7 @@ def build_rebuild_siblings_jql(
     issue_key: str,
     component: str,
     fix_version: str,
+    downstream_component: str | None = None,
 ) -> str:
     """Build JQL query to find rebuild sibling candidates."""
     return build_siblings_jql(
@@ -45,6 +46,7 @@ def build_rebuild_siblings_jql(
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBASE.value,
         ],
+        downstream_component=downstream_component,
     )
 
 
@@ -79,6 +81,7 @@ async def find_rebuild_siblings(
     local_clone: Path | None = None,
     unpacked_sources: Path | None = None,
     target_branch: str | None = None,
+    downstream_component: str | None = None,
 ) -> tuple[list[ConsolidatedIssue], str]:
     """
     Find sibling Jira issues that can share a single rebuild MR.
@@ -99,6 +102,7 @@ async def find_rebuild_siblings(
             issue_key=jira_issue,
             component=rebuild_data.package,
             fix_version=rebuild_data.fix_version,
+            downstream_component=downstream_component,
         )
         candidates = await run_tool(
             "search_jira_issues",

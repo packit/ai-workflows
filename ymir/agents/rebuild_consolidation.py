@@ -26,6 +26,7 @@ from ymir.common.models import (
     TriageEligibility,
 )
 from ymir.common.utils import FIXED_IN_BUILD_CUSTOM_FIELD, check_build_in_buildroot
+from ymir.tools.privileged.jira import extract_cve_ids
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +169,7 @@ async def find_rebuild_siblings(
                     f"Sibling {candidate_key}: dependency fix shipped, including in rebuild "
                     f"(dependency: {analysis.dependency_component})"
                 )
-                cve_id = analysis.cve_id
+                cve_id = extract_cve_ids(candidate.get("fields", {}).get("summary"))
 
                 if (
                     local_clone
@@ -230,6 +231,7 @@ async def find_rebuild_siblings(
                 consolidated.append(
                     ConsolidatedIssue(
                         issue_key=candidate_key,
+                        cve_id=cve_id,
                         dependency_issue=analysis.dependency_issue,
                         dependency_component=analysis.dependency_component,
                     )

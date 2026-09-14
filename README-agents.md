@@ -29,6 +29,43 @@ Z-stream Git blobs. The LLM cannot use shell, network, file-creation, or
 patch-generation tools, and its spec changes are audited before release and
 changelog bookkeeping is added.
 
+### Cross-stream MR titles
+
+In Redis queue mode, rebase, backport, and rebuild workflows fetch the current Jira
+summary before modifying the changelog. For CVEs, a valid `CVE-YYYY-NNNN`
+identifier makes that ProdSec-formatted summary the canonical title. For non-CVE
+issues, the summary is only context and an invalidation input: on a cache miss, a
+Title Agent generates a title from the implemented change. A stable Redis key
+scoped to the package and issue family atomically elects one generated title for
+all sibling workers. CVE families are identified by their normalized CVE set;
+non-CVE siblings are identified by the root issue of their Jira Cloners chain,
+falling back to the current issue key when that relationship cannot be resolved.
+Consolidated tasks use a canonical record only when every included issue belongs
+to that same family; mixed-family consolidations generate an aggregate title
+without caching it under an individual family.
+The record requires the Jira issue that supplied its title, a summary digest, and
+the Jira `updated` timestamp. Only a newer, UTC-normalized timestamp from that
+source issue may atomically replace the family record; sibling issue updates
+reuse the elected title. Invalid cache values are compare-and-deleted so they
+cannot remove a concurrently published title. Canonical records expire after
+30 days.
+
+For normal workflows, the Log Agent receives an RPM-escaped form of the canonical
+title before adding an explicit changelog entry. The workflow then verifies and
+corrects that new entry deterministically. The inherited backport path writes the
+same escaped title directly and adds a separate historical-style `Resolves:` line.
+Commit and MR subjects retain the original title. `%autochangelog` specs continue
+to derive the title from the commit and receive no explicit entry. Direct and
+dry-run workflows do not read or write canonical title records. Malformed
+Jira/cache metadata or a title-agent result that is blank, multi-line, over 80
+characters, or contains a recognized Jira key falls back to ordinary Log Agent
+title generation.
+Rebuild workflows also fall back when a canonical title omits an updated
+dependency component, so rebuild titles always identify their dependencies.
+Malformed Jira `updated` timestamps similarly fall back without being cached.
+The Title Agent treats Jira summaries, implemented-change context, and source
+changelog text as untrusted data, never as instructions.
+
 The inherited change must pass clean `%prep`, SRPM creation, and Copr validation.
 If an immutable patch is changed or does not apply cleanly, inheritance is
 disabled durably and the existing normal backport starts with the original patch

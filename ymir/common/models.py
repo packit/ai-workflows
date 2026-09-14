@@ -356,6 +356,10 @@ class ConsolidatedIssue(BaseModel):
     """A sibling Jira issue consolidated into the same rebuild task."""
 
     issue_key: str = Field(description="Jira issue key (e.g. RHEL-67890)")
+    cve_id: str | None = Field(
+        default=None,
+        description="CVE identifier(s) from the sibling triage or consolidation analysis",
+    )
     dependency_issue: str | None = Field(
         description="Key of the dependency Jira issue (e.g. RHEL-12345)",
         default=None,
@@ -805,6 +809,10 @@ class LogInputSchema(BaseModel):
         default=None,
         description="Changelog message from the source commit to reuse, if available",
     )
+    canonical_title: str | None = Field(
+        default=None,
+        description="Validated display data copied exactly into commit, MR, and changelog titles",
+    )
 
 
 class LogOutputSchema(BaseModel):
@@ -812,6 +820,23 @@ class LogOutputSchema(BaseModel):
 
     title: str = Field(description="Title to use for commit message and MR")
     description: str = Field(description="Description of changes for commit message and MR")
+
+
+class TitleInputSchema(BaseModel):
+    """Input schema for the title-only agent's non-CVE canonical title generation."""
+
+    jira_summary: str = Field(description="Jira summary for context; do not copy verbatim by default")
+    changes_summary: str = Field(description="Summary of performed changes")
+    source_changelog: str | None = Field(
+        default=None,
+        description="Changelog message from the source commit, if available",
+    )
+
+
+class TitleOutputSchema(BaseModel):
+    """Output schema for the title-only agent's non-CVE canonical title generation."""
+
+    title: str = Field(description="Generated commit, merge request, and changelog title")
 
 
 # ============================================================================
@@ -857,14 +882,20 @@ class MergeRequestOutputSchema(BaseModel):
 
 
 class CachedMRMetadata(BaseModel):
-    """Cached merge request metadata for reuse across streams."""
+    """Redis record for a canonical title shared by an issue family.
 
-    operation_type: str = Field(description="Type of operation (backport or rebase)")
-    title: str = Field(description="Merge request title")
+    The key identifies the package/family. The source Jira issue, digest, and
+    timestamp decide whether a newer source summary may atomically replace it.
+    """
+
+    title: str = Field(description="Canonical commit, merge request, and changelog title")
     package: str = Field(description="Package name")
-    details: str = Field(
-        description="Operation-specific identifier "
-        "(list of upstream patch URLs for backport, version for rebase)"
+    issue_identity: str = Field(description="Normalized CVE set or non-CVE Jira clone-root key")
+    summary_source_issue: str = Field(description="Jira issue that supplied the canonical title")
+    summary_digest: str = Field(description="Digest used to invalidate the record after a summary update")
+    summary_updated: str | None = Field(
+        default=None,
+        description="Jira updated timestamp for ordering invalidations",
     )
 
 

@@ -1,8 +1,6 @@
 from typing import Any
 
-from beeai_framework.agents.requirement.requirements.conditional import (
-    ConditionalRequirement,
-)
+from beeai_framework.agents.requirement.requirements.conditional import ConditionalRequirement
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool

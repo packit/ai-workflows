@@ -14,7 +14,7 @@ from ymir.tools.base import CloneableTool as Tool
 
 # Pattern to extract CVE IDs. Needs to handle space-separated, comma-separated,
 # or any other separator as there is no standard in how those can be provided.
-CVE_ID_PATTERN = re.compile(r"CVE-\d{4}-\d{4,}")
+CVE_ID_PATTERN = re.compile(r"CVE-[0-9]{4}-[0-9]{4,}")
 
 
 class GitPreparePackageSourcesInput(BaseModel):

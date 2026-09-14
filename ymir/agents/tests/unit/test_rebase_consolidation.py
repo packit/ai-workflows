@@ -85,6 +85,20 @@ def test_new_changelog_entry_is_required_before_updating_consolidation_metadata(
     assert spec.read_text() == original
 
 
+def test_add_jira_ticket_preserves_canonical_changelog_title(tmp_path):
+    spec = tmp_path / "package.spec"
+    old_entry = "* Sun Sep 13 2026 Maintainer <maintainer@example.com> - 0-1\n- Previous update\n"
+    spec.write_text(_spec(old_entry))
+    headers_before = changelog_entry_headers(spec)
+    canonical_title = "CVE-2026-1234 package: Fix issue"
+    spec.write_text(
+        _spec(f"* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n- {canonical_title}\n" + old_entry)
+    )
+
+    assert add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100"], headers_before)
+    assert f"- {canonical_title}\n- Resolves: RHEL-100\n" in spec.read_text()
+
+
 def test_add_jira_tickets_does_not_treat_prose_as_a_reference(tmp_path):
     spec = tmp_path / "package.spec"
     spec.write_text(

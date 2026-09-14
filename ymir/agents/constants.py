@@ -25,6 +25,13 @@ JIRA_COMMENT_TEMPLATE = Template(f"""{YMIR_COMMENT_MARKER.template}: \n\n$JIRA_C
 
 I_AM_YMIR = "by Ymir, a Red Hat Enterprise Linux software maintenance AI agent."
 
+# Captures a Jira resolution footer while retaining optional changelog-style
+# indentation and bullet formatting for callers that append related footers.
+RESOLVES_FOOTER_RE = re.compile(
+    r"^(?P<prefix>\s*(?:[-*]\s*)?)(?P<tag>Resolves):\s*(?P<value>.*)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 
 def format_jira_links_for_mr(issues: str | list[str] | None) -> str:
     """Format Jira issue key(s) as browse links for an MR description.

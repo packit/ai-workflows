@@ -14,6 +14,7 @@ from specfile import Specfile
 from specfile.prep import AutopatchMacro, AutosetupMacro, PatchMacro
 from specfile.utils import EVR
 
+from ymir.agents.constants import RESOLVES_FOOTER_RE
 from ymir.common.base_utils import check_subprocess, run_subprocess
 from ymir.common.constants import BREWHUB_URL
 from ymir.common.models import ShippedZStreamCandidate
@@ -27,7 +28,6 @@ from ymir.common.version_utils import parse_rhel_version
 
 _FULL_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _JIRA_KEY_RE = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b", re.IGNORECASE)
-_RESOLVES_RE = re.compile(r"^Resolves:\s*(?P<value>.+)$", re.IGNORECASE | re.MULTILINE)
 _YMIR_ATTRIBUTION_RE = re.compile(r"^\s*Assisted-by:\s*Ymir\s*$", re.IGNORECASE)
 
 
@@ -172,7 +172,7 @@ def spec_matches_brew_version(spec_path: Path, source: BrewSource) -> bool:
 def resolves_keys(commit_message: str) -> set[str]:
     """Extract normalized Jira keys from Resolves footer lines."""
     keys: set[str] = set()
-    for match in _RESOLVES_RE.finditer(commit_message):
+    for match in RESOLVES_FOOTER_RE.finditer(commit_message):
         keys.update(key.upper() for key in _JIRA_KEY_RE.findall(match.group("value")))
     return keys
 

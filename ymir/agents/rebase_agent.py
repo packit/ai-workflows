@@ -32,7 +32,13 @@ from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState
 from ymir.agents.reasoning_agent import ReasoningAgent
-from ymir.agents.rebase_consolidation import find_triaged_rebase_siblings
+from ymir.agents.rebase_consolidation import (
+    add_jira_tickets_to_latest_changelog_entry,
+    changelog_entry_headers,
+    find_triaged_rebase_siblings,
+    has_new_latest_changelog_entry,
+    uses_autochangelog,
+)
 from ymir.agents.utils import (
     format_mr_triage_details,
     get_agent_execution_config,
@@ -77,6 +83,14 @@ from ymir.tools.unprivileged.wicked_git import BuildSrpmTool, RunPackagePrepTool
 
 logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")
+
+
+def _consolidated_issue_keys(
+    primary_issue: str,
+    consolidated_issues: list[ConsolidatedIssue],
+) -> list[str]:
+    """Return the primary Jira key followed by unique consolidated sibling keys."""
+    return list(dict.fromkeys([primary_issue] + [item.issue_key for item in consolidated_issues]))
 
 
 def get_instructions() -> str:
@@ -447,7 +461,9 @@ async def main() -> None:
 
             async def stage_changes(state):
                 # Use accumulated files from all rebase iterations, fallback to *.spec if none specified
-                files_to_git_add = list(state.all_files_git_to_add) or [f"{state.package}.spec"]
+                # The log agent and consolidation metadata update the spec after a
+                # rebase iteration, so always stage it along with agent-reported files.
+                files_to_git_add = list(state.all_files_git_to_add | {f"{state.package}.spec"})
 
                 try:
                     await tasks.stage_changes(
@@ -464,11 +480,14 @@ async def main() -> None:
                 return "run_log_agent"
 
             async def run_log_agent(state):
+                all_issues = _consolidated_issue_keys(state.jira_issue, state.consolidated_issues)
+                spec_path = state.local_clone / f"{state.package}.spec"
+                changelog_headers_before = changelog_entry_headers(spec_path)
                 response = await log_agent.run(
                     render_template(
                         get_log_prompt(),
                         LogInputSchema(
-                            jira_issue=state.jira_issue,
+                            jira_issue=", ".join(all_issues),
                             changes_summary=state.rebase_log[-1],
                         ),
                     ),
@@ -491,11 +510,27 @@ async def main() -> None:
                     )
                 state.log_result = log_output
 
+                if len(all_issues) > 1:
+                    if uses_autochangelog(spec_path):
+                        logger.info("Skipping manual changelog metadata for %autochangelog spec")
+                    else:
+                        if not has_new_latest_changelog_entry(spec_path, changelog_headers_before):
+                            raise RuntimeError(
+                                "Log agent did not create a new changelog entry for consolidation"
+                            )
+                        if add_jira_tickets_to_latest_changelog_entry(
+                            spec_path, all_issues, changelog_headers_before
+                        ):
+                            logger.info("Added consolidated Jira references to the changelog entry")
+
+                # The log agent (and the metadata update above) modify the spec
+                # after the initial staging step.
                 return "stage_changes"
 
             async def commit_push_and_open_mr(state):
                 try:
-                    all_issues = [state.jira_issue] + [item.issue_key for item in state.consolidated_issues]
+                    all_issues = _consolidated_issue_keys(state.jira_issue, state.consolidated_issues)
+                    resolves_lines = "\n".join(f"Resolves: {issue}" for issue in all_issues)
                     triage_details_text = format_mr_triage_details(state.justification, state.triage_summary)
                     consolidation_text = (
                         f"\n\n{wrap_details('Consolidated issues', state.consolidation_summary)}"
@@ -510,7 +545,7 @@ async def main() -> None:
                         commit_message=(
                             f"{state.log_result.title}\n\n"
                             f"{state.log_result.description}\n\n"
-                            f"Resolves: {state.jira_issue}\n\n"
+                            f"{resolves_lines}\n\n"
                             f"This commit was created {I_AM_YMIR}\n\n"
                             f"Assisted-by: Ymir\n"
                         ),

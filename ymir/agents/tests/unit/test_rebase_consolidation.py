@@ -1,5 +1,139 @@
-from ymir.agents.rebase_consolidation import build_rebase_siblings_jql
+import pytest
+
+from ymir.agents.rebase_agent import _consolidated_issue_keys
+from ymir.agents.rebase_consolidation import (
+    add_jira_tickets_to_latest_changelog_entry,
+    build_rebase_siblings_jql,
+    changelog_entry_headers,
+    has_new_latest_changelog_entry,
+    uses_autochangelog,
+)
+from ymir.common.models import ConsolidatedIssue
 from ymir.common.utils import extract_text_from_adf
+
+
+def _spec(changelog: str = "", changelog_directive: str = "%changelog") -> str:
+    return (
+        "Name: package\n"
+        "Version: 1\n"
+        "Release: 1\n"
+        "Summary: Test package\n"
+        "License: MIT\n"
+        "%description\n"
+        "Test package\n"
+        f"{changelog_directive}\n"
+        f"{changelog}"
+    )
+
+
+def test_add_jira_tickets_to_latest_changelog_entry(tmp_path):
+    spec = tmp_path / "package.spec"
+    spec.write_text(
+        _spec(
+            "* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n"
+            "- Update package\n"
+            "- Resolves: RHEL-100\n"
+            "* Sun Sep 13 2026 Maintainer <maintainer@example.com> - 0-1\n"
+            "- Previous update\n"
+        )
+    )
+
+    assert add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100", "RHEL-200", "RHEL-300"])
+    assert spec.read_text() == _spec(
+        "* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n"
+        "- Update package\n"
+        "- Resolves: RHEL-100\n"
+        "- Resolves: RHEL-200\n"
+        "- Resolves: RHEL-300\n"
+        "* Sun Sep 13 2026 Maintainer <maintainer@example.com> - 0-1\n"
+        "- Previous update\n"
+    )
+
+
+def test_add_jira_tickets_skips_empty_changelog(tmp_path):
+    spec = tmp_path / "package.spec"
+    spec.write_text(_spec())
+
+    assert not add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100", "RHEL-200"])
+    assert spec.read_text() == _spec()
+
+
+def test_uses_autochangelog(tmp_path):
+    spec = tmp_path / "package.spec"
+    spec.write_text(_spec("%autochangelog\n"))
+
+    assert uses_autochangelog(spec)
+
+
+def test_does_not_treat_commented_autochangelog_as_a_directive(tmp_path):
+    spec = tmp_path / "package.spec"
+    spec.write_text(_spec("# %autochangelog\n"))
+
+    assert not uses_autochangelog(spec)
+
+
+def test_new_changelog_entry_is_required_before_updating_consolidation_metadata(tmp_path):
+    spec = tmp_path / "package.spec"
+    original = _spec("* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n- Historical release metadata\n")
+    spec.write_text(original)
+
+    headers_before = changelog_entry_headers(spec)
+
+    assert not has_new_latest_changelog_entry(spec, headers_before)
+    with pytest.raises(ValueError, match="new changelog entry"):
+        add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100", "RHEL-200"], headers_before)
+    assert spec.read_text() == original
+
+
+def test_add_jira_tickets_does_not_treat_prose_as_a_reference(tmp_path):
+    spec = tmp_path / "package.spec"
+    spec.write_text(
+        _spec(
+            "* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n"
+            "- Fix the issue reported in RHEL-100\n"
+            "- Related: RHEL-200\n"
+        )
+    )
+
+    assert add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100", "RHEL-200"])
+    assert spec.read_text().endswith(
+        "- Fix the issue reported in RHEL-100\n"
+        "- Related: RHEL-200\n"
+        "- Resolves: RHEL-100\n"
+        "- Resolves: RHEL-200\n"
+    )
+
+
+def test_add_jira_tickets_preserves_star_bulleted_resolves_reference(tmp_path):
+    spec = tmp_path / "package.spec"
+    spec.write_text(
+        _spec(
+            "* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n"
+            "  * Resolves: RHEL-200\n"
+            "* Sun Sep 13 2026 Maintainer <maintainer@example.com> - 0-1\n"
+            "- Previous update\n"
+        )
+    )
+
+    assert add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100", "RHEL-200"])
+    assert spec.read_text() == _spec(
+        "* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n"
+        "  * Resolves: RHEL-200\n"
+        "  * Resolves: RHEL-100\n"
+        "* Sun Sep 13 2026 Maintainer <maintainer@example.com> - 0-1\n"
+        "- Previous update\n"
+    )
+
+
+def test_consolidated_issue_keys_deduplicates_siblings_and_primary():
+    assert _consolidated_issue_keys(
+        "RHEL-100",
+        [
+            ConsolidatedIssue(issue_key="RHEL-200"),
+            ConsolidatedIssue(issue_key="RHEL-100"),
+            ConsolidatedIssue(issue_key="RHEL-200"),
+        ],
+    ) == ["RHEL-100", "RHEL-200"]
 
 
 def test_build_rebase_siblings_jql():

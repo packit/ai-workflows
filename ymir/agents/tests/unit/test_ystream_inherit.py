@@ -151,6 +151,10 @@ def test_resolves_keys_matches_exact_footer_keys():
     }
 
 
+def test_resolves_keys_matches_changelog_style_footer():
+    assert resolves_keys("Fix curl\n\n  - Resolves: RHEL-1, RHEL-10") == {"RHEL-1", "RHEL-10"}
+
+
 def _git(repo, *args):
     result = subprocess.run(
         ["git", *args],

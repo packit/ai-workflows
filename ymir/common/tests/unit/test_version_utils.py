@@ -2,7 +2,10 @@ import pytest
 from flexmock import flexmock
 
 from ymir.common.version_utils import (
+    detect_modular_issue,
+    extract_downstream_package,
     get_maintenance_rhel_branch,
+    is_modular,
     is_older_zstream,
     parse_branch_name,
     parse_module_stream,
@@ -199,3 +202,128 @@ async def test_get_maintenance_rhel_branch(branch, expected):
 )
 def test_parse_module_stream(summary, component, expected):
     assert parse_module_stream(summary, component) == expected
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("postgresql:16/postgis", "postgis"),
+        ("nodejs:18/nodejs", "nodejs"),
+        ("perl:5.32/perl-IO-Socket-SSL", "perl-IO-Socket-SSL"),
+        ("libtiff", "libtiff"),
+        ("regular-component", "regular-component"),
+        (None, None),
+        ("", None),
+    ],
+)
+def test_extract_downstream_package(raw, expected):
+    assert extract_downstream_package(raw) == expected
+
+
+def test_is_modular_requires_package_not_full_modular_string():
+    summary = "postgresql:16/postgis: PostGIS: vuln"
+    raw = "postgresql:16/postgis"
+    assert is_modular(summary, raw) is False
+    assert is_modular(summary, extract_downstream_package(raw)) is True
+
+
+def test_parse_module_stream_requires_package_not_full_modular_string():
+    summary = "postgresql:16/postgis: PostGIS: vuln"
+    raw = "postgresql:16/postgis"
+    assert parse_module_stream(summary, raw) is None
+    assert parse_module_stream(summary, extract_downstream_package(raw)) == ("postgresql", "16")
+
+
+# --- detect_modular_issue -------------------------------------------------
+
+
+class TestDetectModularIssue:
+    """Tests for detect_modular_issue — the shared helper used by agents."""
+
+    def test_raw_component_structural_match(self):
+        """module:stream/package format is detected without needing summary."""
+        assert (
+            detect_modular_issue(
+                jira_summary=None,
+                raw_downstream_component="postgresql:16/postgis",
+            )
+            is True
+        )
+
+    def test_raw_component_non_modular(self):
+        """Plain package name is not modular without matching summary."""
+        assert (
+            detect_modular_issue(
+                jira_summary="CVE-2026-1234 postgresql16: some vuln [rhel-10.2.z]",
+                raw_downstream_component="postgresql16",
+            )
+            is False
+        )
+
+    def test_summary_fallback_after_extraction(self):
+        """When raw is module:stream/package, summary check uses extracted package."""
+        assert (
+            detect_modular_issue(
+                jira_summary="CVE-2026-1234 postgresql:16/postgis: PostGIS vuln [rhel-9.8.z]",
+                raw_downstream_component="postgresql:16/postgis",
+            )
+            is True
+        )
+
+    def test_extracted_component_override(self):
+        """Explicit downstream_component overrides extraction from raw."""
+        assert (
+            detect_modular_issue(
+                jira_summary="CVE-2026-1234 postgresql:16/postgis: PostGIS vuln [rhel-9.8.z]",
+                raw_downstream_component=None,
+                downstream_component="postgis",
+            )
+            is True
+        )
+
+    def test_all_none(self):
+        """All None inputs → not modular."""
+        assert detect_modular_issue(None, None, None) is False
+
+    def test_summary_only_modular(self):
+        """Summary alone detects modular when component is passed."""
+        assert (
+            detect_modular_issue(
+                jira_summary="CVE-2026-1234 squid:4/squid: Denial of Service [rhel-8.10.z]",
+                raw_downstream_component=None,
+                downstream_component="squid",
+            )
+            is True
+        )
+
+    def test_slash_in_path_not_modular(self):
+        """A slash that isn't module:stream/package is not modular."""
+        assert (
+            detect_modular_issue(
+                jira_summary="some issue",
+                raw_downstream_component="path/to/package",
+            )
+            is False
+        )
+
+    def test_post_extract_triage_state(self):
+        """Simulates new triage state: raw has module:stream/package, dc is extracted."""
+        assert (
+            detect_modular_issue(
+                jira_summary="CVE-2026-73515 postgresql:16/postgis: Memory vuln [rhel-9.8.z]",
+                raw_downstream_component="postgresql:16/postgis",
+                downstream_component="postgis",
+            )
+            is True
+        )
+
+    def test_pre_extract_triage_state(self):
+        """Simulates old triage state: dc is the raw module:stream/package string."""
+        assert (
+            detect_modular_issue(
+                jira_summary="CVE-2026-73515 postgresql:16/postgis: Memory vuln [rhel-9.8.z]",
+                raw_downstream_component=None,
+                downstream_component="postgresql:16/postgis",
+            )
+            is True
+        )

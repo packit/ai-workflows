@@ -348,11 +348,59 @@ async def is_older_zstream(
 
 MODULAR_SUMMARY_PREFIX = r"^(?:\S+\s+)*([\w.+-]+):([^/\s]+)/"
 
+# Matches the ``module:stream/package`` format used in Jira customfield_10669.
+# Equivalent to the fetcher's ``MODULAR_COMPONENT_PATTERN``.
+_MODULAR_COMPONENT_RE = re.compile(r".+:.+/.+")
+
+
+def extract_downstream_package(raw: str | None) -> str | None:
+    """Return the package name from Jira Downstream Component Name (customfield_10669).
+
+    Modular issues store ``module:stream/package`` (e.g. ``postgresql:16/postgis``);
+    non-modular issues store just the package name. ``is_modular`` and
+    ``parse_module_stream`` match the summary against the package part only.
+    """
+    if not raw:
+        return None
+    return raw.rsplit("/", 1)[-1]
+
 
 def is_modular(summary: str | None, component: str | None) -> bool:
     if not summary or not component:
         return False
     return bool(re.match(MODULAR_SUMMARY_PREFIX + re.escape(component) + r":", summary))
+
+
+def detect_modular_issue(
+    jira_summary: str | None,
+    raw_downstream_component: str | None,
+    downstream_component: str | None = None,
+) -> bool:
+    """Detect whether a Jira issue is modular.
+
+    Checks two signals (either is sufficient):
+    1. **Structural**: *raw_downstream_component* matches ``module:stream/package``
+       (same regex the fetcher uses).
+    2. **Summary**: the Jira summary contains a modular prefix matching the
+       (extracted) *downstream_component*.
+
+    Args:
+        jira_summary: Jira issue summary text.
+        raw_downstream_component: Original ``customfield_10669`` value
+            (e.g. ``"postgresql:16/postgis"``).  Stored as
+            ``triage_state["raw_downstream_component"]``.
+        downstream_component: Extracted package name (e.g. ``"postgis"``).
+            Falls back to ``extract_downstream_package(raw_downstream_component)``
+            when ``None``.
+
+    Returns:
+        ``True`` when the issue is modular.
+    """
+    raw = raw_downstream_component or downstream_component
+    if raw and _MODULAR_COMPONENT_RE.fullmatch(raw):
+        return True
+    package = extract_downstream_package(downstream_component or raw)
+    return is_modular(jira_summary, package)
 
 
 def parse_module_stream(summary: str | None, component: str | None) -> tuple[str, str] | None:

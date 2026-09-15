@@ -77,6 +77,8 @@ from ymir.common.utils import (
 )
 from ymir.common.version_utils import (
     construct_internal_branch_name,
+    detect_modular_issue,
+    extract_downstream_package,
     is_modular,
     is_older_zstream,
     normalize_fix_version,
@@ -303,8 +305,15 @@ async def determine_target_branch(
             return None, None
 
         older_zstream = await is_older_zstream(triage_data.fix_version)
+        if cve_needs_internal_fix and not older_zstream:
+            config = await load_rhel_config()
+            y_streams = config.get("current_y_streams", {})
+            parsed_version = parse_rhel_version(triage_data.fix_version)
+            has_y_stream = bool(parsed_version and parsed_version[0] in y_streams)
+        else:
+            has_y_stream = False
         namespace: Literal["rhel", "centos-stream"] = (
-            "rhel" if cve_needs_internal_fix or older_zstream else "centos-stream"
+            "rhel" if older_zstream or (cve_needs_internal_fix and has_y_stream) else "centos-stream"
         )
         jira_issue = getattr(triage_data, "jira_issue", "unknown")
         logger.info(
@@ -412,7 +421,18 @@ async def render_prompt(
     if cve_needs_internal_fix and fix_version:
         if is_modular(jira_summary, downstream_component):
             internal_branch = _map_version_to_module_branch(fix_version, jira_summary, downstream_component)
-            if internal_branch:
+            if internal_branch and not older_zstream:
+                # Same Y-stream gate as determine_target_branch: only RHEL
+                # versions with a Y-stream use the internal rhel namespace;
+                # others (e.g. RHEL 8) go to centos-stream where the
+                # internal_target_branch hint would be misleading.
+                config = await load_rhel_config()
+                y_streams = config.get("current_y_streams", {})
+                parsed_version = parse_rhel_version(fix_version)
+                has_y_stream = bool(parsed_version and parsed_version[0] in y_streams)
+            else:
+                has_y_stream = older_zstream  # older Z-streams always use rhel
+            if internal_branch and (older_zstream or has_y_stream):
                 updates["needs_internal_fix"] = True
                 updates["internal_target_branch"] = internal_branch
         else:
@@ -440,7 +460,18 @@ class TriageState(BaseModel):
     )
     downstream_component: str | None = Field(
         default=None,
-        description="Jira Downstream Component Name (customfield_10669), used for modular detection.",
+        description=(
+            "Package name from Jira Downstream Component Name (customfield_10669). "
+            "Modular values are reduced from 'module:stream/package' to the package."
+        ),
+    )
+    raw_downstream_component: str | None = Field(
+        default=None,
+        description=(
+            "Original Downstream Component Name value (customfield_10669) before "
+            "extraction, e.g. 'postgresql:16/postgis'. Used by sibling JQL to "
+            "filter by module stream."
+        ),
     )
     jira_summary: str | None = Field(
         default=None,
@@ -722,7 +753,11 @@ async def run_workflow(
 
             input_data = InputSchema(issue=state.jira_issue)
             state.jira_summary = jira_details.get("fields", {}).get("summary")
-            state.downstream_component = jira_details.get("fields", {}).get(DOWNSTREAM_COMPONENT_CUSTOM_FIELD)
+            raw_component = jira_details.get("fields", {}).get(DOWNSTREAM_COMPONENT_CUSTOM_FIELD)
+            state.raw_downstream_component = raw_component or None
+            # Modular issues store "module:stream/package" (e.g. "postgresql:16/postgis");
+            # extract the package so is_modular() / parse_module_stream() match the summary.
+            state.downstream_component = extract_downstream_package(raw_component)
             response = await triage_agent.run(
                 await render_prompt(
                     input_data,
@@ -1128,6 +1163,7 @@ async def run_workflow(
                 local_clone=state.applicability_local_clone,
                 unpacked_sources=state.applicability_unpacked_sources,
                 target_branch=state.target_branch,
+                downstream_component=state.raw_downstream_component,
             )
             rebuild_data.consolidated_issues = included
             rebuild_data.consolidation_summary = summary or None
@@ -1176,6 +1212,7 @@ async def run_workflow(
                 available_tools=gateway_tools,
                 dry_run=dry_run,
                 user_triggered=user_triggered,
+                downstream_component=state.raw_downstream_component,
             )
 
             # If siblings were queued, don't queue primary yet (wait for siblings)
@@ -1759,6 +1796,13 @@ async def main() -> None:
                     except Exception as e:
                         logger.warning(f"Failed to check/queue primary for sibling {input.issue}: {e}")
 
+                # Modular issues stop after triage — no downstream jobs or reproducer.
+                _modular_component = detect_modular_issue(
+                    jira_summary=state.jira_summary,
+                    raw_downstream_component=state.raw_downstream_component,
+                    downstream_component=state.downstream_component,
+                )
+
                 # Dispatch to downstream queues
                 if output.resolution == Resolution.ERROR:
                     # `data` is a plain union independent of `resolution` — nothing
@@ -1793,7 +1837,7 @@ async def main() -> None:
                     Resolution.CLARIFICATION_NEEDED,
                     Resolution.OPEN_ENDED_ANALYSIS,
                 ):
-                    if auto_chain:
+                    if auto_chain and (not _modular_component or user_triggered):
                         if output.resolution == Resolution.OPEN_ENDED_ANALYSIS:
                             queue = RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value
                             downstream_payload = output.data.model_dump_json()
@@ -1845,11 +1889,18 @@ async def main() -> None:
                         if queue is not None:
                             await fix_await(redis.lpush(queue, downstream_payload))
                             logger.info(f"Pushed {input.issue} to {queue}")
+                    elif _modular_component and not user_triggered:
+                        logger.info(
+                            f"Modular issue {input.issue} — stopping after triage, "
+                            "skipping downstream queue (not user-triggered)"
+                        )
                     else:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
 
                 if output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
-                    if enqueue_reproducer:
+                    if _modular_component and not user_triggered:
+                        logger.info("Modular issue %s — skipping reproducer queue", input.issue)
+                    elif enqueue_reproducer:
                         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
                             await _enqueue_reproducer(redis, state, user_triggered, gateway_tools)
                     else:

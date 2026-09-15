@@ -10,6 +10,8 @@ from ymir.agents.backport_agent import (
     _get_shipped_zstream_candidates,
     _inherit_prep_error,
     _move_build_logs,
+    _parse_upstream_patches,
+    _patch_fetch_tool_name,
     _remote_branch_matches_commit,
     _restore_inherited_publication,
     _schedule_inherit_cleanup_retry,
@@ -58,6 +60,34 @@ def test_get_shipped_zstream_candidates_from_triage_state():
 def test_get_shipped_zstream_candidates_supports_old_payloads():
     assert _get_shipped_zstream_candidates({}) == []
     assert _get_shipped_zstream_candidates({"cve_eligibility_result": None}) == []
+
+
+def test_parse_upstream_patches_strips_whitespace():
+    assert _parse_upstream_patches(" https://example.com/one.patch , https://example.com/two.patch ") == [
+        "https://example.com/one.patch",
+        "https://example.com/two.patch",
+    ]
+
+
+@pytest.mark.parametrize("patches", ["", ",https://example.com/fix.patch", "https://example.com/fix.patch,"])
+def test_parse_upstream_patches_rejects_empty_entries(patches):
+    with pytest.raises(SystemExit, match="each comma-separated entry must be a non-empty URL"):
+        _parse_upstream_patches(patches)
+
+
+@pytest.mark.parametrize(
+    ("patch_url", "tool_name"),
+    [
+        ("https://github.com/owner/repo/pull/1.patch", "get_github_patch"),
+        ("https://www.github.com/owner/repo/commit/deadbeef.patch", "get_github_patch"),
+        ("https://github.com/owner/repo/pull/1.diff?download=1", "get_github_patch"),
+        ("https://github.com/owner/repo/raw/main/fix.patch#contents", "get_github_patch"),
+        ("http://github.com/owner/repo/pull/1.patch", "get_patch_from_url"),
+        ("https://gitlab.gnome.org/GNOME/gvfs/-/commit/ea1322da.patch", "get_patch_from_url"),
+    ],
+)
+def test_patch_fetch_tool_name(patch_url, tool_name):
+    assert _patch_fetch_tool_name(patch_url) == tool_name
 
 
 def _state(**updates):

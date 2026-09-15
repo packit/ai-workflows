@@ -135,7 +135,7 @@ directory that contains this file.
 |----------|----------|-------------|
 | `MCP_TRANSPORT` | **Yes** | Set to `stdio` so the agent can communicate with the process. |
 | `UPSTREAM_SEARCH_API_URL` | **Yes** | Base URL of the upstream search service (provides `/find_repository` and `/find_commit` endpoints). |
-| `MCP_GATEWAY_URL` | No | SSE URL of a running privileged gateway. See the note on cross-gateway calls below. |
+| `MCP_GATEWAY_URL` | No | SSE URL of a running privileged gateway. When configured, GitHub PR and compare lookups use its authenticated tools; otherwise, the unprivileged gateway uses unauthenticated public GitHub API requests. |
 | `DEBUG_FILE` | No | Path to a log file. When set, gateway logs are written to this file in addition to stderr. Useful for debugging local installations. |
 | `REQUESTS_CA_BUNDLE` | No | Path to a Certificate Authority (CA) bundle, if additional or custom ones are required for workflow services. |
 

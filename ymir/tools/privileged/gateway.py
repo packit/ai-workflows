@@ -24,6 +24,11 @@ from ymir.tools.privileged.errata import (
     GetErratumTransitionRulesTool,
     GetPreviousErratumTool,
 )
+from ymir.tools.privileged.github import (
+    GetGithubCompareTool,
+    GetGithubPatchTool,
+    GetGithubPullRequestTool,
+)
 from ymir.tools.privileged.gitlab import (
     AddBlockingMergeRequestCommentTool,
     AddMergeRequestCommentTool,
@@ -137,6 +142,9 @@ async def _async_main():
             ResolveReviewersTool(options=tool_options),
             ResolveQeReviewersTool(options=tool_options),
             SetMergeRequestReviewersTool(options=tool_options),
+            GetGithubPullRequestTool(options=tool_options),
+            GetGithubCompareTool(options=tool_options),
+            GetGithubPatchTool(options=tool_options),
             GetErratumTool(options=tool_options),
             GetErratumBuildNvrTool(options=tool_options),
             GetErratumTransitionRulesTool(options=tool_options),

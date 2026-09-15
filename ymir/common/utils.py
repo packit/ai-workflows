@@ -459,6 +459,23 @@ def extract_text_from_adf(adf_body) -> str:
     return ""
 
 
+def __traces_sampler(sampling_context: dict) -> float:
+    """
+    Compute sample rate or sampling decision for a transaction.
+    https://docs.sentry.io/platforms/python/performance/
+    https://docs.sentry.io/platforms/python/configuration/sampling
+
+    Args:
+        sampling_context: context data
+
+    Returns: traces sample rate (between 0 and 1)
+    """
+    if rate := os.getenv("SENTRY_TRACES_SAMPLE_RATE"):
+        return float(rate)
+    # TODO: Take sampling_context into account
+    return 0.5
+
+
 def init_sentry() -> None:
     """Initialize Sentry, if the DSN is set."""
     if not (dsn := os.getenv("SENTRY_DSN")):
@@ -477,9 +494,7 @@ def init_sentry() -> None:
         dsn=dsn,
         environment=os.getenv("SENTRY_ENVIRONMENT"),
         enable_logs=True,
-        # Set traces_sample_rate to 1.0 to capture 100%
-        # of transactions for tracing.
-        traces_sample_rate=1.0,
+        traces_sampler=__traces_sampler,
         # Add data like inputs and responses;
         # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
         stream_gen_ai_spans=True,

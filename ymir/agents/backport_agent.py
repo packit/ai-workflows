@@ -3,6 +3,7 @@ import itertools
 import logging
 import os
 import re
+import shutil
 import sys
 import traceback
 from enum import StrEnum
@@ -711,7 +712,10 @@ async def run_workflow(
                 package=state.package,
                 dist_git_branch=state.dist_git_branch,
             )
-            state.unpacked_sources = tasks.get_unpacked_sources(state.local_clone, state.package)
+            builddir = local_tool_options.get("builddir")
+            state.unpacked_sources = tasks.get_unpacked_sources(
+                state.local_clone, state.package, builddir=Path(builddir) if builddir else None
+            )
             for idx, upstream_patch in enumerate(state.upstream_patches):
                 patch_name = f"{state.jira_issue}-{idx}.patch"
                 content = await run_tool(
@@ -1532,25 +1536,29 @@ async def run_workflow(
         workflow.add_step("submit_consolidation_job", submit_consolidation_job)
         workflow.add_step("comment_in_jira", comment_in_jira)
 
-        response = await workflow.run(
-            BackportState(
-                package=package,
-                dist_git_branch=dist_git_branch,
-                dist_git_namespace=dist_git_namespace,
-                upstream_patches=upstream_patches,
-                jira_issue=jira_issue,
-                workspace_id=workspace_id,
-                cve_id=cve_id,
-                justification=justification,
-                triage_summary=triage_summary,
-                fix_version=fix_version,
-                attempts_remaining=max_build_attempts,
-                shipped_zstream_candidates=shipped_zstream_candidates or [],
-                inherited_publication_checkpoint=inherited_publication_checkpoint,
-                inheritance_disabled=inheritance_disabled,
-            ),
-        )
-        return response.state
+        try:
+            response = await workflow.run(
+                BackportState(
+                    package=package,
+                    dist_git_branch=dist_git_branch,
+                    dist_git_namespace=dist_git_namespace,
+                    upstream_patches=upstream_patches,
+                    jira_issue=jira_issue,
+                    workspace_id=workspace_id,
+                    cve_id=cve_id,
+                    justification=justification,
+                    triage_summary=triage_summary,
+                    fix_version=fix_version,
+                    attempts_remaining=max_build_attempts,
+                    shipped_zstream_candidates=shipped_zstream_candidates or [],
+                    inherited_publication_checkpoint=inherited_publication_checkpoint,
+                    inheritance_disabled=inheritance_disabled,
+                ),
+            )
+            return response.state
+        finally:
+            if builddir := local_tool_options.get("builddir"):
+                shutil.rmtree(builddir, ignore_errors=True)
 
 
 async def main() -> None:

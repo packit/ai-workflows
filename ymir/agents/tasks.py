@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -885,11 +886,12 @@ async def cache_mr_metadata(
     return log_output
 
 
-def get_unpacked_sources(local_clone: Path, package: str) -> Path:
+def get_unpacked_sources(local_clone: Path, package: str, builddir: Path | None = None) -> Path:
     """
     Get a path to the root of extracted archive directory tree (referenced as TLD
     in RPM documentation) for a given package.
     """
+    base = builddir or local_clone
     with Specfile(local_clone / f"{package}.spec") as spec:
         name = spec.expand("%{name}")
         version = spec.expand("%{version}")
@@ -901,23 +903,25 @@ def get_unpacked_sources(local_clone: Path, package: str) -> Path:
         buildsubdir = buildsubdir.split("/")[0]
 
     # RPM 4.20+ uses a per-build directory named %{NAME}-%{VERSION}-build
-    per_build_dir = local_clone / f"{name}-{version}-build"
+    per_build_dir = base / f"{name}-{version}-build"
     sources_dir = per_build_dir / buildsubdir
     if sources_dir.is_dir():
         return sources_dir
 
     # Older RPM versions unpack directly under _builddir
-    sources_dir = local_clone / buildsubdir
+    sources_dir = base / buildsubdir
     if sources_dir.is_dir():
         return sources_dir
 
     raise ValueError(f"Unpacked source directory does not exist: {sources_dir}")
 
 
-async def _fallback_extract_sources(local_clone: Path, package: str) -> Path:
+async def _fallback_extract_sources(local_clone: Path, package: str) -> tuple[Path, str]:
     """
     Fallback when centpkg/rhpkg prep fails: extract the primary source
     archive using Source0 from the spec file.
+    Returns (unpacked_sources, extract_dir) where extract_dir is a /tmp
+    path the caller must clean up.
     """
     try:
         with Specfile(local_clone / f"{package}.spec") as spec:
@@ -930,20 +934,20 @@ async def _fallback_extract_sources(local_clone: Path, package: str) -> Path:
         raise ValueError(f"Could not determine source archive for {package}: {e}") from e
     logger.info(f"Using Source0 from spec: {archive.name}")
 
-    extract_dir = local_clone / "_extracted"
-    extract_dir.mkdir(exist_ok=True)
+    extract_dir = Path(tempfile.mkdtemp(prefix="rpmbuild-fallback-"))
 
     cmd = ["/usr/lib/rpm/rpmuncompress", "-x", str(archive)]
     logger.info(f"Extracting {archive.name} to {extract_dir}")
 
     exit_code, _, stderr = await run_subprocess(cmd, cwd=extract_dir)
     if exit_code != 0:
+        shutil.rmtree(extract_dir, ignore_errors=True)
         raise ValueError(f"Failed to extract {archive.name}: {stderr}")
 
     subdirs = [d for d in extract_dir.iterdir() if d.is_dir()]
     if len(subdirs) == 1:
-        return subdirs[0]
-    return extract_dir
+        return subdirs[0], str(extract_dir)
+    return extract_dir, str(extract_dir)
 
 
 async def clone_and_prep_sources(
@@ -953,10 +957,11 @@ async def clone_and_prep_sources(
     jira_issue: str,
     ref: str | None = None,
     dist_git_namespace: str | None = None,
-) -> tuple[Path, Path, bool]:
+) -> tuple[Path, Path, bool, str | None]:
     """
     Clone dist-git repo and run centpkg/rhpkg sources + prep.
-    Returns (local_clone, unpacked_sources, prep_succeeded).
+    Returns (local_clone, unpacked_sources, prep_succeeded, builddir).
+    The caller must clean up *builddir* (a /tmp path) when done.
     Read-only: no fork, no push — just for source analysis.
 
     Falls back to manual archive extraction if prep fails (e.g. missing
@@ -1007,20 +1012,22 @@ async def clone_and_prep_sources(
     # Run prep locally rather than via MCP gateway: the agent container is
     # RHEL-based so rpmbuild evaluates %prep macros correctly, whereas the
     # MCP gateway runs Fedora and would expand them differently.
+    prep_tool = RunPackagePrepTool()
     result = await run_tool(
-        RunPackagePrepTool(),
+        prep_tool,
         dist_git_path=str(local_clone),
         package=package,
         dist_git_branch=dist_git_branch,
     )
 
     if "Prep FAILED" not in result:
-        unpacked = get_unpacked_sources(local_clone, package)
-        return local_clone, unpacked, True
+        builddir = prep_tool.options.get("builddir")
+        unpacked = get_unpacked_sources(local_clone, package, builddir=Path(builddir) if builddir else None)
+        return local_clone, unpacked, True, builddir
 
     logger.warning(f"prep failed for {package}, falling back to manual extraction: {result}")
-    unpacked = await _fallback_extract_sources(local_clone, package)
-    return local_clone, unpacked, False
+    unpacked, fallback_builddir = await _fallback_extract_sources(local_clone, package)
+    return local_clone, unpacked, False, fallback_builddir
 
 
 class InvalidConsolidationConfigError(Exception):

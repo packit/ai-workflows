@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import sys
 import traceback
 from pathlib import Path
@@ -325,8 +326,12 @@ async def main() -> None:
             workflow.add_step("commit_and_push", commit_and_push)
             workflow.add_step("comment_in_mr", comment_in_mr)
 
-            response = await workflow.run(State(merge_request_url=merge_request_url))
-            return response.state
+            try:
+                response = await workflow.run(State(merge_request_url=merge_request_url))
+                return response.state
+            finally:
+                if builddir := local_tool_options.get("builddir"):
+                    shutil.rmtree(builddir, ignore_errors=True)
 
     if merge_request_url := os.getenv("MERGE_REQUEST_URL", None):
         logger.info("Running in direct mode with environment variables")

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 import traceback
 from datetime import timedelta
@@ -1671,8 +1672,12 @@ async def run_workflow(
             # CVE / Jira lists are collected from commit footers after branches
             # are fetched — do not seed from branch metadata.
 
-        response = await workflow.run(initial_state)
-        return response.state
+        try:
+            response = await workflow.run(initial_state)
+            return response.state
+        finally:
+            if builddir := local_tool_options.get("builddir"):
+                shutil.rmtree(builddir, ignore_errors=True)
 
 
 _CONSOLIDATED_MARKER = "## Consolidated Backport MR"

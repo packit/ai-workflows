@@ -1,7 +1,7 @@
 {
     "current_y_streams": {
-      "9": "rhel-9.9",
-      "10": "rhel-10.3"
+      "9": "rhel-9.10",
+      "10": "rhel-10.4"
     },
     "current_z_streams": {
       "8": "rhel-8.10.z",

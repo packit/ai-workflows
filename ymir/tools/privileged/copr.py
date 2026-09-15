@@ -25,7 +25,7 @@ from ymir.common import load_rhel_config
 from ymir.common.base_utils import init_kerberos_ticket
 from ymir.common.models import BuildResult
 from ymir.common.validators import AbsolutePath
-from ymir.common.version_utils import parse_branch_name
+from ymir.common.version_utils import construct_internal_branch_name, parse_branch_name, parse_rhel_version
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.base import make_additional_context, tool_error_context
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
@@ -130,14 +130,13 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
             "x86_64",
         )
         rhel_config = await load_rhel_config()
-        upcoming_z_streams = rhel_config.get("upcoming_z_streams", {})
         with tool_error_context(
             "Failed to deduce Copr chroot",
             dist_git_branch=dist_git_branch,
             build_arch=build_arch,
         ):
-            chroot_base, majorver = await self.branch_to_chroot(dist_git_branch, upcoming_z_streams)
-            chroot = f"{chroot_base}-{build_arch}"
+            chroot = f"custom-1-{build_arch}"
+            buildroot_branch, is_zstream, majorver = self.branch_to_buildroot(dist_git_branch, rhel_config)
         logger.info(f"Connecting to Copr API at {COPR_CONFIG['copr_url']} for project creation/update")
         project_proxy = ProjectProxy({"username": copr_user, **COPR_CONFIG})
         kwargs = {
@@ -166,65 +165,60 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                     exception=_copr_error_detail(e),
                 ),
             ) from e
-        if chroot.startswith("custom-"):
-            # make sure the chroot has access to corresponding buildroot repository
-            logger.info(f"Connecting to Copr API to update chroot configuration for {chroot}")
-            chroot_proxy = ProjectChrootProxy({"username": copr_user, **COPR_CONFIG})
-            bootstrap_image = f"registry.access.redhat.com/ubi{majorver}/ubi"
-            if not (internal_repos_host := rhel_config.get("internal_repos_host")):
-                raise ToolErrorWithContext(
-                    "Internal repos host not configured",
-                    additional_context=make_additional_context(
-                        copr_user=copr_user,
-                        project=jira_issue,
-                        chroot=chroot,
-                    ),
-                )
-            buildroot_repo_url = urljoin(
-                internal_repos_host,
-                f"brewroot/repos/{dist_git_branch}-z-build/latest/{build_arch}",
+        # make the custom chroot use the target stream's buildroot
+        logger.info(f"Connecting to Copr API to update chroot configuration for {chroot}")
+        chroot_proxy = ProjectChrootProxy({"username": copr_user, **COPR_CONFIG})
+        bootstrap_image = f"registry.access.redhat.com/ubi{majorver}/ubi"
+        if not (internal_repos_host := rhel_config.get("internal_repos_host")):
+            raise ToolErrorWithContext(
+                "Internal repos host not configured",
+                additional_context=make_additional_context(
+                    copr_user=copr_user,
+                    project=jira_issue,
+                    chroot=chroot,
+                ),
             )
-            try:
-                chroot_config = await _copr_api_call(
-                    chroot_proxy.get,
+        buildroot_repo_url = urljoin(
+            internal_repos_host,
+            f"brewroot/repos/{buildroot_branch}{'-z-build' if is_zstream else '-build'}/latest/{build_arch}",
+        )
+        try:
+            chroot_config = await _copr_api_call(
+                chroot_proxy.get,
+                ownername=copr_user,
+                projectname=jira_issue,
+                chrootname=chroot,
+            )
+            kwargs = {}
+            if getattr(chroot_config, "bootstrap", None) != "image":
+                kwargs["bootstrap"] = "image"
+            if getattr(chroot_config, "bootstrap_image", None) != bootstrap_image:
+                kwargs["bootstrap_image"] = bootstrap_image
+            if chroot_config.additional_repos != [buildroot_repo_url]:
+                kwargs["additional_repos"] = [buildroot_repo_url]
+            # make sure base build packages are present in the chroot
+            build_group = "@build"
+            if build_group not in chroot_config.additional_packages:
+                kwargs["additional_packages"] = sorted(set(chroot_config.additional_packages) | {build_group})
+            if kwargs:
+                await _copr_api_call(
+                    chroot_proxy.edit,
                     ownername=copr_user,
                     projectname=jira_issue,
                     chrootname=chroot,
+                    **kwargs,
                 )
-                kwargs = {}
-                if getattr(chroot_config, "bootstrap", None) != "image":
-                    kwargs["bootstrap"] = "image"
-                if getattr(chroot_config, "bootstrap_image", None) != bootstrap_image:
-                    kwargs["bootstrap_image"] = bootstrap_image
-                if buildroot_repo_url not in chroot_config.additional_repos:
-                    kwargs["additional_repos"] = sorted(
-                        set(chroot_config.additional_repos) | {buildroot_repo_url}
-                    )
-                # make sure base build packages are present in the chroot
-                build_group = "@build"
-                if build_group not in chroot_config.additional_packages:
-                    kwargs["additional_packages"] = sorted(
-                        set(chroot_config.additional_packages) | {build_group}
-                    )
-                if kwargs:
-                    await _copr_api_call(
-                        chroot_proxy.edit,
-                        ownername=copr_user,
-                        projectname=jira_issue,
-                        chrootname=chroot,
-                        **kwargs,
-                    )
-            except Exception as e:
-                raise ToolErrorWithContext(
-                    "Failed to update Copr chroot",
-                    cause=e,
-                    additional_context=make_additional_context(
-                        copr_user=copr_user,
-                        project=jira_issue,
-                        chroot=chroot,
-                        exception=_copr_error_detail(e),
-                    ),
-                ) from e
+        except Exception as e:
+            raise ToolErrorWithContext(
+                "Failed to update Copr chroot",
+                cause=e,
+                additional_context=make_additional_context(
+                    copr_user=copr_user,
+                    project=jira_issue,
+                    chroot=chroot,
+                    exception=_copr_error_detail(e),
+                ),
+            ) from e
         logger.info(f"Connecting to Copr API to submit build for {srpm_path}")
         build_proxy = BuildProxy({"username": copr_user, **COPR_CONFIG})
         try:
@@ -333,22 +327,22 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
         return (COPR_ARCHES - exclude_arches) & exclusive_arches
 
     @staticmethod
-    async def branch_to_chroot(dist_git_branch: str, upcoming_z_streams: dict[str, str]) -> tuple[str, str]:
+    def branch_to_buildroot(dist_git_branch: str, rhel_config: dict) -> tuple[str, bool, str]:
+        """Return the Brew buildroot branch, stream type, and RHEL major version."""
         if not (parsed := parse_branch_name(dist_git_branch)):
             raise ValueError(f"Unsupported branch name: {dist_git_branch}")
         majorver, minorver = parsed
-        # build Y-Streams and 0-day Z-Streams against the dev chroot
         if minorver is not None:
-            if (ver := upcoming_z_streams.get(majorver)) and ver.startswith(f"rhel-{majorver}.{minorver}"):
-                suffix = ".dev"
-            else:
-                suffix = ""
-        else:
-            suffix = ".dev"
-        if not suffix:
-            # use fully custom chroot for regular Z-Streams
-            return "custom-1", majorver
-        return f"rhel-{majorver}{suffix}", majorver
+            return construct_internal_branch_name(majorver, minorver), True, majorver
+        current_y_streams = rhel_config.get("current_y_streams", {})
+        if (y_stream := current_y_streams.get(majorver)) and (y_parsed := parse_rhel_version(y_stream)):
+            y_majorver, y_minorver, _ = y_parsed
+            return construct_internal_branch_name(y_majorver, y_minorver), False, majorver
+        current_z_streams = rhel_config.get("current_z_streams", {})
+        if (z_stream := current_z_streams.get(majorver)) and (z_parsed := parse_rhel_version(z_stream)):
+            z_majorver, z_minorver, _ = z_parsed
+            return construct_internal_branch_name(z_majorver, z_minorver), True, majorver
+        raise ValueError(f"No current stream configured for branch: {dist_git_branch}")
 
 
 class DownloadArtifactsToolInput(BaseModel):

@@ -47,9 +47,10 @@ async def test_build_package(build_failure, build_timeout, exclusive_arch, dist_
     ownername = "jotnar-bot"
     srpm_path = Path("/tmp/test.src.rpm")
     jira_issue = "RHEL-12345"
-    suffix = "" if dist_git_branch == "rhel-10.0" else ".dev"
     build_arch = exclusive_arch or "x86_64"
-    chroot = f"rhel-10{suffix}-{build_arch}" if suffix else f"custom-1-{build_arch}"
+    chroot = f"custom-1-{build_arch}"
+    buildroot_branch = "rhel-10.2" if dist_git_branch == "c10s" else dist_git_branch
+    buildroot_suffix = "-build" if dist_git_branch == "c10s" else "-z-build"
     existing_chroot = "rhel-9.dev-x86_64"
     internal_repos_host = "http://example.com"
 
@@ -58,6 +59,7 @@ async def test_build_package(build_failure, build_timeout, exclusive_arch, dist_
 
     async def load_rhel_config():
         return {
+            "current_y_streams": {"10": "rhel-10.2"},
             "current_z_streams": {"10": "rhel-10.0.z"},
             "upcoming_z_streams": {"10": "rhel-10.1.z"},
             "internal_repos_host": internal_repos_host,
@@ -94,8 +96,13 @@ async def test_build_package(build_failure, build_timeout, exclusive_arch, dist_
         projectname=jira_issue,
         chrootname=chroot,
     ).and_return(
-        flexmock(additional_repos=[], additional_packages=[], bootstrap="default", bootstrap_image=None)
-    ).times(0 if suffix else 1)
+        flexmock(
+            additional_repos=[f"{internal_repos_host}/brewroot/repos/rhel-10.9-z-build/latest/{build_arch}"],
+            additional_packages=[],
+            bootstrap="default",
+            bootstrap_image=None,
+        )
+    ).once()
     flexmock(ProjectChrootProxy).should_receive("edit").with_args(
         ownername=ownername,
         projectname=jira_issue,
@@ -103,10 +110,10 @@ async def test_build_package(build_failure, build_timeout, exclusive_arch, dist_
         bootstrap="image",
         bootstrap_image="registry.access.redhat.com/ubi10/ubi",
         additional_repos=[
-            f"{internal_repos_host}/brewroot/repos/{dist_git_branch}-z-build/latest/{build_arch}",
+            f"{internal_repos_host}/brewroot/repos/{buildroot_branch}{buildroot_suffix}/latest/{build_arch}",
         ],
         additional_packages=["@build"],
-    ).times(0 if suffix else 1)
+    ).once()
     flexmock(BuildProxy).should_receive("create_from_file").with_args(
         ownername=ownername,
         projectname=jira_issue,
@@ -160,6 +167,26 @@ async def test_build_package(build_failure, build_timeout, exclusive_arch, dist_
         assert any(
             url.endswith(f"test-0.1-1.el10.{exclusive_arch or 'x86_64'}.rpm") for url in result.artifacts_urls
         )
+
+
+@pytest.mark.parametrize(
+    ("branch", "rhel_config", "expected"),
+    [
+        ("rhel-9.8.0", {}, ("rhel-9.8.0", True, "9")),
+        ("rhel-10.2", {}, ("rhel-10.2", True, "10")),
+        ("c9s", {"current_y_streams": {"9": "rhel-9.9"}}, ("rhel-9.9.0", False, "9")),
+        ("c10s", {"current_y_streams": {"10": "rhel-10.2"}}, ("rhel-10.2", False, "10")),
+        ("rhel-10-main", {"current_y_streams": {"10": "rhel-10.2"}}, ("rhel-10.2", False, "10")),
+        ("c8s", {"current_z_streams": {"8": "rhel-8.10.z"}}, ("rhel-8.10.0", True, "8")),
+    ],
+)
+def test_branch_to_buildroot(branch, rhel_config, expected):
+    assert BuildPackageTool.branch_to_buildroot(branch, rhel_config) == expected
+
+
+def test_branch_to_buildroot_requires_current_stream():
+    with pytest.raises(ValueError, match="No current stream configured"):
+        BuildPackageTool.branch_to_buildroot("c9s", {})
 
 
 @pytest.mark.parametrize(

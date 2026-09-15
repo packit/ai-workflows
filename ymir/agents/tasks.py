@@ -2,8 +2,12 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import shutil
 import subprocess
+import unicodedata
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -30,7 +34,6 @@ from ymir.common.models import (
     CachedMRMetadata,
     ErrorData,
     ErrorListEntry,
-    LogOutputSchema,
     MergeRequestDetails,
     OpenMergeRequestResult,
     PackageConsolidationConfig,
@@ -38,6 +41,7 @@ from ymir.common.models import (
     PackageReproducerConfig,
     Task,
 )
+from ymir.common.reproducer_lock import resolve_clone_root
 from ymir.common.utils import get_all_sources, get_latest_candidate_build, get_latest_z_pending_build
 from ymir.common.version_utils import (
     construct_internal_branch_name,
@@ -835,54 +839,456 @@ async def set_jira_labels(
     raise last_exc  # type: ignore[misc]
 
 
-async def cache_mr_metadata(
-    redis_conn,
-    log_output: LogOutputSchema,
-    operation_type: str,
-    package: str,
-    details: str,
-) -> LogOutputSchema:
-    """
-    Cache MR metadata for sharing across streams.
+_CANONICAL_MR_TITLE_TTL_SECONDS = 30 * 24 * 60 * 60
+_CVE_ID_RE = re.compile(r"(?<![A-Z0-9])CVE-[0-9]{4}-[0-9]{4,}(?![A-Z0-9])", re.IGNORECASE)
+_MAX_CANONICAL_TITLE_LENGTH = 255
+_MAX_GENERATED_TITLE_LENGTH = 80
+_MAX_CANONICAL_TITLE_REPLACEMENT_ATTEMPTS = 3
+_JIRA_ISSUE_KEY_RE = re.compile(r"\b(?:RHEL|PACKIT)-\d+\b", re.IGNORECASE)
+_CONDITIONAL_DELETE_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+_CONDITIONAL_REPLACE_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])
+end
+return nil
+"""
 
-    Returns cached metadata if it exists, otherwise stores and returns the provided one.
 
-    Args:
-        redis_conn: Redis client connection
-        operation_type: Type of operation ("backport" or "rebase")
-        package: Package name
-        details: Operation-specific identifier (upstream_fix URL for backport, version for rebase)
-        log_output: LogOutputSchema to store if not cached
+def _cve_ids(cve_id: str | None, jira_summary: str) -> list[str]:
+    """Normalize all CVE IDs found in triage metadata and the Jira summary."""
+    return sorted({match.upper() for match in _CVE_ID_RE.findall(f"{cve_id or ''} {jira_summary}")})
 
-    Returns:
-        LogOutputSchema: With cached title if available, otherwise original title
-    """
-    # As the upstream_fix URL can be quite long, use only the hash
-    details_hash = hashlib.sha256(details.encode()).hexdigest()[:16]
-    cache_key = f"mr_metadata:{operation_type}:{package}:{details_hash}"
 
-    # Try to get previously cached metadata
+def _parse_jira_updated(value: str | None) -> datetime | None:
+    """Parse a Jira updated timestamp into UTC, treating malformed values as unavailable."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+def _normalize_jira_updated(value: str | None) -> str | None:
+    """Return a valid Jira timestamp in UTC ISO format, preserving an absent value."""
+    if value is None:
+        return None
+    parsed = _parse_jira_updated(value)
+    if parsed is None:
+        raise ValueError("Jira updated timestamp must be timezone-aware ISO-8601")
+    return parsed.isoformat()
+
+
+def _is_newer_summary(candidate: str | None, current: str | None) -> bool:
+    """Return whether two Jira updated timestamps prove the candidate is newer."""
+    candidate_updated = _parse_jira_updated(candidate)
+    current_updated = _parse_jira_updated(current)
+    return bool(candidate_updated and current_updated and candidate_updated > current_updated)
+
+
+def _validate_canonical_title(title: str, jira_issue: str) -> str:
+    """Accept only bounded, single-line display data from Jira or Redis."""
+    if not title or not title.strip() or len(title) > _MAX_CANONICAL_TITLE_LENGTH:
+        raise ValueError(
+            f"Canonical title for {jira_issue} must be 1-{_MAX_CANONICAL_TITLE_LENGTH} characters"
+        )
+    prohibited_categories = {"Cc", "Cf", "Zl", "Zp"}
+    if any(unicodedata.category(character) in prohibited_categories for character in title):
+        raise ValueError(f"Canonical title for {jira_issue} must be a single display line")
+    return title
+
+
+def _validate_generated_title(title: str, jira_issue: str) -> str:
+    """Enforce the stricter title-agent output contract before publication."""
+    title = _validate_canonical_title(title, jira_issue)
+    if len(title) > _MAX_GENERATED_TITLE_LENGTH:
+        raise ValueError(
+            f"Generated title for {jira_issue} must be at most {_MAX_GENERATED_TITLE_LENGTH} characters"
+        )
+    if _JIRA_ISSUE_KEY_RE.search(title):
+        raise ValueError(f"Generated title for {jira_issue} must not contain a Jira issue key")
+    return title
+
+
+async def _get_cached_canonical_metadata(
+    redis_conn, cache_key: str, jira_issue: str, is_cve: bool
+) -> tuple[CachedMRMetadata, str] | None:
+    """Return valid cached metadata, compare-deleting malformed records only."""
     cached = await redis_conn.get(cache_key)
-    if cached is not None:
-        logger.info(f"MR metadata cache HIT for {operation_type}/{package}/{details} (key: {cache_key})")
+    if cached is None:
+        return None
+    try:
+        metadata = CachedMRMetadata.model_validate_json(cached)
+        validator = _validate_canonical_title if is_cve else _validate_generated_title
+        validator(metadata.title, jira_issue)
+        _normalize_jira_updated(metadata.summary_updated)
+        return metadata, cached
+    except ValueError as error:
+        logger.warning("Discarding invalid canonical title cache record %s: %s", cache_key, error)
         try:
-            metadata = CachedMRMetadata.model_validate_json(cached)
-            # Override the title by value stored in the cache
-            return LogOutputSchema(title=metadata.title, description=log_output.description)
-        except ValueError as e:
-            logger.warning(f"Error validating cached MR metadata for key {cache_key}: {e}")
+            await redis_conn.eval(_CONDITIONAL_DELETE_LUA, 1, cache_key, cached)
+        except Exception:
+            logger.warning(
+                "Could not delete invalid canonical title cache record %s", cache_key, exc_info=True
+            )
+    return None
 
-    # Store new metadata on cache miss or validation error
-    metadata = CachedMRMetadata(
-        operation_type=operation_type,
-        title=log_output.title,
-        package=package,
-        details=details,
+
+def changelog_entry_count(local_clone: Path, package: str) -> int | None:
+    """Return the explicit changelog entry count, or None for %autochangelog."""
+    with Specfile(local_clone / f"{package}.spec") as spec:
+        if spec.has_autochangelog:
+            return None
+        with spec.changelog() as changelog:
+            return len(changelog)
+
+
+def escape_rpm_changelog_text(value: str) -> str:
+    """Escape RPM macro markers so changelog text is interpreted literally."""
+    return value.replace("%", "%%")
+
+
+def canonical_title_mentions_components(title: str, components: list[str]) -> bool:
+    """Return whether a title names every rebuild dependency component."""
+    normalized_title = title.casefold()
+    return all(component.casefold() in normalized_title for component in components)
+
+
+def ensure_canonical_changelog_title(
+    local_clone: Path,
+    package: str,
+    title: str,
+    expected_entry_count: int | None,
+) -> None:
+    """Replace exactly one new explicit changelog entry's descriptive line with ``title``.
+
+    ``expected_entry_count`` is captured before the Log Agent runs. This prevents
+    a failed or non-compliant Log Agent from causing an older entry to be changed.
+    ``None`` denotes a %autochangelog spec, which has no explicit entry to edit.
+    """
+    if expected_entry_count is None:
+        return
+    with Specfile(local_clone / f"{package}.spec") as spec:
+        if spec.has_autochangelog:
+            return
+        with spec.changelog() as changelog:
+            if len(changelog) != expected_entry_count + 1:
+                raise RuntimeError(
+                    f"Expected one new changelog entry for {package}, "
+                    f"found {len(changelog) - expected_entry_count}"
+                )
+            entry = changelog[-1]
+            for index, line in enumerate(entry.content):
+                is_jira_reference = re.match(r"^\s*(?:[-*]\s*)?(?:Resolves|Related):", line, re.IGNORECASE)
+                if line.strip() and not is_jira_reference:
+                    entry.content[index] = f"- {escape_rpm_changelog_text(title)}"
+                    return
+    raise RuntimeError(f"New changelog entry for {package} has no descriptive line")
+
+
+def _canonical_mr_title_key(
+    package: str,
+    jira_summary: str,
+    cve_id: str | None,
+    jira_issue: str,
+    clone_root: str | None = None,
+) -> str:
+    """Return the stable cross-stream key for an issue family."""
+    cve_ids = _cve_ids(cve_id, jira_summary)
+    if cve_ids:
+        issue_identity = "cve:" + ",".join(cve_ids)
+    else:
+        issue_identity = "jira:" + (clone_root or jira_issue).strip().upper()
+
+    identity_digest = hashlib.sha256(issue_identity.encode()).hexdigest()[:16]
+    return f"mr_metadata:v2:{package}:{identity_digest}"
+
+
+async def resolve_canonical_mr_title(
+    redis_conn,
+    *,
+    package: str,
+    jira_issue: str,
+    jira_summary: str,
+    cve_id: str | None,
+    clone_root: str | None = None,
+    generated_title: str | None = None,
+    summary_updated: str | None = None,
+    _replacement_attempts: int = 0,
+) -> str:
+    """Read or atomically publish the canonical title for one issue family.
+
+    The Redis key is stable for the package/family. A matching summary digest
+    reuses the record; only a newer ``summary_updated`` value from its source
+    Jira issue compare-and-swaps a replacement. CVE families use the Jira
+    summary verbatim; non-CVE families require a validated generated title.
+    """
+    jira_summary = _validate_canonical_title(jira_summary, jira_issue)
+    summary_updated = _normalize_jira_updated(summary_updated)
+
+    cache_key = _canonical_mr_title_key(package, jira_summary, cve_id, jira_issue, clone_root)
+    cve_ids = _cve_ids(cve_id, jira_summary)
+    issue_identity = ",".join(cve_ids) if cve_ids else (clone_root or jira_issue).strip().upper()
+    summary_digest = hashlib.sha256(jira_summary.encode()).hexdigest()[:16]
+    cached = await _get_cached_canonical_metadata(redis_conn, cache_key, jira_issue, bool(cve_ids))
+    if cached is not None:
+        cached_metadata, cached_value = cached
+        if cached_metadata.summary_source_issue != jira_issue.upper():
+            logger.info("Reused sibling canonical MR title for %s from %s", jira_issue, cache_key)
+            return cached_metadata.title
+        if cached_metadata.summary_digest == summary_digest or not summary_updated:
+            logger.info("Reused canonical MR title for %s from %s", jira_issue, cache_key)
+            return cached_metadata.title
+        if cached_metadata.summary_updated and not _is_newer_summary(
+            summary_updated, cached_metadata.summary_updated
+        ):
+            logger.info("Kept newer canonical MR title for %s from %s", jira_issue, cache_key)
+            return cached_metadata.title
+
+    title = jira_summary if cve_ids else generated_title
+    if title is None:
+        raise ValueError(f"Non-CVE issue {jira_issue} requires a generated title on cache miss")
+    title = (
+        _validate_canonical_title(title, jira_issue)
+        if cve_ids
+        else _validate_generated_title(title, jira_issue)
     )
-    await redis_conn.set(cache_key, metadata.model_dump_json())
-    logger.info(f"MR metadata cache stored for {operation_type}/{package}/{details} (key: {cache_key})")
+    metadata = CachedMRMetadata(
+        title=title,
+        package=package,
+        issue_identity=issue_identity,
+        summary_source_issue=jira_issue.upper(),
+        summary_digest=summary_digest,
+        summary_updated=summary_updated,
+    )
+    metadata_json = metadata.model_dump_json()
+    if cached is None:
+        created = await redis_conn.set(
+            cache_key,
+            metadata_json,
+            nx=True,
+            ex=_CANONICAL_MR_TITLE_TTL_SECONDS,
+        )
+    else:
+        created = await redis_conn.eval(
+            _CONDITIONAL_REPLACE_LUA,
+            1,
+            cache_key,
+            cached_value,
+            metadata_json,
+            _CANONICAL_MR_TITLE_TTL_SECONDS,
+        )
+    if created:
+        logger.info("Published canonical MR title for %s at %s", jira_issue, cache_key)
+        return title
 
-    return log_output
+    cached = await _get_cached_canonical_metadata(redis_conn, cache_key, jira_issue, bool(cve_ids))
+    if cached is None:
+        if _replacement_attempts >= _MAX_CANONICAL_TITLE_REPLACEMENT_ATTEMPTS:
+            raise RuntimeError(f"Could not publish current canonical MR title for {jira_issue}")
+        return await resolve_canonical_mr_title(
+            redis_conn,
+            package=package,
+            jira_issue=jira_issue,
+            jira_summary=jira_summary,
+            cve_id=cve_id,
+            clone_root=clone_root,
+            generated_title=generated_title,
+            summary_updated=summary_updated,
+            _replacement_attempts=_replacement_attempts + 1,
+        )
+    cached_metadata, cached_value = cached
+    if (
+        cached_metadata.summary_source_issue == jira_issue.upper()
+        and summary_updated
+        and cached_metadata.summary_digest != summary_digest
+        and (
+            not cached_metadata.summary_updated
+            or _is_newer_summary(summary_updated, cached_metadata.summary_updated)
+        )
+    ):
+        replaced = await redis_conn.eval(
+            _CONDITIONAL_REPLACE_LUA,
+            1,
+            cache_key,
+            cached_value,
+            metadata_json,
+            _CANONICAL_MR_TITLE_TTL_SECONDS,
+        )
+        if replaced:
+            logger.info("Replaced stale canonical MR title for %s at %s", jira_issue, cache_key)
+            return title
+        if _replacement_attempts >= _MAX_CANONICAL_TITLE_REPLACEMENT_ATTEMPTS:
+            raise RuntimeError(f"Could not publish current canonical MR title for {jira_issue}")
+        return await resolve_canonical_mr_title(
+            redis_conn,
+            package=package,
+            jira_issue=jira_issue,
+            jira_summary=jira_summary,
+            cve_id=cve_id,
+            clone_root=clone_root,
+            generated_title=generated_title,
+            summary_updated=summary_updated,
+            _replacement_attempts=_replacement_attempts + 1,
+        )
+    logger.info("Reused canonical MR title for %s from %s", jira_issue, cache_key)
+    return cached_metadata.title
+
+
+async def _resolve_current_canonical_mr_title(
+    redis_conn,
+    *,
+    available_tools: list[Tool],
+    package: str,
+    jira_issue: str,
+    cve_id: str | None,
+    generate_title: Callable[[str], Awaitable[str]],
+    jira_issues: list[str] | None = None,
+    consolidated_cve_ids: dict[str, str | None] | None = None,
+) -> str | None:
+    """Resolve a canonical title only when every included issue is one family.
+
+    A mixed-family consolidation returns ``None`` so its aggregate title is not
+    read from or published to an individual family record.
+    """
+    details = await run_tool(
+        "get_jira_details",
+        issue_key=jira_issue,
+        available_tools=available_tools,
+    )
+    jira_summary = details.get("fields", {}).get("summary")
+    summary_updated = details.get("fields", {}).get("updated")
+    if not isinstance(jira_summary, str):
+        raise ValueError(f"Jira issue {jira_issue} has no summary")
+    jira_summary = _validate_canonical_title(jira_summary, jira_issue)
+    if summary_updated is not None and not isinstance(summary_updated, str):
+        raise ValueError("Jira updated timestamp must be a string")
+    summary_updated = _normalize_jira_updated(summary_updated)
+    details_by_issue = {jira_issue.upper(): details}
+
+    async def fetch_issue_details(issue_key: str) -> dict:
+        issue_details = details_by_issue.get(issue_key.upper())
+        if issue_details is None:
+            issue_details = await run_tool(
+                "get_jira_details",
+                issue_key=issue_key,
+                available_tools=available_tools,
+            )
+            details_by_issue[issue_key.upper()] = issue_details
+        return issue_details
+
+    async def family_identity(issue_key: str, issue_cve_id: str | None) -> tuple[str, str | None]:
+        issue_details = await fetch_issue_details(issue_key)
+        summary = issue_details.get("fields", {}).get("summary")
+        if not isinstance(summary, str):
+            raise ValueError(f"Jira issue {issue_key} has no summary")
+        cve_ids = _cve_ids(issue_cve_id, summary)
+        if cve_ids:
+            return "cve:" + ",".join(cve_ids), None
+
+        async def fetch_issuelinks(linked_issue_key: str) -> list[dict]:
+            linked_details = await fetch_issue_details(linked_issue_key)
+            return linked_details.get("fields", {}).get("issuelinks", [])
+
+        try:
+            clone_root = await resolve_clone_root(issue_key, fetch_issuelinks)
+        except Exception:
+            clone_root = issue_key.upper()
+            logger.warning(
+                "Failed to resolve clone root for %s; using issue key for canonical title",
+                issue_key,
+                exc_info=True,
+            )
+        return "jira:" + clone_root, clone_root
+
+    all_issues = list(dict.fromkeys([jira_issue, *(jira_issues or [])]))
+    consolidated_cve_ids = {key.upper(): value for key, value in (consolidated_cve_ids or {}).items()}
+    families = await asyncio.gather(
+        *(
+            family_identity(
+                issue,
+                cve_id if issue.upper() == jira_issue.upper() else consolidated_cve_ids.get(issue.upper()),
+            )
+            for issue in all_issues
+        )
+    )
+    if len({identity for identity, _ in families}) != 1:
+        logger.info("Skipping canonical title for multi-family consolidated issues: %s", all_issues)
+        return None
+
+    family_identity_value, clone_root = families[0]
+    cve_id = family_identity_value.removeprefix("cve:") if family_identity_value.startswith("cve:") else None
+    cache_key = _canonical_mr_title_key(package, jira_summary, cve_id, jira_issue, clone_root)
+    cached = await _get_cached_canonical_metadata(
+        redis_conn, cache_key, jira_issue, bool(_cve_ids(cve_id, jira_summary))
+    )
+    if cached is not None:
+        cached_metadata, _ = cached
+        summary_digest = hashlib.sha256(jira_summary.encode()).hexdigest()[:16]
+        if cached_metadata.summary_source_issue != jira_issue.upper():
+            return cached_metadata.title
+        if cached_metadata.summary_digest == summary_digest or not isinstance(summary_updated, str):
+            return cached_metadata.title
+        if cached_metadata.summary_updated and not _is_newer_summary(
+            summary_updated, cached_metadata.summary_updated
+        ):
+            return cached_metadata.title
+
+    generated_title = None if _cve_ids(cve_id, jira_summary) else await generate_title(jira_summary)
+    return await resolve_canonical_mr_title(
+        redis_conn,
+        package=package,
+        jira_issue=jira_issue,
+        jira_summary=jira_summary,
+        cve_id=cve_id,
+        clone_root=clone_root,
+        generated_title=generated_title,
+        summary_updated=summary_updated,
+    )
+
+
+async def resolve_current_canonical_mr_title(
+    redis_conn,
+    *,
+    available_tools: list[Tool],
+    package: str,
+    jira_issue: str,
+    cve_id: str | None,
+    generate_title: Callable[[str], Awaitable[str]],
+    jira_issues: list[str] | None = None,
+    consolidated_cve_ids: dict[str, str | None] | None = None,
+) -> str | None:
+    """Return canonical metadata when available, otherwise use ordinary log generation.
+
+    Canonical title lookup is an optional enhancement: Jira, Redis, validation,
+    and title-generation failures are logged and converted to ``None``.
+    """
+    try:
+        return await _resolve_current_canonical_mr_title(
+            redis_conn,
+            available_tools=available_tools,
+            package=package,
+            jira_issue=jira_issue,
+            cve_id=cve_id,
+            generate_title=generate_title,
+            jira_issues=jira_issues,
+            consolidated_cve_ids=consolidated_cve_ids,
+        )
+    except Exception:
+        logger.warning(
+            "Could not resolve canonical title for %s; using normal log generation",
+            jira_issue,
+            exc_info=True,
+        )
+        return None
 
 
 def get_unpacked_sources(local_clone: Path, package: str) -> Path:

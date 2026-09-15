@@ -230,6 +230,7 @@ async def find_rebuild_siblings(
                 consolidated.append(
                     ConsolidatedIssue(
                         issue_key=candidate_key,
+                        cve_id=cve_id,
                         dependency_issue=analysis.dependency_issue,
                         dependency_component=analysis.dependency_component,
                     )

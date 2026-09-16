@@ -3,6 +3,7 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from beeai_framework.agents.tool_calling.utils import ToolCallCheckerConfig
 from beeai_framework.backend import ChatModel, ChatModelParameters
@@ -17,6 +18,14 @@ from ymir.common.mock_repos import (
 from ymir.common.utils import get_absolute_path, mcp_tools, run_tool  # noqa: F401 — re-exported
 
 logger = logging.getLogger(__name__)
+
+
+def patch_fetch_tool_name(patch_url: str) -> str:
+    """Select authenticated patch retrieval for HTTPS URLs hosted on GitHub."""
+    parsed_url = urlparse(patch_url)
+    if parsed_url.scheme == "https" and parsed_url.hostname in {"github.com", "www.github.com"}:
+        return "get_github_patch_full"
+    return "get_patch_from_url"
 
 
 def resolve_chat_model_override(agent_type: str) -> None:

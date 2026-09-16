@@ -11,13 +11,13 @@ from ymir.agents.backport_agent import (
     _inherit_prep_error,
     _move_build_logs,
     _parse_upstream_patches,
-    _patch_fetch_tool_name,
     _remote_branch_matches_commit,
     _restore_inherited_publication,
     _schedule_inherit_cleanup_retry,
     _update_fix_attempts_log,
     _validate_inherited_staged_files,
 )
+from ymir.agents.utils import patch_fetch_tool_name
 from ymir.agents.ystream_inherit import (
     BrewSource,
     InheritCandidateError,
@@ -78,16 +78,18 @@ def test_parse_upstream_patches_rejects_empty_entries(patches):
 @pytest.mark.parametrize(
     ("patch_url", "tool_name"),
     [
-        ("https://github.com/owner/repo/pull/1.patch", "get_github_patch"),
-        ("https://www.github.com/owner/repo/commit/deadbeef.patch", "get_github_patch"),
-        ("https://github.com/owner/repo/pull/1.diff?download=1", "get_github_patch"),
-        ("https://github.com/owner/repo/raw/main/fix.patch#contents", "get_github_patch"),
+        ("https://github.com/owner/repo/pull/1.patch", "get_github_patch_full"),
+        ("https://www.github.com/owner/repo/commit/deadbeef.patch", "get_github_patch_full"),
+        ("https://github.com/owner/repo/pull/1/", "get_github_patch_full"),
+        ("https://github.com/owner/repo/commit/deadbeef", "get_github_patch_full"),
+        ("https://github.com/owner/repo/pull/1.diff?download=1", "get_github_patch_full"),
+        ("https://github.com/owner/repo/raw/main/fix.patch#contents", "get_github_patch_full"),
         ("http://github.com/owner/repo/pull/1.patch", "get_patch_from_url"),
         ("https://gitlab.gnome.org/GNOME/gvfs/-/commit/ea1322da.patch", "get_patch_from_url"),
     ],
 )
 def test_patch_fetch_tool_name(patch_url, tool_name):
-    assert _patch_fetch_tool_name(patch_url) == tool_name
+    assert patch_fetch_tool_name(patch_url) == tool_name
 
 
 def _state(**updates):

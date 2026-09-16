@@ -35,6 +35,7 @@ from ymir.agents.utils import (
     get_tool_call_checker_config,
     is_reasoning_enabled,
     mcp_tools,
+    patch_fetch_tool_name,
     render_template,
     resolve_chat_model_override,
     run_tool,
@@ -477,6 +478,9 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
                 "get_jira_details",
                 "set_jira_fields",
                 "get_patch_from_url",
+                "get_github_patch",
+                "get_github_pull_request",
+                "get_github_compare",
                 "search_jira_issues",
                 "zstream_search",
                 "get_maintainer_rules",
@@ -497,6 +501,7 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
             ConditionalRequirement("get_shared_rules", only_after=["get_jira_details"]),
             ConditionalRequirement(RunShellCommandTool, only_after=["get_jira_details"]),
             ConditionalRequirement("get_patch_from_url", only_after=["get_jira_details"]),
+            ConditionalRequirement("get_github_patch", only_after=["get_jira_details"]),
             ConditionalRequirement("set_jira_fields", only_after=["get_jira_details"]),
             ConditionalRequirement("search_jira_issues", only_after=["get_jira_details"]),
             ConditionalRequirement("zstream_search", only_after=["get_jira_details"]),
@@ -507,12 +512,19 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
         instructions=[
             "Be proactive in your search for fixes and do not give up easily.",
             "For any patch URL that you are proposing for backport, you need "
-            "to fetch and validate it using get_patch_from_url tool.",
-            "Do not modify the patch URL in your final answer after it has been "
-            "validated with get_patch_from_url.",
-            "When constructing patch URLs for upstream commits, always use https://. "
-            "If https:// fails when validating the patch with get_patch_from_url, "
-            "retry with http:// instead.",
+            "to fetch and validate it: use get_github_patch for HTTPS GitHub URLs "
+            "and get_patch_from_url for all other URLs.",
+            "Prefer authenticated GitHub tools over shell commands for every supported "
+            "GitHub operation: get_github_patch for patches, get_github_pull_request "
+            "for pull-request metadata, and get_github_compare for comparisons. This "
+            "preserves the shared unauthenticated rate limit. Never use curl, wget, "
+            "or another unauthenticated shell request when one of these tools supports "
+            "the operation. If an unauthenticated GitHub request gets rate-limited or "
+            "times out, retry it through the corresponding authenticated GitHub tool.",
+            "Do not modify the patch URL in your final answer after it has been validated.",
+            "When constructing non-GitHub patch URLs for upstream commits, always use "
+            "https://. If https:// fails when validating one, retry with http:// instead. "
+            "Keep HTTPS GitHub URLs on the authenticated GitHub tools.",
             "For gitweb-hosted projects (URLs containing 'gitweb'), always use "
             "the 'a=patch' action (not 'a=commitdiff_plain') when constructing "
             "patch URLs. Example: ?p=project.git;a=patch;h=<commit_hash>",
@@ -978,7 +990,7 @@ async def run_workflow(
                 for idx, url in enumerate(patch_urls):
                     try:
                         content = await run_tool(
-                            "get_patch_from_url",
+                            patch_fetch_tool_name(url),
                             patch_url=url,
                             available_tools=gateway_tools,
                         )

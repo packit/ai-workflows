@@ -1,6 +1,7 @@
 """Unit tests for privileged GitHub MCP tools."""
 
 from contextlib import asynccontextmanager
+from json import JSONDecodeError
 
 import aiohttp
 import pytest
@@ -9,8 +10,10 @@ from beeai_framework.tools import ToolError
 from flexmock import flexmock
 
 from ymir.tools.privileged.github import (
+    MAX_GITHUB_PATCH_PREVIEW_LENGTH,
     GetGithubCompareTool,
     GetGithubCompareToolInput,
+    GetGithubPatchFullTool,
     GetGithubPatchTool,
     GetGithubPatchToolInput,
     GetGithubPullRequestTool,
@@ -60,6 +63,23 @@ def _mock_aiohttp_get_error(error_msg="error"):
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(fake_get)
 
 
+def _mock_aiohttp_get_malformed_json():
+    """Mock aiohttp.ClientSession.get to fail while decoding its JSON response."""
+
+    async def malformed_json():
+        raise JSONDecodeError("Expecting value", "not json", 0)
+
+    @asynccontextmanager
+    async def fake_get(url, **kwargs):
+        yield flexmock(
+            json=malformed_json,
+            raise_for_status=lambda: None,
+            status=200,
+        )
+
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(fake_get)
+
+
 # ---------------------------------------------------------------------------
 # GetGithubPatchTool
 # ---------------------------------------------------------------------------
@@ -83,6 +103,16 @@ class TestGetGithubPatchTool:
                 "https://github.com/owner/repo/commit/98599f6d.diff#patch",
                 "https://api.github.com/repos/owner/repo/commits/98599f6d",
                 "application/vnd.github.diff",
+            ),
+            (
+                "https://github.com/owner/repo/pull/42/",
+                "https://api.github.com/repos/owner/repo/pulls/42",
+                "application/vnd.github.patch",
+            ),
+            (
+                "https://github.com/owner/repo/commit/98599f6d",
+                "https://api.github.com/repos/owner/repo/commits/98599f6d",
+                "application/vnd.github.patch",
             ),
         ],
     )
@@ -118,11 +148,52 @@ class TestGetGithubPatchTool:
         assert captured_headers[0]["Authorization"] == "Bearer test_patch_token"
 
     @pytest.mark.asyncio
+    async def test_large_patch_is_truncated_for_llm_preview(self, tool):
+        patch_content = "x" * (MAX_GITHUB_PATCH_PREVIEW_LENGTH + 1)
+        _mock_aiohttp_get(text_data=patch_content)
+
+        result = await tool.run(
+            input=GetGithubPatchToolInput(patch_url="https://github.com/owner/repo/pull/42.patch")
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert result.result.startswith("x" * MAX_GITHUB_PATCH_PREVIEW_LENGTH)
+        assert f"of {len(patch_content)} total" in result.result
+
+    @pytest.mark.asyncio
     async def test_invalid_patch_url(self, tool):
         with pytest.raises(ToolError, match="Invalid GitHub patch URL"):
             await tool.run(
                 input=GetGithubPatchToolInput(patch_url="http://github.com/owner/repo/pull/42.patch")
             ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+
+class TestGetGithubPatchFullTool:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("patch_url", "request_url"),
+        [
+            (
+                "https://github.com/owner/repo/pull/42",
+                "https://api.github.com/repos/owner/repo/pulls/42",
+            ),
+            (
+                "https://github.com/owner/repo/commit/98599f6d/",
+                "https://api.github.com/repos/owner/repo/commits/98599f6d",
+            ),
+        ],
+    )
+    async def test_bare_url_returns_full_patch_for_deterministic_application(self, patch_url, request_url):
+        patch_content = "x" * (MAX_GITHUB_PATCH_PREVIEW_LENGTH + 1)
+        captured_urls, captured_headers = _mock_aiohttp_get(text_data=patch_content)
+        tool = GetGithubPatchFullTool(options={"working_directory": None})
+
+        result = await tool.run(input=GetGithubPatchToolInput(patch_url=patch_url)).middleware(
+            GlobalTrajectoryMiddleware(pretty=True)
+        )
+
+        assert result.result == patch_content
+        assert captured_urls == [request_url]
+        assert captured_headers[0]["Accept"] == "application/vnd.github.patch"
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +219,7 @@ class TestGetGithubPullRequestTool:
         )
 
         result = await tool.run(
-            input=GetGithubPullRequestToolInput(pr_url="https://github.com/torvalds/linux/pull/42")
+            input=GetGithubPullRequestToolInput(pr_url="https://GitHub.COM/torvalds/linux/pull/42")
         ).middleware(GlobalTrajectoryMiddleware(pretty=True))
 
         data = result.result
@@ -205,6 +276,15 @@ class TestGetGithubPullRequestTool:
             ).middleware(GlobalTrajectoryMiddleware(pretty=True))
 
     @pytest.mark.asyncio
+    async def test_malformed_json_is_reported_as_tool_error(self, tool):
+        _mock_aiohttp_get_malformed_json()
+
+        with pytest.raises(ToolError, match="Failed to fetch GitHub PR"):
+            await tool.run(
+                input=GetGithubPullRequestToolInput(pr_url="https://github.com/owner/repo/pull/999")
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    @pytest.mark.asyncio
     async def test_pr_url_with_patch_suffix(self, tool, monkeypatch):
         """Test PR URL with .patch suffix."""
         monkeypatch.setenv("GITHUB_READONLY_TOKEN", "test_token")  # pragma: allowlist secret
@@ -249,7 +329,7 @@ class TestGetGithubCompareTool:
 
         result = await tool.run(
             input=GetGithubCompareToolInput(
-                repo_url="https://github.com/owner/repo",
+                repo_url="https://GITHUB.com/owner/repo",
                 base_ref="v1.0",
                 target_ref="v2.0",
             )
@@ -301,6 +381,19 @@ class TestGetGithubCompareTool:
         """Test that API errors are properly handled."""
         monkeypatch.setenv("GITHUB_READONLY_TOKEN", "test_token")  # pragma: allowlist secret
         _mock_aiohttp_get_error("timeout")
+
+        with pytest.raises(ToolError, match="Failed to fetch GitHub compare"):
+            await tool.run(
+                input=GetGithubCompareToolInput(
+                    repo_url="https://github.com/owner/repo",
+                    base_ref="old",
+                    target_ref="new",
+                )
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    @pytest.mark.asyncio
+    async def test_malformed_json_is_reported_as_tool_error(self, tool):
+        _mock_aiohttp_get_malformed_json()
 
         with pytest.raises(ToolError, match="Failed to fetch GitHub compare"):
             await tool.run(

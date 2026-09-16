@@ -196,7 +196,15 @@ You must decide between one of the following actions. Follow these guidelines to
    2.3. Validate the Fix and URL
    * First, make sure the URL is an actual patch/commit link, not an issue or bug tracker reference
      (e.g. reject URLs containing /issues/, /bug/, bugzilla, jira, /tickets/)
-   * Use the get_patch_from_url tool to fetch content from any patch/commit URL you intend to use
+   * Use `get_github_patch` for HTTPS GitHub URLs and `get_patch_from_url` for all other
+     patch/commit URLs you intend to use
+   * Prefer the authenticated GitHub MCP tools over shell commands for every supported
+     GitHub operation: use `get_github_patch` for patches,
+     `get_github_pull_request` for pull-request metadata, and `get_github_compare` for
+     comparisons. This avoids exhausting the shared unauthenticated GitHub rate limit.
+     Never use `curl`, `wget`, or another unauthenticated shell request when one of
+     these tools supports the operation. If an unauthenticated GitHub request is
+     rate-limited or times out, retry it through the corresponding authenticated tool.
    * Once you have the content, you must validate two things:
      1. **Is it a patch/diff?** Look for diff indicators like:
         - `diff --git` headers
@@ -278,8 +286,9 @@ You must decide between one of the following actions. Follow these guidelines to
         function names in commit messages:
         `git log --all --grep="<issue-number-or-CVE-ID>"`
      If you find follow-up commits, evaluate each one against the criteria
-     above. For those that qualify, validate them the same way (fetch via
-     get_patch_from_url and verify they are real patches) and include them
+     above. For those that qualify, validate them the same way (use
+     `get_github_patch` for HTTPS GitHub URLs and `get_patch_from_url` otherwise,
+     then verify they are real patches) and include them
      in your patch_urls list, ordered chronologically (earliest first).
    * **Prefer individual commit URLs; collapse to PR/MR when appropriate**:
      Start by searching for individual fixing commits and use their
@@ -293,7 +302,8 @@ You must decide between one of the following actions. Follow these guidelines to
      When using a PR/MR URL, construct it as:
      - GitHub PR: `https://github.com/org/repo/pull/N.patch`
      - GitLab MR: `https://gitlab.com/org/repo/-/merge_requests/N.patch`
-     Fetch and validate any URL via `get_patch_from_url` before using it.
+     Fetch and validate GitHub URLs via `get_github_patch`; use
+     `get_patch_from_url` for all other URLs before using them.
    * **Use commits from the target branch, not the PR source branch**:
      When a PR/MR is merged via rebase or squash on GitHub/GitLab, the
      commit hashes on the target branch (e.g. `main`, `master`) differ

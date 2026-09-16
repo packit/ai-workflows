@@ -551,6 +551,36 @@ def test_reproducer_agent_enables_context_management():
     assert llm.allow_parallel_tool_calls is True
 
 
+def test_reproducer_agent_exposes_authenticated_github_patch_tool(monkeypatch):
+    captured = {}
+
+    def reasoning_agent_factory(**kwargs):
+        captured.update(kwargs)
+        return flexmock()
+
+    monkeypatch.setattr(r_agent, "ReasoningAgent", reasoning_agent_factory)
+    monkeypatch.setattr(r_agent, "get_chat_model", lambda: flexmock(allow_parallel_tool_calls=False))
+    monkeypatch.setattr(r_agent, "is_reasoning_enabled", lambda: False)
+    monkeypatch.setattr(r_agent, "get_tool_call_checker_config", lambda: None)
+
+    create_reproducer_agent(
+        gateway_tools=[
+            flexmock(name="get_patch_from_url"),
+            flexmock(name="get_github_patch"),
+            flexmock(name="get_github_pull_request"),
+            flexmock(name="get_github_compare"),
+        ]
+    )
+
+    tool_names = {tool.name for tool in captured["tools"]}
+    assert {
+        "get_patch_from_url",
+        "get_github_patch",
+        "get_github_pull_request",
+        "get_github_compare",
+    } <= tool_names
+
+
 async def _git_init_with_main(repo: Path) -> None:
     await check_subprocess(["git", "init", "-b", "main"], cwd=repo)
     await check_subprocess(["git", "config", "user.email", "test@example.com"], cwd=repo)

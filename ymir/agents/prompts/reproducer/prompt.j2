@@ -67,7 +67,15 @@ Execute the following steps in order.
 
    1.4. If `{{ triage_summary }}` is provided, use it as the primary source of understanding for the bug throughout the workflow. It contains the triage agent's analysis of the issue and may include details about the root cause, affected code paths, and patch validation results.
 
-   1.5. If `{{ patch_urls }}` is provided, it is already a list of URLs. For each URL, call `get_patch_from_url` to fetch the patch content and study what the fix changes — this informs what the reproducer should test (the pre-fix behavior). By reading the fix backwards — from what was changed to what was there before — you can determine how to trigger the original bug.
+   1.5. If `{{ patch_urls }}` is provided, it is already a list of URLs. For each HTTPS GitHub URL, call `get_github_patch`; for every other URL, call `get_patch_from_url`. Study what the fix changes — this informs what the reproducer should test (the pre-fix behavior). By reading the fix backwards — from what was changed to what was there before — you can determine how to trigger the original bug.
+
+   For every supported GitHub operation, prefer authenticated GitHub MCP tools over shell
+   commands: use `get_github_patch` for patches, `get_github_pull_request` for
+   pull-request metadata, and `get_github_compare` for comparisons. This avoids
+   exhausting the shared unauthenticated GitHub rate limit. Never use `curl`, `wget`,
+   or another unauthenticated shell request when one of these tools supports the
+   operation. If an unauthenticated GitHub request is rate-limited or times out, retry
+   it through the corresponding authenticated tool.
 
    **Critical — understand the fix's activation conditions:** When the patch introduces thresholds, limits, or new protection mechanisms, extract the **default values** from the code (look for default constants, initializers, `#define`, or default function arguments). Your reproducer payload MUST exceed these defaults so that the fix actually activates and changes behavior. If the fix adds a protection that only triggers above 64 MiB, a 1 MB payload will behave identically on both fixed and unfixed systems — the test will be useless. Design your test input to land squarely in the range where the fix makes a difference.
 

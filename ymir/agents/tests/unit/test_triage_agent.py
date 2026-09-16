@@ -57,6 +57,35 @@ def test_user_triggered_always_posts(resolution):
     assert _should_update_jira(resolution=resolution, user_triggered=True) is True
 
 
+def test_triage_agent_exposes_authenticated_github_patch_tool(monkeypatch):
+    captured = {}
+
+    def reasoning_agent_factory(**kwargs):
+        captured.update(kwargs)
+        return flexmock()
+
+    monkeypatch.setattr(t_agent, "ReasoningAgent", reasoning_agent_factory)
+    monkeypatch.setattr(t_agent, "get_chat_model", lambda: None)
+    monkeypatch.setattr(t_agent, "is_reasoning_enabled", lambda: False)
+    monkeypatch.setattr(t_agent, "get_tool_call_checker_config", lambda: None)
+
+    gateway_tools = [
+        flexmock(name="get_patch_from_url"),
+        flexmock(name="get_github_patch"),
+        flexmock(name="get_github_pull_request"),
+        flexmock(name="get_github_compare"),
+    ]
+    t_agent.create_triage_agent(gateway_tools)
+
+    tool_names = {tool.name for tool in captured["tools"]}
+    assert {
+        "get_patch_from_url",
+        "get_github_patch",
+        "get_github_pull_request",
+        "get_github_compare",
+    } <= tool_names
+
+
 @pytest.mark.parametrize(
     "resolution",
     [

@@ -85,6 +85,9 @@ _PROMPT_TEMPLATE = "reproducer/prompt.j2"
 _REPRODUCER_MCP_TOOLS = [
     "get_jira_details",
     "get_patch_from_url",
+    "get_github_patch",
+    "get_github_pull_request",
+    "get_github_compare",
     "get_maintainer_rules",
     "get_shared_rules",
     "clone_repository",
@@ -133,8 +136,16 @@ def create_reproducer_agent(gateway_tools, local_tool_options=None, extra_middle
             "Always return the Testing Farm machine by calling cancel_testing_farm_request "
             "when done, even if the reproducer failed.",
             "When constructing patch URLs for upstream commits, always use https://. "
-            "If https:// fails when validating the patch with get_patch_from_url, "
-            "retry with http:// instead.",
+            "Use get_github_patch for HTTPS GitHub URLs and get_patch_from_url for all other URLs. "
+            "For non-GitHub URLs, retry with http:// if https:// fails when validating a patch; "
+            "keep GitHub URLs on the authenticated GitHub tools.",
+            "Prefer authenticated GitHub tools over shell commands for every supported "
+            "GitHub operation: get_github_patch for patches, get_github_pull_request "
+            "for pull-request metadata, and get_github_compare for comparisons. This "
+            "preserves the shared unauthenticated rate limit. Never use curl, wget, "
+            "or another unauthenticated shell request when one of these tools supports "
+            "the operation. If an unauthenticated GitHub request gets rate-limited or "
+            "times out, retry it through the corresponding authenticated GitHub tool.",
             "Never use shallow clones (--depth) when cloning upstream repositories.",
             "When conversation history contains failed approaches, large obsolete dumps, or "
             "noise you no longer need, call manage_context in the SAME turn as your next useful "

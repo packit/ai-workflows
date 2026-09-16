@@ -15,6 +15,7 @@ SECURITY:
 
 import os
 import re
+from json import JSONDecodeError
 from urllib.parse import urlparse
 
 import aiohttp
@@ -27,12 +28,25 @@ from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.tools.http import aiohttp_get_with_retries
 
+MAX_GITHUB_PATCH_PREVIEW_LENGTH = 2_000
+
 
 def _github_headers(accept: str = "application/vnd.github+json") -> dict[str, str]:
     headers = {"Accept": accept, "User-Agent": YMIR_USER_AGENT}
     if token := os.getenv("GITHUB_READONLY_TOKEN"):
         headers["Authorization"] = f"Bearer {token}"
     return headers
+
+
+def _github_path_match(url: str, pattern: str, error_message: str) -> re.Match[str]:
+    """Validate a GitHub host case-insensitively and match only its URL path."""
+    parsed_url = urlparse(url)
+    if parsed_url.hostname not in {"github.com", "www.github.com"}:
+        raise ToolError(f"{error_message}: {url}")
+    match = re.fullmatch(pattern, parsed_url.path)
+    if not match:
+        raise ToolError(f"{error_message}: {url}")
+    return match
 
 
 class GetGithubPullRequestToolInput(BaseModel):
@@ -68,10 +82,12 @@ class GetGithubPullRequestTool(
         context: RunContext,
     ) -> GetGithubPullRequestToolOutput:
         """Fetch PR information from GitHub API."""
-        # Extract owner, repo, PR number from URL
-        pr_match = re.search(r"github\.com/([\w\-\.]+)/([\w\-\.]+)/pull/(\d+)", tool_input.pr_url)
-        if not pr_match:
-            raise ToolError(f"Invalid GitHub PR URL: {tool_input.pr_url}")
+        # Extract owner, repo, PR number from the validated URL path.
+        pr_match = _github_path_match(
+            tool_input.pr_url,
+            r"/([\w.-]+)/([\w.-]+)/pull/(\d+)(?:\.patch)?/?",
+            "Invalid GitHub PR URL",
+        )
 
         owner = pr_match.group(1)
         repo = pr_match.group(2)
@@ -95,7 +111,7 @@ class GetGithubPullRequestTool(
                         "merged": data.get("merged", False),
                     }
                 )
-        except (aiohttp.ClientError, TimeoutError, KeyError) as e:
+        except (aiohttp.ClientError, TimeoutError, KeyError, JSONDecodeError) as e:
             raise ToolError(
                 f"Failed to fetch GitHub PR {pr_number} from {owner}/{repo}. "
                 f"The PR might be private, deleted, or the API is unavailable. Error: {e}"
@@ -137,10 +153,12 @@ class GetGithubCompareTool(Tool[GetGithubCompareToolInput, ToolRunOptions, GetGi
         """Fetch compare information from GitHub API."""
         from urllib.parse import quote
 
-        # Extract owner/repo from URL
-        repo_match = re.search(r"github\.com/([\w\-\.]+)/([\w\-\.]+)", tool_input.repo_url)
-        if not repo_match:
-            raise ToolError(f"Invalid GitHub repository URL: {tool_input.repo_url}")
+        # Extract owner/repo from the validated URL path.
+        repo_match = _github_path_match(
+            tool_input.repo_url,
+            r"/([\w.-]+)/([\w.-]+)/?",
+            "Invalid GitHub repository URL",
+        )
 
         owner = repo_match.group(1)
         repo = repo_match.group(2).removesuffix(".git")
@@ -166,7 +184,7 @@ class GetGithubCompareTool(Tool[GetGithubCompareToolInput, ToolRunOptions, GetGi
                 ]
 
                 return GetGithubCompareToolOutput(result={"commits": commits})
-        except (aiohttp.ClientError, TimeoutError) as e:
+        except (aiohttp.ClientError, TimeoutError, JSONDecodeError) as e:
             raise ToolError(
                 f"Failed to fetch GitHub compare {tool_input.base_ref}...{tool_input.target_ref} "
                 f"for {project_path}. Error: {e}"
@@ -180,11 +198,12 @@ class GetGithubPatchToolInput(BaseModel):
 
 
 class GetGithubPatchTool(Tool[GetGithubPatchToolInput, ToolRunOptions, StringToolOutput]):
-    """Fetch a GitHub-hosted patch through authenticated GitHub access."""
+    """Fetch a bounded preview of a GitHub-hosted patch for LLM use."""
 
     name = "get_github_patch"
-    description = "Fetch a GitHub-hosted patch or diff using authenticated API access"
+    description = "Fetch a preview of a GitHub-hosted patch or diff using authenticated API access"
     input_schema = GetGithubPatchToolInput
+    max_content_length: int | None = MAX_GITHUB_PATCH_PREVIEW_LENGTH
 
     def _create_emitter(self) -> Emitter:
         return Emitter.root().child(namespace=["tool", "github", self.name], creator=self)
@@ -200,7 +219,7 @@ class GetGithubPatchTool(Tool[GetGithubPatchToolInput, ToolRunOptions, StringToo
             raise ToolError(f"Invalid GitHub patch URL: {tool_input.patch_url}")
 
         patch_match = re.fullmatch(
-            r"/([\w.-]+)/([\w.-]+)/(?:pull/(\d+)|commit/([0-9a-fA-F]+))\.(patch|diff)",
+            r"/([\w.-]+)/([\w.-]+)/(?:pull/(\d+)|commit/([0-9a-fA-F]+))(?:\.(patch|diff))?/?",
             parsed_url.path,
         )
         if patch_match:
@@ -209,7 +228,9 @@ class GetGithubPatchTool(Tool[GetGithubPatchToolInput, ToolRunOptions, StringToo
                 request_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}"
             else:
                 request_url = f"https://api.github.com/repos/{owner}/{repo}/commits/{commit}"
-            headers = _github_headers(f"application/vnd.github.{patch_format}")
+            # GitHub's normal PR and commit pages are HTML, so request their
+            # patch representation explicitly. Bare URLs default to .patch.
+            headers = _github_headers(f"application/vnd.github.{patch_format or 'patch'}")
         else:
             # Retain support for GitHub-hosted patch sources that do not map to
             # a PR or commit API endpoint, such as raw files and release assets.
@@ -226,6 +247,21 @@ class GetGithubPatchTool(Tool[GetGithubPatchToolInput, ToolRunOptions, StringToo
                 ) as response,
             ):
                 response.raise_for_status()
-                return StringToolOutput(result=await response.text())
+                content = await response.text()
+                if self.max_content_length is not None and len(content) > self.max_content_length:
+                    content = (
+                        content[: self.max_content_length]
+                        + f"\n\n[Content truncated - showing first {self.max_content_length} characters "
+                        f"of {len(content)} total]"
+                    )
+                return StringToolOutput(result=content)
         except (aiohttp.ClientError, TimeoutError) as e:
             raise ToolError(f"Failed to fetch GitHub patch from {tool_input.patch_url}. Error: {e}") from e
+
+
+class GetGithubPatchFullTool(GetGithubPatchTool):
+    """Fetch full GitHub patch content for deterministic patch application."""
+
+    name = "get_github_patch_full"
+    description = "Fetch full GitHub-hosted patch or diff content using authenticated API access"
+    max_content_length = None

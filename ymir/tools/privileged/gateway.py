@@ -26,6 +26,7 @@ from ymir.tools.privileged.errata import (
 )
 from ymir.tools.privileged.github import (
     GetGithubCompareTool,
+    GetGithubPatchFullTool,
     GetGithubPatchTool,
     GetGithubPullRequestTool,
 )
@@ -145,6 +146,7 @@ async def _async_main():
             GetGithubPullRequestTool(options=tool_options),
             GetGithubCompareTool(options=tool_options),
             GetGithubPatchTool(options=tool_options),
+            GetGithubPatchFullTool(options=tool_options),
             GetErratumTool(options=tool_options),
             GetErratumBuildNvrTool(options=tool_options),
             GetErratumTransitionRulesTool(options=tool_options),

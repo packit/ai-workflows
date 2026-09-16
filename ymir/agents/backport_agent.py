@@ -8,7 +8,6 @@ import traceback
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 from beeai_framework.agents.requirement.requirements.conditional import (
@@ -46,6 +45,7 @@ from ymir.agents.utils import (
     get_tool_call_checker_config,
     is_reasoning_enabled,
     mcp_tools,
+    patch_fetch_tool_name,
     render_template,
     resolve_chat_model_override,
     run_subprocess,
@@ -719,7 +719,7 @@ async def run_workflow(
             for idx, upstream_patch in enumerate(state.upstream_patches):
                 patch_name = f"{state.jira_issue}-{idx}.patch"
                 content = await run_tool(
-                    _patch_fetch_tool_name(upstream_patch),
+                    patch_fetch_tool_name(upstream_patch),
                     available_tools=gateway_tools,
                     patch_url=upstream_patch,
                 )
@@ -1563,14 +1563,6 @@ def _parse_upstream_patches(upstream_patches_raw: str) -> list[str]:
     if any(not patch for patch in upstream_patches):
         raise SystemExit("Invalid UPSTREAM_PATCHES: each comma-separated entry must be a non-empty URL.")
     return upstream_patches
-
-
-def _patch_fetch_tool_name(patch_url: str) -> str:
-    """Select the authenticated GitHub patch tool for GitHub patch URLs."""
-    parsed_url = urlparse(patch_url)
-    if parsed_url.scheme == "https" and parsed_url.hostname in {"github.com", "www.github.com"}:
-        return "get_github_patch"
-    return "get_patch_from_url"
 
 
 async def main() -> None:

@@ -1,5 +1,7 @@
+import os
 import re
 from string import Template
+from urllib.parse import quote
 
 from ymir.common.constants import YMIR_COMMENT_MARKER
 
@@ -22,6 +24,18 @@ AGENT_WARNING = (
 # the sweep's parser can never drift. ``.template`` yields the raw marker string
 # (with its ``$AGENT_TYPE`` placeholder intact) to splice into this template.
 JIRA_COMMENT_TEMPLATE = Template(f"""{YMIR_COMMENT_MARKER.template}: \n\n$JIRA_COMMENT\n\n{AGENT_WARNING}""")
+
+
+def trace_viewer_issue_url(jira_issue: str) -> str | None:
+    """Build a trace viewer link when a trace viewer is configured."""
+    viewer_url = os.getenv("TRACE_VIEWER_URL")
+    if not viewer_url:
+        return None
+
+    viewer_url = viewer_url.rstrip("/")
+    encoded_issue = quote(jira_issue, safe="")
+    return f"{viewer_url}/#/issues/{encoded_issue}"
+
 
 I_AM_YMIR = "by Ymir, a Red Hat Enterprise Linux software maintenance AI agent."
 

@@ -6,6 +6,7 @@ from beeai_framework.errors import FrameworkError
 from flexmock import flexmock
 
 from ymir.agents import tasks as agent_tasks
+from ymir.agents.constants import JIRA_COMMENT_TEMPLATE
 from ymir.agents.tasks import (
     InvalidReleaseBumpingConfigError,
     ZStreamBranchStaleError,
@@ -900,6 +901,88 @@ async def test_post_user_ack_once_posts_on_first_call():
     )
 
     assert task.metadata["ack_posted"] is True
+
+
+@pytest.mark.asyncio
+async def test_comment_in_jira_adds_trace_link_to_error_comments(monkeypatch):
+    monkeypatch.setenv("TRACE_VIEWER_URL", "https://trace.example/")
+    calls = []
+    comment_text = (
+        "The backport failed.\n\n"
+        "See the [Ymir execution trace|https://trace.example/#/issues/RHEL-1] for additional details."
+    )
+
+    async def _mock_run_tool(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    flexmock(agent_tasks).should_receive("run_tool").once().replace_with(_mock_run_tool)
+
+    await agent_tasks.comment_in_jira(
+        jira_issue="RHEL-1",
+        agent_type="Backport",
+        comment_text="The backport failed.",
+        available_tools=[],
+        is_error=True,
+        user_triggered=True,
+    )
+
+    comment = calls[0][1]["comment"]
+    assert comment == JIRA_COMMENT_TEMPLATE.substitute(
+        AGENT_TYPE="Backport",
+        JIRA_COMMENT=comment_text,
+    )
+
+
+@pytest.mark.asyncio
+async def test_comment_in_jira_does_not_add_trace_link_to_non_error_comments(monkeypatch):
+    monkeypatch.setenv("TRACE_VIEWER_URL", "https://trace.example/")
+    calls = []
+
+    async def _mock_run_tool(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    flexmock(agent_tasks).should_receive("run_tool").once().replace_with(_mock_run_tool)
+
+    await agent_tasks.comment_in_jira(
+        jira_issue="RHEL-1",
+        agent_type="Backport",
+        comment_text="The backport completed.",
+        available_tools=[],
+        is_error=False,
+        user_triggered=True,
+    )
+
+    comment = calls[0][1]["comment"]
+    assert comment == JIRA_COMMENT_TEMPLATE.substitute(
+        AGENT_TYPE="Backport",
+        JIRA_COMMENT="The backport completed.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_comment_in_jira_omits_trace_link_when_viewer_is_not_configured(monkeypatch):
+    monkeypatch.delenv("TRACE_VIEWER_URL", raising=False)
+    calls = []
+
+    async def _mock_run_tool(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    flexmock(agent_tasks).should_receive("run_tool").once().replace_with(_mock_run_tool)
+
+    await agent_tasks.comment_in_jira(
+        jira_issue="RHEL-1",
+        agent_type="Backport",
+        comment_text="The backport failed.",
+        available_tools=[],
+        is_error=True,
+        user_triggered=True,
+    )
+
+    comment = calls[0][1]["comment"]
+    assert comment == JIRA_COMMENT_TEMPLATE.substitute(
+        AGENT_TYPE="Backport",
+        JIRA_COMMENT="The backport failed.",
+    )
 
 
 @pytest.mark.asyncio

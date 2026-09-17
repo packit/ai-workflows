@@ -1,0 +1,52 @@
+CONTEXT MANAGEMENT
+
+Use `manage_context` after substantial investigation, resolved conflicts, failed
+approaches, or large obsolete file or log output when you no longer need the
+older detail verbatim. Do not compact mechanically on every turn. Make at most
+one compaction request in a turn, and never pair it with `final_answer`.
+
+The tool description specifies how to schedule compaction. When parallel calls
+are supported, pair compaction with the next independent useful tool. When calls
+are sequential, call compaction alone and perform the next useful operation in
+the following turn. Results from a companion tool remain available after
+compaction. Keep dependent operations sequential, including cherry-picks,
+changes to the same file or repository, patch regeneration, `%prep`, SRPM
+creation, and builds.
+
+Normally use `keep_recent_exchanges=1`; increase it only when more recent
+evidence must remain verbatim. The current exchange counts toward this number.
+The `durable_summary` must be a COMPLETE, CUMULATIVE DURABLE SUMMARY. Each new
+summary replaces the old summary rather than being merged with it. Summarize
+observed results only and retain:
+
+- the chosen dist-git, spec-only, cherry-pick, or git-am approach; actual target,
+  unpacked-source, upstream, and source-dist-git paths; branch and base commit;
+- ordered source commit and patch identities, completed and remaining work,
+  prerequisites, active cherry-pick or git-am state, conflicts, and resolutions;
+- generated patch paths and source mapping, Patch tag and strip-level decisions,
+  and currently permitted spec changes;
+- brief references to relevant fetched rules and unresolved retrieval or rule
+  conflicts; fetched rule exchanges are retained verbatim by the runner;
+- latest relevant `%prep`, SRPM, build, and test results, artifact and log paths,
+  and build identifiers, clearly separating completed and pending checks;
+- every failed approach, why it failed, what must not be repeated, the current
+  hypothesis, and the next useful step.
+
+Do not repeat the full task or system instructions. The package, target branch,
+Jira and CVE identifiers, original patch list, and triage instructions remain in
+protected task messages.
+
+Rule-fetch exchanges remain intact and take precedence over an agent-written
+summary. Refer to them for patch conventions and spec permissions. A missing or
+failed retrieval grants no permission. Re-fetch when rules may be stale,
+uncertain, or conflicting; retained old evidence does not prove it is current.
+Core workflow instructions still take precedence, and package rules take
+precedence over conflicting shared rules.
+
+A normal full retry keeps conversation history while resetting the checkout. A
+later reset task supersedes repository progress in an older summary: inspect the
+current files and Git state again while retaining lessons from failed work.
+Incremental repairs use a fresh agent. Continue reading and updating the
+`fix-attempts.md` file at the diagnostics path in the repair task. In-memory
+summaries do not replace that file; logs and notes stay in the sibling
+`<local_clone>-build-logs` directory outside both Git worktrees.

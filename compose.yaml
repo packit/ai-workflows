@@ -5,6 +5,7 @@ x-beeai-env: &beeai-env
   UPSTREAM_SEARCH_API_URL: http://upstream-sea.hosted.upshift.rdu2.redhat.com:80/v1
   REDIS_URL: redis://valkey:6379/0
   COLLECTOR_ENDPOINT: http://otel-collector:4318/v1/traces
+  TRACE_VIEWER_URL: ${TRACE_VIEWER_URL:-http://localhost:8082}
   GIT_REPO_BASEPATH: /git-repos
   MAX_RETRIES: 3
   MAX_CONCURRENT_TASKS: ${MAX_CONCURRENT_TASKS:-1}

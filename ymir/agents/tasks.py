@@ -17,7 +17,7 @@ from beeai_framework.errors import FrameworkError
 from beeai_framework.tools import Tool
 from specfile import Specfile
 
-from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE
+from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE, trace_viewer_issue_url
 from ymir.agents.utils import check_subprocess, mcp_tools, run_subprocess, run_tool
 from ymir.common.base_utils import fix_await, is_cs_branch, is_modular_branch, resolve_dist_git_namespace
 from ymir.common.config import load_rhel_config
@@ -673,6 +673,12 @@ async def comment_in_jira(
     if is_error and not user_triggered:
         logger.info(f"Skipping Jira error comment for {jira_issue} (not user-triggered)")
         return
+
+    trace_server_url = trace_viewer_issue_url(jira_issue)
+    if is_error and trace_server_url:
+        comment_text = (
+            f"{comment_text}\n\nSee the [Ymir execution trace|{trace_server_url}] for additional details."
+        )
 
     await run_tool(
         "add_jira_comment",

@@ -77,6 +77,13 @@ async def _submit_consolidation_job(
         )
 
     if submitted:
+        logger.info(
+            "Consolidation job submitted: package=%s branch=%s source_issues=%s strategy=%s",
+            payload.package,
+            payload.target_branch,
+            payload.source_issues,
+            payload.release_strategy,
+        )
         return web.json_response({"submitted": True}, status=201)
 
     return web.json_response(
@@ -97,8 +104,9 @@ async def submit_consolidation(request: web.Request) -> web.Response:
     try:
         payload = ConsolidationRequest.model_validate(body)
     except ValidationError as exc:
+        errors = [{k: v for k, v in e.items() if k != "ctx"} for e in exc.errors()]
         return web.json_response(
-            {"error": "validation failed", "details": exc.errors()},
+            {"error": "validation failed", "details": errors},
             status=400,
         )
 

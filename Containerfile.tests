@@ -45,7 +45,8 @@ RUN pip install --no-cache-dir \
       rpkg \
       specfile \
       "logdetective-mcp>=0.5.0" \
-      "sentry-sdk>=2.13.0"
+      "sentry-sdk>=2.13.0" \
+      jwcrypto
 
 # Verify no malicious litellm_init.pth was introduced by compromised litellm packages (e.g. 1.82.7, 1.82.8)
 RUN MALICIOUS=$(find /usr /opt -name "litellm_init.pth" 2>/dev/null); \

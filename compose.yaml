@@ -201,6 +201,10 @@ services:
       - "8082:8080"
     environment:
       - TRACE_DB_PATH=/data/traces.db
+      - OIDC_AUTHORITY=http://localhost:8084/realms/ymir
+      - OIDC_CLIENT_ID=ymir-trace-ui
+      - OIDC_API_URL=http://localhost:8080
+      - OIDC_SCOPE=openid email
     volumes:
       - ./trace_server:/app:ro,z
       - trace-server-data:/data:U
@@ -468,6 +472,20 @@ services:
       - .secrets/sweep.env
     restart: "no"
     profiles: ["manual"]
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      - KC_BOOTSTRAP_ADMIN_USERNAME=admin
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
+      - KC_HTTP_PORT=8080
+    volumes:
+      - ./files/keycloak-realm-ymir.json:/opt/keycloak/data/import/ymir-realm.json:ro,z
+    ports:
+      - "8084:8080"
+    restart: unless-stopped
+    profiles: ["agents"]
+
   api:
     image: ymir-api
     build:
@@ -476,12 +494,19 @@ services:
     environment:
       - REDIS_URL=redis://valkey:6379/0
       - API_PORT=8080
+      - API_HOST=0.0.0.0
       - JIRA_WEBHOOK_SECRET=${JIRA_WEBHOOK_SECRET:-}
       - JIRA_BOT_ACCOUNT_ID=${JIRA_BOT_ACCOUNT_ID:-}
+      - OIDC_PROVIDER_URL=http://keycloak:8080/realms/ymir
+      - OIDC_ISSUER=http://localhost:8084/realms/ymir
+      - OIDC_CLIENT_ID=ymir-trace-ui
+      - OIDC_CORS_ALLOWED_ORIGIN=http://localhost:8082
+      - OIDC_CORS_ALLOWED_ORIGIN_ALT=DISABLED
     env_file:
       - .secrets/mcp-gateway.env
     depends_on:
       - valkey
+      - keycloak
     ports:
       - "8080:8080"
     restart: unless-stopped

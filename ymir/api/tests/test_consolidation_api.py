@@ -30,6 +30,9 @@ class FakeRedis:
     async def eval(self, script: str, num_keys: int, *args):
         return None
 
+    async def ping(self):
+        return True
+
 
 @pytest.fixture
 def fake_redis():
@@ -49,6 +52,29 @@ async def test_healthz(client):
     assert resp.status == 200
     body = await resp.json()
     assert body == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_readyz_healthy(client):
+    resp = await client.get("/readyz")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_readyz_redis_down(client, fake_redis):
+    """When Redis is unreachable, /readyz should return 503."""
+
+    async def broken_ping():
+        raise ConnectionError("Redis down")
+
+    fake_redis.ping = broken_ping
+    resp = await client.get("/readyz")
+    assert resp.status == 503
+    body = await resp.json()
+    assert body["status"] == "not ready"
+    assert "redis" in body["reason"]
 
 
 @pytest.mark.asyncio

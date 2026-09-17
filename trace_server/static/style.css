@@ -604,3 +604,102 @@ html.dark .attr-key { color: #c9a0ff; }
   .trace-grid { grid-template-columns: 1fr; }
   .trace-detail-meta { flex-direction: column; gap: 4px; }
 }
+
+/* Header user */
+.header-user {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-right: 4px;
+}
+
+/* Submit form */
+.submit-form {
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.submit-label {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  margin-top: 8px;
+}
+
+.submit-input {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  color: var(--fg-primary);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  width: 100%;
+}
+
+.submit-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.submit-input-half {
+  width: calc(50% - 4px);
+}
+
+.submit-issues-row {
+  display: flex;
+  gap: 8px;
+}
+
+.submit-btn {
+  margin-top: 12px;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px 20px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.submit-btn:hover { background: var(--accent-hover); }
+.submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.submit-result {
+  margin-top: 8px;
+  font-size: 12px;
+  padding: 8px 12px;
+  border-radius: 2px;
+  display: none;
+}
+
+.submit-result:not(:empty) { display: block; }
+
+.submit-success {
+  background: rgba(22, 163, 74, 0.1);
+  border: 1px solid var(--status-ok);
+  color: var(--status-ok);
+}
+
+.submit-warning {
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid #eab308;
+  color: #eab308;
+}
+
+.submit-error {
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  color: var(--status-error);
+}
+
+.submit-login-prompt {
+  padding: 24px;
+  text-align: center;
+  color: var(--fg-secondary);
+  font-size: 13px;
+}
+
+.submit-login-prompt p { margin-bottom: 12px; }

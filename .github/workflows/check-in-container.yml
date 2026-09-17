@@ -37,6 +37,7 @@ jobs:
           - target: check-supervisor-in-container
           - target: check-sweep-in-container
           - target: check-mr-cleanup-in-container
+          - target: check-api-in-container
           - target: check-mcp-install-in-container
     steps:
     - name: Checkout code

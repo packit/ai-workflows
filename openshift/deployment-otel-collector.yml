@@ -65,6 +65,9 @@ spec:
         env:
         - name: TRACE_DB_PATH
           value: /data/traces.db
+        envFrom:
+        - configMapRef:
+            name: trace-server-oidc-env
         ports:
         - containerPort: 8080
           protocol: TCP

@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trace-server-oidc-env
+data:
+  OIDC_AUTHORITY: "https://sso.redhat.com/auth/realms/redhat-external"
+  OIDC_CLIENT_ID: "a03db9cb-95d4-4cbc-9f91-ffa746d4f02c"
+  OIDC_API_URL: "https://api-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com"
+  OIDC_SCOPE: "openid id.username"

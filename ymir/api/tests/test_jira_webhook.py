@@ -118,9 +118,7 @@ def _comment_payload(body: dict | str, event: str = "comment_created") -> dict:
 def _sign(payload: dict, secret: str = WEBHOOK_SECRET) -> dict:
     """Compute X-Hub-Signature header for a JSON payload."""
     raw = json.dumps(payload).encode("utf-8")
-    digest = hmac_mod.new(
-        secret.encode("utf-8"), msg=raw, digestmod=hashlib.sha256
-    ).hexdigest()
+    digest = hmac_mod.new(secret.encode("utf-8"), msg=raw, digestmod=hashlib.sha256).hexdigest()
     return {"X-Hub-Signature": f"sha256={digest}"}
 
 
@@ -248,7 +246,9 @@ async def test_wrong_signature(client):
     resp = await client.post(
         "/api/jira/webhook",
         json=_comment_payload(_adf_mention_body("consolidate expat rhel-9.8.0")),
-        headers={"X-Hub-Signature": "sha256=0000000000000000000000000000000000000000000000000000000000000000"},
+        headers={
+            "X-Hub-Signature": "sha256=0000000000000000000000000000000000000000000000000000000000000000"
+        },
     )
     assert resp.status == 401
 

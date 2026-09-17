@@ -11,6 +11,7 @@ import os
 from aiohttp import web
 
 from ymir.api.app_keys import REDIS_KEY
+from ymir.api.auth import oidc_middleware
 from ymir.api.consolidation import add_routes as add_consolidation_routes
 from ymir.api.jira_webhook import add_routes as add_jira_webhook_routes
 from ymir.common.base_utils import redis_client
@@ -22,6 +23,19 @@ _REDIS_CTX_KEY = web.AppKey("redis_ctx")
 
 
 async def healthz(request: web.Request) -> web.Response:
+    """Liveness check — process is alive."""
+    return web.json_response({"status": "ok"})
+
+
+async def readyz(request: web.Request) -> web.Response:
+    """Readiness check — verifies Redis is reachable."""
+    redis_conn = request.app.get(REDIS_KEY)
+    if redis_conn is None:
+        return web.json_response({"status": "not ready", "reason": "redis not initialized"}, status=503)
+    try:
+        await redis_conn.ping()
+    except Exception:
+        return web.json_response({"status": "not ready", "reason": "redis unreachable"}, status=503)
     return web.json_response({"status": "ok"})
 
 
@@ -31,8 +45,9 @@ def create_app(redis_conn=None) -> web.Application:
     When *redis_conn* is provided (e.g. in tests) it is used directly;
     otherwise the app opens its own connection on startup.
     """
-    app = web.Application()
+    app = web.Application(middlewares=[oidc_middleware])
     app.router.add_get("/healthz", healthz)
+    app.router.add_get("/readyz", readyz)
 
     add_consolidation_routes(app)
     add_jira_webhook_routes(app)

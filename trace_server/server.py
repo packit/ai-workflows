@@ -92,6 +92,11 @@ LOG_LEVEL = os.environ.get("TRACE_LOG_LEVEL", "INFO").upper()
 MAX_PAYLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_LAST_TRACES = 900
 RETENTION_DAYS = max(1, int(os.environ.get("TRACE_RETENTION_DAYS", "14")))
+
+OIDC_AUTHORITY = os.environ.get("OIDC_AUTHORITY", "")
+OIDC_CLIENT_ID = os.environ.get("OIDC_CLIENT_ID", "")
+OIDC_API_URL = os.environ.get("OIDC_API_URL", "")
+OIDC_SCOPE = os.environ.get("OIDC_SCOPE", "openid id.username")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 _MIME_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -882,6 +887,16 @@ class TraceHandler(BaseHTTPRequestHandler):
             self._send_file(filepath)
         elif path == "/health":
             self._send_json(200, {"status": "ok"})
+        elif path == "/oidc-config.json":
+            self._send_json(
+                200,
+                {
+                    "authority": OIDC_AUTHORITY,
+                    "client_id": OIDC_CLIENT_ID,
+                    "api_url": OIDC_API_URL,
+                    "scope": OIDC_SCOPE,
+                },
+            )
         elif path == "/traces/recent":
             try:
                 since_s = int(params.get("since", 10800))

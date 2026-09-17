@@ -55,6 +55,7 @@ class BrewSource(BaseModel):
     commit_sha: str
     epoch: int
     version: str
+    build_id: int = 0
 
     @property
     def ev(self) -> EVR:
@@ -95,7 +96,11 @@ class _PatchApplication:
     strip: int
 
 
-async def resolve_brew_source(nvr: str, package: str) -> BrewSource:
+async def resolve_brew_source(
+    nvr: str,
+    package: str,
+    allowed_namespaces: tuple[str, ...] = ("rhel",),
+) -> BrewSource:
     """Resolve and validate the dist-git source recorded by a Brew build."""
     build = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, nvr)
     if not build:
@@ -116,9 +121,9 @@ async def resolve_brew_source(nvr: str, package: str) -> BrewSource:
     parsed_url = urlparse(repository_url)
     if parsed_url.scheme != "https" or parsed_url.hostname != "gitlab.com":
         raise InheritCandidateError(f"Brew build {nvr} has an unsupported source repository")
-    expected_suffix = f"/redhat/rhel/rpms/{package}"
-    if parsed_url.path.rstrip("/") != expected_suffix:
-        raise InheritCandidateError(f"Brew build {nvr} source does not match redhat/rhel/rpms/{package}")
+    expected_paths = {f"/redhat/{namespace}/rpms/{package}" for namespace in allowed_namespaces}
+    if parsed_url.path.rstrip("/") not in expected_paths:
+        raise InheritCandidateError(f"Brew build {nvr} source does not match an allowed dist-git repository")
 
     version = build.get("version")
     if not isinstance(version, str) or not version:
@@ -128,12 +133,18 @@ async def resolve_brew_source(nvr: str, package: str) -> BrewSource:
     except (TypeError, ValueError) as exc:
         raise InheritCandidateError(f"Brew build {nvr} has an invalid epoch") from exc
 
+    try:
+        build_id = int(build.get("build_id") or 0)
+    except (TypeError, ValueError) as exc:
+        raise InheritCandidateError(f"Brew build {nvr} has an invalid build ID") from exc
+
     return BrewSource(
         nvr=nvr,
         repository_url=repository_url,
         commit_sha=commit_sha.lower(),
         epoch=epoch,
         version=version,
+        build_id=build_id,
     )
 
 

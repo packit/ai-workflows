@@ -5,6 +5,8 @@ import os
 import re
 import sys
 import traceback
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -106,8 +108,10 @@ from ymir.common.models import (
     TitleInputSchema,
     TitleOutputSchema,
 )
+from ymir.common.reproducer_lock import resolve_clone_root
 from ymir.common.utils import get_all_patches, init_sentry
 from ymir.common.version_utils import is_older_zstream, parse_rhel_version
+from ymir.tools.privileged.jira import extract_cve_ids
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.distgit_detector import DistgitDetectorTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
@@ -354,6 +358,195 @@ def _rhel_distgit_commit_hash(url: str, package: str) -> str | None:
     if not re.search(r"/-/commit/[a-f0-9]{7,40}$", parsed.path, re.IGNORECASE):
         return None
     return _extract_commit_hash(url)
+
+
+@dataclass(frozen=True)
+class ResolvedSiblingSource:
+    title: str
+    changelog: str | None
+    issue_key: str
+    source_nvr: str
+    commit_sha: str
+
+
+@dataclass(frozen=True)
+class ResolvedSiblingCandidate:
+    issue_key: str
+    fixed_in_build: str
+    resolutiondate: datetime
+
+
+def _parse_resolutiondate(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+async def discover_resolved_sibling_candidates(
+    jira_issue: str,
+    package: str,
+    cve_id: str | None,
+    available_tools: list[Tool],
+) -> list[ResolvedSiblingCandidate]:
+    """Find resolved same-family siblings with a Brew NVR, ordered newest first."""
+    escaped_package = package.replace('"', '\\"')
+    if cve_id:
+        normalized_cve_ids = extract_cve_ids(cve_id)
+        if not normalized_cve_ids:
+            return []
+        family_clause = " AND ".join(f'summary ~ "{cve}"' for cve in normalized_cve_ids.split(","))
+    else:
+        details_by_issue: dict[str, dict] = {}
+
+        async def fetch_issuelinks(issue_key: str) -> list[dict]:
+            details = details_by_issue.get(issue_key.upper())
+            if details is None:
+                details = await run_tool(
+                    "get_jira_details",
+                    available_tools=available_tools,
+                    issue_key=issue_key,
+                )
+                details_by_issue[issue_key.upper()] = details
+            return details.get("fields", {}).get("issuelinks", [])
+
+        try:
+            clone_root = await resolve_clone_root(jira_issue, fetch_issuelinks)
+        except Exception:
+            logger.warning("Could not resolve clone root for %s", jira_issue, exc_info=True)
+            return []
+        family_clause = f'(key = "{clone_root}" OR issue in linkedIssues("{clone_root}", "Cloners"))'
+    jql = (
+        f'project = RHEL AND component = "{escaped_package}" '
+        f'AND {family_clause} AND key != "{jira_issue}" '
+        'AND resolution is not EMPTY AND "Fixed in Build" is not EMPTY'
+    )
+    try:
+        issues = await run_tool(
+            "search_jira_issues",
+            available_tools=available_tools,
+            jql=jql,
+            fields=["key", "summary", "resolutiondate", "customfield_10578"],
+            max_results=100,
+        )
+    except Exception:
+        logger.warning("Could not search for resolved sibling issues", exc_info=True)
+        return []
+
+    candidates = []
+    for issue in issues or []:
+        fields = issue.get("fields", {})
+        if cve_id and extract_cve_ids(fields.get("summary")) != normalized_cve_ids:
+            continue
+        fixed_in_build = fields.get("customfield_10578")
+        resolutiondate = _parse_resolutiondate(fields.get("resolutiondate"))
+        if not isinstance(fixed_in_build, str) or not fixed_in_build.strip() or resolutiondate is None:
+            continue
+        candidates.append(
+            ResolvedSiblingCandidate(
+                issue_key=issue.get("key", ""),
+                fixed_in_build=fixed_in_build.strip(),
+                resolutiondate=resolutiondate,
+            )
+        )
+    return sorted(candidates, key=lambda candidate: candidate.resolutiondate, reverse=True)
+
+
+async def _read_commit_changelog(local_clone: Path, commit_sha: str, package: str) -> str | None:
+    try:
+        content, _ = await check_subprocess(
+            ["git", "-C", str(local_clone), "show", f"{commit_sha}:{package}.spec"],
+        )
+        spec = Specfile(content=content, sourcedir=local_clone)
+        with spec.changelog() as changelog:
+            if not changelog:
+                return None
+            return "\n".join(changelog[-1].content)
+    except Exception:
+        logger.debug("Could not read source changelog from %s", commit_sha)
+        return None
+
+
+async def resolve_resolved_sibling_source(
+    local_clone: Path,
+    package: str,
+    candidates: list[ShippedZStreamCandidate],
+    available_tools: list[Tool],
+) -> ResolvedSiblingSource | None:
+    """Return the newest build-provenance source among resolved sibling issues."""
+    sources: list[tuple[BrewSource, str]] = []
+    for candidate in candidates:
+        try:
+            source = await resolve_brew_source(
+                candidate.fixed_in_build,
+                package,
+                allowed_namespaces=("rhel", "centos-stream"),
+            )
+        except Exception:
+            logger.warning(
+                "Could not resolve shipped sibling build %s",
+                candidate.fixed_in_build,
+                exc_info=True,
+            )
+            continue
+        sources.append((source, candidate.issue_key))
+    if not sources:
+        return None
+
+    source, issue_key = max(sources, key=lambda item: (item[0].build_id, item[0].commit_sha))
+    try:
+        await run_tool(
+            "fetch_commit",
+            repository=source.repository_url,
+            commit_sha=source.commit_sha,
+            clone_path=local_clone,
+            available_tools=available_tools,
+        )
+        title, _ = await check_subprocess(
+            ["git", "-C", str(local_clone), "show", "-s", "--format=%s", source.commit_sha],
+        )
+    except Exception:
+        logger.warning("Could not fetch resolved sibling source commit %s", source.commit_sha, exc_info=True)
+        return None
+    title = title.strip()
+    if not title:
+        return None
+    return ResolvedSiblingSource(
+        title=title,
+        changelog=await _read_commit_changelog(local_clone, source.commit_sha, package),
+        issue_key=issue_key,
+        source_nvr=source.nvr,
+        commit_sha=source.commit_sha,
+    )
+
+
+async def resolve_latest_resolved_sibling_source(
+    local_clone: Path,
+    package: str,
+    candidates: list[ResolvedSiblingCandidate],
+    available_tools: list[Tool],
+) -> ResolvedSiblingSource | None:
+    """Resolve the newest Jira-resolved sibling whose Brew source is usable."""
+    for candidate in sorted(candidates, key=lambda candidate: candidate.resolutiondate, reverse=True):
+        source = await resolve_resolved_sibling_source(
+            local_clone,
+            package,
+            [
+                ShippedZStreamCandidate(
+                    issue_key=candidate.issue_key,
+                    fixed_in_build=candidate.fixed_in_build,
+                )
+            ],
+            available_tools,
+        )
+        if source:
+            return source
+    return None
 
 
 async def extract_source_title(local_clone: Path, upstream_patches: list[str], package: str) -> str | None:
@@ -1359,6 +1552,42 @@ async def run_workflow(
             state.source_title = await extract_source_title(
                 state.local_clone, state.upstream_patches, state.package
             )
+            if state.source_title is None:
+                resolved_source = await resolve_resolved_sibling_source(
+                    state.local_clone,
+                    state.package,
+                    state.shipped_zstream_candidates,
+                    gateway_tools,
+                )
+                if resolved_source:
+                    state.source_title = resolved_source.title
+                    source_changelog = resolved_source.changelog or source_changelog
+                    logger.info(
+                        "Using resolved sibling source %s from %s",
+                        resolved_source.issue_key,
+                        resolved_source.source_nvr,
+                    )
+            if state.source_title is None:
+                sibling_candidates = await discover_resolved_sibling_candidates(
+                    state.jira_issue,
+                    state.package,
+                    state.cve_id,
+                    gateway_tools,
+                )
+                resolved_source = await resolve_latest_resolved_sibling_source(
+                    state.local_clone,
+                    state.package,
+                    sibling_candidates,
+                    gateway_tools,
+                )
+                if resolved_source:
+                    state.source_title = resolved_source.title
+                    source_changelog = resolved_source.changelog or source_changelog
+                    logger.info(
+                        "Using latest resolved sibling source %s from %s",
+                        resolved_source.issue_key,
+                        resolved_source.source_nvr,
+                    )
             if source_changelog:
                 logger.info(f"Extracted source changelog for reuse: {source_changelog}")
             if state.source_title:

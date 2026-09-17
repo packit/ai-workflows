@@ -12,13 +12,17 @@ from ymir.agents.backport_agent import (
     _get_shipped_zstream_candidates,
     _inherit_prep_error,
     _move_build_logs,
+    _parse_resolutiondate,
     _parse_upstream_patches,
     _remote_branch_matches_commit,
     _restore_inherited_publication,
     _schedule_inherit_cleanup_retry,
     _update_fix_attempts_log,
     _validate_inherited_staged_files,
+    discover_resolved_sibling_candidates,
     extract_source_title,
+    resolve_latest_resolved_sibling_source,
+    resolve_resolved_sibling_source,
 )
 from ymir.agents.utils import patch_fetch_tool_name
 from ymir.agents.ystream_inherit import (
@@ -134,6 +138,173 @@ async def test_extract_source_title_skips_external_and_multi_commit_sources(tmp_
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_resolved_sibling_source_uses_newest_shipped_build(tmp_path):
+    older_sha = "a" * 40
+    newer_sha = "b" * 40
+    candidates = [
+        ShippedZStreamCandidate(issue_key="RHEL-100", fixed_in_build="curl-1-1", fix_versions=["rhel-9.8.z"]),
+        ShippedZStreamCandidate(issue_key="RHEL-101", fixed_in_build="curl-1-2", fix_versions=["rhel-9.9.z"]),
+    ]
+
+    async def mock_run_tool(name, **kwargs):
+        assert name == "fetch_commit"
+        assert kwargs["commit_sha"] == newer_sha
+        return "refs/ymir/zstream/" + newer_sha
+
+    async def mock_resolve_brew_source(nvr, _package, *, allowed_namespaces):
+        assert allowed_namespaces == ("rhel", "centos-stream")
+        return BrewSource(
+            nvr=nvr,
+            repository_url="https://gitlab.com/redhat/centos-stream/rpms/curl",
+            commit_sha=older_sha if nvr == "curl-1-1" else newer_sha,
+            epoch=0,
+            version="1",
+            build_id=1 if nvr == "curl-1-1" else 2,
+        )
+
+    async def mock_check_subprocess(command, **_kwargs):
+        if command[-2:] == ["--format=%s", newer_sha]:
+            return "Newest human title\n", ""
+        assert command[-1] == f"{newer_sha}:curl.spec"
+        return (
+            "Name: curl\nVersion: 1\nRelease: 1\nSummary: curl\nLicense: MIT\n"
+            "%description\ncurl\n%changelog\n"
+            "* Mon Jan 01 2026 Maintainer <m@example.com> - 1-1\n- Newest changelog\n",
+            "",
+        )
+
+    flexmock(backport_agent).should_receive("resolve_brew_source").replace_with(
+        mock_resolve_brew_source
+    ).twice()
+    flexmock(backport_agent).should_receive("run_tool").replace_with(mock_run_tool).once()
+    flexmock(backport_agent).should_receive("check_subprocess").replace_with(mock_check_subprocess).twice()
+
+    source = await resolve_resolved_sibling_source(tmp_path, "curl", candidates, [])
+
+    assert source is not None
+    assert source.title == "Newest human title"
+    assert source.changelog == "- Newest changelog"
+    assert source.commit_sha == newer_sha
+    assert source.source_nvr == "curl-1-2"
+
+
+@pytest.mark.asyncio
+async def test_resolved_sibling_source_skips_operational_brew_failures(tmp_path):
+    candidates = [ShippedZStreamCandidate(issue_key="RHEL-100", fixed_in_build="curl-1-1")]
+
+    async def brew_unavailable(*_args, **_kwargs):
+        raise RuntimeError("Brew unavailable")
+
+    flexmock(backport_agent).should_receive("resolve_brew_source").replace_with(brew_unavailable).once()
+
+    assert await resolve_resolved_sibling_source(tmp_path, "curl", candidates, []) is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("2026-01-01T10:30:00+0100", "2026-01-01T09:30:00+00:00"),
+        ("2026-01-01T10:00:00", None),
+        ("not a date", None),
+    ],
+)
+def test_parse_resolutiondate_returns_utc_aware_values(value, expected):
+    parsed = _parse_resolutiondate(value)
+    assert (parsed.isoformat() if parsed else None) == expected
+
+
+@pytest.mark.asyncio
+async def test_resolved_sibling_discovery_selects_latest_jira_resolution(tmp_path):
+    newer_sha = "b" * 40
+
+    async def mock_run_tool(name, **kwargs):
+        if name == "search_jira_issues":
+            assert 'component = "curl"' in kwargs["jql"]
+            assert 'summary ~ "CVE-2026-1234"' in kwargs["jql"]
+            assert kwargs["fields"] == ["key", "summary", "resolutiondate", "customfield_10578"]
+            assert kwargs["max_results"] == 100
+            return [
+                {
+                    "key": "RHEL-100",
+                    "fields": {
+                        "resolutiondate": "2026-01-01T00:00:00.000+0000",
+                        "summary": "CVE-2026-1234 curl: old",
+                        "customfield_10578": "curl-1-99",
+                    },
+                },
+                {
+                    "key": "RHEL-101",
+                    "fields": {
+                        "resolutiondate": "2026-02-01T00:00:00.000+0000",
+                        "summary": "CVE-2026-1234 curl: latest",
+                        "customfield_10578": "curl-1-1",
+                    },
+                },
+            ]
+        assert name == "fetch_commit"
+        assert kwargs["commit_sha"] == newer_sha
+        return "refs/ymir/sibling/" + newer_sha
+
+    async def mock_resolve_brew_source(nvr, _package, *, allowed_namespaces):
+        assert nvr == "curl-1-1"
+        assert allowed_namespaces == ("rhel", "centos-stream")
+        return BrewSource(
+            nvr=nvr,
+            repository_url="https://gitlab.com/redhat/rhel/rpms/curl",
+            commit_sha=newer_sha,
+            epoch=0,
+            version="1",
+            build_id=1,
+        )
+
+    async def mock_check_subprocess(command, **_kwargs):
+        if command[-2:] == ["--format=%s", newer_sha]:
+            return "Latest Jira resolution title\n", ""
+        return (
+            "Name: curl\nVersion: 1\nRelease: 1\nSummary: curl\nLicense: MIT\n"
+            "%description\ncurl\n%changelog\n"
+            "* Mon Jan 01 2026 Maintainer <m@example.com> - 1-1\n- Latest changelog\n",
+            "",
+        )
+
+    flexmock(backport_agent).should_receive("run_tool").replace_with(mock_run_tool).twice()
+    flexmock(backport_agent).should_receive("resolve_brew_source").replace_with(
+        mock_resolve_brew_source
+    ).once()
+    flexmock(backport_agent).should_receive("check_subprocess").replace_with(mock_check_subprocess).twice()
+
+    candidates = await discover_resolved_sibling_candidates("RHEL-999", "curl", "CVE-2026-1234", [])
+    source = await resolve_latest_resolved_sibling_source(tmp_path, "curl", candidates, [])
+
+    assert source is not None
+    assert source.issue_key == "RHEL-101"
+    assert source.title == "Latest Jira resolution title"
+
+
+@pytest.mark.asyncio
+async def test_non_cve_sibling_discovery_uses_cloners_root():
+    async def mock_run_tool(name, **kwargs):
+        if name == "get_jira_details":
+            return {"fields": {"issuelinks": []}}
+        assert name == "search_jira_issues"
+        assert 'key = "RHEL-100"' in kwargs["jql"]
+        assert 'linkedIssues("RHEL-100", "Cloners")' in kwargs["jql"]
+        return [
+            {
+                "key": "RHEL-101",
+                "fields": {"resolutiondate": "2026-01-02T00:00:00+00:00", "customfield_10578": "curl-1-1"},
+            }
+        ]
+
+    flexmock(backport_agent).should_receive("run_tool").replace_with(mock_run_tool).twice()
+    candidates = await discover_resolved_sibling_candidates("RHEL-100", "curl", None, [])
+
+    assert [(candidate.issue_key, candidate.fixed_in_build) for candidate in candidates] == [
+        ("RHEL-101", "curl-1-1")
+    ]
 
 
 def _state(**updates):

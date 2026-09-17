@@ -44,6 +44,12 @@ For a normal backport from exactly one RHEL GitLab dist-git commit, the source
 commit subject is used as `source_title` for the commit and MR instead. Its
 source changelog entry remains the changelog source. Multiple source commits do
 not select a title and retain the existing combined source-changelog behavior.
+When no direct source title is available, backports inspect resolved sibling
+issues for the same CVE or Jira Cloners family and package. The newest sibling
+by Jira resolution date supplies a durable source title and changelog from its
+RHEL or CentOS Stream dist-git source commit. Y-stream backports retain their
+shipped Z-stream candidate path, which selects the newest validated Brew build
+by build ID and commit SHA before this general fallback.
 Consolidated tasks use a canonical record only when every included issue belongs
 to that same family; mixed-family consolidations generate an aggregate title
 without caching it under an individual family.

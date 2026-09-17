@@ -8,6 +8,7 @@ import traceback
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 from beeai_framework.agents.requirement.requirements.conditional import (
@@ -344,6 +345,42 @@ def _extract_commit_hash(url: str) -> str | None:
     return None
 
 
+def _rhel_distgit_commit_hash(url: str, package: str) -> str | None:
+    """Return a commit hash only for a RHEL GitLab dist-git commit URL."""
+    parsed = urlparse(url)
+    expected_prefix = f"/redhat/rhel/rpms/{package}/-/commit/"
+    if parsed.hostname != "gitlab.com" or not parsed.path.startswith(expected_prefix):
+        return None
+    if not re.search(r"/-/commit/[a-f0-9]{7,40}$", parsed.path, re.IGNORECASE):
+        return None
+    return _extract_commit_hash(url)
+
+
+async def extract_source_title(local_clone: Path, upstream_patches: list[str], package: str) -> str | None:
+    """Read a subject only when exactly one RHEL dist-git source commit is present."""
+    source_commits = list(
+        dict.fromkeys(filter(None, (_extract_commit_hash(url) for url in upstream_patches)))
+    )
+    is_single_rhel_commit = (
+        len(source_commits) == 1
+        and _rhel_distgit_commit_hash(upstream_patches[0], package) == source_commits[0]
+    )
+    if not is_single_rhel_commit:
+        return None
+
+    upstream_clone = Path(f"{local_clone}-upstream")
+    if not upstream_clone.exists():
+        return None
+    try:
+        title, _ = await check_subprocess(
+            ["git", "-C", str(upstream_clone), "show", "-s", "--format=%s", source_commits[0]],
+        )
+    except Exception:
+        logger.debug("Could not read source title from %s", source_commits[0])
+        return None
+    return title.strip() or None
+
+
 async def extract_source_changelog(
     local_clone: Path, upstream_patches: list[str], package: str
 ) -> str | None:
@@ -398,6 +435,7 @@ async def extract_source_changelog(
 class BackportState(PackageUpdateState):
     upstream_patches: list[str]
     cve_id: str | None
+    source_title: str | None = Field(default=None)
     justification: str | None = Field(default=None)
     triage_summary: str | None = Field(default=None)
     unpacked_sources: Path | None = Field(default=None)
@@ -1318,10 +1356,15 @@ async def run_workflow(
             source_changelog = await extract_source_changelog(
                 state.local_clone, state.upstream_patches, state.package
             )
+            state.source_title = await extract_source_title(
+                state.local_clone, state.upstream_patches, state.package
+            )
             if source_changelog:
                 logger.info(f"Extracted source changelog for reuse: {source_changelog}")
+            if state.source_title:
+                logger.info("Using source title from a RHEL dist-git commit: %s", state.source_title)
 
-            if redis_conn is not None and not dry_run:
+            if state.source_title is None and redis_conn is not None and not dry_run:
 
                 async def generate_title(jira_summary):
                     response = await create_title_agent().run(
@@ -1346,7 +1389,7 @@ async def run_workflow(
                     cve_id=state.cve_id,
                     generate_title=generate_title,
                 )
-            if state.canonical_title:
+            if state.canonical_title and not source_changelog:
                 state.changelog_entry_count = tasks.changelog_entry_count(state.local_clone, state.package)
 
             response = await log_agent.run(
@@ -1358,7 +1401,7 @@ async def run_workflow(
                         source_changelog=source_changelog,
                         canonical_title=(
                             tasks.escape_rpm_changelog_text(state.canonical_title)
-                            if state.canonical_title
+                            if state.canonical_title and not source_changelog
                             else None
                         ),
                     ),
@@ -1367,8 +1410,11 @@ async def run_workflow(
                 **get_agent_execution_config(),
             )
             log_output = LogOutputSchema.model_validate_json(response.last_message.text)
-            if state.canonical_title:
+            if state.source_title:
+                log_output.title = state.source_title
+            elif state.canonical_title:
                 log_output.title = state.canonical_title
+            if state.canonical_title and not source_changelog:
                 tasks.ensure_canonical_changelog_title(
                     state.local_clone,
                     state.package,

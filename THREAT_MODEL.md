@@ -56,6 +56,14 @@ Security-relevant assumptions this system makes about its environment:
   authority to trigger real credentialed actions, so injected content
   can still steer those specific calls (see T2).
 
+### 1.1. Downstream service dependencies
+
+The triage agent depends on the following external services:
+
+| service | purpose | data exchanged | trust model |
+|---|---|---|---|
+| **Brew Web** (`brewweb.engineering.redhat.com`) | Build artifact retrieval for dependency verification in rebuild decisions | **Outbound**: Package NVR-derived URLs constructed from Jira "Fixed in Build" fields (e.g., `https://brewweb.engineering.redhat.com/brew/packages/{package}/{version}/{release}/data/logs/{arch}/root.log`). **Inbound**: Build environment logs (`root.log`) containing installed package lists used to determine which dependency versions were present during the build. | Trusted Red Hat internal service. The triage agent (`check_package_built_with_fixed_dependency()` in `ymir/common/utils.py`) fetches root.log to extract dependency NVRs via regex pattern matching. This data influences rebuild vs. NOT_AFFECTED resolution: if the log shows the package was built with the fixed dependency version, the agent skips rebuild and recommends errata addition instead. Compromise or manipulation of Brew Web responses could cause incorrect triage decisions (false negatives: recommending rebuild when unnecessary; false positives: skipping rebuild when needed). Mitigated by network-layer controls (OpenShift TenantEgress allow-list) and the expectation that Brew Web is an internal Red Hat service under operational control. No input validation is performed on root.log content beyond regex extraction of NVR strings, which are then validated against Koji build metadata. |
+
 ## 2. Assets
 
 | asset | description | sensitivity |

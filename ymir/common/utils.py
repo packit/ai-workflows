@@ -3,8 +3,10 @@ Common utility functions shared across the BeeAI system.
 """
 
 import asyncio
+import gzip
 import logging
 import os
+import re
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -396,6 +398,541 @@ async def check_build_in_buildroot(
             return False
 
     return True
+
+
+async def _find_completed_builds_jira(
+    package: str, fix_version: str, available_tools: list[Tool]
+) -> list[tuple[str, str]]:
+    """Search Jira for completed builds with Fixed in Build set.
+
+    Args:
+        package: Package name
+        fix_version: RHEL fix version (e.g., "rhel-10.2.z")
+        available_tools: List of available tools for Jira queries
+
+    Returns:
+        List of (issue_key, nvr) tuples
+    """
+    from ymir.common.version_utils import get_fix_version_variants
+
+    fix_version_variants = get_fix_version_variants(fix_version)
+    escaped_versions = [v.replace('"', '\\"') for v in fix_version_variants]
+    fix_version_clause = ", ".join(f'"{v}"' for v in escaped_versions)
+
+    # Escape package name to prevent JQL injection
+    escaped_package = package.replace("\\", "\\\\").replace('"', '\\"')
+
+    jql = (
+        f'project = RHEL AND component = "{escaped_package}" AND '
+        f"fixVersion in ({fix_version_clause}) AND "
+        f"status in (Closed, Done) AND "
+        f'resolution in ("Done", "Done-Errata") AND '
+        f"customfield_10578 IS NOT EMPTY"
+    )
+    results = await run_tool(
+        "search_jira_issues",
+        available_tools=available_tools,
+        jql=jql,
+        fields=["key", "customfield_10578"],
+        max_results=50,
+    )
+
+    if not results or not isinstance(results, list):
+        return []
+
+    # Warn if we hit the max_results limit - may have missed newer builds
+    if len(results) >= 50:
+        logger.warning(
+            f"Found {len(results)} completed builds for {package} in {fix_version}, "
+            f"hit max_results limit. May have missed a rebuild that already includes "
+            f"the fixed dependency."
+        )
+
+    candidates = []
+    for issue in results:
+        issue_key = issue.get("key")
+        nvr_raw = issue.get("fields", {}).get("customfield_10578")
+
+        # Validate and normalize the NVR field
+        if not issue_key:
+            continue
+        if not isinstance(nvr_raw, str):
+            logger.warning(f"Issue {issue_key} has non-string Fixed in Build: {type(nvr_raw).__name__}")
+            continue
+
+        nvr = nvr_raw.strip()
+        if not nvr:
+            logger.warning(f"Issue {issue_key} has empty Fixed in Build after stripping whitespace")
+            continue
+
+        candidates.append((issue_key, nvr))
+
+    return candidates
+
+
+async def _select_highest_evr_build(
+    candidates: list[tuple[str, str]], expected_package: str
+) -> tuple[str, str, EVR] | None:
+    """Select build with highest EVR from candidate NVRs.
+
+    Args:
+        candidates: List of (issue_key, nvr) tuples
+        expected_package: Expected package name to validate against
+
+    Returns:
+        Tuple of (nvr, issue_key, evr) for highest build, or None if none found
+    """
+    if not candidates:
+        return None
+
+    # Fetch all builds concurrently
+    build_futures = [asyncio.to_thread(_get_koji_build, BREWHUB_URL, nvr) for _, nvr in candidates]
+    builds = await asyncio.gather(*build_futures, return_exceptions=True)
+
+    # Associate successful builds with their metadata
+    candidate_builds = []
+    for (issue_key, nvr), build in zip(candidates, builds, strict=True):
+        if isinstance(build, Exception):
+            logger.warning(f"Failed to fetch build {nvr}: {build}")
+            continue
+        if build:
+            # Verify package name matches to avoid cross-package contamination
+            build_package_name = build.get("name")
+            if build_package_name != expected_package:
+                logger.warning(
+                    f"Skipping build {nvr} from issue {issue_key}: "
+                    f"package name '{build_package_name}' does not match expected '{expected_package}'"
+                )
+                continue
+            evr = _evr_from_build(build)
+            candidate_builds.append((evr, nvr, issue_key))
+
+    if not candidate_builds:
+        return None
+
+    # Sort by EVR descending and pick highest
+    candidate_builds.sort(key=lambda x: x[0], reverse=True)
+    latest_evr, package_nvr, package_issue_key = candidate_builds[0]
+
+    return package_nvr, package_issue_key, latest_evr
+
+
+async def _fetch_root_log(package_nvr: str) -> str | None:
+    """Fetch root.log from Brew for the given package NVR.
+
+    Args:
+        package_nvr: Package NVR (e.g., "go-fdo-client-1.0.0-4.el10_2.7")
+
+    Returns:
+        root.log content as string, or None if not found
+    """
+    # Parse NVR to construct root.log URL
+    nvr_match = re.match(r"^(.+)-([^-]+)-([^-]+)$", package_nvr)
+    if not nvr_match:
+        logger.warning(f"Could not parse package NVR: {package_nvr}")
+        return None
+
+    package_name, version, release = nvr_match.groups()
+
+    # Try multiple architectures concurrently with overall 30s timeout
+    architectures = ["x86_64", "aarch64", "ppc64le", "s390x"]
+    root_log_urls = [
+        f"https://brewweb.engineering.redhat.com/brew/packages/"
+        f"{package_name}/{version}/{release}/data/logs/{arch}/root.log"
+        for arch in architectures
+    ]
+
+    async def check_and_fetch_log(client: httpx.AsyncClient, url: str) -> tuple[str, bytes | None]:
+        """Check if root.log exists with HEAD, then fetch if available."""
+        try:
+            # First check if file exists with HEAD request
+            head_response = await client.head(url)
+            if head_response.status_code != 200:
+                logger.debug(f"root.log not available at {url} (HTTP {head_response.status_code})")
+                return url, None
+
+            # File exists, fetch it
+            response = await client.get(url)
+            if response.status_code == 200:
+                return url, response.content
+        except Exception as e:
+            logger.debug(f"Could not fetch {url}: {e}")
+        return url, None
+
+    root_log = None
+    fetch_tasks = []
+    try:
+        # Overall 30-second timeout for entire operation
+        async with asyncio.timeout(30.0):
+            # Per-request timeout of 10s as secondary safeguard
+            async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
+                # Create explicit tasks so we can cancel them
+                fetch_tasks = [asyncio.create_task(check_and_fetch_log(client, url)) for url in root_log_urls]
+                try:
+                    # Process results as they arrive, cancel rest when found
+                    for coro in asyncio.as_completed(fetch_tasks):
+                        url, content = await coro
+                        if content:
+                            try:
+                                # Check if gzipped and decompress
+                                if content[:2] == b"\x1f\x8b":
+                                    content = gzip.decompress(content)
+                                # Decode to string
+                                root_log = content.decode("utf-8", errors="replace")
+                                logger.debug(f"Found root.log at {url}")
+                                break
+                            except Exception as e:
+                                # Malformed gzip or decode error - try next architecture
+                                logger.warning(
+                                    f"Failed to decompress/decode root.log from {url}: {e}. "
+                                    f"Trying other architectures."
+                                )
+                                continue
+                finally:
+                    # Cancel any remaining tasks
+                    for task in fetch_tasks:
+                        if not task.done():
+                            task.cancel()
+                    # Wait for all tasks to complete (including cancelled ones)
+                    await asyncio.gather(*fetch_tasks, return_exceptions=True)
+    except TimeoutError:
+        logger.warning(f"Timeout (30s) fetching root.log for {package_nvr}")
+        # Cancel any outstanding tasks
+        for task in fetch_tasks:
+            if not task.done():
+                task.cancel()
+        # Await them to clean up
+        if fetch_tasks:
+            await asyncio.gather(*fetch_tasks, return_exceptions=True)
+        return None
+
+    if not root_log:
+        logger.warning(f"Could not fetch root.log for {package_nvr} from any architecture")
+
+    return root_log
+
+
+async def _get_known_package_names(dep_component: str, fixed_dep_nvr: str) -> list[str]:
+    """Get list of binary package names produced by the dependency source build.
+
+    Args:
+        dep_component: Source component name (e.g., "golang")
+        fixed_dep_nvr: Fixed dependency NVR
+
+    Returns:
+        List of binary package names (includes source component name)
+    """
+    fixed_build = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, fixed_dep_nvr)
+    if not fixed_build:
+        logger.warning(f"Could not find build info for fixed dependency: {fixed_dep_nvr}")
+        return [dep_component]
+
+    # Validate that the fixed build is actually for the expected dependency
+    build_name = fixed_build.get("name")
+    if build_name != dep_component:
+        logger.error(
+            f"Fixed dependency NVR {fixed_dep_nvr} resolves to package '{build_name}', "
+            f"not expected component '{dep_component}'. Possible data corruption or injection."
+        )
+        return [dep_component]
+
+    build_id = fixed_build.get("build_id")
+    if not build_id:
+        logger.warning(f"No build_id for {fixed_dep_nvr}")
+        return [dep_component]
+
+    # Get list of binary package names produced by this source build
+    session = koji.ClientSession(BREWHUB_URL)
+    rpms = await asyncio.to_thread(session.listRPMs, buildID=build_id)
+    known_names = [rpm.get("name") for rpm in rpms if rpm.get("name")]
+
+    # Also include the source component name itself
+    if dep_component not in known_names:
+        known_names.insert(0, dep_component)
+
+    logger.debug(f"Known package names for {dep_component}: {known_names[:5]}...")
+    return known_names
+
+
+def _parse_dependency_from_root_log(
+    root_log: str, dep_component: str, known_names: list[str]
+) -> tuple[str | None, int | None]:
+    """Parse root.log to find which version of dependency was installed.
+
+    Args:
+        root_log: Content of root.log
+        dep_component: Source component name
+        known_names: List of known binary package names to search for
+
+    Returns:
+        Tuple of (nvr, epoch) where nvr is in format "name-version-release"
+        and epoch is the epoch number if present in root.log, else None
+    """
+    # Pattern: "Installing: [epoch:]<known_name>-<version>-<release>.<arch>"
+    # Sort by length descending to match longer names first (e.g., golang-bin before golang)
+    for pkg_name in sorted(known_names, key=len, reverse=True):
+        # Escape package name for regex (handles dots, etc.)
+        escaped_name = re.escape(pkg_name)
+        # Pattern: optional epoch, exact package name, then version-release.arch
+        # Use word boundary or hyphen after name to prevent matching subpackages as parent
+        pattern = rf"Installing:\s+(?:(\d+):)?{escaped_name}-([^\s]+)"
+
+        for line in root_log.splitlines():
+            match = re.search(pattern, line)
+            if match:
+                epoch_str = match.group(1)  # May be None
+                version_release = match.group(2)
+                # Remove architecture suffix
+                arch_pattern = r"\.(x86_64|aarch64|ppc64le|s390x|i686|noarch)$"
+                version_release = re.sub(arch_pattern, "", version_release)
+                # Keep epoch as None when absent (allows fallback to Koji's epoch)
+                epoch = int(epoch_str) if epoch_str else None
+                nvr = f"{dep_component}-{version_release}"
+                logger.info(
+                    f"Found {dep_component} package {pkg_name} in root.log: "
+                    f"{f'{epoch}:' if epoch else ''}{nvr}"
+                )
+                return nvr, epoch
+
+    logger.warning(f"Could not find {dep_component} or its subpackages in root.log")
+    return None, None
+
+
+async def _compare_dependency_evrs(
+    used_dep_nvr: str, used_dep_epoch: int | None, fixed_dep_nvr: str, dep_component: str
+) -> bool | None:
+    """Compare used dependency EVR with fixed dependency EVR.
+
+    Args:
+        used_dep_nvr: NVR of dependency that was used during build
+        used_dep_epoch: Epoch from root.log (None if not present)
+        fixed_dep_nvr: NVR of fixed dependency
+        dep_component: Expected dependency component name for validation
+
+    Returns:
+        True if used_dep >= fixed_dep, False if used_dep < fixed_dep, None if comparison failed
+    """
+    # Get build info for both dependencies
+    used_build, fixed_build = await asyncio.gather(
+        asyncio.to_thread(_get_koji_build, BREWHUB_URL, used_dep_nvr),
+        asyncio.to_thread(_get_koji_build, BREWHUB_URL, fixed_dep_nvr),
+    )
+
+    if not used_build:
+        logger.error(f"Could not find build info for used dependency: {used_dep_nvr}")
+        return None
+
+    if not fixed_build:
+        logger.error(f"Could not find build info for fixed dependency: {fixed_dep_nvr}")
+        return None
+
+    # Validate both builds are for the expected dependency component
+    used_name = used_build.get("name")
+    if used_name != dep_component:
+        logger.error(
+            f"Used dependency NVR {used_dep_nvr} resolves to package '{used_name}', "
+            f"not expected component '{dep_component}'. Data validation failed."
+        )
+        return None
+
+    fixed_name = fixed_build.get("name")
+    if fixed_name != dep_component:
+        logger.error(
+            f"Fixed dependency NVR {fixed_dep_nvr} resolves to package '{fixed_name}', "
+            f"not expected component '{dep_component}'. Data validation failed."
+        )
+        return None
+
+    fixed_evr = _evr_from_build(fixed_build)
+
+    # Use the epoch from root.log if present, otherwise use Koji's epoch
+    # (root.log epoch takes precedence as it's what was actually installed)
+    if used_dep_epoch is not None:
+        used_evr = EVR(
+            epoch=used_dep_epoch,
+            version=used_build["version"],
+            release=used_build["release"],
+        )
+    else:
+        used_evr = _evr_from_build(used_build)
+
+    return used_evr >= fixed_evr
+
+
+async def _compare_build_timestamps(
+    package: str,
+    package_nvr: str,
+    dep_component: str,
+    fixed_dep_nvr: str,
+) -> bool:
+    """Compare build timestamps as fallback when root.log is unavailable.
+
+    Args:
+        package: Package name (e.g., "go-fdo-client")
+        package_nvr: Package NVR to check
+        dep_component: Dependency component name (e.g., "golang")
+        fixed_dep_nvr: Fixed dependency NVR
+
+    Returns:
+        True if package was built after dependency fix, False otherwise
+    """
+    package_build = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, package_nvr)
+    fixed_build = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, fixed_dep_nvr)
+
+    if not package_build or not fixed_build:
+        logger.warning("Could not fetch build metadata for timestamp comparison")
+        return False
+
+    # Validate package build is for expected package
+    if package_build.get("name") != package:
+        logger.error(
+            f"Package build {package_nvr} has name '{package_build.get('name')}', "
+            f"expected '{package}'. Possible data error."
+        )
+        return False
+
+    # Validate fixed build is for expected component
+    if fixed_build.get("name") != dep_component:
+        logger.error(
+            f"Fixed dependency {fixed_dep_nvr} has name '{fixed_build.get('name')}', "
+            f"expected '{dep_component}'. Possible data error."
+        )
+        return False
+
+    package_completion = package_build.get("completion_time")
+    fixed_completion = fixed_build.get("completion_time")
+
+    if not package_completion or not fixed_completion:
+        logger.warning("Missing completion_time for timestamp comparison")
+        return False
+
+    # If package was built after dependency fix, it likely has the fix
+    if package_completion >= fixed_completion:
+        logger.info(
+            f"{package} ({package_nvr}) completed at {package_completion}, "
+            f"which is >= {dep_component} fix completion at {fixed_completion}. "
+            f"Assuming fixed dependency was used."
+        )
+        return True
+
+    logger.info(
+        f"{package} ({package_nvr}) completed at {package_completion}, "
+        f"which is < {dep_component} fix completion at {fixed_completion}. "
+        f"Package was built before fix."
+    )
+    return False
+
+
+async def check_package_built_with_fixed_dependency(
+    package: str,
+    fix_version: str,
+    dep_component: str,
+    fixed_dep_nvr: str,
+    available_tools: list[Tool],
+) -> tuple[bool | None, str | None, str | None, str | None]:
+    """Check if the package's latest build already used the fixed dependency.
+
+    Searches for the most recent completed build of the package in the given
+    fix_version, fetches its root.log from Brew, and checks which version of
+    the dependency was used during that build.
+
+    Args:
+        package: Package name (e.g., "go-fdo-client")
+        fix_version: RHEL fix version (e.g., "rhel-10.2.z")
+        dep_component: Dependency component name (e.g., "golang")
+        fixed_dep_nvr: The fixed dependency NVR from "Fixed in Build" field
+        available_tools: List of available tools for Jira queries
+
+    Returns:
+        Tuple of (already_fixed, package_issue_key, package_nvr, reason):
+        - already_fixed: True if confirmed fixed (root.log proves it),
+                        False if needs rebuild (root.log shows old version or built before fix),
+                        None if needs manual action
+        - package_issue_key: Jira issue key for the existing build (if found)
+        - package_nvr: NVR of the existing build (if found)
+        - reason: When already_fixed is None, explains why (e.g., "built_after_fix_no_rootlog",
+                 "koji_metadata_unavailable", "evr_comparison_failed")
+    """
+    try:
+        # Step 1: Find completed builds in Jira
+        candidates = await _find_completed_builds_jira(package, fix_version, available_tools)
+        if not candidates:
+            logger.info(f"No completed builds found for {package} in {fix_version}")
+            return False, None, None, None
+
+        # Step 2: Select build with highest EVR
+        result = await _select_highest_evr_build(candidates, package)
+        if not result:
+            logger.warning(f"No valid builds found in Koji for {package} in {fix_version}")
+            return False, None, None, None
+
+        package_nvr, package_issue_key, latest_evr = result
+        logger.info(
+            f"Found latest build for {package} by EVR: {package_nvr} "
+            f"(issue: {package_issue_key}, EVR: {latest_evr})"
+        )
+
+        # Step 3: Fetch root.log from Brew
+        root_log = await _fetch_root_log(package_nvr)
+        if not root_log:
+            # Fallback: compare build timestamps
+            logger.info(
+                f"root.log unavailable for {package_nvr}, checking timestamps to determine next action"
+            )
+            built_after_fix = await _compare_build_timestamps(
+                package, package_nvr, dep_component, fixed_dep_nvr
+            )
+
+            if built_after_fix:
+                # Package built after fix - likely has it, but need manual verification
+                logger.info(
+                    f"{package} ({package_nvr}) was built after {dep_component} fix. "
+                    f"Returning None to request manual verification."
+                )
+                return None, package_issue_key, package_nvr, "built_after_fix_no_rootlog"
+            # Package built before fix or timestamps unavailable - definitely needs rebuild
+            logger.info(
+                f"{package} ({package_nvr}) was built before {dep_component} fix or "
+                f"timestamps unavailable. Needs rebuild."
+            )
+            return False, package_issue_key, package_nvr, None
+
+        # Step 4: Get known package names for the dependency
+        known_names = await _get_known_package_names(dep_component, fixed_dep_nvr)
+
+        # Step 5: Parse dependency from root.log
+        used_dep_nvr, used_dep_epoch = _parse_dependency_from_root_log(root_log, dep_component, known_names)
+        if not used_dep_nvr:
+            return False, package_issue_key, package_nvr, None
+
+        # Step 6: Compare EVRs
+        is_fixed = await _compare_dependency_evrs(used_dep_nvr, used_dep_epoch, fixed_dep_nvr, dep_component)
+
+        if is_fixed is True:
+            logger.info(
+                f"{package} ({package_nvr}) was built with {used_dep_nvr}, "
+                f"which is >= fixed dependency {fixed_dep_nvr}"
+            )
+            return True, package_issue_key, package_nvr, None
+        if is_fixed is False:
+            logger.info(
+                f"{package} ({package_nvr}) was built with {used_dep_nvr}, "
+                f"which is < fixed dependency {fixed_dep_nvr}"
+            )
+            return False, package_issue_key, package_nvr, None
+        # EVR comparison failed due to missing Koji metadata or validation error
+        logger.error(
+            f"Could not compare dependency EVRs for {package} ({package_nvr}). "
+            f"Koji metadata unavailable or validation failed."
+        )
+        return None, package_issue_key, package_nvr, "evr_comparison_failed"
+
+    except Exception as e:
+        logger.exception(
+            f"Error checking if package was built with fixed dependency: {e}. "
+            "Falling back to standard rebuild check."
+        )
+        return False, None, None, None
 
 
 def extract_text_from_adf(adf_body) -> str:

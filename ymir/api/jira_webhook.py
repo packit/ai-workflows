@@ -24,7 +24,9 @@ from ymir.api import command_parser, jira_reply
 
 logger = logging.getLogger(__name__)
 
-_SIGNATURE_HEADER = "X-Hub-Signature"  # noqa: S105  # pragma: allowlist secret
+_SIGNATURE_HEADER = "X-Hub-Signature"  # pragma: allowlist secret
+
+_background_tasks: set[asyncio.Task] = set()
 
 
 def _verify_signature(raw_body: bytes, secret: str, signature_header: str) -> bool:
@@ -125,9 +127,11 @@ async def jira_webhook(request: web.Request) -> web.Response:
             message = f"Command failed: {error_body.get('error', 'unknown error')}"
         except Exception:
             message = f"Command failed (HTTP {response.status})"
-        asyncio.create_task(  # noqa: RUF006
+        task = asyncio.create_task(
             jira_reply.post_comment(issue_key, message),
         )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     return response
 

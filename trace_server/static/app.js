@@ -250,6 +250,164 @@ const api = {
 };
 
 // ============================================================
+// OIDC PKCE Authentication
+// ============================================================
+
+const oidc = {
+  config: null,
+  _configPromise: null,
+
+  async loadConfig() {
+    if (this.config) return this.config;
+    if (this._configPromise) return this._configPromise;
+    this._configPromise = fetch('/oidc-config.json').then(async r => {
+      if (!r.ok) return null;
+      this.config = await r.json();
+      return this.config;
+    }).catch(() => null);
+    return this._configPromise;
+  },
+
+  isEnabled() {
+    return this.config && this.config.authority && this.config.client_id;
+  },
+
+  getAccessToken() {
+    try {
+      const raw = sessionStorage.getItem('oidc_access_token');
+      const exp = sessionStorage.getItem('oidc_token_exp');
+      if (!raw) return null;
+      if (exp && Date.now() / 1000 > Number(exp) - 30) {
+        this.clearTokens();
+        return null;
+      }
+      return raw;
+    } catch (e) { return null; }
+  },
+
+  getUserEmail() {
+    try { return sessionStorage.getItem('oidc_user_email'); } catch (e) { return null; }
+  },
+
+  clearTokens() {
+    try {
+      sessionStorage.removeItem('oidc_access_token');
+      sessionStorage.removeItem('oidc_id_token');
+      sessionStorage.removeItem('oidc_token_exp');
+      sessionStorage.removeItem('oidc_user_email');
+      sessionStorage.removeItem('oidc_code_verifier');
+    } catch (e) {}
+  },
+
+  async login() {
+    const cfg = await this.loadConfig();
+    if (!cfg) return;
+    const verifier = _generateCodeVerifier();
+    const challenge = await _sha256Base64Url(verifier);
+    try { sessionStorage.setItem('oidc_code_verifier', verifier); } catch (e) {}
+
+    const redirectUri = window.location.origin + '/';
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: cfg.client_id,
+      redirect_uri: redirectUri,
+      scope: cfg.scope || 'openid id.username',
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      state: location.hash || '#/',
+    });
+    location.href = cfg.authority + '/protocol/openid-connect/auth?' + params.toString();
+  },
+
+  async handleCallback(code, returnHash) {
+    const cfg = await this.loadConfig();
+    if (!cfg) return;
+    let verifier;
+    try { verifier = sessionStorage.getItem('oidc_code_verifier'); } catch (e) {}
+    if (!verifier) return;
+
+    const redirectUri = window.location.origin + '/';
+    const body = new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: cfg.client_id,
+      redirect_uri: redirectUri,
+      code: code,
+      code_verifier: verifier,
+    });
+
+    try {
+      const res = await fetch(cfg.authority + '/protocol/openid-connect/token', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: body.toString(),
+      });
+      if (!res.ok) throw new Error('Token exchange failed');
+      const data = await res.json();
+      sessionStorage.setItem('oidc_access_token', data.access_token);
+      if (data.id_token) {
+        sessionStorage.setItem('oidc_id_token', data.id_token);
+      }
+      if (data.expires_in) {
+        sessionStorage.setItem('oidc_token_exp', String(Date.now() / 1000 + data.expires_in));
+      }
+      if (data.id_token) {
+        const claims = _parseJwtPayload(data.id_token);
+        const displayName = (claims && (claims.preferred_username || claims.email)) || null;
+        if (displayName) {
+          sessionStorage.setItem('oidc_user_email', displayName);
+        }
+      }
+      sessionStorage.removeItem('oidc_code_verifier');
+    } catch (e) {
+      console.error('OIDC token exchange error:', e);
+    }
+    // Navigate to the original hash (stored in state param)
+    history.replaceState(null, '', location.pathname + (returnHash || '#/'));
+  },
+
+  logout() {
+    const cfg = this.config;
+    let idToken;
+    try { idToken = sessionStorage.getItem('oidc_id_token'); } catch (e) {}
+    this.clearTokens();
+    renderHeader();
+    if (cfg) {
+      const redirectUri = window.location.origin + '/';
+      const params = new URLSearchParams({post_logout_redirect_uri: redirectUri});
+      if (idToken) params.set('id_token_hint', idToken);
+      location.href = cfg.authority + '/protocol/openid-connect/logout?' + params.toString();
+    }
+  },
+};
+
+function _generateCodeVerifier() {
+  const arr = new Uint8Array(32);
+  crypto.getRandomValues(arr);
+  return _base64UrlEncode(arr);
+}
+
+async function _sha256Base64Url(str) {
+  const buf = new TextEncoder().encode(str);
+  const hash = await crypto.subtle.digest('SHA-256', buf);
+  return _base64UrlEncode(new Uint8Array(hash));
+}
+
+function _base64UrlEncode(bytes) {
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function _parseJwtPayload(jwt) {
+  try {
+    const parts = jwt.split('.');
+    if (parts.length < 2) return null;
+    const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(payload));
+  } catch (e) { return null; }
+}
+
+// ============================================================
 // State
 // ============================================================
 
@@ -331,7 +489,6 @@ function route() {
       state.currentTraceId = parsed.traceId;
       renderTraceDetail(app, parsed.issue, parsed.traceId, prevHash, parsed.spanId);
     } else {
-      // Invalid trace URL - fall back to recent view
       state.view = 'recent';
       state.currentIssue = null;
       state.currentTraceId = null;
@@ -345,6 +502,9 @@ function route() {
   } else if (hash === '#/issues') {
     state.view = 'issues';
     renderIssues(app);
+  } else if (hash === '#/submit') {
+    state.view = 'submit';
+    renderSubmitForm(app);
   } else {
     state.view = 'recent';
     renderRecent(app);
@@ -358,6 +518,7 @@ function updateNav() {
     const href = a.getAttribute('href');
     if (state.view === 'recent' && href === '#/') a.classList.add('active');
     else if ((state.view === 'issues' || state.view === 'issue') && href === '#/issues') a.classList.add('active');
+    else if (state.view === 'submit' && href === '#/submit') a.classList.add('active');
     else a.classList.remove('active');
   });
 }
@@ -377,9 +538,25 @@ function renderHeader() {
   header.appendChild(logo);
   header.appendChild(el('nav', {className: 'header-nav'},
     el('a', {href: '#/'}, 'recent'),
-    el('a', {href: '#/issues'}, 'issues')));
+    el('a', {href: '#/issues'}, 'issues'),
+    el('a', {href: '#/submit'}, 'submit')));
   header.appendChild(el('div', {className: 'header-spacer'}));
   header.appendChild(el('span', {className: 'header-status', id: 'header-status'}));
+
+  // Auth controls
+  if (oidc.isEnabled()) {
+    const email = oidc.getUserEmail();
+    const token = oidc.getAccessToken();
+    if (token && email) {
+      header.appendChild(el('span', {className: 'header-user'}, email));
+      header.appendChild(el('button', {className: 'header-btn', onClick: () => oidc.logout()}, '[logout]'));
+    } else if (token) {
+      header.appendChild(el('button', {className: 'header-btn', onClick: () => oidc.logout()}, '[logout]'));
+    } else {
+      header.appendChild(el('button', {className: 'header-btn', onClick: () => oidc.login()}, '[login]'));
+    }
+  }
+
   header.appendChild(el('button', {
     className: 'header-btn',
     onClick: toggleTheme,
@@ -1517,6 +1694,145 @@ async function refreshIssueDetail(container, issue) {
 }
 
 // ============================================================
+// Submit Consolidation Form
+// ============================================================
+
+function renderSubmitForm(container) {
+  container.appendChild(el('div', {className: 'view-title'}, 'Submit consolidation job'));
+
+  if (!oidc.isEnabled()) {
+    container.appendChild(el('div', {className: 'error-banner'}, 'OIDC is not configured. Authentication is required to submit jobs.'));
+    return;
+  }
+
+  const token = oidc.getAccessToken();
+  if (!token) {
+    const msg = el('div', {className: 'submit-login-prompt'});
+    msg.appendChild(el('p', {}, 'You need to log in to submit consolidation jobs.'));
+    msg.appendChild(el('button', {className: 'submit-btn', onClick: () => oidc.login()}, 'Log in'));
+    container.appendChild(msg);
+    return;
+  }
+
+  const form = el('div', {className: 'submit-form'});
+
+  const pkgLabel = el('label', {className: 'submit-label'}, 'Package');
+  const pkgInput = el('input', {className: 'submit-input', type: 'text', placeholder: 'e.g. expat', id: 'submit-package'});
+  form.appendChild(pkgLabel);
+  form.appendChild(pkgInput);
+
+  const branchLabel = el('label', {className: 'submit-label'}, 'Target branch');
+  const branchInput = el('input', {className: 'submit-input', type: 'text', placeholder: 'e.g. rhel-9.8.0', id: 'submit-branch'});
+  form.appendChild(branchLabel);
+  form.appendChild(branchInput);
+
+  const issuesLabel = el('label', {className: 'submit-label'}, 'Source issues (optional, exactly 2)');
+  const issuesRow = el('div', {className: 'submit-issues-row'});
+  const issue1 = el('input', {className: 'submit-input submit-input-half', type: 'text', placeholder: 'e.g. RHEL-12345', id: 'submit-issue1'});
+  const issue2 = el('input', {className: 'submit-input submit-input-half', type: 'text', placeholder: 'e.g. RHEL-67890', id: 'submit-issue2'});
+  issuesRow.appendChild(issue1);
+  issuesRow.appendChild(issue2);
+  form.appendChild(issuesLabel);
+  form.appendChild(issuesRow);
+
+  const stratLabel = el('label', {className: 'submit-label'}, 'Release strategy (optional)');
+  const stratSelect = el('select', {className: 'submit-input', id: 'submit-strategy'});
+  stratSelect.appendChild(el('option', {value: ''}, '— default —'));
+  stratSelect.appendChild(el('option', {value: 'merged'}, 'merged'));
+  stratSelect.appendChild(el('option', {value: 'per_commit'}, 'per_commit'));
+  form.appendChild(stratLabel);
+  form.appendChild(stratSelect);
+
+  const resultDiv = el('div', {className: 'submit-result', id: 'submit-result'});
+
+  const submitBtn = el('button', {
+    className: 'submit-btn',
+    id: 'submit-btn',
+    onClick: () => doSubmitConsolidation(resultDiv),
+  }, 'Submit');
+  form.appendChild(submitBtn);
+  form.appendChild(resultDiv);
+  container.appendChild(form);
+}
+
+async function doSubmitConsolidation(resultDiv) {
+  const pkg = document.getElementById('submit-package').value.trim();
+  const branch = document.getElementById('submit-branch').value.trim();
+  const issue1 = document.getElementById('submit-issue1').value.trim();
+  const issue2 = document.getElementById('submit-issue2').value.trim();
+  const strategy = document.getElementById('submit-strategy').value;
+
+  resultDiv.innerHTML = '';
+  resultDiv.className = 'submit-result';
+
+  if (!pkg || !branch) {
+    resultDiv.className = 'submit-result submit-error';
+    resultDiv.textContent = 'Package and target branch are required.';
+    return;
+  }
+
+  const payload = {package: pkg, target_branch: branch};
+  if (issue1 && issue2) {
+    payload.source_issues = [issue1, issue2];
+  } else if (issue1 || issue2) {
+    resultDiv.className = 'submit-result submit-error';
+    resultDiv.textContent = 'Source issues must be exactly 2 (or leave both empty).';
+    return;
+  }
+  if (strategy) payload.release_strategy = strategy;
+
+  const token = oidc.getAccessToken();
+  if (!token) {
+    resultDiv.className = 'submit-result submit-error';
+    resultDiv.textContent = 'Session expired. Please log in again.';
+    return;
+  }
+
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting...';
+
+  try {
+    const apiUrl = oidc.config.api_url.replace(/\/+$/, '');
+    const res = await fetch(apiUrl + '/api/consolidation', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token,
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+
+    if (res.status === 201) {
+      resultDiv.className = 'submit-result submit-success';
+      resultDiv.textContent = 'Job submitted successfully.';
+    } else if (res.status === 200 && data.reason === 'already_queued') {
+      resultDiv.className = 'submit-result submit-warning';
+      resultDiv.textContent = 'Job already queued for this package/branch.';
+    } else if (res.status === 409) {
+      resultDiv.className = 'submit-result submit-warning';
+      resultDiv.textContent = 'Conflict: a pending or active job already exists.';
+    } else if (res.status === 400) {
+      resultDiv.className = 'submit-result submit-error';
+      resultDiv.textContent = 'Validation error: ' + (data.error || JSON.stringify(data.details));
+    } else if (res.status === 401) {
+      resultDiv.className = 'submit-result submit-error';
+      resultDiv.textContent = 'Unauthorized — your session may have expired. Please log in again.';
+    } else {
+      resultDiv.className = 'submit-result submit-error';
+      resultDiv.textContent = 'Error ' + res.status + ': ' + (data.error || res.statusText);
+    }
+  } catch (e) {
+    resultDiv.className = 'submit-result submit-error';
+    resultDiv.textContent = 'Network error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Submit';
+  }
+}
+
+// ============================================================
 // Keyboard shortcuts
 // ============================================================
 
@@ -1535,5 +1851,17 @@ document.addEventListener('keydown', (e) => {
 // Init
 // ============================================================
 
-renderHeader();
-route();
+(async function init() {
+  await oidc.loadConfig();
+
+  // Handle OIDC callback: ?code=...&state=...
+  const params = new URLSearchParams(location.search);
+  if (params.has('code')) {
+    const code = params.get('code');
+    const returnHash = params.get('state') || '#/';
+    await oidc.handleCallback(code, returnHash);
+  }
+
+  renderHeader();
+  route();
+})();

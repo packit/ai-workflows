@@ -35,11 +35,6 @@ spec:
         ports:
         - containerPort: 8080
           protocol: TCP
-        env:
-        - name: API_PORT
-          value: "8080"
-        - name: API_HOST
-          value: "0.0.0.0"
         envFrom:
         - configMapRef:
             name: endpoints-env
@@ -49,6 +44,8 @@ spec:
             name: jira-env
         - secretRef:
             name: api-env
+        - secretRef:
+            name: api-oidc-env
         resources:
           limits:
             cpu: "200m"
@@ -63,7 +60,7 @@ spec:
           periodSeconds: 15
         readinessProbe:
           httpGet:
-            path: /healthz
+            path: /readyz
             port: 8080
           initialDelaySeconds: 3
           periodSeconds: 10

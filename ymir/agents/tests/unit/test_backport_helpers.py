@@ -1,5 +1,7 @@
 import pytest
+from flexmock import flexmock
 
+from ymir.agents import backport_agent
 from ymir.agents.backport_agent import (
     BackportRetryMode,
     BackportState,
@@ -16,6 +18,7 @@ from ymir.agents.backport_agent import (
     _schedule_inherit_cleanup_retry,
     _update_fix_attempts_log,
     _validate_inherited_staged_files,
+    extract_source_title,
 )
 from ymir.agents.utils import patch_fetch_tool_name
 from ymir.agents.ystream_inherit import (
@@ -90,6 +93,47 @@ def test_parse_upstream_patches_rejects_empty_entries(patches):
 )
 def test_patch_fetch_tool_name(patch_url, tool_name):
     assert patch_fetch_tool_name(patch_url) == tool_name
+
+
+@pytest.mark.asyncio
+async def test_extract_source_title_from_single_rhel_distgit_commit(tmp_path):
+    local_clone = tmp_path / "curl"
+    upstream_clone = tmp_path / "curl-upstream"
+    upstream_clone.mkdir()
+    commit = "a" * 40
+    url = f"https://gitlab.com/redhat/rhel/rpms/curl/-/commit/{commit}"
+
+    async def show_subject(command, **_kwargs):
+        assert command == ["git", "-C", str(upstream_clone), "show", "-s", "--format=%s", commit]
+        return "Fix curl retry handling\n", ""
+
+    flexmock(backport_agent).should_receive("check_subprocess").replace_with(show_subject).once()
+
+    assert await extract_source_title(local_clone, [url], "curl") == "Fix curl retry handling"
+
+
+@pytest.mark.asyncio
+async def test_extract_source_title_skips_external_and_multi_commit_sources(tmp_path):
+    local_clone = tmp_path / "curl"
+    (tmp_path / "curl-upstream").mkdir()
+    first = "a" * 40
+    second = "b" * 40
+
+    assert (
+        await extract_source_title(local_clone, [f"https://github.com/curl/curl/commit/{first}"], "curl")
+        is None
+    )
+    assert (
+        await extract_source_title(
+            local_clone,
+            [
+                f"https://gitlab.com/redhat/rhel/rpms/curl/-/commit/{first}",
+                f"https://gitlab.com/redhat/rhel/rpms/curl/-/commit/{second}",
+            ],
+            "curl",
+        )
+        is None
+    )
 
 
 def _state(**updates):

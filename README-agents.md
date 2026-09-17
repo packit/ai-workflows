@@ -40,6 +40,10 @@ scoped to the package and issue family atomically elects one generated title for
 all sibling workers. CVE families are identified by their normalized CVE set;
 non-CVE siblings are identified by the root issue of their Jira Cloners chain,
 falling back to the current issue key when that relationship cannot be resolved.
+For a normal backport from exactly one RHEL GitLab dist-git commit, the source
+commit subject is used as `source_title` for the commit and MR instead. Its
+source changelog entry remains the changelog source. Multiple source commits do
+not select a title and retain the existing combined source-changelog behavior.
 Consolidated tasks use a canonical record only when every included issue belongs
 to that same family; mixed-family consolidations generate an aggregate title
 without caching it under an individual family.

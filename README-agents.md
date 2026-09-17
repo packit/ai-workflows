@@ -128,6 +128,29 @@ repair prompt provides the file path for reading previous attempts and
 appending the outcome. The directory is removed with the issue's working
 directory on a fresh run.
 
+Backport context management is initially disabled. Set
+`BACKPORT_CONTEXT_MANAGEMENT=true` to let the model compact older investigation
+history during normal backports and incremental repairs. Task and system
+instructions remain available, and every shared or package maintainer-rule
+fetch is retained verbatim with its arguments and result. Models configured for
+sequential tool calls compact in a standalone turn; parallel-capable models can
+pair compaction with an independent useful operation. Incremental repairs still
+use the on-disk `<local_clone>-build-logs/fix-attempts.md` history across fresh
+repair-agent instances. Set the variable to `false` or leave it unset for the
+original behavior.
+
+Protected compaction retains every original user message verbatim and in order,
+including earlier instructions in multi-message inputs. Generated context
+summaries remain replaceable by later compactions.
+
+On model requests, stored context summaries are delivered as paired synthetic
+tool calls/results and explicitly marked as untrusted model-generated notes.
+They cannot authorize changes or override tasks and maintainer rules. Protected
+compaction removes standalone reasoning-only retry messages, preserving reasoning
+attached to retained tool calls. Rejected compactions log a specific validation
+reason; unexpected failures log their type and stack locations without task,
+rule, or tool-result contents.
+
 ## Dry run mode
 
 **Without setting `DRY_RUN=true` env var, agents will make real changes:**

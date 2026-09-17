@@ -239,6 +239,8 @@ async def create_backport_agent(
     github_tools = [
         tool for tool in mcp_tools if tool.name in {"get_github_pull_request", "get_github_compare"}
     ]
+    enabled = os.getenv("BACKPORT_CONTEXT_MANAGEMENT", "false").lower() == "true"
+    llm = get_chat_model()
     base_tools = [
         ThinkTool(),
         RunShellCommandTool(options=local_tool_options),
@@ -284,9 +286,13 @@ async def create_backport_agent(
             ]
         )
 
+    instructions = await get_instructions(fix_version)
+    if enabled:
+        instructions = f"{instructions}\n\n{render_template('backport/_context_management.j2')}"
+
     return ReasoningAgent(
         name="BackportAgent",
-        llm=get_chat_model(),
+        llm=llm,
         unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=base_tools,
@@ -301,7 +307,9 @@ async def create_backport_agent(
         ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat Enterprise Linux developer",
-        instructions=await get_instructions(fix_version),
+        instructions=instructions,
+        enable_context_management=enabled,
+        context_protected_tool_names=(("get_shared_rules", "get_maintainer_rules") if enabled else ()),
     )
 
 

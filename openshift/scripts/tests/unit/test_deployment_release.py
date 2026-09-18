@@ -183,6 +183,122 @@ def test_github_api_get_is_anonymous_without_github_token(monkeypatch):
     assert captured["request"].get_header("Authorization") is None
 
 
+def test_check_build_and_push_requires_all_build_jobs_but_ignores_tests(monkeypatch):
+    source_head = "a" * 40
+    run_path = (
+        f"/repos/{deployment_release.GITHUB_REPOSITORY}/actions/workflows/"
+        f"{deployment_release.BUILD_WORKFLOW_FILE}/runs?head_sha={source_head}&per_page=100"
+    )
+    jobs_path = (
+        f"/repos/{deployment_release.GITHUB_REPOSITORY}/actions/runs/123/jobs?filter=latest&per_page=100"
+    )
+
+    def fake_api(path):
+        if path == run_path:
+            return {
+                "workflow_runs": [
+                    {
+                        "id": 123,
+                        "head_sha": source_head,
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "created_at": "2026-09-18T10:00:00Z",
+                    }
+                ]
+            }
+        if path == jobs_path:
+            return {
+                "jobs": [
+                    {
+                        "name": "build-and-push-beeai-containers (c9s)",
+                        "status": "completed",
+                        "conclusion": "success",
+                    },
+                    {
+                        "name": "build-and-push-beeai-containers (c10s)",
+                        "status": "completed",
+                        "conclusion": "success",
+                    },
+                    {
+                        "name": "check-in-container",
+                        "status": "completed",
+                        "conclusion": "failure",
+                    },
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(deployment_release, "github_api_get", fake_api)
+
+    assert deployment_release.check_build_and_push(source_head) == (True, "")
+
+
+def test_check_build_and_push_blocks_failed_build_job(monkeypatch):
+    source_head = "b" * 40
+
+    def fake_api(path):
+        if "/actions/workflows/" in path:
+            return {
+                "workflow_runs": [
+                    {
+                        "id": 456,
+                        "head_sha": source_head,
+                        "status": "completed",
+                        "conclusion": "failure",
+                    }
+                ]
+            }
+        return {
+            "jobs": [
+                {
+                    "name": "build-and-push-mcp-server",
+                    "status": "completed",
+                    "conclusion": "failure",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(deployment_release, "github_api_get", fake_api)
+
+    ready, reason = deployment_release.check_build_and_push(source_head)
+
+    assert not ready
+    assert "build-and-push-mcp-server" in reason
+
+
+def test_check_build_and_push_blocks_pending_build_job(monkeypatch):
+    source_head = "c" * 40
+
+    def fake_api(path):
+        if "/actions/workflows/" in path:
+            return {
+                "workflow_runs": [
+                    {
+                        "id": 789,
+                        "head_sha": source_head,
+                        "status": "in_progress",
+                        "conclusion": None,
+                    }
+                ]
+            }
+        return {
+            "jobs": [
+                {
+                    "name": "build-and-push-sweep",
+                    "status": "in_progress",
+                    "conclusion": None,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(deployment_release, "github_api_get", fake_api)
+
+    ready, reason = deployment_release.check_build_and_push(source_head)
+
+    assert not ready
+    assert "pending jobs" in reason
+
+
 def test_collect_release_notes_uses_commit_pull_request_data(monkeypatch):
     commit = "a" * 40
     api_paths = []
@@ -234,6 +350,33 @@ def test_deployment_changelog_failure_does_not_abort(monkeypatch, capsys):
     assert changelog == ("Changes since `deployed/20260910T100000Z`:\n- Release notes unavailable.")
     assert commits_without_prs == []
     assert "continuing without changelog" in capsys.readouterr().err
+
+
+def test_print_deployment_changelog_uses_baseline_commit(monkeypatch):
+    calls = []
+    base_label = "deployed/20260910T100000Z"
+    base = "a" * 40
+    source_head = "b" * 40
+
+    def fake_collect(repo, received_label, received_base, received_head):
+        calls.append((repo, received_label, received_base, received_head))
+        return "Changes since the previous deployment:", []
+
+    monkeypatch.setattr(deployment_release, "collect_deployment_changelog", fake_collect)
+
+    deployment_release.print_deployment_changelog(
+        {
+            "repo": Path("."),
+            "base_label": base_label,
+            "base": base,
+            "source_head": source_head,
+            "config_head": "c" * 40,
+            "tag": "deployed/20260911T100000Z",
+            "changelog": "",
+        }
+    )
+
+    assert calls == [(Path("."), base_label, base, source_head)]
 
 
 def test_deploy_runs_openshift_finalization_before_changelog(monkeypatch):
@@ -360,6 +503,7 @@ def test_finalize_tags_source_revision_with_minimal_annotation(monkeypatch):
         {
             "repo": Path("."),
             "base_label": "deployed/20260901T100000Z",
+            "base": "c" * 40,
             "source_head": source_head,
             "config_head": config_head,
             "tag": tag,

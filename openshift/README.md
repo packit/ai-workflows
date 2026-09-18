@@ -144,7 +144,9 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   from either the repository root or `openshift/`. It reviews the changes,
   asks for confirmation, applies the local manifests, pushes a
   `deployed/<timestamp>` tag for the captured `upstream/main` commit, and
-  prints the changelog. GitHub API failures warn but do not block deployment.
+  prints the changelog. Before confirmation, all `build-and-push-*` jobs in the
+  `build-and-push` workflow for that commit must have succeeded. Release-note
+  lookup failures warn after deployment.
   Answering `N` cancels without changing OpenShift or creating a tag.
 
   `make deploy` uses the `upstream` remote by default. To use another configured
@@ -170,8 +172,8 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
 
   - Python 3.13, Git, and `make`; deployment also requires `oc` logged in to
     the target project and push access to the selected Git remote.
-  - Release-note requests use the public `packit/ai-workflows` repository and
-    are anonymous by default. If rate-limited, set:
+  - Build-status and release-note requests use the public `packit/ai-workflows`
+    repository and are anonymous by default. If rate-limited, set:
 
     ```bash
     export GITHUB_TOKEN=<github-token>

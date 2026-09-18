@@ -138,6 +138,25 @@ Not-affected resolution (CVE does not apply):
 }
 ```
 
+Already-fixed resolution (rebase/backport/rebuild already done):
+```json
+{
+    "resolution": "already-fixed",
+    "data": {
+        "explanation": "Package is already at version 2.3.4 in the rhel-9.8 branch (tracked by RHEL-67890 with Fixed in Build: libfoo-2.3.4-1.el9). Please add this ticket to that build's Errata.",
+        "jira_issue": "RHEL-12345",
+        "package": "libfoo",
+        "package_nvr": "libfoo-2.3.4-1.el9",
+        "package_issue_key": "RHEL-67890",
+        "dependency_issue_key": null,
+        "dependency_nvr": null,
+        "cve_id": "CVE-2025-12345",
+        "fix_version": "rhel-9.8"
+    }
+}
+```
+Note: Use this when the rebase, backport, or rebuild has already been completed. For rebases, set dependency fields to null. For rebuilds, include dependency_issue_key and dependency_nvr. If no Jira issue or build is found, set package_nvr and package_issue_key to null and include generic guidance in the explanation.
+
 Open-ended analysis resolution:
 ```json
 {

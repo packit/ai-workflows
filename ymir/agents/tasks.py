@@ -20,6 +20,7 @@ from ymir.common.config import load_rhel_config
 from ymir.common.constants import RedisQueues
 from ymir.common.merge_queue import (  # noqa: F401 — re-exported for agents and tests
     _CONSOLIDATION_HASH_KEY,
+    SubmitResult,
     _consolidation_field_key,
     complete_job,
     pick_next_job,
@@ -1114,7 +1115,7 @@ async def try_submit_consolidation_job(
         dist_git_branch,
         release_strategy=config.release_strategy.value,
     )
-    if submitted:
+    if submitted is SubmitResult.SUBMITTED:
         logger.info("Submitted consolidation job for %s/%s", package, dist_git_branch)
     else:
         logger.info("Consolidation job already queued for %s/%s", package, dist_git_branch)

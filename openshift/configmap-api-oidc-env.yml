@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-oidc-env
+data:
+  OIDC_PROVIDER_URL: "https://sso.redhat.com/auth/realms/redhat-external"
+  OIDC_CORS_ALLOWED_ORIGIN: "https://ymir.redhat.com"
+  OIDC_CORS_ALLOWED_ORIGIN_ALT: "https://trace-server-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com"

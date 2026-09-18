@@ -4,6 +4,7 @@ data:
   MCP_GATEWAY_URL: http://mcp-gateway:8000/sse
   UPSTREAM_SEARCH_API_URL: http://upstream-search.hosted.upshift.rdu2.redhat.com:80/v1
   REDIS_URL: redis://valkey:6379/0
+  JIRA_BOT_ACCOUNT_ID: "712020:2df6b4b4-233c-4909-b5bb-334169740357"
 immutable: false
 kind: ConfigMap
 metadata:

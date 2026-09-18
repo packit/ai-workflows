@@ -56,6 +56,11 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   SENTRY_DSN
   ```
 
+  `api-env` (webhook secret for the API server):
+  ```
+  JIRA_WEBHOOK_SECRET
+  ```
+
   `phoenix-db-env` (PostgreSQL credentials for Phoenix observability):
   ```bash
   oc create secret generic phoenix-db-env \
@@ -137,6 +142,88 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   ```
 
   This applies all configurations: egress rules, ConfigMaps, ImageStreams, PersistentVolumes, Services, and Deployments.
+
+### DNS CNAME route (ymir.redhat.com)
+
+A dedicated Route (`route-trace-server-cname.yml`) accepts traffic for the
+`ymir.redhat.com` CNAME.  The OpenShift router's default wildcard certificate
+only covers `*.apps.gpc.ocp-hub.prod.psi.redhat.com`, so a TLS certificate
+for `ymir.redhat.com` must be stored in a Secret.  OpenShift Routes cannot
+reference Secrets directly, so `deploy.sh` automatically patches the
+cert/key into the Route after each apply.
+
+One-time Secret creation:
+
+```bash
+oc create secret tls ymir-cname-tls \
+  --cert=ymir.redhat.com.crt --key=ymir.redhat.com.key
+```
+
+Subsequent deploys via `deploy.sh` will read the cert/key from the
+`ymir-cname-tls` Secret and patch the Route automatically.  If the Secret
+does not exist yet, the patch is skipped with a warning.
+
+## API Authentication (OIDC)
+
+The API validates OIDC Bearer tokens (JWTs) directly using an aiohttp
+middleware (`ymir/api/auth.py`).  Tokens are verified against the OIDC
+provider's JWKS endpoint — no login redirects, no sessions, no sidecar.
+Clients obtain tokens externally and present them as
+`Authorization: Bearer <token>`.
+
+### Architecture
+
+```
+  Browser (trace server UI)          CLI (curl / oidc-agent)
+         |                                  |
+    PKCE login flow                    Bearer token
+         |                                  |
+         v                                  v
+  +----- trace-server ------+    +------ API (:8080) -----+
+  |  serves SPA + /oidc-    |    |  validates JWT via     |
+  |  config.json            |    |  JWKS (jwcrypto)       |
+  +--------------------------+   +-------------------------+
+```
+
+### Browser usage (trace server UI)
+
+1. Visit the trace server at `https://ymir.redhat.com` (or `https://trace-server-jotnar-ymir--...`)
+2. Click "login" in the header — redirects to Red Hat SSO
+3. After login, navigate to "submit" to submit consolidation jobs
+4. The SPA manages tokens automatically (PKCE flow)
+
+### CLI usage
+
+```bash
+# Using oidc-agent (one-time setup: oidc-gen ymir-api):
+curl -H "Authorization: Bearer $(oidc-token ymir-api)" \
+  https://api-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com/api/consolidation \
+  -H 'Content-Type: application/json' \
+  -d '{"package":"expat","target_branch":"rhel-9.8.0"}'
+```
+
+### Required secrets and ConfigMaps
+
+| Resource | Type | Purpose |
+|---|---|---|
+| `api-oidc-env` | ConfigMap | `OIDC_PROVIDER_URL` + CORS origins for the API JWT validation middleware |
+| `trace-server-oidc-env` | ConfigMap | `OIDC_AUTHORITY`, `OIDC_CLIENT_ID`, `OIDC_API_URL`, `OIDC_SCOPE` for the trace server SPA |
+
+### Red Hat IT requirements checklist
+
+Before OIDC authentication will work, the following must be obtained from Red Hat IT / SSO admins:
+
+1. **OIDC Provider URL** — the Keycloak realm URL (e.g. `https://sso.redhat.com/auth/realms/redhat-external`)
+2. **Public OIDC Client registration** with:
+   - Client type: **public** (no client secret)
+   - PKCE required: **yes** (S256)
+   - Allowed redirect URIs: `https://ymir.redhat.com/*` and `https://trace-server-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com/*`
+   - Allowed web origins: `https://ymir.redhat.com` and `https://trace-server-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com`
+   - Standard flow enabled (Authorization Code)
+   - Scopes: `id.username` (the `openid` scope is implicit at sso.redhat.com)
+3. **Client ID** assigned by the registration (e.g. `ymir-trace-ui`)
+4. **JWKS endpoint URL** — usually `${provider_url}/protocol/openid-connect/certs` (auto-discoverable from `.well-known/openid-configuration`)
+5. **Confirmation** that access tokens are JWTs (not opaque) so they can be validated via JWKS without introspection
 
 ## Jira Issue Fetcher Deployment
 

@@ -35,7 +35,7 @@ from ymir.common.base_utils import fix_await, get_jira_auth_headers, redis_clien
 from ymir.common.constants import JIRA_SEARCH_PATH, JiraLabels, RedisQueues
 from ymir.common.issue_lock import LOCK_KEY_PREFIX
 from ymir.common.logging_setup import configure_logging
-from ymir.common.merge_queue import submit_merge_job
+from ymir.common.merge_queue import SubmitResult, submit_merge_job
 from ymir.common.models import (
     BackportOutputSchema,
     ErrorData,
@@ -990,9 +990,9 @@ class JiraIssueFetcher:
                     )
                     continue
 
-                if not result:
+                if result is not SubmitResult.SUBMITTED:
                     logger.info(
-                        "Consolidation job already queued for %s/%s, removing labels without commenting",
+                        "Consolidation job already queued for %s/%s, removing labels",
                         package,
                         branch,
                     )
@@ -1010,13 +1010,23 @@ class JiraIssueFetcher:
                         except Exception as e:
                             logger.warning("Failed to remove %s from %s: %s", label, issue_key, e)
 
-                # Only post comment if job was newly submitted
-                if result:
+                if result is SubmitResult.SUBMITTED:
                     comment = (
                         f"MR consolidation job submitted for {package}/{branch}. "
                         f"The backport MRs for {base_key} and {next_key} will be "
                         f"consolidated into a single MR."
                     )
+                elif result is SubmitResult.CONFLICT:
+                    comment = (
+                        f"A consolidation job is already pending or running for "
+                        f"{package}/{branch}. Consolidation labels have been "
+                        f"removed from {base_key} and {next_key}. Please "
+                        f"re-apply them after the current job finishes."
+                    )
+                else:
+                    comment = None
+
+                if comment is not None:
                     for issue_key in [base_key, next_key]:
                         if self.dry_run:
                             logger.info("DRY_RUN: would post comment on %s", issue_key)
@@ -1026,6 +1036,7 @@ class JiraIssueFetcher:
                             except Exception as e:
                                 logger.warning("Failed to post comment on %s: %s", issue_key, e)
 
+                if result is SubmitResult.SUBMITTED:
                     submitted += 1
                     logger.info(
                         "Submitted consolidation job for %s/%s (issues: %s, %s)",

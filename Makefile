@@ -19,11 +19,13 @@ CONTAINER_TOOL ?= $(shell command -v podman >/dev/null 2>&1 && echo "podman" || 
 REGISTRY ?= quay.io/jotnar
 
 .PHONY: deploy changelog
+REMOTE ?= upstream
+
 deploy:
-	$(MAKE) -C openshift deploy DEPLOY_ARGS="$(DEPLOY_ARGS)"
+	$(MAKE) -C openshift deploy REMOTE="$(REMOTE)"
 
 changelog:
-	$(MAKE) -C openshift changelog CHANGELOG_ARGS="$(CHANGELOG_ARGS)"
+	$(MAKE) -C openshift changelog REMOTE="$(REMOTE)" CHANGELOG_BASE="$(CHANGELOG_BASE)" CHANGELOG_HEAD="$(CHANGELOG_HEAD)"
 
 .PHONY: build
 build:

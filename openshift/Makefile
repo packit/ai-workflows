@@ -7,8 +7,7 @@ SHELL := /bin/bash
 # Reverse to oldest-first (next-to-pop) order. tac is GNU-only; fall back to
 # `tail -r` on macOS/BSD where tac is absent.
 TAC := $(shell command -v tac 2>/dev/null || echo "tail -r")
-DEPLOY_ARGS ?=
-CHANGELOG_ARGS ?=
+REMOTE ?= upstream
 
 # Dump an input queue and its ymir_todo priority twin (drained first by the
 # agents' BRPOP), oldest-first to match pop order.
@@ -30,10 +29,10 @@ define show_single_queue
 endef
 
 deploy:
-	python3 scripts/deployment_release.py deploy $(DEPLOY_ARGS)
+	python3 scripts/deployment_release.py --remote "$(REMOTE)" deploy
 
 changelog:
-	python3 scripts/deployment_release.py changelog $(CHANGELOG_ARGS)
+	python3 scripts/deployment_release.py --remote "$(REMOTE)" changelog $(CHANGELOG_BASE) $(CHANGELOG_HEAD)
 
 run-jira-issue-fetcher:
 	oc delete job jira-issue-fetcher-manual || true

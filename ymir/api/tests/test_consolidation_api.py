@@ -28,7 +28,24 @@ class FakeRedis:
         return dict(self._data.get(name, {}))
 
     async def eval(self, script: str, num_keys: int, *args):
+        """Dispatch to the correct Lua-script simulation."""
+        hash_key = args[0]
+        if len(args) == 5:
+            return self._eval_submit_job(hash_key, args[1], args[2], args[3], args[4])
         return None
+
+    def _eval_submit_job(self, hash_key, pending_key, active_key, value, mode):
+        """Simulate _SUBMIT_JOB_LUA: atomic check-and-set for submission."""
+        bucket = self._data.get(hash_key, {})
+        pk = pending_key.decode() if isinstance(pending_key, bytes) else pending_key
+        ak = active_key.decode() if isinstance(active_key, bytes) else active_key
+        m = mode.decode() if isinstance(mode, bytes) else mode
+        if pk in bucket:
+            return 0
+        if m == "strict" and ak in bucket:
+            return -1
+        self._data.setdefault(hash_key, {})[pk] = value.encode() if isinstance(value, str) else value
+        return 1
 
     async def ping(self):
         return True
@@ -252,7 +269,7 @@ async def test_redis_failure(client, fake_redis):
     async def explode(*args, **kwargs):
         raise ConnectionError("Redis down")
 
-    fake_redis.hget = explode
+    fake_redis.eval = explode
 
     resp = await client.post(
         "/api/consolidation",

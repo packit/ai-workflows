@@ -44,7 +44,7 @@ spec:
             name: jira-env
         - secretRef:
             name: api-env
-        - secretRef:
+        - configMapRef:
             name: api-oidc-env
         resources:
           limits:

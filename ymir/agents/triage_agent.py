@@ -449,6 +449,7 @@ class TriageState(BaseModel):
     )
     applicability_local_clone: Path | None = Field(default=None)
     applicability_unpacked_sources: Path | None = Field(default=None)
+    applicability_builddir: str | None = Field(default=None)
     applicability_used_fallback: bool = Field(default=False)
     applicability_check_skipped: bool = Field(default=False)
     rebase_waiting_for_siblings: bool = Field(
@@ -961,7 +962,7 @@ async def run_workflow(
                     logger.warning(f"Failed to check branches for {package}: {e}")
 
             try:
-                local_clone, unpacked_sources, prep_ok = await tasks.clone_and_prep_sources(
+                local_clone, unpacked_sources, prep_ok, builddir = await tasks.clone_and_prep_sources(
                     package=package,
                     dist_git_branch=clone_branch,
                     available_tools=gateway_tools,
@@ -983,6 +984,7 @@ async def run_workflow(
 
             state.applicability_local_clone = local_clone
             state.applicability_unpacked_sources = unpacked_sources
+            state.applicability_builddir = builddir
             state.applicability_used_fallback = not prep_ok
 
             try:
@@ -996,7 +998,7 @@ async def run_workflow(
                         )
                         patch_name = f"{state.jira_issue}-{idx}.patch"
                         (local_clone / patch_name).write_text(content)
-                        patch_files.append(patch_name)
+                        patch_files.append(str(local_clone / patch_name))
                     except Exception:
                         logger.warning(f"Could not fetch patch from {url}")
 
@@ -1216,6 +1218,9 @@ async def run_workflow(
                 shutil.rmtree(applicability_dir, ignore_errors=True)
                 state.applicability_local_clone = None
                 state.applicability_unpacked_sources = None
+            if state.applicability_builddir:
+                shutil.rmtree(state.applicability_builddir, ignore_errors=True)
+                state.applicability_builddir = None
 
             comment_text = state.triage_result.format_for_comment(auto_chain=auto_chain)
             if state.applicability_check_skipped:

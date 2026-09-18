@@ -37,6 +37,31 @@ import_image() {
     return 1
 }
 
+patch_route_tls_from_secret() {
+    local route=$1
+    local secret=$2
+
+    if ! oc get secret "$secret" -o name >/dev/null 2>&1; then
+        echo "WARNING: TLS secret '$secret' not found — skipping cert patch for route '$route'"
+        return 0
+    fi
+
+    echo "Patching route $route with TLS cert/key from secret $secret ..."
+    local cert key
+    cert=$(oc get secret "$secret" -o jsonpath='{.data.tls\.crt}' | base64 -d)
+    key=$(oc get secret "$secret" -o jsonpath='{.data.tls\.key}' | base64 -d)
+
+    oc patch route "$route" --type merge -p "$(
+        python3 -c "
+import json, sys
+print(json.dumps({'spec':{'tls':{
+    'certificate': sys.argv[1],
+    'key': sys.argv[2],
+}}}))
+" "$cert" "$key"
+    )"
+}
+
 # Egress rules
 apply tenant-egress.yml
 
@@ -71,6 +96,7 @@ apply pvc-trace-server-data.yml
 apply service-otel-collector.yml
 apply route-trace-server.yml
 apply route-trace-server-cname.yml
+patch_route_tls_from_secret trace-server-cname ymir-cname-tls
 apply deployment-otel-collector.yml
 
 # Valkey
@@ -97,6 +123,7 @@ apply deployment-mcp-gateway.yml
 # API
 apply imagestream-api.yml
 import_image ymir-api
+apply configmap-api-oidc-env.yml
 apply service-api.yml
 apply route-api.yml
 apply deployment-api.yml

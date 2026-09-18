@@ -53,17 +53,14 @@ check-sweep:
 check-sweep-integration: TEST_TARGET = ./tests/integration
 check-sweep-integration:
 	$(call RUN_TESTS,ymir/sweep/)
+check-api: TEST_TARGET = ./tests
 check-api:
 	$(call RUN_TESTS,ymir/api/)
 
 check-mcp-install:
 	PYTHONPATH= bash scripts/test_mcp_install.sh
 
-<<<<<<< HEAD
-check: check-agents check-cli check-tools-general check-unprivileged-tools check-privileged-tools check-jira-issue-fetcher check-ymir-common check-supervisor check-deployment-scripts check-mr-cleanup check-sweep check-mcp-install
-=======
-check: check-agents check-cli check-unprivileged-tools check-privileged-tools check-jira-issue-fetcher check-ymir-common check-supervisor check-sweep check-api check-mcp-install
->>>>>>> 9f1d22e0 (Address PR review findings)
+check: check-agents check-cli check-tools-general check-unprivileged-tools check-privileged-tools check-jira-issue-fetcher check-ymir-common check-supervisor check-deployment-scripts check-mr-cleanup check-sweep check-api check-mcp-install
 
 define RUN_TESTS_IN_CONTAINER
 	$(CONTAINER_ENGINE) run --rm -it -v $(CURDIR):/src:z --env TEST_TARGET $(1) make -f Makefile.tests $(2)
@@ -102,10 +99,6 @@ check-in-container: check-agents-in-container check-cli-in-container check-tools
 	check-unprivileged-tools-in-container \
 	check-privileged-tools-in-container \
 	check-jira-issue-fetcher-in-container check-ymir-common-in-container check-supervisor-in-container \
-<<<<<<< HEAD
 	check-deployment-scripts-in-container check-mr-cleanup-in-container check-sweep-in-container \
-=======
-	check-sweep-in-container \
 	check-api-in-container \
->>>>>>> 9f1d22e0 (Address PR review findings)
 	check-mcp-install-in-container

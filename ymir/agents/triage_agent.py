@@ -78,7 +78,6 @@ from ymir.common.utils import (
 )
 from ymir.common.version_utils import (
     construct_internal_branch_name,
-    detect_modular_issue,
     extract_downstream_package,
     is_modular,
     is_older_zstream,
@@ -1847,13 +1846,6 @@ async def main() -> None:
                     except Exception as e:
                         logger.warning(f"Failed to check/queue primary for sibling {input.issue}: {e}")
 
-                # Modular issues stop after triage — no downstream jobs or reproducer.
-                _modular_component = detect_modular_issue(
-                    jira_summary=state.jira_summary,
-                    raw_downstream_component=state.raw_downstream_component,
-                    downstream_component=state.downstream_component,
-                )
-
                 # Dispatch to downstream queues
                 if output.resolution == Resolution.ERROR:
                     # `data` is a plain union independent of `resolution` — nothing
@@ -1892,7 +1884,7 @@ async def main() -> None:
                     Resolution.CLARIFICATION_NEEDED,
                     Resolution.OPEN_ENDED_ANALYSIS,
                 ):
-                    if auto_chain and (not _modular_component or user_triggered):
+                    if auto_chain:
                         if output.resolution == Resolution.OPEN_ENDED_ANALYSIS:
                             queue = RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value
                             downstream_payload = output.data.model_dump_json()
@@ -1944,18 +1936,11 @@ async def main() -> None:
                         if queue is not None:
                             await fix_await(redis.lpush(queue, downstream_payload))
                             logger.info(f"Pushed {input.issue} to {queue}")
-                    elif _modular_component and not user_triggered:
-                        logger.info(
-                            f"Modular issue {input.issue} — stopping after triage, "
-                            "skipping downstream queue (not user-triggered)"
-                        )
                     else:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
 
                 if output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
-                    if _modular_component and not user_triggered:
-                        logger.info("Modular issue %s — skipping reproducer queue", input.issue)
-                    elif enqueue_reproducer:
+                    if enqueue_reproducer:
                         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
                             await _enqueue_reproducer(redis, state, user_triggered, gateway_tools)
                     else:

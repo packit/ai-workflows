@@ -133,86 +133,70 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
 - Run the deployment script:
 
   ```bash
+  # From the repository root
   make deploy
+
+  # From openshift/
+  cd openshift && make deploy
   ```
 
-  This `make deploy` target is the primary deployment entry point. It fetches
-  `upstream/main`, shows the image/source revision and the
-  local deployment-configuration revision, warns if they diverge, shows source
-  changes since the last deployment tag, and asks for confirmation. It then
-  applies the local manifests, creates `deployed/<timestamp>` pointing at
-  the captured `upstream/main` commit, and prints the changelog. Release notes
-  are collected after deployment and tag push; GitHub API failures warn but do
-  not block the deployment. If the local deployment configuration diverges,
-  that is reported during the deployment.
+  The root Makefile delegates to `openshift/Makefile`, so `make deploy` works
+  from either the repository root or `openshift/`. It reviews the changes,
+  asks for confirmation, applies the local manifests, pushes a
+  `deployed/<timestamp>` tag for the captured `upstream/main` commit, and
+  prints the changelog. GitHub API failures warn but do not block deployment.
   Answering `N` cancels without changing OpenShift or creating a tag.
 
-  Use `make deploy` for the default `upstream` workflow. Use the Python CLI
-  directly when selecting another remote or passing subcommand options.
-
-  `deploy-oc.sh` is the low-level apply/import script used by the Python
-  driver. It can be run directly with `./openshift/deploy-oc.sh`, but bypasses
-  revision review, confirmation, changelog generation, and tag creation.
-
-  Requirements:
-
-  - Python 3.13, Git, and `make` for the Make targets. The release script uses
-    the Python standard library for GitHub API calls.
-  - GitHub API requests are anonymous by default for this public repository.
-    Set `GITHUB_TOKEN` to use authenticated read-only requests; for a private
-    repository, the token needs read access to pull requests.
-
-    For example, expose a read-only token to the CLI with:
-
-    ```bash
-    export GITHUB_TOKEN=<read-only-github-token>
-    ```
-
-    `GITLAB_TOKEN` is an OpenShift application secret and is unrelated to the
-    GitHub release-note lookup.
-  - For deployment, `oc` installed and logged in to the target OpenShift
-    project, plus push access to the selected Git remote.
-  - No tracked Git changes and an existing `deployed/*` tag on the selected
-    remote. Untracked files are ignored.
-
-  The changelog command does not require `oc` or a clean worktree; it needs
-  the Git refs and GitHub API access, and may use local refs. The deployment
-  and its dry run require the baseline tag to exist on the selected remote.
-
-  For Git/release-note checks without deploying or creating a tag:
+  `make deploy` uses the `upstream` remote by default. To use another configured
+  remote:
 
   ```bash
-  python3 openshift/scripts/deployment_release.py deploy --dry-run
+  make deploy REMOTE=origin
+  ```
+
+  To review without deploying or creating a tag, use the Python CLI directly.
+  The examples below assume the repository root; from `openshift/`, use
+  `python3 scripts/deployment_release.py` instead.
+
+  ```bash
   python3 openshift/scripts/deployment_release.py --remote origin deploy --dry-run
   ```
 
-  Before the first deployment, create and push an initial `deployed/<timestamp>`
-  tag at the source commit that represents the last deployed state. Deployment
-  refuses to run without an existing `deployed/*` tag. For example, for a
-  deployment from 2026-09-15:
+  `./openshift/deploy-oc.sh` is the low-level apply/import command; running it
+  directly bypasses revision review, confirmation, changelog generation, and
+  tag creation.
 
-  ```bash
-  git tag -a deployed/20260915T120000Z <last-deployed-source-sha> \
-    -m "Initial deployment baseline"
-  git push upstream deployed/20260915T120000Z
-  ```
+  Requirements:
 
-  The full CLI is `python3 openshift/scripts/deployment_release.py` when run
-  from the repository root. For example, to deploy using `origin`:
+  - Python 3.13, Git, and `make`; deployment also requires `oc` logged in to
+    the target project and push access to the selected Git remote.
+  - Release-note requests use the public `packit/ai-workflows` repository and
+    are anonymous by default. If rate-limited, set:
 
-  ```bash
-  python3 openshift/scripts/deployment_release.py --remote origin deploy
-  ```
+    ```bash
+    export GITHUB_TOKEN=<github-token>
+    ```
+
+  Deployment and dry runs require no tracked changes and an existing
+  `deployed/*` tag on the selected remote; untracked files are ignored.
+  Changelog-only runs need only the Git refs and GitHub API access.
 
   To print a changelog without deploying or creating a tag, use the full CLI:
 
   ```bash
+  # From the repository root
   python3 openshift/scripts/deployment_release.py changelog deployed/20260910T100000Z
-  python3 openshift/scripts/deployment_release.py --remote origin changelog deployed/20260910T100000Z
   ```
 
   The optional head argument defaults to `upstream/main` (or `<remote>/main`
   when `--remote` is overridden).
+
+  `make changelog CHANGELOG_BASE="deployed/<timestamp>"` works from either
+  directory. Set `REMOTE` for another configured remote:
+
+  ```bash
+  make changelog REMOTE=origin CHANGELOG_BASE="deployed/<timestamp>"
+  ```
 
 ## Jira Issue Fetcher Deployment
 

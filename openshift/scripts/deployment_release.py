@@ -3,8 +3,8 @@
 
 This module owns the deployment flow: selecting the previous deployment
 reference, reviewing upstream source commits and local deployment configuration,
-extracting release notes, invoking the OpenShift apply script, and creating the
-immutable deployment tag after a successful deployment.
+invoking the OpenShift apply script, creating the immutable deployment tag after
+a successful deployment, and then extracting release notes.
 """
 
 from __future__ import annotations
@@ -394,6 +394,20 @@ def format_changelog(base_label: str, prs: list[ReleaseNotesPullRequest], missin
     return "\n".join(lines)
 
 
+def collect_deployment_changelog(
+    repo: Path, base_label: str, base: str, source_head: str
+) -> tuple[str, list[str]]:
+    try:
+        prs, missing_notes, commits_without_prs = collect_release_notes(repo, base, source_head)
+    except ReleaseError as error:
+        print(
+            f"Warning: release-note collection failed; continuing without changelog: {error}",
+            file=sys.stderr,
+        )
+        return f"Changes since `{base_label}`:\n- Release notes unavailable.", []
+    return format_changelog(base_label, prs, missing_notes), commits_without_prs
+
+
 def print_changelog(base_ref: str, head_ref: str | None, remote: str) -> None:
     repo = repository_root()
     remote = repository_remote(repo, remote)
@@ -471,9 +485,12 @@ def prepare(dry_run: bool, remote: str) -> DeploymentContext:
     if not dry_run:
         ask_for_confirmation()
 
-    print("\nCollecting release notes from GitHub...")
-    prs, missing_notes, commits_without_prs = collect_release_notes(repo, base, source_head)
-    changelog = format_changelog(base_label, prs, missing_notes)
+    changelog = ""
+    if dry_run:
+        print("\nCollecting release notes from GitHub...")
+        changelog, commits_without_prs = collect_deployment_changelog(repo, base_label, base, source_head)
+    else:
+        commits_without_prs = []
     context: DeploymentContext = {
         "repo": repo,
         "base_label": base_label,
@@ -482,7 +499,7 @@ def prepare(dry_run: bool, remote: str) -> DeploymentContext:
         "tag": tag,
         "changelog": changelog,
     }
-    if commits_without_prs:
+    if dry_run and commits_without_prs:
         print(
             "Warning: no associated PR was found for commits: " + ", ".join(commits_without_prs),
             file=sys.stderr,
@@ -541,8 +558,23 @@ def finalize(context: DeploymentContext, remote: str) -> None:
             f"The tag points to {remote}/main; the deployed configuration came "
             "from a different local revision."
         )
+
+
+def print_deployment_changelog(context: DeploymentContext) -> None:
+    print("\nCollecting release notes from GitHub...")
+    changelog, commits_without_prs = collect_deployment_changelog(
+        context["repo"],
+        context["base_label"],
+        context["base_label"],
+        context["source_head"],
+    )
+    if commits_without_prs:
+        print(
+            "Warning: no associated PR was found for commits: " + ", ".join(commits_without_prs),
+            file=sys.stderr,
+        )
     print("\nChangelog:")
-    print(context["changelog"])
+    print(changelog)
 
 
 def deploy(dry_run: bool, remote: str) -> None:
@@ -551,6 +583,7 @@ def deploy(dry_run: bool, remote: str) -> None:
         return
     run_openshift_deployment()
     finalize(context, remote)
+    print_deployment_changelog(context)
 
 
 def build_parser() -> argparse.ArgumentParser:

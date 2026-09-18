@@ -141,8 +141,10 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   local deployment-configuration revision, warns if they diverge, shows source
   changes since the last deployment tag, and asks for confirmation. It then
   applies the local manifests, creates `deployed/<timestamp>` pointing at
-  the captured `upstream/main` commit, and prints the changelog. If the local
-  deployment configuration diverges, that is reported during the deployment.
+  the captured `upstream/main` commit, and prints the changelog. Release notes
+  are collected after deployment and tag push; GitHub API failures warn but do
+  not block the deployment. If the local deployment configuration diverges,
+  that is reported during the deployment.
   Answering `N` cancels without changing OpenShift or creating a tag.
 
   Use `make deploy` for the default `upstream` workflow. Use the Python CLI

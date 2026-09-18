@@ -221,7 +221,22 @@ def test_collect_release_notes_uses_commit_pull_request_data(monkeypatch):
     assert commits_without_prs == []
 
 
-def test_deploy_runs_openshift_before_finalization(monkeypatch):
+def test_deployment_changelog_failure_does_not_abort(monkeypatch, capsys):
+    def fail_to_collect(_repo, _base, _head):
+        raise deployment_release.ReleaseError("GitHub API rate limit exceeded")
+
+    monkeypatch.setattr(deployment_release, "collect_release_notes", fail_to_collect)
+
+    changelog, commits_without_prs = deployment_release.collect_deployment_changelog(
+        Path("."), "deployed/20260910T100000Z", "base", "head"
+    )
+
+    assert changelog == ("Changes since `deployed/20260910T100000Z`:\n- Release notes unavailable.")
+    assert commits_without_prs == []
+    assert "continuing without changelog" in capsys.readouterr().err
+
+
+def test_deploy_runs_openshift_finalization_before_changelog(monkeypatch):
     context = object()
     events = []
 
@@ -232,6 +247,9 @@ def test_deploy_runs_openshift_before_finalization(monkeypatch):
     def fake_finalize(received_context, remote):
         events.append(("finalize", received_context, remote))
 
+    def fake_print_changelog(received_context):
+        events.append(("changelog", received_context))
+
     monkeypatch.setattr(deployment_release, "prepare", fake_prepare)
     monkeypatch.setattr(
         deployment_release,
@@ -239,6 +257,7 @@ def test_deploy_runs_openshift_before_finalization(monkeypatch):
         lambda: events.append("openshift"),
     )
     monkeypatch.setattr(deployment_release, "finalize", fake_finalize)
+    monkeypatch.setattr(deployment_release, "print_deployment_changelog", fake_print_changelog)
 
     deployment_release.deploy(False, "upstream")
 
@@ -246,6 +265,7 @@ def test_deploy_runs_openshift_before_finalization(monkeypatch):
         ("prepare", False, "upstream"),
         "openshift",
         ("finalize", context, "upstream"),
+        ("changelog", context),
     ]
 
 

@@ -258,6 +258,7 @@ class Resolution(Enum):
     CLARIFICATION_NEEDED = "clarification-needed"
     OPEN_ENDED_ANALYSIS = "open-ended-analysis"
     NOT_AFFECTED = "not-affected"
+    ALREADY_FIXED = "already-fixed"  # Build already contains fix, needs errata processing
     ERROR = "error"
     # Postponement resolutions, broken down by the reason for postponing.
     # The reason is carried by the resolution itself (there is no separate
@@ -505,6 +506,25 @@ class NotAffectedData(BaseModel):
     )
 
 
+class AlreadyFixedData(BaseModel):
+    """Data for already-fixed resolution (build already contains fix, needs errata processing)."""
+
+    explanation: str = Field(
+        description="Detailed explanation of how the build was verified to contain the fix"
+    )
+    jira_issue: str = Field(description="Jira issue identifier")
+    package: str = Field(description="Package name")
+    package_nvr: str = Field(description="Package NVR that already contains the fix")
+    package_issue_key: str = Field(description="Jira issue key for the existing build with the fix")
+    dependency_issue_key: str = Field(description="Jira issue key for the dependency fix")
+    dependency_nvr: str = Field(description="Dependency NVR that was used in the build")
+    cve_id: str | None = Field(
+        default=None,
+        description="CVE identifier(s); include ALL CVE IDs when the issue covers multiple CVEs",
+    )
+    fix_version: str | None = Field(default=None, description="Fix version in Jira (e.g., 'rhel-9.8')")
+
+
 class ApplicabilityResult(BaseModel):
     """Output schema for the CVE applicability check agent."""
 
@@ -566,7 +586,7 @@ class TriageOutputSchema(BaseModel):
 
     resolution: Resolution = Field(
         description="Triage resolution, one of rebase, backport, rebuild, "
-        "clarification-needed, open-ended-analysis, not-affected, error, "
+        "clarification-needed, open-ended-analysis, not-affected, already-fixed, error, "
         "postponed_dependency, postponed_no_patch, postponed_pr_pending"
     )
     data: (
@@ -577,6 +597,7 @@ class TriageOutputSchema(BaseModel):
         | OpenEndedAnalysisData
         | PostponedData
         | NotAffectedData
+        | AlreadyFixedData
         | ErrorData
     ) = Field(description="Associated data")
 
@@ -728,6 +749,19 @@ class TriageOutputSchema(BaseModel):
                 return (
                     f"*Recommendation: Not a Bug / {category}*\n\n"
                     f"{self.data.explanation}{vex_guide}{TRIAGE_DISCLAIMER}"
+                )
+
+            case AlreadyFixedData():
+                return (
+                    f"{resolution}"
+                    f"*Package*: {self.data.package}\n"
+                    f"*Build with Fix*: {self.data.package_nvr} ({self.data.package_issue_key})\n"
+                    f"*Dependency Fix*: {self.data.dependency_nvr} ({self.data.dependency_issue_key})\n\n"
+                    f"{self.data.explanation}\n\n"
+                    f"*Action Required*: Add build {self.data.package_nvr} to the errata for "
+                    f"{self.data.fix_version or 'the appropriate release'}."
+                    f"{AUTOMATED_RESOLUTION_NOT_SUPPORTED}"
+                    f"{TRIAGE_DISCLAIMER}"
                 )
 
             case ErrorData():

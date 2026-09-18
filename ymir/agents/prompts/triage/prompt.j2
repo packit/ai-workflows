@@ -113,8 +113,8 @@ You must decide between one of the following actions. Follow these guidelines to
        (summary ~ "rebase" OR summary ~ "update") AND summary ~ "<target_version>"
        AND status in (Closed, Done, In Progress) AND fixVersion = "<fix_version>"'
        Include fields ["key", "summary", "status", "customfield_10578"] (Fixed in Build)
-     - Return resolution "not-affected" instead of "rebase"
-     - In the summary field, reference the existing issue if found: "Package is
+     - Return resolution "already-fixed" instead of "rebase"
+     - In the explanation field, reference the existing issue if found: "Package is
        already at version X.Y.Z in the <branch> branch (tracked by ISSUE-KEY with
        Fixed in Build: package-X.Y.Z-R.elN). Please add this ticket to that build's
        Errata." If no issue found, provide generic guidance: "Package is already

@@ -178,6 +178,14 @@ class TestMergeRequestInstructions:
 
 
 class TestBackportInstructions:
+    def test_context_management_partial(self):
+        result = render_template("backport/_context_management.j2")
+        assert "CUMULATIVE DURABLE SUMMARY" in result
+        assert "failed" in result.lower()
+        assert "retained verbatim" in result
+        assert "dependent operations" in result
+        assert "fix-attempts.md" in result
+
     def test_normal_loads(self):
         result = render_template("backport/instructions.j2")
         assert "backporting upstream patches" in result

@@ -43,6 +43,7 @@ from pydantic import BaseModel, Field
 from ymir.agents.reasoning_agent.context_management import (
     ManageContextTool,
     apply_pending_context_compaction,
+    context_messages_for_llm,
 )
 from ymir.agents.reasoning_agent.events import (
     ReasoningAgentFinalAnswerEvent,
@@ -133,6 +134,7 @@ class ReasoningAgentRunner:
         requirements: Sequence[RequirementAgentRequirement] | None = None,
         unconstrained: bool = False,
         enable_context_management: bool = False,
+        context_protected_tool_names: Sequence[str] = (),
     ) -> None:
         self._ctx = run_context
         self._llm = llm
@@ -143,9 +145,13 @@ class ReasoningAgentRunner:
         )
         self._final_answer = FinalAnswerTool(expected_output, state=self._state)
         self._tools = tools
+        self._context_protected_tool_names = tuple(context_protected_tool_names)
         self._all_tools: list[AnyTool] = [*tools]
         if enable_context_management:
-            self._all_tools.append(ManageContextTool(state=self._state))
+            context_tool = ManageContextTool(state=self._state)
+            if self._context_protected_tool_names and not self._llm.allow_parallel_tool_calls:
+                context_tool.use_standalone_description()
+            self._all_tools.append(context_tool)
         self._all_tools.append(self._final_answer)
         self._run_config = config
         self._tool_call_cycle_checker = tool_call_cycle_checker
@@ -445,6 +451,7 @@ class ReasoningAgentRunner:
             )
             cache_index = 1 if self._requirements else 0
 
+        messages = context_messages_for_llm(messages)
         cache_control_injection_points = [
             {"location": "message", "index": cache_index},
             {
@@ -609,7 +616,10 @@ class ReasoningAgentRunner:
 
         await self._state.memory.add_many([*response.output, *tool_results])
         await delete_messages_by_meta_key(self._state.memory, key=TEMP_MESSAGE_META_KEY, value=True)
-        await apply_pending_context_compaction(self._state)
+        await apply_pending_context_compaction(
+            self._state,
+            protected_tool_names=self._context_protected_tool_names,
+        )
 
         return response
 
@@ -674,6 +684,9 @@ class ReasoningAgentRunner:
 
         await self._state.memory.add_many([*response.output, *tool_results])
         await delete_messages_by_meta_key(self._state.memory, key=TEMP_MESSAGE_META_KEY, value=True)
-        await apply_pending_context_compaction(self._state)
+        await apply_pending_context_compaction(
+            self._state,
+            protected_tool_names=self._context_protected_tool_names,
+        )
 
         return response

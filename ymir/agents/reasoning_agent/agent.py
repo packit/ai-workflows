@@ -64,6 +64,7 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
         final_answer_as_tool: bool = True,
         save_intermediate_steps: bool = True,
         enable_context_management: bool = False,
+        context_protected_tool_names: Sequence[str] = (),
         templates: dict[ReasoningAgentTemplatesKeys, PromptTemplate[Any] | ReasoningAgentTemplateFactory]
         | ReasoningAgentTemplates
         | None = None,
@@ -77,6 +78,7 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
         self._tool_call_checker = tool_call_checker
         self._final_answer_as_tool = final_answer_as_tool
         self._enable_context_management = enable_context_management
+        self._context_protected_tool_names = tuple(context_protected_tool_names)
         self._unconstrained = unconstrained
         self._requirements = [] if unconstrained else list(requirements or [])
         template_defaults: dict[str, Any] = {
@@ -116,6 +118,7 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
             requirements=self._requirements,
             unconstrained=self._unconstrained,
             enable_context_management=self._enable_context_management,
+            context_protected_tool_names=self._context_protected_tool_names,
         )
         new_messages = self._process_input(
             input,
@@ -217,6 +220,7 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
             save_intermediate_steps=self._save_intermediate_steps,
             final_answer_as_tool=self._final_answer_as_tool,
             enable_context_management=self._enable_context_management,
+            context_protected_tool_names=self._context_protected_tool_names,
             name=self._meta.name,
             description=self._meta.description,
             middlewares=self.middlewares.copy(),

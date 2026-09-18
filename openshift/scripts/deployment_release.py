@@ -25,6 +25,8 @@ TAG_PREFIX = "deployed/"
 GITHUB_REPOSITORY = "packit/ai-workflows"
 GITHUB_API_URL = "https://api.github.com"
 GITHUB_API_TIMEOUT = 10
+BUILD_WORKFLOW_FILE = "build-and-push.yml"
+BUILD_JOB_PREFIX = "build-and-push-"
 RELEASE_NOTES_RE = re.compile(
     r"(?ms)^[ \t]*RELEASE NOTES BEGIN[ \t]*\r?\n"
     r"(?P<notes>.*?)\r?\n^[ \t]*RELEASE NOTES END[ \t]*\r?$"
@@ -39,6 +41,7 @@ class DeploymentContext(TypedDict):
 
     repo: Path
     base_label: str
+    base: str
     source_head: str
     config_head: str
     tag: str
@@ -317,6 +320,92 @@ def github_api_get(path: str) -> Any:
         raise ReleaseError(f"GitHub API returned invalid JSON for {path}") from error
 
 
+def check_build_and_push(source_head: str) -> tuple[bool, str]:
+    runs_path = (
+        f"/repos/{GITHUB_REPOSITORY}/actions/workflows/{BUILD_WORKFLOW_FILE}/runs"
+        f"?head_sha={source_head}&per_page=100"
+    )
+    runs_response = github_api_get(runs_path)
+    if not isinstance(runs_response, dict):
+        raise ReleaseError("GitHub API returned unexpected workflow run data")
+    workflow_runs = runs_response.get("workflow_runs")
+    if not isinstance(workflow_runs, list):
+        raise ReleaseError("GitHub API returned unexpected workflow run data")
+
+    matching_runs = [
+        run for run in workflow_runs if isinstance(run, dict) and run.get("head_sha") == source_head
+    ]
+    if not matching_runs:
+        reason = f"no {BUILD_WORKFLOW_FILE} run found for {source_head[:12]}"
+        print(f"\nBuild-and-push checks: {reason}.", file=sys.stderr)
+        return False, reason
+    matching_runs.sort(key=lambda run: str(run.get("created_at", "")), reverse=True)
+    workflow_run = matching_runs[0]
+
+    run_id = workflow_run.get("id")
+    run_url = workflow_run.get("html_url")
+    if not isinstance(run_id, int) or isinstance(run_id, bool):
+        raise ReleaseError("GitHub API returned an invalid build workflow run ID")
+    if run_url is not None and not isinstance(run_url, str):
+        raise ReleaseError("GitHub API returned an invalid build workflow URL")
+
+    jobs_path = f"/repos/{GITHUB_REPOSITORY}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"
+    jobs_response = github_api_get(jobs_path)
+    if not isinstance(jobs_response, dict):
+        raise ReleaseError("GitHub API returned unexpected build job data")
+    jobs = jobs_response.get("jobs")
+    if not isinstance(jobs, list):
+        raise ReleaseError("GitHub API returned unexpected build job data")
+
+    build_jobs: list[tuple[str, str, str | None]] = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            raise ReleaseError("GitHub API returned unexpected build job data")
+        name = job.get("name")
+        if not isinstance(name, str):
+            raise ReleaseError("GitHub API returned a build job without a name")
+        if not name.startswith(BUILD_JOB_PREFIX):
+            continue
+        status = job.get("status")
+        conclusion = job.get("conclusion")
+        if not isinstance(status, str):
+            raise ReleaseError(f"GitHub API returned an invalid status for build job {name!r}")
+        if conclusion is not None and not isinstance(conclusion, str):
+            raise ReleaseError(f"GitHub API returned an invalid conclusion for build job {name!r}")
+        build_jobs.append((name, status, conclusion))
+
+    if not build_jobs:
+        reason = f"no {BUILD_JOB_PREFIX} jobs have been reported yet"
+        print(f"\nBuild-and-push checks: {reason}.", file=sys.stderr)
+        return False, reason
+
+    build_jobs.sort(key=lambda job: job[0])
+    print(f"\nBuild-and-push checks for {source_head[:12]}:")
+    if run_url:
+        print(f"  Workflow: {run_url}")
+    for name, status, conclusion in build_jobs:
+        result = conclusion if status == "completed" else status
+        print(f"  {name}: {result or 'unknown'}")
+
+    pending_jobs = [name for name, status, _conclusion in build_jobs if status != "completed"]
+    unsuccessful_jobs = [
+        name for name, status, conclusion in build_jobs if status == "completed" and conclusion != "success"
+    ]
+    reasons: list[str] = []
+    if pending_jobs:
+        reasons.append("pending jobs: " + ", ".join(pending_jobs))
+    if unsuccessful_jobs:
+        reasons.append("unsuccessful jobs: " + ", ".join(unsuccessful_jobs))
+
+    if reasons:
+        reason = "; ".join(reasons)
+        print(f"Build-and-push checks are not ready: {reason}.", file=sys.stderr)
+        return False, reason
+
+    print("All build-and-push checks succeeded.")
+    return True, ""
+
+
 def associated_pull_requests(repository: str, commit: str) -> list[dict[str, Any]]:
     value = github_api_get(f"/repos/{repository}/commits/{commit}/pulls?per_page=100")
     if not isinstance(value, list):
@@ -482,6 +571,22 @@ def prepare(dry_run: bool, remote: str) -> DeploymentContext:
     print(f"\nChanges in {remote}/main since the previous deployment:")
     print(log or "(no commits since the previous deployment)")
 
+    try:
+        build_ready, build_reason = check_build_and_push(source_head)
+    except ReleaseError as error:
+        if not dry_run:
+            raise
+        build_ready = False
+        build_reason = str(error)
+        print(f"Build-and-push check could not be completed: {error}.", file=sys.stderr)
+    if not build_ready:
+        if not dry_run:
+            raise ReleaseError(f"deployment blocked: {build_reason}")
+        print(
+            f"WARNING: deployment would be blocked until build-and-push checks succeed: {build_reason}",
+            file=sys.stderr,
+        )
+
     if not dry_run:
         ask_for_confirmation()
 
@@ -494,6 +599,7 @@ def prepare(dry_run: bool, remote: str) -> DeploymentContext:
     context: DeploymentContext = {
         "repo": repo,
         "base_label": base_label,
+        "base": base,
         "source_head": source_head,
         "config_head": config_head,
         "tag": tag,
@@ -565,7 +671,7 @@ def print_deployment_changelog(context: DeploymentContext) -> None:
     changelog, commits_without_prs = collect_deployment_changelog(
         context["repo"],
         context["base_label"],
-        context["base_label"],
+        context["base"],
         context["source_head"],
     )
     if commits_without_prs:

@@ -48,6 +48,7 @@ from ymir.common.logging_setup import configure_logging, current_jira_issue, get
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     POSTPONED_RESOLUTIONS,
+    AlreadyFixedData,
     ApplicabilityResult,
     ClarificationNeededData,
     CVEEligibilityResult,
@@ -72,6 +73,7 @@ from ymir.common.utils import (
     DOWNSTREAM_COMPONENT_CUSTOM_FIELD,
     FIXED_IN_BUILD_CUSTOM_FIELD,
     check_build_in_buildroot,
+    check_package_built_with_fixed_dependency,
     extract_text_from_adf,
     get_latest_candidate_build,
     init_sentry,
@@ -110,6 +112,7 @@ def _should_update_jira(resolution: Resolution = None, user_triggered: bool = Fa
         return True
     return resolution in (
         Resolution.NOT_AFFECTED,
+        Resolution.ALREADY_FIXED,
         Resolution.OPEN_ENDED_ANALYSIS,
         Resolution.CLARIFICATION_NEEDED,
         *POSTPONED_RESOLUTIONS,
@@ -807,6 +810,7 @@ async def run_workflow(
                 Resolution.CLARIFICATION_NEEDED,
                 Resolution.OPEN_ENDED_ANALYSIS,
                 Resolution.NOT_AFFECTED,
+                Resolution.ALREADY_FIXED,
             ]:
                 return "comment_in_jira"
             if state.triage_result.resolution in POSTPONED_RESOLUTIONS:
@@ -1071,7 +1075,11 @@ async def run_workflow(
             return "comment_in_jira"
 
         async def verify_rebuild_buildroot(state):
-            """Verify the dependency's fixed build is available in the target buildroot."""
+            """Verify the dependency's fixed build is available in the target buildroot.
+
+            Also checks if the package was already built with the fixed dependency,
+            in which case it recommends adding to errata instead of rebuilding.
+            """
             data = state.triage_result.data
             dep_issue_key = getattr(data, "dependency_issue", None)
             dep_component = getattr(data, "dependency_component", None)
@@ -1092,6 +1100,117 @@ async def run_workflow(
 
             # fix_version is already normalized by run_triage_analysis (e.g. rhel-9.8 → rhel-9.8.z)
             fix_version = getattr(data, "fix_version", None) or ""
+            package = getattr(data, "package", None)
+
+            # Check if package was already built with the fixed dependency by inspecting root.log
+            if package and fix_version:
+                try:
+                    (
+                        already_fixed,
+                        pkg_issue_key,
+                        pkg_nvr,
+                        reason,
+                    ) = await check_package_built_with_fixed_dependency(
+                        package=package,
+                        fix_version=fix_version,
+                        dep_component=dep_component,
+                        fixed_dep_nvr=fixed_in_build,
+                        available_tools=gateway_tools,
+                    )
+                    if already_fixed is True:
+                        # Confirmed via root.log that package has the fix
+                        logger.info(
+                            f"{package} already built with fixed dependency {dep_component} "
+                            f"({fixed_in_build}) — resolving as ALREADY_FIXED"
+                        )
+                        cve_id = getattr(data, "cve_id", None) or ""
+                        cve_list = [c.strip() for c in cve_id.split(",") if c.strip()]
+                        cve_text = " and ".join(cve_list) if cve_list else "the vulnerability"
+
+                        state.triage_result = OutputSchema(
+                            resolution=Resolution.ALREADY_FIXED,
+                            data=AlreadyFixedData(
+                                explanation=(
+                                    f"The latest build of {package} was verified to contain "
+                                    f"{cve_text} fix. Build logs confirm it was created with the "
+                                    f"fixed {dep_component} dependency."
+                                ),
+                                jira_issue=state.jira_issue,
+                                package=package,
+                                package_nvr=pkg_nvr,
+                                package_issue_key=pkg_issue_key,
+                                dependency_issue_key=dep_issue_key,
+                                dependency_nvr=fixed_in_build,
+                                cve_id=cve_id,
+                                fix_version=fix_version,
+                            ),
+                        )
+                        return "comment_in_jira"
+                    if already_fixed is None:
+                        cve_id = getattr(data, "cve_id", None) or ""
+
+                        if reason == "built_after_fix_no_rootlog":
+                            # Package built after fix but no root.log - needs manual verification
+                            logger.info(
+                                f"{package} build {pkg_nvr} completed after {dep_component} fix but root.log "
+                                f"unavailable. Requesting manual verification."
+                            )
+                            state.triage_result = OutputSchema(
+                                resolution=Resolution.CLARIFICATION_NEEDED,
+                                data=ClarificationNeededData(
+                                    findings=(
+                                        f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
+                                        f"{pkg_issue_key}) was completed after the {dep_component} fix "
+                                        f"(dependency issue {dep_issue_key}, Fixed in Build: "
+                                        f"{fixed_in_build}). This suggests the package likely already "
+                                        f"has the fix, but build logs are unavailable to confirm which "
+                                        f"dependency version was actually used. Overlapping builds or "
+                                        f"buildroot tagging delays could mean an older version was used "
+                                        f"despite the later build time."
+                                    ),
+                                    additional_info_needed=(
+                                        f"Please verify whether build {pkg_nvr} was created with "
+                                        f"{dep_component} {fixed_in_build} or newer. If confirmed, mark as "
+                                        f"Not Affected and add to the errata. If the old version was used, "
+                                        f"proceed with rebuild."
+                                    ),
+                                    jira_issue=state.jira_issue,
+                                ),
+                            )
+                            return "comment_in_jira"
+                        if reason == "evr_comparison_failed":
+                            # Koji metadata unavailable - cannot verify
+                            logger.warning(
+                                f"Koji metadata unavailable for {package} build {pkg_nvr}. "
+                                f"Cannot verify dependency version."
+                            )
+                            state.triage_result = OutputSchema(
+                                resolution=Resolution.CLARIFICATION_NEEDED,
+                                data=ClarificationNeededData(
+                                    findings=(
+                                        f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
+                                        f"{pkg_issue_key}) could not be verified because Koji metadata is "
+                                        f"unavailable for the dependency builds. This may be a transient "
+                                        f"Koji issue or missing build data."
+                                    ),
+                                    additional_info_needed=(
+                                        f"Please retry this check later or manually verify whether build "
+                                        f"{pkg_nvr} was created with {dep_component} {fixed_in_build} or "
+                                        f"newer. Check Koji directly or contact infrastructure if the "
+                                        f"build metadata appears to be missing."
+                                    ),
+                                    jira_issue=state.jira_issue,
+                                ),
+                            )
+                            return "comment_in_jira"
+                        # Unknown reason - should not happen but handle gracefully
+                        logger.error(f"Unexpected None result with reason={reason} for {package}")
+                        # Fall through to standard rebuild check below
+                except Exception as e:
+                    logger.warning(
+                        f"Error checking if {package} was built with fixed dependency: {e}. "
+                        "Continuing with standard buildroot check."
+                    )
 
             try:
                 in_buildroot = await check_build_in_buildroot(

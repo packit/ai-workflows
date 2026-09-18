@@ -43,6 +43,7 @@ def build_rebuild_siblings_jql(
         fix_version=fix_version,
         excluded_labels=[
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
+            JiraLabels.TRIAGED_ALREADY_FIXED.value,
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBASE.value,
         ],

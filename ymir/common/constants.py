@@ -210,6 +210,7 @@ class JiraLabels(Enum):
     YMIR_POSTPONED_PR_PENDING = "ymir_postponed_pr_pending"
 
     TRIAGED_NOT_AFFECTED = "ymir_triaged_not_affected"
+    TRIAGED_ALREADY_FIXED = "ymir_triaged_already_fixed"
 
     RETRY_NEEDED = "ymir_retry_needed"
 

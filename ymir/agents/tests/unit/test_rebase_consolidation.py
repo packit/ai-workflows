@@ -184,6 +184,7 @@ def test_build_rebase_siblings_jql_excludes_correct_labels():
 
     # Triage decisions (non-retriable)
     assert '"ymir_triaged_not_affected"' in jql
+    assert '"ymir_triaged_already_fixed"' in jql
     assert '"ymir_triaged_backport"' in jql
     assert '"ymir_triaged_rebuild"' in jql
     assert '"ymir_triaged_rebase"' in jql

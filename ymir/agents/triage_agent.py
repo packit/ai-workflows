@@ -48,6 +48,7 @@ from ymir.common.logging_setup import configure_logging, current_jira_issue, get
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     POSTPONED_RESOLUTIONS,
+    AlreadyFixedData,
     ApplicabilityResult,
     ClarificationNeededData,
     CVEEligibilityResult,
@@ -111,6 +112,7 @@ def _should_update_jira(resolution: Resolution = None, user_triggered: bool = Fa
         return True
     return resolution in (
         Resolution.NOT_AFFECTED,
+        Resolution.ALREADY_FIXED,
         Resolution.OPEN_ENDED_ANALYSIS,
         Resolution.CLARIFICATION_NEEDED,
         *POSTPONED_RESOLUTIONS,
@@ -808,6 +810,7 @@ async def run_workflow(
                 Resolution.CLARIFICATION_NEEDED,
                 Resolution.OPEN_ENDED_ANALYSIS,
                 Resolution.NOT_AFFECTED,
+                Resolution.ALREADY_FIXED,
             ]:
                 return "comment_in_jira"
             if state.triage_result.resolution in POSTPONED_RESOLUTIONS:
@@ -1118,26 +1121,28 @@ async def run_workflow(
                         # Confirmed via root.log that package has the fix
                         logger.info(
                             f"{package} already built with fixed dependency {dep_component} "
-                            f"({fixed_in_build}) — resolving as NOT_AFFECTED"
+                            f"({fixed_in_build}) — resolving as ALREADY_FIXED"
                         )
                         cve_id = getattr(data, "cve_id", None) or ""
                         cve_list = [c.strip() for c in cve_id.split(",") if c.strip()]
                         cve_text = " and ".join(cve_list) if cve_list else "the vulnerability"
 
                         state.triage_result = OutputSchema(
-                            resolution=Resolution.NOT_AFFECTED,
-                            data=NotAffectedData(
+                            resolution=Resolution.ALREADY_FIXED,
+                            data=AlreadyFixedData(
                                 explanation=(
-                                    f"Package already has {cve_text} fixed because the latest build "
-                                    f"(Fixed in Build: {pkg_nvr} from {pkg_issue_key}) was created with "
-                                    f"the dependency fix (dependency issue {dep_issue_key}, "
-                                    f"Fixed in Build: {fixed_in_build}). "
-                                    f"Please add this ticket to the Errata for build {pkg_nvr}."
+                                    f"The latest build of {package} was verified to contain "
+                                    f"{cve_text} fix. Build logs confirm it was created with the "
+                                    f"fixed {dep_component} dependency."
                                 ),
                                 jira_issue=state.jira_issue,
                                 package=package,
-                                fix_version=fix_version,
+                                package_nvr=pkg_nvr,
+                                package_issue_key=pkg_issue_key,
+                                dependency_issue_key=dep_issue_key,
+                                dependency_nvr=fixed_in_build,
                                 cve_id=cve_id,
+                                fix_version=fix_version,
                             ),
                         )
                         return "comment_in_jira"

@@ -258,6 +258,7 @@ class Resolution(Enum):
     CLARIFICATION_NEEDED = "clarification-needed"
     OPEN_ENDED_ANALYSIS = "open-ended-analysis"
     NOT_AFFECTED = "not-affected"
+    ALREADY_FIXED = "already-fixed"  # Build already contains fix, needs errata processing
     ERROR = "error"
     # Postponement resolutions, broken down by the reason for postponing.
     # The reason is carried by the resolution itself (there is no separate
@@ -505,6 +506,33 @@ class NotAffectedData(BaseModel):
     )
 
 
+class AlreadyFixedData(BaseModel):
+    """Data for already-fixed resolution (build already contains fix, needs errata processing)."""
+
+    explanation: str = Field(
+        description="Detailed explanation of how the build was verified to contain the fix"
+    )
+    jira_issue: str = Field(description="Jira issue identifier")
+    package: str = Field(description="Package name")
+    package_nvr: str | None = Field(
+        default=None, description="Package NVR that already contains the fix (if known)"
+    )
+    package_issue_key: str | None = Field(
+        default=None, description="Jira issue key for the existing build with the fix (if found)"
+    )
+    dependency_issue_key: str | None = Field(
+        default=None, description="Jira issue key for the dependency fix (null for rebases)"
+    )
+    dependency_nvr: str | None = Field(
+        default=None, description="Dependency NVR that was used in the build (null for rebases)"
+    )
+    cve_id: str | None = Field(
+        default=None,
+        description="CVE identifier(s); include ALL CVE IDs when the issue covers multiple CVEs",
+    )
+    fix_version: str | None = Field(default=None, description="Fix version in Jira (e.g., 'rhel-9.8')")
+
+
 class ApplicabilityResult(BaseModel):
     """Output schema for the CVE applicability check agent."""
 
@@ -566,7 +594,7 @@ class TriageOutputSchema(BaseModel):
 
     resolution: Resolution = Field(
         description="Triage resolution, one of rebase, backport, rebuild, "
-        "clarification-needed, open-ended-analysis, not-affected, error, "
+        "clarification-needed, open-ended-analysis, not-affected, already-fixed, error, "
         "postponed_dependency, postponed_no_patch, postponed_pr_pending"
     )
     data: (
@@ -577,6 +605,7 @@ class TriageOutputSchema(BaseModel):
         | OpenEndedAnalysisData
         | PostponedData
         | NotAffectedData
+        | AlreadyFixedData
         | ErrorData
     ) = Field(description="Associated data")
 
@@ -729,6 +758,30 @@ class TriageOutputSchema(BaseModel):
                     f"*Recommendation: Not a Bug / {category}*\n\n"
                     f"{self.data.explanation}{vex_guide}{TRIAGE_DISCLAIMER}"
                 )
+
+            case AlreadyFixedData():
+                lines = [f"{resolution}*Package*: {self.data.package}\n"]
+                if self.data.package_nvr and self.data.package_issue_key:
+                    lines.append(
+                        f"*Build with Fix*: {self.data.package_nvr} ({self.data.package_issue_key})\n"
+                    )
+                if self.data.dependency_nvr and self.data.dependency_issue_key:
+                    lines.append(
+                        f"*Dependency Fix*: {self.data.dependency_nvr} ({self.data.dependency_issue_key})\n"
+                    )
+                lines.append(f"\n{self.data.explanation}\n\n")
+                if self.data.package_nvr:
+                    lines.append(
+                        f"*Action Required*: Add build {self.data.package_nvr} to the errata for "
+                        f"{self.data.fix_version or 'the appropriate release'}."
+                    )
+                else:
+                    lines.append(
+                        "*Action Required*: Search for the existing build and add this ticket to the "
+                        "appropriate Errata."
+                    )
+                lines.append(f"{AUTOMATED_RESOLUTION_NOT_SUPPORTED}{TRIAGE_DISCLAIMER}")
+                return "".join(lines)
 
             case ErrorData():
                 return f"{resolution}*Details*: {self.data.details}{TRIAGE_DISCLAIMER}"

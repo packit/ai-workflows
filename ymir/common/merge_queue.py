@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -17,43 +18,81 @@ def _consolidation_field_key(package: str, branch: str, slot: str) -> str:
     return f"{package}:{branch}:{slot}"
 
 
+class SubmitResult(enum.Enum):
+    """Outcome of :func:`submit_merge_job`."""
+
+    SUBMITTED = "submitted"
+    ALREADY_QUEUED = "already_queued"
+    CONFLICT = "conflict"
+
+
+# Lua script: atomic check-and-set for consolidation job submission.
+#
+# KEYS[1]  = hash key
+# ARGV[1]  = pending field key
+# ARGV[2]  = active field key
+# ARGV[3]  = job JSON value
+# ARGV[4]  = "strict" or "auto"
+#
+# In "strict" mode (label-triggered): fails if pending OR active exists.
+# In "auto" mode: fails only if pending exists.
+#
+# Returns:
+#   1  = submitted
+#   0  = pending already exists  (already_queued / conflict depending on mode)
+#  -1  = active exists           (conflict, strict mode only)
+_SUBMIT_JOB_LUA = """
+local hash    = KEYS[1]
+local pending = ARGV[1]
+local active  = ARGV[2]
+local value   = ARGV[3]
+local mode    = ARGV[4]
+
+if redis.call('HEXISTS', hash, pending) == 1 then
+    return 0
+end
+
+if mode == 'strict' and redis.call('HEXISTS', hash, active) == 1 then
+    return -1
+end
+
+redis.call('HSET', hash, pending, value)
+return 1
+"""
+
+
 async def submit_merge_job(
     redis_conn,
     package: str,
     target_branch: str,
     source_issues: list[str] | None = None,
     release_strategy: str | None = None,
-) -> bool:
-    """Submit a merge consolidation job if the queue invariant allows it.
+) -> SubmitResult:
+    """Atomically submit a merge consolidation job.
 
-    The consolidation queue uses a Redis Hash with at-most-one-active and
-    one-pending entry per package-branch pair.
+    Uses a Lua script so the existence check and the HSET are executed
+    as a single atomic operation on the Redis server, eliminating the
+    race where two concurrent requests both pass the check before
+    either writes.
 
-    Args:
-        redis_conn: Active Redis connection.
-        package: RPM package name.
-        target_branch: Dist-git target branch.
-        source_issues: When set, the consolidation agent will target only
-            MRs for these specific Jira issue keys (label-triggered mode).
-            When None, it picks the two oldest open MRs (auto mode).
+    When *source_issues* is set (label-triggered mode), the script
+    runs in **strict** mode: submission is rejected if *either* a
+    pending or an active job already exists for the same
+    package/branch.
+
+    When *source_issues* is None (auto mode), only an existing
+    pending job blocks submission — an active job is allowed because
+    auto-mode jobs are safe to queue behind a running one.
 
     Returns:
-        True if a new pending job was created, False if one already exists
-        or is unnecessary.
+        :attr:`SubmitResult.SUBMITTED` if a new pending job was created.
+        :attr:`SubmitResult.ALREADY_QUEUED` if a pending job already exists.
+        :attr:`SubmitResult.CONFLICT` if an active (or pending) job blocks
+        a label-triggered submission.
     """
     pending_key = _consolidation_field_key(package, target_branch, "pending")
     active_key = _consolidation_field_key(package, target_branch, "active")
-
-    existing_pending = await fix_await(redis_conn.hget(_CONSOLIDATION_HASH_KEY, pending_key))
-    if existing_pending is not None:
-        logger.info(
-            "Pending merge job already exists for %s/%s, skipping",
-            package,
-            target_branch,
-        )
-        return False
-
-    existing_active = await fix_await(redis_conn.hget(_CONSOLIDATION_HASH_KEY, active_key))
+    mode = "strict" if source_issues is not None else "auto"
 
     job = MergeConsolidationJob(
         package=package,
@@ -63,13 +102,30 @@ async def submit_merge_job(
         source_issues=source_issues,
         release_strategy=release_strategy,
     )
-    await fix_await(redis_conn.hset(_CONSOLIDATION_HASH_KEY, pending_key, job.model_dump_json()))
 
-    if existing_active is not None:
-        logger.info("Active job running for %s/%s; filed pending job", package, target_branch)
-    else:
-        logger.info("No active job for %s/%s; filed pending job", package, target_branch)
-    return True
+    result = await fix_await(
+        redis_conn.eval(
+            _SUBMIT_JOB_LUA,
+            1,
+            _CONSOLIDATION_HASH_KEY,
+            pending_key,
+            active_key,
+            job.model_dump_json(),
+            mode,
+        )
+    )
+
+    if result == 1:
+        logger.info("Filed pending merge job for %s/%s (mode=%s)", package, target_branch, mode)
+        return SubmitResult.SUBMITTED
+    if result == -1:
+        logger.info("Conflict: active job exists for %s/%s", package, target_branch)
+        return SubmitResult.CONFLICT
+
+    logger.info("Pending merge job already exists for %s/%s, skipping", package, target_branch)
+    if mode == "strict":
+        return SubmitResult.CONFLICT
+    return SubmitResult.ALREADY_QUEUED
 
 
 # Lua script ensures the scan-check-promote is atomic on the Redis server,

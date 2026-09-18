@@ -61,14 +61,6 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   JIRA_WEBHOOK_SECRET
   ```
 
-  `api-oidc-env` (OIDC provider URL and CORS origins for JWT validation):
-  ```bash
-  oc create secret generic api-oidc-env \
-    --from-literal=OIDC_PROVIDER_URL=https://sso.redhat.com/auth/realms/redhat-external \
-    --from-literal=OIDC_CORS_ALLOWED_ORIGIN=https://ymir.redhat.com \
-    --from-literal=OIDC_CORS_ALLOWED_ORIGIN_ALT=https://trace-server-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com
-  ```
-
   `phoenix-db-env` (PostgreSQL credentials for Phoenix observability):
   ```bash
   oc create secret generic phoenix-db-env \
@@ -156,18 +148,20 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
 A dedicated Route (`route-trace-server-cname.yml`) accepts traffic for the
 `ymir.redhat.com` CNAME.  The OpenShift router's default wildcard certificate
 only covers `*.apps.gpc.ocp-hub.prod.psi.redhat.com`, so a TLS certificate
-for `ymir.redhat.com` must be provisioned separately and added to the Route:
+for `ymir.redhat.com` must be stored in a Secret.  OpenShift Routes cannot
+reference Secrets directly, so `deploy.sh` automatically patches the
+cert/key into the Route after each apply.
+
+One-time Secret creation:
 
 ```bash
-oc create route edge trace-server-cname \
-  --service=otel-collector --port=8080-tcp \
-  --hostname=ymir.redhat.com \
+oc create secret tls ymir-cname-tls \
   --cert=ymir.redhat.com.crt --key=ymir.redhat.com.key
 ```
 
-Alternatively, if the cluster has a cert-manager integration that can issue
-certs for custom domains, the manifest route can be used as-is and the cert
-will be injected automatically.
+Subsequent deploys via `deploy.sh` will read the cert/key from the
+`ymir-cname-tls` Secret and patch the Route automatically.  If the Secret
+does not exist yet, the patch is skipped with a warning.
 
 ## API Authentication (OIDC)
 
@@ -212,7 +206,7 @@ curl -H "Authorization: Bearer $(oidc-token ymir-api)" \
 
 | Resource | Type | Purpose |
 |---|---|---|
-| `api-oidc-env` | Secret | `OIDC_PROVIDER_URL` + CORS origins for the API JWT validation middleware |
+| `api-oidc-env` | ConfigMap | `OIDC_PROVIDER_URL` + CORS origins for the API JWT validation middleware |
 | `trace-server-oidc-env` | ConfigMap | `OIDC_AUTHORITY`, `OIDC_CLIENT_ID`, `OIDC_API_URL`, `OIDC_SCOPE` for the trace server SPA |
 
 ### Red Hat IT requirements checklist

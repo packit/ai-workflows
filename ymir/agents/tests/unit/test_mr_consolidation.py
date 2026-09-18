@@ -20,6 +20,7 @@ from ymir.agents.tasks import (
 )
 from ymir.agents.tasks import (
     InvalidConsolidationConfigError,
+    SubmitResult,
     complete_job,
     fetch_consolidation_config,
     pick_next_job,
@@ -55,15 +56,31 @@ class FakeRedis:
     async def eval(self, script: str, num_keys: int, *args):
         """Dispatch to the correct Lua-script simulation based on args.
 
+        submit_merge_job: eval(script, 1, hash_key, pending, active, value, mode) — 5 args
         pick_next_job: eval(script, 1, hash_key) — 1 arg after num_keys
         conditional HDEL: eval(script, 1, hash_key, field, expected) — 3 args
         """
         hash_key = args[0]
+        if len(args) == 5:
+            return self._eval_submit_job(hash_key, args[1], args[2], args[3], args[4])
         if len(args) == 1:
             return self._eval_pick_next_job(hash_key)
         if len(args) == 3:
             return self._eval_conditional_hdel(hash_key, args[1], args[2])
         return None
+
+    def _eval_submit_job(self, hash_key, pending_key, active_key, value, mode):
+        """Simulate _SUBMIT_JOB_LUA: atomic check-and-set for submission."""
+        bucket = self._data.get(hash_key, {})
+        pk = pending_key.decode() if isinstance(pending_key, bytes) else pending_key
+        ak = active_key.decode() if isinstance(active_key, bytes) else active_key
+        m = mode.decode() if isinstance(mode, bytes) else mode
+        if pk in bucket:
+            return 0
+        if m == "strict" and ak in bucket:
+            return -1
+        self._data.setdefault(hash_key, {})[pk] = value.encode() if isinstance(value, str) else value
+        return 1
 
     def _eval_pick_next_job(self, hash_key):
         bucket = self._data.get(hash_key, {})
@@ -104,15 +121,15 @@ def fake_redis():
 @pytest.mark.asyncio
 async def test_submit_new_job(fake_redis):
     result = await submit_merge_job(fake_redis, "bash", "c10s")
-    assert result is True
+    assert result is SubmitResult.SUBMITTED
     pending_key = _field_key("bash", "c10s", "pending")
     assert await fake_redis.hget(HASH_KEY, pending_key) is not None
 
 
 @pytest.mark.asyncio
 async def test_submit_duplicate_pending_noop(fake_redis):
-    assert await submit_merge_job(fake_redis, "bash", "c10s") is True
-    assert await submit_merge_job(fake_redis, "bash", "c10s") is False
+    assert await submit_merge_job(fake_redis, "bash", "c10s") is SubmitResult.SUBMITTED
+    assert await submit_merge_job(fake_redis, "bash", "c10s") is SubmitResult.ALREADY_QUEUED
 
 
 @pytest.mark.asyncio
@@ -122,7 +139,7 @@ async def test_submit_while_active_creates_pending(fake_redis):
     await fake_redis.hset(HASH_KEY, active_key, job.model_dump_json())
 
     result = await submit_merge_job(fake_redis, "bash", "c10s")
-    assert result is True
+    assert result is SubmitResult.SUBMITTED
 
 
 @pytest.mark.asyncio
@@ -135,13 +152,50 @@ async def test_submit_while_active_and_pending_noop(fake_redis):
     await fake_redis.hset(HASH_KEY, pending_key, job_p.model_dump_json())
 
     result = await submit_merge_job(fake_redis, "bash", "c10s")
-    assert result is False
+    assert result is SubmitResult.ALREADY_QUEUED
 
 
 @pytest.mark.asyncio
 async def test_different_packages_independent(fake_redis):
-    assert await submit_merge_job(fake_redis, "bash", "c10s") is True
-    assert await submit_merge_job(fake_redis, "curl", "c10s") is True
+    assert await submit_merge_job(fake_redis, "bash", "c10s") is SubmitResult.SUBMITTED
+    assert await submit_merge_job(fake_redis, "curl", "c10s") is SubmitResult.SUBMITTED
+
+
+# -- submit_merge_job strict (label-triggered) mode ---------------------------
+
+
+@pytest.mark.asyncio
+async def test_strict_submit_new_job(fake_redis):
+    result = await submit_merge_job(fake_redis, "bash", "c10s", source_issues=["RHEL-1", "RHEL-2"])
+    assert result is SubmitResult.SUBMITTED
+
+
+@pytest.mark.asyncio
+async def test_strict_submit_conflict_pending(fake_redis):
+    await submit_merge_job(fake_redis, "bash", "c10s", source_issues=["RHEL-1", "RHEL-2"])
+    result = await submit_merge_job(fake_redis, "bash", "c10s", source_issues=["RHEL-3", "RHEL-4"])
+    assert result is SubmitResult.CONFLICT
+
+
+@pytest.mark.asyncio
+async def test_strict_submit_conflict_active(fake_redis):
+    active_key = _field_key("bash", "c10s", "active")
+    job = MergeConsolidationJob(package="bash", target_branch="c10s", active=True)
+    await fake_redis.hset(HASH_KEY, active_key, job.model_dump_json())
+
+    result = await submit_merge_job(fake_redis, "bash", "c10s", source_issues=["RHEL-1", "RHEL-2"])
+    assert result is SubmitResult.CONFLICT
+
+
+@pytest.mark.asyncio
+async def test_auto_submit_while_active_ok(fake_redis):
+    """Auto mode allows submission even when an active job exists."""
+    active_key = _field_key("bash", "c10s", "active")
+    job = MergeConsolidationJob(package="bash", target_branch="c10s", active=True)
+    await fake_redis.hset(HASH_KEY, active_key, job.model_dump_json())
+
+    result = await submit_merge_job(fake_redis, "bash", "c10s")
+    assert result is SubmitResult.SUBMITTED
 
 
 # -- pick_next_job ------------------------------------------------------------

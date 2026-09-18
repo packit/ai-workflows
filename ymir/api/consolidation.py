@@ -14,13 +14,9 @@ from pydantic import BaseModel, ValidationError, field_validator
 
 from ymir.api import command_parser
 from ymir.api.app_keys import REDIS_KEY
-from ymir.common.base_utils import fix_await
-from ymir.common.constants import RedisQueues
-from ymir.common.merge_queue import _consolidation_field_key, submit_merge_job
+from ymir.common.merge_queue import SubmitResult, submit_merge_job
 
 logger = logging.getLogger(__name__)
-
-_CONSOLIDATION_HASH_KEY = RedisQueues.MERGE_CONSOLIDATION_QUEUE.value
 
 
 class ConsolidationRequest(BaseModel):
@@ -47,22 +43,8 @@ async def _submit_consolidation_job(
     """Shared submission logic used by both the REST endpoint and the command handler."""
     redis_conn = request.app[REDIS_KEY]
 
-    # Label-triggered mode: check for conflicts before submitting, because
-    # submit_merge_job() silently drops source_issues when a pending job
-    # already exists for the same package/branch.
-    if payload.source_issues is not None:
-        pending_key = _consolidation_field_key(payload.package, payload.target_branch, "pending")
-        active_key = _consolidation_field_key(payload.package, payload.target_branch, "active")
-        existing_pending = await fix_await(redis_conn.hget(_CONSOLIDATION_HASH_KEY, pending_key))
-        existing_active = await fix_await(redis_conn.hget(_CONSOLIDATION_HASH_KEY, active_key))
-        if existing_pending is not None or existing_active is not None:
-            return web.json_response(
-                {"submitted": False, "reason": "conflict"},
-                status=409,
-            )
-
     try:
-        submitted = await submit_merge_job(
+        result = await submit_merge_job(
             redis_conn,
             payload.package,
             payload.target_branch,
@@ -76,7 +58,7 @@ async def _submit_consolidation_job(
             status=500,
         )
 
-    if submitted:
+    if result is SubmitResult.SUBMITTED:
         logger.info(
             "Consolidation job submitted: package=%s branch=%s source_issues=%s strategy=%s",
             payload.package,
@@ -85,6 +67,12 @@ async def _submit_consolidation_job(
             payload.release_strategy,
         )
         return web.json_response({"submitted": True}, status=201)
+
+    if result is SubmitResult.CONFLICT:
+        return web.json_response(
+            {"submitted": False, "reason": "conflict"},
+            status=409,
+        )
 
     return web.json_response(
         {"submitted": False, "reason": "already_queued"},

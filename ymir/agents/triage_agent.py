@@ -77,6 +77,7 @@ from ymir.common.utils import (
 )
 from ymir.common.version_utils import (
     construct_internal_branch_name,
+    detect_modular_issue,
     extract_downstream_package,
     is_modular,
     is_older_zstream,
@@ -1885,7 +1886,14 @@ async def main() -> None:
                         logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
 
                 if output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
-                    if enqueue_reproducer:
+                    _modular_component = detect_modular_issue(
+                        jira_summary=state.jira_summary,
+                        raw_downstream_component=state.raw_downstream_component,
+                        downstream_component=state.downstream_component,
+                    )
+                    if _modular_component:
+                        logger.info("Modular issue %s — skipping reproducer queue", input.issue)
+                    elif enqueue_reproducer:
                         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
                             await _enqueue_reproducer(redis, state, user_triggered, gateway_tools)
                     else:

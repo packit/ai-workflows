@@ -178,3 +178,22 @@ index d3f3adc6..5497ff77 100644
          else:
              if event.context.get("internal"):
                  return
+diff --git a/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/_span.py b/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/_span.py
+index 9f999967..ac9d68cf 100644
+--- a/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/_span.py
++++ b/python/instrumentation/openinference-instrumentation-beeai/src/openinference/instrumentation/beeai/_span.py
+@@ -84,2 +84,14 @@ class SpanWrapper:
+     def record_exception(self, error: Exception) -> None:
++        error_context = getattr(error, "context", None)
++        additional_context = (
++            error_context.get("additional_context") if isinstance(error_context, dict) else None
++        )
++        if isinstance(additional_context, dict):
++            self.set_attributes(
++                {
++                    f"{SpanAttributes.METADATA}.additional_context.{key}": str(value)
++                    for key, value in additional_context.items()
++                }
++            )
++
+         from beeai_framework.errors import FrameworkError

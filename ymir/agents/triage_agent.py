@@ -151,6 +151,7 @@ _RESOLUTION_TO_LABEL: dict[Resolution, JiraLabels] = {
     Resolution.CLARIFICATION_NEEDED: JiraLabels.NEEDS_ATTENTION,
     Resolution.OPEN_ENDED_ANALYSIS: JiraLabels.TRIAGED,
     Resolution.NOT_AFFECTED: JiraLabels.TRIAGED_NOT_AFFECTED,
+    Resolution.ALREADY_FIXED: JiraLabels.TRIAGED_ALREADY_FIXED,
     Resolution.ERROR: JiraLabels.TRIAGE_ERRORED,
     Resolution.POSTPONED_DEPENDENCY: JiraLabels.YMIR_POSTPONED_DEPENDENCY,
     Resolution.POSTPONED_NO_PATCH: JiraLabels.YMIR_POSTPONED_NO_PATCH,
@@ -1171,8 +1172,112 @@ async def run_workflow(
                                     additional_info_needed=(
                                         f"Please verify whether build {pkg_nvr} was created with "
                                         f"{dep_component} {fixed_in_build} or newer. If confirmed, mark as "
-                                        f"Not Affected and add to the errata. If the old version was used, "
+                                        f"Already Fixed and add build {pkg_nvr} to the errata. If the old "
+                                        f"version was used, proceed with rebuild."
+                                    ),
+                                    jira_issue=state.jira_issue,
+                                ),
+                            )
+                            return "comment_in_jira"
+                        if reason and reason.startswith("active_builds_not_closed:"):
+                            # Active builds exist but not yet closed - can't trust them yet
+                            active_issues = reason.split(":", 1)[1]
+                            logger.warning(
+                                f"Active builds found for {package} ({active_issues}) but not closed. "
+                                f"Requesting clarification."
+                            )
+                            state.triage_result = OutputSchema(
+                                resolution=Resolution.CLARIFICATION_NEEDED,
+                                data=ClarificationNeededData(
+                                    findings=(
+                                        f"Found active (not yet closed) builds for {package} with "
+                                        f"'Fixed in Build' set: {active_issues}. These builds exist "
+                                        f"in Jira but have not been closed/resolved yet, so they may "
+                                        f"still be rejected or abandoned."
+                                    ),
+                                    additional_info_needed=(
+                                        f"Please verify whether any of these builds ({active_issues}) "
+                                        f"actually shipped with {dep_component} {fixed_in_build} or newer. "
+                                        f"If yes and the build is valid, close the issue and mark as "
+                                        f"Already Fixed. If the builds are invalid or won't ship, "
                                         f"proceed with rebuild."
+                                    ),
+                                    jira_issue=state.jira_issue,
+                                ),
+                            )
+                            return "comment_in_jira"
+                        if reason == "partial_architecture_coverage":
+                            # Dependency found in some architectures but not others
+                            logger.warning(
+                                f"Partial architecture coverage for {package} build {pkg_nvr}. "
+                                f"Dependency missing from some arch logs."
+                            )
+                            state.triage_result = OutputSchema(
+                                resolution=Resolution.CLARIFICATION_NEEDED,
+                                data=ClarificationNeededData(
+                                    findings=(
+                                        f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
+                                        f"{pkg_issue_key}) has {dep_component} dependency in some "
+                                        f"architecture root.logs but not others. This could indicate "
+                                        f"parsing issues, different build configurations per arch, or "
+                                        f"incomplete build logs."
+                                    ),
+                                    additional_info_needed=(
+                                        f"Please manually inspect all architecture root.log files for "
+                                        f"{pkg_nvr} to verify which {dep_component} version was actually "
+                                        f"used across all architectures. If all archs used {fixed_in_build} "
+                                        f"or newer, mark as Already Fixed. Otherwise, rebuild."
+                                    ),
+                                    jira_issue=state.jira_issue,
+                                ),
+                            )
+                            return "comment_in_jira"
+                        if reason == "architecture_dependency_conflict":
+                            # Different architectures have different dependency versions
+                            logger.warning(
+                                f"Architecture dependency conflict for {package} build {pkg_nvr}. "
+                                f"Different buildroots used."
+                            )
+                            state.triage_result = OutputSchema(
+                                resolution=Resolution.CLARIFICATION_NEEDED,
+                                data=ClarificationNeededData(
+                                    findings=(
+                                        f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
+                                        f"{pkg_issue_key}) shows different {dep_component} versions "
+                                        f"across architectures. This indicates different buildroots were "
+                                        f"used, which can happen with long builds or buildroot updates."
+                                    ),
+                                    additional_info_needed=(
+                                        f"Please manually inspect the root.log files for {pkg_nvr} across "
+                                        f"architectures to determine which {dep_component} version was "
+                                        f"used. Mark as Already Fixed only if ALL architectures used "
+                                        f"{fixed_in_build} or newer. If any architecture used an older "
+                                        f"version, rebuild the affected architectures."
+                                    ),
+                                    jira_issue=state.jira_issue,
+                                ),
+                            )
+                            return "comment_in_jira"
+                        if reason == "timestamp_comparison_failed":
+                            # Koji metadata unavailable for timestamp comparison
+                            logger.warning(
+                                f"Koji metadata unavailable for timestamp comparison of {package} "
+                                f"build {pkg_nvr}. Cannot determine build order."
+                            )
+                            state.triage_result = OutputSchema(
+                                resolution=Resolution.CLARIFICATION_NEEDED,
+                                data=ClarificationNeededData(
+                                    findings=(
+                                        f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
+                                        f"{pkg_issue_key}) could not be verified because root.log is "
+                                        f"unavailable and Koji build metadata is missing. Cannot "
+                                        f"determine if the build was created before or after the "
+                                        f"{dep_component} fix."
+                                    ),
+                                    additional_info_needed=(
+                                        f"Please retry this check later or manually verify whether "
+                                        f"{pkg_nvr} was created with {dep_component} {fixed_in_build} "
+                                        f"or newer. Check build logs in Koji or Brew directly."
                                     ),
                                     jira_issue=state.jira_issue,
                                 ),

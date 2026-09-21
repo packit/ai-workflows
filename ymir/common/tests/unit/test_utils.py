@@ -658,13 +658,18 @@ Installing: other-package-1.0-1.el10_2.x86_64
     }
     used_build = {"name": "golang", "epoch": None, "version": "1.26.4", "release": "1.el10_2"}
 
+    # Mock run_tool to return fresh coroutines each call (called twice: closed + active)
     flexmock(_ymir_utils).should_receive("run_tool").with_args(
         "search_jira_issues",
         available_tools=[mock_tool],
         jql=str,
         fields=list,
         max_results=50,
-    ).and_return(_coro(jira_search_result))
+    ).replace_with(
+        lambda *args, **kwargs: _coro(
+            jira_search_result if "status in (Closed, Done)" in kwargs.get("jql", "") else []
+        )
+    )
 
     # Mock Koji listRPMs to return binary package names
     mock_koji_session = flexmock()
@@ -739,13 +744,18 @@ Installing: other-package-1.0-1.el10_2.x86_64
     }
     used_build = {"name": "golang", "epoch": None, "version": "1.26.3", "release": "1.el10_2"}
 
+    # Mock run_tool to return fresh coroutines each call (called twice: closed + active)
     flexmock(_ymir_utils).should_receive("run_tool").with_args(
         "search_jira_issues",
         available_tools=[mock_tool],
         jql=str,
         fields=list,
         max_results=50,
-    ).and_return(_coro(jira_search_result))
+    ).replace_with(
+        lambda *args, **kwargs: _coro(
+            jira_search_result if "status in (Closed, Done)" in kwargs.get("jql", "") else []
+        )
+    )
 
     # Mock Koji listRPMs
     mock_koji_session = flexmock()
@@ -792,13 +802,10 @@ async def test_check_package_built_with_fixed_dependency_no_build_found():
     """Test when no completed build exists for the package."""
     mock_tool = flexmock()
 
-    flexmock(_ymir_utils).should_receive("run_tool").with_args(
-        "search_jira_issues",
-        available_tools=[mock_tool],
-        jql=str,
-        fields=list,
-        max_results=50,
-    ).and_return(_coro([]))
+    async def mock_run_tool(tool, **kwargs):
+        return []
+
+    flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
 
     already_fixed, issue_key, _nvr, _reason = await check_package_built_with_fixed_dependency(
         package="go-fdo-client",
@@ -844,13 +851,18 @@ async def test_check_package_built_with_fixed_dependency_no_rootlog_built_after_
         "completion_time": datetime(2026, 8, 24, 15, 0, 0),
     }
 
+    # Mock run_tool to return fresh coroutines each call (called twice: closed + active)
     flexmock(_ymir_utils).should_receive("run_tool").with_args(
         "search_jira_issues",
         available_tools=[mock_tool],
         jql=str,
         fields=list,
         max_results=50,
-    ).and_return(_coro(jira_search_result))
+    ).replace_with(
+        lambda *args, **kwargs: _coro(
+            jira_search_result if "status in (Closed, Done)" in kwargs.get("jql", "") else []
+        )
+    )
 
     # Mock root.log fetch to return 404 (no log available)
     mock_head_response = flexmock(status_code=404)
@@ -915,13 +927,18 @@ async def test_check_package_built_with_fixed_dependency_no_rootlog_built_before
         "completion_time": datetime(2026, 8, 24, 15, 0, 0),
     }
 
+    # Mock run_tool to return fresh coroutines each call (called twice: closed + active)
     flexmock(_ymir_utils).should_receive("run_tool").with_args(
         "search_jira_issues",
         available_tools=[mock_tool],
         jql=str,
         fields=list,
         max_results=50,
-    ).and_return(_coro(jira_search_result))
+    ).replace_with(
+        lambda *args, **kwargs: _coro(
+            jira_search_result if "status in (Closed, Done)" in kwargs.get("jql", "") else []
+        )
+    )
 
     # Mock root.log fetch to return 404
     mock_head_response = flexmock(status_code=404)
@@ -983,13 +1000,18 @@ async def test_check_package_built_with_fixed_dependency_gzipped_log():
         "build_id": 1234,
     }
 
+    # Mock run_tool to return fresh coroutines each call (called twice: closed + active)
     flexmock(_ymir_utils).should_receive("run_tool").with_args(
         "search_jira_issues",
         available_tools=[mock_tool],
         jql=str,
         fields=list,
         max_results=50,
-    ).and_return(_coro(jira_search_result))
+    ).replace_with(
+        lambda *args, **kwargs: _coro(
+            jira_search_result if "status in (Closed, Done)" in kwargs.get("jql", "") else []
+        )
+    )
 
     mock_head_response = flexmock(status_code=200)
     mock_get_response = flexmock(status_code=200, content=gzipped_content)
@@ -1056,13 +1078,18 @@ Installing: other-package-1.0-1.el10_2.x86_64
         "release": "1.el10_2",
         "build_id": 123456,
     }
+    # Mock run_tool to return fresh coroutines each call (called twice: closed + active)
     flexmock(_ymir_utils).should_receive("run_tool").with_args(
         "search_jira_issues",
         available_tools=[mock_tool],
         jql=str,
         fields=list,
         max_results=50,
-    ).and_return(_coro(jira_search_result))
+    ).replace_with(
+        lambda *args, **kwargs: _coro(
+            jira_search_result if "status in (Closed, Done)" in kwargs.get("jql", "") else []
+        )
+    )
 
     # Mock Koji listRPMs
     mock_koji_session = flexmock()
@@ -1130,13 +1157,18 @@ Installing: other-package-1.0-1.el10_2.x86_64
         "build_id": 123456,
     }
     # Used build also has epoch 1 (from Koji, not root.log)
+    # Mock run_tool to return fresh coroutines each call (called twice: closed + active)
     flexmock(_ymir_utils).should_receive("run_tool").with_args(
         "search_jira_issues",
         available_tools=[mock_tool],
         jql=str,
         fields=list,
         max_results=50,
-    ).and_return(_coro(jira_search_result))
+    ).replace_with(
+        lambda *args, **kwargs: _coro(
+            jira_search_result if "status in (Closed, Done)" in kwargs.get("jql", "") else []
+        )
+    )
 
     # Mock Koji listRPMs
     mock_koji_session = flexmock()
@@ -1181,41 +1213,70 @@ Installing: other-package-1.0-1.el10_2.x86_64
 
 @pytest.mark.asyncio
 async def test_find_completed_builds_jira_success():
-    """Test _find_completed_builds_jira returns candidates."""
+    """Test _find_completed_builds_jira returns closed and active candidates."""
     from ymir.common.utils import _find_completed_builds_jira
 
     mock_tool = flexmock()
-    jira_result = [
+    closed_result = [
         {"key": "RHEL-123", "fields": {"customfield_10578": "pkg-1.0-1.el10"}},
         {"key": "RHEL-456", "fields": {"customfield_10578": "pkg-2.0-1.el10"}},
     ]
+    active_result = [
+        {
+            "key": "RHEL-789",
+            "fields": {"customfield_10578": "pkg-3.0-1.el10", "status": {"name": "In Progress"}},
+        },
+    ]
 
-    flexmock(_ymir_utils).should_receive("run_tool").with_args(
-        "search_jira_issues",
-        available_tools=[mock_tool],
-        jql=str,
-        fields=["key", "customfield_10578"],
-        max_results=50,
-    ).and_return(_coro(jira_result))
+    # Mock both queries
+    closed_jql = (
+        'project = RHEL AND component = "pkg" AND '
+        'fixVersion in ("rhel-10.2", "rhel-10.2.z") AND '
+        "status in (Closed, Done) AND "
+        'resolution in ("Done", "Done-Errata") AND '
+        "customfield_10578 IS NOT EMPTY"
+    )
+    active_jql = (
+        'project = RHEL AND component = "pkg" AND '
+        'fixVersion in ("rhel-10.2", "rhel-10.2.z") AND '
+        "status not in (Closed, Done) AND "
+        "customfield_10578 IS NOT EMPTY"
+    )
 
-    candidates = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
+    async def mock_run_tool(tool, **kwargs):
+        if kwargs.get("jql") == closed_jql:
+            return closed_result
+        if kwargs.get("jql") == active_jql:
+            return active_result
+        raise ValueError(f"Unexpected JQL: {kwargs.get('jql')}")
 
-    assert len(candidates) == 2
-    assert candidates[0] == ("RHEL-123", "pkg-1.0-1.el10")
-    assert candidates[1] == ("RHEL-456", "pkg-2.0-1.el10")
+    flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
+
+    closed, active = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
+
+    assert len(closed) == 2
+    assert closed[0] == ("RHEL-123", "pkg-1.0-1.el10")
+    assert closed[1] == ("RHEL-456", "pkg-2.0-1.el10")
+    assert len(active) == 1
+    assert active[0] == ("RHEL-789", "pkg-3.0-1.el10")
 
 
 @pytest.mark.asyncio
 async def test_find_completed_builds_jira_no_results():
-    """Test _find_completed_builds_jira returns empty list when no results."""
+    """Test _find_completed_builds_jira returns empty lists when no results."""
     from ymir.common.utils import _find_completed_builds_jira
 
     mock_tool = flexmock()
-    flexmock(_ymir_utils).should_receive("run_tool").and_return(_coro([]))
 
-    candidates = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
+    async def mock_run_tool(tool, **kwargs):
+        return []
 
-    assert candidates == []
+    flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
+
+    closed, active = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
+
+    assert closed == []
+    assert active == []
 
 
 @pytest.mark.asyncio
@@ -1224,18 +1285,19 @@ async def test_find_completed_builds_jira_missing_nvr():
     from ymir.common.utils import _find_completed_builds_jira
 
     mock_tool = flexmock()
-    jira_result = [
+    closed_result = [
         {"key": "RHEL-123", "fields": {"customfield_10578": "pkg-1.0-1.el10"}},
         {"key": "RHEL-456", "fields": {"customfield_10578": None}},  # Missing NVR
         {"key": "RHEL-789", "fields": {}},  # Missing field entirely
     ]
 
-    flexmock(_ymir_utils).should_receive("run_tool").and_return(_coro(jira_result))
+    flexmock(_ymir_utils).should_receive("run_tool").and_return(_coro(closed_result)).and_return(_coro([]))
 
-    candidates = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
+    closed, active = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
 
-    assert len(candidates) == 1
-    assert candidates[0] == ("RHEL-123", "pkg-1.0-1.el10")
+    assert len(closed) == 1
+    assert closed[0] == ("RHEL-123", "pkg-1.0-1.el10")
+    assert active == []
 
 
 @pytest.mark.asyncio
@@ -1244,7 +1306,7 @@ async def test_find_completed_builds_jira_whitespace_and_invalid_types():
     from ymir.common.utils import _find_completed_builds_jira
 
     mock_tool = flexmock()
-    jira_result = [
+    closed_result = [
         {"key": "RHEL-123", "fields": {"customfield_10578": "pkg-1.0-1.el10"}},  # Valid
         {"key": "RHEL-456", "fields": {"customfield_10578": "  pkg-2.0-1.el10  "}},  # Whitespace
         {"key": "RHEL-789", "fields": {"customfield_10578": "   "}},  # Only whitespace
@@ -1252,36 +1314,41 @@ async def test_find_completed_builds_jira_whitespace_and_invalid_types():
         {"key": "RHEL-888", "fields": {"customfield_10578": ["pkg-3.0-1.el10"]}},  # Non-string (list)
     ]
 
-    flexmock(_ymir_utils).should_receive("run_tool").and_return(_coro(jira_result))
+    flexmock(_ymir_utils).should_receive("run_tool").and_return(_coro(closed_result)).and_return(_coro([]))
 
-    candidates = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
+    closed, active = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
 
     # Should only get the valid ones, with whitespace stripped
-    assert len(candidates) == 2
-    assert candidates[0] == ("RHEL-123", "pkg-1.0-1.el10")
-    assert candidates[1] == ("RHEL-456", "pkg-2.0-1.el10")  # Whitespace stripped
+    assert len(closed) == 2
+    assert closed[0] == ("RHEL-123", "pkg-1.0-1.el10")
+    assert closed[1] == ("RHEL-456", "pkg-2.0-1.el10")  # Whitespace stripped
+    assert active == []
 
 
 @pytest.mark.asyncio
 async def test_find_completed_builds_jira_includes_both_statuses():
-    """Test _find_completed_builds_jira queries for both Closed and Done statuses."""
+    """Test _find_completed_builds_jira queries for both closed and active builds."""
     from ymir.common.utils import _find_completed_builds_jira
 
     mock_tool = flexmock()
-    captured_jql = None
+    captured_jqls = []
 
     def capture_jql(*args, **kwargs):
-        nonlocal captured_jql
-        captured_jql = kwargs.get("jql")
+        jql = kwargs.get("jql")
+        if jql:
+            captured_jqls.append(jql)
         return _coro([])
 
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(capture_jql)
 
     await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
 
-    assert captured_jql is not None
-    assert "status in (Closed, Done)" in captured_jql
-    assert 'resolution in ("Done", "Done-Errata")' in captured_jql
+    assert len(captured_jqls) == 2
+    # First query should be for closed builds
+    assert "status in (Closed, Done)" in captured_jqls[0]
+    assert 'resolution in ("Done", "Done-Errata")' in captured_jqls[0]
+    # Second query should be for active builds
+    assert "status not in (Closed, Done)" in captured_jqls[1]
 
 
 @pytest.mark.asyncio
@@ -1290,11 +1357,12 @@ async def test_find_completed_builds_jira_escapes_package_name():
     from ymir.common.utils import _find_completed_builds_jira
 
     mock_tool = flexmock()
-    captured_jql = None
+    captured_jqls = []
 
     def capture_jql(*args, **kwargs):
-        nonlocal captured_jql
-        captured_jql = kwargs.get("jql")
+        jql = kwargs.get("jql")
+        if jql:
+            captured_jqls.append(jql)
         return _coro([])
 
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(capture_jql)
@@ -1303,11 +1371,80 @@ async def test_find_completed_builds_jira_escapes_package_name():
     malicious_package = 'pkg" OR project = "OTHER'
     await _find_completed_builds_jira(malicious_package, "rhel-10.2.z", [mock_tool])
 
-    assert captured_jql is not None
-    # The quote should be escaped, preventing JQL injection
-    assert 'component = "pkg\\" OR project = \\"OTHER"' in captured_jql
-    # Should NOT contain unescaped injection attempt
-    assert 'component = "pkg" OR project = "OTHER"' not in captured_jql
+    # Both queries should escape the package name
+    for jql in captured_jqls:
+        # The quote should be escaped, preventing JQL injection
+        assert 'component = "pkg\\" OR project = \\"OTHER"' in jql
+        # Should NOT contain unescaped injection attempt
+        assert 'component = "pkg" OR project = "OTHER"' not in jql
+
+
+@pytest.mark.asyncio
+async def test_find_completed_builds_jira_active_query_fails():
+    """Test _find_completed_builds_jira returns None for active when query fails."""
+    from ymir.common.utils import _find_completed_builds_jira
+
+    mock_tool = flexmock()
+    closed_result = [{"key": "RHEL-123", "fields": {"customfield_10578": "pkg-1.0-1.el10"}}]
+
+    call_count = {"count": 0}
+
+    async def mock_run_tool(tool, **kwargs):
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            # First call (closed query) succeeds
+            return closed_result
+        # Second call (active query) fails
+        raise Exception("Jira connection timeout")
+
+    flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
+
+    closed, active = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
+
+    assert closed == [("RHEL-123", "pkg-1.0-1.el10")]
+    assert active is None  # Query failed
+
+
+@pytest.mark.asyncio
+async def test_find_completed_builds_jira_active_query_invalid_response():
+    """Test _find_completed_builds_jira returns None when active query returns non-list."""
+    from ymir.common.utils import _find_completed_builds_jira
+
+    mock_tool = flexmock()
+    closed_result = [{"key": "RHEL-123", "fields": {"customfield_10578": "pkg-1.0-1.el10"}}]
+
+    call_count = {"count": 0}
+
+    async def mock_run_tool(tool, **kwargs):
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            return closed_result
+        return {"error": "invalid response"}  # Not a list
+
+    flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
+
+    closed, active = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
+
+    assert closed == [("RHEL-123", "pkg-1.0-1.el10")]
+    assert active is None
+
+
+@pytest.mark.asyncio
+async def test_find_completed_builds_jira_both_queries_fail():
+    """Test _find_completed_builds_jira handles both queries failing."""
+    from ymir.common.utils import _find_completed_builds_jira
+
+    mock_tool = flexmock()
+
+    async def mock_run_tool(tool, **kwargs):
+        return None  # Both queries fail
+
+    flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
+
+    closed, active = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
+
+    assert closed == []
+    assert active is None
 
 
 @pytest.mark.asyncio
@@ -1438,7 +1575,7 @@ async def test_select_highest_evr_build_wrong_package():
 
 @pytest.mark.asyncio
 async def test_fetch_root_log_success():
-    """Test _fetch_root_log fetches from first architecture."""
+    """Test _fetch_root_log returns list of architecture logs."""
     from ymir.common.utils import _fetch_root_log
 
     root_log_content = b"Installing: golang-1.22.7-1.el10.x86_64"
@@ -1451,10 +1588,10 @@ async def test_fetch_root_log_success():
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
 
-    log = await _fetch_root_log("golang-1.22.7-1.el10")
+    logs = await _fetch_root_log("golang-1.22.7-1.el10")
 
-    assert log is not None
-    assert "Installing: golang-1.22.7-1.el10.x86_64" in log
+    assert len(logs) > 0
+    assert any("Installing: golang-1.22.7-1.el10.x86_64" in content for _, content in logs)
 
 
 @pytest.mark.asyncio
@@ -1475,24 +1612,24 @@ async def test_fetch_root_log_gzipped():
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
 
-    log = await _fetch_root_log("golang-1.22.7-1.el10")
+    logs = await _fetch_root_log("golang-1.22.7-1.el10")
 
-    assert log is not None
-    assert "Installing: golang-1.22.7-1.el10.x86_64" in log
+    assert len(logs) > 0
+    assert any("Installing: golang-1.22.7-1.el10.x86_64" in content for _, content in logs)
 
 
 @pytest.mark.asyncio
 async def test_fetch_root_log_invalid_nvr():
-    """Test _fetch_root_log returns None for invalid NVR."""
+    """Test _fetch_root_log returns empty list for invalid NVR."""
     from ymir.common.utils import _fetch_root_log
 
-    log = await _fetch_root_log("invalid-nvr")
-    assert log is None
+    logs = await _fetch_root_log("invalid-nvr")
+    assert logs == []
 
 
 @pytest.mark.asyncio
 async def test_fetch_root_log_not_found():
-    """Test _fetch_root_log returns None when not found."""
+    """Test _fetch_root_log returns empty list when not found."""
     from ymir.common.utils import _fetch_root_log
 
     mock_head_response = flexmock(status_code=404)
@@ -1501,8 +1638,8 @@ async def test_fetch_root_log_not_found():
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
 
-    log = await _fetch_root_log("pkg-1.0-1.el10")
-    assert log is None
+    logs = await _fetch_root_log("pkg-1.0-1.el10")
+    assert logs == []
 
 
 @pytest.mark.asyncio
@@ -1551,14 +1688,74 @@ async def test_get_known_package_names_component_not_in_list():
 
 @pytest.mark.asyncio
 async def test_get_known_package_names_koji_failure():
-    """Test _get_known_package_names falls back to component name on failure."""
+    """Test _get_known_package_names returns None when build not found."""
     from ymir.common.utils import _get_known_package_names
 
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(None)
 
     names = await _get_known_package_names("golang", "golang-1.22.7-1.el10")
 
-    assert names == ["golang"]
+    assert names is None
+
+
+@pytest.mark.asyncio
+async def test_get_known_package_names_name_mismatch():
+    """Test _get_known_package_names returns None when build name doesn't match component."""
+    from ymir.common.utils import _get_known_package_names
+
+    wrong_build = {"name": "python", "build_id": 123}
+    flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(wrong_build)
+
+    names = await _get_known_package_names("golang", "golang-1.22.7-1.el10")
+
+    assert names is None
+
+
+@pytest.mark.asyncio
+async def test_get_known_package_names_missing_build_id():
+    """Test _get_known_package_names returns None when build has no build_id."""
+    from ymir.common.utils import _get_known_package_names
+
+    build_no_id = {"name": "golang"}
+    flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(build_no_id)
+
+    names = await _get_known_package_names("golang", "golang-1.22.7-1.el10")
+
+    assert names is None
+
+
+@pytest.mark.asyncio
+async def test_get_known_package_names_list_rpms_exception():
+    """Test _get_known_package_names returns None when listRPMs raises exception."""
+    from ymir.common.utils import _get_known_package_names
+
+    valid_build = {"name": "golang", "build_id": 123456}
+    flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(valid_build)
+
+    mock_session = flexmock()
+    mock_session.should_receive("listRPMs").and_raise(Exception("Koji unavailable"))
+    flexmock(koji).should_receive("ClientSession").and_return(mock_session)
+
+    names = await _get_known_package_names("golang", "golang-1.22.7-1.el10")
+
+    assert names is None
+
+
+@pytest.mark.asyncio
+async def test_get_known_package_names_invalid_rpms_response():
+    """Test _get_known_package_names returns None when listRPMs returns non-list."""
+    from ymir.common.utils import _get_known_package_names
+
+    valid_build = {"name": "golang", "build_id": 123456}
+    flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(valid_build)
+
+    mock_session = flexmock()
+    mock_session.should_receive("listRPMs").and_return("not a list")
+    flexmock(koji).should_receive("ClientSession").and_return(mock_session)
+
+    names = await _get_known_package_names("golang", "golang-1.22.7-1.el10")
+
+    assert names is None
 
 
 def test_parse_dependency_from_root_log_success():
@@ -1816,7 +2013,7 @@ async def test_compare_build_timestamps_same_time():
 
 @pytest.mark.asyncio
 async def test_compare_build_timestamps_missing_package_build():
-    """Test _compare_build_timestamps returns False when package build not found."""
+    """Test _compare_build_timestamps returns None when package build not found."""
     from datetime import datetime
 
     from ymir.common.utils import _compare_build_timestamps
@@ -1829,7 +2026,7 @@ async def test_compare_build_timestamps_missing_package_build():
         "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", "golang-1.26.7-1.el10"
     )
 
-    assert result is False
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -1847,7 +2044,7 @@ async def test_compare_build_timestamps_missing_fixed_build():
         "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", "golang-1.26.7-1.el10"
     )
 
-    assert result is False
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -1864,7 +2061,7 @@ async def test_compare_build_timestamps_missing_completion_time():
         "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", "golang-1.26.7-1.el10"
     )
 
-    assert result is False
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -1886,7 +2083,7 @@ async def test_compare_build_timestamps_wrong_package_name():
         "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", "golang-1.26.7-1.el10"
     )
 
-    assert result is False
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -1908,7 +2105,7 @@ async def test_compare_build_timestamps_wrong_dependency_name():
         "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", "golang-1.26.7-1.el10"
     )
 
-    assert result is False
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -1939,13 +2136,18 @@ Installing: other-package-1.0-1.el10_2.x86_64
         "build_id": 123456,
     }
 
+    # Mock run_tool to return fresh coroutines each call (called twice: closed + active)
     flexmock(_ymir_utils).should_receive("run_tool").with_args(
         "search_jira_issues",
         available_tools=[mock_tool],
         jql=str,
         fields=list,
         max_results=50,
-    ).and_return(_coro(jira_search_result))
+    ).replace_with(
+        lambda *args, **kwargs: _coro(
+            jira_search_result if "status in (Closed, Done)" in kwargs.get("jql", "") else []
+        )
+    )
 
     mock_head_response = flexmock(status_code=200)
     mock_get_response = flexmock(status_code=200, content=root_log_content)
@@ -1992,3 +2194,374 @@ Installing: other-package-1.0-1.el10_2.x86_64
     assert reason == "evr_comparison_failed"
     assert issue_key == "RHEL-242375"
     assert _nvr == "go-fdo-client-1.0.0-4.el10_2.7"
+
+
+@pytest.mark.asyncio
+async def test_check_package_built_with_fixed_dependency_subpackage_list_unavailable():
+    """Test when subpackage list fetch fails due to Koji error."""
+    mock_tool = flexmock()
+
+    jira_search_result = [
+        {
+            "key": "RHEL-888888",
+            "fields": {
+                "customfield_10578": "some-app-5.0-1.el10",
+            },
+        }
+    ]
+
+    root_log_content = b"""Installing: golang-1.22.7-1.el10.x86_64
+Installing: other-package-1.0-1.el10.x86_64
+"""
+
+    candidate_build = {"name": "some-app", "epoch": None, "version": "5.0", "release": "1.el10"}
+    fixed_build = {
+        "name": "golang",
+        "epoch": None,
+        "version": "1.22.7",
+        "release": "1.el10",
+        "build_id": 123456,
+    }
+
+    flexmock(_ymir_utils).should_receive("run_tool").with_args(
+        "search_jira_issues",
+        available_tools=[mock_tool],
+        jql=str,
+        fields=list,
+        max_results=50,
+    ).replace_with(
+        lambda *args, **kwargs: _coro(
+            jira_search_result if "status in (Closed, Done)" in kwargs.get("jql", "") else []
+        )
+    )
+
+    mock_head_response = flexmock(status_code=200)
+    mock_get_response = flexmock(status_code=200, content=root_log_content)
+    mock_client = flexmock()
+    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
+    mock_client.should_receive("get").and_return(_coro(mock_get_response)).at_least().once()
+
+    flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
+
+    # Mock Koji to fail on listRPMs
+    mock_session = flexmock()
+    mock_session.should_receive("listRPMs").and_raise(Exception("Koji connection timeout"))
+    flexmock(koji).should_receive("ClientSession").and_return(mock_session)
+
+    def mock_get_build(url, nvr):
+        if nvr == "some-app-5.0-1.el10":
+            return candidate_build
+        if nvr == "golang-1.22.7-1.el10":
+            return fixed_build
+        return None
+
+    flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(mock_get_build)
+
+    already_fixed, issue_key, _nvr, reason = await check_package_built_with_fixed_dependency(
+        package="some-app",
+        fix_version="rhel-10.z",
+        dep_component="golang",
+        fixed_dep_nvr="golang-1.22.7-1.el10",
+        available_tools=[mock_tool],
+    )
+
+    # Should return None with evr_comparison_failed when subpackage list unavailable
+    assert already_fixed is None
+    assert reason == "evr_comparison_failed"
+    assert issue_key == "RHEL-888888"
+    assert _nvr == "some-app-5.0-1.el10"
+
+
+@pytest.mark.asyncio
+async def test_check_package_built_with_fixed_dependency_epoch_normalization_multiarch():
+    """Test that explicit epoch 0 and omitted epoch are treated as equivalent across architectures."""
+    mock_tool = flexmock()
+
+    jira_search_result = [
+        {
+            "key": "RHEL-999999",
+            "fields": {
+                "customfield_10578": "some-package-2.0-1.el10",
+            },
+        }
+    ]
+
+    # x86_64 log shows dependency WITHOUT epoch prefix
+    x86_64_log = b"""Installing: golang-1.22.7-1.el10.x86_64
+Installing: other-package-1.0-1.el10.x86_64
+"""
+
+    # aarch64 log shows dependency WITH explicit epoch 0
+    aarch64_log = b"""Installing: 0:golang-1.22.7-1.el10.aarch64
+Installing: other-package-1.0-1.el10.aarch64
+"""
+
+    candidate_build = {"name": "some-package", "epoch": None, "version": "2.0", "release": "1.el10"}
+    golang_build = {
+        "name": "golang",
+        "epoch": 0,  # Koji says epoch is 0
+        "version": "1.22.7",
+        "release": "1.el10",
+        "build_id": 123456,
+    }
+    fixed_build = {
+        "name": "golang",
+        "epoch": None,
+        "version": "1.22.5",
+        "release": "1.el10",
+        "build_id": 123456,
+    }
+
+    # Mock run_tool to return fresh coroutines each call
+    flexmock(_ymir_utils).should_receive("run_tool").with_args(
+        "search_jira_issues",
+        available_tools=[mock_tool],
+        jql=str,
+        fields=list,
+        max_results=50,
+    ).replace_with(
+        lambda *args, **kwargs: _coro(
+            jira_search_result if "status in (Closed, Done)" in kwargs.get("jql", "") else []
+        )
+    )
+
+    # Mock root.log fetch - return both x86_64 and aarch64 logs
+    mock_response_x86 = flexmock(status_code=200, content=x86_64_log)
+    mock_response_aarch64 = flexmock(status_code=200, content=aarch64_log)
+    mock_response_404 = flexmock(status_code=404)
+
+    async def mock_head(url, **kwargs):
+        if "x86_64" in url:
+            return mock_response_x86
+        if "aarch64" in url:
+            return mock_response_aarch64
+        return mock_response_404
+
+    async def mock_get(url, **kwargs):
+        if "x86_64" in url:
+            return mock_response_x86
+        if "aarch64" in url:
+            return mock_response_aarch64
+        return mock_response_404
+
+    mock_client = flexmock()
+    mock_client.should_receive("head").replace_with(mock_head)
+    mock_client.should_receive("get").replace_with(mock_get)
+
+    flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
+
+    # Mock Koji listRPMs
+    mock_koji_session = flexmock()
+    mock_koji_session.should_receive("listRPMs").with_args(buildID=123456).and_return([{"name": "golang"}])
+    flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
+
+    # Mock _get_koji_build
+    def mock_get_build(url, nvr):
+        if nvr == "some-package-2.0-1.el10":
+            return candidate_build
+        if nvr == "golang-1.22.7-1.el10":
+            return golang_build
+        if nvr == "golang-1.22.5-1.el10":
+            return fixed_build
+        return None
+
+    flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(mock_get_build)
+
+    already_fixed, issue_key, _nvr, _reason = await check_package_built_with_fixed_dependency(
+        package="some-package",
+        fix_version="rhel-10.z",
+        dep_component="golang",
+        fixed_dep_nvr="golang-1.22.5-1.el10",
+        available_tools=[mock_tool],
+    )
+
+    # Should recognize both architectures agree (epoch 0 == no epoch) and return True
+    assert already_fixed is True
+    assert issue_key == "RHEL-999999"
+    assert _nvr == "some-package-2.0-1.el10"
+
+
+@pytest.mark.asyncio
+async def test_check_package_built_with_fixed_dependency_active_query_failed_no_closed():
+    """Test when active query fails and no closed builds found."""
+    mock_tool = flexmock()
+
+    call_count = {"count": 0}
+
+    async def mock_run_tool(tool, **kwargs):
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            return []  # No closed builds
+        raise Exception("Jira timeout")  # Active query fails
+
+    flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
+
+    already_fixed, issue_key, _nvr, reason = await check_package_built_with_fixed_dependency(
+        package="some-pkg",
+        fix_version="rhel-10.z",
+        dep_component="golang",
+        fixed_dep_nvr="golang-1.22.7-1.el10",
+        available_tools=[mock_tool],
+    )
+
+    # Should return clarification when no closed builds and active query failed
+    assert already_fixed is None
+    assert reason == "jira_query_failed"
+    assert issue_key is None
+    assert _nvr is None
+
+
+@pytest.mark.asyncio
+async def test_check_package_built_with_fixed_dependency_active_query_failed_with_closed():
+    """Test when active query fails but closed builds exist - should process closed builds."""
+    mock_tool = flexmock()
+
+    jira_search_result = [
+        {
+            "key": "RHEL-777777",
+            "fields": {
+                "customfield_10578": "test-app-3.0-1.el10",
+            },
+        }
+    ]
+
+    root_log_content = b"""Installing: golang-1.22.8-1.el10.x86_64
+Installing: other-package-1.0-1.el10.x86_64
+"""
+
+    candidate_build = {"name": "test-app", "epoch": None, "version": "3.0", "release": "1.el10"}
+    golang_build = {
+        "name": "golang",
+        "epoch": None,
+        "version": "1.22.8",
+        "release": "1.el10",
+        "build_id": 123456,
+    }
+    fixed_build = {
+        "name": "golang",
+        "epoch": None,
+        "version": "1.22.5",
+        "release": "1.el10",
+        "build_id": 123456,
+    }
+
+    call_count = {"count": 0}
+
+    async def mock_run_tool(tool, **kwargs):
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            return jira_search_result  # Closed builds found
+        return None  # Active query returns invalid response
+
+    flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
+
+    mock_head_response = flexmock(status_code=200)
+    mock_get_response = flexmock(status_code=200, content=root_log_content)
+    mock_client = flexmock()
+    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
+    mock_client.should_receive("get").and_return(_coro(mock_get_response)).at_least().once()
+
+    flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
+
+    mock_koji_session = flexmock()
+    mock_koji_session.should_receive("listRPMs").and_return([{"name": "golang"}])
+    flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
+
+    def mock_get_build(url, nvr):
+        if nvr == "test-app-3.0-1.el10":
+            return candidate_build
+        if nvr == "golang-1.22.8-1.el10":
+            return golang_build
+        if nvr == "golang-1.22.5-1.el10":
+            return fixed_build
+        return None
+
+    flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(mock_get_build)
+
+    already_fixed, issue_key, _nvr, _reason = await check_package_built_with_fixed_dependency(
+        package="test-app",
+        fix_version="rhel-10.z",
+        dep_component="golang",
+        fixed_dep_nvr="golang-1.22.5-1.el10",
+        available_tools=[mock_tool],
+    )
+
+    # Should process closed builds successfully despite active query failure
+    assert already_fixed is True
+    assert issue_key == "RHEL-777777"
+    assert _nvr == "test-app-3.0-1.el10"
+
+
+@pytest.mark.asyncio
+async def test_check_package_built_with_fixed_dependency_closed_old_but_active_exists():
+    """Test when closed build doesn't have fix but active builds exist - should request clarification."""
+    mock_tool = flexmock()
+
+    jira_closed = [{"key": "RHEL-111", "fields": {"customfield_10578": "pkg-1.0-1.el10"}}]
+    jira_active = [
+        {
+            "key": "RHEL-222",
+            "fields": {"customfield_10578": "pkg-2.0-1.el10", "status": {"name": "In Progress"}},
+        }
+    ]
+
+    root_log_content = b"""Installing: golang-1.22.4-1.el10.x86_64
+Installing: other-package-1.0-1.el10.x86_64
+"""
+
+    closed_build = {"name": "pkg", "epoch": None, "version": "1.0", "release": "1.el10"}
+    used_golang = {"name": "golang", "epoch": None, "version": "1.22.4", "release": "1.el10", "build_id": 123}
+    fixed_golang = {
+        "name": "golang",
+        "epoch": None,
+        "version": "1.22.7",
+        "release": "1.el10",
+        "build_id": 124,
+    }
+
+    call_count = {"count": 0}
+
+    async def mock_run_tool(tool, **kwargs):
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            return jira_closed
+        return jira_active
+
+    flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
+
+    mock_head_response = flexmock(status_code=200)
+    mock_get_response = flexmock(status_code=200, content=root_log_content)
+    mock_client = flexmock()
+    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
+    mock_client.should_receive("get").and_return(_coro(mock_get_response)).at_least().once()
+
+    flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
+
+    mock_session = flexmock()
+    mock_session.should_receive("listRPMs").and_return([{"name": "golang"}])
+    flexmock(koji).should_receive("ClientSession").and_return(mock_session)
+
+    def mock_get_build(url, nvr):
+        if nvr == "pkg-1.0-1.el10":
+            return closed_build
+        if nvr == "golang-1.22.4-1.el10":
+            return used_golang
+        if nvr == "golang-1.22.7-1.el10":
+            return fixed_golang
+        return None
+
+    flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(mock_get_build)
+
+    already_fixed, issue_key, _nvr, reason = await check_package_built_with_fixed_dependency(
+        package="pkg",
+        fix_version="rhel-10.z",
+        dep_component="golang",
+        fixed_dep_nvr="golang-1.22.7-1.el10",
+        available_tools=[mock_tool],
+    )
+
+    # Should request clarification because active builds exist
+    assert already_fixed is None
+    assert reason == "active_builds_not_closed:RHEL-222"
+    assert issue_key == "RHEL-111"  # Closed build issue
+    assert _nvr == "pkg-1.0-1.el10"

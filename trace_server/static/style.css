@@ -15,6 +15,7 @@
   --status-unset: #9ca3af;
   --reasoning-bg: #fdf8f0;
   --reasoning-border: #c8a060;
+  --context-border: #b56b78;
   --tool-bg: #f0f5f8;
   --tool-border: #7a9db5;
   --error-bg: #fef2f2;
@@ -41,6 +42,7 @@ html.dark {
   --status-unset: #6b7280;
   --reasoning-bg: #1a1408;
   --reasoning-border: #8a6830;
+  --context-border: #b87580;
   --tool-bg: #0c1418;
   --tool-border: #4a7a90;
   --error-bg: #1f0a0a;
@@ -432,6 +434,46 @@ a:hover { text-decoration: underline; }
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.additional-context {
+  background: var(--tool-bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--context-border);
+  margin: 4px 0;
+}
+
+.additional-context-title {
+  color: var(--fg-secondary);
+  font-size: 11px;
+  font-weight: bold;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.additional-context-values {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  font-size: 11px;
+}
+
+.additional-context-values dt,
+.additional-context-values dd {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.additional-context-values dt {
+  color: var(--fg-secondary);
+  font-weight: bold;
+  border-right: 1px solid var(--border);
+}
+
+.additional-context-values dd:last-child,
+.additional-context-values dt:nth-last-child(2) {
+  border-bottom: 0;
 }
 
 details { margin-top: 4px; }

@@ -1143,7 +1143,7 @@ function renderSpanRow(span, depth, parent) {
   header.appendChild(el('span', {className: 'span-duration'}, fmtDuration(span.start_time, span.end_time)));
   row.appendChild(header);
 
-  const detail = extractDetail(attrs, span.name);
+  const detail = extractDetail(attrs, span.name, effectiveStatus);
   if (detail) {
     const detailDiv = el('div', {className: 'span-detail'});
     detailDiv.appendChild(detail);
@@ -1160,8 +1160,84 @@ function renderSpanRow(span, depth, parent) {
 // Span Detail Extraction
 // ============================================================
 
-function extractDetail(attrs, spanName) {
+function parseErrorOutput(output) {
+  const contextMarker = '\nContext: ';
+  const contextOffset = output.lastIndexOf(contextMarker);
+  const errorOutput = contextOffset === -1 ? output : output.slice(0, contextOffset);
+  let message = errorOutput;
+  let additionalContext = null;
+
+  const jsonOffset = errorOutput.indexOf('{');
+  if (jsonOffset !== -1) {
+    try {
+      const error = JSON.parse(errorOutput.slice(jsonOffset));
+      if (typeof error.text === 'string') message = error.text;
+    } catch (e) {}
+  }
+  if (contextOffset !== -1) {
+    const contextLines = output.slice(contextOffset + contextMarker.length).split('\n');
+    try {
+      let context;
+      let contextLineCount = 1;
+      try {
+        context = JSON.parse(contextLines[0]);
+      } catch (e) {
+        context = JSON.parse(contextLines.join('\n'));
+        contextLineCount = contextLines.length;
+      }
+      if (context.additional_context && typeof context.additional_context === 'object'
+          && !Array.isArray(context.additional_context)) {
+        additionalContext = context.additional_context;
+      }
+      const suffix = contextLines.slice(contextLineCount).join('\n').trim();
+      if (suffix) message += '\n' + suffix;
+    } catch (e) {}
+  }
+  return {message, additionalContext};
+}
+
+function extractAdditionalContext(attrs) {
+  const prefix = 'metadata.additional_context.';
+  const context = {};
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key.startsWith(prefix)) context[key.slice(prefix.length)] = getVal(value);
+  }
+  return Object.keys(context).length > 0 ? context : null;
+}
+
+function formatContextValue(value) {
+  return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+}
+
+function renderErrorDetail(output, attrs) {
+  const {message, additionalContext: outputContext} = parseErrorOutput(String(output));
+  const additionalContext = extractAdditionalContext(attrs) || outputContext;
+  const frag = document.createDocumentFragment();
+  frag.appendChild(el('div', {className: 'detail-error', textContent: message.slice(0, 1000)}));
+
+  if (additionalContext && Object.keys(additionalContext).length > 0) {
+    const context = el('div', {className: 'additional-context'});
+    context.appendChild(el('div', {className: 'additional-context-title'}, 'Additional context'));
+    const values = el('dl', {className: 'additional-context-values'});
+    for (const key of Object.keys(additionalContext).sort()) {
+      values.appendChild(el('dt', {textContent: key}));
+      values.appendChild(el('dd', {textContent: formatContextValue(additionalContext[key])}));
+    }
+    context.appendChild(values);
+    frag.appendChild(context);
+  }
+  return frag;
+}
+
+function extractDetail(attrs, spanName, statusCode) {
   const kind = getSpanKind(attrs);
+
+  if (statusCode === 2) {
+    const output = getVal(attrs['output.value']);
+    if (output && (spanName.endsWith('Workflow') || String(output).startsWith('ToolError'))) {
+      return renderErrorDetail(output, attrs);
+    }
+  }
 
   if (kind === 'LLM' || (!kind && spanName.endsWith('ChatModel'))) {
     const frag = document.createDocumentFragment();
@@ -1221,8 +1297,7 @@ function extractDetail(attrs, spanName) {
   if (spanName === 'error') {
     const output = getVal(attrs['output.value']);
     if (output) {
-      const truncated = String(output).slice(0, 1000);
-      return el('div', {className: 'detail-error', textContent: truncated});
+      return renderErrorDetail(output, attrs);
     }
     return null;
   }
@@ -1295,6 +1370,11 @@ function extractDetail(attrs, spanName) {
       let pretty = isError ? str.replace(/\n\s*Context: .*/g, '') : str;
       if (!isError) {
         try { pretty = JSON.stringify(JSON.parse(str), null, 2); } catch (e) {}
+      }
+      if (isError) {
+        frag.appendChild(renderErrorDetail(str, attrs));
+        found = true;
+        return found ? frag : null;
       }
       frag.appendChild(lazyDetails((isError ? 'error' : 'output') + ' (' + pretty.length + ' chars)',
         () => el('pre', {className: cls, textContent: pretty}), true));

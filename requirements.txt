@@ -20,7 +20,6 @@ typer>=0.16.0
 backoff>=2.2.1
 python-dotenv>=1.0.0
 tomli-w>=1.2.0
-flexmock>=0.12.2
 nitrate>=1.9.0
 
 # Sentry integration

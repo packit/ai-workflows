@@ -4,11 +4,11 @@ import os
 import re
 from contextlib import asynccontextmanager
 from functools import partial
+from types import SimpleNamespace
 from urllib.parse import urljoin
 
 import aiofiles
 from beeai_framework.tools import ToolError
-from flexmock import flexmock
 
 
 async def _get_transitions():
@@ -94,7 +94,7 @@ class aiohttpClientSessionMock:
     async def get(self, *args, **kwargs):
         if match_data := self.issue_get_regex.fullmatch(args[0]):
             requested_fields = self._parse_requested_fields(kwargs)
-            yield flexmock(
+            yield SimpleNamespace(
                 status=200,
                 raise_for_status=lambda: None,
                 json=partial(
@@ -105,21 +105,21 @@ class aiohttpClientSessionMock:
                 ),
             )
         elif match_data := self.remote_link_get_regex.fullmatch(args[0]):
-            yield flexmock(
+            yield SimpleNamespace(
                 status=200,
                 raise_for_status=lambda: None,
                 json=partial(_read_jira_mock, issue_key=match_data.group(1), remote_link=True),
             )
         elif match_data := self.transitions_get_regex.fullmatch(args[0]):
-            yield flexmock(status=200, raise_for_status=lambda: None, json=_get_transitions)
+            yield SimpleNamespace(status=200, raise_for_status=lambda: None, json=_get_transitions)
         elif match_data := self.user_get_regex.fullmatch(args[0]):
             if (
                 kwargs["params"].get("key") == "verified_user"
                 or kwargs["params"].get("accountId") == "verified_user"
             ):
-                yield flexmock(status=200, raise_for_status=lambda: None, json=_get_verified_user)
+                yield SimpleNamespace(status=200, raise_for_status=lambda: None, json=_get_verified_user)
             else:
-                yield flexmock(status=200, raise_for_status=lambda: None, json=_get_unverified_user)
+                yield SimpleNamespace(status=200, raise_for_status=lambda: None, json=_get_unverified_user)
         else:
             raise NotImplementedError()
 
@@ -149,7 +149,7 @@ class aiohttpClientSessionMock:
             else:
                 raise NotImplementedError()
             await _write_jira_mock(match_data.group(1), issue_data)
-            yield flexmock(raise_for_status=lambda: None)
+            yield SimpleNamespace(raise_for_status=lambda: None)
         else:
             raise NotImplementedError()
 
@@ -169,13 +169,13 @@ class aiohttpClientSessionMock:
             current_issue["fields"]["comment"]["maxResults"] += 1
             current_issue["fields"]["comment"]["total"] += 1
             await _write_jira_mock(match_data.group(1), current_issue)
-            yield flexmock(raise_for_status=lambda: None)
+            yield SimpleNamespace(raise_for_status=lambda: None)
         elif self.search_post_regex.fullmatch(args[0]):
 
             async def _empty_search():
                 return {"issues": []}
 
-            yield flexmock(raise_for_status=lambda: None, json=_empty_search)
+            yield SimpleNamespace(raise_for_status=lambda: None, json=_empty_search)
         elif match_data := self.transitions_get_regex.fullmatch(args[0]):
             jira_data = await _read_jira_mock(match_data.group(1))
             if kwargs["json"]["transition"]["id"] == 1:
@@ -191,6 +191,6 @@ class aiohttpClientSessionMock:
             else:
                 raise ToolError("Not implemented Transition!")
             await _write_jira_mock(match_data.group(1), jira_data)
-            yield flexmock(raise_for_status=lambda: None)
+            yield SimpleNamespace(raise_for_status=lambda: None)
         else:
             raise ToolError("Not implemented Post!")

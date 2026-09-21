@@ -767,7 +767,6 @@ async function renderTraceDetail(container, issue, traceId, prevHash, targetSpan
     }
     header.appendChild(meta);
     main.appendChild(header);
-
     const spanList = el('div', {className: 'span-list', id: 'span-list'});
     renderSpanTree(spanList, tree, 0);
     main.appendChild(spanList);
@@ -1229,19 +1228,17 @@ function renderErrorDetail(output, attrs) {
   return frag;
 }
 
+function renderGenericErrorDetail(attrs, statusCode) {
+  if (statusCode !== 2) return null;
+  const output = getVal(attrs['output.value']);
+  return output ? renderErrorDetail(output, attrs) : null;
+}
+
 function extractDetail(attrs, spanName, statusCode) {
   const kind = getSpanKind(attrs);
 
-  if (statusCode === 2) {
-    const output = getVal(attrs['output.value']);
-    if (output && (spanName.endsWith('Workflow') || String(output).startsWith('ToolError'))) {
-      return renderErrorDetail(output, attrs);
-    }
-  }
-
   if (kind === 'LLM' || (!kind && spanName.endsWith('ChatModel'))) {
     const frag = document.createDocumentFragment();
-    let found = false;
 
     let i = 0;
     while (true) {
@@ -1252,13 +1249,11 @@ function extractDetail(attrs, spanName, statusCode) {
         if (text) {
           frag.appendChild(lazyDetails('reasoning (' + text.length + ' chars)',
             () => el('div', {className: 'detail-reasoning', textContent: text}), true));
-          found = true;
         }
       } else if (ctype === 'text') {
         const text = getVal(attrs['llm.output_messages.0.message.contents.' + i + '.message_content.text']);
         if (text) {
           frag.appendChild(el('div', {className: 'detail-text', textContent: text}));
-          found = true;
         }
       }
       i++;
@@ -1288,10 +1283,13 @@ function extractDetail(attrs, spanName, statusCode) {
         }
         return f;
       }));
-      found = true;
     }
 
-    return found ? frag : null;
+    if (statusCode === 2) {
+      const errorDetail = renderGenericErrorDetail(attrs, statusCode);
+      if (errorDetail) frag.appendChild(errorDetail);
+    }
+    return frag.childNodes.length ? frag : null;
   }
 
   if (spanName === 'error') {
@@ -1304,7 +1302,7 @@ function extractDetail(attrs, spanName, statusCode) {
 
   if (kind === 'TOOL' && spanName === 'final_answer') {
     const inputVal = getVal(attrs['input.value']);
-    if (inputVal == null) return null;
+    if (inputVal == null) return renderGenericErrorDetail(attrs, statusCode);
     let content;
     try {
       const parsed = JSON.parse(inputVal);
@@ -1318,8 +1316,14 @@ function extractDetail(attrs, spanName, statusCode) {
     } catch (e) {
       content = String(inputVal);
     }
-    return lazyDetails('content (' + content.length + ' chars)',
+    const contentDetail = lazyDetails('content (' + content.length + ' chars)',
       () => el('pre', {className: 'detail-tool-io', textContent: content}), true);
+    if (statusCode !== 2) return contentDetail;
+    const frag = document.createDocumentFragment();
+    frag.appendChild(contentDetail);
+    const errorDetail = renderGenericErrorDetail(attrs, statusCode);
+    if (errorDetail) frag.appendChild(errorDetail);
+    return frag;
   }
 
   if (kind === 'TOOL' && spanName === 'run_shell_command') {
@@ -1383,7 +1387,7 @@ function extractDetail(attrs, spanName, statusCode) {
     return found ? frag : null;
   }
 
-  return null;
+  return renderGenericErrorDetail(attrs, statusCode);
 }
 
 function renderAttrs(attrs) {

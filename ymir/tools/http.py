@@ -19,13 +19,16 @@ logger = logging.getLogger(__name__)
 async def aiohttp_get_with_retries(
     session: aiohttp.ClientSession,
     url: str,
+    yield_final_retryable_response: bool = False,
     **kwargs,
 ) -> AsyncIterator[aiohttp.ClientResponse]:
     """Drop-in replacement for ``session.get()`` that retries on transient HTTP errors.
 
     Retries up to ``AIOHTTP_MAX_RETRIES`` times on status codes listed in
     ``AIOHTTP_RETRYABLE_STATUS_CODES`` using exponential back-off.  Raises
-    ``aiohttp.ClientResponseError`` when all retries are exhausted.
+    ``aiohttp.ClientResponseError`` when all retries are exhausted. Set
+    ``yield_final_retryable_response`` to let a caller inspect the final error
+    response instead.
     """
     for attempt in range(AIOHTTP_MAX_RETRIES):
         async with session.get(url, **kwargs) as response:
@@ -33,6 +36,9 @@ async def aiohttp_get_with_retries(
                 yield response
                 return
             if attempt >= AIOHTTP_MAX_RETRIES - 1:
+                if yield_final_retryable_response:
+                    yield response
+                    return
                 raise aiohttp.ClientResponseError(
                     response.request_info,
                     response.history,

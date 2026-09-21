@@ -102,6 +102,27 @@ async def test_exhausted_retries_raises():
 
 
 @pytest.mark.asyncio
+async def test_exhausted_retries_yields_final_response_when_requested():
+    flexmock(asyncio).should_receive("sleep").replace_with(_mock_sleep).twice()
+    session, get_count = _make_session(
+        [
+            _mock_response(503),
+            _mock_response(503),
+            _mock_response(503),
+        ]
+    )
+
+    async with aiohttp_get_with_retries(
+        session,
+        "http://example.com",
+        yield_final_retryable_response=True,
+    ) as response:
+        assert response.status == 503
+
+    assert get_count() == 3
+
+
+@pytest.mark.asyncio
 async def test_backoff_delays_increase():
     delays = []
 

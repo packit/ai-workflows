@@ -9,6 +9,7 @@ from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import ToolError
 from flexmock import flexmock
 
+from ymir.tools import http as http_tools
 from ymir.tools.privileged.github import (
     MAX_GITHUB_PATCH_PREVIEW_LENGTH,
     GetGithubCompareTool,
@@ -59,6 +60,30 @@ def _mock_aiohttp_get_error(error_msg="error"):
     async def fake_get(url, **kwargs):
         raise aiohttp.ClientError(error_msg)
         yield
+
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(fake_get)
+
+
+def _mock_aiohttp_api_error(status, message, json_error=None):
+    """Mock a GitHub API response with a JSON error body."""
+
+    def raise_for_status():
+        error = aiohttp.ClientError(f"{status} {message}")
+        error.status = status
+        raise error
+
+    async def json(content_type=None):
+        if json_error:
+            raise json_error
+        return {"message": message}
+
+    @asynccontextmanager
+    async def fake_get(url, **kwargs):
+        yield flexmock(
+            json=json,
+            raise_for_status=raise_for_status,
+            status=status,
+        )
 
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(fake_get)
 
@@ -164,6 +189,39 @@ class TestGetGithubPatchTool:
         with pytest.raises(ToolError, match="Invalid GitHub patch URL"):
             await tool.run(
                 input=GetGithubPatchToolInput(patch_url="http://github.com/owner/repo/pull/42.patch")
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    @pytest.mark.asyncio
+    async def test_api_error_includes_github_message(self, tool):
+        _mock_aiohttp_api_error(422, "No commit found for SHA: deadbeef")
+
+        with pytest.raises(ToolError, match="GitHub reported: No commit found for SHA: deadbeef"):
+            await tool.run(
+                input=GetGithubPatchToolInput(patch_url="https://github.com/owner/repo/commit/deadbeef.patch")
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    @pytest.mark.asyncio
+    async def test_error_with_invalid_response_encoding_is_reported_as_tool_error(self, tool):
+        _mock_aiohttp_api_error(
+            422,
+            "Unprocessable Entity",
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+        )
+
+        with pytest.raises(ToolError, match="Failed to fetch GitHub patch"):
+            await tool.run(
+                input=GetGithubPatchToolInput(patch_url="https://github.com/owner/repo/commit/deadbeef.patch")
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    @pytest.mark.asyncio
+    async def test_exhausted_503_includes_github_message(self, tool, monkeypatch):
+        monkeypatch.setattr(http_tools, "AIOHTTP_RETRY_BACKOFF_BASE", 0)
+        monkeypatch.setattr(http_tools.random, "uniform", lambda *_args: 0)
+        _mock_aiohttp_api_error(503, "Service unavailable")
+
+        with pytest.raises(ToolError, match="GitHub reported: Service unavailable"):
+            await tool.run(
+                input=GetGithubPatchToolInput(patch_url="https://github.com/owner/repo/commit/deadbeef.patch")
             ).middleware(GlobalTrajectoryMiddleware(pretty=True))
 
 
@@ -388,6 +446,54 @@ class TestGetGithubCompareTool:
                     repo_url="https://github.com/owner/repo",
                     base_ref="old",
                     target_ref="new",
+                )
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    @pytest.mark.asyncio
+    async def test_not_found_includes_ref_guidance(self, tool):
+        _mock_aiohttp_api_error(404, "Not Found")
+
+        with pytest.raises(
+            ToolError,
+            match=r"GitHub reported: Not Found.*Verify that the repository and both references exist",
+        ):
+            await tool.run(
+                input=GetGithubCompareToolInput(
+                    repo_url="https://github.com/owner/repo",
+                    base_ref="missing-base",
+                    target_ref="missing-target",
+                )
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    @pytest.mark.asyncio
+    async def test_error_with_invalid_response_encoding_is_reported_as_tool_error(self, tool):
+        _mock_aiohttp_api_error(
+            404,
+            "Not Found",
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+        )
+
+        with pytest.raises(ToolError, match="Failed to fetch GitHub compare"):
+            await tool.run(
+                input=GetGithubCompareToolInput(
+                    repo_url="https://github.com/owner/repo",
+                    base_ref="missing-base",
+                    target_ref="missing-target",
+                )
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    @pytest.mark.asyncio
+    async def test_exhausted_503_includes_github_message(self, tool, monkeypatch):
+        monkeypatch.setattr(http_tools, "AIOHTTP_RETRY_BACKOFF_BASE", 0)
+        monkeypatch.setattr(http_tools.random, "uniform", lambda *_args: 0)
+        _mock_aiohttp_api_error(503, "Service unavailable")
+
+        with pytest.raises(ToolError, match="GitHub reported: Service unavailable"):
+            await tool.run(
+                input=GetGithubCompareToolInput(
+                    repo_url="https://github.com/owner/repo",
+                    base_ref="base",
+                    target_ref="target",
                 )
             ).middleware(GlobalTrajectoryMiddleware(pretty=True))
 

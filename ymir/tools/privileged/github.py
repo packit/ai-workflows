@@ -49,6 +49,17 @@ def _github_path_match(url: str, pattern: str, error_message: str) -> re.Match[s
     return match
 
 
+async def _github_error_message(response: aiohttp.ClientResponse) -> str | None:
+    """Return GitHub's human-readable API error, when one is available."""
+    try:
+        data = await response.json(content_type=None)
+    except (aiohttp.ClientError, JSONDecodeError, TypeError, UnicodeDecodeError):
+        return None
+
+    message = data.get("message") if isinstance(data, dict) else None
+    return message if isinstance(message, str) else None
+
+
 class GetGithubPullRequestToolInput(BaseModel):
     """Input for fetching GitHub pull request information."""
 
@@ -169,12 +180,20 @@ class GetGithubCompareTool(Tool[GetGithubCompareToolInput, ToolRunOptions, GetGi
             f"{quote(tool_input.base_ref, safe='')}...{quote(tool_input.target_ref, safe='')}"
         )
         headers = _github_headers()
+        github_error = None
 
         try:
             async with (
                 aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
-                aiohttp_get_with_retries(session, api_url, headers=headers) as response,
+                aiohttp_get_with_retries(
+                    session,
+                    api_url,
+                    headers=headers,
+                    yield_final_retryable_response=True,
+                ) as response,
             ):
+                if response.status >= 400:
+                    github_error = await _github_error_message(response)
                 response.raise_for_status()
                 data = await response.json()
 
@@ -185,9 +204,12 @@ class GetGithubCompareTool(Tool[GetGithubCompareToolInput, ToolRunOptions, GetGi
 
                 return GetGithubCompareToolOutput(result={"commits": commits})
         except (aiohttp.ClientError, TimeoutError, JSONDecodeError) as e:
+            detail = f" GitHub reported: {github_error}." if github_error else ""
+            if getattr(e, "status", None) == 404:
+                detail += " Verify that the repository and both references exist and are comparable."
             raise ToolError(
                 f"Failed to fetch GitHub compare {tool_input.base_ref}...{tool_input.target_ref} "
-                f"for {project_path}. Error: {e}"
+                f"for {project_path}.{detail} Error: {e}"
             ) from e
 
 
@@ -237,6 +259,7 @@ class GetGithubPatchTool(Tool[GetGithubPatchToolInput, ToolRunOptions, StringToo
             request_url = tool_input.patch_url
             headers = _github_headers("*/*")
 
+        github_error = None
         try:
             async with (
                 aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
@@ -244,8 +267,11 @@ class GetGithubPatchTool(Tool[GetGithubPatchToolInput, ToolRunOptions, StringToo
                     session,
                     request_url,
                     headers=headers,
+                    yield_final_retryable_response=True,
                 ) as response,
             ):
+                if response.status >= 400:
+                    github_error = await _github_error_message(response)
                 response.raise_for_status()
                 content = await response.text()
                 if self.max_content_length is not None and len(content) > self.max_content_length:
@@ -256,7 +282,10 @@ class GetGithubPatchTool(Tool[GetGithubPatchToolInput, ToolRunOptions, StringToo
                     )
                 return StringToolOutput(result=content)
         except (aiohttp.ClientError, TimeoutError) as e:
-            raise ToolError(f"Failed to fetch GitHub patch from {tool_input.patch_url}. Error: {e}") from e
+            detail = f" GitHub reported: {github_error}." if github_error else ""
+            raise ToolError(
+                f"Failed to fetch GitHub patch from {tool_input.patch_url}.{detail} Error: {e}"
+            ) from e
 
 
 class GetGithubPatchFullTool(GetGithubPatchTool):

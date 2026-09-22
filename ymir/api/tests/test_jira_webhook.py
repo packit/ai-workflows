@@ -73,6 +73,21 @@ def _set_env(monkeypatch):
     monkeypatch.setenv("JIRA_WEBHOOK_SECRET", WEBHOOK_SECRET)
 
 
+@pytest.fixture(autouse=True)
+def _mock_rh_employee():
+    """By default, treat every comment author as an RH employee.
+
+    Individual tests override this when they need to exercise the
+    rejection path.
+    """
+    with patch(
+        "ymir.api.jira_webhook._is_rh_employee",
+        new_callable=AsyncMock,
+        return_value=True,
+    ):
+        yield
+
+
 @pytest_asyncio.fixture
 async def client(fake_redis):
     app = create_app(redis_conn=fake_redis)
@@ -409,7 +424,10 @@ async def test_error_comment_with_missing_issue_key(client):
     """If the webhook payload has no issue key, no comment should be scheduled."""
     payload = {
         "webhookEvent": "comment_created",
-        "comment": {"body": _adf_mention_body("do-something-unknown arg1")},
+        "comment": {
+            "body": _adf_mention_body("do-something-unknown arg1"),
+            "author": {"accountId": "user-123", "displayName": "Test User"},
+        },
     }
     with patch("ymir.api.jira_webhook.jira_reply.post_comment", new_callable=AsyncMock) as mock_post:
         resp = await client.post(
@@ -435,3 +453,82 @@ async def test_malformed_consolidate_triggers_comment(client):
     mock_post.assert_awaited_once()
     assert mock_post.call_args[0][0] == "RHEL-99999"
     assert "invalid consolidate arguments" in mock_post.call_args[0][1]
+
+
+# -- Red Hat Employee group check ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rh_employee_command_accepted(client):
+    """A verified Red Hat employee's command should be dispatched normally."""
+    payload = _comment_payload(_adf_mention_body("consolidate expat rhel-9.8.0"))
+    resp = await _signed_post(client, payload)
+    assert resp.status == 201
+    body = await resp.json()
+    assert body["submitted"] is True
+
+
+@pytest.mark.asyncio
+async def test_non_rh_employee_rejected(client):
+    """A non-employee comment author should receive a 403."""
+    with patch(
+        "ymir.api.jira_webhook._is_rh_employee",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
+        payload = _comment_payload(_adf_mention_body("consolidate expat rhel-9.8.0"))
+        resp = await _signed_post(client, payload)
+    assert resp.status == 403
+    body = await resp.json()
+    assert "not a Red Hat employee" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_missing_author_account_id_rejected(client):
+    """A webhook payload with no author accountId should be rejected."""
+    payload = {
+        "webhookEvent": "comment_created",
+        "comment": {
+            "body": _adf_mention_body("consolidate expat rhel-9.8.0"),
+            "author": {"displayName": "No Account ID User"},
+        },
+        "issue": {"key": "RHEL-99999"},
+    }
+    resp = await client.post(
+        "/api/jira/webhook",
+        json=payload,
+        headers=_sign(payload),
+    )
+    assert resp.status == 403
+    body = await resp.json()
+    assert "not a Red Hat employee" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_jira_api_failure_fails_closed(client):
+    """If the Jira user lookup raises, the command must be rejected (fail closed)."""
+    with patch(
+        "ymir.api.jira_webhook._is_rh_employee",
+        new_callable=AsyncMock,
+        side_effect=Exception("connection refused"),
+    ):
+        payload = _comment_payload(_adf_mention_body("consolidate expat rhel-9.8.0"))
+        resp = await _signed_post(client, payload)
+    assert resp.status == 403
+    body = await resp.json()
+    assert "not a Red Hat employee" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_non_command_comment_skips_employee_check(client):
+    """Comments without a bot mention must be ignored without calling the employee check."""
+    with patch(
+        "ymir.api.jira_webhook._is_rh_employee",
+        new_callable=AsyncMock,
+    ) as mock_check:
+        payload = _comment_payload(_adf_plain_body("just a regular comment"))
+        resp = await _signed_post(client, payload)
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["ignored"] is True
+    mock_check.assert_not_awaited()

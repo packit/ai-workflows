@@ -18,11 +18,18 @@ import json
 import logging
 import os
 
+import aiohttp
 from aiohttp import web
 
 from ymir.api import command_parser, jira_reply
+from ymir.common.base_utils import get_jira_auth_headers
 
 logger = logging.getLogger(__name__)
+
+# Matches the value used by ymir/tools/privileged/jira.py and
+# ymir/jira_issue_fetcher/jira_issue_fetcher.py.  Duplicated here to
+# avoid a cross-layer import from the privileged tools package.
+_RH_EMPLOYEE_GROUP = "Red Hat Employee"
 
 _SIGNATURE_HEADER = "X-Hub-Signature"  # pragma: allowlist secret
 
@@ -53,6 +60,49 @@ def _verify_signature(raw_body: bytes, secret: str, signature_header: str) -> bo
 def _get_bot_account_id() -> str | None:
     """Return the configured bot Jira account ID, or None."""
     return os.environ.get("JIRA_BOT_ACCOUNT_ID")
+
+
+async def _is_rh_employee(account_id: str) -> bool:
+    """Check whether a Jira account belongs to the Red Hat Employee group.
+
+    Calls the Jira REST API ``GET /rest/api/3/user?expand=groups`` and
+    looks for the ``Red Hat Employee`` group in the response.
+
+    Returns ``False`` on any error (fail closed), consistent with the
+    fetcher's ``_label_added_by_rh_employee`` approach.
+    """
+    jira_url = os.environ.get("JIRA_URL")
+    if not jira_url:
+        logger.warning("JIRA_URL not configured, cannot verify employee status")
+        return False
+
+    url = f"{jira_url.rstrip('/')}/rest/api/3/user"
+    try:
+        headers = get_jira_auth_headers()
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
+                url,
+                params={"accountId": account_id, "expand": "groups"},
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp,
+        ):
+            if resp.status >= 400:
+                logger.warning(
+                    "Jira user lookup for %s returned HTTP %d",
+                    account_id,
+                    resp.status,
+                )
+                return False
+            user_data = await resp.json()
+    except Exception:
+        logger.exception("Failed to verify employee status for %s", account_id)
+        return False
+
+    return any(
+        group.get("name") == _RH_EMPLOYEE_GROUP for group in user_data.get("groups", {}).get("items", [])
+    )
 
 
 def _extract_command_from_adf(adf_body: dict, bot_account_id: str) -> str | None:
@@ -117,6 +167,22 @@ async def jira_webhook(request: web.Request) -> web.Response:
     command_text = _extract_command(comment_body, bot_account_id)
     if command_text is None:
         return web.json_response({"ignored": True, "reason": "no bot mention"})
+
+    comment_author_id = (body.get("comment") or {}).get("author", {}).get("accountId")
+    try:
+        is_employee = bool(comment_author_id) and await _is_rh_employee(comment_author_id)
+    except Exception:
+        logger.exception("Employee verification failed for %s, rejecting (fail closed)", comment_author_id)
+        is_employee = False
+    if not is_employee:
+        logger.warning(
+            "Comment author %s is not a verified Red Hat employee, rejecting command",
+            comment_author_id,
+        )
+        return web.json_response(
+            {"error": "comment author is not a Red Hat employee"},
+            status=403,
+        )
 
     issue_key = (body.get("issue") or {}).get("key")
     response = await command_parser.dispatch(command_text, request)

@@ -647,8 +647,20 @@ Installing: other-package-1.0-1.el10_2.x86_64
 """
 
     # Mock Koji build info for candidate selection (EVR comparison)
-    candidate1_build = {"name": "go-fdo-client", "epoch": None, "version": "1.0.0", "release": "4.el10_2.7"}
-    candidate2_build = {"name": "go-fdo-client", "epoch": None, "version": "1.0.0", "release": "3.el10_2"}
+    candidate1_build = {
+        "name": "go-fdo-client",
+        "build_id": 99910,
+        "epoch": None,
+        "version": "1.0.0",
+        "release": "4.el10_2.7",
+    }
+    candidate2_build = {
+        "name": "go-fdo-client",
+        "build_id": 99911,
+        "epoch": None,
+        "version": "1.0.0",
+        "release": "3.el10_2",
+    }
     fixed_build = {
         "name": "golang",
         "epoch": None,
@@ -671,19 +683,23 @@ Installing: other-package-1.0-1.el10_2.x86_64
         )
     )
 
-    # Mock Koji listRPMs to return binary package names
+    # Mock Koji listRPMs for architecture lookup (candidate1 wins EVR selection)
     mock_koji_session = flexmock()
-    mock_koji_session.should_receive("listRPMs").with_args(buildID=123456).and_return(
-        [{"name": "golang"}, {"name": "golang-bin"}, {"name": "golang-devel"}]
+    mock_koji_session.should_receive("listRPMs").and_return(
+        [{"arch": "x86_64", "name": "go-fdo-client", "nvr": "go-fdo-client-1.0.0-4.el10_2.7"}]
     )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
-    # Mock httpx client for root.log fetch - must work with as_completed and async context manager
+    # Mock httpx client for root.log fetch
     mock_head_response = flexmock(status_code=200)
     mock_get_response = flexmock(status_code=200, content=root_log_content)
     mock_client = flexmock()
-    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
-    mock_client.should_receive("get").and_return(_coro(mock_get_response)).at_least().once()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
+    mock_client.should_receive("get").replace_with(
+        lambda *a, **kw: _coro(mock_get_response)
+    ).at_least().once()
 
     # Create a proper async context manager mock
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
@@ -734,7 +750,13 @@ async def test_check_package_built_with_fixed_dependency_needs_rebuild():
 Installing: other-package-1.0-1.el10_2.x86_64
 """
 
-    candidate_build = {"name": "go-fdo-client", "epoch": None, "version": "1.0.0", "release": "4.el10_2.7"}
+    candidate_build = {
+        "name": "go-fdo-client",
+        "build_id": 99901,
+        "epoch": None,
+        "version": "1.0.0",
+        "release": "4.el10_2.7",
+    }
     fixed_build = {
         "name": "golang",
         "epoch": None,
@@ -757,18 +779,26 @@ Installing: other-package-1.0-1.el10_2.x86_64
         )
     )
 
-    # Mock Koji listRPMs
+    # Mock Koji listRPMs for architecture lookup and subpackage lookup
     mock_koji_session = flexmock()
-    mock_koji_session.should_receive("listRPMs").with_args(buildID=123456).and_return(
-        [{"name": "golang"}, {"name": "golang-bin"}]
+    mock_koji_session.should_receive("listRPMs").replace_with(
+        lambda buildID: (
+            [{"arch": "x86_64", "name": "go-fdo-client", "nvr": "go-fdo-client-1.0.0-4.el10_2.7"}]
+            if buildID == 99901
+            else [{"arch": "x86_64", "name": "golang", "nvr": "golang-1.26.4-1.el10_2"}]
+        )
     )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
     mock_head_response = flexmock(status_code=200)
     mock_get_response = flexmock(status_code=200, content=root_log_content)
     mock_client = flexmock()
-    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
-    mock_client.should_receive("get").and_return(_coro(mock_get_response)).at_least().once()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
+    mock_client.should_receive("get").replace_with(
+        lambda *a, **kw: _coro(mock_get_response)
+    ).at_least().once()
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
 
@@ -838,10 +868,12 @@ async def test_check_package_built_with_fixed_dependency_no_rootlog_built_after_
 
     candidate_build = {
         "name": "git-lfs",
+        "build_id": 12345,
         "epoch": None,
         "version": "3.4.1",
         "release": "13.el8_10",
         "completion_time": datetime(2026, 8, 25, 10, 0, 0),  # After golang fix
+        "completion_ts": 1756162800.0,  # Recent build
     }
     fixed_build = {
         "name": "golang",
@@ -864,14 +896,23 @@ async def test_check_package_built_with_fixed_dependency_no_rootlog_built_after_
         )
     )
 
+    # Mock koji.ClientSession.listRPMs to return noarch-only RPMs
+    mock_koji_session = flexmock()
+    mock_koji_session.should_receive("listRPMs").with_args(buildID=12345).and_return(
+        [{"arch": "noarch", "name": "git-lfs", "nvr": "git-lfs-3.4.1-13.el8_10"}]
+    )
+    flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
+
     # Mock root.log fetch to return 404 (no log available)
     mock_head_response = flexmock(status_code=404)
     mock_client = flexmock()
-    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
 
-    # Mock _get_koji_build for timestamp comparison
+    # Mock _get_koji_build for both arch lookup and timestamp comparison
     def mock_get_build(url, nvr):
         if nvr == "git-lfs-3.4.1-13.el8_10":
             return candidate_build
@@ -914,10 +955,12 @@ async def test_check_package_built_with_fixed_dependency_no_rootlog_built_before
 
     candidate_build = {
         "name": "git-lfs",
+        "build_id": 12346,
         "epoch": None,
         "version": "3.4.1",
         "release": "12.el8_10",
         "completion_time": datetime(2026, 7, 9, 13, 0, 0),  # Before golang fix
+        "completion_ts": 1752058800.0,  # Recent build
     }
     fixed_build = {
         "name": "golang",
@@ -940,14 +983,23 @@ async def test_check_package_built_with_fixed_dependency_no_rootlog_built_before
         )
     )
 
+    # Mock koji.ClientSession.listRPMs to return noarch-only RPMs
+    mock_koji_session = flexmock()
+    mock_koji_session.should_receive("listRPMs").with_args(buildID=12346).and_return(
+        [{"arch": "noarch", "name": "git-lfs", "nvr": "git-lfs-3.4.1-12.el8_10"}]
+    )
+    flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
+
     # Mock root.log fetch to return 404
     mock_head_response = flexmock(status_code=404)
     mock_client = flexmock()
-    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
 
-    # Mock _get_koji_build for timestamp comparison
+    # Mock _get_koji_build for both arch lookup and timestamp comparison
     def mock_get_build(url, nvr):
         if nvr == "git-lfs-3.4.1-12.el8_10":
             return candidate_build
@@ -991,7 +1043,13 @@ async def test_check_package_built_with_fixed_dependency_gzipped_log():
     log_content = b"Installing: golang-1.26.4-1.el10_2.x86_64\n"
     gzipped_content = gzip.compress(log_content)
 
-    candidate_build = {"name": "go-fdo-client", "epoch": None, "version": "1.0.0", "release": "4.el10_2.7"}
+    candidate_build = {
+        "name": "go-fdo-client",
+        "build_id": 99902,
+        "epoch": None,
+        "version": "1.0.0",
+        "release": "4.el10_2.7",
+    }
     fixed_build = {
         "name": "golang",
         "epoch": None,
@@ -1013,20 +1071,24 @@ async def test_check_package_built_with_fixed_dependency_gzipped_log():
         )
     )
 
+    # Mock Koji listRPMs for architecture lookup and _get_known_package_names
+    mock_session = flexmock()
+    mock_session.should_receive("listRPMs").and_return(
+        [{"arch": "x86_64", "name": "go-fdo-client", "nvr": "go-fdo-client-1.0.0-4.el10_2.7"}]
+    )
+    flexmock(koji).should_receive("ClientSession").and_return(mock_session)
+
     mock_head_response = flexmock(status_code=200)
     mock_get_response = flexmock(status_code=200, content=gzipped_content)
     mock_client = flexmock()
-    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
-    mock_client.should_receive("get").and_return(_coro(mock_get_response)).at_least().once()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
+    mock_client.should_receive("get").replace_with(
+        lambda *a, **kw: _coro(mock_get_response)
+    ).at_least().once()
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
-
-    # Mock listRPMs for _get_known_package_names
-    import koji
-
-    mock_session = flexmock()
-    mock_session.should_receive("listRPMs").and_return([{"name": "golang"}])
-    flexmock(koji).should_receive("ClientSession").and_return(mock_session)
 
     # Mock _get_koji_build with argument-aware function
     def mock_get_build(url, nvr):
@@ -1070,7 +1132,13 @@ async def test_check_package_built_with_fixed_dependency_dotted_package_name():
 Installing: other-package-1.0-1.el10_2.x86_64
 """
 
-    candidate_build = {"name": "some-app", "epoch": None, "version": "1.0.0", "release": "1.el10_2"}
+    candidate_build = {
+        "name": "some-app",
+        "build_id": 99903,
+        "epoch": None,
+        "version": "1.0.0",
+        "release": "1.el10_2",
+    }
     fixed_build = {
         "name": "python3.11",
         "epoch": None,
@@ -1091,18 +1159,22 @@ Installing: other-package-1.0-1.el10_2.x86_64
         )
     )
 
-    # Mock Koji listRPMs
+    # Mock Koji listRPMs for candidate build architecture lookup
     mock_koji_session = flexmock()
-    mock_koji_session.should_receive("listRPMs").with_args(buildID=123456).and_return(
-        [{"name": "python3.11"}]
+    mock_koji_session.should_receive("listRPMs").and_return(
+        [{"arch": "x86_64", "name": "some-app", "nvr": "some-app-1.0.0-1.el10_2"}]
     )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
     mock_head_response = flexmock(status_code=200)
     mock_get_response = flexmock(status_code=200, content=root_log_content)
     mock_client = flexmock()
-    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
-    mock_client.should_receive("get").and_return(_coro(mock_get_response)).at_least().once()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
+    mock_client.should_receive("get").replace_with(
+        lambda *a, **kw: _coro(mock_get_response)
+    ).at_least().once()
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
 
@@ -1147,7 +1219,13 @@ async def test_check_package_built_with_fixed_dependency_epoch_from_koji():
 Installing: other-package-1.0-1.el10_2.x86_64
 """
 
-    candidate_build = {"name": "some-app", "epoch": None, "version": "1.0.0", "release": "1.el10_2"}
+    candidate_build = {
+        "name": "some-app",
+        "build_id": 99904,
+        "epoch": None,
+        "version": "1.0.0",
+        "release": "1.el10_2",
+    }
     # Fixed build has epoch 1
     fixed_build = {
         "name": "python-libs",
@@ -1170,18 +1248,22 @@ Installing: other-package-1.0-1.el10_2.x86_64
         )
     )
 
-    # Mock Koji listRPMs
+    # Mock Koji listRPMs for candidate build architecture lookup
     mock_koji_session = flexmock()
-    mock_koji_session.should_receive("listRPMs").with_args(buildID=123456).and_return(
-        [{"name": "python-libs"}]
+    mock_koji_session.should_receive("listRPMs").and_return(
+        [{"arch": "x86_64", "name": "some-app", "nvr": "some-app-1.0.0-1.el10_2"}]
     )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
     mock_head_response = flexmock(status_code=200)
     mock_get_response = flexmock(status_code=200, content=root_log_content)
     mock_client = flexmock()
-    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
-    mock_client.should_receive("get").and_return(_coro(mock_get_response)).at_least().once()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
+    mock_client.should_receive("get").replace_with(
+        lambda *a, **kw: _coro(mock_get_response)
+    ).at_least().once()
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
 
@@ -1431,20 +1513,18 @@ async def test_find_completed_builds_jira_active_query_invalid_response():
 
 @pytest.mark.asyncio
 async def test_find_completed_builds_jira_both_queries_fail():
-    """Test _find_completed_builds_jira handles both queries failing."""
-    from ymir.common.utils import _find_completed_builds_jira
+    """Test _find_completed_builds_jira raises when closed query returns invalid response."""
+    from ymir.common.utils import TransientInfrastructureError, _find_completed_builds_jira
 
     mock_tool = flexmock()
 
     async def mock_run_tool(tool, **kwargs):
-        return None  # Both queries fail
+        return None  # Invalid response
 
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
 
-    closed, active = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
-
-    assert closed == []
-    assert active is None
+    with pytest.raises(TransientInfrastructureError, match="Invalid response from closed-build"):
+        await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
 
 
 @pytest.mark.asyncio
@@ -1516,8 +1596,8 @@ async def test_select_highest_evr_build_with_epoch():
 
 @pytest.mark.asyncio
 async def test_select_highest_evr_build_koji_failures():
-    """Test _select_highest_evr_build handles Koji failures gracefully."""
-    from ymir.common.utils import _select_highest_evr_build
+    """Test _select_highest_evr_build raises when any Koji lookup fails."""
+    from ymir.common.utils import TransientInfrastructureError, _select_highest_evr_build
 
     candidates = [
         ("RHEL-123", "pkg-1.0-1.el10"),
@@ -1537,12 +1617,8 @@ async def test_select_highest_evr_build_koji_failures():
 
     flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(mock_get_build)
 
-    result = await _select_highest_evr_build(candidates, "pkg")
-
-    # Should return the only successful build
-    nvr, issue_key, _ = result
-    assert nvr == "pkg-1.0-1.el10"
-    assert issue_key == "RHEL-123"
+    with pytest.raises(TransientInfrastructureError, match="Koji lookup failed for 1 candidate"):
+        await _select_highest_evr_build(candidates, "pkg")
 
 
 @pytest.mark.asyncio
@@ -1583,14 +1659,19 @@ async def test_fetch_root_log_success():
     mock_head_response = flexmock(status_code=200)
     mock_get_response = flexmock(status_code=200, content=root_log_content)
     mock_client = flexmock()
-    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
-    mock_client.should_receive("get").and_return(_coro(mock_get_response)).at_least().once()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
+    mock_client.should_receive("get").replace_with(
+        lambda *a, **kw: _coro(mock_get_response)
+    ).at_least().once()
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
 
-    logs = await _fetch_root_log("golang-1.22.7-1.el10")
+    built_archs = {"x86_64", "aarch64"}
+    logs = await _fetch_root_log("golang-1.22.7-1.el10", built_archs)
 
-    assert len(logs) > 0
+    assert len(logs) == 2
     assert any("Installing: golang-1.22.7-1.el10.x86_64" in content for _, content in logs)
 
 
@@ -1607,39 +1688,74 @@ async def test_fetch_root_log_gzipped():
     mock_head_response = flexmock(status_code=200)
     mock_get_response = flexmock(status_code=200, content=gzipped_content)
     mock_client = flexmock()
-    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
-    mock_client.should_receive("get").and_return(_coro(mock_get_response)).at_least().once()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
+    mock_client.should_receive("get").replace_with(
+        lambda *a, **kw: _coro(mock_get_response)
+    ).at_least().once()
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
 
-    logs = await _fetch_root_log("golang-1.22.7-1.el10")
+    built_archs = {"x86_64"}
+    logs = await _fetch_root_log("golang-1.22.7-1.el10", built_archs)
 
-    assert len(logs) > 0
+    assert len(logs) == 1
     assert any("Installing: golang-1.22.7-1.el10.x86_64" in content for _, content in logs)
 
 
 @pytest.mark.asyncio
 async def test_fetch_root_log_invalid_nvr():
-    """Test _fetch_root_log returns empty list for invalid NVR."""
-    from ymir.common.utils import _fetch_root_log
+    """Test _fetch_root_log raises exception for NVR with no available logs."""
+    from ymir.common.utils import TransientInfrastructureError, _fetch_root_log
 
-    logs = await _fetch_root_log("invalid-nvr")
-    assert logs == []
+    mock_head_response = flexmock(status_code=404)
+    mock_client = flexmock()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
+
+    flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
+
+    built_archs = {"x86_64"}
+    with pytest.raises(TransientInfrastructureError, match=r"No root\.log available"):
+        await _fetch_root_log("invalid-n-vr", built_archs)
 
 
 @pytest.mark.asyncio
 async def test_fetch_root_log_not_found():
-    """Test _fetch_root_log returns empty list when not found."""
-    from ymir.common.utils import _fetch_root_log
+    """Test _fetch_root_log raises exception when logs not found."""
+    from ymir.common.utils import TransientInfrastructureError, _fetch_root_log
 
     mock_head_response = flexmock(status_code=404)
     mock_client = flexmock()
-    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
 
-    logs = await _fetch_root_log("pkg-1.0-1.el10")
-    assert logs == []
+    built_archs = {"x86_64"}
+    with pytest.raises(TransientInfrastructureError, match=r"No root\.log available"):
+        await _fetch_root_log("pkg-1.0-1.el10", built_archs)
+
+
+@pytest.mark.asyncio
+async def test_fetch_root_log_server_error():
+    """Test _fetch_root_log raises TransientInfrastructureError on 5xx."""
+    from ymir.common.utils import TransientInfrastructureError, _fetch_root_log
+
+    mock_head_response = flexmock(status_code=503)
+    mock_client = flexmock()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
+
+    flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
+
+    built_archs = {"x86_64"}
+    with pytest.raises(TransientInfrastructureError, match="Infrastructure error"):
+        await _fetch_root_log("pkg-1.0-1.el10", built_archs)
 
 
 @pytest.mark.asyncio
@@ -2110,7 +2226,9 @@ async def test_compare_build_timestamps_wrong_dependency_name():
 
 @pytest.mark.asyncio
 async def test_check_package_built_with_fixed_dependency_evr_comparison_failed():
-    """Test when EVR comparison fails due to missing Koji metadata."""
+    """Test when EVR comparison fails due to missing Koji metadata - should raise exception."""
+    from ymir.common.utils import TransientInfrastructureError
+
     mock_tool = flexmock()
 
     jira_search_result = [
@@ -2127,7 +2245,13 @@ async def test_check_package_built_with_fixed_dependency_evr_comparison_failed()
 Installing: other-package-1.0-1.el10_2.x86_64
 """
 
-    candidate_build = {"name": "go-fdo-client", "epoch": None, "version": "1.0.0", "release": "4.el10_2.7"}
+    candidate_build = {
+        "name": "go-fdo-client",
+        "build_id": 99905,
+        "epoch": None,
+        "version": "1.0.0",
+        "release": "4.el10_2.7",
+    }
     fixed_build = {
         "name": "golang",
         "epoch": None,
@@ -2149,20 +2273,24 @@ Installing: other-package-1.0-1.el10_2.x86_64
         )
     )
 
+    # Mock Koji listRPMs for candidate build architecture lookup
+    mock_session = flexmock()
+    mock_session.should_receive("listRPMs").and_return(
+        [{"arch": "x86_64", "name": "go-fdo-client", "nvr": "go-fdo-client-1.0.0-4.el10_2.7"}]
+    )
+    flexmock(koji).should_receive("ClientSession").and_return(mock_session)
+
     mock_head_response = flexmock(status_code=200)
     mock_get_response = flexmock(status_code=200, content=root_log_content)
     mock_client = flexmock()
-    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
-    mock_client.should_receive("get").and_return(_coro(mock_get_response)).at_least().once()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
+    mock_client.should_receive("get").replace_with(
+        lambda *a, **kw: _coro(mock_get_response)
+    ).at_least().once()
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
-
-    # Mock Koji listRPMs
-    import koji
-
-    mock_session = flexmock()
-    mock_session.should_receive("listRPMs").and_return([{"name": "golang"}])
-    flexmock(koji).should_receive("ClientSession").and_return(mock_session)
 
     # Mock _get_koji_build to return None for EVR comparison (simulating missing metadata)
     def mock_get_build(url, nvr):
@@ -2181,24 +2309,105 @@ Installing: other-package-1.0-1.el10_2.x86_64
 
     flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(mock_get_build)
 
-    already_fixed, issue_key, _nvr, reason = await check_package_built_with_fixed_dependency(
-        package="go-fdo-client",
-        fix_version="rhel-10.2.z",
-        dep_component="golang",
-        fixed_dep_nvr="golang-1.26.4-1.el10_2",
+    # Should raise TransientInfrastructureError when Koji metadata unavailable
+    with pytest.raises(TransientInfrastructureError, match="Koji metadata unavailable"):
+        await check_package_built_with_fixed_dependency(
+            package="go-fdo-client",
+            fix_version="rhel-10.2.z",
+            dep_component="golang",
+            fixed_dep_nvr="golang-1.26.4-1.el10_2",
+            available_tools=[mock_tool],
+        )
+
+
+@pytest.mark.asyncio
+async def test_check_package_built_with_fixed_dependency_all_koji_lookups_fail():
+    """Test that TransientInfrastructureError is raised when all candidate Koji lookups fail."""
+    from ymir.common.utils import TransientInfrastructureError
+
+    mock_tool = flexmock()
+
+    jira_search_result = [
+        {"key": "RHEL-111111", "fields": {"customfield_10578": "pkg-1.0-1.el10"}},
+        {"key": "RHEL-222222", "fields": {"customfield_10578": "pkg-2.0-1.el10"}},
+    ]
+
+    flexmock(_ymir_utils).should_receive("run_tool").with_args(
+        "search_jira_issues",
         available_tools=[mock_tool],
+        jql=str,
+        fields=list,
+        max_results=50,
+    ).replace_with(
+        lambda *args, **kwargs: _coro(
+            jira_search_result if "status in (Closed, Done)" in kwargs.get("jql", "") else []
+        )
     )
 
-    # Should return None with reason "evr_comparison_failed"
-    assert already_fixed is None
-    assert reason == "evr_comparison_failed"
-    assert issue_key == "RHEL-242375"
-    assert _nvr == "go-fdo-client-1.0.0-4.el10_2.7"
+    # All Koji lookups fail
+    flexmock(_ymir_utils).should_receive("_get_koji_build").and_raise(
+        ConnectionError("Koji connection refused")
+    )
+
+    with pytest.raises(TransientInfrastructureError, match="Koji lookup failed for 2 candidate"):
+        await check_package_built_with_fixed_dependency(
+            package="pkg",
+            fix_version="rhel-10.0.z",
+            dep_component="dep",
+            fixed_dep_nvr="dep-1.0-1.el10",
+            available_tools=[mock_tool],
+        )
+
+
+@pytest.mark.asyncio
+async def test_check_package_built_with_fixed_dependency_partial_koji_lookup_fail():
+    """Test that TransientInfrastructureError is raised when any candidate Koji lookup fails."""
+    from ymir.common.utils import TransientInfrastructureError
+
+    mock_tool = flexmock()
+
+    jira_search_result = [
+        {"key": "RHEL-111111", "fields": {"customfield_10578": "pkg-1.0-1.el10"}},
+        {"key": "RHEL-222222", "fields": {"customfield_10578": "pkg-2.0-1.el10"}},
+    ]
+
+    flexmock(_ymir_utils).should_receive("run_tool").with_args(
+        "search_jira_issues",
+        available_tools=[mock_tool],
+        jql=str,
+        fields=list,
+        max_results=50,
+    ).replace_with(
+        lambda *args, **kwargs: _coro(
+            jira_search_result if "status in (Closed, Done)" in kwargs.get("jql", "") else []
+        )
+    )
+
+    # Newest candidate fails, older one succeeds
+    def mock_get_build(url, nvr):
+        if nvr == "pkg-2.0-1.el10":
+            raise ConnectionError("Koji timeout")
+        if nvr == "pkg-1.0-1.el10":
+            return {"name": "pkg", "epoch": None, "version": "1.0", "release": "1.el10"}
+        return None
+
+    flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(mock_get_build)
+
+    with pytest.raises(TransientInfrastructureError, match="Koji lookup failed for 1 candidate"):
+        await check_package_built_with_fixed_dependency(
+            package="pkg",
+            fix_version="rhel-10.0.z",
+            dep_component="dep",
+            fixed_dep_nvr="dep-1.0-1.el10",
+            available_tools=[mock_tool],
+        )
 
 
 @pytest.mark.asyncio
 async def test_check_package_built_with_fixed_dependency_subpackage_list_unavailable():
-    """Test when subpackage list fetch fails due to Koji error."""
+    """Test when subpackage list fetch fails due to Koji error - should raise exception."""
+    from ymir.common.utils import TransientInfrastructureError
+
     mock_tool = flexmock()
 
     jira_search_result = [
@@ -2210,11 +2419,13 @@ async def test_check_package_built_with_fixed_dependency_subpackage_list_unavail
         }
     ]
 
-    root_log_content = b"""Installing: golang-1.22.7-1.el10.x86_64
-Installing: other-package-1.0-1.el10.x86_64
-"""
-
-    candidate_build = {"name": "some-app", "epoch": None, "version": "5.0", "release": "1.el10"}
+    candidate_build = {
+        "name": "some-app",
+        "build_id": 99906,
+        "epoch": None,
+        "version": "5.0",
+        "release": "1.el10",
+    }
     fixed_build = {
         "name": "golang",
         "epoch": None,
@@ -2235,17 +2446,9 @@ Installing: other-package-1.0-1.el10.x86_64
         )
     )
 
-    mock_head_response = flexmock(status_code=200)
-    mock_get_response = flexmock(status_code=200, content=root_log_content)
-    mock_client = flexmock()
-    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
-    mock_client.should_receive("get").and_return(_coro(mock_get_response)).at_least().once()
-
-    flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
-
-    # Mock Koji to fail on listRPMs
+    # Mock Koji to fail on listRPMs (architecture lookup)
     mock_session = flexmock()
-    mock_session.should_receive("listRPMs").and_raise(Exception("Koji connection timeout"))
+    mock_session.should_receive("listRPMs").and_raise(koji.GenericError("Koji connection timeout"))
     flexmock(koji).should_receive("ClientSession").and_return(mock_session)
 
     def mock_get_build(url, nvr):
@@ -2257,19 +2460,15 @@ Installing: other-package-1.0-1.el10.x86_64
 
     flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(mock_get_build)
 
-    already_fixed, issue_key, _nvr, reason = await check_package_built_with_fixed_dependency(
-        package="some-app",
-        fix_version="rhel-10.z",
-        dep_component="golang",
-        fixed_dep_nvr="golang-1.22.7-1.el10",
-        available_tools=[mock_tool],
-    )
-
-    # Should return None with evr_comparison_failed when subpackage list unavailable
-    assert already_fixed is None
-    assert reason == "evr_comparison_failed"
-    assert issue_key == "RHEL-888888"
-    assert _nvr == "some-app-5.0-1.el10"
+    # Should raise TransientInfrastructureError when architecture list unavailable
+    with pytest.raises(TransientInfrastructureError, match="Failed to fetch architecture list"):
+        await check_package_built_with_fixed_dependency(
+            package="some-app",
+            fix_version="rhel-10.z",
+            dep_component="golang",
+            fixed_dep_nvr="golang-1.22.7-1.el10",
+            available_tools=[mock_tool],
+        )
 
 
 @pytest.mark.asyncio
@@ -2296,7 +2495,13 @@ Installing: other-package-1.0-1.el10.x86_64
 Installing: other-package-1.0-1.el10.aarch64
 """
 
-    candidate_build = {"name": "some-package", "epoch": None, "version": "2.0", "release": "1.el10"}
+    candidate_build = {
+        "name": "some-package",
+        "build_id": 99907,
+        "epoch": None,
+        "version": "2.0",
+        "release": "1.el10",
+    }
     golang_build = {
         "name": "golang",
         "epoch": 0,  # Koji says epoch is 0
@@ -2325,6 +2530,16 @@ Installing: other-package-1.0-1.el10.aarch64
         )
     )
 
+    # Mock Koji listRPMs for candidate build architecture lookup
+    mock_koji_session = flexmock()
+    mock_koji_session.should_receive("listRPMs").and_return(
+        [
+            {"arch": "x86_64", "name": "some-package", "nvr": "some-package-2.0-1.el10"},
+            {"arch": "aarch64", "name": "some-package", "nvr": "some-package-2.0-1.el10"},
+        ]
+    )
+    flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
+
     # Mock root.log fetch - return both x86_64 and aarch64 logs
     mock_response_x86 = flexmock(status_code=200, content=x86_64_log)
     mock_response_aarch64 = flexmock(status_code=200, content=aarch64_log)
@@ -2349,11 +2564,6 @@ Installing: other-package-1.0-1.el10.aarch64
     mock_client.should_receive("get").replace_with(mock_get)
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
-
-    # Mock Koji listRPMs
-    mock_koji_session = flexmock()
-    mock_koji_session.should_receive("listRPMs").with_args(buildID=123456).and_return([{"name": "golang"}])
-    flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
     # Mock _get_koji_build
     def mock_get_build(url, nvr):
@@ -2383,7 +2593,9 @@ Installing: other-package-1.0-1.el10.aarch64
 
 @pytest.mark.asyncio
 async def test_check_package_built_with_fixed_dependency_active_query_failed_no_closed():
-    """Test when active query fails and no closed builds found."""
+    """Test when active query fails and no closed builds found - should raise exception."""
+    from ymir.common.utils import TransientInfrastructureError
+
     mock_tool = flexmock()
 
     call_count = {"count": 0}
@@ -2396,19 +2608,55 @@ async def test_check_package_built_with_fixed_dependency_active_query_failed_no_
 
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
 
-    already_fixed, issue_key, _nvr, reason = await check_package_built_with_fixed_dependency(
-        package="some-pkg",
-        fix_version="rhel-10.z",
-        dep_component="golang",
-        fixed_dep_nvr="golang-1.22.7-1.el10",
-        available_tools=[mock_tool],
-    )
+    # Should raise TransientInfrastructureError when no closed builds and active query failed
+    with pytest.raises(TransientInfrastructureError, match="Jira query failed"):
+        await check_package_built_with_fixed_dependency(
+            package="some-pkg",
+            fix_version="rhel-10.z",
+            dep_component="golang",
+            fixed_dep_nvr="golang-1.22.7-1.el10",
+            available_tools=[mock_tool],
+        )
 
-    # Should return clarification when no closed builds and active query failed
-    assert already_fixed is None
-    assert reason == "jira_query_failed"
-    assert issue_key is None
-    assert _nvr is None
+
+@pytest.mark.asyncio
+async def test_check_package_built_with_fixed_dependency_closed_query_raises():
+    """Test that closed-build Jira query failure raises TransientInfrastructureError."""
+    from beeai_framework.tools import ToolError
+
+    from ymir.common.utils import TransientInfrastructureError
+
+    mock_tool = flexmock()
+
+    flexmock(_ymir_utils).should_receive("run_tool").and_raise(ToolError("Jira connection refused"))
+
+    with pytest.raises(TransientInfrastructureError, match="Closed-build Jira query failed"):
+        await check_package_built_with_fixed_dependency(
+            package="some-pkg",
+            fix_version="rhel-10.z",
+            dep_component="golang",
+            fixed_dep_nvr="golang-1.22.7-1.el10",
+            available_tools=[mock_tool],
+        )
+
+
+@pytest.mark.asyncio
+async def test_check_package_built_with_fixed_dependency_closed_query_malformed():
+    """Test that malformed closed-build response raises TransientInfrastructureError."""
+    from ymir.common.utils import TransientInfrastructureError
+
+    mock_tool = flexmock()
+
+    flexmock(_ymir_utils).should_receive("run_tool").replace_with(lambda *args, **kwargs: _coro("not a list"))
+
+    with pytest.raises(TransientInfrastructureError, match="Invalid response from closed-build"):
+        await check_package_built_with_fixed_dependency(
+            package="some-pkg",
+            fix_version="rhel-10.z",
+            dep_component="golang",
+            fixed_dep_nvr="golang-1.22.7-1.el10",
+            available_tools=[mock_tool],
+        )
 
 
 @pytest.mark.asyncio
@@ -2429,7 +2677,13 @@ async def test_check_package_built_with_fixed_dependency_active_query_failed_wit
 Installing: other-package-1.0-1.el10.x86_64
 """
 
-    candidate_build = {"name": "test-app", "epoch": None, "version": "3.0", "release": "1.el10"}
+    candidate_build = {
+        "name": "test-app",
+        "build_id": 99908,
+        "epoch": None,
+        "version": "3.0",
+        "release": "1.el10",
+    }
     golang_build = {
         "name": "golang",
         "epoch": None,
@@ -2455,17 +2709,24 @@ Installing: other-package-1.0-1.el10.x86_64
 
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
 
+    # Mock Koji listRPMs for candidate build architecture lookup
+    mock_koji_session = flexmock()
+    mock_koji_session.should_receive("listRPMs").and_return(
+        [{"arch": "x86_64", "name": "test-app", "nvr": "test-app-3.0-1.el10"}]
+    )
+    flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
+
     mock_head_response = flexmock(status_code=200)
     mock_get_response = flexmock(status_code=200, content=root_log_content)
     mock_client = flexmock()
-    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
-    mock_client.should_receive("get").and_return(_coro(mock_get_response)).at_least().once()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
+    mock_client.should_receive("get").replace_with(
+        lambda *a, **kw: _coro(mock_get_response)
+    ).at_least().once()
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
-
-    mock_koji_session = flexmock()
-    mock_koji_session.should_receive("listRPMs").and_return([{"name": "golang"}])
-    flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
     def mock_get_build(url, nvr):
         if nvr == "test-app-3.0-1.el10":
@@ -2509,7 +2770,13 @@ async def test_check_package_built_with_fixed_dependency_closed_old_but_active_e
 Installing: other-package-1.0-1.el10.x86_64
 """
 
-    closed_build = {"name": "pkg", "epoch": None, "version": "1.0", "release": "1.el10"}
+    closed_build = {
+        "name": "pkg",
+        "build_id": 99909,
+        "epoch": None,
+        "version": "1.0",
+        "release": "1.el10",
+    }
     used_golang = {"name": "golang", "epoch": None, "version": "1.22.4", "release": "1.el10", "build_id": 123}
     fixed_golang = {
         "name": "golang",
@@ -2529,17 +2796,24 @@ Installing: other-package-1.0-1.el10.x86_64
 
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
 
+    # Mock Koji listRPMs for candidate build architecture lookup
+    mock_session = flexmock()
+    mock_session.should_receive("listRPMs").and_return(
+        [{"arch": "x86_64", "name": "pkg", "nvr": "pkg-1.0-1.el10"}]
+    )
+    flexmock(koji).should_receive("ClientSession").and_return(mock_session)
+
     mock_head_response = flexmock(status_code=200)
     mock_get_response = flexmock(status_code=200, content=root_log_content)
     mock_client = flexmock()
-    mock_client.should_receive("head").and_return(_coro(mock_head_response)).at_least().once()
-    mock_client.should_receive("get").and_return(_coro(mock_get_response)).at_least().once()
+    mock_client.should_receive("head").replace_with(
+        lambda *a, **kw: _coro(mock_head_response)
+    ).at_least().once()
+    mock_client.should_receive("get").replace_with(
+        lambda *a, **kw: _coro(mock_get_response)
+    ).at_least().once()
 
     flexmock(httpx).should_receive("AsyncClient").and_return(_AsyncContextManager(mock_client))
-
-    mock_session = flexmock()
-    mock_session.should_receive("listRPMs").and_return([{"name": "golang"}])
-    flexmock(koji).should_receive("ClientSession").and_return(mock_session)
 
     def mock_get_build(url, nvr):
         if nvr == "pkg-1.0-1.el10":

@@ -26,6 +26,8 @@ from ymir.common import (
 )
 from ymir.common.base_utils import get_jira_auth_headers
 from ymir.common.constants import CENTOS_STREAM_KOJIHUB_URL, JIRA_SEARCH_PATH
+from ymir.common.cve import CVE_ID_PATTERN
+from ymir.common.cve import extract_cve_ids as extract_cve_ids
 from ymir.common.utils import _get_koji_build
 from ymir.common.version_utils import (
     get_fix_version_variants,
@@ -410,17 +412,6 @@ class AddJiraCommentTool(Tool[AddJiraCommentToolInput, ToolRunOptions, StringToo
                 ) as response:
                     response.raise_for_status()
         return StringToolOutput(result=f"Successfully added the specified comment to {issue_key}")
-
-
-CVE_ID_PATTERN = re.compile(r"(?<![A-Z0-9])(CVE-[0-9]{4}-[0-9]{4,})(?![A-Z0-9])")
-
-
-def extract_cve_ids(summary: str | None) -> str | None:
-    """Return every valid CVE in a summary as a normalized comma-separated set."""
-    if not isinstance(summary, str):
-        return None
-    cve_ids = sorted(set(CVE_ID_PATTERN.findall(summary.upper())))
-    return ",".join(cve_ids) if cve_ids else None
 
 
 def extract_cve_id(summary: str) -> str | None:

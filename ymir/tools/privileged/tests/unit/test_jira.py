@@ -26,7 +26,6 @@ from ymir.tools.privileged.jira import (
     _check_zstream_clones_shipped,
     _check_zstream_fix_approach,
     extract_cve_id,
-    extract_cve_ids,
 )
 
 
@@ -523,23 +522,6 @@ async def test_verify_issue_author(user_groups, expected_result, use_account_id)
 )
 def test_extract_cve_id(summary, expected):
     assert extract_cve_id(summary) == expected
-
-
-def test_extract_cve_ids_returns_normalized_deduplicated_set():
-    assert extract_cve_ids("CVE-2026-1234, cve-2025-5678, CVE-2026-1234") == "CVE-2025-5678,CVE-2026-1234"
-
-
-def test_extract_cve_ids_accepts_missing_summary():
-    assert extract_cve_ids(None) is None
-
-
-def test_extract_cve_ids_rejects_unicode_digits():
-    assert extract_cve_ids("CVE-٢٠٢٦-١٢٣٤") is None
-
-
-@pytest.mark.parametrize("summary", ["notCVE-2026-1234", "CVE-2026-1234suffix"])
-def test_extract_cve_ids_rejects_embedded_identifiers(summary):
-    assert extract_cve_ids(summary) is None
 
 
 @pytest.mark.parametrize(

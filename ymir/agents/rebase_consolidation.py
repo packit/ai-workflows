@@ -15,6 +15,7 @@ from ymir.agents.utils import (
 )
 from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.cve import extract_cve_ids
 from ymir.common.models import (
     ConsolidatedIssue,
     CVEEligibilityResult,
@@ -24,7 +25,6 @@ from ymir.common.models import (
 )
 from ymir.common.utils import extract_text_from_adf
 from ymir.common.version_utils import get_fix_version_variants
-from ymir.tools.privileged.jira import extract_cve_ids
 
 logger = logging.getLogger(__name__)
 

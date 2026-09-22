@@ -129,10 +129,15 @@ async def test_webhook_no_auth_needed(app_and_client):
 @pytest.mark.asyncio
 async def test_protected_path_missing_token(app_and_client):
     _, client = app_and_client
-    resp = await client.post("/api/consolidation", json={})
+    resp = await client.post(
+        "/api/consolidation",
+        json={},
+        headers={"Origin": "http://localhost:8082"},
+    )
     assert resp.status == 401
     body = await resp.json()
     assert "Authorization" in body["error"]
+    assert resp.headers.get("Access-Control-Allow-Origin") == "http://localhost:8082"
 
 
 @pytest.mark.asyncio
@@ -141,9 +146,13 @@ async def test_protected_path_invalid_token(app_and_client):
     resp = await client.post(
         "/api/consolidation",
         json={},
-        headers={"Authorization": "Bearer invalid.token.here"},
+        headers={
+            "Authorization": "Bearer invalid.token.here",
+            "Origin": "http://localhost:8082",
+        },
     )
     assert resp.status == 401
+    assert resp.headers.get("Access-Control-Allow-Origin") == "http://localhost:8082"
 
 
 @pytest.mark.asyncio

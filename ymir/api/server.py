@@ -75,8 +75,8 @@ def create_app(redis_conn=None) -> web.Application:
 def main() -> None:
     configure_logging(level=logging.INFO)
 
-    host = os.environ.get("API_HOST", "0.0.0.0")  # noqa: S104
-    port = int(os.environ.get("API_PORT", "8080"))
+    host = os.environ.get("YMIR_API_HOST", "0.0.0.0")  # noqa: S104
+    port = int(os.environ.get("YMIR_API_PORT", "8080"))
     logger.info("Starting Ymir API on %s:%d", host, port)
     web.run_app(create_app(), host=host, port=port)
 

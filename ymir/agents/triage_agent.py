@@ -72,6 +72,7 @@ from ymir.common.models import (
 from ymir.common.utils import (
     DOWNSTREAM_COMPONENT_CUSTOM_FIELD,
     FIXED_IN_BUILD_CUSTOM_FIELD,
+    TransientInfrastructureError,
     check_build_in_buildroot,
     check_package_built_with_fixed_dependency,
     extract_text_from_adf,
@@ -1258,59 +1259,13 @@ async def run_workflow(
                                 ),
                             )
                             return "comment_in_jira"
-                        if reason == "timestamp_comparison_failed":
-                            # Koji metadata unavailable for timestamp comparison
-                            logger.warning(
-                                f"Koji metadata unavailable for timestamp comparison of {package} "
-                                f"build {pkg_nvr}. Cannot determine build order."
-                            )
-                            state.triage_result = OutputSchema(
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
-                                        f"{pkg_issue_key}) could not be verified because root.log is "
-                                        f"unavailable and Koji build metadata is missing. Cannot "
-                                        f"determine if the build was created before or after the "
-                                        f"{dep_component} fix."
-                                    ),
-                                    additional_info_needed=(
-                                        f"Please retry this check later or manually verify whether "
-                                        f"{pkg_nvr} was created with {dep_component} {fixed_in_build} "
-                                        f"or newer. Check build logs in Koji or Brew directly."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
-                            )
-                            return "comment_in_jira"
-                        if reason == "evr_comparison_failed":
-                            # Koji metadata unavailable - cannot verify
-                            logger.warning(
-                                f"Koji metadata unavailable for {package} build {pkg_nvr}. "
-                                f"Cannot verify dependency version."
-                            )
-                            state.triage_result = OutputSchema(
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
-                                        f"{pkg_issue_key}) could not be verified because Koji metadata is "
-                                        f"unavailable for the dependency builds. This may be a transient "
-                                        f"Koji issue or missing build data."
-                                    ),
-                                    additional_info_needed=(
-                                        f"Please retry this check later or manually verify whether build "
-                                        f"{pkg_nvr} was created with {dep_component} {fixed_in_build} or "
-                                        f"newer. Check Koji directly or contact infrastructure if the "
-                                        f"build metadata appears to be missing."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
-                            )
-                            return "comment_in_jira"
+                        # Transient infrastructure failures (jira_query_failed, timestamp_comparison_failed,
+                        # evr_comparison_failed) now raise TransientInfrastructureError and won't reach here.
                         # Unknown reason - should not happen but handle gracefully
                         logger.error(f"Unexpected None result with reason={reason} for {package}")
                         # Fall through to standard rebuild check below
+                except TransientInfrastructureError:
+                    raise
                 except Exception as e:
                     logger.warning(
                         f"Error checking if {package} was built with fixed dependency: {e}. "

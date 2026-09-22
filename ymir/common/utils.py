@@ -7,6 +7,7 @@ import gzip
 import logging
 import os
 import re
+import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -33,6 +34,7 @@ from ymir.common.constants import BREWHUB_URL, CENTOS_STREAM_KOJIHUB_URL
 from ymir.common.logging_setup import get_trajectory_writeable
 from ymir.common.version_utils import (
     construct_internal_branch_name,
+    get_fix_version_variants,
     get_maintenance_majors,
     parse_rhel_version,
 )
@@ -269,6 +271,13 @@ class NoBuildFoundError(Exception):
     """Raised when no build exists in any of the queried tags (as opposed to a lookup failure)."""
 
 
+class TransientInfrastructureError(Exception):
+    """Raised when infrastructure services are temporarily unavailable (Koji, Jira, etc).
+
+    The task should be retried later rather than requesting user clarification.
+    """
+
+
 async def _get_latest_build_from_tags(
     package: str,
     *tags: str,
@@ -415,8 +424,6 @@ async def _find_completed_builds_jira(
         - closed_builds: List of (issue_key, nvr) tuples for closed builds
         - active_builds: List of (issue_key, nvr) tuples for active builds, or None if query failed
     """
-    from ymir.common.version_utils import get_fix_version_variants
-
     fix_version_variants = get_fix_version_variants(fix_version)
     escaped_versions = [v.replace('"', '\\"') for v in fix_version_variants]
     fix_version_clause = ", ".join(f'"{v}"' for v in escaped_versions)
@@ -431,15 +438,24 @@ async def _find_completed_builds_jira(
         f'resolution in ("Done", "Done-Errata") AND '
         f"customfield_10578 IS NOT EMPTY"
     )
-    closed_results = await run_tool(
-        "search_jira_issues",
-        available_tools=available_tools,
-        jql=closed_jql,
-        fields=["key", "customfield_10578"],
-        max_results=50,
-    )
+    try:
+        closed_results = await run_tool(
+            "search_jira_issues",
+            available_tools=available_tools,
+            jql=closed_jql,
+            fields=["key", "customfield_10578"],
+            max_results=50,
+        )
+    except (ToolError, ConnectionError, OSError, TimeoutError) as e:
+        raise TransientInfrastructureError(
+            f"Closed-build Jira query failed for {package} in {fix_version}: {e}"
+        ) from e
 
-    closed_results = closed_results if closed_results and isinstance(closed_results, list) else []
+    if closed_results is None or not isinstance(closed_results, list):
+        raise TransientInfrastructureError(
+            f"Invalid response from closed-build Jira query for {package}: {type(closed_results)}"
+        )
+    # Empty list is valid — no closed builds found
 
     # Also search for active builds (not yet closed but have Fixed in Build set)
     # These need validation since they might be rejected/abandoned
@@ -555,9 +571,11 @@ async def _select_highest_evr_build(
 
     # Associate successful builds with their metadata
     candidate_builds = []
+    koji_failures = []
     for (issue_key, nvr), build in zip(candidates, builds, strict=True):
         if isinstance(build, Exception):
             logger.warning(f"Failed to fetch build {nvr}: {build}")
+            koji_failures.append((nvr, build))
             continue
         if build:
             # Verify package name matches to avoid cross-package contamination
@@ -571,6 +589,12 @@ async def _select_highest_evr_build(
             evr = _evr_from_build(build)
             candidate_builds.append((evr, nvr, issue_key))
 
+    if koji_failures:
+        failed_nvrs = [nvr for nvr, _ in koji_failures]
+        raise TransientInfrastructureError(
+            f"Koji lookup failed for {len(koji_failures)} candidate(s): {failed_nvrs}"
+        )
+
     if not candidate_builds:
         return None
 
@@ -581,17 +605,22 @@ async def _select_highest_evr_build(
     return package_nvr, package_issue_key, latest_evr
 
 
-async def _fetch_root_log(package_nvr: str) -> list[tuple[str, str]]:
-    """Fetch root.log from Brew for the given package NVR across all architectures.
-
-    Different architectures can have different buildroots, so fetches logs from all
-    available architectures. Caller must verify consistency across logs.
+async def _fetch_root_log(
+    package_nvr: str, built_architectures: set[str], *, require_all: bool = True
+) -> list[tuple[str, str]]:
+    """Fetch root.log from Brew for the given package NVR for specific architectures.
 
     Args:
         package_nvr: Package NVR (e.g., "go-fdo-client-1.0.0-4.el10_2.7")
+        built_architectures: Set of architectures to try
+        require_all: If True, raise if any architecture's log is missing.
+            If False, return whatever logs are found (for noarch builds).
 
     Returns:
-        List of (architecture_url, log_content) tuples. Empty if no logs found.
+        List of (architecture_url, log_content) tuples
+
+    Raises:
+        TransientInfrastructureError: If require_all and logs missing, or no logs at all
     """
     # Parse NVR to construct root.log URL
     nvr_match = re.match(r"^(.+)-([^-]+)-([^-]+)$", package_nvr)
@@ -601,30 +630,36 @@ async def _fetch_root_log(package_nvr: str) -> list[tuple[str, str]]:
 
     package_name, version, release = nvr_match.groups()
 
-    # Try multiple architectures concurrently with overall 30s timeout
-    architectures = ["x86_64", "aarch64", "ppc64le", "s390x"]
+    # Fetch logs only for architectures that were actually built
     root_log_urls = [
         f"https://brewweb.engineering.redhat.com/brew/packages/"
         f"{package_name}/{version}/{release}/data/logs/{arch}/root.log"
-        for arch in architectures
+        for arch in built_architectures
     ]
+
+    class _LogAbsent(Exception):
+        """Log confirmed absent (404/410) — not an infrastructure error."""
+
+    class _LogFetchError(Exception):
+        """Infrastructure error fetching log (5xx, auth, transport)."""
 
     async def check_and_fetch_log(client: httpx.AsyncClient, url: str) -> tuple[str, bytes | None]:
         """Check if root.log exists with HEAD, then fetch if available."""
         try:
-            # First check if file exists with HEAD request
             head_response = await client.head(url)
+            if head_response.status_code in (404, 410):
+                raise _LogAbsent(f"HTTP {head_response.status_code}")
             if head_response.status_code != 200:
-                logger.debug(f"root.log not available at {url} (HTTP {head_response.status_code})")
-                return url, None
+                raise _LogFetchError(f"HTTP {head_response.status_code} from {url}")
 
-            # File exists, fetch it
             response = await client.get(url)
             if response.status_code == 200:
                 return url, response.content
+            raise _LogFetchError(f"GET HTTP {response.status_code} from {url}")
+        except (_LogAbsent, _LogFetchError):
+            raise
         except Exception as e:
-            logger.debug(f"Could not fetch {url}: {e}")
-        return url, None
+            raise _LogFetchError(f"Transport error fetching {url}: {e}") from e
 
     fetch_tasks = []
     try:
@@ -636,35 +671,55 @@ async def _fetch_root_log(package_nvr: str) -> list[tuple[str, str]]:
                 fetch_tasks = [asyncio.create_task(check_and_fetch_log(client, url)) for url in root_log_urls]
                 results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
-                # Process all fetched logs
+                # Process results — separate absent logs from infra errors
                 decoded_logs = []
+                infra_errors = []
                 for result in results:
+                    if isinstance(result, _LogAbsent):
+                        continue
+                    if isinstance(result, _LogFetchError):
+                        infra_errors.append(str(result))
+                        continue
                     if isinstance(result, Exception):
+                        infra_errors.append(str(result))
                         continue
                     url, content = result
                     if content:
                         try:
-                            # Check if gzipped and decompress
                             if content[:2] == b"\x1f\x8b":
                                 content = gzip.decompress(content)
-                            # Decode to string
                             decoded_logs.append((url, content.decode("utf-8", errors="replace")))
                         except Exception as e:
                             logger.warning(f"Failed to decompress/decode root.log from {url}: {e}")
                             continue
 
+                if infra_errors:
+                    raise TransientInfrastructureError(
+                        f"Infrastructure error fetching root.log for {package_nvr}: {infra_errors}"
+                    )
+
                 if not decoded_logs:
-                    logger.warning(f"Could not fetch root.log for {package_nvr} from any architecture")
-                    return []
+                    raise TransientInfrastructureError(
+                        f"No root.log available for {package_nvr} from any architecture "
+                        f"(all returned 404/410, expected: {list(built_architectures)})"
+                    )
+
+                fetched_archs = {url.split("/")[-2] for url, _ in decoded_logs}
+                missing_archs = built_architectures - fetched_archs
+
+                if missing_archs and require_all:
+                    raise TransientInfrastructureError(
+                        f"Missing root.log for {package_nvr} from {len(missing_archs)} "
+                        f"architecture(s): {list(missing_archs)} (fetched: {list(fetched_archs)})"
+                    )
 
                 logger.debug(
-                    f"Found root.log for {package_nvr} from {len(decoded_logs)} architecture(s): "
-                    f"{[url.split('/')[-2] for url, _ in decoded_logs]}"
+                    f"Found root.log for {package_nvr} from {len(decoded_logs)} "
+                    f"architecture(s): {list(fetched_archs)}"
                 )
                 return decoded_logs
 
     except TimeoutError:
-        logger.warning(f"Timeout (30s) fetching root.log for {package_nvr}")
         # Cancel any outstanding tasks
         for task in fetch_tasks:
             if not task.done():
@@ -672,7 +727,10 @@ async def _fetch_root_log(package_nvr: str) -> list[tuple[str, str]]:
         # Await them to clean up
         if fetch_tasks:
             await asyncio.gather(*fetch_tasks, return_exceptions=True)
-        return []
+        raise TransientInfrastructureError(
+            f"Timeout (30s) fetching root.log for {package_nvr} "
+            f"from architectures: {list(built_architectures)}"
+        ) from None
 
 
 async def _get_known_package_names(dep_component: str, fixed_dep_nvr: str) -> list[str] | None:
@@ -922,8 +980,14 @@ async def check_package_built_with_fixed_dependency(
                         None if needs manual action
         - package_issue_key: Jira issue key for the existing build (if found)
         - package_nvr: NVR of the existing build (if found)
-        - reason: When already_fixed is None, explains why (e.g., "built_after_fix_no_rootlog",
-                 "koji_metadata_unavailable", "evr_comparison_failed")
+        - reason: When already_fixed is None, explains why. Possible reasons:
+                 "built_after_fix_no_rootlog" - root.log unavailable (Brew retention)
+                 "architecture_dependency_conflict" - different dependency versions per arch
+                 "partial_architecture_coverage" - dependency missing from some arch logs
+                 "active_builds_not_closed" - builds in progress (might be rejected)
+
+    Raises:
+        TransientInfrastructureError: When Jira/Koji temporarily unavailable (task should retry)
     """
     try:
         # Step 1: Find builds in Jira
@@ -935,13 +999,12 @@ async def check_package_built_with_fixed_dependency(
         if active_candidates is None:
             logger.warning(f"Active builds query failed for {package} in {fix_version}")
             # If we have closed candidates, we can still check them
-            # But if we don't, we need clarification since we don't know if active builds exist
+            # But if we don't, this is a transient infrastructure failure
             if not closed_candidates:
-                logger.warning(
-                    f"No closed builds found and active builds query failed for {package}. "
-                    f"Cannot determine build status."
+                raise TransientInfrastructureError(
+                    f"Jira query failed for {package} in {fix_version} - "
+                    f"no closed builds found and active builds query failed"
                 )
-                return None, None, None, "jira_query_failed"
 
         if not closed_candidates and not active_candidates:
             logger.info(f"No builds found for {package} in {fix_version}")
@@ -970,13 +1033,12 @@ async def check_package_built_with_fixed_dependency(
                 )
                 active_issues = ", ".join(key for key, _ in active_candidates)
                 return None, None, None, f"active_builds_not_closed:{active_issues}"
-            # If active query failed, we need clarification
+            # If active query failed, this is a transient infrastructure failure
             if active_candidates is None:
-                logger.warning(
-                    f"Closed builds invalid and active builds query failed for {package}. "
-                    f"Cannot determine build status."
+                raise TransientInfrastructureError(
+                    f"Jira query failed for {package} in {fix_version} - "
+                    f"closed builds invalid and active builds query failed"
                 )
-                return None, None, None, "jira_query_failed"
             return False, None, None, None
 
         package_nvr, package_issue_key, latest_evr = result
@@ -985,8 +1047,67 @@ async def check_package_built_with_fixed_dependency(
             f"(issue: {package_issue_key}, EVR: {latest_evr})"
         )
 
-        # Step 3: Fetch root.log from Brew (all architectures)
-        root_logs = await _fetch_root_log(package_nvr)
+        # Step 3a: Get build metadata to determine which architectures were built
+        package_build = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, package_nvr)
+        if not package_build:
+            raise TransientInfrastructureError(f"Koji metadata unavailable for package build: {package_nvr}")
+
+        # Get list of architectures from RPMs
+        build_id = package_build.get("build_id")
+        if not build_id:
+            raise TransientInfrastructureError(f"No build_id for {package_nvr}")
+
+        try:
+            session = koji.ClientSession(BREWHUB_URL)
+            rpms = await asyncio.to_thread(session.listRPMs, buildID=build_id)
+            if not isinstance(rpms, list):
+                raise TransientInfrastructureError(f"Invalid RPM list response for {package_nvr}")
+
+            # Extract unique architectures (exclude 'src' and 'noarch')
+            built_archs = {
+                rpm["arch"]
+                for rpm in rpms
+                if isinstance(rpm, dict) and rpm.get("arch") not in ("src", "noarch")
+            }
+
+            if not built_archs:
+                # Noarch builds have root.log under the builder's arch.
+                # Try common arches — we only need one log for noarch.
+                logger.info(f"Noarch-only build {package_nvr}, trying common arches for root.log")
+                built_archs = {"x86_64", "aarch64", "ppc64le", "s390x"}
+                noarch_build = True
+            else:
+                noarch_build = False
+
+        except TransientInfrastructureError:
+            raise
+        except (koji.GenericError, ConnectionError, OSError) as e:
+            raise TransientInfrastructureError(
+                f"Failed to fetch architecture list for {package_nvr}: {e}"
+            ) from e
+
+        if built_archs:
+            logger.debug(f"Build {package_nvr} produced architectures: {list(built_archs)}")
+
+        # Step 3b: Fetch root.log from Brew
+        # For arch builds: require ALL arches. For noarch: accept any log found.
+        root_logs = []
+        if built_archs:
+            try:
+                root_logs = await _fetch_root_log(package_nvr, built_archs, require_all=not noarch_build)
+            except TransientInfrastructureError:
+                completion_ts = package_build.get("completion_ts")
+                if completion_ts:
+                    cutoff_ts = time.time() - (90 * 24 * 60 * 60)
+                    if completion_ts > cutoff_ts:
+                        raise
+
+                logger.info(
+                    f"root.log unavailable for {package_nvr} (completion_ts: "
+                    f"{completion_ts or 'unknown'}), "
+                    f"falling back to timestamp comparison"
+                )
+
         if not root_logs:
             # Fallback: compare build timestamps
             logger.info(
@@ -1014,21 +1135,19 @@ async def check_package_built_with_fixed_dependency(
                     active_issues = ", ".join(key for key, _ in active_candidates)
                     return None, package_issue_key, package_nvr, f"active_builds_not_closed:{active_issues}"
                 return False, package_issue_key, package_nvr, None
-            # Timestamp comparison failed (metadata unavailable) - cannot determine
-            logger.warning(
-                f"Could not determine build order for {package} ({package_nvr}) and "
-                f"{dep_component} ({fixed_dep_nvr}). Koji metadata unavailable."
+            # Timestamp comparison failed (metadata unavailable) - transient Koji issue
+            raise TransientInfrastructureError(
+                f"Koji metadata unavailable for timestamp comparison: {package} ({package_nvr}) "
+                f"vs {dep_component} ({fixed_dep_nvr})"
             )
-            return None, package_issue_key, package_nvr, "timestamp_comparison_failed"
 
         # Step 4: Get known package names for the dependency
         known_names = await _get_known_package_names(dep_component, fixed_dep_nvr)
         if known_names is None:
-            logger.error(
-                f"Could not fetch subpackage list for {dep_component} ({fixed_dep_nvr}). "
-                f"Koji metadata unavailable."
+            raise TransientInfrastructureError(
+                f"Koji metadata unavailable: could not fetch subpackage list for "
+                f"{dep_component} ({fixed_dep_nvr})"
             )
-            return None, package_issue_key, package_nvr, "evr_comparison_failed"
 
         # Step 5: Parse dependency from all architecture root.logs and verify consistency
         dep_versions = {}
@@ -1074,8 +1193,9 @@ async def check_package_built_with_fixed_dependency(
         for arch, (nvr, epoch_from_log) in dep_versions.items():
             build = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, nvr)
             if not build:
-                logger.error(f"Could not fetch Koji metadata for {nvr} from {arch} architecture")
-                return None, package_issue_key, package_nvr, "evr_comparison_failed"
+                raise TransientInfrastructureError(
+                    f"Koji metadata unavailable for {nvr} ({arch} architecture)"
+                )
 
             # Use epoch from root.log if present, otherwise Koji's epoch
             if epoch_from_log is not None:
@@ -1133,12 +1253,13 @@ async def check_package_built_with_fixed_dependency(
                 return None, package_issue_key, package_nvr, f"active_builds_not_closed:{active_issues}"
             return False, package_issue_key, package_nvr, None
         # EVR comparison failed due to missing Koji metadata or validation error
-        logger.error(
-            f"Could not compare dependency EVRs for {package} ({package_nvr}). "
-            f"Koji metadata unavailable or validation failed."
+        raise TransientInfrastructureError(
+            f"Koji metadata unavailable for EVR comparison: {package} ({package_nvr})"
         )
-        return None, package_issue_key, package_nvr, "evr_comparison_failed"
 
+    except TransientInfrastructureError:
+        # Re-raise infrastructure errors for task retry
+        raise
     except Exception as e:
         logger.exception(
             f"Error checking if package was built with fixed dependency: {e}. "

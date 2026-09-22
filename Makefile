@@ -9,6 +9,7 @@ AUTO_CHAIN ?= true
 SHARED_RULES_ENABLED ?= true
 FORCE_CVE_TRIAGE ?= false
 RUN_LLM_JUDGE ?= true
+BACKPORT_E2E_EXCLUDE_ISSUES ?=
 
 COMPOSE ?= $(shell if podman compose ls >/dev/null 2>&1; then echo "podman compose"; elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose"; else echo "docker-compose"; fi)
 COMPOSE_AGENTS=$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents
@@ -91,6 +92,7 @@ run-backport-agent-e2e-tests:
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \
+		-e BACKPORT_E2E_EXCLUDE_ISSUES="$(BACKPORT_E2E_EXCLUDE_ISSUES)" \
 		backport-agent-e2e-tests
 
 

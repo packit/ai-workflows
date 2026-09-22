@@ -319,6 +319,7 @@ services:
     environment:
       <<: *beeai-env
       BACKPORT_MOCK_REPOS_DIR: /home/beeai/mock_repos/backport
+      BACKPORT_E2E_EXCLUDE_ISSUES: ${BACKPORT_E2E_EXCLUDE_ISSUES:-}
       # SAFETY: These MUST be set to prevent E2E tests from writing to production Jira.
       MOCK_JIRA: ${MOCK_JIRA:-true}
       DRY_RUN: ${DRY_RUN:-true}

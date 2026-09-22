@@ -23,6 +23,7 @@ Each JSON file contains::
 
     {
         "zstream_override": {"9": "rhel-9.2.z"},   // optional
+        "zstream_build_ref": "a983ca344462...",     // optional fixed E2E Brew baseline
         "input": {
             "shipped_zstream_candidates": [        // optional; Y-stream inherit e2e
                 {
@@ -47,13 +48,40 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 import git
 
-from ymir.common.version_utils import current_z_streams_override
+from ymir.common.version_utils import current_z_streams_override, parse_zstream_branch_name
 
 logger = logging.getLogger(__name__)
+
+
+def get_zstream_build_refs(configs: Mapping[str, dict]) -> dict[tuple[str, str], str]:
+    """Collect deterministic Brew source refs declared by mock-repo fixtures."""
+    refs: dict[tuple[str, str], str] = {}
+    for issue_key, config in configs.items():
+        config_input = config.get("input") or {}
+        package = config_input.get("package")
+        branch = config_input.get("dist_git_branch")
+        if "zstream_build_ref" not in config:
+            if isinstance(branch, str) and parse_zstream_branch_name(branch):
+                raise ValueError(f"{issue_key} requires zstream_build_ref for deterministic E2E")
+            continue
+        ref = config["zstream_build_ref"]
+        if not isinstance(ref, str) or not ref.strip():
+            raise ValueError(f"{issue_key} has an invalid zstream_build_ref")
+        ref = ref.strip()
+
+        key = (package, branch)
+        if not all(isinstance(value, str) and value for value in key):
+            raise ValueError(f"{issue_key} cannot key its zstream_build_ref")
+        existing = refs.get(key)
+        if existing is not None and existing != ref:
+            raise ValueError(f"Fixtures have conflicting z-stream build refs for {key[0]}/{key[1]}")
+        refs[key] = ref
+    return refs
 
 
 def load_fixture_config(issue_key: str, fixtures_dir: str | Path) -> dict | None:

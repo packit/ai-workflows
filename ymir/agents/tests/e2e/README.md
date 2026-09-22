@@ -50,7 +50,17 @@ The mystery was traced to E2E tests being invoked directly (bypassing the Makefi
 E2E tests use real Jira issue keys that exist in production. When `MOCK_JIRA=true`, these issues are loaded from mock JSON files in:
 - `ymir/tools/privileged/tests/data/` (fetched from `testing-jiras` repo)
 
-The mock backend reads/writes to local files only — no network calls are made.
+The mock Jira backend reads/writes local files only — no Jira network calls are made.
+
+### GitLab Authentication for Local E2E Runs
+
+For local Compose E2E runs (including `make run-<agent>-agent-e2e-tests`), add a GitLab.com personal access token that can read the repositories referenced by the mock repo fixtures to the project `.env`:
+
+```bash
+GITLAB_TOKEN=<GitLab token>
+```
+
+The mock repo setup clones the repositories described by the mock repo fixtures. Without `GITLAB_TOKEN` in `.env`, Git prompts for credentials while preparing mock repositories. See [`mock_repos/README.md`](mock_repos/README.md) for mock repository fixture setup.
 
 ## Debugging Failed Safety Checks
 

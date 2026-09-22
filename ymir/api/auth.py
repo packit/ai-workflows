@@ -148,7 +148,9 @@ async def oidc_middleware(request: web.Request, handler):
     # Protected path — require valid Bearer token.
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        return web.json_response({"error": "missing or invalid Authorization header"}, status=401)
+        resp = web.json_response({"error": "missing or invalid Authorization header"}, status=401)
+        _add_cors_headers(resp, origin)
+        return resp
 
     token = auth_header[len("Bearer ") :]
     try:
@@ -156,7 +158,9 @@ async def oidc_middleware(request: web.Request, handler):
         claims = _validate_token(token, keyset)
     except Exception:
         logger.debug("Token validation failed", exc_info=True)
-        return web.json_response({"error": "invalid or expired token"}, status=401)
+        resp = web.json_response({"error": "invalid or expired token"}, status=401)
+        _add_cors_headers(resp, origin)
+        return resp
 
     # Attach user identity to the request for downstream handlers.
     request["remote_user"] = (

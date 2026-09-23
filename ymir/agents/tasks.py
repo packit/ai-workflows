@@ -668,9 +668,8 @@ async def comment_in_jira(
     user_triggered: bool = False,
 ) -> None:
     # Mid-workflow errors (e.g. consolidation failures in backport/rebase) are
-    # trigger-gated here; crash-based terminal errors bypass this via
-    # post_terminal_error_comment().  Triage ERROR resolutions are handled as
-    # no-MR results by _should_update_jira() and never pass is_error=True.
+    # trigger-gated here; crash-based and resolution-based terminal errors
+    # bypass this via post_terminal_error_comment() after retries are exhausted.
     if is_error and not user_triggered:
         logger.info(f"Skipping Jira error comment for {jira_issue} (not user-triggered)")
         return

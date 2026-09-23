@@ -104,17 +104,18 @@ def _should_update_jira(resolution: Resolution = None, user_triggered: bool = Fa
     resolution carries information the requester needs even unbidden.
     The unbidden cases are the resolutions that do NOT produce an MR —
     without a comment the result would be invisible to the requester:
-    not-affected, postponed, open-ended-analysis, clarification-needed, error.
-    Crash-based errors (exceptions) are handled separately by the terminal
-    retry path via post_terminal_error_comment().
+    not-affected, postponed, open-ended-analysis, clarification-needed.
+    ERROR resolutions are dispatched to retry() and commented once via
+    post_terminal_error_comment() after retries are exhausted.
     """
+    if resolution == Resolution.ERROR:
+        return False
     if user_triggered:
         return True
     return resolution in (
         Resolution.NOT_AFFECTED,
         Resolution.OPEN_ENDED_ANALYSIS,
         Resolution.CLARIFICATION_NEEDED,
-        Resolution.ERROR,
         *POSTPONED_RESOLUTIONS,
     )
 
@@ -1514,7 +1515,13 @@ async def main() -> None:
                     )
                 return
 
-            async def retry(task, error: ErrorData, input=input, user_triggered=user_triggered):
+            async def retry(
+                task,
+                error: ErrorData,
+                comment_text=None,
+                input=input,
+                user_triggered=user_triggered,
+            ):
                 task.attempts += 1
                 # Preserve priority on retries: ymir_todo tasks go back to
                 # the priority queue, normal tasks to the standard one.
@@ -1546,7 +1553,7 @@ async def main() -> None:
                         )
                     except Exception as label_error:
                         logger.warning(f"Failed to set error labels on {input.issue}: {label_error}")
-                    if not dry_run:
+                    if comment_text and not dry_run:
                         try:
                             async with mcp_tools(
                                 os.environ["MCP_GATEWAY_URL"],
@@ -1555,7 +1562,7 @@ async def main() -> None:
                                 await tasks.post_terminal_error_comment(
                                     jira_issue=input.issue,
                                     agent_type="Triage",
-                                    comment_text=f"Agent failed to perform triage: {error.details}",
+                                    comment_text=comment_text,
                                     available_tools=gateway_tools,
                                 )
                         except Exception as comment_error:
@@ -1650,9 +1657,11 @@ async def main() -> None:
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during triage processing for {input.issue}: {error}")
+                reason = e.explain() if isinstance(e, FrameworkError) else e
                 await retry(
                     task,
                     ErrorData(details=error, jira_issue=input.issue),
+                    comment_text=f"Agent failed to perform triage: {reason}",
                 )
             else:
                 logger.info(f"Triage resolved as {output.resolution.value} for {input.issue}")
@@ -1819,7 +1828,11 @@ async def main() -> None:
                             jira_issue=input.issue,
                         )
                     )
-                    await retry(task, error_data)
+                    await retry(
+                        task,
+                        error_data,
+                        comment_text=f"Agent failed to perform triage: {error_data.details}",
+                    )
                 elif output.resolution in POSTPONED_RESOLUTIONS:
                     await fix_await(
                         redis.lpush(

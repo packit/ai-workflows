@@ -49,7 +49,6 @@ from ymir.common.version_utils import is_modular, parse_module_stream
         Resolution.POSTPONED_PR_PENDING,
         Resolution.OPEN_ENDED_ANALYSIS,
         Resolution.CLARIFICATION_NEEDED,
-        Resolution.ERROR,
     ],
 )
 def test_user_triggered_run_posts_normal_results(resolution):
@@ -118,9 +117,10 @@ def test_non_user_triggered_still_posts_when_no_mr_will_open(resolution):
     assert _should_update_jira(resolution=resolution, user_triggered=False) is True
 
 
-def test_error_resolution_posts_unbidden():
-    """ERROR produces no MR, so the comment is the only visible output."""
-    assert _should_update_jira(resolution=Resolution.ERROR, user_triggered=False) is True
+def test_error_deferred_to_terminal_retry_path():
+    """ERROR is dispatched to retry() and commented once after retries are exhausted."""
+    assert _should_update_jira(resolution=Resolution.ERROR, user_triggered=False) is False
+    assert _should_update_jira(resolution=Resolution.ERROR, user_triggered=True) is False
 
 
 def _make_payload(issue: str = "RHEL-99999", user_triggered: bool = False) -> bytes:

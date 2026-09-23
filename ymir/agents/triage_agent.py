@@ -432,9 +432,10 @@ async def render_prompt(
                 # others (e.g. RHEL 8) go to centos-stream where the
                 # internal_target_branch hint would be misleading.
                 config = await load_rhel_config()
-                y_streams = config.get("current_y_streams", {})
                 parsed_version = parse_rhel_version(fix_version)
-                has_y_stream = bool(parsed_version and parsed_version[0] in y_streams)
+                has_y_stream = bool(
+                    parsed_version and parsed_version[0] not in get_maintenance_majors(config)
+                )
             else:
                 has_y_stream = older_zstream  # older Z-streams always use rhel
             if internal_branch and (older_zstream or has_y_stream):

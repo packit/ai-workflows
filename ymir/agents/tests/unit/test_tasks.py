@@ -971,6 +971,34 @@ async def test_comment_in_jira_adds_trace_link_to_error_comments(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_post_terminal_error_comment_adds_trace_link_without_user_trigger(monkeypatch):
+    monkeypatch.setenv("TRACE_VIEWER_URL", "https://trace.example/")
+    calls = []
+
+    async def _mock_run_tool(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    flexmock(agent_tasks).should_receive("run_tool").once().replace_with(_mock_run_tool)
+
+    await agent_tasks.post_terminal_error_comment(
+        jira_issue="RHEL-1",
+        agent_type="Backport",
+        comment_text="The backport failed.",
+        available_tools=[],
+    )
+
+    comment = calls[0][1]["comment"]
+    assert comment == JIRA_COMMENT_TEMPLATE.substitute(
+        AGENT_TYPE="Backport",
+        JIRA_COMMENT=(
+            "The backport failed.\n\n"
+            "See the [Ymir execution trace|https://trace.example/#/issues/RHEL-1] "
+            "for additional details."
+        ),
+    )
+
+
+@pytest.mark.asyncio
 async def test_comment_in_jira_does_not_add_trace_link_to_non_error_comments(monkeypatch):
     monkeypatch.setenv("TRACE_VIEWER_URL", "https://trace.example/")
     calls = []
@@ -1570,14 +1598,12 @@ async def test_handle_zstream_branch_stale_error_labels_comments_and_error_list(
     task = _make_task(attempts=2)
 
     flexmock(agent_tasks).should_receive("set_jira_labels").twice().replace_with(_async_noop)
-    flexmock(agent_tasks).should_receive("comment_in_jira").once().replace_with(_async_noop)
-    flexmock(agent_tasks).should_receive("comment_in_jira").with_args(
+    flexmock(agent_tasks).should_receive("post_terminal_error_comment").once().replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("post_terminal_error_comment").with_args(
         jira_issue="RHEL-1",
         agent_type="Rebuild",
         comment_text=str(exc),
         available_tools=[],
-        is_error=True,
-        user_triggered=True,
     ).once().replace_with(_async_noop)
     flexmock(agent_tasks).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
 
@@ -1618,7 +1644,7 @@ async def test_handle_zstream_branch_stale_error_skips_comment_on_dry_run():
     redis.should_receive("incr").replace_with(_mock_incr)
 
     flexmock(agent_tasks).should_receive("set_jira_labels").once().replace_with(_async_noop)
-    flexmock(agent_tasks).should_receive("comment_in_jira").never()
+    flexmock(agent_tasks).should_receive("post_terminal_error_comment").never()
     flexmock(agent_tasks).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
 
     await handle_zstream_branch_stale_error(

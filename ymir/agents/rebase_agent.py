@@ -244,7 +244,7 @@ async def main() -> None:
         Post link comments to consolidated siblings pointing to primary issue with error details.
 
         Uses is_error=False so these informational links are always posted, even on automatic runs.
-        Only the detailed error on the primary issue is gated by user_triggered.
+        The primary terminal error is posted separately by the final retry path.
 
         Isolates errors per-sibling so a single Jira failure doesn't abort posting to other siblings.
         Deduplicates issue keys to prevent multiple identical comments.
@@ -790,32 +790,26 @@ async def main() -> None:
                         user_triggered=user_triggered,
                     )
                     # Post failure feedback to Jira once, here on the final attempt
-                    # only — never for intermediate retries. Restricted to
-                    # user-triggered (ymir_todo) runs: a maintainer who didn't ask
-                    # for processing shouldn't be notified, so skip the gateway
-                    # connection entirely otherwise.
-                    if user_triggered and not dry_run:
+                    # only — never for intermediate retries.
+                    if comment_text and not dry_run:
                         try:
                             async with mcp_tools(
                                 os.environ["MCP_GATEWAY_URL"],
                                 call_meta={"jira_issue": rebase_data.jira_issue},
                             ) as gateway_tools:
                                 # Post detailed error to primary issue (with error handling)
-                                if comment_text:
-                                    try:
-                                        await tasks.comment_in_jira(
-                                            jira_issue=rebase_data.jira_issue,
-                                            agent_type="Rebase",
-                                            comment_text=comment_text,
-                                            available_tools=gateway_tools,
-                                            is_error=True,
-                                            user_triggered=user_triggered,
-                                        )
-                                    except Exception as e:
-                                        logger.warning(
-                                            f"Failed to post error comment to primary issue "
-                                            f"{rebase_data.jira_issue}: {e}"
-                                        )
+                                try:
+                                    await tasks.post_terminal_error_comment(
+                                        jira_issue=rebase_data.jira_issue,
+                                        agent_type="Rebase",
+                                        comment_text=comment_text,
+                                        available_tools=gateway_tools,
+                                    )
+                                except Exception as e:
+                                    logger.warning(
+                                        f"Failed to post error comment to primary issue "
+                                        f"{rebase_data.jira_issue}: {e}"
+                                    )
                                 # Link consolidated siblings to primary issue
                                 # (with per-sibling error handling)
                                 await post_failure_comments_to_consolidated_siblings(

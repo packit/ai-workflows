@@ -104,12 +104,16 @@ class Task(BaseModel):
         default_factory=uuid4,
         description="Stable identifier for this queued task across retries and requeues",
     )
-    attempts: int = Field(default=0, description="Number of processing attempts")
+    attempts: int = Field(
+        default=0,
+        description="Number of completed failed attempts before the next processing run",
+    )
     user_triggered: bool = Field(
         default=False,
         description="True when a maintainer triggered this run via the ymir_todo label — "
-        "causes agents to post comments and intermediate failure labels that are "
-        "otherwise suppressed (default is silent).",
+        "causes agents to post acknowledgement/result comments and intermediate "
+        "failure labels that are otherwise suppressed. Error comments are "
+        "posted regardless of this flag.",
     )
 
     def to_json(self) -> str:

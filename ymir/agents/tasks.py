@@ -159,13 +159,11 @@ async def handle_zstream_branch_stale_error(
             ) as gateway_tools:
                 for issue_key in issues:
                     try:
-                        await comment_in_jira(
+                        await post_terminal_error_comment(
                             jira_issue=issue_key,
                             agent_type=agent_type,
                             comment_text=str(exc),
                             available_tools=gateway_tools,
-                            is_error=True,
-                            user_triggered=True,  # force-post regardless of actual trigger
                         )
                     except Exception as comment_error:
                         logger.warning(
@@ -669,13 +667,46 @@ async def comment_in_jira(
     is_error: bool = False,
     user_triggered: bool = False,
 ) -> None:
-    # Default is silent: error comments are only posted on user-triggered runs.
-    # A maintainer who didn't ask for processing should not be spammed with
-    # error notifications; if they want to see them, they add ymir_todo.
+    # Mid-workflow errors (e.g. consolidation failures in backport/rebase) are
+    # trigger-gated here; crash-based terminal errors bypass this via
+    # post_terminal_error_comment().  Triage ERROR resolutions are handled as
+    # no-MR results by _should_update_jira() and never pass is_error=True.
     if is_error and not user_triggered:
         logger.info(f"Skipping Jira error comment for {jira_issue} (not user-triggered)")
         return
 
+    await _post_jira_comment(
+        jira_issue=jira_issue,
+        agent_type=agent_type,
+        comment_text=comment_text,
+        available_tools=available_tools,
+        is_error=is_error,
+    )
+
+
+async def post_terminal_error_comment(
+    jira_issue: str,
+    agent_type: str,
+    comment_text: str,
+    available_tools: list[Tool],
+) -> None:
+    """Post an error comment for a terminal failure, regardless of trigger."""
+    await _post_jira_comment(
+        jira_issue=jira_issue,
+        agent_type=agent_type,
+        comment_text=comment_text,
+        available_tools=available_tools,
+        is_error=True,
+    )
+
+
+async def _post_jira_comment(
+    jira_issue: str,
+    agent_type: str,
+    comment_text: str,
+    available_tools: list[Tool],
+    is_error: bool,
+) -> None:
     trace_server_url = trace_viewer_issue_url(jira_issue)
     if is_error and trace_server_url:
         comment_text = (

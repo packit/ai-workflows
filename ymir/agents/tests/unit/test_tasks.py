@@ -13,6 +13,7 @@ from ymir.agents.tasks import (
     _canonical_mr_title_key,
     _check_zstream_branch_consistency,
     _is_newer_summary,
+    _normalize_cve_title,
     _normalize_jira_updated,
     _validate_generated_title,
     canonical_title_mentions_components,
@@ -241,7 +242,7 @@ async def test_current_cve_title_does_not_call_generator():
         raise AssertionError("CVE title generation must not run")
 
     async def jira_details(*_args, **_kwargs):
-        return {"fields": {"summary": "CVE-2026-1234 curl: Fix an overflow"}}
+        return {"fields": {"summary": "CVE-2026-1234 curl: Fix an overflow [rhel-9.9]"}}
 
     flexmock(agent_tasks).should_receive("run_tool").replace_with(jira_details).once()
     title = await resolve_current_canonical_mr_title(
@@ -251,6 +252,42 @@ async def test_current_cve_title_does_not_call_generator():
         jira_issue="RHEL-100",
         cve_id="CVE-2026-1234",
         generate_title=generator,
+    )
+
+    assert title == "CVE-2026-1234 curl: Fix an overflow"
+
+
+def test_cve_title_removes_stream_suffix():
+    assert _normalize_cve_title("CVE-2026-1234 curl: Fix an overflow [rhel-9.9]") == (
+        "CVE-2026-1234 curl: Fix an overflow"
+    )
+    assert _normalize_cve_title("CVE-2026-1234 [rhel-9.9] curl: Fix an overflow") == (
+        "CVE-2026-1234 [rhel-9.9] curl: Fix an overflow"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cached_cve_title_removes_existing_stream_suffix():
+    redis = CanonicalTitleRedis()
+
+    await resolve_canonical_mr_title(
+        redis,
+        package="curl",
+        jira_issue="RHEL-100",
+        jira_summary="CVE-2026-1234 curl: Fix an overflow [rhel-9.9]",
+        cve_id="CVE-2026-1234",
+    )
+    key = next(iter(redis.store))
+    metadata = CachedMRMetadata.model_validate_json(redis.store[key])
+    metadata.title = "CVE-2026-1234 curl: Fix an overflow [rhel-9.9]"
+    redis.store[key] = metadata.model_dump_json()
+
+    title = await resolve_canonical_mr_title(
+        redis,
+        package="curl",
+        jira_issue="RHEL-101",
+        jira_summary="CVE-2026-1234 curl: Fix an overflow [rhel-9.9]",
+        cve_id="CVE-2026-1234",
     )
 
     assert title == "CVE-2026-1234 curl: Fix an overflow"

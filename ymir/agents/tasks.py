@@ -853,6 +853,7 @@ _MAX_CANONICAL_TITLE_LENGTH = 255
 _MAX_GENERATED_TITLE_LENGTH = 80
 _MAX_CANONICAL_TITLE_REPLACEMENT_ATTEMPTS = 3
 _JIRA_ISSUE_KEY_RE = re.compile(r"\b(?:RHEL|PACKIT)-\d+\b", re.IGNORECASE)
+_CVE_STREAM_SUFFIX_RE = re.compile(r"\s+\[rhel-[^\]]+\]\s*$", re.IGNORECASE)
 _CONDITIONAL_DELETE_LUA = """
 if redis.call('GET', KEYS[1]) == ARGV[1] then
     return redis.call('DEL', KEYS[1])
@@ -914,6 +915,11 @@ def _validate_canonical_title(title: str, jira_issue: str) -> str:
     return title
 
 
+def _normalize_cve_title(title: str) -> str:
+    """Remove the stream-specific suffix Jira adds to CVE summaries."""
+    return _CVE_STREAM_SUFFIX_RE.sub("", title)
+
+
 def _validate_generated_title(title: str, jira_issue: str) -> str:
     """Enforce the stricter title-agent output contract before publication."""
     title = _validate_canonical_title(title, jira_issue)
@@ -938,6 +944,8 @@ async def _get_cached_canonical_metadata(
         validator = _validate_canonical_title if is_cve else _validate_generated_title
         validator(metadata.title, jira_issue)
         _normalize_jira_updated(metadata.summary_updated)
+        if is_cve:
+            metadata = metadata.model_copy(update={"title": _normalize_cve_title(metadata.title)})
         return metadata, cached
     except ValueError as error:
         logger.warning("Discarding invalid canonical title cache record %s: %s", cache_key, error)
@@ -1037,7 +1045,8 @@ async def resolve_canonical_mr_title(
     The Redis key is stable for the package/family. A matching summary digest
     reuses the record; only a newer ``summary_updated`` value from its source
     Jira issue compare-and-swaps a replacement. CVE families use the Jira
-    summary verbatim; non-CVE families require a validated generated title.
+    summary with its stream-specific suffix removed; non-CVE families require
+    a validated generated title.
     """
     jira_summary = _validate_canonical_title(jira_summary, jira_issue)
     summary_updated = _normalize_jira_updated(summary_updated)
@@ -1061,7 +1070,7 @@ async def resolve_canonical_mr_title(
             logger.info("Kept newer canonical MR title for %s from %s", jira_issue, cache_key)
             return cached_metadata.title
 
-    title = jira_summary if cve_ids else generated_title
+    title = _normalize_cve_title(jira_summary) if cve_ids else generated_title
     if title is None:
         raise ValueError(f"Non-CVE issue {jira_issue} requires a generated title on cache miss")
     title = (

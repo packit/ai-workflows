@@ -196,7 +196,9 @@ class RunPackagePrepTool(Tool[RunPackagePrepInput, ToolRunOptions, StringToolOut
 
         try:
             spec_path = dist_git / f"{tool_input.package}.spec"
-            defines = build_rpmdefines(dist_git, tool_input.dist_git_branch, spec_path, builddir=Path(builddir))
+            defines = build_rpmdefines(
+                dist_git, tool_input.dist_git_branch, spec_path, builddir=Path(builddir)
+            )
             cmd = ["rpmbuild", *defines, "--nodeps", "-bp", str(spec_path)]
 
             exit_code, stdout, stderr = await run_subprocess(cmd, cwd=dist_git)

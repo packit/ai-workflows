@@ -1444,7 +1444,9 @@ async def clone_and_prep_sources(
     if "Prep FAILED" not in result:
         builddir = prep_tool.options.get("builddir")
         try:
-            unpacked = get_unpacked_sources(local_clone, package, builddir=Path(builddir) if builddir else None)
+            unpacked = get_unpacked_sources(
+                local_clone, package, builddir=Path(builddir) if builddir else None
+            )
         except BaseException:
             if builddir:
                 shutil.rmtree(builddir, ignore_errors=True)

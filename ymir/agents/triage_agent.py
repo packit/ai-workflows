@@ -1268,7 +1268,9 @@ async def run_workflow(
             response = await workflow.run(TriageState(jira_issue=jira_issue))
             return response.state
         finally:
-            applicability_dir = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / APPLICABILITY_DIR / jira_issue
+            applicability_dir = (
+                Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / APPLICABILITY_DIR / jira_issue
+            )
             if applicability_dir.exists():
                 shutil.rmtree(applicability_dir, ignore_errors=True)
             if cleanup["builddir"]:

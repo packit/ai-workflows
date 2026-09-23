@@ -1,5 +1,6 @@
 import re
 import shutil
+import tempfile
 from pathlib import Path
 
 from beeai_framework.context import RunContext
@@ -93,7 +94,9 @@ class GitPreparePackageSources(Tool[GitPreparePackageSourcesInput, ToolRunOption
             raise ToolError(f"ERROR: {e}") from e
 
 
-def build_rpmdefines(dist_git_path: Path, branch: str, spec_path: Path) -> list[str]:
+def build_rpmdefines(
+    dist_git_path: Path, branch: str, spec_path: Path, *, builddir: Path | None = None
+) -> list[str]:
     if not (parsed := parse_branch_name(branch)):
         raise ToolError(f"Cannot parse branch name: {branch}")
     major, minor = parsed
@@ -107,7 +110,7 @@ def build_rpmdefines(dist_git_path: Path, branch: str, spec_path: Path) -> list[
         "--define",
         f"_specdir {root}",
         "--define",
-        f"_builddir {root}",
+        f"_builddir {builddir or root}",
         "--define",
         f"_srcrpmdir {root}",
         "--define",
@@ -157,8 +160,14 @@ class RunPackagePrepTool(Tool[RunPackagePrepInput, ToolRunOptions, StringToolOut
     timeout = 600
     description = """
     Runs the package prep step (source extraction + patch application) to verify
-    that all patches apply cleanly. If prep fails, the build subdirectory is
-    removed to prevent inspection of a partially-patched source tree.
+    that all patches apply cleanly. Build output goes to a /tmp directory stored
+    in options["builddir"]; the caller must clean it up after use. If prep fails,
+    the build directory is removed to prevent inspection of a partially-patched
+    source tree.
+
+    Callers that read back "builddir" from a shared options dict must pass a
+    non-empty dict (e.g. containing "working_directory"); the framework replaces
+    an empty dict with None, so mutations would go to an internal copy instead.
     """
     input_schema = RunPackagePrepInput
 
@@ -178,20 +187,31 @@ class RunPackagePrepTool(Tool[RunPackagePrepInput, ToolRunOptions, StringToolOut
         if not dist_git.exists():
             raise ToolError(f"Dist-git path does not exist: {dist_git}")
 
-        spec_path = dist_git / f"{tool_input.package}.spec"
-        defines = build_rpmdefines(dist_git, tool_input.dist_git_branch, spec_path)
-        cmd = ["rpmbuild", *defines, "--nodeps", "-bp", str(spec_path)]
+        if self.options is None:
+            self._options = {}
+        builddir = self.options.get("builddir")
+        if not builddir:
+            builddir = tempfile.mkdtemp(prefix="rpmbuild-")
+            self.options["builddir"] = builddir
 
-        exit_code, stdout, stderr = await run_subprocess(cmd, cwd=dist_git)
+        try:
+            spec_path = dist_git / f"{tool_input.package}.spec"
+            defines = build_rpmdefines(
+                dist_git, tool_input.dist_git_branch, spec_path, builddir=Path(builddir)
+            )
+            cmd = ["rpmbuild", *defines, "--nodeps", "-bp", str(spec_path)]
+
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=dist_git)
+        except BaseException:
+            shutil.rmtree(builddir, ignore_errors=True)
+            self.options.pop("builddir", None)
+            raise
 
         if exit_code == 0:
             return StringToolOutput(result=f"Prep succeeded.\n{stdout}")
 
-        # Prep failed — remove build subdirectories to prevent stale state.
-        # rpmbuild creates directories like <package>-<version>/ under the dist-git root.
-        for child in dist_git.iterdir():
-            if child.is_dir() and child.name.startswith(tool_input.package + "-"):
-                shutil.rmtree(child, ignore_errors=True)
+        shutil.rmtree(builddir, ignore_errors=True)
+        self.options.pop("builddir", None)
 
         return StringToolOutput(
             result=f"Prep FAILED (exit code {exit_code}). "

@@ -62,7 +62,6 @@ def build_applicability_prompt(
     dep_issue_key: str | None,
     patch_files: list[str],
     unpacked_sources: Path,
-    local_clone: Path,
     prep_ok: bool = True,
 ) -> str:
     cve_label = cve_id or "the CVE"
@@ -88,7 +87,6 @@ def build_applicability_prompt(
             f"cannot verify the full dependency chain — classify as 'Inconclusive'.\n"
         )
 
-    sources_rel = unpacked_sources.relative_to(local_clone)
     if patch_files:
         patch_info = "Upstream fix patches are available at: " + ", ".join(patch_files)
     else:
@@ -112,10 +110,10 @@ def build_applicability_prompt(
         {rebuild_context}
         {patch_info}
         {fallback_warning}
-        The unpacked package source is at: {sources_rel}
+        The unpacked package source is at: {unpacked_sources}
 
         CRITICAL: Your analysis MUST be based on the package source at
-        {sources_rel} — this is the actual version shipped in RHEL.
+        {unpacked_sources} — this is the actual version shipped in RHEL.
         Do NOT clone or check the latest upstream repository — it may
         already contain the fix, which is irrelevant to whether the
         shipped RHEL version is affected. If the fix patch applies
@@ -127,7 +125,7 @@ def build_applicability_prompt(
         (package.json, requirements.txt, go.mod, pom.xml, etc.) does
         NOT mean the component is shipped. What matters is whether the
         component's actual source or compiled files exist on disk in
-        {sources_rel}. If the vulnerable library's files are absent
+        {unpacked_sources}. If the vulnerable library's files are absent
         (e.g. no node_modules/<lib>/, no vendored source, `find`
         returns empty), classify as "Component not Present" regardless
         of what manifests or import statements declare. Manifests can
@@ -156,12 +154,12 @@ def build_applicability_prompt(
         2. If upstream fix patches are available, read them to identify
            the specific files and functions modified by the fix.
            Then verify whether those files physically exist in
-           {sources_rel} (use `find` to locate them). If the
+           {unpacked_sources} (use `find` to locate them). If the
            vulnerable library's files are completely absent from
            the source tree, that is definitive evidence of Component
            not Present — stop and classify accordingly.
         3. Search for those files/functions in the package source at
-           {sources_rel}. Do NOT look at any other copy of the source.
+           {unpacked_sources}. Do NOT look at any other copy of the source.
            If the files do not exist on disk, that is decisive — do not
            override this with manifest declarations or import statements.
         4. If the vulnerable code is not present, determine why — older

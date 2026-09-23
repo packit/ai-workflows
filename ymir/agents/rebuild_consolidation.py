@@ -338,7 +338,6 @@ async def _check_sibling_applicability(
             dep_issue_key=dep_issue_key,
             patch_files=[],
             unpacked_sources=unpacked_sources,
-            local_clone=local_clone,
         )
         response = await agent.run(
             prompt,

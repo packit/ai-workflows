@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import shutil
 import sys
 import traceback
 from pathlib import Path
@@ -671,23 +672,27 @@ async def main() -> None:
             workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
             workflow.add_step("comment_in_jira", comment_in_jira)
 
-            response = await workflow.run(
-                State(
-                    package=package,
-                    dist_git_branch=dist_git_branch,
-                    dist_git_namespace=dist_git_namespace,
-                    version=version,
-                    jira_issue=jira_issue,
-                    workspace_id=workspace_id,
-                    cve_id=cve_id,
-                    fix_version=fix_version,
-                    justification=justification,
-                    triage_summary=triage_summary,
-                    consolidated_issues=consolidated_issues or [],
-                    consolidation_summary=consolidation_summary,
-                ),
-            )
-            return response.state
+            try:
+                response = await workflow.run(
+                    State(
+                        package=package,
+                        dist_git_branch=dist_git_branch,
+                        dist_git_namespace=dist_git_namespace,
+                        version=version,
+                        jira_issue=jira_issue,
+                        workspace_id=workspace_id,
+                        cve_id=cve_id,
+                        fix_version=fix_version,
+                        justification=justification,
+                        triage_summary=triage_summary,
+                        consolidated_issues=consolidated_issues or [],
+                        consolidation_summary=consolidation_summary,
+                    ),
+                )
+                return response.state
+            finally:
+                if builddir := local_tool_options.get("builddir"):
+                    shutil.rmtree(builddir, ignore_errors=True)
 
     if (
         (package := os.getenv("PACKAGE", None))

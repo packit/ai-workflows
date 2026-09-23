@@ -555,6 +555,8 @@ async def run_workflow(
     if mock_env := get_mock_local_tool_env(jira_issue):
         local_tool_options = {"env": mock_env}
 
+    cleanup = {"builddir": None}
+
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL"), call_meta={"jira_issue": jira_issue}) as gateway_tools:
         triage_agent = triage_agent_factory(gateway_tools, local_tool_options)
 
@@ -961,7 +963,7 @@ async def run_workflow(
                     logger.warning(f"Failed to check branches for {package}: {e}")
 
             try:
-                local_clone, unpacked_sources, prep_ok = await tasks.clone_and_prep_sources(
+                local_clone, unpacked_sources, prep_ok, builddir = await tasks.clone_and_prep_sources(
                     package=package,
                     dist_git_branch=clone_branch,
                     available_tools=gateway_tools,
@@ -981,6 +983,7 @@ async def run_workflow(
             if not prep_ok:
                 logger.warning(f"Source prep failed for {package} — analyzing unpatched upstream source")
 
+            cleanup["builddir"] = builddir
             state.applicability_local_clone = local_clone
             state.applicability_unpacked_sources = unpacked_sources
             state.applicability_used_fallback = not prep_ok
@@ -996,7 +999,7 @@ async def run_workflow(
                         )
                         patch_name = f"{state.jira_issue}-{idx}.patch"
                         (local_clone / patch_name).write_text(content)
-                        patch_files.append(patch_name)
+                        patch_files.append(str(local_clone / patch_name))
                     except Exception:
                         logger.warning(f"Could not fetch patch from {url}")
 
@@ -1014,7 +1017,6 @@ async def run_workflow(
                     dep_issue_key=dep_issue_key,
                     patch_files=patch_files,
                     unpacked_sources=unpacked_sources,
-                    local_clone=local_clone,
                     prep_ok=prep_ok,
                 )
 
@@ -1211,12 +1213,6 @@ async def run_workflow(
             return "comment_in_jira"
 
         async def comment_in_jira(state):
-            applicability_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / APPLICABILITY_DIR / state.jira_issue
-            if applicability_dir.exists():
-                shutil.rmtree(applicability_dir, ignore_errors=True)
-                state.applicability_local_clone = None
-                state.applicability_unpacked_sources = None
-
             comment_text = state.triage_result.format_for_comment(auto_chain=auto_chain)
             if state.applicability_check_skipped:
                 comment_text += (
@@ -1267,8 +1263,19 @@ async def run_workflow(
         workflow.add_step("consolidate_rebase_siblings", consolidate_rebase_siblings)
         workflow.add_step("comment_in_jira", comment_in_jira)
 
-        response = await workflow.run(TriageState(jira_issue=jira_issue))
-        return response.state
+        response = None
+        try:
+            response = await workflow.run(TriageState(jira_issue=jira_issue))
+            return response.state
+        finally:
+            applicability_dir = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / APPLICABILITY_DIR / jira_issue
+            if applicability_dir.exists():
+                shutil.rmtree(applicability_dir, ignore_errors=True)
+            if cleanup["builddir"]:
+                shutil.rmtree(cleanup["builddir"], ignore_errors=True)
+            if response is not None:
+                response.state.applicability_local_clone = None
+                response.state.applicability_unpacked_sources = None
 
 
 async def label_postponed_issues(jira_issue: str, output: OutputSchema, dry_run: bool, user_triggered: bool):

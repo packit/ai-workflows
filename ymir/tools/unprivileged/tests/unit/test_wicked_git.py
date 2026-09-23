@@ -1,4 +1,6 @@
+import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
@@ -310,15 +312,14 @@ async def test_run_package_prep_success(dist_git_dir):
     )
     assert "Prep succeeded" in output.result
     assert "prep done successfully" in output.result
+    builddir = tool.options.get("builddir")
+    assert builddir is not None, "builddir should be stored in options on success"
+    assert Path(builddir).is_dir(), "builddir should exist on disk after success"
+    shutil.rmtree(builddir, ignore_errors=True)
 
 
 @pytest.mark.asyncio
-async def test_run_package_prep_failure_cleans_build_dir(dist_git_dir):
-    # Simulate a partially-patched build subdirectory left behind by rpmbuild
-    build_dir = dist_git_dir / "ruby-3.3.10"
-    build_dir.mkdir()
-    (build_dir / "patched_file.rb").write_text("partially applied content")
-
+async def test_run_package_prep_failure_cleans_builddir(dist_git_dir):
     async def mock_run_subprocess(cmd, **kwargs):
         return (1, "", "patch failed to apply")
 
@@ -334,21 +335,19 @@ async def test_run_package_prep_failure_cleans_build_dir(dist_git_dir):
     )
     assert "Prep FAILED" in output.result
     assert "cleaned up" in output.result
-    assert not build_dir.exists(), "Build directory should have been removed on failure"
+    assert tool.options.get("builddir") is None, "builddir option should be cleared on failure"
 
 
 @pytest.mark.asyncio
-async def test_run_package_prep_failure_preserves_non_matching_dirs(dist_git_dir):
-    # Create directories: one matching the package name, one not
-    build_dir = dist_git_dir / "ruby-3.3.10"
-    build_dir.mkdir()
-    other_dir = dist_git_dir / "some-other-dir"
-    other_dir.mkdir()
+async def test_run_package_prep_reuses_builddir(dist_git_dir):
+    call_count = 0
 
     async def mock_run_subprocess(cmd, **kwargs):
-        return (1, "", "")
+        nonlocal call_count
+        call_count += 1
+        return (0, f"prep done {call_count}", "")
 
-    flexmock(wicked_git_mod).should_receive("run_subprocess").replace_with(mock_run_subprocess).once()
+    flexmock(wicked_git_mod).should_receive("run_subprocess").replace_with(mock_run_subprocess).twice()
 
     tool = RunPackagePrepTool()
     await tool.run(
@@ -358,8 +357,19 @@ async def test_run_package_prep_failure_preserves_non_matching_dirs(dist_git_dir
             dist_git_branch="c10s",
         ),
     )
-    assert not build_dir.exists(), "Build directory should have been removed"
-    assert other_dir.exists(), "Non-matching directory should be preserved"
+    first_builddir = tool.options.get("builddir")
+
+    await tool.run(
+        input=RunPackagePrepInput(
+            dist_git_path=str(dist_git_dir),
+            package="ruby",
+            dist_git_branch="c10s",
+        ),
+    )
+    second_builddir = tool.options.get("builddir")
+
+    assert first_builddir == second_builddir, "builddir should be reused across calls"
+    shutil.rmtree(first_builddir, ignore_errors=True)
 
 
 @pytest.mark.asyncio

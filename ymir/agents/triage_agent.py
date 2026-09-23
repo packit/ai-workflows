@@ -80,6 +80,7 @@ from ymir.common.version_utils import (
     construct_internal_branch_name,
     detect_modular_issue,
     extract_downstream_package,
+    get_maintenance_majors,
     is_modular,
     is_older_zstream,
     normalize_fix_version,
@@ -312,9 +313,8 @@ async def determine_target_branch(
         older_zstream = await is_older_zstream(triage_data.fix_version)
         if cve_needs_internal_fix and not older_zstream:
             config = await load_rhel_config()
-            y_streams = config.get("current_y_streams", {})
             parsed_version = parse_rhel_version(triage_data.fix_version)
-            has_y_stream = bool(parsed_version and parsed_version[0] in y_streams)
+            has_y_stream = bool(parsed_version and parsed_version[0] not in get_maintenance_majors(config))
         else:
             has_y_stream = False
         namespace: Literal["rhel", "centos-stream"] = (

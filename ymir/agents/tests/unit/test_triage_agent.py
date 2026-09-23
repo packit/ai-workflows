@@ -418,7 +418,10 @@ async def test_determine_target_branch_modular_internal_fix_no_ystream_uses_cs()
         patch(
             "ymir.agents.triage_agent.load_rhel_config",
             new_callable=AsyncMock,
-            return_value={"current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"}},
+            return_value={
+                "current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"},
+                "current_z_streams": {"8": "rhel-8.10.z", "9": "rhel-9.8.z", "10": "rhel-10.2.z"},
+            },
         ),
     ):
         branch, namespace = await determine_target_branch(

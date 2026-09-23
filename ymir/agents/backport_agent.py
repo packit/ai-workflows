@@ -2040,19 +2040,17 @@ async def main() -> None:
                     user_triggered=user_triggered,
                 )
                 # Crash paths have not reached the workflow's Jira-comment step.
-                if user_triggered and comment_text and not dry_run:
+                if comment_text and not dry_run:
                     try:
                         async with mcp_tools(
                             os.environ["MCP_GATEWAY_URL"],
                             call_meta={"jira_issue": backport_data.jira_issue},
                         ) as gateway_tools:
-                            await tasks.comment_in_jira(
+                            await tasks.post_terminal_error_comment(
                                 jira_issue=backport_data.jira_issue,
                                 agent_type="Backport",
                                 comment_text=comment_text,
                                 available_tools=gateway_tools,
-                                is_error=True,
-                                user_triggered=user_triggered,
                             )
                     except Exception as comment_error:
                         logger.warning(

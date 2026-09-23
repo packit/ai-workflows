@@ -565,11 +565,8 @@ async def main() -> None:
                         except Exception as e:
                             logger.warning(f"Failed to set labels on {issue_key}: {e}")
                     # Post failure feedback to Jira once, here on the final attempt
-                    # only — never for intermediate retries. Restricted to
-                    # user-triggered (ymir_todo) runs: a maintainer who didn't ask
-                    # for processing shouldn't be notified, so skip the gateway
-                    # connection entirely otherwise.
-                    if user_triggered and comment_text and not dry_run:
+                    # only — never for intermediate retries.
+                    if comment_text and not dry_run:
                         try:
                             async with mcp_tools(
                                 os.environ["MCP_GATEWAY_URL"],
@@ -577,13 +574,11 @@ async def main() -> None:
                             ) as gateway_tools:
                                 for issue_key in dict.fromkeys(rebuild_data.all_jira_issues):
                                     try:
-                                        await tasks.comment_in_jira(
+                                        await tasks.post_terminal_error_comment(
                                             jira_issue=issue_key,
                                             agent_type="Rebuild",
                                             comment_text=comment_text,
                                             available_tools=gateway_tools,
-                                            is_error=True,
-                                            user_triggered=user_triggered,
                                         )
                                     except Exception as comment_error:
                                         logger.warning(

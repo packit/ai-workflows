@@ -104,7 +104,9 @@ def _should_update_jira(resolution: Resolution = None, user_triggered: bool = Fa
     resolution carries information the requester needs even unbidden.
     The unbidden cases are the resolutions that do NOT produce an MR —
     without a comment the result would be invisible to the requester:
-    not-affected, postponed, open-ended-analysis, clarification-needed.
+    not-affected, postponed, open-ended-analysis, clarification-needed, error.
+    Crash-based errors (exceptions) are handled separately by the terminal
+    retry path via post_terminal_error_comment().
     """
     if user_triggered:
         return True
@@ -112,6 +114,7 @@ def _should_update_jira(resolution: Resolution = None, user_triggered: bool = Fa
         Resolution.NOT_AFFECTED,
         Resolution.OPEN_ENDED_ANALYSIS,
         Resolution.CLARIFICATION_NEEDED,
+        Resolution.ERROR,
         *POSTPONED_RESOLUTIONS,
     )
 
@@ -1543,6 +1546,24 @@ async def main() -> None:
                         )
                     except Exception as label_error:
                         logger.warning(f"Failed to set error labels on {input.issue}: {label_error}")
+                    if not dry_run:
+                        try:
+                            async with mcp_tools(
+                                os.environ["MCP_GATEWAY_URL"],
+                                call_meta={"jira_issue": input.issue},
+                            ) as gateway_tools:
+                                await tasks.post_terminal_error_comment(
+                                    jira_issue=input.issue,
+                                    agent_type="Triage",
+                                    comment_text=f"Agent failed to perform triage: {error.details}",
+                                    available_tools=gateway_tools,
+                                )
+                        except Exception as comment_error:
+                            logger.warning(
+                                "Failed to post final triage failure comment for %s: %s",
+                                input.issue,
+                                comment_error,
+                            )
                     error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
                     entry = ErrorListEntry(error_id=error_id, queue=retry_queue, task=task, error=error)
                     await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))

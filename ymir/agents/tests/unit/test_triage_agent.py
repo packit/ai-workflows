@@ -52,8 +52,8 @@ from ymir.common.version_utils import is_modular, parse_module_stream
         Resolution.ERROR,
     ],
 )
-def test_user_triggered_always_posts(resolution):
-    """A maintainer-triggered run always gets a comment, regardless of resolution."""
+def test_user_triggered_run_posts_normal_results(resolution):
+    """A maintainer-triggered run gets a normal result comment."""
     assert _should_update_jira(resolution=resolution, user_triggered=True) is True
 
 
@@ -118,9 +118,9 @@ def test_non_user_triggered_still_posts_when_no_mr_will_open(resolution):
     assert _should_update_jira(resolution=resolution, user_triggered=False) is True
 
 
-def test_non_user_triggered_error_does_not_post():
-    """ERROR is handled by separate error-path machinery, not this helper."""
-    assert _should_update_jira(resolution=Resolution.ERROR, user_triggered=False) is False
+def test_error_resolution_posts_unbidden():
+    """ERROR produces no MR, so the comment is the only visible output."""
+    assert _should_update_jira(resolution=Resolution.ERROR, user_triggered=False) is True
 
 
 def _make_payload(issue: str = "RHEL-99999", user_triggered: bool = False) -> bytes:

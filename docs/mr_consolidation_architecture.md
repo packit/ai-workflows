@@ -57,16 +57,20 @@ originals as consolidated.
 
 ### Data Structure
 
-A single Redis **Hash** (`merge_consolidation_queue`) stores all consolidation jobs.
-Each package-branch pair has up to two fields:
+A single Redis **Hash** (`merge_consolidation_queue`) stores all consolidation jobs
+and their leases. Each package-branch pair uses these fields:
 
 | Field pattern              | Meaning                                     |
 |----------------------------|---------------------------------------------|
 | `{pkg}:{branch}:pending`  | A job waiting to be picked up               |
 | `{pkg}:{branch}:active`   | A job currently being processed by a worker |
+| `{pkg}:{branch}:recovery` | A cancelled or expired job waiting to retry |
+| `{pkg}:{branch}:heartbeat` | Unix timestamp of the active worker's last lease refresh |
 
-**Invariant**: At most one `pending` and one `active` entry exist per package-branch
-pair at any time.
+**Invariant**: At most one `active` and one `recovery` entry exist per
+package-branch pair. A `pending` entry may coexist with `recovery` for an
+automatic submission, but strict, label-triggered submissions reject existing
+active or recovery work.
 
 ### Operations
 
@@ -80,34 +84,24 @@ ordering, stale-HEAD filtering, and per-commit consolidation need no special
 case. Inheritance provenance (source Jira key, Brew NVR, and commit SHA) remains
 in the original MR description.
 
-**`pick_next_job()`** — Finds any `pending` field whose package-branch pair has no
-`active` field, atomically deletes the `pending` entry and creates an `active` entry
-with the same value. Implemented as a **Lua script** running inside Redis, so the
-scan-check-promote is a single atomic operation — multiple concurrent workers cannot
+**`pick_next_job()`** — Prioritizes `recovery` over `pending`, then atomically
+deletes the selected field and creates the canonical `active` field. The same
+Lua script also initializes the heartbeat. Multiple concurrent workers cannot
 pick the same job.
 
-```lua
--- Scans all fields, finds a :pending without a matching :active,
--- atomically promotes it.
-local hash = KEYS[1]
-local fields = redis.call('HGETALL', hash)
-for i = 1, #fields, 2 do
-    local field = fields[i]
-    if string.sub(field, -8) == ':pending' then
-        local prefix = string.sub(field, 1, #field - 8)
-        local active_key = prefix .. ':active'
-        if redis.call('HEXISTS', hash, active_key) == 0 then
-            redis.call('HDEL', hash, field)
-            redis.call('HSET', hash, active_key, fields[i + 1])
-            return {field, fields[i + 1]}
-        end
-    end
-end
-return nil
-```
+**`refresh_active_heartbeat(package, branch, payload)`** — Atomically refreshes
+the heartbeat only while the active payload still matches the worker's payload.
+The worker aborts if ownership is lost or Redis remains unavailable long enough
+for the lease to expire.
 
-**`complete_job(package, branch)`** — Deletes the `active` field after the workflow
-finishes (success or failure), freeing the slot for the next pending job.
+**`complete_job(package, branch, payload)`** — Atomically deletes the active
+payload and heartbeat only when the payload still belongs to that worker.
+
+**Cancellation and stale recovery** — A cancelled worker atomically moves its
+matching active payload to `recovery`. The poller also moves active jobs whose
+heartbeat has expired to `recovery`, using a compare-and-move operation. This
+preserves work across planned redeployments and hard crashes without allowing
+an older worker to delete or requeue a replacement worker's job.
 
 ### Why a Hash Instead of a List/Stream?
 
@@ -116,6 +110,8 @@ finishes (success or failure), freeing the slot for the next pending job.
 - **At-most-one-active guarantee**: A worker checks for an existing `active` key
   before promoting, all within a single Lua script.
 - **Visibility**: `HGETALL` gives a full snapshot of all in-flight work.
+- **Crash recovery**: Heartbeat expiry and cancellation move jobs to durable
+  recovery storage rather than relying on a list requeue.
 
 ## Workflow Steps
 

@@ -213,6 +213,35 @@ class TestRunTaskLoopShutdown:
         assert fake_redis.rpush_calls == [(b"queue1", b"payload1")]
 
     @pytest.mark.asyncio
+    async def test_orphaned_poll_uses_custom_recovery_without_repush(self):
+        fake_redis = FakeRedis()
+        fake_redis.arm_delayed_result((b"synthetic", b"payload1"))
+        shutdown_event = asyncio.Event()
+        recovered = []
+
+        async def recover(payload):
+            recovered.append(payload)
+
+        loop_task = asyncio.create_task(
+            run_task_loop(
+                fake_redis,
+                [],
+                _noop,
+                max_concurrent=1,
+                shutdown_event=shutdown_event,
+                recovery_fn=recover,
+            )
+        )
+        await _wait_until(lambda: fake_redis.brpop_calls >= 1)
+        shutdown_event.set()
+        await asyncio.sleep(0.05)
+        fake_redis.release_delayed()
+        await asyncio.wait_for(loop_task, timeout=1)
+
+        assert recovered == [b"payload1"]
+        assert fake_redis.rpush_calls == []
+
+    @pytest.mark.asyncio
     async def test_orphaned_poll_natural_timeout_repushes_nothing(self):
         """If the in-flight BRPOP that was abandoned on shutdown resolves
         with None (a natural timeout, no data arrived), there's nothing to

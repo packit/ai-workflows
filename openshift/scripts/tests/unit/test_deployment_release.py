@@ -516,4 +516,4 @@ def test_finalize_tags_source_revision_with_minimal_annotation(monkeypatch):
     assert tag_command[:3] == ("tag", "--annotate", "--message")
     assert tag_command[3] == "Automated deployment"
     assert tag_command[-1] == source_head
-    assert commands[1] == ("push", "upstream", tag)
+    assert commands[1] == ("push", "--progress", "upstream", tag)

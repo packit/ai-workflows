@@ -17,6 +17,11 @@ data:
       otlphttp/trace-server:
         endpoint: http://localhost:8080
         encoding: json
+      otlphttp/langfuse:
+        endpoint: https://us.cloud.langfuse.com/api/public/otel
+        headers:
+          Authorization: "Basic ${env:LANGFUSE_AUTH}"
+          x-langfuse-ingestion-version: "4"
     extensions:
       health_check:
         endpoint: 0.0.0.0:13133
@@ -25,4 +30,4 @@ data:
       pipelines:
         traces:
           receivers: [otlp]
-          exporters: [otlphttp/phoenix, otlphttp/trace-server]
+          exporters: [otlphttp/phoenix, otlphttp/trace-server, otlphttp/langfuse]

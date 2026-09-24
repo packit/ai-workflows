@@ -63,6 +63,7 @@ class AgentSpanProcessor(SpanProcessor):
             jira_issue = current_jira_issue.get()
             if jira_issue:
                 span.set_attribute("jira.issue", jira_issue)
+                span.set_attribute("langfuse.session.id", jira_issue)
             workflow = current_workflow.get()
             if workflow:
                 span.set_attribute("workflow.name", workflow)

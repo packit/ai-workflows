@@ -32,6 +32,12 @@ spec:
       - name: otel-collector
         image: docker.io/otel/opentelemetry-collector-contrib
         imagePullPolicy: IfNotPresent
+        env:
+        - name: LANGFUSE_AUTH
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-credentials
+              key: auth
         ports:
         - containerPort: 4318
           protocol: TCP

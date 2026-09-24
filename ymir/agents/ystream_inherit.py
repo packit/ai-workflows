@@ -412,6 +412,38 @@ def _validate_patch_usage(spec_path: Path, patch_files: list[str]) -> None:
                 )
 
 
+def normalize_first_inherited_patch_applications(
+    spec_path: Path, original_spec: str, patch_files: list[str]
+) -> None:
+    """Use modern explicit application syntax when adding the first patches."""
+    if not patch_files:
+        return
+    with Specfile(content=original_spec, sourcedir=spec_path.parent) as original:
+        # RPM's parsed view omits declarations in inactive conditionals.
+        with original.sections() as original_sections:
+            has_patch_declaration = (
+                any(re.match(r"(?i)^\s*Patch\d*\s*:", line) for line in original_sections.package)
+                or "patchlist" in original_sections
+            )
+        if has_patch_declaration or any(get_all_patches(original)):
+            return
+
+    with Specfile(spec_path) as spec:
+        patch_numbers = {
+            patch.number for patch in get_all_patches(spec) if patch.valid and patch.filename in patch_files
+        }
+        if not patch_numbers:
+            return
+        with spec.sections() as sections:
+            if "prep" not in sections:
+                return
+            prep = sections.prep
+            for index, line in enumerate(prep):
+                match = re.match(r"(\s*)%patch(\d+)(?=\s|$)", line)
+                if match and int(match.group(2)) in patch_numbers:
+                    prep[index] = f"{match.group(1)}%patch -P {match.group(2)}{line[match.end() :]}"
+
+
 async def verify_inherited_patches(clone_path: Path, change: IntegratedChange) -> None:
     """Require every inherited patch to remain byte-for-byte equal to its source Git blob."""
     for patch_file, expected_blob in change.patch_blob_ids.items():

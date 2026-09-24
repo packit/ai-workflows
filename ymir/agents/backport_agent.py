@@ -73,6 +73,7 @@ from ymir.agents.ystream_inherit import (
     apply_zstream_change,
     ensure_single_ymir_attribution,
     find_zstream_fix_commit,
+    normalize_first_inherited_patch_applications,
     reset_inherit_attempt,
     resolve_brew_source,
     rewrite_commit_message,
@@ -1128,6 +1129,15 @@ async def run_workflow(
                     raise InheritCandidateError(
                         f"Inheritance adaptation reported {adaptation.strategy} without patch files"
                     )
+                original_spec, _ = await check_subprocess(
+                    ["git", "show", f"{state.inherit_saved_head}:{state.package}.spec"],
+                    cwd=state.local_clone,
+                )
+                normalize_first_inherited_patch_applications(
+                    state.local_clone / f"{state.package}.spec",
+                    original_spec,
+                    state.inherit_change.patch_files,
+                )
                 await validate_inherited_adaptation(
                     state.local_clone,
                     state.package,

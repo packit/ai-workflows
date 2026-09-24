@@ -21,6 +21,8 @@
    b. Unless the spec uses `%autosetup` or `%autopatch` (which apply patches
       automatically), the `%prep` section has a corresponding `%patch` directive
       for each new tag, with the correct `-p` strip level.
+      For the first patch in a spec, use `%patch -P N`; otherwise follow the
+      existing application format.
       (Skip if no patch files were generated.)
    c. All pre-existing `Patch:` tags and their `%patch` directives remain
       present with the same tag numbers and `-p` arguments as before.

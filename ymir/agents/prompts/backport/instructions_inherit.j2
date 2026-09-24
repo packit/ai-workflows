@@ -14,6 +14,12 @@ their functional packaging intent on the target spec, accounting for differences
 in patch numbering, conditional layout, and %prep style. For a spec-only fix,
 apply the smallest equivalent logical change.
 
+When adding the target spec's first patch, use `%patch -P N` for any explicit
+application in %prep (for example, `%patch -P 0 -p1`). If the target already
+has patches, follow its established application format. The target's existing
+format takes precedence over the source spec diff. Do not add an explicit
+application when `%autosetup` or `%autopatch` already applies the new patch.
+
 Preserve the target Name, Epoch, Version, Release, Source tags, and %changelog
 section exactly. Release and changelog updates are handled by deterministic
 workflow steps after your work is audited.

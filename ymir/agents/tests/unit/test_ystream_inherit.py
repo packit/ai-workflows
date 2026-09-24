@@ -258,6 +258,12 @@ test
             "# keep this comment\n  %patch0 -p1 -b .backup\n%patch1 -p0",
             "# keep this comment\n  %patch -P 0 -p1 -b .backup\n%patch -P 1 -p0",
         ),
+        (
+            "",
+            "%setup -q",
+            "  %patch 0 -p1 -b .backup",
+            "  %patch -P 0 -p1 -b .backup",
+        ),
         ("", "%autosetup -p1", "%autosetup -p1", "%autosetup -p1"),
         ("Patch0: existing.patch", "%patch0 -p1", "%patch0 -p1\n%patch1 -p1", "%patch0 -p1\n%patch1 -p1"),
         (

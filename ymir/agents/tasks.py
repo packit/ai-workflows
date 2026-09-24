@@ -27,6 +27,8 @@ from ymir.common.merge_queue import (  # noqa: F401 — re-exported for agents a
     _consolidation_field_key,
     complete_job,
     pick_next_job,
+    refresh_active_heartbeat,
+    requeue_active_job,
     submit_merge_job,
     sweep_stale_active_jobs,
 )

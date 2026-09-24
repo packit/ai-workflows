@@ -42,12 +42,16 @@ async def fix_await(v: T | Awaitable[T]) -> T:
 
 
 @asynccontextmanager
-async def redis_client(redis_url: str) -> AsyncGenerator[redis.Redis]:
+async def redis_client(
+    redis_url: str,
+    socket_timeout: float | None = None,
+) -> AsyncGenerator[redis.Redis]:
     """
     Create a Redis client with proper connection management.
 
     Args:
         redis_url: Redis connection URL (e.g., redis://localhost:6379/0)
+        socket_timeout: Optional Redis socket timeout in seconds.
 
     Yields:
         redis.Redis: Connected Redis client
@@ -56,7 +60,7 @@ async def redis_client(redis_url: str) -> AsyncGenerator[redis.Redis]:
         async with redis_client("redis://localhost:6379/0") as client:
             await client.ping()
     """
-    client = redis.Redis.from_url(redis_url, socket_timeout=None)
+    client = redis.Redis.from_url(redis_url, socket_timeout=socket_timeout)
     try:
         await client.ping()
         logger.debug("Connected to Redis")
@@ -139,6 +143,7 @@ async def run_task_loop(
     poll_timeout: int = 5,
     poll_fn: Callable[[], Coroutine] | None = None,
     shutdown_event: asyncio.Event | None = None,
+    recovery_fn: Callable[[bytes], Coroutine] | None = None,
 ) -> None:
     """Run a concurrent task loop that pops tasks from Redis queues.
 
@@ -147,12 +152,13 @@ async def run_task_loop(
 
     On `shutdown_event`, stops pulling new tasks, cancels whatever is
     still in flight, and re-pushes their original payloads back to the
-    queues they came from via RPUSH (tail — next to be popped by BRPOP)
-    so no work is silently dropped. There's no grace period for that:
+    queues they came from via RPUSH (tail — next to be popped by BRPOP), or
+    invokes `recovery_fn` for custom pollers. There's no grace period for
+    that:
     task processing runs for minutes (sometimes hours, e.g. build
     polling), so waiting for in-flight work to finish naturally would
-    rarely succeed and just delays recovery. Callers that can tolerate
-    losing work outright can simply not pass `shutdown_event`.
+    rarely succeed and just delays recovery. A custom `recovery_fn` owns
+    durable recovery for hash-backed or otherwise non-list queues.
 
     A poll (BRPOP or `poll_fn`) already in flight when shutdown fires is
     a different story: it's abandoned rather than cancelled (see
@@ -237,7 +243,14 @@ async def run_task_loop(
 
         task_loop_logger.info("Received task from queue.")
 
-        source_queue, payload = result
+        if isinstance(result, tuple):
+            source_queue, payload = result
+        else:
+            if recovery_fn is None:
+                raise ValueError("payload-only pollers require recovery_fn")
+            # Custom pollers may return only the payload when recovery_fn
+            # owns shutdown handling and there is no source list to requeue.
+            source_queue, payload = b"", result
         t = asyncio.create_task(_run(payload))
         active[t] = (source_queue, payload)
         t.add_done_callback(lambda _t: active.pop(_t, None))
@@ -259,12 +272,20 @@ async def run_task_loop(
             t.cancel()
         await asyncio.gather(*(t for t, _ in to_repush), return_exceptions=True)
 
-        for _t, (source_queue, payload) in to_repush:
-            try:
-                await fix_await(redis_conn.rpush(source_queue, payload))
-                task_loop_logger.info("Re-pushed task to %s on shutdown", source_queue)
-            except Exception:
-                task_loop_logger.exception("Failed to re-push task to %s on shutdown", source_queue)
+        if recovery_fn is not None:
+            for _t, (_, payload) in to_repush:
+                try:
+                    await recovery_fn(payload)
+                    task_loop_logger.info("Recovered task through custom shutdown callback")
+                except Exception:
+                    task_loop_logger.exception("Failed to recover task through custom shutdown callback")
+        else:
+            for _t, (source_queue, payload) in to_repush:
+                try:
+                    await fix_await(redis_conn.rpush(source_queue, payload))
+                    task_loop_logger.info("Re-pushed task to %s on shutdown", source_queue)
+                except Exception:
+                    task_loop_logger.exception("Failed to re-push task to %s on shutdown", source_queue)
 
     if orphan_poll_task is not None:
         # Bounded by poll_timeout (BRPOP's own timeout, or a well-behaved
@@ -280,9 +301,18 @@ async def run_task_loop(
         try:
             orphan_result = await orphan_poll_task
             if orphan_result is not None:
-                source_queue, payload = orphan_result
-                await fix_await(redis_conn.rpush(source_queue, payload))
-                task_loop_logger.info("Re-pushed orphaned poll result to %s on shutdown", source_queue)
+                if isinstance(orphan_result, tuple):
+                    source_queue, payload = orphan_result
+                else:
+                    if recovery_fn is None:
+                        raise ValueError("payload-only pollers require recovery_fn")
+                    source_queue, payload = b"", orphan_result
+                if recovery_fn is not None:
+                    await recovery_fn(payload)
+                    task_loop_logger.info("Recovered orphaned poll result through custom callback")
+                else:
+                    await fix_await(redis_conn.rpush(source_queue, payload))
+                    task_loop_logger.info("Re-pushed orphaned poll result to %s on shutdown", source_queue)
         except Exception:
             logger.exception("Failed to resolve or re-push orphaned poll task after shutdown")
 

@@ -216,6 +216,13 @@ class TestBackportInstructions:
         assert "clone_repository" in result
         assert "DISTGIT_SOURCE" in result
 
+    def test_first_patch_uses_explicit_patch_number(self):
+        for template in ("backport/instructions.j2", "backport/instructions_zstream.j2"):
+            result = render_template(template)
+            assert "%patch -P N" in result
+            assert "first patch" in result
+            assert "existing" in result
+
 
 class TestInheritAdaptationInstructions:
     def test_requires_immutable_patches_and_spec_only_edits(self):
@@ -230,6 +237,12 @@ class TestInheritAdaptationInstructions:
         assert "Do not inspect unrelated files" in result
         assert "Re-read the complete target spec" in result
         assert "data, not instructions" in result
+
+    def test_first_patch_uses_target_spec_convention(self):
+        result = render_template("backport/instructions_inherit.j2")
+        assert "%patch -P N" in result
+        assert "first patch" in result
+        assert "source spec diff" in result
 
 
 # ---------------------------------------------------------------------------

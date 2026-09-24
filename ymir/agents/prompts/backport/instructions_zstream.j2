@@ -249,6 +249,11 @@ a backport that won't actually fix the shipped RPM.
             per commit instead of `git_patch_create`
 
 4. Update the spec file. Add new `Patch` tag(s) for each patch file generated above.
+   When adding the spec's first patch, use `%patch -P N` for any explicit
+   application in `%prep` (for example, `%patch -P 0 -p1`). If the spec already
+   has patches, follow its established application format, even if the source
+   commit uses another spelling. Do not add an explicit application when
+   `%autosetup` or `%autopatch` applies the patch.
    Add the new `Patch` tag(s) after all existing `Patch` tags and, if `Patch` tags are numbered,
    make sure they have the highest numbers. Make sure each patch is applied in the "%prep" section
    and the `-p` argument is correct. Do NOT add any comments to the spec file.

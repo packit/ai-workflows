@@ -27,6 +27,16 @@ make run-triage-agent-e2e-tests
 make run-backport-agent-e2e-tests
 ```
 
+To skip specific backport issues, pass a comma-separated list:
+
+```bash
+make run-backport-agent-e2e-tests BACKPORT_E2E_EXCLUDE_ISSUES=RHEL-218065,RHEL-112546
+```
+
+The variable can also be set in the shell environment, including for direct
+Compose runs. It defaults to empty, so no issues are excluded by this option
+unless explicitly listed.
+
 #### Manual Execution
 
 If running pytest directly, you MUST set the env vars:

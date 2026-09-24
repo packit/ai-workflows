@@ -17,6 +17,7 @@ from ymir.agents.utils import (
     run_tool,
 )
 from ymir.common.constants import JiraLabels
+from ymir.common.cve import extract_cve_ids
 from ymir.common.models import (
     ApplicabilityResult,
     ConsolidatedIssue,
@@ -26,7 +27,6 @@ from ymir.common.models import (
     TriageEligibility,
 )
 from ymir.common.utils import FIXED_IN_BUILD_CUSTOM_FIELD, check_build_in_buildroot
-from ymir.tools.privileged.jira import extract_cve_ids
 
 logger = logging.getLogger(__name__)
 

@@ -58,6 +58,10 @@ These are AI-powered agents that use the MCP Server tools to interact with Jira:
 
 *These agents access Jira ONLY through MCP tools like `get_jira_details()`, `add_jira_comment()`, etc.*
 
+CVE extraction from summary text lives in `ymir/common/cve.py`. Agents import
+this shared parser directly so parsing does not load the privileged Jira client
+or its `MOCK_JIRA` implementation and `flexmock` dependency.
+
 ### Python Services (Direct Jira API Access)
 
 Traditional Python services that make direct HTTP calls to Jira:

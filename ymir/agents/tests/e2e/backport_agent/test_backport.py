@@ -6,9 +6,9 @@ import shutil
 from pathlib import Path
 
 import pytest
-from tabulate import tabulate
-from unidiff import PatchSet
+from specfile.utils import EVR
 
+from ymir.agents import tasks as agent_tasks
 from ymir.agents.backport_agent import (
     BackportState,
     create_backport_agent,
@@ -25,6 +25,7 @@ from ymir.agents.tests.e2e.backport_agent.evaluation import BackportEvaluator
 from ymir.common.mock_repos import (
     apply_zstream_override,
     cleanup_mock_gitconfig,
+    get_zstream_build_refs,
     load_all_fixture_configs,
     setup_mock_repos,
 )
@@ -120,9 +121,15 @@ test_cases = _load_test_cases(os.getenv("BACKPORT_MOCK_REPOS_DIR") or str(DEFAUL
 
 def _parametrize_cases():
     """Build pytest.param list, tagging slow cases with ``pytest.mark.slow``."""
+    excluded_issues = {
+        issue.strip() for issue in os.getenv("BACKPORT_E2E_EXCLUDE_ISSUES", "").split(",") if issue.strip()
+    }
     params = []
     for tc in test_cases:
         marks = [pytest.mark.slow] if tc.slow else []
+        if tc.jira_issue in excluded_issues:
+            tc.skip_reason = "excluded by BACKPORT_E2E_EXCLUDE_ISSUES"
+            marks.append(pytest.mark.skip(reason=tc.skip_reason))
         params.append(pytest.param(tc, id=tc.jira_issue, marks=marks))
     return params
 
@@ -151,9 +158,21 @@ def observability_fixture():
 SHARED_BARE_REPOS_DIR = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / "mock_bare"
 
 
+def _selected_test_cases(request) -> list[BackportAgentTestCase]:
+    """Use the same pytest selection for repository setup and workflow execution."""
+    selected = {
+        item.callspec.params["test_case"]
+        for item in request.session.items
+        if hasattr(item, "callspec")
+        and "test_case" in item.callspec.params
+        and not any(item.iter_markers(name="skip"))
+    }
+    return [tc for tc in test_cases if tc in selected]
+
+
 @pytest.fixture(scope="session", autouse=True)
-def mock_centos_stream_repos():
-    """Clone CentOS Stream RPM repos at pre-fix state for each backport test case.
+def mock_centos_stream_repos(request):
+    """Clone RPM repos at pre-fix state for selected backport test cases.
 
     Bare clones are placed in the shared ``/git-repos/`` volume so that both
     the test container and the MCP gateway can access them.
@@ -165,10 +184,12 @@ def mock_centos_stream_repos():
     case its own ``insteadOf`` scope.
 
     Yields:
-        Control to the test session after repos are prepared.
+        Selected fixture configurations after their repos are prepared.
     """
     fixtures_dir = os.getenv("BACKPORT_MOCK_REPOS_DIR") or str(DEFAULT_FIXTURES_DIR)
     configs = load_all_fixture_configs(fixtures_dir)
+    cases_to_run = _selected_test_cases(request)
+    configs = {tc.jira_issue: configs[tc.jira_issue] for tc in cases_to_run}
 
     if SHARED_BARE_REPOS_DIR.exists():
         shutil.rmtree(SHARED_BARE_REPOS_DIR)
@@ -181,18 +202,20 @@ def mock_centos_stream_repos():
 
         setup_mock_repos(repos, issue_key, SHARED_BARE_REPOS_DIR)
 
-        for tc in test_cases:
+        for tc in cases_to_run:
             if tc.jira_issue == issue_key:
                 tc.zstream_override = config.get("zstream_override")
                 break
 
-    yield
+    yield configs
 
     cleanup_mock_gitconfig()
 
 
 def _files_touched_by_patch(patch_text: str) -> set[str]:
     """Extract the set of file paths modified by a unified diff."""
+    from unidiff import PatchSet
+
     patch_set = PatchSet(patch_text)
     return {patched_file.path for patched_file in patch_set}
 
@@ -212,21 +235,36 @@ def _load_reference_patch(test_case: "BackportAgentTestCase") -> str | None:
 @pytest.fixture(scope="session", autouse=True)
 def run_test_cases_concurrently(request, mock_centos_stream_repos):
     """Execute selected backport test cases concurrently via asyncio.gather, then collect metrics."""
-    selected = {
-        item.callspec.params["test_case"]
-        for item in request.session.items
-        if hasattr(item, "callspec")
-        and "test_case" in item.callspec.params
-        and not any(item.iter_markers(name="skip"))
-    }
-    cases_to_run = [tc for tc in test_cases if tc in selected]
+    cases_to_run = _selected_test_cases(request)
 
     async def _run_all():
         await asyncio.gather(*(tc.run() for tc in cases_to_run))
 
-    asyncio.run(_run_all())
+    selected_configs = {tc.jira_issue: mock_centos_stream_repos[tc.jira_issue] for tc in cases_to_run}
+    fixed_build_refs = get_zstream_build_refs(selected_configs)
+    live_candidate_lookup = agent_tasks.get_latest_candidate_build
+    live_z_pending_lookup = agent_tasks.get_latest_z_pending_build
+
+    async def _fixed_or_live_candidate(package: str, branch: str):
+        ref = fixed_build_refs.get((package, branch))
+        if ref is not None:
+            return EVR(epoch=0, version="0", release="0"), ref
+        return await live_candidate_lookup(package, branch)
+
+    async def _fixed_or_live_z_pending(package: str, branch: str):
+        ref = fixed_build_refs.get((package, branch))
+        if ref is not None:
+            return EVR(epoch=0, version="0", release="0"), ref
+        return await live_z_pending_lookup(package, branch)
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(agent_tasks, "get_latest_candidate_build", _fixed_or_live_candidate)
+        monkeypatch.setattr(agent_tasks, "get_latest_z_pending_build", _fixed_or_live_z_pending)
+        asyncio.run(_run_all())
 
     yield
+
+    from tabulate import tabulate
 
     collected_metrics = []
     for test_case in cases_to_run:

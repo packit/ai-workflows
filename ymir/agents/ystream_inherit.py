@@ -439,9 +439,11 @@ def normalize_first_inherited_patch_applications(
                 return
             prep = sections.prep
             for index, line in enumerate(prep):
-                match = re.match(r"(\s*)%patch(\d+)(?=\s|$)", line)
-                if match and int(match.group(2)) in patch_numbers:
-                    prep[index] = f"{match.group(1)}%patch -P {match.group(2)}{line[match.end() :]}"
+                match = re.match(r"([ \t]*)%patch(?:(\d+)|[ \t]+(\d+))(?=[ \t]|$)", line)
+                if match:
+                    patch_number = match.group(2) or match.group(3)
+                    if int(patch_number) in patch_numbers:
+                        prep[index] = f"{match.group(1)}%patch -P {patch_number}{line[match.end() :]}"
 
 
 async def verify_inherited_patches(clone_path: Path, change: IntegratedChange) -> None:

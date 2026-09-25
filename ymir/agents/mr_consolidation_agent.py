@@ -34,7 +34,13 @@ from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
 from ymir.agents.package_update_steps import PackageUpdateState
 from ymir.agents.reasoning_agent import ReasoningAgent
-from ymir.agents.tasks import complete_job, pick_next_job, sweep_stale_active_jobs
+from ymir.agents.tasks import (
+    complete_job,
+    pick_next_job,
+    refresh_active_heartbeat,
+    requeue_active_job,
+    sweep_stale_active_jobs,
+)
 from ymir.agents.utils import (
     _PROMPTS_DIR,
     _get_jinja2_env,
@@ -86,6 +92,11 @@ from ymir.tools.unprivileged.wicked_git import (
 
 logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")
+
+
+class ConsolidationOwnershipLostError(RuntimeError):
+    """Raised when another worker has taken over an active job."""
+
 
 _NFS_CACHE_WAIT = 60
 _COPR_PROJECT_NAME_MAX_LENGTH = 100
@@ -1820,30 +1831,79 @@ async def main() -> None:
 
     logger.info("Starting MR consolidation agent in queue mode")
     max_concurrent_tasks = int(os.getenv("MAX_CONCURRENT_TASKS", 1))
+    stale_threshold = timedelta(hours=int(os.getenv("STALE_ACTIVE_THRESHOLD_HOURS", "6")))
+    heartbeat_interval = max(
+        1.0,
+        min(
+            float(os.getenv("ACTIVE_HEARTBEAT_INTERVAL_SECONDS", "300")),
+            stale_threshold.total_seconds() / 2,
+        ),
+    )
+    heartbeat_socket_timeout = max(1.0, heartbeat_interval / 2)
 
-    async with redis_client(os.environ["REDIS_URL"]) as redis_conn:
-        stale_threshold = timedelta(hours=int(os.getenv("STALE_ACTIVE_THRESHOLD_HOURS", "6")))
+    async with (
+        redis_client(os.environ["REDIS_URL"]) as redis_conn,
+        redis_client(
+            os.environ["REDIS_URL"], socket_timeout=heartbeat_socket_timeout
+        ) as heartbeat_redis_conn,
+    ):
 
-        async def poll_consolidation_queue() -> tuple[bytes, bytes] | None:
+        async def poll_consolidation_queue() -> bytes | None:
             await sweep_stale_active_jobs(redis_conn, threshold=stale_threshold)
             job = await pick_next_job(redis_conn)
             if job is None:
                 return None
             redis_logger.info("Picked job for %s/%s", job.package, job.target_branch)
-            # This queue is a Redis Hash (pick_next_job/complete_job), not a
-            # list run_task_loop can RPUSH back into on shutdown — re-push
-            # doesn't apply here.  On cancellation, process_task leaves the
-            # :active field in place (see its CancelledError handler).
-            # The sentinel is only so a cancelled job still satisfies
-            # run_task_loop's generic (source_queue, payload) bookkeeping;
-            # nothing ever reads from it.
-            return b"mr_consolidation", job.model_dump_json().encode()
+            # This queue is hash-backed, so run_task_loop delegates shutdown
+            # recovery to recover_orphaned_job instead of re-pushing a list
+            # payload.
+            return job.model_dump_json().encode()
+
+        async def recover_orphaned_job(payload: bytes) -> None:
+            job = MergeConsolidationJob.model_validate_json(payload)
+            await requeue_active_job(redis_conn, job.package, job.target_branch, payload)
 
         async def process_task(payload: bytes) -> None:
             job = MergeConsolidationJob.model_validate_json(payload)
             jira_key = ",".join(job.source_issues) if job.source_issues else None
             current_jira_issue.set(jira_key)
-            try:
+
+            async def heartbeat() -> None:
+                last_success = time.monotonic()
+                lease_timeout = max(1.0, stale_threshold.total_seconds() - heartbeat_interval)
+                while True:
+                    await asyncio.sleep(heartbeat_interval)
+                    try:
+                        owned = await refresh_active_heartbeat(
+                            heartbeat_redis_conn,
+                            job.package,
+                            job.target_branch,
+                            payload,
+                        )
+                    except Exception as err:
+                        logger.warning(
+                            "Failed to refresh consolidation heartbeat for %s/%s",
+                            job.package,
+                            job.target_branch,
+                            exc_info=True,
+                        )
+                        if time.monotonic() - last_success >= lease_timeout:
+                            raise ConsolidationOwnershipLostError(
+                                f"heartbeat unavailable for {job.package}/{job.target_branch}"
+                            ) from err
+                        continue
+                    last_success = time.monotonic()
+                    if not owned:
+                        logger.warning(
+                            "Lost ownership of consolidation job %s/%s",
+                            job.package,
+                            job.target_branch,
+                        )
+                        raise ConsolidationOwnershipLostError(
+                            f"active payload changed for {job.package}/{job.target_branch}"
+                        )
+
+            async def run_owned_workflow():
                 with span_processor.start_transaction(
                     jira_key,
                     workflow="MRConsolidationWorkflow",
@@ -1852,7 +1912,7 @@ async def main() -> None:
                         "RELEASE_STRATEGY",
                         "per_commit",
                     )
-                    state = await run_workflow(
+                    return await run_workflow(
                         package=job.package,
                         dist_git_branch=job.target_branch,
                         redis_conn=redis_conn,
@@ -1861,26 +1921,43 @@ async def main() -> None:
                         source_issues=job.source_issues,
                         release_strategy=job_strategy,
                     )
-                    if state.consolidation_result and state.consolidation_result.success:
-                        logger.info(
-                            "Consolidation succeeded for %s/%s",
-                            job.package,
-                            job.target_branch,
-                        )
-                    else:
-                        logger.warning(
-                            "Consolidation failed for %s/%s: %s",
-                            job.package,
-                            job.target_branch,
-                            state.consolidation_result.error if state.consolidation_result else "unknown",
-                        )
+
+            workflow_task = asyncio.create_task(run_owned_workflow())
+            heartbeat_task = asyncio.create_task(heartbeat())
+
+            async def drain(task: asyncio.Task) -> None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+            try:
+                done, _ = await asyncio.wait(
+                    {workflow_task, heartbeat_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if heartbeat_task in done:
+                    heartbeat_task.result()
+                state = await workflow_task
+                if state.consolidation_result and state.consolidation_result.success:
+                    logger.info("Consolidation succeeded for %s/%s", job.package, job.target_branch)
+                else:
+                    logger.warning(
+                        "Consolidation failed for %s/%s: %s",
+                        job.package,
+                        job.target_branch,
+                        state.consolidation_result.error if state.consolidation_result else "unknown",
+                    )
+                await complete_job(redis_conn, job.package, job.target_branch, payload)
             except asyncio.CancelledError:
-                # Deliberately leave the :active hash field alone — calling
-                # complete_job() here would silently erase the job.  This
-                # matches pre-PR behavior (SIGTERM killed the process
-                # outright, so finally never ran).  Proper recovery for
-                # stuck :active entries is separate follow-up work.
+                # Preserve the job for the next pod instead of letting the
+                # generic task-loop cleanup erase the hash entry.
+                await drain(workflow_task)
+                await requeue_active_job(redis_conn, job.package, job.target_branch, payload)
                 raise
+            except ConsolidationOwnershipLostError:
+                await drain(workflow_task)
+                logger.warning(
+                    "Aborted consolidation after losing ownership for %s/%s", job.package, job.target_branch
+                )
             except Exception:
                 logger.error(
                     "Unhandled error processing %s/%s:\n%s",
@@ -1888,9 +1965,10 @@ async def main() -> None:
                     job.target_branch,
                     traceback.format_exc(),
                 )
-                await complete_job(redis_conn, job.package, job.target_branch)
-            else:
-                await complete_job(redis_conn, job.package, job.target_branch)
+                await complete_job(redis_conn, job.package, job.target_branch, payload)
+            finally:
+                await drain(workflow_task)
+                await drain(heartbeat_task)
 
         shutdown_event = asyncio.Event()
         install_shutdown_handler(asyncio.get_running_loop(), shutdown_event)
@@ -1901,6 +1979,7 @@ async def main() -> None:
             max_concurrent=max_concurrent_tasks,
             poll_fn=poll_consolidation_queue,
             shutdown_event=shutdown_event,
+            recovery_fn=recover_orphaned_job,
         )
 
 

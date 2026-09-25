@@ -86,6 +86,7 @@ from ymir.common.version_utils import (
     normalize_fix_version,
     parse_module_stream,
     parse_rhel_version,
+    parse_zstream_branch_name,
 )
 from ymir.tools.privileged.utils import APPLICABILITY_DIR
 from ymir.tools.unprivileged.commands import RunShellCommandTool
@@ -98,21 +99,29 @@ logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")
 
 
-def _should_update_jira(resolution: Resolution = None, user_triggered: bool = False) -> bool:
+def _should_update_jira(
+    resolution: Resolution = None,
+    user_triggered: bool = False,
+    branch_creation_opt_out: bool = False,
+) -> bool:
     """Whether to post a user-facing Jira comment for this run.
 
     Used only for comments — labels are dedup anchors and are written
     unconditionally. Default is silent: comments are suppressed unless the
     run was explicitly requested by a maintainer (via ymir_todo) or the
     resolution carries information the requester needs even unbidden.
-    The unbidden cases are the resolutions that do NOT produce an MR —
-    without a comment the result would be invisible to the requester:
+    A manual branch creation hold is also always commented because it is an
+    actionable state that blocks downstream processing. Other unbidden cases
+    are the resolutions that do NOT produce an MR — without a comment the
+    result would be invisible to the requester:
     not-affected, postponed, open-ended-analysis, clarification-needed.
     ERROR resolutions are dispatched to retry() and commented once via
     post_terminal_error_comment() after retries are exhausted.
     """
     if resolution == Resolution.ERROR:
         return False
+    if branch_creation_opt_out:
+        return True
     if user_triggered:
         return True
     return resolution in (
@@ -457,6 +466,13 @@ class TriageState(BaseModel):
     cve_eligibility_result: CVEEligibilityResult | None = Field(default=None)
     triage_result: OutputSchema | None = Field(default=None)
     target_branch: str | None = Field(default=None)
+    target_branch_exists: bool | None = Field(
+        default=None,
+        description=(
+            "Whether an internal z-stream target branch already exists. "
+            "None means the target is not an internal z-stream branch or the check was unavailable."
+        ),
+    )
     dist_git_namespace: Literal["rhel", "centos-stream"] | None = Field(
         default=None,
         description=(
@@ -493,6 +509,46 @@ class TriageState(BaseModel):
             "Set to True when siblings are queued and this issue should wait for them to finish triaging."
         ),
     )
+    branch_creation_opt_out: bool | None = Field(
+        default=None,
+        description=(
+            "Set to True when the package's ymir.yaml disables automatic branch creation "
+            "and the target internal z-stream branch does not exist yet. None means "
+            "the policy was not applicable or could not be checked."
+        ),
+    )
+
+
+async def _record_target_branch_existence(state: TriageState, package: str, available_tools) -> None:
+    """Record whether an internal z-stream target branch exists for ``package``.
+
+    CentOS Stream and other non-z-stream targets intentionally leave the field
+    as ``None``. Callers handle failures as an unavailable check, preserving
+    the existing best-effort behavior of triage.
+    """
+    if not state.target_branch or parse_zstream_branch_name(state.target_branch) is None:
+        return
+
+    available_branches = await run_tool(
+        "get_internal_rhel_branches",
+        available_tools=available_tools,
+        package=package,
+    )
+    state.target_branch_exists = state.target_branch in available_branches
+
+
+async def _record_branch_creation_opt_out(state: TriageState, package: str, available_tools) -> None:
+    """Record the branch-creation policy after confirming a target branch is missing."""
+    if (
+        state.branch_creation_opt_out is not None
+        or state.target_branch_exists is not False
+        or not state.target_branch
+        or parse_zstream_branch_name(state.target_branch) is None
+    ):
+        return
+
+    branch_config = await tasks.fetch_branch_creation_config(package, available_tools)
+    state.branch_creation_opt_out = not branch_config.automatic
 
 
 def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgent:
@@ -883,6 +939,29 @@ async def run_workflow(
             else:
                 logger.warning(f"Could not determine target branch for {state.jira_issue}")
 
+            package = getattr(state.triage_result.data, "package", None)
+            if package:
+                try:
+                    await _record_target_branch_existence(state, package, gateway_tools)
+                except Exception as e:
+                    logger.warning(f"Failed to check branches for {package}: {e}")
+
+                try:
+                    await _record_branch_creation_opt_out(state, package, gateway_tools)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to read branch creation config for %s: %s; "
+                        "continuing with automatic branch creation",
+                        package,
+                        e,
+                    )
+                if state.branch_creation_opt_out is True:
+                    logger.info(
+                        "Automatic branch creation is disabled for %s; holding %s for manual branch creation",
+                        package,
+                        state.target_branch,
+                    )
+
             if (
                 state.cve_eligibility_result
                 and state.cve_eligibility_result.is_cve
@@ -966,41 +1045,60 @@ async def run_workflow(
             clone_branch = state.target_branch
             base_ref = None
             parsed = parse_rhel_version(state.target_branch)
-            if parsed:
+
+            # The initial branch-existence check runs while determining the
+            # target branch.  Retry it here when it was unavailable so a
+            # transient MCP failure does not suppress the fallback that the
+            # original applicability flow performed at this point.
+            if parsed and state.target_branch_exists is None:
+                try:
+                    await _record_target_branch_existence(state, package, gateway_tools)
+                except Exception as e:
+                    logger.warning(f"Failed to recheck branches for {package}: {e}")
+
+            if state.target_branch_exists is False and state.branch_creation_opt_out is None:
+                try:
+                    await _record_branch_creation_opt_out(state, package, gateway_tools)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to recheck branch creation config for %s: %s; "
+                        "continuing with automatic branch creation",
+                        package,
+                        e,
+                    )
+
+            if parsed and state.target_branch_exists is False:
                 major_version = parsed[0]
                 try:
-                    available_branches = await run_tool(
-                        "get_internal_rhel_branches",
-                        available_tools=gateway_tools,
-                        package=package,
-                    )
-                    if state.target_branch not in available_branches:
-                        if await is_older_zstream(state.target_branch):
-                            try:
-                                _, base_ref = await get_latest_candidate_build(package, state.target_branch)
-                                logger.info(
-                                    f"Branch {state.target_branch} not found for {package}, "
-                                    f"using base ref {base_ref} for applicability analysis"
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    f"Could not resolve base ref for {state.target_branch}: {e} — "
-                                    f"skipping applicability check"
-                                )
-                                state.applicability_check_skipped = True
-                                if state.triage_result.resolution == Resolution.REBUILD:
-                                    return "consolidate_rebuild_siblings"
-                                if state.triage_result.resolution == Resolution.REBASE:
-                                    return "consolidate_rebase_siblings"
-                                return "comment_in_jira"
-                        else:
-                            clone_branch = f"c{major_version}s"
-                            logger.info(
-                                f"Branch {state.target_branch} not found for {package}, "
-                                f"using {clone_branch} for applicability analysis"
-                            )
+                    older_zstream = await is_older_zstream(state.target_branch)
                 except Exception as e:
-                    logger.warning(f"Failed to check branches for {package}: {e}")
+                    logger.warning(f"Could not determine fallback branch for {state.target_branch}: {e}")
+                    older_zstream = None
+
+                if older_zstream is True:
+                    try:
+                        _, base_ref = await get_latest_candidate_build(package, state.target_branch)
+                        logger.info(
+                            f"Branch {state.target_branch} not found for {package}, "
+                            f"using base ref {base_ref} for applicability analysis"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not resolve base ref for {state.target_branch}: {e} — "
+                            f"skipping applicability check"
+                        )
+                        state.applicability_check_skipped = True
+                        if state.triage_result.resolution == Resolution.REBUILD:
+                            return "consolidate_rebuild_siblings"
+                        if state.triage_result.resolution == Resolution.REBASE:
+                            return "consolidate_rebase_siblings"
+                        return "comment_in_jira"
+                elif older_zstream is False:
+                    clone_branch = f"c{major_version}s"
+                    logger.info(
+                        f"Branch {state.target_branch} not found for {package}, "
+                        f"using {clone_branch} for applicability analysis"
+                    )
 
             try:
                 local_clone, unpacked_sources, prep_ok, builddir = await tasks.clone_and_prep_sources(
@@ -1260,10 +1358,23 @@ async def run_workflow(
                 comment_text += (
                     "\n\n_Note: CVE applicability check could not be performed (source preparation failed)._"
                 )
+            if state.branch_creation_opt_out is True:
+                comment_text += (
+                    "\n\n---\n"
+                    "Automatic branch creation is disabled for this package "
+                    f"(`ymir.yaml` → `branch_creation.automatic: false`). "
+                    f"Branch `{state.target_branch}` does not exist yet.\n\n"
+                    "To proceed, create the branch manually and retrigger processing "
+                    "by adding the `ymir_todo` label."
+                )
             logger.info(f"Result to be put in Jira comment: {comment_text}")
             if dry_run:
                 return Workflow.END
-            if not _should_update_jira(state.triage_result.resolution, user_triggered):
+            if not _should_update_jira(
+                resolution=state.triage_result.resolution,
+                user_triggered=user_triggered,
+                branch_creation_opt_out=state.branch_creation_opt_out is True,
+            ):
                 logger.info(
                     f"Skipping Jira comment for {state.jira_issue} "
                     f"(resolution={state.triage_result.resolution.value}, not user-triggered)"
@@ -1724,6 +1835,20 @@ async def main() -> None:
                 except Exception as e:
                     logger.warning(f"Failed to check if {input.issue} is sibling: {e}")
 
+                branch_creation_opt_out = (
+                    auto_chain
+                    and state.branch_creation_opt_out is True
+                    and output.resolution in (Resolution.REBASE, Resolution.BACKPORT, Resolution.REBUILD)
+                    and not (
+                        output.resolution == Resolution.REBASE
+                        and (
+                            is_sibling
+                            or state.rebase_waiting_for_siblings
+                            or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
+                        )
+                    )
+                )
+
                 if output.resolution in POSTPONED_RESOLUTIONS:
                     await label_postponed_issues(
                         jira_issue=input.issue, output=output, dry_run=dry_run, user_triggered=user_triggered
@@ -1758,6 +1883,9 @@ async def main() -> None:
                                 f"{input.issue} is waiting for siblings, skipping terminal label "
                                 "(will be added on re-triage after siblings finish)"
                             )
+
+                        if branch_creation_opt_out:
+                            labels_to_add.append(JiraLabels.MANUAL_BRANCH_NEEDED.value)
 
                         await tasks.set_jira_labels(
                             jira_issue=input.issue,
@@ -1901,7 +2029,14 @@ async def main() -> None:
                         else:
                             task = Task(metadata=state.model_dump(), user_triggered=user_triggered)
                             downstream_payload = task.model_dump_json()
-                            if output.resolution == Resolution.REBASE:
+                            if branch_creation_opt_out:
+                                logger.info(
+                                    "Skipping downstream dispatch for %s until branch %s is created manually",
+                                    input.issue,
+                                    state.target_branch,
+                                )
+                                queue = None
+                            elif output.resolution == Resolution.REBASE:
                                 # Skip queueing if this is a sibling (will be consolidated with primary)
                                 if is_sibling:
                                     logger.info(

@@ -391,7 +391,9 @@ async def main() -> None:
                     dist_git_namespace=state.dist_git_namespace,
                 )
                 local_tool_options["working_directory"] = state.local_clone
-                state.leading_zstream_branch = await tasks.find_leading_zstream_branch(state.dist_git_branch)
+                state.leading_zstream_branch = await tasks.find_leading_zstream_branch(
+                    state.dist_git_branch, local_clone=state.local_clone
+                )
                 return "run_rebase_agent"
 
             async def run_rebase_agent(state):

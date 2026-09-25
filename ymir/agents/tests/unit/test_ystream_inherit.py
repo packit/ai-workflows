@@ -13,6 +13,7 @@ from ymir.agents.ystream_inherit import (
     ensure_single_ymir_attribution,
     find_zstream_fix_commit,
     inspect_commit_files,
+    normalize_first_inherited_patch_applications,
     reset_inherit_attempt,
     resolve_brew_source,
     resolves_keys,
@@ -248,6 +249,61 @@ test
 """
 
 
+@pytest.mark.parametrize(
+    ("original_patches", "original_prep", "adapted_prep", "expected_prep"),
+    [
+        (
+            "",
+            "%setup -q",
+            "# keep this comment\n  %patch0 -p1 -b .backup\n%patch1 -p0",
+            "# keep this comment\n  %patch -P 0 -p1 -b .backup\n%patch -P 1 -p0",
+        ),
+        (
+            "",
+            "%setup -q",
+            "  %patch 0 -p1 -b .backup",
+            "  %patch -P 0 -p1 -b .backup",
+        ),
+        ("", "%autosetup -p1", "%autosetup -p1", "%autosetup -p1"),
+        ("Patch0: existing.patch", "%patch0 -p1", "%patch0 -p1\n%patch1 -p1", "%patch0 -p1\n%patch1 -p1"),
+        (
+            "%if 0\nPatch0: conditional.patch\n%endif",
+            "%setup -q",
+            "%setup -q\n%patch1 -p1",
+            "%setup -q\n%patch1 -p1",
+        ),
+        (
+            "%patchlist\nexisting.patch\n",
+            "%setup -q",
+            "%setup -q\n%patch1 -p1",
+            "%setup -q\n%patch1 -p1",
+        ),
+    ],
+)
+def test_normalize_first_inherited_patch_applications(
+    tmp_path, original_patches, original_prep, adapted_prep, expected_prep
+):
+    original = _spec(original_patches, original_prep)
+    spec_path = tmp_path / "package.spec"
+    spec_path.write_text(_spec("Patch0: fix.patch\nPatch1: second.patch", adapted_prep))
+
+    normalize_first_inherited_patch_applications(spec_path, original, ["fix.patch", "second.patch"])
+
+    assert spec_path.read_text() == _spec("Patch0: fix.patch\nPatch1: second.patch", expected_prep)
+
+
+def test_normalize_first_inherited_patch_applications_only_changes_inherited_macros(tmp_path):
+    original = _spec("", "%setup -q").replace("%description\ntest", "%description\ntest\nPatch0: example")
+    spec_path = tmp_path / "package.spec"
+    adapted = _spec("Patch0: fix.patch\nPatch1: other.patch", "%setup -q\n%patch0 -p1\n%patch1 -p1")
+    adapted = adapted.replace("%description\ntest", "%description\ntest\n# %patch0 is mentioned here")
+    spec_path.write_text(adapted)
+
+    normalize_first_inherited_patch_applications(spec_path, original, ["fix.patch"])
+
+    assert spec_path.read_text() == adapted.replace("%patch0 -p1", "%patch -P 0 -p1")
+
+
 @pytest.mark.asyncio
 async def test_apply_zstream_change_and_cleanup(tmp_path):
     _git(tmp_path, "init")
@@ -256,7 +312,7 @@ async def test_apply_zstream_change_and_cleanup(tmp_path):
     base_spec = _spec("", "%autosetup -p1")
     base = _commit(tmp_path, "package.spec", base_spec, "Base")
     _git(tmp_path, "checkout", "-b", "z")
-    (tmp_path / "package.spec").write_text(_spec("Patch0: cve.patch", "%autosetup -p1"))
+    (tmp_path / "package.spec").write_text(_spec("Patch0: cve.patch", "%setup -q\n%patch0 -p1"))
     (tmp_path / "cve.patch").write_text("fix\n")
     _git(tmp_path, "add", "package.spec", "cve.patch")
     _git(tmp_path, "commit", "-m", "Fix CVE\n\nResolves: RHEL-123")
@@ -269,6 +325,7 @@ async def test_apply_zstream_change_and_cleanup(tmp_path):
     assert result.patch_files == ["cve.patch"]
     assert result.patch_blob_ids == {"cve.patch": _git(tmp_path, "rev-parse", f"{fix}:cve.patch")}
     assert "Patch0: cve.patch" in result.source_spec_diff
+    assert "%patch0 -p1" in result.source_spec_diff
     assert (tmp_path / "cve.patch").read_text() == "fix\n"
     with Specfile(tmp_path / "package.spec") as spec:
         assert list(get_all_patches(spec)) == []
@@ -279,6 +336,12 @@ async def test_apply_zstream_change_and_cleanup(tmp_path):
     (tmp_path / "package.spec").write_text(_spec("Patch0: cve.patch", "%autosetup -N"))
     with pytest.raises(InheritCandidateError, match="applied exactly once"):
         await validate_inherited_adaptation(tmp_path, "package", base, result)
+
+    (tmp_path / "package.spec").write_text(_spec("Patch0: cve.patch", "%setup -q\n%patch0 -p1"))
+    normalize_first_inherited_patch_applications(tmp_path / "package.spec", base_spec, result.patch_files)
+    assert "%patch -P 0 -p1" in (tmp_path / "package.spec").read_text()
+    await verify_inherited_patches(tmp_path, result)
+    await validate_inherited_adaptation(tmp_path, "package", base, result)
 
     (tmp_path / "package.spec").write_text(_spec("Patch0: cve.patch", "%autosetup -p1"))
     await validate_inherited_adaptation(tmp_path, "package", base, result)

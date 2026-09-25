@@ -966,6 +966,19 @@ class PackageConsolidationConfig(BaseModel):
     )
 
 
+class PackageBranchCreationConfig(BaseModel):
+    """Machine-readable branch creation config from the per-package rules repo.
+
+    Parsed from the ``branch_creation`` section of
+    ``gitlab.com/redhat/centos-stream/rules/<package>/ymir.yaml``.
+    """
+
+    automatic: bool = Field(
+        default=True,
+        description="Whether Ymir may automatically create missing internal z-stream branches",
+    )
+
+
 class PackageReproducerConfig(BaseModel):
     """Machine-readable reproducer config from the per-package rules repo.
 

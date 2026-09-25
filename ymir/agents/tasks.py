@@ -38,6 +38,7 @@ from ymir.common.models import (
     ErrorListEntry,
     MergeRequestDetails,
     OpenMergeRequestResult,
+    PackageBranchCreationConfig,
     PackageConsolidationConfig,
     PackageReleaseBumpingConfig,
     PackageReproducerConfig,
@@ -361,6 +362,62 @@ async def prepare_dist_git_from_merge_request(
 
 class InvalidReleaseBumpingConfigError(Exception):
     """Raised when ymir.yaml exists but the release_bumping section cannot be parsed."""
+
+
+class InvalidBranchCreationConfigError(Exception):
+    """Raised when ymir.yaml exists but the branch_creation section cannot be parsed."""
+
+
+async def fetch_branch_creation_config(
+    package: str,
+    available_tools: list,
+) -> PackageBranchCreationConfig:
+    """Fetch the branch creation config from the per-package rules repo.
+
+    Reads the ``branch_creation`` section from ``ymir.yaml`` at
+    ``gitlab.com/redhat/centos-stream/rules/<package>``.
+    Returns the default config (automatic branch creation enabled) when the
+    file is absent, unreadable, or has no ``branch_creation`` key.
+
+    Raises:
+        InvalidBranchCreationConfigError: When the file exists but the
+            ``branch_creation`` section does not conform to the expected schema.
+
+    Args:
+        package: RPM package name.
+        available_tools: MCP gateway tools (must include ``get_maintainer_rules``).
+
+    Returns:
+        Parsed branch creation config.
+    """
+    try:
+        raw = await run_tool(
+            "get_maintainer_rules",
+            package=package,
+            file_path="ymir.yaml",
+            available_tools=available_tools,
+        )
+    except Exception as e:
+        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, e)
+        return PackageBranchCreationConfig()
+
+    if "not found" in raw.lower():
+        return PackageBranchCreationConfig()
+
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        raise InvalidBranchCreationConfigError(f"ymir.yaml for {package} is not valid YAML: {e}") from e
+
+    if not isinstance(data, dict) or "branch_creation" not in data:
+        return PackageBranchCreationConfig()
+
+    try:
+        return PackageBranchCreationConfig.model_validate(data["branch_creation"])
+    except Exception as e:
+        raise InvalidBranchCreationConfigError(
+            f"ymir.yaml branch_creation section for {package} is malformed: {e}"
+        ) from e
 
 
 async def fetch_release_bumping_config(

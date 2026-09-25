@@ -101,6 +101,18 @@ def test_non_user_triggered_skips_comment_when_mr_will_be_opened(resolution):
     assert _should_update_jira(resolution=resolution, user_triggered=False) is False
 
 
+def test_non_user_triggered_posts_manual_branch_creation_hold():
+    """A manual branch hold must be visible even when the resolution would normally be silent."""
+    assert (
+        _should_update_jira(
+            resolution=Resolution.REBASE,
+            user_triggered=False,
+            branch_creation_opt_out=True,
+        )
+        is True
+    )
+
+
 @pytest.mark.parametrize(
     "resolution",
     [
@@ -584,6 +596,30 @@ async def test_determine_target_branch_non_modular_has_no_explicit_namespace():
     )
     assert branch == "rhel-10.2"
     assert namespace is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("branch", "available_branches", "expected"),
+    [
+        ("rhel-9.9.0", ["rhel-9.9.0"], True),
+        ("rhel-10.3", [], False),
+        ("c10s", ["rhel-10.3"], None),
+    ],
+)
+async def test_record_target_branch_existence_only_checks_internal_zstreams(
+    branch, available_branches, expected
+):
+    state = TriageState(jira_issue="RHEL-100", target_branch=branch)
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        return available_branches
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    await t_agent._record_target_branch_existence(state, "bash", [])
+
+    assert state.target_branch_exists is expected
 
 
 # --- Per-issue lock tests ---

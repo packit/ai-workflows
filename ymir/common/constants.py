@@ -179,6 +179,10 @@ class JiraLabels(Enum):
 
     TRIAGED_REBUILD = "ymir_triaged_rebuild"
 
+    # Applied when package maintainers must create a missing internal
+    # z-stream branch before Ymir can continue processing the issue.
+    MANUAL_BRANCH_NEEDED = "ymir_manual_branch_needed"
+
     REBASED = "ymir_rebased"
     BACKPORTED = "ymir_backported"
     REBUILT = "ymir_rebuilt"

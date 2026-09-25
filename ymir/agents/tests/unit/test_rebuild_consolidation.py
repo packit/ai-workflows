@@ -11,6 +11,7 @@ def test_build_rebuild_siblings_jql():
     assert '"ymir_triaged_rebuild"' not in jql
     assert '"ymir_rebuilt"' not in jql
     assert '"ymir_triaged_not_affected"' in jql
+    assert '"ymir_triaged_already_fixed"' in jql
     assert '"ymir_triaged_backport"' in jql
     assert '"ymir_triaged_rebase"' in jql
     assert 'status in ("New", "Planning")' in jql

@@ -301,19 +301,27 @@ async def fork_and_prepare_dist_git(
     return local_clone, update_branch, fork_url, fedora_clone, zstream_branch_created
 
 
-async def find_leading_zstream_branch(dist_git_branch: str) -> str | None:
+async def find_leading_zstream_branch(
+    dist_git_branch: str,
+    local_clone: Path | None = None,
+) -> str | None:
     """Return the current (leading) z-stream branch if it is higher than *dist_git_branch*.
 
     Looks up the leading z-stream for the same RHEL major version from
     rhel-config.json and returns its dist-git branch name, or ``None`` when
     the branch is already the leading z-stream (or not a z-stream at all).
+
+    For terminal major versions (no active Y-stream, e.g. RHEL 8) the
+    dedicated z-stream branch may not exist because all work went to
+    ``rhel-<major>-main`` / ``c<major>s``.  When *local_clone* is provided
+    the function verifies the branch against remote refs and falls back to
+    those names.  Non-terminal majors always return the computed branch name
+    without verification.
     """
     parsed = parse_zstream_branch_name(dist_git_branch)
     if not parsed:
         return None
     major, minor_str = parsed
-
-    from ymir.common.config import load_rhel_config
 
     config = await load_rhel_config()
     current_zstream = (config.get("current_z_streams") or {}).get(major)
@@ -325,7 +333,33 @@ async def find_leading_zstream_branch(dist_git_branch: str) -> str | None:
     current_minor = int(current_parsed[1])
     if current_minor <= int(minor_str):
         return None
-    return construct_internal_branch_name(major, current_parsed[1])
+
+    leading = construct_internal_branch_name(major, current_parsed[1])
+
+    # For terminal major versions (no active Y-stream, e.g. RHEL 8) the
+    # dedicated z-stream branch may not exist because all work went to
+    # rhel-<major>-main / c<major>s.  Verify and fall back when a clone
+    # is available.
+    is_terminal = major not in (config.get("current_y_streams") or {})
+    if local_clone is None or not is_terminal:
+        return leading
+
+    for branch in (f"rhel-{major}-main", f"c{major}s"):
+        exit_code, _, _ = await run_subprocess(
+            ["git", "rev-parse", "--verify", f"origin/{branch}"],
+            cwd=local_clone,
+        )
+        if exit_code == 0:
+            logger.info(
+                "Terminal major %s: using %s instead of %s",
+                major,
+                branch,
+                leading,
+            )
+            return branch
+
+    logger.warning("Leading z-stream branch %s not found in %s", leading, local_clone)
+    return None
 
 
 async def prepare_dist_git_from_merge_request(

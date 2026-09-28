@@ -926,9 +926,7 @@ async def test_process_task_passes_reproducer_config_to_workflow(_mock_env_vars,
 
     async def _mock_workflow(*_args, **kwargs):
         captured.update(kwargs)
-        result = flexmock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
-        result.should_receive("model_dump_json").and_return("{}")
-        return flexmock(result=result)
+        return flexmock(result=_output(jira_issue="RHEL-99999", package="bind"))
 
     @contextlib.asynccontextmanager
     async def _mock_mcp_tools(*_args, **_kwargs):

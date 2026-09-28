@@ -35,6 +35,7 @@ from ymir.agents.utils import (
 )
 from ymir.common.base_utils import fix_await, install_shutdown_handler, redis_client, run_task_loop
 from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.error_list import clear_resolved_errors
 from ymir.common.issue_lock import issue_lock
 from ymir.common.logging_setup import configure_logging, current_jira_issue
 from ymir.common.mock_repos import get_mock_local_tool_env
@@ -54,6 +55,25 @@ from ymir.common.utils import init_sentry
 
 logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")
+
+
+async def _clear_rebuild_resolved_errors(
+    redis_conn,
+    rebuild_data: RebuildData,
+    queue: str,
+    *,
+    target_branch: str,
+    dry_run: bool,
+) -> None:
+    """Clear prior rebuild errors for the primary issue and each resolved sibling."""
+    for issue_key in dict.fromkeys(rebuild_data.all_jira_issues):
+        await clear_resolved_errors(
+            redis_conn,
+            issue_key,
+            queue,
+            target_branch=target_branch,
+            dry_run=dry_run,
+        )
 
 
 async def main() -> None:
@@ -668,6 +688,13 @@ async def main() -> None:
                                 merge_request_url=state.merge_request_url,
                             ).model_dump_json(),
                         )
+                    )
+                    await _clear_rebuild_resolved_errors(
+                        redis,
+                        rebuild_data,
+                        rebuild_queue,
+                        target_branch=dist_git_branch,
+                        dry_run=dry_run,
                     )
                 else:
                     logger.warning(f"Rebuild failed for {rebuild_data.jira_issue}: {state.rebuild_error}")

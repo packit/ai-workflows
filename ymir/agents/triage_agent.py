@@ -43,6 +43,7 @@ from ymir.agents.utils import (
 from ymir.common.base_utils import fix_await, install_shutdown_handler, redis_client, run_task_loop
 from ymir.common.config import load_rhel_config
 from ymir.common.constants import YMIR_COMMENT_MARKER, JiraLabels, RedisQueues
+from ymir.common.error_list import clear_resolved_errors
 from ymir.common.issue_lock import issue_lock
 from ymir.common.logging_setup import configure_logging, current_jira_issue, get_trajectory_writeable
 from ymir.common.mock_repos import get_mock_local_tool_env
@@ -1958,6 +1959,11 @@ async def main() -> None:
                             "TRIAGE_ENQUEUE_REPRODUCER disabled, skipping reproducer queue for %s",
                             input.issue,
                         )
+
+                if output.resolution != Resolution.ERROR:
+                    await clear_resolved_errors(
+                        redis, input.issue, RedisQueues.TRIAGE_QUEUE.value, dry_run=dry_run
+                    )
 
         shutdown_event = asyncio.Event()
         install_shutdown_handler(asyncio.get_running_loop(), shutdown_event)

@@ -38,6 +38,7 @@ from ymir.agents.utils import (
 from ymir.common.base_utils import fix_await, redis_client, run_task_loop
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.delayed_queue import promote_due_tasks, schedule_task
+from ymir.common.error_list import clear_resolved_errors
 from ymir.common.logging_setup import configure_logging, current_jira_issue
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
@@ -263,6 +264,31 @@ def _should_finalize_jira(result: OutputSchema) -> bool:
     ``ymir_reproducer_in_progress`` and are scheduled for a later attempt.
     """
     return not result.retryable_error and not result.lock_deferred
+
+
+async def _clear_finalized_reproducer_errors(
+    redis_conn, input_data: InputSchema, result: OutputSchema, *, dry_run: bool
+) -> int:
+    """Clear earlier failures only when the final Jira label resolves this work."""
+    if not _should_finalize_jira(result):
+        return 0
+    # An adapted test still needs its MR update. If that step failed, the
+    # original test's presence must not make this run count as resolved.
+    if result.adapted_existing and not result.success:
+        return 0
+    if _determine_result_label(result) not in {
+        JiraLabels.REPRODUCER_CREATED,
+        JiraLabels.REPRODUCER_ALREADY_EXISTS,
+        JiraLabels.REPRODUCER_NOT_REPRODUCIBLE,
+    }:
+        return 0
+    return await clear_resolved_errors(
+        redis_conn,
+        input_data.jira_issue,
+        RedisQueues.REPRODUCER_QUEUE.value,
+        target_branch=input_data.target_branch,
+        dry_run=dry_run,
+    )
 
 
 def _needs_merge_request(result: OutputSchema) -> bool:
@@ -1440,6 +1466,7 @@ async def main() -> None:
                     logger.info(
                         f"Pushed {input_data.jira_issue} to {RedisQueues.COMPLETED_REPRODUCER_LIST.value}"
                     )
+                    await _clear_finalized_reproducer_errors(redis, input_data, output, dry_run=dry_run)
             finally:
                 try:
                     await release_reproducer_lock(

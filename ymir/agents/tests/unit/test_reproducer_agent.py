@@ -13,6 +13,7 @@ from ymir.agents.reproducer_agent import (
     PreparedTestsClone,
     _bootstrap_tests_clone,
     _build_mr_title,
+    _clear_finalized_reproducer_errors,
     _cve_only_needles,
     _determine_comment_resolution,
     _determine_result_label,
@@ -32,8 +33,15 @@ from ymir.agents.reproducer_agent import (
 )
 from ymir.agents.tasks import InvalidReproducerConfigError, fetch_reproducer_config
 from ymir.common.base_utils import check_subprocess
-from ymir.common.constants import JiraLabels
-from ymir.common.models import MergeRequestDetails, ReproducerInputSchema, ReproducerOutputSchema, Task
+from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.models import (
+    ErrorData,
+    ErrorListEntry,
+    MergeRequestDetails,
+    ReproducerInputSchema,
+    ReproducerOutputSchema,
+    Task,
+)
 
 
 def _output(**overrides) -> ReproducerOutputSchema:
@@ -104,6 +112,63 @@ def test_should_finalize_jira_false_for_retryable_error():
     assert _should_finalize_jira(_output(success=False, lock_deferred=True)) is False
     assert _should_finalize_jira(_output(success=False)) is True
     assert _should_finalize_jira(_output(success=True)) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("result_overrides", "dry_run", "expected_removed"),
+    [
+        ({"success": False, "not_reproducible_reason": "race"}, False, 1),
+        ({"success": False, "test_already_exists": True}, False, 1),
+        pytest.param(
+            {
+                "success": False,
+                "test_already_exists": True,
+                "adapted_existing": True,
+                "summary": "MR creation failed",
+            },
+            False,
+            0,
+            id="adapted-existing-mr-update-failed",
+        ),
+        ({"success": True}, False, 1),
+        ({"success": False}, False, 0),
+        ({"success": False, "retryable_error": True, "not_reproducible_reason": "race"}, False, 0),
+        ({"success": False, "lock_deferred": True, "test_already_exists": True}, False, 0),
+        ({"success": False, "not_reproducible_reason": "race"}, True, 0),
+    ],
+)
+async def test_finalized_reproducer_clears_only_resolved_errors(result_overrides, dry_run, expected_removed):
+    input_data = ReproducerInputSchema(jira_issue="RHEL-12345", package="libfoo", target_branch="c10s")
+    old_error = (
+        ErrorListEntry(
+            error_id=1,
+            queue=RedisQueues.REPRODUCER_QUEUE.value,
+            task=Task(metadata=input_data.model_dump()),
+            error=ErrorData(jira_issue=input_data.jira_issue, details="prior failure"),
+        )
+        .model_dump_json()
+        .encode()
+    )
+
+    class ErrorListRedis:
+        def __init__(self):
+            self.entries = [old_error]
+            self.lrem_calls = 0
+
+        async def lrange(self, *_args):
+            return list(self.entries)
+
+        async def lrem(self, _key, _count, raw):
+            self.lrem_calls += 1
+            self.entries.remove(raw)
+            return 1
+
+    redis = ErrorListRedis()
+    await _clear_finalized_reproducer_errors(redis, input_data, _output(**result_overrides), dry_run=dry_run)
+
+    assert len(redis.entries) == 1 - expected_removed
+    assert redis.lrem_calls == expected_removed
 
 
 def test_needs_merge_request():
@@ -788,7 +853,11 @@ async def _run_process_task(payload: bytes) -> None:
     async def _mock_redis_client(*_args, **_kwargs):
         redis_mock = flexmock()
         redis_mock.should_receive("lpush").replace_with(_async_noop)
-        redis_mock.should_receive("model_dump_json").replace_with(_async_noop)
+
+        async def _empty_error_list(*_args):
+            return []
+
+        redis_mock.should_receive("lrange").replace_with(_empty_error_list)
         yield redis_mock
 
     flexmock(r_agent).should_receive("init_sentry")
@@ -841,9 +910,7 @@ async def test_process_task_proceeds_despite_terminal_label_when_user_triggered(
         return ["ymir_reproducer_created"], "New"
 
     async def _mock_workflow(*_args, **_kwargs):
-        result = flexmock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
-        result.should_receive("model_dump_json").and_return("{}")
-        return flexmock(result=result)
+        return flexmock(result=_output())
 
     flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
     flexmock(r_agent).should_receive("run_workflow").replace_with(_mock_workflow).once()
@@ -861,9 +928,7 @@ async def test_process_task_proceeds_when_terminal_label_and_in_progress(
         return ["ymir_reproducer_created", "ymir_reproducer_in_progress"], "New"
 
     async def _mock_workflow(*_args, **_kwargs):
-        result = flexmock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
-        result.should_receive("model_dump_json").and_return("{}")
-        return flexmock(result=result)
+        return flexmock(result=_output())
 
     flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
     flexmock(r_agent).should_receive("run_workflow").once().replace_with(_mock_workflow)
@@ -880,9 +945,7 @@ async def test_process_task_proceeds_when_no_terminal_labels(
         return [], "New"
 
     async def _mock_workflow(*_args, **_kwargs):
-        result = flexmock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
-        result.should_receive("model_dump_json").and_return("{}")
-        return flexmock(result=result)
+        return flexmock(result=_output())
 
     flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
     flexmock(r_agent).should_receive("run_workflow").once().replace_with(_mock_workflow)

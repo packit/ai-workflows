@@ -1527,6 +1527,7 @@ async def main() -> None:
                 and JiraLabels.RETRY_NEEDED.value not in current_labels
                 and JiraLabels.TRIAGE_IN_PROGRESS.value not in current_labels
                 and not user_triggered
+                and not task.requeued_from_error_list
             ):
                 logger.info(
                     f"Skipping duplicate triage for {input.issue} — "

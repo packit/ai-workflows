@@ -7,15 +7,12 @@ carrying `error_id`/`queue`/`task`). Legacy entries pushed before that change,
 or entries recorded for a payload that never parsed into a `Task` in the first
 place, have no `queue`/`task` to requeue and are reported as non-requeueable.
 
-The task's `attempts` counter is reset to 0 and `user_triggered` is forced to
-True before requeuing, on the assumption that whoever runs this has already
-fixed the underlying issue and wants a fresh retry budget. Forcing
-`user_triggered` also matters functionally: triage and reproducer skip
-processing outright when a terminal `ymir_*_errored`/similar label is still
-on the issue and the task isn't user-triggered — exactly the state a
-just-requeued task is in until it gets a chance to run and clear that label
-itself. It also routes the task onto the priority (`_todo`) twin of its
-queue, same as any other maintainer-triggered run.
+The task's `attempts` counter is reset to 0 before requeuing. By default,
+`user_triggered` is set to False to keep acknowledgement and result comments
+for maintainers low. Requeued tasks still go to the priority (`_todo`) twin
+of their queue. A separate `requeued_from_error_list` marker lets triage and
+reproducer process them even while the issue has a terminal errored label.
+Pass `--user-triggered` to opt into maintainer-triggered comments and labels.
 
 The entry is located and its replacement task computed here, client-side (a
 plain LRANGE + local JSON parsing) rather than inside Redis: scanning and
@@ -34,8 +31,10 @@ passed as `oc exec`/subprocess command-line arguments, which have far lower
 size limits than a Redis value.
 
 Usage:
-    make requeue-error ERROR_ID=42                       # from openshift/ (preferred)
+    make requeue-error ERROR_ID=42                       # priority requeue, fewer comments
+    make requeue-error ERROR_ID=42 USER_TRIGGERED=true   # priority/user-triggered requeue
     python3 scripts/requeue_error.py 42                  # same, run directly
+    python3 scripts/requeue_error.py 42 --user-triggered # priority/user-triggered
     python3 scripts/requeue_error.py 42 --dry-run         # show the plan, don't mutate anything
 """
 
@@ -168,6 +167,15 @@ def atomic_requeue(
     return int(out.strip())
 
 
+def prepare_requeue_task(task: dict, source_queue: str, user_triggered: bool) -> tuple[str, str]:
+    """Reset a task and send it to the priority queue, with optional maintainer feedback."""
+    task["attempts"] = 0
+    task["user_triggered"] = user_triggered
+    task["requeued_from_error_list"] = True
+    target_queue = source_queue if source_queue.endswith("_todo") else f"{source_queue}_todo"
+    return target_queue, json.dumps(task)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument(
@@ -179,6 +187,11 @@ def main() -> None:
     )
     ap.add_argument(
         "--dry-run", action="store_true", help="Print the plan without pushing or removing anything"
+    )
+    ap.add_argument(
+        "--user-triggered",
+        action="store_true",
+        help="Set user_triggered=true for maintainer comments and labels (priority queue either way)",
     )
     args = ap.parse_args()
 
@@ -198,15 +211,11 @@ def main() -> None:
         )
 
     old_attempts = task.get("attempts", 0)
-    task["attempts"] = 0
-    task["user_triggered"] = True
-    if not target_queue.endswith("_todo"):
-        target_queue = f"{target_queue}_todo"
-    task_json = json.dumps(task)
+    target_queue, task_json = prepare_requeue_task(task, target_queue, args.user_triggered)
 
     print(
         f"Requeuing error_id={args.error_id} ({jira_issue}) onto '{target_queue}' "
-        f"(attempts {old_attempts} -> 0, user_triggered -> true)"
+        f"(attempts {old_attempts} -> 0, user_triggered -> {str(args.user_triggered).lower()})"
     )
     if args.dry_run:
         print(f"[dry-run] Would atomically remove from {args.queue} and LPUSH {target_queue}: {task_json}")

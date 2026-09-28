@@ -1,5 +1,21 @@
 # OpenShift Deployment
 
+## Retrying failed tasks
+
+Run `make show-error-list`, then `make requeue-error ERROR_ID=42` from this
+directory. Requeueing removes all `ymir_*` labels from the issue through the
+MCP gateway before putting the saved task on its priority queue with attempts
+reset to zero. Other Jira labels are preserved. Cleanup failure leaves the
+entry in `error_list` without enqueueing it. If enqueueing fails after cleanup,
+the labels have already been cleared; retry the command using the same error ID.
+This resets Jira workflow labels and the retry budget; the saved task metadata
+is retained.
+
+Maintainer acknowledgement and result comments remain opt-in with
+`USER_TRIGGERED=true`. To preview without changing Jira or Valkey, run
+`python3 scripts/requeue_error.py 42 --dry-run`. The script needs `oc` access
+to both the Valkey and MCP gateway deployments, but no local Jira credentials.
+
 ## Agent container startup
 
 The c9s and c10s agent images use catatonit as PID 1 to forward signals and reap

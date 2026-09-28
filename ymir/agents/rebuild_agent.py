@@ -511,6 +511,7 @@ async def main() -> None:
                 await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
                 return
 
+            requeue = None
             async with issue_lock(redis, rebuild_data.jira_issue, prefix="lock:rebuild:") as lock_token:
                 if lock_token is None:
                     logger.info(
@@ -518,9 +519,11 @@ async def main() -> None:
                         rebuild_data.jira_issue,
                     )
                     return
-                await _process_rebuild_locked(task, triage_state, rebuild_data)
+                requeue = await _process_rebuild_locked(task, triage_state, rebuild_data)
+            if requeue is not None:
+                await fix_await(redis.lpush(requeue[0], requeue[1]))
 
-        async def _process_rebuild_locked(task, triage_state, rebuild_data):
+        async def _process_rebuild_locked(task, triage_state, rebuild_data) -> tuple[str, str] | None:
             dist_git_branch = triage_state["target_branch"]
             dist_git_namespace = triage_state.get("dist_git_namespace")
             user_triggered = task.user_triggered
@@ -538,7 +541,14 @@ async def main() -> None:
                 comment_text=None,
                 rebuild_data=rebuild_data,
                 user_triggered=user_triggered,
-            ):
+            ) -> tuple[str, str] | None:
+                """Handle a failed task by re-queuing or finalizing.
+
+                Returns ``(queue, payload)`` when the task should be
+                re-queued.  The caller must push the payload **after**
+                releasing the issue lock to avoid a race where another
+                worker picks up the task while the lock is still held.
+                """
                 task.attempts += 1
                 retry_queue = rebuild_queue_todo if task.user_triggered else rebuild_queue
                 if task.attempts < max_retries:
@@ -546,53 +556,53 @@ async def main() -> None:
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {rebuild_data.jira_issue}"
                     )
-                    await fix_await(redis.lpush(retry_queue, task.model_dump_json()))
-                else:
-                    # Final attempt exhausted — mark errored and stop retrying.
-                    logger.error(
-                        f"Task failed after {max_retries} attempts, "
-                        f"moving to error list: {rebuild_data.jira_issue}"
-                    )
-                    for issue_key in dict.fromkeys(rebuild_data.all_jira_issues):
-                        try:
-                            await tasks.set_jira_labels(
-                                jira_issue=issue_key,
-                                labels_to_add=[JiraLabels.REBUILD_ERRORED.value],
-                                labels_to_remove=[JiraLabels.TRIAGED_REBUILD.value],
-                                dry_run=dry_run,
-                                user_triggered=user_triggered,
-                            )
-                        except Exception as e:
-                            logger.warning(f"Failed to set labels on {issue_key}: {e}")
-                    # Post failure feedback to Jira once, here on the final attempt
-                    # only — never for intermediate retries.
-                    if comment_text and not dry_run:
-                        try:
-                            async with mcp_tools(
-                                os.environ["MCP_GATEWAY_URL"],
-                                call_meta={"jira_issue": rebuild_data.jira_issue},
-                            ) as gateway_tools:
-                                for issue_key in dict.fromkeys(rebuild_data.all_jira_issues):
-                                    try:
-                                        await tasks.post_terminal_error_comment(
-                                            jira_issue=issue_key,
-                                            agent_type="Rebuild",
-                                            comment_text=comment_text,
-                                            available_tools=gateway_tools,
-                                        )
-                                    except Exception as comment_error:
-                                        logger.warning(
-                                            f"Failed to post final rebuild failure comment for "
-                                            f"{issue_key}: {comment_error}"
-                                        )
-                        except Exception as gateway_error:
-                            logger.warning(
-                                f"Failed to connect to MCP gateway for final rebuild failure comment: "
-                                f"{gateway_error}"
-                            )
-                    error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
-                    entry = ErrorListEntry(error_id=error_id, queue=retry_queue, task=task, error=error)
-                    await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
+                    return (retry_queue, task.model_dump_json())
+                # Final attempt exhausted — mark errored and stop retrying.
+                logger.error(
+                    f"Task failed after {max_retries} attempts, "
+                    f"moving to error list: {rebuild_data.jira_issue}"
+                )
+                for issue_key in dict.fromkeys(rebuild_data.all_jira_issues):
+                    try:
+                        await tasks.set_jira_labels(
+                            jira_issue=issue_key,
+                            labels_to_add=[JiraLabels.REBUILD_ERRORED.value],
+                            labels_to_remove=[JiraLabels.TRIAGED_REBUILD.value],
+                            dry_run=dry_run,
+                            user_triggered=user_triggered,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to set labels on {issue_key}: {e}")
+                # Post failure feedback to Jira once, here on the final attempt
+                # only — never for intermediate retries.
+                if comment_text and not dry_run:
+                    try:
+                        async with mcp_tools(
+                            os.environ["MCP_GATEWAY_URL"],
+                            call_meta={"jira_issue": rebuild_data.jira_issue},
+                        ) as gateway_tools:
+                            for issue_key in dict.fromkeys(rebuild_data.all_jira_issues):
+                                try:
+                                    await tasks.post_terminal_error_comment(
+                                        jira_issue=issue_key,
+                                        agent_type="Rebuild",
+                                        comment_text=comment_text,
+                                        available_tools=gateway_tools,
+                                    )
+                                except Exception as comment_error:
+                                    logger.warning(
+                                        f"Failed to post final rebuild failure comment for "
+                                        f"{issue_key}: {comment_error}"
+                                    )
+                    except Exception as gateway_error:
+                        logger.warning(
+                            f"Failed to connect to MCP gateway for final rebuild failure comment: "
+                            f"{gateway_error}"
+                        )
+                error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
+                entry = ErrorListEntry(error_id=error_id, queue=retry_queue, task=task, error=error)
+                await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
+                return None
 
             try:
                 with span_processor.start_transaction(rebuild_data.jira_issue, workflow="RebuildWorkflow"):
@@ -637,7 +647,7 @@ async def main() -> None:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during rebuild processing for {rebuild_data.jira_issue}: {error}")
                 reason = e.explain() if isinstance(e, FrameworkError) else e
-                await retry(
+                return await retry(
                     task,
                     ErrorData(details=error, jira_issue=rebuild_data.jira_issue),
                     comment_text=f"Agent failed to perform a rebuild: {reason}",
@@ -686,7 +696,7 @@ async def main() -> None:
                     # already posted the failure feedback for this graceful path.
                     # Only the crash path (which never reaches that step) passes
                     # comment_text, so we never double-comment.
-                    await retry(
+                    return await retry(
                         task,
                         ErrorData(
                             details=state.rebuild_error or "Unknown rebuild error",

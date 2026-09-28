@@ -115,6 +115,11 @@ class Task(BaseModel):
         "failure labels that are otherwise suppressed. Error comments are "
         "posted regardless of this flag.",
     )
+    requeued_from_error_list: bool = Field(
+        default=False,
+        description="True when an operator requeued this task from error_list, so an existing "
+        "error label does not cause triage or reproducer to skip it as a duplicate.",
+    )
 
     def to_json(self) -> str:
         """Convert to JSON string for Redis queue storage."""

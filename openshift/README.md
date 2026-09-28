@@ -11,6 +11,12 @@ the labels have already been cleared; retry the command using the same error ID.
 This resets Jira workflow labels and the retry budget; the saved task metadata
 is retained.
 
+Successful workflows automatically clear matching failures from the newest
+1,000 entries in `error_list`, matching the issue, workflow queue, and target
+branch. Consolidated rebase and rebuild workflows scan once for the whole group.
+Older entries remain available for inspection and manual requeueing. Dry runs
+do not read or modify the production error list.
+
 Maintainer acknowledgement and result comments remain opt-in with
 `USER_TRIGGERED=true`. To preview without changing Jira or Valkey, run
 `python3 scripts/requeue_error.py 42 --dry-run`. The script needs `oc` access

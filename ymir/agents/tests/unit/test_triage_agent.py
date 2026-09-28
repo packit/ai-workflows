@@ -85,6 +85,10 @@ def test_terminal_labels_still_block_duplicate_triage():
     assert _terminal_ymir_labels(labels) == [JiraLabels.TRIAGED_REBASE.value]
 
 
+def test_closed_mr_label_is_not_terminal():
+    assert _terminal_ymir_labels([JiraLabels.MR_CLOSED.value]) == []
+
+
 @pytest.mark.parametrize(
     "resolution",
     [

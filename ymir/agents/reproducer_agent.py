@@ -1235,6 +1235,7 @@ async def main() -> None:
                 terminal_ymir_labels
                 and JiraLabels.REPRODUCER_IN_PROGRESS.value not in current_labels
                 and not user_triggered
+                and not task.requeued_from_error_list
             ):
                 logger.info(
                     f"Skipping duplicate reproducer for {input_data.jira_issue} — "

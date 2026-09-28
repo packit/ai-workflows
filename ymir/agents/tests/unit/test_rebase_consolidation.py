@@ -2,7 +2,7 @@ import pytest
 from flexmock import flexmock
 
 from ymir.agents import rebase_consolidation
-from ymir.agents.rebase_agent import _consolidated_issue_keys
+from ymir.agents.rebase_agent import _clear_rebase_resolved_errors, _consolidated_issue_keys
 from ymir.agents.rebase_consolidation import (
     add_jira_tickets_to_latest_changelog_entry,
     build_rebase_siblings_jql,
@@ -152,6 +152,38 @@ def test_consolidated_issue_keys_deduplicates_siblings_and_primary():
             ConsolidatedIssue(issue_key="RHEL-200"),
         ],
     ) == ["RHEL-100", "RHEL-200"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dry_run", [False, True])
+async def test_successful_consolidated_rebase_clears_primary_and_distinct_siblings(monkeypatch, dry_run):
+    calls = []
+
+    async def mock_clear(redis_conn, issue, queue, *, target_branch, dry_run):
+        calls.append((redis_conn, issue, queue, target_branch, dry_run))
+
+    monkeypatch.setattr("ymir.agents.rebase_agent.clear_resolved_errors", mock_clear)
+    redis = object()
+    data = RebaseData(
+        package="expat",
+        version="2.7.0",
+        jira_issue="RHEL-100",
+        consolidated_issues=[
+            ConsolidatedIssue(issue_key="RHEL-200"),
+            ConsolidatedIssue(issue_key="RHEL-100"),
+            ConsolidatedIssue(issue_key="RHEL-200"),
+            ConsolidatedIssue(issue_key="RHEL-300"),
+        ],
+    )
+
+    await _clear_rebase_resolved_errors(
+        redis, data, "rebase_queue_c10s", target_branch="rhel-10.3", dry_run=dry_run
+    )
+
+    assert calls == [
+        (redis, issue, "rebase_queue_c10s", "rhel-10.3", dry_run)
+        for issue in ("RHEL-100", "RHEL-200", "RHEL-300")
+    ]
 
 
 def test_build_rebase_siblings_jql():

@@ -21,7 +21,7 @@ Weekly rotating role ([definition](https://github.com/packit/agile/issues/972)) 
 
 ### Sumo Logic logs
 
-Open [Sumo Logic](https://rhcorporate.sumologic.com/home) and sign in with Red Hat SSO to view the agent logs. Saved queries are under `Library → Folders → jotnar`. You can also create a query for the Jotnar namespace:
+Open [Sumo Logic](https://rhcorporate.sumologic.com/home) and sign in with Red Hat SSO to view the agent logs. Saved queries are under `Library → Folders → jotnar`. You can also create a query for the Jotnar namespace (`Logs` -> `New Log Search`):
 
 ```text
 _index="rh_paas" _sourcecategory=openshift "jotnar-ymir--jotnar-ymir"

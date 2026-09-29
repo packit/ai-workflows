@@ -1146,7 +1146,7 @@ async def run_workflow(
             fix_version = getattr(data, "fix_version", None) or ""
             package = getattr(data, "package", None)
 
-            # Check if package was already built with the fixed dependency by inspecting root.log
+            # Check if package was already built with the fixed dependency by inspecting installed_pkgs.log
             if package and fix_version:
                 try:
                     (
@@ -1162,7 +1162,7 @@ async def run_workflow(
                         available_tools=gateway_tools,
                     )
                     if already_fixed is True:
-                        # Confirmed via root.log that package has the fix
+                        # Confirmed via installed_pkgs.log that package has the fix
                         logger.info(
                             f"{package} already built with fixed dependency {dep_component} "
                             f"({fixed_in_build}) — resolving as ALREADY_FIXED"
@@ -1193,11 +1193,11 @@ async def run_workflow(
                     if already_fixed is None:
                         cve_id = getattr(data, "cve_id", None) or ""
 
-                        if reason == "built_after_fix_no_rootlog":
-                            # Package built after fix but no root.log - needs manual verification
+                        if reason == "built_after_fix_no_installed_pkgs_log":
+                            # Package built after fix but no installed_pkgs.log - needs manual verification
                             logger.info(
-                                f"{package} build {pkg_nvr} completed after {dep_component} fix but root.log "
-                                f"unavailable. Requesting manual verification."
+                                f"{package} build {pkg_nvr} completed after {dep_component} fix "
+                                "but installed_pkgs.log is unavailable. Requesting manual verification."
                             )
                             state.triage_result = OutputSchema(
                                 resolution=Resolution.CLARIFICATION_NEEDED,
@@ -1261,12 +1261,12 @@ async def run_workflow(
                                     findings=(
                                         f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
                                         f"{pkg_issue_key}) has {dep_component} dependency in some "
-                                        f"architecture root.logs but not others. This could indicate "
+                                        "installed_pkgs.log files but not others. This could indicate "
                                         f"parsing issues, different build configurations per arch, or "
                                         f"incomplete build logs."
                                     ),
                                     additional_info_needed=(
-                                        f"Please manually inspect all architecture root.log files for "
+                                        "Please manually inspect installed_pkgs.log for all architectures of "
                                         f"{pkg_nvr} to verify which {dep_component} version was actually "
                                         f"used across all architectures. If all archs used {fixed_in_build} "
                                         f"or newer, mark as Already Fixed. Otherwise, rebuild."
@@ -1291,7 +1291,7 @@ async def run_workflow(
                                         f"used, which can happen with long builds or buildroot updates."
                                     ),
                                     additional_info_needed=(
-                                        f"Please manually inspect the root.log files for {pkg_nvr} across "
+                                        f"Please inspect installed_pkgs.log for {pkg_nvr} across "
                                         f"architectures to determine which {dep_component} version was "
                                         f"used. Mark as Already Fixed only if ALL architectures used "
                                         f"{fixed_in_build} or newer. If any architecture used an older "

@@ -278,6 +278,10 @@ class TransientInfrastructureError(Exception):
     """
 
 
+class BuildLogMissingError(TransientInfrastructureError):
+    """Brew confirmed a requested build log is absent (HTTP 404 or 410)."""
+
+
 async def _get_latest_build_from_tags(
     package: str,
     *tags: str,
@@ -438,23 +442,31 @@ async def _find_completed_builds_jira(
         f'resolution in ("Done", "Done-Errata") AND '
         f"customfield_10578 IS NOT EMPTY"
     )
-    try:
-        closed_results = await run_tool(
+
+    async def search_all(jql: str, fields: list[str], kind: str) -> list[dict]:
+        results = await run_tool(
             "search_jira_issues",
             available_tools=available_tools,
-            jql=closed_jql,
-            fields=["key", "customfield_10578"],
+            jql=jql,
+            fields=fields,
             max_results=50,
+            fetch_all=True,
         )
+        if not isinstance(results, list):
+            raise TransientInfrastructureError(
+                f"Invalid response from {kind}-build Jira query for {package}: {type(results)}"
+            )
+        return results
+
+    try:
+        closed_results = await search_all(closed_jql, ["key", "customfield_10578"], "closed")
+    except TransientInfrastructureError:
+        raise
     except (ToolError, ConnectionError, OSError, TimeoutError) as e:
         raise TransientInfrastructureError(
             f"Closed-build Jira query failed for {package} in {fix_version}: {e}"
         ) from e
 
-    if closed_results is None or not isinstance(closed_results, list):
-        raise TransientInfrastructureError(
-            f"Invalid response from closed-build Jira query for {package}: {type(closed_results)}"
-        )
     # Empty list is valid — no closed builds found
 
     # Also search for active builds (not yet closed but have Fixed in Build set)
@@ -466,17 +478,7 @@ async def _find_completed_builds_jira(
         f"customfield_10578 IS NOT EMPTY"
     )
     try:
-        active_results = await run_tool(
-            "search_jira_issues",
-            available_tools=available_tools,
-            jql=active_jql,
-            fields=["key", "customfield_10578", "status"],
-            max_results=50,
-        )
-        # Validate response - None or non-list is invalid, but empty list is valid
-        if active_results is None or not isinstance(active_results, list):
-            logger.warning(f"Invalid response from active builds query for {package}: {type(active_results)}")
-            active_results = None
+        active_results = await search_all(active_jql, ["key", "customfield_10578", "status"], "active")
     except Exception as e:
         logger.error(f"Failed to query active builds for {package} in {fix_version}: {e}")
         active_results = None
@@ -493,12 +495,6 @@ async def _find_completed_builds_jira(
         return [], []
 
     # Process closed results
-    if len(closed_results) >= 50:
-        logger.warning(
-            f"Found {len(closed_results)} closed builds for {package} in {fix_version}, "
-            f"hit max_results limit. May have missed a rebuild."
-        )
-
     closed_candidates = []
     for issue in closed_results:
         issue_key = issue.get("key")
@@ -605,10 +601,10 @@ async def _select_highest_evr_build(
     return package_nvr, package_issue_key, latest_evr
 
 
-async def _fetch_root_log(
+async def _fetch_installed_pkgs_log(
     package_nvr: str, built_architectures: set[str], *, require_all: bool = True
 ) -> list[tuple[str, str]]:
-    """Fetch root.log from Brew for the given package NVR for specific architectures.
+    """Fetch installed_pkgs.log from Brew for the given package NVR for specific architectures.
 
     Args:
         package_nvr: Package NVR (e.g., "go-fdo-client-1.0.0-4.el10_2.7")
@@ -622,7 +618,7 @@ async def _fetch_root_log(
     Raises:
         TransientInfrastructureError: If require_all and logs missing, or no logs at all
     """
-    # Parse NVR to construct root.log URL
+    # Parse NVR to construct installed_pkgs.log URL
     nvr_match = re.match(r"^(.+)-([^-]+)-([^-]+)$", package_nvr)
     if not nvr_match:
         logger.warning(f"Could not parse package NVR: {package_nvr}")
@@ -631,9 +627,9 @@ async def _fetch_root_log(
     package_name, version, release = nvr_match.groups()
 
     # Fetch logs only for architectures that were actually built
-    root_log_urls = [
+    installed_pkgs_log_urls = [
         f"https://brewweb.engineering.redhat.com/brew/packages/"
-        f"{package_name}/{version}/{release}/data/logs/{arch}/root.log"
+        f"{package_name}/{version}/{release}/data/logs/{arch}/installed_pkgs.log"
         for arch in built_architectures
     ]
 
@@ -644,7 +640,7 @@ async def _fetch_root_log(
         """Infrastructure error fetching log (5xx, auth, transport)."""
 
     async def check_and_fetch_log(client: httpx.AsyncClient, url: str) -> tuple[str, bytes | None]:
-        """Check if root.log exists with HEAD, then fetch if available."""
+        """Check if installed_pkgs.log exists with HEAD, then fetch if available."""
         try:
             head_response = await client.head(url)
             if head_response.status_code in (404, 410):
@@ -668,7 +664,9 @@ async def _fetch_root_log(
             # Per-request timeout of 10s as secondary safeguard
             async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
                 # Fetch all architecture logs to verify consistency across architectures
-                fetch_tasks = [asyncio.create_task(check_and_fetch_log(client, url)) for url in root_log_urls]
+                fetch_tasks = [
+                    asyncio.create_task(check_and_fetch_log(client, url)) for url in installed_pkgs_log_urls
+                ]
                 results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
                 # Process results — separate absent logs from infra errors
@@ -688,19 +686,20 @@ async def _fetch_root_log(
                         try:
                             if content[:2] == b"\x1f\x8b":
                                 content = gzip.decompress(content)
-                            decoded_logs.append((url, content.decode("utf-8", errors="replace")))
+                            decoded_logs.append((url, content.decode("utf-8")))
                         except Exception as e:
-                            logger.warning(f"Failed to decompress/decode root.log from {url}: {e}")
-                            continue
+                            infra_errors.append(f"Failed to decode {url}: {e}")
+                    else:
+                        infra_errors.append(f"Empty installed_pkgs.log from {url}")
 
                 if infra_errors:
                     raise TransientInfrastructureError(
-                        f"Infrastructure error fetching root.log for {package_nvr}: {infra_errors}"
+                        f"Infrastructure error fetching installed_pkgs.log for {package_nvr}: {infra_errors}"
                     )
 
                 if not decoded_logs:
-                    raise TransientInfrastructureError(
-                        f"No root.log available for {package_nvr} from any architecture "
+                    raise BuildLogMissingError(
+                        f"No installed_pkgs.log available for {package_nvr} from any architecture "
                         f"(all returned 404/410, expected: {list(built_architectures)})"
                     )
 
@@ -708,13 +707,13 @@ async def _fetch_root_log(
                 missing_archs = built_architectures - fetched_archs
 
                 if missing_archs and require_all:
-                    raise TransientInfrastructureError(
-                        f"Missing root.log for {package_nvr} from {len(missing_archs)} "
+                    raise BuildLogMissingError(
+                        f"Missing installed_pkgs.log for {package_nvr} from {len(missing_archs)} "
                         f"architecture(s): {list(missing_archs)} (fetched: {list(fetched_archs)})"
                     )
 
                 logger.debug(
-                    f"Found root.log for {package_nvr} from {len(decoded_logs)} "
+                    f"Found installed_pkgs.log for {package_nvr} from {len(decoded_logs)} "
                     f"architecture(s): {list(fetched_archs)}"
                 )
                 return decoded_logs
@@ -728,7 +727,7 @@ async def _fetch_root_log(
         if fetch_tasks:
             await asyncio.gather(*fetch_tasks, return_exceptions=True)
         raise TransientInfrastructureError(
-            f"Timeout (30s) fetching root.log for {package_nvr} "
+            f"Timeout (30s) fetching installed_pkgs.log for {package_nvr} "
             f"from architectures: {list(built_architectures)}"
         ) from None
 
@@ -782,47 +781,40 @@ async def _get_known_package_names(dep_component: str, fixed_dep_nvr: str) -> li
     return known_names
 
 
-def _parse_dependency_from_root_log(
-    root_log: str, dep_component: str, known_names: list[str]
+def _parse_dependency_from_installed_pkgs_log(
+    installed_pkgs_log: str, dep_component: str, known_names: list[str]
 ) -> tuple[str | None, int | None]:
-    """Parse root.log to find which version of dependency was installed.
+    """Parse installed_pkgs.log to find which version of dependency was installed.
 
     Args:
-        root_log: Content of root.log
+        installed_pkgs_log: Content of installed_pkgs.log
         dep_component: Source component name
         known_names: List of known binary package names to search for
 
     Returns:
         Tuple of (nvr, epoch) where nvr is in format "name-version-release"
-        and epoch is the epoch number if present in root.log, else None
+        and epoch is the epoch number if present in installed_pkgs.log, else None
     """
-    # Pattern: "Installing: [epoch:]<known_name>-<version>-<release>.<arch>"
-    # Sort by length descending to match longer names first (e.g., golang-bin before golang)
+    # Brew records: name-[epoch:]version-release.arch timestamp size digest installed.
+    # Prefer a known subpackage over a shorter source name with the same prefix.
     for pkg_name in sorted(known_names, key=len, reverse=True):
-        # Escape package name for regex (handles dots, etc.)
-        escaped_name = re.escape(pkg_name)
-        # Pattern: optional epoch, exact package name, then version-release.arch
-        # Use word boundary or hyphen after name to prevent matching subpackages as parent
-        pattern = rf"Installing:\s+(?:(\d+):)?{escaped_name}-([^\s]+)"
+        pattern = re.compile(rf"{re.escape(pkg_name)}-(?:(\d+):)?([^-\s]+)-([^-\s]+)\.([\w]+)")
 
-        for line in root_log.splitlines():
-            match = re.search(pattern, line)
+        for line in installed_pkgs_log.splitlines():
+            fields = line.split()
+            if len(fields) != 5 or fields[-1] != "installed":
+                continue
+            match = pattern.fullmatch(fields[0])
             if match:
-                epoch_str = match.group(1)  # May be None
-                version_release = match.group(2)
-                # Remove architecture suffix
-                arch_pattern = r"\.(x86_64|aarch64|ppc64le|s390x|i686|noarch)$"
-                version_release = re.sub(arch_pattern, "", version_release)
-                # Keep epoch as None when absent (allows fallback to Koji's epoch)
-                epoch = int(epoch_str) if epoch_str else None
-                nvr = f"{dep_component}-{version_release}"
+                epoch = int(match.group(1)) if match.group(1) is not None else None
+                nvr = f"{dep_component}-{match.group(2)}-{match.group(3)}"
                 logger.info(
-                    f"Found {dep_component} package {pkg_name} in root.log: "
+                    f"Found {dep_component} package {pkg_name} in installed_pkgs.log: "
                     f"{f'{epoch}:' if epoch else ''}{nvr}"
                 )
                 return nvr, epoch
 
-    logger.warning(f"Could not find {dep_component} or its subpackages in root.log")
+    logger.warning(f"Could not find {dep_component} or its subpackages in installed_pkgs.log")
     return None, None
 
 
@@ -833,7 +825,7 @@ async def _compare_dependency_evrs(
 
     Args:
         used_dep_nvr: NVR of dependency that was used during build
-        used_dep_epoch: Epoch from root.log (None if not present)
+        used_dep_epoch: Epoch from installed_pkgs.log (None if not present)
         fixed_dep_nvr: NVR of fixed dependency
         dep_component: Expected dependency component name for validation
 
@@ -873,8 +865,8 @@ async def _compare_dependency_evrs(
 
     fixed_evr = _evr_from_build(fixed_build)
 
-    # Use the epoch from root.log if present, otherwise use Koji's epoch
-    # (root.log epoch takes precedence as it's what was actually installed)
+    # Use the epoch from installed_pkgs.log if present, otherwise use Koji's epoch
+    # (installed_pkgs.log epoch takes precedence as it's what was actually installed)
     if used_dep_epoch is not None:
         used_evr = EVR(
             epoch=used_dep_epoch,
@@ -893,7 +885,7 @@ async def _compare_build_timestamps(
     dep_component: str,
     fixed_dep_nvr: str,
 ) -> bool | None:
-    """Compare build timestamps as fallback when root.log is unavailable.
+    """Compare build timestamps as fallback when installed_pkgs.log is unavailable.
 
     Args:
         package: Package name (e.g., "go-fdo-client")
@@ -963,7 +955,7 @@ async def check_package_built_with_fixed_dependency(
     """Check if the package's latest build already used the fixed dependency.
 
     Searches for the most recent completed build of the package in the given
-    fix_version, fetches its root.log from Brew, and checks which version of
+    fix_version, fetches its installed_pkgs.log from Brew, and checks which version of
     the dependency was used during that build.
 
     Args:
@@ -975,13 +967,13 @@ async def check_package_built_with_fixed_dependency(
 
     Returns:
         Tuple of (already_fixed, package_issue_key, package_nvr, reason):
-        - already_fixed: True if confirmed fixed (root.log proves it),
-                        False if needs rebuild (root.log shows old version or built before fix),
+        - already_fixed: True if confirmed fixed (installed_pkgs.log proves it),
+                        False if needs rebuild (installed_pkgs.log shows old version or built before fix),
                         None if needs manual action
         - package_issue_key: Jira issue key for the existing build (if found)
         - package_nvr: NVR of the existing build (if found)
         - reason: When already_fixed is None, explains why. Possible reasons:
-                 "built_after_fix_no_rootlog" - root.log unavailable (Brew retention)
+                 "built_after_fix_no_installed_pkgs_log" - installed_pkgs.log unavailable (Brew retention)
                  "architecture_dependency_conflict" - different dependency versions per arch
                  "partial_architecture_coverage" - dependency missing from some arch logs
                  "active_builds_not_closed" - builds in progress (might be rejected)
@@ -997,14 +989,9 @@ async def check_package_built_with_fixed_dependency(
 
         # Handle case where active query failed
         if active_candidates is None:
-            logger.warning(f"Active builds query failed for {package} in {fix_version}")
-            # If we have closed candidates, we can still check them
-            # But if we don't, this is a transient infrastructure failure
-            if not closed_candidates:
-                raise TransientInfrastructureError(
-                    f"Jira query failed for {package} in {fix_version} - "
-                    f"no closed builds found and active builds query failed"
-                )
+            raise TransientInfrastructureError(
+                f"Active-build Jira query failed for {package} in {fix_version}"
+            )
 
         if not closed_candidates and not active_candidates:
             logger.info(f"No builds found for {package} in {fix_version}")
@@ -1071,9 +1058,9 @@ async def check_package_built_with_fixed_dependency(
             }
 
             if not built_archs:
-                # Noarch builds have root.log under the builder's arch.
+                # Noarch builds have installed_pkgs.log under the builder's arch.
                 # Try common arches — we only need one log for noarch.
-                logger.info(f"Noarch-only build {package_nvr}, trying common arches for root.log")
+                logger.info(f"Noarch-only build {package_nvr}, trying common arches for installed_pkgs.log")
                 built_archs = {"x86_64", "aarch64", "ppc64le", "s390x"}
                 noarch_build = True
             else:
@@ -1089,13 +1076,15 @@ async def check_package_built_with_fixed_dependency(
         if built_archs:
             logger.debug(f"Build {package_nvr} produced architectures: {list(built_archs)}")
 
-        # Step 3b: Fetch root.log from Brew
+        # Step 3b: Fetch installed_pkgs.log from Brew
         # For arch builds: require ALL arches. For noarch: accept any log found.
-        root_logs = []
+        installed_pkgs_logs = []
         if built_archs:
             try:
-                root_logs = await _fetch_root_log(package_nvr, built_archs, require_all=not noarch_build)
-            except TransientInfrastructureError:
+                installed_pkgs_logs = await _fetch_installed_pkgs_log(
+                    package_nvr, built_archs, require_all=not noarch_build
+                )
+            except BuildLogMissingError:
                 completion_ts = package_build.get("completion_ts")
                 if completion_ts:
                     cutoff_ts = time.time() - (90 * 24 * 60 * 60)
@@ -1103,15 +1092,16 @@ async def check_package_built_with_fixed_dependency(
                         raise
 
                 logger.info(
-                    f"root.log unavailable for {package_nvr} (completion_ts: "
+                    f"installed_pkgs.log unavailable for {package_nvr} (completion_ts: "
                     f"{completion_ts or 'unknown'}), "
                     f"falling back to timestamp comparison"
                 )
 
-        if not root_logs:
+        if not installed_pkgs_logs:
             # Fallback: compare build timestamps
             logger.info(
-                f"root.log unavailable for {package_nvr}, checking timestamps to determine next action"
+                f"installed_pkgs.log unavailable for {package_nvr}; "
+                "checking timestamps to determine next action"
             )
             built_after_fix = await _compare_build_timestamps(
                 package, package_nvr, dep_component, fixed_dep_nvr
@@ -1123,7 +1113,7 @@ async def check_package_built_with_fixed_dependency(
                     f"{package} ({package_nvr}) was built after {dep_component} fix. "
                     f"Returning None to request manual verification."
                 )
-                return None, package_issue_key, package_nvr, "built_after_fix_no_rootlog"
+                return None, package_issue_key, package_nvr, "built_after_fix_no_installed_pkgs_log"
             if built_after_fix is False:
                 # Package built before fix - but check if active builds exist
                 logger.info(f"{package} ({package_nvr}) was built before {dep_component} fix")
@@ -1149,12 +1139,12 @@ async def check_package_built_with_fixed_dependency(
                 f"{dep_component} ({fixed_dep_nvr})"
             )
 
-        # Step 5: Parse dependency from all architecture root.logs and verify consistency
+        # Step 5: Parse dependency from all architecture installed_pkgs.logs and verify consistency
         dep_versions = {}
         missing_archs = []
-        for arch_url, log_content in root_logs:
+        for arch_url, log_content in installed_pkgs_logs:
             arch_name = arch_url.split("/")[-2]
-            used_dep_nvr, used_dep_epoch = _parse_dependency_from_root_log(
+            used_dep_nvr, used_dep_epoch = _parse_dependency_from_installed_pkgs_log(
                 log_content, dep_component, known_names
             )
             if used_dep_nvr:
@@ -1165,13 +1155,13 @@ async def check_package_built_with_fixed_dependency(
         if not dep_versions:
             # No dependency found in any architecture log
             logger.warning(
-                f"Could not find {dep_component} dependency in root.log for {package_nvr} "
-                f"(checked {len(root_logs)} architecture(s))"
+                f"Could not find {dep_component} dependency in installed_pkgs.log for {package_nvr} "
+                f"(checked {len(installed_pkgs_logs)} architecture(s))"
             )
             # Check if active builds exist before returning False
             if active_candidates:
                 logger.warning(
-                    f"Dependency not found in {package_nvr} root.log, but {len(active_candidates)} "
+                    f"Dependency not found in {package_nvr} installed_pkgs.log, but {len(active_candidates)} "
                     f"active builds exist. Requesting clarification on active builds."
                 )
                 active_issues = ", ".join(key for key, _ in active_candidates)
@@ -1197,7 +1187,7 @@ async def check_package_built_with_fixed_dependency(
                     f"Koji metadata unavailable for {nvr} ({arch} architecture)"
                 )
 
-            # Use epoch from root.log if present, otherwise Koji's epoch
+            # Use epoch from installed_pkgs.log if present, otherwise Koji's epoch
             if epoch_from_log is not None:
                 evr = EVR(
                     epoch=epoch_from_log,
@@ -1222,7 +1212,7 @@ async def check_package_built_with_fixed_dependency(
 
         # All architectures agree - use the common version (pick first)
         used_dep_nvr, _ = dep_versions[next(iter(dep_versions))]
-        # Use epoch from first architecture's root.log for final comparison
+        # Use epoch from first architecture's installed_pkgs.log for final comparison
         used_dep_epoch = dep_versions[next(iter(dep_versions))][1]
         logger.info(
             f"All {len(dep_versions)} architecture(s) agree: {package_nvr} used {dep_component}"
@@ -1261,11 +1251,9 @@ async def check_package_built_with_fixed_dependency(
         # Re-raise infrastructure errors for task retry
         raise
     except Exception as e:
-        logger.exception(
-            f"Error checking if package was built with fixed dependency: {e}. "
-            "Falling back to standard rebuild check."
-        )
-        return False, None, None, None
+        raise TransientInfrastructureError(
+            f"Build verification failed for {package} in {fix_version}: {e}"
+        ) from e
 
 
 def extract_text_from_adf(adf_body) -> str:

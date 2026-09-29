@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock
+
 import pytest
 
 from ymir.agents.rebase_agent import _consolidated_issue_keys
@@ -7,9 +9,11 @@ from ymir.agents.rebase_consolidation import (
     changelog_entry_headers,
     find_triaged_rebase_siblings,
     has_new_latest_changelog_entry,
+    queue_siblings_for_triage,
     uses_autochangelog,
 )
-from ymir.common.models import ConsolidatedIssue
+from ymir.common.constants import JiraLabels
+from ymir.common.models import ConsolidatedIssue, RebaseData
 from ymir.common.utils import extract_text_from_adf
 
 
@@ -232,6 +236,34 @@ def test_build_rebase_siblings_jql_excludes_correct_labels():
     # Excluding it would break check_and_queue_primary_if_ready() which needs to find
     # queued-but-not-started siblings
     assert '"ymir_rebase_sibling"' not in jql
+
+
+@pytest.mark.asyncio
+async def test_queue_siblings_skips_already_fixed_issue_after_jira_search(monkeypatch):
+    """The label check must protect against stale Jira search results."""
+
+    async def fake_run_tool(name, **kwargs):
+        if name == "search_jira_issues":
+            return [{"key": "RHEL-200", "fields": {"summary": "Already fixed"}}]
+        if name == "check_cve_triage_eligibility":
+            return {"is_cve": True, "eligibility": "immediately", "reason": "Ready"}
+        raise AssertionError(f"Unexpected tool: {name}")
+
+    monkeypatch.setattr("ymir.agents.rebase_consolidation.run_tool", fake_run_tool)
+    get_metadata = AsyncMock(return_value=([JiraLabels.TRIAGED_ALREADY_FIXED.value], None))
+    monkeypatch.setattr("ymir.agents.rebase_consolidation.tasks.get_jira_issue_metadata", get_metadata)
+
+    count = await queue_siblings_for_triage(
+        primary_issue="RHEL-100",
+        rebase_data=RebaseData(
+            package="libtiff", version="4.0.9", jira_issue="RHEL-100", fix_version="rhel-8.10"
+        ),
+        available_tools=[],
+        dry_run=True,
+    )
+
+    assert count == 0
+    get_metadata.assert_awaited_once_with("RHEL-200")
 
 
 class TestSiblingCommentExtraction:

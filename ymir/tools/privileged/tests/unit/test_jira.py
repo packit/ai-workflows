@@ -18,6 +18,7 @@ from ymir.tools.privileged.jira import (
     FixApproach,
     GetJiraDetailsTool,
     SearchJiraIssuesTool,
+    SearchJiraIssuesToolInput,
     SetJiraFieldsTool,
     Severity,
     VerifyIssueAuthorTool,
@@ -39,8 +40,36 @@ def _create_async_return(value):
     return async_return()
 
 
+@pytest.mark.asyncio
+async def test_search_jira_issues_follows_next_page_token():
+    tokens = []
+
+    @asynccontextmanager
+    async def post(url, json, headers):
+        assert json["maxResults"] == 50
+        tokens.append(json.get("nextPageToken"))
+
+        async def response_json():
+            if len(tokens) == 1:
+                return {"issues": [{"key": "RHEL-1", "fields": {}}], "nextPageToken": "next"}
+            return {"issues": [{"key": "RHEL-2", "fields": {}}], "isLast": True}
+
+        yield flexmock(json=response_json, raise_for_status=lambda: None)
+
+    flexmock(aiohttp.ClientSession).should_receive("post").replace_with(post)
+
+    tool_input = SearchJiraIssuesToolInput.model_construct(
+        jql="project = RHEL", fields=None, max_results=50, fetch_all=True
+    )
+    result = await SearchJiraIssuesTool()._run(tool_input, None, None)
+
+    assert [issue["key"] for issue in result.result] == ["RHEL-1", "RHEL-2"]
+    assert tokens == [None, "next"]
+
+
 @pytest.fixture(autouse=True)
 def mocked_env():
+    flexmock(os).should_receive("getenv").with_args("PYDANTIC_DISABLE_PLUGINS").and_return(None)
     flexmock(os).should_receive("getenv").with_args("JIRA_URL").and_return("http://jira")
     flexmock(os).should_receive("getenv").with_args("DRY_RUN", "False").and_return("false")
     flexmock(os).should_receive("getenv").with_args("SKIP_SETTING_JIRA_FIELDS", "False").and_return("false")

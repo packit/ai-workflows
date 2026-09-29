@@ -101,6 +101,7 @@ flowchart TD
 | Label | Purpose | Effect |
 |-------|---------|--------|
 | `ymir_retry_needed` | Trigger retry | Forces reprocessing |
+| `ymir_manual_branch_needed` | Target branch must be created manually | Added alongside the triage resolution on the primary and consolidated siblings when `branch_creation.automatic: false` blocks work. Prevents abandoned-task recovery. Create the branch and add `ymir_todo` to the primary; re-triage clears the hold label as part of normal label cleanup. |
 | `ymir_triaged` | Triage completed, no automated follow-up | Terminal state |
 | `ymir_todo` | Maintainer-facing trigger for an e2e run | Fetcher swaps it for `ymir_triage_in_progress` on enqueue; only honored when the changelog shows the label was added by a member of the `Red Hat Employee` Jira group (verified per-issue, not via JQL). The triage run posts an ack comment and a result comment so the requester gets feedback. Automatic runs remain quiet for normal results, but error comments are posted once after the final retry regardless of trigger. |
 | `ymir_consolidate_base` | Mark a backport MR for consolidation (base) | Paired with `ymir_consolidate_next` on another issue for the same package/branch. The fetcher matches the pair, submits a targeted consolidation job, removes both labels, and posts comments. |
@@ -145,7 +146,7 @@ These labels are applied to GitLab merge requests (not Jira issues):
 
 ## Deduplication Logic
 
-**Trigger labels are consumed by the fetcher, all other labels by the agent.** The fetcher atomically removes `ymir_todo` and `ymir_retry_needed` before pushing to Redis, replacing them with `ymir_triage_in_progress` so the very next sweep sees the in-progress marker and skips. Every other `ymir_*` label is cleaned up by the triage agent when it pops the task. If the fetcher's atomic flip fails after retries, the Redis push is **skipped** — the issue stays eligible for the next sweep with its trigger label intact, rather than being enqueued without a dedup anchor.
+**Trigger labels are consumed by the fetcher, all other labels by the agent.** The fetcher atomically removes `ymir_todo` and `ymir_retry_needed` before pushing to Redis, replacing them with `ymir_triage_in_progress` so the very next sweep sees the in-progress marker and skips. The triage agent cleans up old `ymir_*` labels when it pops the task, preserving `ymir_rebase_waiting_for_siblings` until the sibling coordination completes. If the fetcher's atomic flip fails after retries, the Redis push is **skipped** — the issue stays eligible for the next sweep with its trigger label intact, rather than being enqueued without a dedup anchor.
 
 ```mermaid
 flowchart TD
@@ -194,7 +195,7 @@ so clone or queue retries continue only through normal backporting.
 
 Ground rules:
 
-- **Default is quiet.** Normal result comments are suppressed on automatic runs, and intermediate `_failed` labels are not written. Only `not-affected`, `postponed`, `open-ended-analysis`, and `clarification-needed` triage resolutions still post a comment unbidden (those have no MR to look at, so the comment is the only visible explanation). Error comments are posted once after the final retry via `post_terminal_error_comment()`, regardless of trigger.
+- **Default is quiet.** Normal result comments are suppressed on automatic runs, and intermediate `_failed` labels are not written. Only `not-affected`, `postponed`, `open-ended-analysis`, and `clarification-needed` triage resolutions still post a comment unbidden (those have no MR to look at, so the comment is the only visible explanation). Error comments are posted once when processing stops via `post_terminal_error_comment()`, regardless of trigger. Policy read failures propagate and trigger agent-level retry; branch existence checks that fail are retried post-applicability.
 - **`user_triggered=True`** (set on the task when the issue carried `ymir_todo`) enables an immediate private ack comment, normal result comments, and `_failed` labels. Error comments do not depend on this flag — they are posted once after retries are exhausted.
 - **Labels that are state, not notification, are always written.** `ymir_triage_in_progress` at the start of triage, terminal `ymir_*_errored` / `ymir_triaged_*` at the end. Suppressing them would break dedup against the next fetcher sweep.
 - **Jira workflow status changes are opt-in via `JIRA_ALLOW_STATUS_CHANGES`.** When the env var is unset or `false` (the default), the rebase/backport agents do NOT move the issue to "In Progress" on task pop, and the issue-verification agent does NOT transition issues to "Release Pending" / "Closed". When set to `true`, all of those transitions happen. The same flag also gates the preliminary-testing agent setting **`Preliminary Testing = Pass`** — that field admits the build into the next compose, triggers erratum creation, and moves the issue to Integration. Triage and the fetcher never touch the workflow status, regardless of the flag.

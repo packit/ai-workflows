@@ -29,6 +29,18 @@ from ymir.common.version_utils import get_fix_version_variants
 logger = logging.getLogger(__name__)
 
 
+def get_rebase_primary_issue(details: dict) -> str | None:
+    """Read the primary issue from the persistent sibling marker comment."""
+    comments = details.get("fields", {}).get("comment", {}).get("comments", [])
+    for comment in comments:
+        body = extract_text_from_adf(comment.get("body", ""))
+        _, marker, reference = body.partition("Queued for triage as potential sibling of")
+        # Jira may turn the issue key into an ADF inlineCard or HTML smartlink.
+        if marker and (match := re.search(r"\bRHEL-\d+\b", reference)):
+            return match.group(0)
+    return None
+
+
 def uses_autochangelog(spec_path: Path) -> bool:
     """Return whether the spec delegates changelog generation to rpmautospec."""
     with Specfile(spec_path) as spec:
@@ -455,19 +467,7 @@ async def check_and_queue_primary_if_ready(
         )
 
         # Look for comment matching "Queued for triage as potential sibling of {primary}"
-        primary_issue = None
-        comments = sibling_details.get("fields", {}).get("comment", {}).get("comments", [])
-        for comment in comments:
-            # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
-            body = extract_text_from_adf(comment.get("body", ""))
-            if "Queued for triage as potential sibling of" in body:
-                # Extract issue key (format: RHEL-123456)
-                import re
-
-                match = re.search(r"RHEL-\d+", body)
-                if match:
-                    primary_issue = match.group(0)
-                    break
+        primary_issue = get_rebase_primary_issue(sibling_details)
 
         if not primary_issue:
             logger.info(f"No primary issue found in {sibling_issue} comments, skipping check")
@@ -715,18 +715,13 @@ async def find_triaged_rebase_siblings(
                     issue_key=candidate_key,
                 )
 
-                # Look for comment matching "Queued for triage as potential sibling of {jira_issue}"
-                # The comment contains an inlineCard with URL, so we check for both the phrase and issue key
-                has_primary_reference = False
                 comments = candidate_details.get("fields", {}).get("comment", {}).get("comments", [])
-                for comment in comments:
-                    # Extract text from ADF comment body (MCP returns ADF JSON with inlineCard nodes)
-                    body = extract_text_from_adf(comment.get("body", ""))
-                    # Check if comment has the sibling phrase AND references the primary issue
-                    if "Queued for triage as potential sibling of" in body and jira_issue in body:
-                        has_primary_reference = True
-                        break
-
+                has_primary_reference = any(
+                    "Queued for triage as potential sibling of"
+                    in (body := extract_text_from_adf(comment.get("body", "")))
+                    and re.search(rf"\b{re.escape(jira_issue)}\b", body)
+                    for comment in comments
+                )
                 if has_primary_reference:
                     logger.info(f"Sibling {candidate_key} confirmed as sibling of {jira_issue}")
                     consolidated_issue = ConsolidatedIssue(

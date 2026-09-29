@@ -23,6 +23,34 @@ commit missing from the clone is also flagged for review. The check is skipped
 for other branches; Brew lookup failures and unexpected Git errors are logged
 without claiming the branch is stale.
 
+### Manual creation of internal z-stream branches
+
+Packages can disable automatic branch creation in their rules repository's
+`ymir.yaml` (`gitlab.com/redhat/centos-stream/rules/<package>`):
+
+```yaml
+branch_creation:
+  automatic: false
+```
+
+Triage still analyzes applicability and chooses a resolution. If a rebase,
+backport, or rebuild needs a missing internal z-stream branch, processing waits
+with `ymir_manual_branch_needed`. This also applies to direct triage runs.
+Consolidated rebase and rebuild siblings receive the same label, protecting the
+whole group from abandoned-task recovery. Comments identify the primary issue:
+create the branch manually, then add `ymir_todo` to that primary to resume.
+Re-triage (triggered by adding `ymir_todo`) clears old hold labels as part of
+its normal label cleanup. Rebase siblings and primaries still waiting for
+sibling triage do not receive premature retrigger instructions.
+
+Missing or empty configuration, or an omitted `branch_creation` section,
+defaults to automatic creation. Failures reading the policy propagate to the
+workflow and trigger agent-level Redis retry; after retries are exhausted the
+issue receives an errored label. Branch existence checks that fail leave the
+field unknown and are retried post-applicability. Existing branches can be used
+regardless of this setting; CentOS Stream and modular branches keep their
+existing handling. Dry runs do not write hold labels or comments.
+
 ### Y-stream inheritance fast path
 
 For Important and Critical Y-stream CVEs, triage carries the shipped leading

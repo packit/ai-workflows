@@ -316,6 +316,7 @@ async def queue_siblings_for_triage(
                 JiraLabels.TRIAGED_BACKPORT.value,
                 JiraLabels.TRIAGED_REBUILD.value,
                 JiraLabels.TRIAGED_NOT_AFFECTED.value,
+                JiraLabels.TRIAGED_ALREADY_FIXED.value,
                 JiraLabels.TRIAGED_POSTPONED.value,
                 JiraLabels.TRIAGED.value,
                 JiraLabels.BACKPORTED.value,

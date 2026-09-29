@@ -180,7 +180,8 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
             )
         buildroot_repo_url = urljoin(
             internal_repos_host,
-            f"brewroot/repos/{buildroot_branch}{'-z-build' if is_zstream else '-build'}/latest/{build_arch}",
+            f"brewroot/repos/{buildroot_branch}"
+            f"{'-z-build' if is_zstream else '-build'}/latest/{build_arch}?module_hotfixes=True",
         )
         try:
             chroot_config = await _copr_api_call(

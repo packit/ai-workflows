@@ -24,6 +24,7 @@ from ymir.agents.observability import setup_observability
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.rebase_consolidation import (
     check_and_queue_primary_if_ready,
+    get_rebase_primary_issue,
     queue_siblings_for_triage,
 )
 from ymir.agents.rebuild_consolidation import find_rebuild_siblings
@@ -102,7 +103,7 @@ redis_logger = logging.getLogger("agent.redis")
 def _should_update_jira(
     resolution: Resolution = None,
     user_triggered: bool = False,
-    branch_creation_opt_out: bool = False,
+    requires_manual_branch_creation: bool = False,
 ) -> bool:
     """Whether to post a user-facing Jira comment for this run.
 
@@ -120,7 +121,7 @@ def _should_update_jira(
     """
     if resolution == Resolution.ERROR:
         return False
-    if branch_creation_opt_out:
+    if requires_manual_branch_creation:
         return True
     if user_triggered:
         return True
@@ -509,22 +510,36 @@ class TriageState(BaseModel):
             "Set to True when siblings are queued and this issue should wait for them to finish triaging."
         ),
     )
-    branch_creation_opt_out: bool | None = Field(
+    is_rebase_sibling: bool = False
+    automatic_branch_creation_disabled: bool | None = Field(
         default=None,
         description=(
-            "Set to True when the package's ymir.yaml disables automatic branch creation "
-            "and the target internal z-stream branch does not exist yet. None means "
-            "the policy was not applicable or could not be checked."
+            "Whether the package's ymir.yaml disables automatic branch creation. "
+            "The policy is checked only for a missing internal z-stream target branch. "
+            "None means it has not been determined."
         ),
     )
+
+    @property
+    def hold_for_manual_branch_creation(self) -> bool:
+        """Whether this task must wait for a maintainer to create the target branch."""
+        return (
+            self.automatic_branch_creation_disabled is True
+            and self.target_branch_exists is False
+            and self.triage_result is not None
+            and self.triage_result.resolution in (Resolution.REBASE, Resolution.BACKPORT, Resolution.REBUILD)
+            and not (
+                self.triage_result.resolution == Resolution.REBASE
+                and (self.is_rebase_sibling or self.rebase_waiting_for_siblings)
+            )
+        )
 
 
 async def _record_target_branch_existence(state: TriageState, package: str, available_tools) -> None:
     """Record whether an internal z-stream target branch exists for ``package``.
 
     CentOS Stream and other non-z-stream targets intentionally leave the field
-    as ``None``. Callers handle failures as an unavailable check, preserving
-    the existing best-effort behavior of triage.
+    as ``None``.
     """
     if not state.target_branch or parse_zstream_branch_name(state.target_branch) is None:
         return
@@ -534,13 +549,14 @@ async def _record_target_branch_existence(state: TriageState, package: str, avai
         available_tools=available_tools,
         package=package,
     )
-    state.target_branch_exists = state.target_branch in available_branches
+    if isinstance(available_branches, list):
+        state.target_branch_exists = state.target_branch in available_branches
 
 
-async def _record_branch_creation_opt_out(state: TriageState, package: str, available_tools) -> None:
+async def _record_branch_creation_policy(state: TriageState, package: str, available_tools) -> None:
     """Record the branch-creation policy after confirming a target branch is missing."""
     if (
-        state.branch_creation_opt_out is not None
+        state.automatic_branch_creation_disabled is not None
         or state.target_branch_exists is not False
         or not state.target_branch
         or parse_zstream_branch_name(state.target_branch) is None
@@ -548,7 +564,8 @@ async def _record_branch_creation_opt_out(state: TriageState, package: str, avai
         return
 
     branch_config = await tasks.fetch_branch_creation_config(package, available_tools)
-    state.branch_creation_opt_out = not branch_config.automatic
+    state.automatic_branch_creation_disabled = not branch_config.automatic
+    logger.info("Branch creation policy for %s: automatic=%s", package, branch_config.automatic)
 
 
 def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgent:
@@ -827,6 +844,12 @@ async def run_workflow(
                 logger.warning(f"Failed to pre-fetch Jira details for prompt selection: {e}")
 
             input_data = InputSchema(issue=state.jira_issue)
+            state.is_rebase_sibling = (
+                state.is_rebase_sibling or get_rebase_primary_issue(jira_details) is not None
+            )
+            state.rebase_waiting_for_siblings = state.rebase_waiting_for_siblings or (
+                JiraLabels.WAITING_FOR_SIBLINGS.value in jira_details.get("fields", {}).get("labels", [])
+            )
             state.jira_summary = jira_details.get("fields", {}).get("summary")
             raw_component = jira_details.get("fields", {}).get(DOWNSTREAM_COMPONENT_CUSTOM_FIELD)
             state.raw_downstream_component = raw_component or None
@@ -945,22 +968,7 @@ async def run_workflow(
                     await _record_target_branch_existence(state, package, gateway_tools)
                 except Exception as e:
                     logger.warning(f"Failed to check branches for {package}: {e}")
-
-                try:
-                    await _record_branch_creation_opt_out(state, package, gateway_tools)
-                except Exception as e:
-                    logger.warning(
-                        "Failed to read branch creation config for %s: %s; "
-                        "continuing with automatic branch creation",
-                        package,
-                        e,
-                    )
-                if state.branch_creation_opt_out is True:
-                    logger.info(
-                        "Automatic branch creation is disabled for %s; holding %s for manual branch creation",
-                        package,
-                        state.target_branch,
-                    )
+                await _record_branch_creation_policy(state, package, gateway_tools)
 
             if (
                 state.cve_eligibility_result
@@ -1056,16 +1064,8 @@ async def run_workflow(
                 except Exception as e:
                     logger.warning(f"Failed to recheck branches for {package}: {e}")
 
-            if state.target_branch_exists is False and state.branch_creation_opt_out is None:
-                try:
-                    await _record_branch_creation_opt_out(state, package, gateway_tools)
-                except Exception as e:
-                    logger.warning(
-                        "Failed to recheck branch creation config for %s: %s; "
-                        "continuing with automatic branch creation",
-                        package,
-                        e,
-                    )
+            if state.target_branch_exists is False and state.automatic_branch_creation_disabled is None:
+                await _record_branch_creation_policy(state, package, gateway_tools)
 
             if parsed and state.target_branch_exists is False:
                 major_version = parsed[0]
@@ -1293,7 +1293,8 @@ async def run_workflow(
             # Skip consolidation if this issue is already a sibling of another primary
             # Check both label (set when queued) and comments (may not be labeled yet due to race)
             current_labels, _ = await tasks.get_jira_issue_metadata(state.jira_issue)
-            if JiraLabels.REBASE_SIBLING.value in current_labels:
+            if state.is_rebase_sibling or JiraLabels.REBASE_SIBLING.value in current_labels:
+                state.is_rebase_sibling = True
                 logger.info(f"Issue {state.jira_issue} has ymir_rebase_sibling label, skipping consolidation")
                 # Don't search for siblings or set waiting flag
                 state.rebase_waiting_for_siblings = False
@@ -1314,6 +1315,7 @@ async def run_workflow(
                     # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
                     comment_text = extract_text_from_adf(comment.get("body", ""))
                     if "Queued for triage as potential sibling of" in comment_text:
+                        state.is_rebase_sibling = True
                         logger.info(f"Issue {state.jira_issue} is a sibling, skipping consolidation")
                         state.rebase_waiting_for_siblings = False
                         rebase_data.consolidated_issues = []
@@ -1344,9 +1346,11 @@ async def run_workflow(
                 rebase_data.consolidated_issues = []
                 rebase_data.consolidation_summary = None
             else:
-                # No siblings found, queue primary for rebase immediately
-                logger.info(f"No siblings found for {state.jira_issue}, will queue for rebase now")
-                state.rebase_waiting_for_siblings = False
+                logger.info(
+                    "No new siblings queued for %s; waiting for previously queued siblings: %s",
+                    state.jira_issue,
+                    state.rebase_waiting_for_siblings,
+                )
                 rebase_data.consolidated_issues = []
                 rebase_data.consolidation_summary = None
 
@@ -1358,14 +1362,9 @@ async def run_workflow(
                 comment_text += (
                     "\n\n_Note: CVE applicability check could not be performed (source preparation failed)._"
                 )
-            if state.branch_creation_opt_out is True:
-                comment_text += (
-                    "\n\n---\n"
-                    "Automatic branch creation is disabled for this package "
-                    f"(`ymir.yaml` → `branch_creation.automatic: false`). "
-                    f"Branch `{state.target_branch}` does not exist yet.\n\n"
-                    "To proceed, create the branch manually and retrigger processing "
-                    "by adding the `ymir_todo` label."
+            if state.hold_for_manual_branch_creation:
+                comment_text += "\n\n---\n" + tasks.manual_branch_creation_comment(
+                    state.triage_result.data.package, state.target_branch, state.jira_issue
                 )
             logger.info(f"Result to be put in Jira comment: {comment_text}")
             if dry_run:
@@ -1373,7 +1372,7 @@ async def run_workflow(
             if not _should_update_jira(
                 resolution=state.triage_result.resolution,
                 user_triggered=user_triggered,
-                branch_creation_opt_out=state.branch_creation_opt_out is True,
+                requires_manual_branch_creation=state.hold_for_manual_branch_creation,
             ):
                 logger.info(
                     f"Skipping Jira comment for {state.jira_issue} "
@@ -1397,13 +1396,28 @@ async def run_workflow(
                     state.triage_result.resolution.value,
                 )
                 return Workflow.END
-            await tasks.comment_in_jira(
-                jira_issue=state.jira_issue,
-                agent_type="Triage",
-                comment_text=comment_text,
-                available_tools=gateway_tools,
-                user_triggered=user_triggered,
-            )
+            if state.hold_for_manual_branch_creation:
+                siblings = getattr(state.triage_result.data, "consolidated_issues", [])
+                await tasks.handle_manual_branch_creation_required(
+                    tasks.ManualBranchCreationRequired(
+                        state.triage_result.data.package,
+                        state.target_branch,
+                        [state.jira_issue, *[issue.issue_key for issue in siblings]],
+                    ),
+                    agent_type="Triage",
+                    triaged_label=_RESOLUTION_TO_LABEL[state.triage_result.resolution].value,
+                    dry_run=dry_run,
+                    user_triggered=user_triggered,
+                    primary_comment=comment_text,
+                )
+            else:
+                await tasks.comment_in_jira(
+                    jira_issue=state.jira_issue,
+                    agent_type="Triage",
+                    comment_text=comment_text,
+                    available_tools=gateway_tools,
+                    user_triggered=user_triggered,
+                )
             return Workflow.END
 
         workflow.add_step("check_cve_eligibility", check_cve_eligibility)
@@ -1446,7 +1460,12 @@ async def label_postponed_issues(jira_issue: str, output: OutputSchema, dry_run:
         await tasks.set_jira_labels(
             jira_issue=jira_issue,
             labels_to_add=[reason_label.value],
-            labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value, *postponement_labels],
+            labels_to_remove=[
+                JiraLabels.TRIAGE_IN_PROGRESS.value,
+                JiraLabels.MANUAL_BRANCH_NEEDED.value,
+                JiraLabels.WAITING_FOR_SIBLINGS.value,
+                *postponement_labels,
+            ],
             dry_run=dry_run,
             user_triggered=user_triggered,
             critical=True,
@@ -1539,11 +1558,16 @@ async def main() -> None:
                     )
                 else:
                     resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
-                    if resolution_label and output.resolution != Resolution.ERROR:
+                    if (
+                        resolution_label
+                        and output.resolution != Resolution.ERROR
+                        and not state.hold_for_manual_branch_creation
+                    ):
                         try:
                             await tasks.set_jira_labels(
                                 jira_issue=jira_issue,
                                 labels_to_add=[resolution_label.value],
+                                labels_to_remove=[JiraLabels.MANUAL_BRANCH_NEEDED.value],
                                 user_triggered=True,
                                 dry_run=dry_run,
                             )
@@ -1553,7 +1577,7 @@ async def main() -> None:
                                 jira_issue,
                                 e,
                             )
-                    if output.resolution == Resolution.REBUILD:
+                    if output.resolution == Resolution.REBUILD and not state.hold_for_manual_branch_creation:
                         for consolidated in output.data.consolidated_issues:
                             try:
                                 await tasks.set_jira_labels(
@@ -1562,6 +1586,7 @@ async def main() -> None:
                                     labels_to_remove=[
                                         JiraLabels.TRIAGE_IN_PROGRESS.value,
                                         JiraLabels.REBUILT.value,
+                                        JiraLabels.MANUAL_BRANCH_NEEDED.value,
                                     ],
                                     dry_run=dry_run,
                                     user_triggered=True,
@@ -1705,7 +1730,10 @@ async def main() -> None:
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
                         labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
-                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                        labels_to_remove=[
+                            JiraLabels.TRIAGE_IN_PROGRESS.value,
+                            JiraLabels.MANUAL_BRANCH_NEEDED.value,
+                        ],
                         dry_run=dry_run,
                         user_triggered=user_triggered,
                     )
@@ -1741,14 +1769,15 @@ async def main() -> None:
             # retries, not Jira-write retries — set_jira_labels already retries
             # the write internally) and skip processing this iteration.
             try:
-                # Remove all ymir_* labels currently on the issue (including any
-                # deprecated labels like ymir_fusa), except the in-progress anchor
-                # we're about to add. This ensures cleanup of unknown/legacy labels
-                # without requiring hardcoded references.
+                # Keep the waiting marker so sibling completion can release
+                # this primary while it is being re-triaged. Clean other old
+                # ymir_* labels and establish the in-progress anchor.
                 labels_to_remove = [
                     label
                     for label in current_labels
-                    if label.startswith("ymir_") and label != JiraLabels.TRIAGE_IN_PROGRESS.value
+                    if label.startswith("ymir_")
+                    and label
+                    not in (JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.WAITING_FOR_SIBLINGS.value)
                 ]
                 await tasks.set_jira_labels(
                     jira_issue=input.issue,
@@ -1828,39 +1857,8 @@ async def main() -> None:
             else:
                 logger.info(f"Triage resolved as {output.resolution.value} for {input.issue}")
 
-                # Check if this issue is a sibling by checking for sibling comment
-                # (can't use ymir_rebase_sibling label because it was removed at line 1308)
-                is_sibling = False
-                try:
-                    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-                        details = await run_tool(
-                            "get_jira_details",
-                            issue_key=input.issue,
-                            available_tools=gateway_tools,
-                        )
-                        comments = details.get("fields", {}).get("comment", {}).get("comments", [])
-                        for comment in comments:
-                            # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
-                            comment_text = extract_text_from_adf(comment.get("body", ""))
-                            if "Queued for triage as potential sibling of" in comment_text:
-                                is_sibling = True
-                                break
-                except Exception as e:
-                    logger.warning(f"Failed to check if {input.issue} is sibling: {e}")
-
-                branch_creation_opt_out = (
-                    auto_chain
-                    and state.branch_creation_opt_out is True
-                    and output.resolution in (Resolution.REBASE, Resolution.BACKPORT, Resolution.REBUILD)
-                    and not (
-                        output.resolution == Resolution.REBASE
-                        and (
-                            is_sibling
-                            or state.rebase_waiting_for_siblings
-                            or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
-                        )
-                    )
-                )
+                is_sibling = state.is_rebase_sibling
+                hold_for_manual_branch_creation = state.hold_for_manual_branch_creation
 
                 if output.resolution in POSTPONED_RESOLUTIONS:
                     await label_postponed_issues(
@@ -1868,7 +1866,11 @@ async def main() -> None:
                     )
                 else:
                     resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
-                    if resolution_label and output.resolution != Resolution.ERROR:
+                    if (
+                        resolution_label
+                        and output.resolution != Resolution.ERROR
+                        and not hold_for_manual_branch_creation
+                    ):
                         # Terminal resolution label is the dedup anchor that replaces
                         # ymir_triage_in_progress — must be written unconditionally so
                         # the next fetcher sweep skips this issue.
@@ -1887,18 +1889,19 @@ async def main() -> None:
                         # (primary waiting for siblings will be re-triaged when siblings finish,
                         # and terminal label will be added then)
                         if not (
-                            state.rebase_waiting_for_siblings
-                            or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
+                            output.resolution == Resolution.REBASE
+                            and (
+                                state.rebase_waiting_for_siblings
+                                or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
+                            )
                         ):
                             labels_to_add.append(resolution_label.value)
+                            labels_to_remove.append(JiraLabels.WAITING_FOR_SIBLINGS.value)
                         else:
                             logger.info(
                                 f"{input.issue} is waiting for siblings, skipping terminal label "
                                 "(will be added on re-triage after siblings finish)"
                             )
-
-                        if branch_creation_opt_out:
-                            labels_to_add.append(JiraLabels.MANUAL_BRANCH_NEEDED.value)
 
                         await tasks.set_jira_labels(
                             jira_issue=input.issue,
@@ -1912,7 +1915,7 @@ async def main() -> None:
                         # Update current_labels to reflect the changes we just made
                         if is_sibling and JiraLabels.REBASE_SIBLING.value in current_labels:
                             current_labels.remove(JiraLabels.REBASE_SIBLING.value)
-                    if output.resolution == Resolution.REBUILD:
+                    if output.resolution == Resolution.REBUILD and not hold_for_manual_branch_creation:
                         for consolidated in output.data.consolidated_issues:
                             try:
                                 await tasks.set_jira_labels(
@@ -1921,6 +1924,7 @@ async def main() -> None:
                                     labels_to_remove=[
                                         JiraLabels.TRIAGE_IN_PROGRESS.value,
                                         JiraLabels.REBUILT.value,
+                                        JiraLabels.MANUAL_BRANCH_NEEDED.value,
                                     ],
                                     dry_run=dry_run,
                                     user_triggered=user_triggered,
@@ -1930,7 +1934,7 @@ async def main() -> None:
                                     f"Failed to set labels on consolidated issue "
                                     f"{consolidated.issue_key}: {e}"
                                 )
-                    elif output.resolution == Resolution.REBASE:
+                    elif output.resolution == Resolution.REBASE and not hold_for_manual_branch_creation:
                         # Label and link consolidated siblings so they skip re-triage
                         for consolidated in output.data.consolidated_issues:
                             try:
@@ -1940,6 +1944,7 @@ async def main() -> None:
                                     labels_to_remove=[
                                         JiraLabels.TRIAGE_IN_PROGRESS.value,
                                         JiraLabels.REBASED.value,
+                                        JiraLabels.MANUAL_BRANCH_NEEDED.value,
                                     ],
                                     dry_run=dry_run,
                                     user_triggered=user_triggered,
@@ -2042,7 +2047,7 @@ async def main() -> None:
                         else:
                             task = Task(metadata=state.model_dump(), user_triggered=user_triggered)
                             downstream_payload = task.model_dump_json()
-                            if branch_creation_opt_out:
+                            if hold_for_manual_branch_creation:
                                 logger.info(
                                     "Skipping downstream dispatch for %s until branch %s is created manually",
                                     input.issue,
@@ -2060,8 +2065,6 @@ async def main() -> None:
                                 # Skip queueing if issue is waiting for siblings to finish triaging.
                                 # Check both state flag (set mid-workflow) and
                                 # Jira label (persisted across restarts).
-                                # After pod restart/re-triage, state.rebase_waiting_for_siblings
-                                # defaults to False, but the Jira label persists until siblings finish.
                                 elif (
                                     state.rebase_waiting_for_siblings
                                     or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels

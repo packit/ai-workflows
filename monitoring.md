@@ -19,6 +19,14 @@ Weekly rotating role ([definition](https://github.com/packit/agile/issues/972)) 
 - **Retention**: 2 weeks
 - **Filter by**: Jira issue key in metadata or input.value
 
+### Sumo Logic logs
+
+Open [Sumo Logic](https://rhcorporate.sumologic.com/home) and sign in with Red Hat SSO to view the agent logs. Saved queries are under `Library → Folders → jotnar`. You can also create a query for the Jotnar namespace (`Logs` -> `New Log Search`):
+
+```text
+_index="rh_paas" _sourcecategory=openshift "jotnar-ymir--jotnar-ymir"
+```
+
 ### Agent Workflows Tracked
 - **Triage**: Issue analysis, decisions, patch validation, Jira updates
 - **Rebase**: Version mapping, specfile updates, builds

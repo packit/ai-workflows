@@ -578,3 +578,30 @@ async def test_find_triaged_rebase_siblings_no_unbound_error_on_jira_failure():
         )
     assert result == []
     assert summary == ""
+
+
+@pytest.mark.asyncio
+async def test_find_triaged_rebase_siblings_requires_exact_primary_key(monkeypatch):
+    from ymir.agents import rebase_consolidation
+    from ymir.common.models import RebaseData
+
+    async def run_tool(name, **kwargs):
+        if name == "search_jira_issues":
+            return [{"key": "RHEL-300"}]
+        if kwargs["issue_key"] == "RHEL-300":
+            return {
+                "fields": {
+                    "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-2001"}]}
+                }
+            }
+        return {"fields": {}}
+
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    siblings, _ = await find_triaged_rebase_siblings(
+        jira_issue="RHEL-200",
+        rebase_data=RebaseData(
+            jira_issue="RHEL-200", package="bash", version="5.3", fix_version="rhel-10.3.z"
+        ),
+        available_tools=[],
+    )
+    assert siblings == []

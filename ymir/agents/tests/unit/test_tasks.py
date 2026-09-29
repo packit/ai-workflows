@@ -782,6 +782,8 @@ async def test_fork_and_prepare_dist_git_wipes_own_stale_working_dir(git_repo_ba
     mock_tools = [flexmock()]
 
     async def _mock_run_tool(*_args, **_kwargs):
+        if _args[0] == "get_internal_rhel_branches":
+            return ["rhel-10.0"]
         return "https://fork.example.com"
 
     flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
@@ -812,6 +814,8 @@ async def test_fork_and_prepare_dist_git_isolates_workspaces(git_repo_basepath):
     first_file.write_text("first")
 
     async def _mock_run_tool(*_args, **_kwargs):
+        if _args[0] == "get_internal_rhel_branches":
+            raise AssertionError("Callers without branch policy context must keep the existing path")
         return "https://fork.example.com"
 
     flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
@@ -837,6 +841,8 @@ async def test_fork_and_prepare_dist_git_reuses_task_workspace(git_repo_basepath
     task = Task(metadata={"issue": "RHEL-12345"})
 
     async def _mock_run_tool(*_args, **_kwargs):
+        if _args[0] == "get_internal_rhel_branches":
+            return ["rhel-10.0"]
         return "https://fork.example.com"
 
     flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
@@ -1662,7 +1668,7 @@ async def test_handle_zstream_branch_stale_error_skips_comment_on_dry_run():
     )
 
 
-# -- fetch_release_bumping_config ---------------------------------------------
+# -- fetch_branch_creation_config ---------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -1678,9 +1684,17 @@ async def test_fetch_branch_creation_config_returns_default_when_not_found():
 
 
 @pytest.mark.asyncio
-async def test_fetch_branch_creation_config_parses_valid_yaml():
+@pytest.mark.parametrize(
+    "yaml_content",
+    [
+        "branch_creation:\n  automatic: false\n",
+        "# Create manually if branch not found\nbranch_creation:\n  automatic: false\n",
+        "branch_creation:\n  automatic: false\nnote: branch not found\n",
+    ],
+)
+async def test_fetch_branch_creation_config_parses_valid_yaml(yaml_content):
     async def _mock_run_tool(*_args, **_kwargs):
-        return "branch_creation:\n  automatic: false\n"
+        return yaml_content
 
     flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
 
@@ -1690,15 +1704,14 @@ async def test_fetch_branch_creation_config_parses_valid_yaml():
 
 
 @pytest.mark.asyncio
-async def test_fetch_branch_creation_config_returns_default_on_exception():
+async def test_fetch_branch_creation_config_propagates_fetch_errors():
     async def _mock_run_tool(*_args, **_kwargs):
         raise RuntimeError("network error")
 
     flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
 
-    config = await fetch_branch_creation_config("bash", [])
-
-    assert config.automatic is True
+    with pytest.raises(RuntimeError, match="network error"):
+        await fetch_branch_creation_config("bash", [])
 
 
 @pytest.mark.asyncio
@@ -1733,6 +1746,9 @@ async def test_fetch_branch_creation_config_returns_default_when_no_key():
     config = await fetch_branch_creation_config("bash", [])
 
     assert config.automatic is True
+
+
+# -- fetch_release_bumping_config ---------------------------------------------
 
 
 @pytest.mark.asyncio

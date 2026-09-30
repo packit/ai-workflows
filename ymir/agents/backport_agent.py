@@ -89,6 +89,7 @@ from ymir.common.base_utils import (
     run_task_loop,
 )
 from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.cve import extract_cve_ids
 from ymir.common.issue_lock import issue_lock
 from ymir.common.logging_setup import configure_logging, current_jira_issue, get_trajectory_writeable
 from ymir.common.mock_repos import get_mock_local_tool_env
@@ -112,7 +113,6 @@ from ymir.common.models import (
 from ymir.common.reproducer_lock import resolve_clone_root
 from ymir.common.utils import get_all_patches, init_sentry
 from ymir.common.version_utils import detect_modular_issue, is_older_zstream, parse_rhel_version
-from ymir.tools.privileged.jira import extract_cve_ids
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.distgit_detector import DistgitDetectorTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool

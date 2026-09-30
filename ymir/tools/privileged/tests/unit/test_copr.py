@@ -110,7 +110,8 @@ async def test_build_package(build_failure, build_timeout, exclusive_arch, dist_
         bootstrap="image",
         bootstrap_image="registry.access.redhat.com/ubi10/ubi",
         additional_repos=[
-            f"{internal_repos_host}/brewroot/repos/{buildroot_branch}{buildroot_suffix}/latest/{build_arch}",
+            f"{internal_repos_host}/brewroot/repos/{buildroot_branch}"
+            f"{buildroot_suffix}/latest/{build_arch}?module_hotfixes=True",
         ],
         additional_packages=["@build"],
     ).once()

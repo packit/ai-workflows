@@ -2,6 +2,7 @@ from ymir.common.models import (
     AUTOMATED_RESOLUTION_NOT_SUPPORTED,
     POSTPONEMENT_NOTE,
     TRIAGE_DISCLAIMER,
+    AlreadyFixedData,
     ApplicabilityResult,
     BackportData,
     ClarificationNeededData,
@@ -821,3 +822,53 @@ def test_error_list_entry_non_requeueable_when_task_missing():
     )
     assert entry.queue is None
     assert entry.task is None
+
+
+def test_already_fixed_formatting_with_all_fields():
+    """AlreadyFixedData with full rebuild details formats all build and dependency lines."""
+    data = AlreadyFixedData(
+        explanation="Build logs confirm package was created with the fixed dependency.",
+        jira_issue="RHEL-12345",
+        package="myapp",
+        package_nvr="myapp-2.0-1.el9",
+        package_issue_key="RHEL-67890",
+        dependency_issue_key="RHEL-11111",
+        dependency_nvr="libfoo-1.5-2.el9",
+        cve_id="CVE-2025-9999",
+        fix_version="rhel-9.8",
+    )
+    output = TriageOutputSchema(resolution=Resolution.ALREADY_FIXED, data=data)
+    formatted = output.format_for_comment()
+
+    assert "*Package*: myapp" in formatted
+    assert "*Build with Fix*: myapp-2.0-1.el9 (RHEL-67890)" in formatted
+    assert "*Dependency Fix*: libfoo-1.5-2.el9 (RHEL-11111)" in formatted
+    assert "Build logs confirm package was created with the fixed dependency." in formatted
+    assert "*Action Required*: Add build myapp-2.0-1.el9 to the errata for rhel-9.8." in formatted
+    assert AUTOMATED_RESOLUTION_NOT_SUPPORTED in formatted
+    assert TRIAGE_DISCLAIMER in formatted
+
+
+def test_already_fixed_formatting_rebase_no_jira_issue():
+    """AlreadyFixedData for rebase without found Jira issue omits build/dependency lines."""
+    data = AlreadyFixedData(
+        explanation="Package is already at version 3.0 in the rhel-9.8 branch. Search for builds.",
+        jira_issue="RHEL-12345",
+        package="libbar",
+        package_nvr=None,
+        package_issue_key=None,
+        dependency_issue_key=None,
+        dependency_nvr=None,
+        cve_id="CVE-2025-8888",
+        fix_version="rhel-9.8",
+    )
+    output = TriageOutputSchema(resolution=Resolution.ALREADY_FIXED, data=data)
+    formatted = output.format_for_comment()
+
+    assert "*Package*: libbar" in formatted
+    assert "*Build with Fix*:" not in formatted
+    assert "*Dependency Fix*:" not in formatted
+    assert "Package is already at version 3.0" in formatted
+    assert "*Action Required*: Search for the existing build" in formatted
+    assert AUTOMATED_RESOLUTION_NOT_SUPPORTED in formatted
+    assert TRIAGE_DISCLAIMER in formatted

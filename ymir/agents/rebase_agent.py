@@ -752,6 +752,7 @@ async def main() -> None:
             triage_state = task.metadata
             rebase_data = RebaseData.model_validate(triage_state["triage_result"]["data"])
             current_jira_issue.set(rebase_data.jira_issue)
+            requeue = None
             async with issue_lock(redis, rebase_data.jira_issue, prefix="lock:rebase:") as lock_token:
                 if lock_token is None:
                     logger.info(
@@ -759,9 +760,11 @@ async def main() -> None:
                         rebase_data.jira_issue,
                     )
                     return
-                await _process_rebase_locked(task, triage_state, rebase_data)
+                requeue = await _process_rebase_locked(task, triage_state, rebase_data)
+            if requeue is not None:
+                await fix_await(redis.lpush(requeue[0], requeue[1]))
 
-        async def _process_rebase_locked(task, triage_state, rebase_data):
+        async def _process_rebase_locked(task, triage_state, rebase_data) -> tuple[str, str] | None:
             dist_git_branch = triage_state["target_branch"]
             dist_git_namespace = triage_state.get("dist_git_namespace")
             user_triggered = task.user_triggered
@@ -783,7 +786,14 @@ async def main() -> None:
                 comment_text=None,
                 rebase_data=rebase_data,
                 user_triggered=user_triggered,
-            ):
+            ) -> tuple[str, str] | None:
+                """Handle a failed task by re-queuing or finalizing.
+
+                Returns ``(queue, payload)`` when the task should be
+                re-queued.  The caller must push the payload **after**
+                releasing the issue lock to avoid a race where another
+                worker picks up the task while the lock is still held.
+                """
                 task.attempts += 1
                 retry_queue = rebase_queue_todo if task.user_triggered else rebase_queue
                 if task.attempts < max_retries:
@@ -791,59 +801,59 @@ async def main() -> None:
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {rebase_data.jira_issue}"
                     )
-                    await fix_await(redis.lpush(retry_queue, task.model_dump_json()))
-                else:
-                    # Final attempt exhausted — mark errored and stop retrying.
-                    logger.error(
-                        f"Task failed after {max_retries} attempts, "
-                        f"moving to error list: {rebase_data.jira_issue}"
-                    )
-                    # Label all consolidated issues with error status
-                    await update_labels_for_all_issues(
-                        primary_issue=rebase_data.jira_issue,
-                        consolidated_issues=rebase_data.consolidated_issues,
-                        labels_to_add=[JiraLabels.REBASE_ERRORED.value],
-                        labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
-                        dry_run=dry_run,
-                        user_triggered=user_triggered,
-                    )
-                    # Post failure feedback to Jira once, here on the final attempt
-                    # only — never for intermediate retries.
-                    if comment_text and not dry_run:
-                        try:
-                            async with mcp_tools(
-                                os.environ["MCP_GATEWAY_URL"],
-                                call_meta={"jira_issue": rebase_data.jira_issue},
-                            ) as gateway_tools:
-                                # Post detailed error to primary issue (with error handling)
-                                try:
-                                    await tasks.post_terminal_error_comment(
-                                        jira_issue=rebase_data.jira_issue,
-                                        agent_type="Rebase",
-                                        comment_text=comment_text,
-                                        available_tools=gateway_tools,
-                                    )
-                                except Exception as e:
-                                    logger.warning(
-                                        f"Failed to post error comment to primary issue "
-                                        f"{rebase_data.jira_issue}: {e}"
-                                    )
-                                # Link consolidated siblings to primary issue
-                                # (with per-sibling error handling)
-                                await post_failure_comments_to_consolidated_siblings(
-                                    primary_issue=rebase_data.jira_issue,
-                                    consolidated_issues=rebase_data.consolidated_issues,
+                    return (retry_queue, task.model_dump_json())
+                # Final attempt exhausted — mark errored and stop retrying.
+                logger.error(
+                    f"Task failed after {max_retries} attempts, "
+                    f"moving to error list: {rebase_data.jira_issue}"
+                )
+                # Label all consolidated issues with error status
+                await update_labels_for_all_issues(
+                    primary_issue=rebase_data.jira_issue,
+                    consolidated_issues=rebase_data.consolidated_issues,
+                    labels_to_add=[JiraLabels.REBASE_ERRORED.value],
+                    labels_to_remove=[JiraLabels.TRIAGED_REBASE.value],
+                    dry_run=dry_run,
+                    user_triggered=user_triggered,
+                )
+                # Post failure feedback to Jira once, here on the final attempt
+                # only — never for intermediate retries.
+                if comment_text and not dry_run:
+                    try:
+                        async with mcp_tools(
+                            os.environ["MCP_GATEWAY_URL"],
+                            call_meta={"jira_issue": rebase_data.jira_issue},
+                        ) as gateway_tools:
+                            # Post detailed error to primary issue (with error handling)
+                            try:
+                                await tasks.post_terminal_error_comment(
+                                    jira_issue=rebase_data.jira_issue,
+                                    agent_type="Rebase",
+                                    comment_text=comment_text,
                                     available_tools=gateway_tools,
-                                    user_triggered=user_triggered,
                                 )
-                        except Exception as comment_error:
-                            logger.warning(
-                                f"Failed to post final rebase failure comment for "
-                                f"{rebase_data.jira_issue}: {comment_error}"
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to post error comment to primary issue "
+                                    f"{rebase_data.jira_issue}: {e}"
+                                )
+                            # Link consolidated siblings to primary issue
+                            # (with per-sibling error handling)
+                            await post_failure_comments_to_consolidated_siblings(
+                                primary_issue=rebase_data.jira_issue,
+                                consolidated_issues=rebase_data.consolidated_issues,
+                                available_tools=gateway_tools,
+                                user_triggered=user_triggered,
                             )
-                    error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
-                    entry = ErrorListEntry(error_id=error_id, queue=retry_queue, task=task, error=error)
-                    await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
+                    except Exception as comment_error:
+                        logger.warning(
+                            f"Failed to post final rebase failure comment for "
+                            f"{rebase_data.jira_issue}: {comment_error}"
+                        )
+                error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
+                entry = ErrorListEntry(error_id=error_id, queue=retry_queue, task=task, error=error)
+                await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
+                return None
 
             try:
                 logger.info(f"Starting rebase processing for {rebase_data.jira_issue}")
@@ -888,7 +898,7 @@ async def main() -> None:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during rebase processing for {rebase_data.jira_issue}: {error}")
                 reason = e.explain() if isinstance(e, FrameworkError) else e
-                await retry(
+                return await retry(
                     task,
                     ErrorData(details=error, jira_issue=rebase_data.jira_issue),
                     comment_text=f"Agent failed to perform a rebase: {reason}",
@@ -935,7 +945,7 @@ async def main() -> None:
                     # already posted the failure feedback for this graceful path.
                     # Only the crash path (which never reaches that step) passes
                     # comment_text, so we never double-comment.
-                    await retry(
+                    return await retry(
                         task,
                         ErrorData(
                             details=getattr(state.rebase_result, "error", None) or "Unknown rebase error",

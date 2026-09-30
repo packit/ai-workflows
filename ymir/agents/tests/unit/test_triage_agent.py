@@ -22,9 +22,11 @@ from ymir.agents.triage_agent import (
     render_prompt,
     run_workflow,
 )
-from ymir.common.constants import YMIR_COMMENT_MARKER
+from ymir.common.constants import YMIR_COMMENT_MARKER, JiraLabels
 from ymir.common.models import (
+    ApplicabilityResult,
     BackportData,
+    ConsolidatedIssue,
     CVEEligibilityResult,
     NotAffectedData,
     PostponedData,
@@ -35,6 +37,7 @@ from ymir.common.models import (
     TriageEligibility,
     TriageOutputSchema,
 )
+from ymir.common.utils import FIXED_IN_BUILD_CUSTOM_FIELD
 from ymir.common.version_utils import extract_downstream_package, is_modular, parse_module_stream
 
 
@@ -99,6 +102,18 @@ def test_non_user_triggered_skips_comment_when_mr_will_be_opened(resolution):
     """Without ymir_todo, runs do not comment when an MR will be opened —
     the MR itself is the user-visible artifact."""
     assert _should_update_jira(resolution=resolution, user_triggered=False) is False
+
+
+def test_non_user_triggered_posts_manual_branch_creation_hold():
+    """A manual branch hold must be visible even when the resolution would normally be silent."""
+    assert (
+        _should_update_jira(
+            resolution=Resolution.REBASE,
+            user_triggered=False,
+            requires_manual_branch_creation=True,
+        )
+        is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -586,6 +601,30 @@ async def test_determine_target_branch_non_modular_has_no_explicit_namespace():
     assert namespace is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("branch", "available_branches", "expected"),
+    [
+        ("rhel-9.9.0", ["rhel-9.9.0"], True),
+        ("rhel-10.3", [], False),
+        ("c10s", ["rhel-10.3"], None),
+    ],
+)
+async def test_record_target_branch_existence_only_checks_internal_zstreams(
+    branch, available_branches, expected
+):
+    state = TriageState(jira_issue="RHEL-100", target_branch=branch)
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        return available_branches
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    await t_agent._record_target_branch_existence(state, "bash", [])
+
+    assert state.target_branch_exists is expected
+
+
 # --- Per-issue lock tests ---
 
 
@@ -620,6 +659,38 @@ async def test_process_task_acquires_lock_and_proceeds(_mock_env_vars_redis):
 
     process_task = await _capture_process_task(main)
     await process_task(_make_payload())
+
+
+@pytest.mark.asyncio
+async def test_held_primary_is_not_labeled_twice(_mock_env_vars_redis, monkeypatch):
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("TRIAGE_ENQUEUE_REPRODUCER", "false")
+    state = TriageState(
+        jira_issue="RHEL-99999",
+        target_branch="rhel-10.3",
+        target_branch_exists=False,
+        automatic_branch_creation_disabled=True,
+        triage_result=TriageOutputSchema(
+            resolution=Resolution.BACKPORT,
+            data=BackportData(
+                package="bash", jira_issue="RHEL-99999", patch_urls=[], justification="Test hold"
+            ),
+        ),
+    )
+    labels = AsyncMock()
+    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(
+        AsyncMock(return_value=([], "New"))
+    )
+    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(labels)
+    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
+    flexmock(t_agent).should_receive("run_workflow").replace_with(AsyncMock(return_value=state))
+
+    process_task = await _capture_process_task(main)
+    await process_task(_make_payload())
+
+    assert labels.await_count == 1
+    assert labels.await_args.kwargs["labels_to_add"] == [JiraLabels.TRIAGE_IN_PROGRESS.value]
 
 
 def test_build_reproducer_input_from_backport():
@@ -738,6 +809,150 @@ def test_build_reproducer_input_skips_postponed():
 
 
 # --- Eligibility → resolution mapping regression tests ---
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "ready",
+        "direct",
+        "sibling",
+        "waiting",
+        "consolidated",
+        "comment_error",
+    ],
+)
+@pytest.mark.parametrize(
+    ("initial_resolution", "is_affected", "in_buildroot", "expected_resolution", "expect_hold"),
+    [
+        (Resolution.BACKPORT, True, True, Resolution.BACKPORT, True),
+        (Resolution.REBASE, True, True, Resolution.REBASE, True),
+        (Resolution.REBUILD, True, True, Resolution.REBUILD, True),
+        (Resolution.REBUILD, False, True, Resolution.NOT_AFFECTED, False),
+        (Resolution.REBUILD, True, False, Resolution.POSTPONED_DEPENDENCY, False),
+    ],
+)
+async def test_branch_creation_notice_uses_final_resolution(
+    scenario,
+    initial_resolution,
+    is_affected,
+    in_buildroot,
+    expected_resolution,
+    expect_hold,
+    _mock_env_vars,
+    monkeypatch,
+    tmp_path,
+):
+    """Applicability and buildroot decisions can supersede the manual branch hold."""
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+    common_data = {
+        "package": "bash",
+        "jira_issue": "RHEL-99999",
+        "cve_id": "CVE-2025-1234",
+        "fix_version": "rhel-10.3.z",
+    }
+    if initial_resolution == Resolution.BACKPORT:
+        data = BackportData(**common_data, patch_urls=[], justification="Apply upstream fix")
+    elif initial_resolution == Resolution.REBASE:
+        data = RebaseData(**common_data, version="5.3")
+    else:
+        data = RebuildData(**common_data, dependency_issue="RHEL-1", dependency_component="openssl")
+    output = TriageOutputSchema(resolution=initial_resolution, data=data)
+    eligibility = CVEEligibilityResult(
+        is_cve=True, eligibility=TriageEligibility.IMMEDIATELY, reason="Eligible"
+    )
+    applicability = ApplicabilityResult(is_affected=is_affected, explanation="Source analysis result")
+
+    @asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    async def _mock_run_tool(name, **kwargs):
+        if name == "check_cve_triage_eligibility":
+            return eligibility.model_dump()
+        if name == "verify_issue_author":
+            return True
+        if name == "get_internal_rhel_branches":
+            return []
+        if name == "get_jira_details":
+            fields = {FIXED_IN_BUILD_CUSTOM_FIELD: "openssl-3.0-1.el10"}
+            if scenario == "sibling":
+                fields["comment"] = {
+                    "comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]
+                }
+            return {"fields": fields}
+        raise AssertionError(f"Unexpected tool: {name}")
+
+    async def _mock_rules(name, **kwargs):
+        assert name == "get_maintainer_rules"
+        assert kwargs["file_path"] == "ymir.yaml"
+        return "branch_creation:\n  automatic: false\n"
+
+    triage_agent = flexmock(
+        run=AsyncMock(return_value=flexmock(last_message=flexmock(text=output.model_dump_json())))
+    )
+    applicability_agent = flexmock(
+        run=AsyncMock(return_value=flexmock(last_message=flexmock(text=applicability.model_dump_json())))
+    )
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    monkeypatch.setattr(agent_tasks, "mcp_tools", _mock_mcp_tools)
+    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_rules)
+    monkeypatch.setattr(t_agent, "get_mock_local_tool_env", lambda *_: None)
+    monkeypatch.setattr(t_agent, "get_agent_execution_config", dict)
+    monkeypatch.setattr(t_agent, "render_template", lambda *_: "output format")
+    monkeypatch.setattr(t_agent, "render_prompt", AsyncMock(return_value="triage prompt"))
+    monkeypatch.setattr(t_agent, "load_rhel_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(t_agent, "determine_target_branch", AsyncMock(return_value=("rhel-10.3", None)))
+    monkeypatch.setattr(t_agent, "is_older_zstream", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        agent_tasks, "clone_and_prep_sources", AsyncMock(return_value=(tmp_path, tmp_path, True, None))
+    )
+    monkeypatch.setattr(t_agent, "create_applicability_agent", lambda *_: applicability_agent)
+    monkeypatch.setattr(t_agent, "check_build_in_buildroot", AsyncMock(return_value=in_buildroot))
+    siblings = [ConsolidatedIssue(issue_key="RHEL-200")] if scenario == "consolidated" else []
+    monkeypatch.setattr(t_agent, "find_rebuild_siblings", AsyncMock(return_value=(siblings, None)))
+    monkeypatch.setattr(agent_tasks, "get_jira_issue_metadata", AsyncMock(return_value=([], "New")))
+    monkeypatch.setattr(
+        t_agent, "queue_siblings_for_triage", AsyncMock(return_value=2 if scenario == "waiting" else 0)
+    )
+    labels = AsyncMock()
+    monkeypatch.setattr(agent_tasks, "set_jira_labels", labels)
+    comment = (
+        AsyncMock(side_effect=RuntimeError("Jira comments unavailable"))
+        if scenario == "comment_error" and expect_hold
+        else AsyncMock()
+    )
+    monkeypatch.setattr(agent_tasks, "comment_in_jira", comment)
+
+    state = await run_workflow(
+        "RHEL-99999",
+        dry_run=False,
+        triage_agent_factory=lambda *_: triage_agent,
+        auto_chain=scenario != "direct",
+    )
+
+    assert state.automatic_branch_creation_disabled is True
+    assert state.triage_result.resolution == expected_resolution
+    if initial_resolution == Resolution.REBASE and scenario in ("sibling", "waiting"):
+        assert not state.hold_for_manual_branch_creation
+        labels.assert_not_awaited()
+        comment.assert_not_awaited()
+        return
+    held_issues = {"RHEL-99999"} if expect_hold else set()
+    if expect_hold and scenario == "consolidated" and initial_resolution == Resolution.REBUILD:
+        held_issues.add("RHEL-200")
+    assert {call.kwargs["jira_issue"] for call in labels.await_args_list} == held_issues
+    for call in labels.await_args_list:
+        assert JiraLabels.MANUAL_BRANCH_NEEDED.value in call.kwargs["labels_to_add"]
+        assert call.kwargs["critical"] is True
+    assert comment.await_count == (len(held_issues) or 1)
+    text = comment.await_args_list[-1].kwargs["comment_text"]
+    assert ("Automatic branch creation is disabled" in text) is expect_hold
+    assert ("create the branch manually" in text) is expect_hold
+    if expect_hold:
+        assert all("label to RHEL-99999" in call.kwargs["comment_text"] for call in comment.await_args_list)
 
 
 @pytest.mark.asyncio

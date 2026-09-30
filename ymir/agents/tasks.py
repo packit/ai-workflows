@@ -22,7 +22,7 @@ from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE, trace_vi
 from ymir.agents.utils import check_subprocess, mcp_tools, run_subprocess, run_tool
 from ymir.common.base_utils import fix_await, is_cs_branch, is_modular_branch, resolve_dist_git_namespace
 from ymir.common.config import load_rhel_config
-from ymir.common.constants import RedisQueues
+from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.merge_queue import (  # noqa: F401 — re-exported for agents and tests
     _CONSOLIDATION_HASH_KEY,
     SubmitResult,
@@ -38,6 +38,7 @@ from ymir.common.models import (
     ErrorListEntry,
     MergeRequestDetails,
     OpenMergeRequestResult,
+    PackageBranchCreationConfig,
     PackageConsolidationConfig,
     PackageReleaseBumpingConfig,
     PackageReproducerConfig,
@@ -56,6 +57,70 @@ from ymir.tools.unprivileged.specfile import UpdateReleaseTool
 from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
 
 logger = logging.getLogger(__name__)
+
+
+def manual_branch_creation_comment(package: str, branch: str, primary_issue: str) -> str:
+    return (
+        f"Automatic branch creation is disabled for {package} "
+        "(`ymir.yaml` → `branch_creation.automatic: false`). "
+        f"Branch `{branch}` does not exist yet.\n\n"
+        "To proceed, create the branch manually and retrigger processing "
+        f"by adding the `ymir_todo` label to {primary_issue}."
+    )
+
+
+class ManualBranchCreationRequired(FrameworkError):
+    """An existing task must wait for a maintainer to create its target branch."""
+
+    def __init__(self, package: str, branch: str, jira_issues: list[str]):
+        self.package = package
+        self.branch = branch
+        self.jira_issues = list(dict.fromkeys(jira_issues))
+        super().__init__(
+            manual_branch_creation_comment(package, branch, self.jira_issues[0]),
+            is_retryable=False,
+        )
+
+
+async def handle_manual_branch_creation_required(
+    error: ManualBranchCreationRequired,
+    *,
+    agent_type: str,
+    triaged_label: str,
+    dry_run: bool,
+    user_triggered: bool,
+    primary_comment: str | None = None,
+) -> None:
+    """Hold a queued group without treating the maintainer policy as a failed task."""
+    if dry_run:
+        logger.info("[DRY-RUN] %s", error)
+        return
+    # Keep the primary's in-progress marker until every sibling is held.
+    for issue in [*error.jira_issues[1:], error.jira_issues[0]]:
+        await set_jira_labels(
+            jira_issue=issue,
+            labels_to_add=[triaged_label, JiraLabels.MANUAL_BRANCH_NEEDED.value],
+            labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+            user_triggered=user_triggered,
+            critical=True,
+        )
+    try:
+        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+            for issue in error.jira_issues:
+                try:
+                    await comment_in_jira(
+                        jira_issue=issue,
+                        agent_type=agent_type,
+                        comment_text=primary_comment
+                        if issue == error.jira_issues[0] and primary_comment
+                        else str(error),
+                        available_tools=gateway_tools,
+                        user_triggered=user_triggered,
+                    )
+                except Exception:
+                    logger.warning("Could not post manual branch hold comment on %s", issue, exc_info=True)
+    except Exception:
+        logger.warning("Could not connect to post manual branch hold comments", exc_info=True)
 
 
 class ZStreamBranchStaleError(FrameworkError):
@@ -395,6 +460,63 @@ async def prepare_dist_git_from_merge_request(
 
 class InvalidReleaseBumpingConfigError(Exception):
     """Raised when ymir.yaml exists but the release_bumping section cannot be parsed."""
+
+
+class InvalidBranchCreationConfigError(Exception):
+    """Raised when ymir.yaml exists but the branch_creation section cannot be parsed."""
+
+
+async def fetch_branch_creation_config(
+    package: str,
+    available_tools: list,
+) -> PackageBranchCreationConfig:
+    """Fetch the branch creation config from the per-package rules repo.
+
+    Reads the ``branch_creation`` section from ``ymir.yaml`` at
+    ``gitlab.com/redhat/centos-stream/rules/<package>``.
+    Returns the default config (automatic branch creation enabled) when the
+    file is absent, empty, or has no ``branch_creation`` key.
+    Fetch failures propagate so callers can retry.
+
+    Raises:
+        InvalidBranchCreationConfigError: When the file exists but the
+            ``branch_creation`` section does not conform to the expected schema.
+
+    Args:
+        package: RPM package name.
+        available_tools: MCP gateway tools (must include ``get_maintainer_rules``).
+
+    Returns:
+        Parsed branch creation config.
+    """
+    raw = await run_tool(
+        "get_maintainer_rules",
+        package=package,
+        file_path="ymir.yaml",
+        available_tools=available_tools,
+    )
+
+    if not isinstance(raw, str) or raw.startswith("No maintainer rules found"):
+        return PackageBranchCreationConfig()
+
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        raise InvalidBranchCreationConfigError(f"ymir.yaml for {package} is not valid YAML: {e}") from e
+
+    if data is None:
+        return PackageBranchCreationConfig()
+    if not isinstance(data, dict):
+        raise InvalidBranchCreationConfigError(f"ymir.yaml for {package} must be a mapping")
+    if "branch_creation" not in data:
+        return PackageBranchCreationConfig()
+
+    try:
+        return PackageBranchCreationConfig.model_validate(data["branch_creation"])
+    except Exception as e:
+        raise InvalidBranchCreationConfigError(
+            f"ymir.yaml branch_creation section for {package} is malformed: {e}"
+        ) from e
 
 
 async def fetch_release_bumping_config(

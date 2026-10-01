@@ -22,6 +22,8 @@ from ymir.agents.reproducer_agent import (
     _match_regression_sibling_mr,
     _needs_merge_request,
     _prepare_reproducer_branch,
+    _render_fmf_templates,
+    _render_prompt,
     _reproducer_mr_title_tags,
     _resolve_reproducer_mr_target,
     _resolve_test_dir,
@@ -33,7 +35,13 @@ from ymir.agents.reproducer_agent import (
 from ymir.agents.tasks import InvalidReproducerConfigError, fetch_reproducer_config
 from ymir.common.base_utils import check_subprocess
 from ymir.common.constants import JiraLabels
-from ymir.common.models import MergeRequestDetails, ReproducerInputSchema, ReproducerOutputSchema, Task
+from ymir.common.models import (
+    MergeRequestDetails,
+    PackageReproducerConfig,
+    ReproducerInputSchema,
+    ReproducerOutputSchema,
+    Task,
+)
 
 
 def _output(**overrides) -> ReproducerOutputSchema:
@@ -890,6 +898,43 @@ async def test_process_task_proceeds_when_no_terminal_labels(
 
 
 @pytest.mark.asyncio
+async def test_process_task_passes_reproducer_config_to_workflow(_mock_env_vars, _mock_workflow_lock):
+    config = PackageReproducerConfig(
+        enabled=True,
+        fmf={"require": ["runtime-package"]},
+    )
+
+    async def _mock_config(*_args, **_kwargs):
+        return config
+
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return [], "New"
+
+    captured = {}
+
+    async def _mock_workflow(*_args, **kwargs):
+        captured.update(kwargs)
+        result = flexmock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
+        result.should_receive("model_dump_json").and_return("{}")
+        return flexmock(result=result)
+
+    @contextlib.asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    flexmock(agent_tasks).should_receive("fetch_reproducer_config").replace_with(_mock_config)
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
+    flexmock(r_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(r_agent).should_receive("run_workflow").once().replace_with(_mock_workflow)
+
+    await _run_process_task(_make_reproducer_payload())
+
+    assert captured["reproducer_config"] is config
+
+
+@pytest.mark.asyncio
 async def test_process_task_blocks_when_workflow_lock_busy(_mock_env_vars, _mock_reproducer_config_enabled):
     """Busy create/adapt locks park the task until the holder releases."""
 
@@ -938,6 +983,81 @@ async def test_fetch_reproducer_config_parses_enabled():
     config = await fetch_reproducer_config("bind", [])
 
     assert config.enabled is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_reproducer_config_parses_fmf_metadata():
+    async def _mock_run_tool(*_args, **_kwargs):
+        return (
+            "reproducer:\n"
+            "  enabled: true\n"
+            "  fmf:\n"
+            "    require: [runtime-package]\n"
+            "    recommend: [optional-tool]\n"
+            "    environment:\n"
+            "      PACKAGE_SETTING: value\n"
+            "    duration: 30m\n"
+            "    tier: '1'\n"
+            "    tag: [package-specific]\n"
+            "  context:\n"
+            "    by_fix_version:\n"
+            "      rhel-10.3:\n"
+            "        runtime_version: '3.3'\n"
+        )
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    config = await fetch_reproducer_config("bind", [])
+
+    assert config.fmf.require == ["runtime-package"]
+    assert config.fmf.recommend == ["optional-tool"]
+    assert config.fmf.environment == {"PACKAGE_SETTING": "value"}
+    assert config.fmf.duration == "30m"
+    assert config.fmf.tier == "1"
+    assert config.fmf.tag == ["package-specific"]
+    assert config.context.by_fix_version == {"rhel-10.3": {"runtime_version": "3.3"}}
+
+
+@pytest.mark.asyncio
+async def test_fetch_reproducer_config_rejects_unknown_fmf_metadata():
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "reproducer:\n  enabled: true\n  fmf:\n    unsupported: value\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    with pytest.raises(InvalidReproducerConfigError, match="malformed"):
+        await fetch_reproducer_config("bind", [])
+
+
+def test_render_prompt_includes_package_fmf_metadata():
+    input_data = ReproducerInputSchema(
+        jira_issue="RHEL-12345",
+        package="bind",
+        fix_version="rhel-10.3",
+    )
+    config = PackageReproducerConfig(
+        enabled=True,
+        fmf={
+            "require": ["runtime-package"],
+            "recommend": ["optional-tool"],
+            "environment": {"PACKAGE_SETTING": "${runtime_version}"},
+            "duration": "30m",
+        },
+        context={"by_fix_version": {"rhel-10.3": {"runtime_version": "3.3"}}},
+    )
+
+    prompt = _render_prompt(input_data, reproducer_config=config)
+
+    assert "Package-specific FMF metadata from `ymir.yaml`" in prompt
+    assert '"runtime-package"' in prompt
+    assert '"optional-tool"' in prompt
+    assert '"PACKAGE_SETTING": "3.3"' in prompt
+    assert '"duration": "30m"' in prompt
+    assert "${runtime_version}" not in prompt
+
+
+def test_render_fmf_templates_rejects_unknown_variable():
+    with pytest.raises(ValueError, match="Unknown FMF context variable: missing"):
+        _render_fmf_templates({"environment": {"SETTING": "${missing}"}}, {})
 
 
 @pytest.mark.asyncio

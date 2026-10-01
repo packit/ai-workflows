@@ -42,4 +42,6 @@ Prefer rebase-merging over creating a merge commit, unless preserving the branch
 
 ## Mocking
 
-`flexmock` is the preferred framework for mocking in tests.
+`flexmock` is the preferred mock framework in tests ahead of `pytest-mock` and `unittest.mock`.
+Do not use `AsyncMock`, `MagicMock` and `patch` constructs, use `flexmock` instead.
+Since `pytest` is used as the general testing framework, `monkeypatch` may be used in some mock cases (environment variables, etc).

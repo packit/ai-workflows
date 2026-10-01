@@ -4,12 +4,13 @@ import asyncio
 import hashlib
 import hmac as hmac_mod
 import json
-from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
 from aiohttp.test_utils import TestClient, TestServer
+from flexmock import flexmock
 
+from ymir.api import jira_reply, jira_webhook
 from ymir.api.jira_webhook import (
     _extract_command,
     _extract_command_from_adf,
@@ -80,12 +81,11 @@ def _mock_rh_employee():
     Individual tests override this when they need to exercise the
     rejection path.
     """
-    with patch(
-        "ymir.api.jira_webhook._is_rh_employee",
-        new_callable=AsyncMock,
-        return_value=True,
-    ):
-        yield
+
+    async def _mock_rh_employee_true(*_args, **_kwargs):
+        return True
+
+    flexmock(jira_webhook).should_receive("_is_rh_employee").replace_with(_mock_rh_employee_true)
 
 
 @pytest_asyncio.fixture
@@ -396,14 +396,19 @@ async def test_fail_closed_when_secret_not_configured(client, monkeypatch):
 @pytest.mark.asyncio
 async def test_error_triggers_jira_comment(client):
     """A 400 response from dispatch should schedule a Jira comment."""
-    payload = _comment_payload(_adf_mention_body("do-something-unknown arg1"))
-    with patch("ymir.api.jira_webhook.jira_reply.post_comment", new_callable=AsyncMock) as mock_post:
-        resp = await _signed_post(client, payload)
-        assert resp.status == 400
-        await asyncio.sleep(0)  # let fire-and-forget create_task drain
+    call_args = []
 
-    mock_post.assert_awaited_once()
-    call_args = mock_post.call_args
+    async def _mock_post_comment(*_args, **_kwargs):
+        call_args.append(_args)
+
+    payload = _comment_payload(_adf_mention_body("do-something-unknown arg1"))
+    flexmock(jira_reply).should_receive("post_comment").replace_with(_mock_post_comment).once()
+
+    resp = await _signed_post(client, payload)
+
+    assert resp.status == 400
+    await asyncio.sleep(0)  # let fire-and-forget create_task drain
+
     assert call_args[0][0] == "RHEL-99999"
     assert "unknown command" in call_args[0][1]
 
@@ -412,11 +417,11 @@ async def test_error_triggers_jira_comment(client):
 async def test_success_does_not_trigger_jira_comment(client):
     """A 201 success response should NOT schedule a Jira comment."""
     payload = _comment_payload(_adf_mention_body("consolidate expat rhel-9.8.0"))
-    with patch("ymir.api.jira_webhook.jira_reply.post_comment", new_callable=AsyncMock) as mock_post:
-        resp = await _signed_post(client, payload)
-        assert resp.status == 201
+    flexmock(jira_reply).should_receive("post_comment").never()
 
-    mock_post.assert_not_awaited()
+    resp = await _signed_post(client, payload)
+
+    assert resp.status == 201
 
 
 @pytest.mark.asyncio
@@ -429,30 +434,36 @@ async def test_error_comment_with_missing_issue_key(client):
             "author": {"accountId": "user-123", "displayName": "Test User"},
         },
     }
-    with patch("ymir.api.jira_webhook.jira_reply.post_comment", new_callable=AsyncMock) as mock_post:
-        resp = await client.post(
-            "/api/jira/webhook",
-            json=payload,
-            headers=_sign(payload),
-        )
-        assert resp.status == 400
-        await asyncio.sleep(0)
+    flexmock(jira_reply).should_receive("post_comment").never()
 
-    mock_post.assert_not_awaited()
+    resp = await client.post(
+        "/api/jira/webhook",
+        json=payload,
+        headers=_sign(payload),
+    )
+
+    assert resp.status == 400
+    await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
 async def test_malformed_consolidate_triggers_comment(client):
     """Malformed consolidate args should trigger an error comment."""
-    payload = _comment_payload(_adf_mention_body("consolidate"))
-    with patch("ymir.api.jira_webhook.jira_reply.post_comment", new_callable=AsyncMock) as mock_post:
-        resp = await _signed_post(client, payload)
-        assert resp.status == 400
-        await asyncio.sleep(0)  # let fire-and-forget create_task drain
+    call_args = []
 
-    mock_post.assert_awaited_once()
-    assert mock_post.call_args[0][0] == "RHEL-99999"
-    assert "invalid consolidate arguments" in mock_post.call_args[0][1]
+    async def _mock_post_comment(*_args, **_kwargs):
+        call_args.append(_args)
+
+    payload = _comment_payload(_adf_mention_body("consolidate"))
+    flexmock(jira_reply).should_receive("post_comment").replace_with(_mock_post_comment).once()
+
+    resp = await _signed_post(client, payload)
+
+    assert resp.status == 400
+    await asyncio.sleep(0)  # let fire-and-forget create_task drain
+
+    assert call_args[0][0] == "RHEL-99999"
+    assert "invalid consolidate arguments" in call_args[0][1]
 
 
 # -- Red Hat Employee group check ---------------------------------------------
@@ -471,13 +482,15 @@ async def test_rh_employee_command_accepted(client):
 @pytest.mark.asyncio
 async def test_non_rh_employee_rejected(client):
     """A non-employee comment author should receive a 403."""
-    with patch(
-        "ymir.api.jira_webhook._is_rh_employee",
-        new_callable=AsyncMock,
-        return_value=False,
-    ):
-        payload = _comment_payload(_adf_mention_body("consolidate expat rhel-9.8.0"))
-        resp = await _signed_post(client, payload)
+
+    async def _mock_rh_employee_false(*_args, **_kwargs):
+        return False
+
+    flexmock(jira_webhook).should_receive("_is_rh_employee").replace_with(_mock_rh_employee_false)
+    payload = _comment_payload(_adf_mention_body("consolidate expat rhel-9.8.0"))
+
+    resp = await _signed_post(client, payload)
+
     assert resp.status == 403
     body = await resp.json()
     assert "not a Red Hat employee" in body["error"]
@@ -507,13 +520,12 @@ async def test_missing_author_account_id_rejected(client):
 @pytest.mark.asyncio
 async def test_jira_api_failure_fails_closed(client):
     """If the Jira user lookup raises, the command must be rejected (fail closed)."""
-    with patch(
-        "ymir.api.jira_webhook._is_rh_employee",
-        new_callable=AsyncMock,
-        side_effect=Exception("connection refused"),
-    ):
-        payload = _comment_payload(_adf_mention_body("consolidate expat rhel-9.8.0"))
-        resp = await _signed_post(client, payload)
+
+    flexmock(jira_webhook).should_receive("_is_rh_employee").and_raise(Exception("connection refused"))
+    payload = _comment_payload(_adf_mention_body("consolidate expat rhel-9.8.0"))
+
+    resp = await _signed_post(client, payload)
+
     assert resp.status == 403
     body = await resp.json()
     assert "not a Red Hat employee" in body["error"]
@@ -522,13 +534,11 @@ async def test_jira_api_failure_fails_closed(client):
 @pytest.mark.asyncio
 async def test_non_command_comment_skips_employee_check(client):
     """Comments without a bot mention must be ignored without calling the employee check."""
-    with patch(
-        "ymir.api.jira_webhook._is_rh_employee",
-        new_callable=AsyncMock,
-    ) as mock_check:
-        payload = _comment_payload(_adf_plain_body("just a regular comment"))
-        resp = await _signed_post(client, payload)
+
+    flexmock(jira_webhook).should_receive("_is_rh_employee").never()
+    payload = _comment_payload(_adf_plain_body("just a regular comment"))
+
+    resp = await _signed_post(client, payload)
     assert resp.status == 200
     body = await resp.json()
     assert body["ignored"] is True
-    mock_check.assert_not_awaited()

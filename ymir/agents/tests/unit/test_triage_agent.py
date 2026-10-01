@@ -1,5 +1,4 @@
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from flexmock import flexmock
@@ -33,6 +32,7 @@ from ymir.common.models import (
     Resolution,
     Task,
     TriageEligibility,
+    TriageInputSchema,
     TriageOutputSchema,
 )
 from ymir.common.version_utils import extract_downstream_package, is_modular, parse_module_stream
@@ -406,30 +406,33 @@ def _cve_eligibility(*, needs_internal_fix: bool) -> CVEEligibilityResult:
     )
 
 
+async def _older_zstream_true(*_args, **_kwargs):
+    return True
+
+
+async def _older_zstream_false(*_args, **_kwargs):
+    return False
+
+
 @pytest.mark.asyncio
 async def test_determine_target_branch_modular_internal_fix_no_ystream_uses_cs():
     """RHEL 8 has no Y-stream, so even CVEs needing internal fix go to centos-stream."""
-    with (
-        patch(
-            "ymir.agents.triage_agent.is_older_zstream",
-            new_callable=AsyncMock,
-            return_value=False,
-        ),
-        patch(
-            "ymir.agents.triage_agent.load_rhel_config",
-            new_callable=AsyncMock,
-            return_value={
-                "current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"},
-                "current_z_streams": {"8": "rhel-8.10.z", "9": "rhel-9.8.z", "10": "rhel-10.2.z"},
-            },
-        ),
-    ):
-        branch, namespace = await determine_target_branch(
-            _cve_eligibility(needs_internal_fix=True),
-            _modular_backport_data(),
-            jira_summary=_MODULAR_SUMMARY,
-            downstream_component="squid",
-        )
+
+    async def _mock_load_rhel_config(*_args, **_kwargs):
+        return {
+            "current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"},
+            "current_z_streams": {"8": "rhel-8.10.z", "9": "rhel-9.8.z", "10": "rhel-10.2.z"},
+        }
+
+    flexmock(t_agent).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+    flexmock(t_agent).should_receive("load_rhel_config").replace_with(_mock_load_rhel_config)
+
+    branch, namespace = await determine_target_branch(
+        _cve_eligibility(needs_internal_fix=True),
+        _modular_backport_data(),
+        jira_summary=_MODULAR_SUMMARY,
+        downstream_component="squid",
+    )
     assert branch == "stream-squid-4-rhel-8.10.0"
     assert namespace == "centos-stream"
 
@@ -437,34 +440,27 @@ async def test_determine_target_branch_modular_internal_fix_no_ystream_uses_cs()
 @pytest.mark.asyncio
 async def test_determine_target_branch_modular_internal_fix_with_ystream_uses_rhel():
     """RHEL 9 has a Y-stream, so CVEs needing internal fix go to rhel."""
+
+    async def _mock_load_rhel_config(*_args, **_kwargs):
+        return {"current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"}}
+
     summary = "CVE-2026-32748 squid:4/squid: Squid: Denial of Service [rhel-9.8.z]"
-    with (
-        patch(
-            "ymir.agents.triage_agent.is_older_zstream",
-            new_callable=AsyncMock,
-            return_value=False,
-        ),
-        patch(
-            "ymir.agents.triage_agent.load_rhel_config",
-            new_callable=AsyncMock,
-            return_value={"current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"}},
-        ),
-    ):
-        branch, namespace = await determine_target_branch(
-            _cve_eligibility(needs_internal_fix=True),
-            _modular_backport_data(fix_version="rhel-9.8.z"),
-            jira_summary=summary,
-            downstream_component="squid",
-        )
+
+    flexmock(t_agent).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+    flexmock(t_agent).should_receive("load_rhel_config").replace_with(_mock_load_rhel_config)
+
+    branch, namespace = await determine_target_branch(
+        _cve_eligibility(needs_internal_fix=True),
+        _modular_backport_data(fix_version="rhel-9.8.z"),
+        jira_summary=summary,
+        downstream_component="squid",
+    )
     assert branch == "stream-squid-4-rhel-9.8.0"
     assert namespace == "rhel"
 
 
 @pytest.mark.asyncio
 async def test_determine_target_branch_modular_cs_eligible_uses_centos_stream():
-    async def _older_zstream_false(*_args, **_kwargs):
-        return False
-
     flexmock(t_agent).should_receive("is_older_zstream").replace_with(_older_zstream_false)
 
     branch, namespace = await determine_target_branch(
@@ -479,9 +475,6 @@ async def test_determine_target_branch_modular_cs_eligible_uses_centos_stream():
 
 @pytest.mark.asyncio
 async def test_determine_target_branch_modular_older_zstream_uses_rhel():
-    async def _older_zstream_true(*_args, **_kwargs):
-        return True
-
     flexmock(t_agent).should_receive("is_older_zstream").replace_with(_older_zstream_true)
 
     branch, namespace = await determine_target_branch(
@@ -500,32 +493,26 @@ async def test_render_prompt_modular_rhel8_no_internal_fix():
     for modular issues even when CVE eligibility says needs_internal_fix=True.
     Otherwise the prompt tells the LLM to clone from rhel namespace instead of
     centos-stream."""
-    from ymir.common.models import TriageInputSchema as InputSchema
 
-    input_data = InputSchema(issue="RHEL-999")
+    async def _mock_load_rhel_config(*_args, **_kwargs):
+        return {
+            "current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"},
+            "current_z_streams": {"8": "rhel-8.10.z", "9": "rhel-9.8.z", "10": "rhel-10.2.z"},
+        }
+
+    input_data = TriageInputSchema(issue="RHEL-999")
     summary = "CVE-2026-32748 squid:4/squid: Denial of Service [rhel-8.10.z]"
-    with (
-        patch(
-            "ymir.agents.triage_agent.is_older_zstream",
-            new_callable=AsyncMock,
-            return_value=False,
-        ),
-        patch(
-            "ymir.agents.triage_agent.load_rhel_config",
-            new_callable=AsyncMock,
-            return_value={
-                "current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"},
-                "current_z_streams": {"8": "rhel-8.10.z", "9": "rhel-9.8.z", "10": "rhel-10.2.z"},
-            },
-        ),
-    ):
-        prompt = await render_prompt(
-            input_data,
-            fix_version="rhel-8.10.z",
-            cve_eligibility_result=_cve_eligibility(needs_internal_fix=True),
-            jira_summary=summary,
-            downstream_component="squid",
-        )
+
+    flexmock(t_agent).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+    flexmock(t_agent).should_receive("load_rhel_config").replace_with(_mock_load_rhel_config)
+
+    prompt = await render_prompt(
+        input_data,
+        fix_version="rhel-8.10.z",
+        cve_eligibility_result=_cve_eligibility(needs_internal_fix=True),
+        jira_summary=summary,
+        downstream_component="squid",
+    )
     assert "stream-squid-4-rhel-8.10.0" not in prompt
     assert "redhat/rhel/rpms" not in prompt
 
@@ -534,29 +521,23 @@ async def test_render_prompt_modular_rhel8_no_internal_fix():
 async def test_render_prompt_modular_rhel9_has_internal_fix():
     """RHEL 9 has a Y-stream, so render_prompt SHOULD set needs_internal_fix
     for modular issues when CVE eligibility says needs_internal_fix=True."""
-    from ymir.common.models import TriageInputSchema as InputSchema
 
-    input_data = InputSchema(issue="RHEL-999")
+    async def _mock_load_rhel_config(*_args, **_kwargs):
+        return {"current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"}}
+
+    input_data = TriageInputSchema(issue="RHEL-999")
     summary = "CVE-2026-32748 squid:4/squid: Denial of Service [rhel-9.8.z]"
-    with (
-        patch(
-            "ymir.agents.triage_agent.is_older_zstream",
-            new_callable=AsyncMock,
-            return_value=False,
-        ),
-        patch(
-            "ymir.agents.triage_agent.load_rhel_config",
-            new_callable=AsyncMock,
-            return_value={"current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"}},
-        ),
-    ):
-        prompt = await render_prompt(
-            input_data,
-            fix_version="rhel-9.8.z",
-            cve_eligibility_result=_cve_eligibility(needs_internal_fix=True),
-            jira_summary=summary,
-            downstream_component="squid",
-        )
+
+    flexmock(t_agent).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+    flexmock(t_agent).should_receive("load_rhel_config").replace_with(_mock_load_rhel_config)
+
+    prompt = await render_prompt(
+        input_data,
+        fix_version="rhel-9.8.z",
+        cve_eligibility_result=_cve_eligibility(needs_internal_fix=True),
+        jira_summary=summary,
+        downstream_component="squid",
+    )
     assert "stream-squid-4-rhel-9.8.0" in prompt
 
 

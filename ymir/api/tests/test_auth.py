@@ -2,13 +2,14 @@
 
 import json
 import time
-from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from jwcrypto import jwk, jwt
+
+from ymir.api import auth
 
 # ---------------------------------------------------------------------------
 # Helpers: generate a key pair + sign a test token
@@ -65,39 +66,36 @@ def valid_token(keyset):
 
 
 @pytest_asyncio.fixture
-async def app_and_client(keyset):
+async def app_and_client(keyset, monkeypatch):
     """Create a minimal aiohttp app with the OIDC middleware and a test route."""
-    from ymir.api import auth
 
     # Patch env vars and JWKS cache for the middleware.
-    with (
-        patch.object(auth, "OIDC_PROVIDER_URL", "http://localhost:8084/realms/ymir"),
-        patch.object(auth, "OIDC_ISSUER", "http://localhost:8084/realms/ymir"),
-        patch.object(auth, "OIDC_CLIENT_ID", "ymir-trace-ui"),
-        patch.object(auth, "OIDC_CORS_ALLOWED_ORIGIN", "http://localhost:8082"),
-        patch.object(auth, "OIDC_CORS_ALLOWED_ORIGIN_ALT", "DISABLED"),
-        patch.object(auth, "_jwks_cache", keyset),
-        patch.object(auth, "_jwks_fetched_at", time.monotonic()),
-    ):
+    monkeypatch.setattr(auth, "OIDC_PROVIDER_URL", "http://localhost:8084/realms/ymir")
+    monkeypatch.setattr(auth, "OIDC_ISSUER", "http://localhost:8084/realms/ymir")
+    monkeypatch.setattr(auth, "OIDC_CLIENT_ID", "ymir-trace-ui")
+    monkeypatch.setattr(auth, "OIDC_CORS_ALLOWED_ORIGIN", "http://localhost:8082")
+    monkeypatch.setattr(auth, "OIDC_CORS_ALLOWED_ORIGIN_ALT", "DISABLED")
+    monkeypatch.setattr(auth, "_jwks_cache", keyset)
+    monkeypatch.setattr(auth, "_jwks_fetched_at", time.monotonic())
 
-        async def protected_handler(request: web.Request) -> web.Response:
-            return web.json_response(
-                {
-                    "user": request.get("remote_user", "unknown"),
-                }
-            )
+    async def protected_handler(request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "user": request.get("remote_user", "unknown"),
+            }
+        )
 
-        async def public_handler(request: web.Request) -> web.Response:
-            return web.json_response({"status": "ok"})
+    async def public_handler(request: web.Request) -> web.Response:
+        return web.json_response({"status": "ok"})
 
-        app = web.Application(middlewares=[auth.oidc_middleware])
-        app.router.add_get("/healthz", public_handler)
-        app.router.add_get("/readyz", public_handler)
-        app.router.add_post("/api/jira/webhook", public_handler)
-        app.router.add_post("/api/consolidation", protected_handler)
+    app = web.Application(middlewares=[auth.oidc_middleware])
+    app.router.add_get("/healthz", public_handler)
+    app.router.add_get("/readyz", public_handler)
+    app.router.add_post("/api/jira/webhook", public_handler)
+    app.router.add_post("/api/consolidation", protected_handler)
 
-        async with TestClient(TestServer(app)) as client:
-            yield app, client
+    async with TestClient(TestServer(app)) as client:
+        yield app, client
 
 
 # ---------------------------------------------------------------------------
@@ -339,22 +337,19 @@ async def test_user_identity_falls_back_to_email(app_and_client, keyset):
 
 
 @pytest.mark.asyncio
-async def test_oidc_disabled_passes_through():
+async def test_oidc_disabled_passes_through(monkeypatch):
     """When OIDC_PROVIDER_URL is empty, all requests pass through."""
-    from ymir.api import auth
 
-    with (
-        patch.object(auth, "OIDC_PROVIDER_URL", ""),
-        patch.object(auth, "OIDC_CORS_ALLOWED_ORIGIN", ""),
-        patch.object(auth, "OIDC_CORS_ALLOWED_ORIGIN_ALT", ""),
-    ):
+    monkeypatch.setattr(auth, "OIDC_PROVIDER_URL", "")
+    monkeypatch.setattr(auth, "OIDC_CORS_ALLOWED_ORIGIN", "")
+    monkeypatch.setattr(auth, "OIDC_CORS_ALLOWED_ORIGIN_ALT", "")
 
-        async def handler(request: web.Request) -> web.Response:
-            return web.json_response({"ok": True})
+    async def handler(request: web.Request) -> web.Response:
+        return web.json_response({"ok": True})
 
-        app = web.Application(middlewares=[auth.oidc_middleware])
-        app.router.add_post("/api/consolidation", handler)
+    app = web.Application(middlewares=[auth.oidc_middleware])
+    app.router.add_post("/api/consolidation", handler)
 
-        async with TestClient(TestServer(app)) as client:
-            resp = await client.post("/api/consolidation", json={})
-            assert resp.status == 200
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post("/api/consolidation", json={})
+        assert resp.status == 200

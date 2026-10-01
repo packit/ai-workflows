@@ -16,6 +16,20 @@ Triage context (from the triage agent):
 {% endif %}
 Fix version: {{ fix_version }}. Target branch: {{ target_branch }}.
 {% if dry_run %}Dry run mode is enabled — do NOT create merge requests.{% endif %}
+{% if fmf_config %}
+Package-specific FMF metadata from `ymir.yaml`:
+```json
+{{ fmf_config | tojson(indent=2) }}
+```
+Apply these values when creating or adapting `main.fmf`. Merge them with the
+default metadata: additional `require`, `recommend`, and `tag` values should
+extend and deduplicate the defaults, `environment` values should merge with
+configured values taking precedence, and configured scalar values should
+override the defaults. Do not change the test link, framework, or test
+entrypoint unless the configuration explicitly contains a supported value for
+that field.
+
+{% endif %}
 
 **Critical Rules**
 
@@ -442,6 +456,21 @@ Execute the following steps in order.
    4.5. Create `main.fmf` (FMF Metadata)
 
    Create `<test_dir>/main.fmf` with appropriate metadata:
+
+   ### Mandatory package metadata
+
+   Everything configured in `ymir.yaml` and passed into this task is an acceptance
+   requirement for the generated `main.fmf`, not optional guidance.
+
+   After writing `main.fmf`, reopen it and compare it against every rendered
+   metadata value supplied above:
+
+   - Copy every configured `require`, `recommend`, and `tag` item verbatim.
+   - Append configured list items to defaults; do not replace or omit them.
+   - Copy every configured environment key/value verbatim.
+   - Apply configured `duration` and `tier`.
+   - Do not leave `${...}` placeholders unresolved.
+   - Do not return success until all configured values are present in `main.fmf`.
 
    For CVE tests:
    ```yaml

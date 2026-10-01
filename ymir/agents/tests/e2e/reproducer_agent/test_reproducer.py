@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from tabulate import tabulate
 
 from ymir.agents.metrics_middleware import MetricsMiddleware
@@ -20,14 +21,22 @@ from ymir.common.mock_repos import (
     load_all_fixture_configs,
     setup_mock_repos,
 )
+from ymir.common.models import PackageReproducerConfig
 from ymir.common.models import ReproducerInputSchema as InputSchema
 from ymir.common.utils import mcp_tools, run_tool
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_FIXTURES_DIR = Path(__file__).parent.parent / "mock_repos" / "reproducer"
-
 SHARED_BARE_REPOS_DIR = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / "mock_bare"
+
+
+def _load_reproducer_config(config: dict) -> PackageReproducerConfig | None:
+    """Load optional package metadata from the per-issue E2E fixture."""
+    raw_config = config.get("reproducer_config")
+    if raw_config is None:
+        return None
+    return PackageReproducerConfig.model_validate(raw_config)
 
 
 @dataclass
@@ -203,6 +212,7 @@ class ReproducerAgentTestCase:
         self.jira_issue: str = self.input["jira_issue"]
         self.rhel_config_override: dict | None = config.get("rhel_config_override")
         self.verification_config: dict | None = config.get("verification")
+        self.reproducer_config = _load_reproducer_config(config)
         self.metrics: dict = None
         self.finished_state: ReproducerState | None = None
         self.error: BaseException | None = None
@@ -241,6 +251,7 @@ class ReproducerAgentTestCase:
                     dry_run=True,
                     reproducer_agent_factory=testing_factory,
                     input_data=input_data,
+                    reproducer_config=self.reproducer_config,
                 )
         except BaseException as e:
             self.error = e
@@ -525,6 +536,20 @@ def test_reproducer_agent_artifacts(test_case: ReproducerAgentTestCase):
         f"{test_case.jira_issue}: main.fmf must link to the Jira issue via verifies"
     )
     assert "verifies:" in main_fmf_content
+
+    if test_case.reproducer_config:
+        fix_version = test_case.input.get("fix_version")
+        context = test_case.reproducer_config.context.by_fix_version.get(fix_version, {})
+        test_stream = context.get("test_stream")
+        assert test_stream, f"{test_case.jira_issue}: missing test_stream fixture context"
+
+        fmf = yaml.safe_load(main_fmf_content)
+        assert f"expat-{test_stream}" in fmf.get("tag", []), (
+            f"{test_case.jira_issue}: main.fmf is missing the interpolated Expat tag"
+        )
+        assert fmf.get("environment", {}).get("EXPAT_TEST_STREAM") == test_stream, (
+            f"{test_case.jira_issue}: main.fmf is missing the interpolated test stream"
+        )
 
 
 # ---------------------------------------------------------------------------

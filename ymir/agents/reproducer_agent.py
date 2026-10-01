@@ -44,6 +44,7 @@ from ymir.common.models import (
     ErrorData,
     ErrorListEntry,
     MergeRequestDetails,
+    PackageReproducerConfig,
     Task,
 )
 from ymir.common.models import (
@@ -191,6 +192,10 @@ class _PromptContext(InputSchema):
         default=None,
         description="Relative test directory path already on the MR branch",
     )
+    fmf_config: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Package-specific FMF metadata from the package rules",
+    )
 
 
 @dataclass
@@ -211,6 +216,7 @@ def _render_prompt(
     input_data: InputSchema,
     dry_run: bool = False,
     bootstrap: TestsCloneBootstrap | None = None,
+    reproducer_config: PackageReproducerConfig | None = None,
 ) -> str:
     """Render the reproducer prompt template with the input schema fields."""
     working_dir = (
@@ -226,6 +232,11 @@ def _render_prompt(
         existing_mr_url=bootstrap.existing_mr_url if bootstrap else None,
         mr_source_branch=bootstrap.mr_source_branch if bootstrap else None,
         existing_test_directory=bootstrap.existing_test_directory if bootstrap else None,
+        fmf_config=(
+            reproducer_config.fmf.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+            if reproducer_config
+            else {}
+        ),
     )
     return render_template(_PROMPT_TEMPLATE, context)
 
@@ -820,8 +831,8 @@ async def _reproducer_enabled_for_package(
     *,
     dry_run: bool,
     user_triggered: bool,
-) -> bool:
-    """Return False when reproducer is disabled or rules config is invalid."""
+) -> PackageReproducerConfig | None:
+    """Return the enabled package config, or None when it cannot run."""
     try:
         config = await tasks.fetch_reproducer_config(package, gateway_tools)
     except InvalidReproducerConfigError as e:
@@ -839,13 +850,13 @@ async def _reproducer_enabled_for_package(
                 available_tools=gateway_tools,
                 user_triggered=user_triggered,
             )
-        return False
+        return None
 
     if not config.enabled:
         logger.info("Reproducer not enabled for %s, skipping", package)
-        return False
+        return None
 
-    return True
+    return config
 
 
 async def run_workflow(
@@ -855,6 +866,7 @@ async def run_workflow(
     input_data: InputSchema | None = None,
     user_triggered: bool = False,
     redis_conn=None,
+    reproducer_config: PackageReproducerConfig | None = None,
 ):
     local_tool_options = None
     if mock_env := get_mock_local_tool_env(jira_issue):
@@ -890,7 +902,12 @@ async def run_workflow(
             logger.info(f"Running reproducer analysis for {state.jira_issue}")
 
             response = await reproducer_agent.run(
-                _render_prompt(agent_input, dry_run=dry_run, bootstrap=bootstrap),
+                _render_prompt(
+                    agent_input,
+                    dry_run=dry_run,
+                    bootstrap=bootstrap,
+                    reproducer_config=reproducer_config,
+                ),
                 expected_output=render_template("reproducer/output_format.j2"),
                 **get_agent_execution_config(),
             )
@@ -1308,13 +1325,14 @@ async def main() -> None:
 
             call_meta = {"jira_issue": input_data.jira_issue, "package": input_data.package}
             async with mcp_tools(os.getenv("MCP_GATEWAY_URL"), call_meta=call_meta) as gateway_tools:
-                if not await _reproducer_enabled_for_package(
+                reproducer_config = await _reproducer_enabled_for_package(
                     input_data.package,
                     input_data.jira_issue,
                     gateway_tools,
                     dry_run=dry_run,
                     user_triggered=user_triggered,
-                ):
+                )
+                if reproducer_config is None or not reproducer_config.enabled:
                     return
 
             lock_id = await resolve_reproducer_lock_id(
@@ -1397,6 +1415,7 @@ async def main() -> None:
                         input_data=input_data,
                         user_triggered=user_triggered,
                         redis_conn=redis,
+                        reproducer_config=reproducer_config,
                     )
                     output = state.result
                     logger.info(

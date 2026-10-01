@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from ymir.common.validators import UniqueSortedList
 
@@ -966,6 +966,28 @@ class PackageConsolidationConfig(BaseModel):
     )
 
 
+class PackageReproducerFmfConfig(BaseModel):
+    """Package-specific FMF metadata added to the default reproducer template."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    require: list[str] = Field(
+        default_factory=list,
+        description="Additional packages required by the reproducer",
+    )
+    recommend: list[str] = Field(
+        default_factory=list,
+        description="Optional packages recommended by the reproducer",
+    )
+    environment: dict[str, str] = Field(
+        default_factory=dict,
+        description="Environment variables required by the reproducer",
+    )
+    duration: str | None = Field(default=None, description="FMF test duration override")
+    tier: str | int | None = Field(default=None, description="FMF test tier override")
+    tag: list[str] = Field(default_factory=list, description="Additional FMF test tags")
+
+
 class PackageReproducerConfig(BaseModel):
     """Machine-readable reproducer config from the per-package rules repo.
 
@@ -976,6 +998,10 @@ class PackageReproducerConfig(BaseModel):
     enabled: bool = Field(
         default=False,
         description="Whether to run the Ymir reproducer workflow for this package",
+    )
+    fmf: PackageReproducerFmfConfig = Field(
+        default_factory=PackageReproducerFmfConfig,
+        description="Package-specific FMF metadata merged into the default reproducer template",
     )
 
 

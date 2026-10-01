@@ -33,6 +33,7 @@ from ymir.agents.utils import (
     mcp_tools,
     render_template,
     resolve_chat_model_override,
+    run_subprocess,
     run_tool,
 )
 from ymir.common.base_utils import fix_await, redis_client, run_task_loop
@@ -79,6 +80,102 @@ _REPRODUCER_TERMINAL_LABELS = {
 }
 
 _PROMPT_TEMPLATE = "reproducer/prompt.j2"
+_FIX_TMT_LINT_PROMPT_TEMPLATE = "reproducer/prompt_fix_tmt_lint.j2"
+_DEFAULT_MAX_TMT_LINT_FIX_ATTEMPTS = 3
+
+
+class ReproducerState(BaseModel):
+    jira_issue: str
+    result: OutputSchema | None = Field(default=None)
+    tmt_lint_error: str | None = Field(default=None)
+    tmt_lint_attempts: int = Field(default=0)
+
+
+class _FixTmtLintPromptContext(BaseModel):
+    """Context for the post-lint fix prompt."""
+
+    jira_issue: str
+    package: str
+    test_directory: str
+    tests_clone_path: str
+    tmt_lint_error: str
+    testing_farm_request_id: str | None = None
+    dry_run: bool = False
+
+
+async def run_tmt_lint(tests_clone: Path, test_directory: str) -> tuple[bool, str]:
+    """Run deterministic ``tmt lint`` on the test path that will be published.
+
+    Returns ``(ok, combined_output)``. Creates a minimal ``.fmf/version`` at the
+    tests-clone root when missing so lint can resolve the tree.
+    """
+    test_dir = _resolve_test_dir(tests_clone, test_directory)
+    if test_dir is None:
+        return False, f"Cannot lint: test directory not found ({test_directory!r})"
+
+    has_fmf = (test_dir / "main.fmf").is_file() or any(test_dir.glob("*.fmf"))
+    if not has_fmf:
+        return False, f"Cannot lint: no FMF metadata under {test_directory}"
+
+    fmf_version = tests_clone / ".fmf" / "version"
+    if not fmf_version.is_file():
+        fmf_version.parent.mkdir(parents=True, exist_ok=True)
+        fmf_version.write_text("1\n")
+
+    rel = test_dir.relative_to(tests_clone.resolve()).as_posix()
+    lint_name = f"/{rel}"
+    try:
+        exit_code, stdout, stderr = await asyncio.wait_for(
+            run_subprocess(["tmt", "lint", lint_name], cwd=tests_clone),
+            timeout=60,
+        )
+    except TimeoutError:
+        return False, f"tmt lint {lint_name} timed out after 60 seconds"
+    output = "\n".join(part for part in (stdout, stderr) if part).strip()
+    if exit_code == 0:
+        return True, output
+    if not output:
+        output = f"tmt lint {lint_name} failed with exit code {exit_code}"
+    return False, output
+
+
+async def _cancel_active_reservations(
+    tf_cleanup: TFReservationCleanupMiddleware,
+    gateway_tools: list,
+    jira_issue: str,
+) -> None:
+    """Explicitly cancel all active TF reservations via MCP.
+
+    The middleware ``finally`` is the safety net for crashes; this is the
+    intentional release on the happy path (lint passed, or lint exhausted).
+    """
+    for request_id in list(tf_cleanup.active_reservations):
+        try:
+            await run_tool(
+                "cancel_testing_farm_request",
+                request_id=request_id,
+                available_tools=gateway_tools,
+            )
+            logger.info(
+                "Cancelled TF reservation %s for %s after tmt lint",
+                request_id,
+                jira_issue,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to cancel TF reservation %s for %s — middleware will retry in finally",
+                request_id,
+                jira_issue,
+            )
+
+
+def _tests_clone_for_result(jira_issue: str, package: str) -> Path:
+    return (
+        Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos"))
+        / "Reproducer"
+        / jira_issue
+        / f"tests-{package}"
+    )
 
 
 # MCP tool names the reproducer agent needs access to
@@ -99,11 +196,6 @@ _REPRODUCER_MCP_TOOLS = [
     "run_remote_command",
     "copy_files_to_remote",
 ]
-
-
-class ReproducerState(BaseModel):
-    jira_issue: str
-    result: OutputSchema | None = Field(default=None)
 
 
 def create_reproducer_agent(gateway_tools, local_tool_options=None, extra_middlewares=None) -> ReasoningAgent:
@@ -133,8 +225,12 @@ def create_reproducer_agent(gateway_tools, local_tool_options=None, extra_middle
         role="Red Hat Enterprise Linux developer",
         instructions=[
             "Do not perform root cause analysis or source code tracing — use the provided triage summary.",
-            "Always return the Testing Farm machine by calling cancel_testing_farm_request "
-            "when done, even if the reproducer failed.",
+            "Step 6 is mandatory: on publish-success (success=true with a test ready to "
+            "publish) you MUST NOT call cancel_testing_farm_request — leave the Testing "
+            "Farm reservation active so the workflow can run tmt lint and possibly return "
+            "with lint errors. On every other outcome (failure, not-reproducible, "
+            "retryable_error, or success that will not publish), you MUST call "
+            "cancel_testing_farm_request when you still hold a request ID — no exceptions.",
             "When constructing patch URLs for upstream commits, always use https://. "
             "Use get_github_patch for HTTPS GitHub URLs and get_patch_from_url for all other URLs. "
             "For non-GitHub URLs, retry with http:// if https:// fails when validating a patch; "
@@ -884,6 +980,9 @@ async def run_workflow(
             bootstrap = await _bootstrap_tests_clone(working_dir, agent_input, gateway_tools)
 
         workflow = Workflow(ReproducerState, name="ReproducerWorkflow")
+        max_tmt_lint_fix_attempts = int(
+            os.getenv("MAX_TMT_LINT_FIX_ATTEMPTS", str(_DEFAULT_MAX_TMT_LINT_FIX_ATTEMPTS))
+        )
 
         async def run_reproducer_analysis(state):
             """Run the reproducer agent."""
@@ -899,7 +998,129 @@ async def run_workflow(
             # Normalize jira_issue to upper-case
             state.result.jira_issue = state.result.jira_issue.upper()
 
+            if _needs_merge_request(state.result):
+                return "validate_tmt_lint"
             return "create_merge_request"
+
+        async def validate_tmt_lint(state):
+            """Deterministic tmt lint gate before MR creation (PACKIT-5417)."""
+            result = state.result
+            if result is None:
+                raise RuntimeError("tmt lint validation requires an existing reproducer result")
+
+            tests_clone = _tests_clone_for_result(state.jira_issue, result.package)
+            if not tests_clone.is_dir():
+                logger.warning(
+                    "Tests clone not found at %s — cannot run tmt lint",
+                    tests_clone,
+                )
+                result.success = False
+                result.summary += " (tmt lint skipped: tests clone directory not found)"
+                return "handle_results"
+
+            if not result.test_directory:
+                result.success = False
+                result.summary += " (tmt lint skipped: test_directory missing)"
+                return "handle_results"
+
+            logger.info(
+                "Running tmt lint for %s at %s/%s (attempt %s)",
+                state.jira_issue,
+                tests_clone,
+                result.test_directory,
+                state.tmt_lint_attempts + 1,
+            )
+            ok, output = await run_tmt_lint(tests_clone, result.test_directory)
+            if ok:
+                logger.info("tmt lint passed for %s", state.jira_issue)
+                state.tmt_lint_error = None
+                await _cancel_active_reservations(tf_cleanup, gateway_tools, state.jira_issue)
+                return "create_merge_request"
+
+            state.tmt_lint_error = output
+            logger.warning(
+                "tmt lint failed for %s (after %s/%s fix attempts):\n%s",
+                state.jira_issue,
+                state.tmt_lint_attempts,
+                max_tmt_lint_fix_attempts,
+                output[:2000],
+            )
+            # Attempts count completed fix rounds; only re-enter the agent while
+            # under the limit (MAX=3 ⇒ up to 3 fix_tmt_lint runs).
+            if state.tmt_lint_attempts >= max_tmt_lint_fix_attempts:
+                result.success = False
+                result.summary += (
+                    f" (tmt lint failed after {state.tmt_lint_attempts} fix attempts: {output[:500]})"
+                )
+                await _cancel_active_reservations(tf_cleanup, gateway_tools, state.jira_issue)
+                return "handle_results"
+            state.tmt_lint_attempts += 1
+            return "fix_tmt_lint"
+
+        async def fix_tmt_lint(state):
+            """Re-enter the agent with lint errors; keep TF reservation when possible."""
+            result = state.result
+            if result is None or not state.tmt_lint_error:
+                raise RuntimeError("tmt lint fix requires an existing result and lint error output")
+
+            tests_clone = _tests_clone_for_result(state.jira_issue, result.package)
+            active = tf_cleanup.active_reservations
+            tf_request_id = result.testing_farm_request_id
+            if tf_request_id and tf_request_id in active:
+                pass  # keep agent-reported id when still tracked
+            elif active:
+                # Missing/stale output id; prefer a still-active reservation.
+                tf_request_id = next(iter(active))
+            else:
+                # Do not claim a reservation is live when middleware holds none.
+                tf_request_id = None
+
+            logger.info(
+                "Running tmt lint fix agent for %s (attempt %s, tf=%s)",
+                state.jira_issue,
+                state.tmt_lint_attempts,
+                tf_request_id,
+            )
+
+            # Fresh agent instance (like backport fix_build_error) but same TF middleware.
+            fix_agent = reproducer_agent_factory(
+                gateway_tools, local_tool_options, extra_middlewares=[tf_cleanup]
+            )
+            response = await fix_agent.run(
+                render_template(
+                    _FIX_TMT_LINT_PROMPT_TEMPLATE,
+                    _FixTmtLintPromptContext(
+                        jira_issue=state.jira_issue,
+                        package=result.package,
+                        test_directory=result.test_directory or "",
+                        tests_clone_path=str(tests_clone),
+                        tmt_lint_error=state.tmt_lint_error,
+                        testing_farm_request_id=tf_request_id,
+                        dry_run=dry_run,
+                    ),
+                ),
+                expected_output=render_template("reproducer/output_format.j2"),
+                **get_agent_execution_config(),
+            )
+            original_test_directory = result.test_directory
+            state.result = OutputSchema.model_validate_json(response.last_message.text)
+            state.result.jira_issue = state.result.jira_issue.upper()
+
+            if state.result.test_directory != original_test_directory:
+                logger.warning(
+                    "Fix agent changed test_directory from %r to %r for %s — "
+                    "restoring original to avoid linting/committing the wrong path",
+                    original_test_directory,
+                    state.result.test_directory,
+                    state.jira_issue,
+                )
+                state.result.test_directory = original_test_directory
+
+            if not state.result.success:
+                return "handle_results"
+            if not _needs_merge_request(state.result):
+                return "create_merge_request"
+            return "validate_tmt_lint"
 
         async def create_merge_request(state):
             """Fork, push, and open or update a merge request for verified reproducers."""
@@ -925,12 +1146,7 @@ async def run_workflow(
             agent_input = InputSchema(jira_issue=state.jira_issue) if input_data is None else input_data
 
             try:
-                tests_clone = (
-                    Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos"))
-                    / "Reproducer"
-                    / state.jira_issue
-                    / f"tests-{package}"
-                )
+                tests_clone = _tests_clone_for_result(state.jira_issue, package)
 
                 if not tests_clone.is_dir():
                     logger.warning(f"Tests clone not found at {tests_clone}, skipping MR creation")
@@ -1116,6 +1332,8 @@ async def run_workflow(
             return Workflow.END
 
         workflow.add_step("run_reproducer_analysis", run_reproducer_analysis)
+        workflow.add_step("validate_tmt_lint", validate_tmt_lint)
+        workflow.add_step("fix_tmt_lint", fix_tmt_lint)
         workflow.add_step("create_merge_request", create_merge_request)
         workflow.add_step("handle_results", handle_results)
 

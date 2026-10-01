@@ -140,7 +140,7 @@ Treat maintainer rules as additional guidance for package-specific decisions, bu
 
 This step provisions a real RHEL machine via Testing Farm for verifying the reproducer. The machine must be reserved BEFORE running the test so it is ready when needed.
 
-**IMPORTANT:** Steps 3 through 5 form the try block and step 6 is the finally block. If ANY error occurs during steps 3-5 (including step 4), you MUST still execute step 6 to release the machine. Never leave a Testing Farm machine reserved.
+**IMPORTANT:** Steps 3 through 5 form the try block. You MUST execute step 6 before returning output — see step 6 for the exact Path A / Path B rules on when to cancel and when to keep the reservation.
 
 1. Determine the RHEL compose for the affected version:
    - Extract the RHEL major version from `{{fix_version}}`, `{{target_branch}}`, or the Jira issue's Affects Version field.
@@ -475,7 +475,7 @@ Compare the output and exit code against the expected detection behavior:
 - The detection method fires: crash detected, wrong output observed, timeout hit, memory leak found, etc.
 - This means the reproducer WORKS. The test correctly detects the bug on the unpatched system.
 - Set `reproducer_verified` = true.
-- Proceed to step 6 (return machine), then produce your final output JSON. The workflow creates the merge request from your output.
+- Proceed to step 6 (Path A — do not cancel), then produce your final output JSON. The workflow runs `tmt lint`, then creates the merge request from your output.
 
 **Case B: Bug is NOT reproduced (test PASSES — the bug is not triggered)**
 - The program does not crash, output is correct, no timeout, no leak, etc.
@@ -557,25 +557,22 @@ If the bug could not be reproduced after the maximum number of iterations:
 4. Save the documentation as `not_reproducible_reason` for the output schema.
 5. Propose setting Test Coverage to "Regression Only" in the Jira comment.
 
-### Step 6: Return Testing Farm Machine
+### Step 6: Return Testing Farm Machine (mandatory — choose exactly one path)
 
-**CRITICAL:** This step MUST always execute, regardless of whether steps 3-5 succeeded or failed. Treat the entire step 3-5-6 sequence as a try/finally block — step 6 is the `finally`.
+**CRITICAL:** You MUST execute step 6 before producing final output. Never leave the reservation in an undefined state. The workflow runs deterministic `tmt lint` after you return; on publish-success it may reuse the same reservation for a fix loop (same pattern as backport build failures).
 
-1. If `tf_request_id` is set (a machine was reserved):
-   - Call `cancel_testing_farm_request` with `request_id` = `tf_request_id`.
-   - Log whether the cancellation succeeded or failed (but do not halt the workflow on failure).
+Decide which path applies, then follow it with no exceptions:
 
-2. If `tf_request_id` is not set (reservation was never made or failed before returning a request ID), skip this step.
-
-3. Clear `ssh_connection` to prevent accidental reuse.
-
-Even if the reproducer verification succeeded, the machine must be returned. Even if an unrelated error occurred, the machine must be returned. Even if the agent is about to report an error, the machine must be returned. There are no exceptions.
+1. **Path A — publish success** (`success=true` and an MR is expected): you MUST NOT call `cancel_testing_farm_request`. Leave the reservation active. Keep `tf_request_id` set and include `testing_farm_request_id` in your output. The workflow will lint, then either open the MR or return to you with lint errors, and will cancel the reservation when finished.
+2. **Path B — every other outcome** (failure, not-reproducible, retryable_error, or any case where no MR will be published): if a machine was reserved (request ID is set), you MUST call `cancel_testing_farm_request` with that request ID. Log whether cancellation succeeded or failed, but do not halt on cancel failure. Treat Path B as a hard `finally` — even if an unrelated error occurred, even if you are about to report an error, the machine MUST be returned.
+3. If no machine was reserved (reservation never made / failed before a request ID), skip cancellation.
+4. Clear `ssh_connection` only after you cancel (Path B), or when you never had SSH.
 
 ### After Step 6: Produce Output (MR is orchestration-owned)
 
 Do **NOT** create a merge request yourself. Do **NOT** fork, push, or open an MR.
 
-After returning the TF machine (step 6), produce your final output JSON. When `success` is true and dry-run is false, the BeeAI workflow (or calling orchestration) commits the test files from the tests clone, forks/pushes, and opens the MR with label `ymir_reproducer`. Leave `test_mr_url` out of your agent output — orchestration sets it.
+Produce your final output JSON after the step 6 rules above. When `success` is true and dry-run is false, the BeeAI workflow runs `tmt lint`, then commits the test files from the tests clone, forks/pushes, and opens the MR with label `ymir_reproducer`. Leave `test_mr_url` out of your agent output — orchestration sets it.
 
 Do NOT post a Jira comment yourself. The workflow handles Jira commenting automatically after you return your output. Focus on producing accurate output fields.
 

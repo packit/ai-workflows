@@ -697,6 +697,71 @@ class TestPreliminaryTestingTemplate:
         assert "{panel}" in result
 
 
+class _ReproducerPromptInput(BaseModel):
+    jira_issue: str
+    package: str | None = None
+    cve_id: str | None = None
+    patch_urls: list[str] | None = None
+    triage_summary: str | None = None
+    fix_version: str | None = None
+    target_branch: str | None = None
+    dry_run: bool = False
+    reproducer_working_dir: str = "/git-repos/Reproducer/RHEL-1"
+    tests_clone_ready: bool = False
+    tests_clone_path: str | None = None
+    existing_mr_url: str | None = None
+    mr_source_branch: str | None = None
+    existing_test_directory: str | None = None
+
+
+class _FixTmtLintPromptInput(BaseModel):
+    jira_issue: str
+    package: str
+    test_directory: str
+    tests_clone_path: str
+    tmt_lint_error: str
+    testing_farm_request_id: str | None = None
+    dry_run: bool = False
+
+
+class TestReproducerTemplate:
+    def test_success_path_keeps_tf_for_workflow_lint(self):
+        result = render_template(
+            "reproducer/prompt.j2",
+            _ReproducerPromptInput(
+                jira_issue="RHEL-12345",
+                package="bind",
+                fix_version="rhel-9.8",
+                target_branch="c9s",
+                dry_run=True,
+                reproducer_working_dir="/git-repos/Reproducer/RHEL-12345",
+                tests_clone_path="/git-repos/Reproducer/RHEL-12345/tests-bind",
+            ),
+        )
+        assert "tmt lint" in result
+        assert "MUST NOT" in result
+        assert "Path B" in result
+        assert "cancel_testing_farm_request" in result
+        assert "No exceptions" in result or "no exceptions" in result.lower()
+
+    def test_fix_tmt_lint_prompt_includes_error_and_tf_id(self):
+        result = render_template(
+            "reproducer/prompt_fix_tmt_lint.j2",
+            _FixTmtLintPromptInput(
+                jira_issue="RHEL-12345",
+                package="bind",
+                test_directory="Regression/RHEL-12345",
+                tests_clone_path="/git-repos/Reproducer/RHEL-12345/tests-bind",
+                tmt_lint_error="fail: missing test key",
+                testing_farm_request_id="tf-abc",
+                dry_run=True,
+            ),
+        )
+        assert "fail: missing test key" in result
+        assert "tf-abc" in result
+        assert "get_testing_farm_reservation_details" in result
+
+
 class _IssueVerificationInput(BaseModel):
     issue: object
     erratum: object

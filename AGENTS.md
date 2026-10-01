@@ -7,7 +7,7 @@ This guide is designed for AI agents working on the Ymir AI workflows project. I
 **Consult these first:**
 - **[README-agents.md](README-agents.md)** — Full setup, running agents, environment variables, Jira mocking
 - **[README.md](README.md)** — Project overview, development environment setup
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** — Code merge policy
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — Code merge policy, Mocking in tests
 
 ## Agent Architecture
 
@@ -121,7 +121,7 @@ If you introduce a new service as a dependency to our agents, make sure to read 
 
 ## Code Changes Checklist
 
-- [ ] Write tests first (especially for tools/git operations)
+- [ ] Write tests first (especially for tools/git operations) — make sure they use `flexmock` for mocking.
 - [ ] Run `make check-in-container` — all tests pass
 - [ ] Test with `DRY_RUN=true` — don't touch real Jira/git
 - [ ] Use rebase merge (see [CONTRIBUTING.md](CONTRIBUTING.md))

@@ -1,10 +1,21 @@
 """Unit tests for the Jira reply helper."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
+from flexmock import flexmock
 
+from ymir.api import jira_reply
 from ymir.api.jira_reply import post_comment
+
+
+class _AsyncContextManager:
+    def __init__(self, value):
+        self.value = value
+
+    async def __aenter__(self):
+        return self.value
+
+    async def __aexit__(self, *_args):
+        return False
 
 
 @pytest.mark.asyncio
@@ -13,20 +24,10 @@ async def test_post_comment_success(monkeypatch):
     monkeypatch.setenv("JIRA_EMAIL", "bot@example.com")
     monkeypatch.setenv("JIRA_TOKEN", "fake-token")  # pragma: allowlist secret
 
-    mock_response = AsyncMock()
-    mock_response.status = 201
-    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-    mock_response.__aexit__ = AsyncMock(return_value=False)
+    mock_response = flexmock(status=201)
 
-    mock_session = AsyncMock()
-    mock_session.post = MagicMock(return_value=mock_response)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=False)
-
-    with patch("ymir.api.jira_reply.aiohttp.ClientSession", return_value=mock_session):
-        await post_comment("RHEL-12345", "Command failed: bad args")
-
-    mock_session.post.assert_called_once_with(
+    mock_session = flexmock()
+    mock_session.should_receive("post").with_args(
         "https://issues.example.com/rest/api/2/issue/RHEL-12345/comment",
         json={"body": "Command failed: bad args"},
         headers={
@@ -34,17 +35,22 @@ async def test_post_comment_success(monkeypatch):
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
+    ).and_return(_AsyncContextManager(mock_response)).once()
+
+    flexmock(jira_reply.aiohttp).should_receive("ClientSession").replace_with(
+        lambda: _AsyncContextManager(mock_session)
     )
+
+    await post_comment("RHEL-12345", "Command failed: bad args")
 
 
 @pytest.mark.asyncio
 async def test_post_comment_no_jira_url(monkeypatch):
     monkeypatch.delenv("JIRA_URL", raising=False)
 
-    with patch("ymir.api.jira_reply.aiohttp.ClientSession") as mock_cls:
-        await post_comment("RHEL-12345", "should not call Jira")
+    flexmock(jira_reply.aiohttp).should_receive("ClientSession").never()
 
-    mock_cls.assert_not_called()
+    await post_comment("RHEL-12345", "should not call Jira")
 
 
 @pytest.mark.asyncio
@@ -54,19 +60,20 @@ async def test_post_comment_jira_error(monkeypatch):
     monkeypatch.setenv("JIRA_EMAIL", "bot@example.com")
     monkeypatch.setenv("JIRA_TOKEN", "fake-token")  # pragma: allowlist secret
 
-    mock_response = AsyncMock()
-    mock_response.status = 403
-    mock_response.text = AsyncMock(return_value="Forbidden")
-    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-    mock_response.__aexit__ = AsyncMock(return_value=False)
+    async def _mock_response_text(*_args, **_kwargs):
+        return "Forbidden"
 
-    mock_session = AsyncMock()
-    mock_session.post = MagicMock(return_value=mock_response)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_response = flexmock(status=403)
+    mock_response.should_receive("text").replace_with(_mock_response_text)
 
-    with patch("ymir.api.jira_reply.aiohttp.ClientSession", return_value=mock_session):
-        await post_comment("RHEL-12345", "some error")
+    mock_session = flexmock()
+    mock_session.should_receive("post").and_return(_AsyncContextManager(mock_response))
+
+    flexmock(jira_reply.aiohttp).should_receive("ClientSession").replace_with(
+        lambda: _AsyncContextManager(mock_session)
+    )
+
+    await post_comment("RHEL-12345", "some error")
 
 
 @pytest.mark.asyncio
@@ -76,13 +83,14 @@ async def test_post_comment_network_exception(monkeypatch):
     monkeypatch.setenv("JIRA_EMAIL", "bot@example.com")
     monkeypatch.setenv("JIRA_TOKEN", "fake-token")  # pragma: allowlist secret
 
-    mock_session = AsyncMock()
-    mock_session.post = MagicMock(side_effect=OSError("connection refused"))
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session = flexmock()
+    mock_session.should_receive("post").and_raise(OSError("connection refused"))
 
-    with patch("ymir.api.jira_reply.aiohttp.ClientSession", return_value=mock_session):
-        await post_comment("RHEL-12345", "some error")
+    flexmock(jira_reply.aiohttp).should_receive("ClientSession").replace_with(
+        lambda: _AsyncContextManager(mock_session)
+    )
+
+    await post_comment("RHEL-12345", "some error")
 
 
 @pytest.mark.asyncio
@@ -92,18 +100,22 @@ async def test_post_comment_trailing_slash(monkeypatch):
     monkeypatch.setenv("JIRA_EMAIL", "bot@example.com")
     monkeypatch.setenv("JIRA_TOKEN", "fake-token")  # pragma: allowlist secret
 
-    mock_response = AsyncMock()
-    mock_response.status = 201
-    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-    mock_response.__aexit__ = AsyncMock(return_value=False)
+    mock_response = flexmock(status=201)
 
-    mock_session = AsyncMock()
-    mock_session.post = MagicMock(return_value=mock_response)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=False)
+    call_url = "http://should/be//overwritten//by/mock_post"
 
-    with patch("ymir.api.jira_reply.aiohttp.ClientSession", return_value=mock_session):
-        await post_comment("RHEL-12345", "msg")
+    def _mock_post(*_args, **_kwargs):
+        nonlocal call_url
+        call_url = _args[0]
+        return _AsyncContextManager(mock_response)
 
-    call_url = mock_session.post.call_args[0][0]
+    mock_session = flexmock()
+    mock_session.should_receive("post").replace_with(_mock_post)
+
+    flexmock(jira_reply.aiohttp).should_receive("ClientSession").replace_with(
+        lambda: _AsyncContextManager(mock_session)
+    )
+
+    await post_comment("RHEL-12345", "msg")
+
     assert "//" not in call_url.split("://")[1]

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import web
+from flexmock import flexmock
 
 from ymir.api import command_parser
 
@@ -27,13 +27,16 @@ def _parse_response_body(resp: web.Response) -> dict:
 
 @pytest.mark.asyncio
 async def test_dispatch_calls_registered_handler():
-    handler = AsyncMock(return_value=web.json_response({"ok": True}, status=201))
-    command_parser.register("hello", handler)
+    async def _mock_json_response(*_args, **_kwargs):
+        return web.json_response({"ok": True}, status=201)
 
     request = object()
+    handler = flexmock()
+    handler.should_receive("handle").with_args(["world"], request).replace_with(_mock_json_response).once()
+
+    command_parser.register("hello", handler.handle)
     resp = await command_parser.dispatch("hello world", request)
 
-    handler.assert_awaited_once_with(["world"], request)
     assert resp.status == 201
 
 
@@ -55,22 +58,30 @@ async def test_dispatch_empty_command():
 
 @pytest.mark.asyncio
 async def test_dispatch_case_insensitive():
-    handler = AsyncMock(return_value=web.json_response({"ok": True}))
-    command_parser.register("greet", handler)
+    async def _mock_json_response(*_args, **_kwargs):
+        return web.json_response({"ok": True})
 
     request = object()
+    handler = flexmock()
+    handler.should_receive("handle").with_args(["Alice"], request).replace_with(_mock_json_response).once()
+
+    command_parser.register("greet", handler.handle)
     await command_parser.dispatch("GREET Alice", request)
-    handler.assert_awaited_once_with(["Alice"], request)
 
 
 @pytest.mark.asyncio
 async def test_dispatch_handles_quoted_args():
-    handler = AsyncMock(return_value=web.json_response({"ok": True}))
-    command_parser.register("echo", handler)
+    async def _mock_json_response(*_args, **_kwargs):
+        return web.json_response({"ok": True})
 
     request = object()
+    handler = flexmock()
+    handler.should_receive("handle").with_args(["hello world", "foo"], request).replace_with(
+        _mock_json_response
+    ).once()
+
+    command_parser.register("echo", handler.handle)
     await command_parser.dispatch('echo "hello world" foo', request)
-    handler.assert_awaited_once_with(["hello world", "foo"], request)
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,7 @@
 import pytest
+from flexmock import flexmock
 
+from ymir.agents import rebase_consolidation
 from ymir.agents.rebase_agent import _consolidated_issue_keys
 from ymir.agents.rebase_consolidation import (
     add_jira_tickets_to_latest_changelog_entry,
@@ -9,7 +11,8 @@ from ymir.agents.rebase_consolidation import (
     has_new_latest_changelog_entry,
     uses_autochangelog,
 )
-from ymir.common.models import ConsolidatedIssue
+from ymir.common.constants import JiraLabels
+from ymir.common.models import ConsolidatedIssue, RebaseData
 from ymir.common.utils import extract_text_from_adf
 
 
@@ -391,8 +394,6 @@ class TestTerminalLabels:
 
     def test_jql_excludes_all_triage_decision_labels(self):
         """JQL must exclude all triage decision labels to avoid re-queueing decided siblings."""
-        from ymir.common.constants import JiraLabels
-
         jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
 
         # Verify each triage decision label appears in the JQL exclusion
@@ -412,8 +413,6 @@ class TestTerminalLabels:
 
         Regression test for RHEL-248139 where ymir_backported was not excluded.
         """
-        from ymir.common.constants import JiraLabels
-
         jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
 
         # These were the missing labels that caused RHEL-248139
@@ -430,8 +429,6 @@ class TestTerminalLabels:
         Per jira_label_workflow_routing.md: ERRORED labels (triage/backport/rebase_errored)
         block retry and need human attention, so they're terminal for sibling queueing.
         """
-        from ymir.common.constants import JiraLabels
-
         jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
 
         # ERRORED labels block retry → must exclude
@@ -452,8 +449,6 @@ class TestTerminalLabels:
         "May auto-retry", so excluding them breaks the retry mechanism where a new
         sibling triggers re-queueing of failed issues.
         """
-        from ymir.common.constants import JiraLabels
-
         jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
 
         # FAILED labels may auto-retry → must NOT exclude
@@ -475,8 +470,6 @@ class TestTerminalLabels:
 
         queue_siblings_for_triage() handles the re-queueing check in its defensive filter.
         """
-        from ymir.common.constants import JiraLabels
-
         jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
 
         assert f'"{JiraLabels.REBASE_SIBLING.value}"' not in jql, (
@@ -492,8 +485,6 @@ class TestTerminalLabels:
 
         This test verifies the exclusion is in the JQL string (server-side filtering).
         """
-        from ymir.common.constants import JiraLabels
-
         jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
 
         # Critical: the exclusion MUST be in the JQL query string itself
@@ -552,10 +543,6 @@ async def test_find_triaged_rebase_siblings_no_unbound_error_on_jira_failure():
     The code then checks ``if downstream_component is None and primary_details:``.
     Without ``primary_details = None`` before try, this raises UnboundLocalError.
     """
-    from unittest.mock import AsyncMock, patch
-
-    from ymir.common.models import RebaseData
-
     rebase_data = RebaseData(
         package="postgis",
         version="3.5.2",
@@ -564,17 +551,14 @@ async def test_find_triaged_rebase_siblings_no_unbound_error_on_jira_failure():
     )
 
     # Simulate get_jira_details failure (MCP gateway down, network error, etc.)
-    with patch(
-        "ymir.agents.rebase_consolidation.run_tool",
-        new_callable=AsyncMock,
-        side_effect=Exception("MCP gateway unreachable"),
-    ):
-        # Should NOT raise UnboundLocalError — should return empty results
-        result, summary = await find_triaged_rebase_siblings(
-            jira_issue="RHEL-250764",
-            rebase_data=rebase_data,
-            available_tools=[],
-            downstream_component=None,
-        )
+    flexmock(rebase_consolidation).should_receive("run_tool").and_raise(Exception("MCP Gateway unreachable"))
+
+    # Should NOT raise UnboundLocalError — should return empty results
+    result, summary = await find_triaged_rebase_siblings(
+        jira_issue="RHEL-250764",
+        rebase_data=rebase_data,
+        available_tools=[],
+        downstream_component=None,
+    )
     assert result == []
     assert summary == ""

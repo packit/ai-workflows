@@ -60,9 +60,19 @@ class RedisQueues(Enum):
     REPRODUCER_QUEUE = "reproducer_queue"
     REPRODUCER_QUEUE_TODO = "reproducer_queue_todo"
     COMPLETED_REPRODUCER_LIST = "completed_reproducer_list"
+    # Single queue, not split per container: the MR verification agent reads CI
+    # results and logs, it never builds anything, so it has no dependency on a
+    # matching build root.
+    MR_VERIFICATION_QUEUE = "mr_verification_queue"
+    MR_VERIFICATION_QUEUE_TODO = "mr_verification_queue_todo"
+    COMPLETED_MR_VERIFICATION_LIST = "completed_mr_verification_list"
     # Redis ZSET (score = unix ready-time) for delayed reproducer retries.
     # Not a BRPOP list — excluded from all_queues().
     REPRODUCER_DELAYED_QUEUE = "reproducer_queue_delayed"
+    # Redis ZSET holding MR verification jobs whose pipeline is still running.
+    # Polling is the whole point of this agent, so the wait lives in Redis
+    # rather than in a sleeping worker. Not a BRPOP list.
+    MR_VERIFICATION_DELAYED_QUEUE = "mr_verification_queue_delayed"
     # Redis scalar counter (INCR) assigning unique, stable ids to error_list
     # entries so a specific failure can be requeued by id. Not a list/hash/zset
     # — excluded from all_queues().
@@ -78,6 +88,7 @@ class RedisQueues(Enum):
             not in (
                 cls.MERGE_CONSOLIDATION_QUEUE,
                 cls.REPRODUCER_DELAYED_QUEUE,
+                cls.MR_VERIFICATION_DELAYED_QUEUE,
                 cls.ERROR_ID_COUNTER,
             )
         }
@@ -105,6 +116,8 @@ class RedisQueues(Enum):
             cls.BACKPORT_QUEUE.value,
             cls.REPRODUCER_QUEUE.value,
             cls.REPRODUCER_QUEUE_TODO.value,
+            cls.MR_VERIFICATION_QUEUE.value,
+            cls.MR_VERIFICATION_QUEUE_TODO.value,
         }
 
     @classmethod
@@ -117,6 +130,7 @@ class RedisQueues(Enum):
             cls.COMPLETED_BACKPORT_LIST.value,
             cls.COMPLETED_REBUILD_LIST.value,
             cls.COMPLETED_REPRODUCER_LIST.value,
+            cls.COMPLETED_MR_VERIFICATION_LIST.value,
             cls.POSTPONED_LIST.value,
         }
 
@@ -154,6 +168,11 @@ class RedisQueues(Enum):
             else cls.REBUILD_QUEUE_C10S.value
         )
         return cls.priority_twin(base) if user_triggered else base
+
+    @classmethod
+    def get_mr_verification_queue(cls, user_triggered: bool = False) -> str:
+        """Return MR verification queue; the priority twin if user-triggered."""
+        return cls.MR_VERIFICATION_QUEUE_TODO.value if user_triggered else cls.MR_VERIFICATION_QUEUE.value
 
     @classmethod
     def get_reproducer_queue(cls, user_triggered: bool = False) -> str:
@@ -216,6 +235,19 @@ class JiraLabels(Enum):
     MR_CLOSED = "ymir_mr_closed"
 
     MR_CONSOLIDATED = "ymir_consolidated"
+
+    # GitLab MR labels applied by the MR verification agent. They live here
+    # next to MR_CONSOLIDATED, which is also an MR-side label, so every Ymir
+    # label string has a single definition. They describe the MR's CI result,
+    # not an opinion about the change: ymir_ci_failed and
+    # ymir_ci_infra_failure are split because the next action differs —
+    # fix the change, versus retry the job.
+    MR_CI_PASSED = "ymir_ci_passed"
+    MR_CI_FAILED = "ymir_ci_failed"
+    MR_CI_INFRA_FAILURE = "ymir_ci_infra_failure"
+    # Jira label: the verification agent itself crashed (as opposed to CI
+    # failing, which is an MR-side label).
+    MR_VERIFICATION_ERRORED = "ymir_mr_verification_errored"
 
     CONSOLIDATE_BASE = "ymir_consolidate_base"
     CONSOLIDATE_NEXT = "ymir_consolidate_next"

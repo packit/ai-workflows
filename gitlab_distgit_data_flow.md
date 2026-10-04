@@ -109,7 +109,9 @@ creation, never at inheritance selection or the fallback backport.
 
 | Tool | Purpose | Returns |
 |------|---------|---------|
+| **get_merge_request_pipeline_status** | Get the head pipeline's status, SHA and failed jobs — the only way to tell "still running" from "finished and failed" | MergeRequestPipelineStatus |
 | **get_failed_pipeline_jobs_from_merge_request** | Get failed CI jobs | List[FailedPipelineJob] |
+| **get_pipeline_job_log** | Read the tail of a job's log (trace) | str |
 | **retry_pipeline_job** | Retry specific pipeline job | Job status |
 
 ### Branch Operations

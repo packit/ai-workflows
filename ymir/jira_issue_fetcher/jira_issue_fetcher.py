@@ -512,6 +512,16 @@ class JiraIssueFetcher:
                                             | RedisQueues.REPRODUCER_QUEUE_TODO.value
                                         ):
                                             issue_key = task.metadata.get("jira_issue", "").upper()
+                                        case (
+                                            RedisQueues.MR_VERIFICATION_QUEUE.value
+                                            | RedisQueues.MR_VERIFICATION_QUEUE_TODO.value
+                                        ):
+                                            # Deliberately NOT used for dedup. These jobs sit in
+                                            # the queue for as long as CI runs — often hours —
+                                            # and a job waiting on a pipeline must not stop a
+                                            # maintainer from re-triggering the issue with
+                                            # ymir_todo.
+                                            continue
                                         case _:
                                             continue
 

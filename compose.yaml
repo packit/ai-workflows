@@ -415,6 +415,13 @@ services:
     command: ["python", "-m", "ymir.agents.mr_consolidation_agent"]
     profiles: ["agents"]
 
+  # One service, not a c9s/c10s pair: this agent reads CI results and logs,
+  # it never builds anything, so it has no dependency on a matching build root.
+  mr-verification-agent:
+    <<: *beeai-agent-c10s
+    command: ["python", "-m", "ymir.agents.mr_verification_agent"]
+    profiles: ["agents"]
+
   mr-consolidation-agent-e2e-tests:
     <<: *beeai-agent-c10s
     environment:

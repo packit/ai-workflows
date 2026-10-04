@@ -33,6 +33,7 @@ from ymir.common.models import (
     FailedPipelineJob,
     MergeRequestComment,
     MergeRequestDetails,
+    MergeRequestPipelineStatus,
     OpenMergeRequestResult,
 )
 from ymir.common.validators import AbsolutePath
@@ -1265,28 +1266,162 @@ class GetFailedPipelineJobsFromMergeRequestTool(
 
                 namespace = mr.target_project.namespace
                 repo = mr.target_project.repo
-                return [
-                    FailedPipelineJob(
-                        id=str(job.id),
-                        name=job.name,
-                        url=f"https://gitlab.com/{namespace}/{repo}/-/jobs/{job.id}",
-                        status=job.status,
-                        stage=job.stage,
-                        artifacts_url=(
-                            f"https://gitlab.com/{namespace}/{repo}/-/jobs/{job.id}/artifacts/browse"
-                            if hasattr(job, "artifacts_file") and job.artifacts_file
-                            else ""
-                        ),
-                        allow_failure=getattr(job, "allow_failure", False),
-                    )
-                    for job in jobs
-                    if job.status == "failed"
-                ]
+                return [_failed_job_from_api(job, namespace, repo) for job in jobs if job.status == "failed"]
 
             failed_jobs = await asyncio.to_thread(get_latest_pipeline_jobs)
 
         logger.info(f"Found {len(failed_jobs)} failed jobs in latest pipeline for MR {merge_request_url}")
         return JSONToolOutput(result=failed_jobs)
+
+
+def _failed_job_from_api(job: Any, namespace: str, repo: str) -> FailedPipelineJob:
+    return FailedPipelineJob(
+        id=str(job.id),
+        name=job.name,
+        url=f"https://gitlab.com/{namespace}/{repo}/-/jobs/{job.id}",
+        status=job.status,
+        stage=job.stage,
+        artifacts_url=(
+            f"https://gitlab.com/{namespace}/{repo}/-/jobs/{job.id}/artifacts/browse"
+            if getattr(job, "artifacts_file", None)
+            else ""
+        ),
+        allow_failure=getattr(job, "allow_failure", False),
+    )
+
+
+class GetMergeRequestPipelineStatusToolInput(BaseModel):
+    merge_request_url: str = Field(description="URL of the merge request")
+
+
+class GetMergeRequestPipelineStatusTool(
+    Tool[
+        GetMergeRequestPipelineStatusToolInput,
+        ToolRunOptions,
+        JSONToolOutput[MergeRequestPipelineStatus],
+    ]
+):
+    name = "get_merge_request_pipeline_status"
+    timeout = 120
+    description = """
+    Gets the status of the latest (head) pipeline of a merge request, together with the
+    commit it ran against and any failed jobs. Status is the raw GitLab pipeline status
+    ('running', 'pending', 'success', 'failed', 'canceled', 'skipped', 'manual', ...),
+    or 'none' when the merge request has no pipeline yet.
+    Use this to tell "CI is still running" apart from "CI finished and failed" —
+    get_failed_pipeline_jobs_from_merge_request cannot distinguish the two.
+    """
+    input_schema = GetMergeRequestPipelineStatusToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: GetMergeRequestPipelineStatusToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[MergeRequestPipelineStatus]:
+        merge_request_url = tool_input.merge_request_url
+        with tool_error_context(
+            "Failed to get pipeline status from merge request",
+            merge_request_url=merge_request_url,
+        ):
+            mr = await _get_merge_request_from_url(merge_request_url)
+
+            def get_pipeline_status() -> MergeRequestPipelineStatus:
+                head_pipeline = getattr(mr._raw_pr, "head_pipeline", None)
+                if not head_pipeline:
+                    # No pipeline yet. Distinct from a failure: callers wait.
+                    return MergeRequestPipelineStatus(status="none")
+
+                pipeline = mr.target_project.gitlab_repo.pipelines.get(head_pipeline["id"])
+                namespace = mr.target_project.namespace
+                repo = mr.target_project.repo
+                # Only enumerate jobs once the pipeline is done failing —
+                # listing jobs of a running pipeline is a wasted API round trip.
+                failed_jobs = (
+                    [
+                        _failed_job_from_api(job, namespace, repo)
+                        for job in pipeline.jobs.list(get_all=True)
+                        if job.status == "failed"
+                    ]
+                    if pipeline.status == "failed"
+                    else []
+                )
+                return MergeRequestPipelineStatus(
+                    status=pipeline.status,
+                    pipeline_id=pipeline.id,
+                    sha=getattr(pipeline, "sha", None),
+                    web_url=getattr(pipeline, "web_url", None),
+                    failed_jobs=failed_jobs,
+                )
+
+            status = await asyncio.to_thread(get_pipeline_status)
+
+        logger.info(
+            f"Pipeline for MR {merge_request_url} is '{status.status}' "
+            f"with {len(status.failed_jobs)} failed job(s)"
+        )
+        return JSONToolOutput(result=status)
+
+
+class GetPipelineJobLogToolInput(BaseModel):
+    project_url: str = Field(description="GitLab project URL, e.g. the merge request's target repo")
+    job_id: int = Field(description="Pipeline job ID whose log should be read")
+    max_chars: int = Field(
+        default=20000,
+        description="Return at most this many characters, taken from the end of the log where the failure is",
+    )
+
+
+class GetPipelineJobLogTool(Tool[GetPipelineJobLogToolInput, ToolRunOptions, StringToolOutput]):
+    name = "get_pipeline_job_log"
+    timeout = 180
+    description = """
+    Reads the log (trace) of a GitLab pipeline job. Returns the tail of the log, because
+    that is where a failing job says why it failed. Read-only.
+    """
+    input_schema = GetPipelineJobLogToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: GetPipelineJobLogToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        project_url = tool_input.project_url
+        job_id = tool_input.job_id
+        with tool_error_context(
+            f"Failed to read log of job {job_id}",
+            project_url=project_url,
+            job_id=job_id,
+        ):
+            project = await asyncio.to_thread(get_project, url=project_url, token=os.getenv("GITLAB_TOKEN"))
+
+            def read_trace() -> str:
+                job = project.gitlab_repo.jobs.get(job_id)
+                trace = job.trace()
+                if isinstance(trace, bytes):
+                    trace = trace.decode("utf-8", errors="replace")
+                return trace or ""
+
+            trace = await asyncio.to_thread(read_trace)
+
+        max_chars = max(1, tool_input.max_chars)
+        if len(trace) > max_chars:
+            trace = f"[... log truncated, showing last {max_chars} characters ...]\n" + trace[-max_chars:]
+        logger.info(f"Read {len(trace)} characters of log from job {job_id}")
+        return StringToolOutput(result=redact_credentials(trace))
 
 
 def _get_authorized_member_ids(project: GitlabProject) -> set[int]:

@@ -7,11 +7,12 @@ See [README.md](README.md) for general notes about setting up the development en
 
 ## Architecture
 
-Three agents process tasks through Redis queues:
+These agents process tasks through Redis queues:
 - **Triage Agent**: Analyzes JIRA issues and determines resolution path. It uses title, description, fields, and comments to find out root cause of the issue. It can ask for clarification, create tasks for other agents or may take no action if not needed.
 - **Rebase Agent**: Updates packages to newer upstream versions. A Rebase is only to be chosen when the issue explicitly instructs you to "rebase" or "update". It looks for upstream references that are linked, attached and present in the description or comments in the issue.
 - **Backport Agent**: Applies specific fixes/patches to packages. It looks for patches that are linked, attached and present in the description or comments in the issue. It tries to apply the patch and resolve any conflicts that may arise during the backport process.
 - **Issue Verification Agent**: Manages the post-fix lifecycle of a JIRA issue — from merged MR through errata creation, testing analysis, and status transitions to RELEASE_PENDING. Migrated from the supervisor's `IssueHandler`.
+- **MR Verification Agent**: Watches the CI pipeline of every Ymir-authored merge request. While the pipeline runs the job waits on a delayed queue; once it finishes, a green pipeline only gets the `ymir_ci_passed` label, and a red one gets a comment explaining which job failed, why, and whether the MR's own change caused it (`ymir_ci_failed`) or the infrastructure did (`ymir_ci_infra_failure`). It does **not** review the change — patches, changelog entries and `Release:` bumps come from deterministic steps and are governed by per-package maintainer rules, so they are checked where they are written. Read-only by construction: it never touches the branch it watches and cannot retry jobs. See [docs/mr_verification_architecture.md](docs/mr_verification_architecture.md).
 
 ### Y-stream inheritance fast path
 

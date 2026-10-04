@@ -24,6 +24,24 @@ data:
   # When "true", triage enqueues reproducer jobs for eligible resolutions.
   # Set to "false" to disable auto-enqueue (manual: make trigger-reproducer).
   TRIAGE_ENQUEUE_REPRODUCER: "true"
+  # Global kill switch for the MR verification agent, which watches the CI
+  # pipeline of Ymir-authored MRs and comments when it fails. When "false",
+  # the MR-producing agents stop enqueueing jobs; already-queued jobs still
+  # drain. The per-package `verification.analyze_ci_failures` key in the
+  # rules repo opts an individual package out.
+  MR_VERIFICATION_ENABLED: "true"
+  # How long to wait before the first pipeline check, and between checks.
+  MR_VERIFICATION_INITIAL_DELAY: "300"
+  MR_VERIFICATION_POLL_INTERVAL: "300"
+  # Give up on a pipeline that has not finished within 6 hours.
+  MR_VERIFICATION_MAX_WAIT: "21600"
+  # Caps on the evidence pasted into the analysis prompt: per job log, number
+  # of failing jobs, and the diff used only to attribute the failure.
+  MR_VERIFICATION_MAX_JOB_LOG_CHARS: "20000"
+  MR_VERIFICATION_MAX_FAILED_JOBS: "5"
+  MR_VERIFICATION_MAX_DIFF_CHARS: "20000"
+  # Lifetime of the already-analysed-pipeline marker (90 days).
+  MR_VERIFICATION_ANALYSED_TTL: "7776000"
 immutable: false
 kind: ConfigMap
 metadata:

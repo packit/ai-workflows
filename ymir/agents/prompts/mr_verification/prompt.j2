@@ -1,0 +1,61 @@
+The CI pipeline of merge request {{ merge_request_url }} failed. Explain why, and decide
+whether the change in the MR caused it.
+
+Your working directory is {{ local_clone }}, a clone of the MR's source branch for package
+{{ package }}. The target branch {{ dist_git_branch }} is available as a local ref, so
+`git diff {{ dist_git_branch }}...HEAD` shows exactly what this MR changes.
+
+- Package: {{ package }}
+- Target branch: {{ dist_git_branch }}
+- Jira issue: {{ jira_issue }}
+{% if cve_id %}
+- CVE: {{ cve_id }}
+{% endif %}
+- Opened by: the Ymir {{ source_agent }} agent
+- MR title: {{ merge_request_title }}
+{% if pipeline_url %}
+- Pipeline: {{ pipeline_url }}
+{% endif %}
+
+{% if source_agent == "Rebuild" %}
+This is a **rebuild** MR: the only change is a `Release:` bump and a changelog entry. If the
+build fails here, the cause is almost always outside this MR — the branch, the build root or
+the infrastructure — because the MR changes no code.
+{% elif source_agent == "Rebase" %}
+This is a **rebase** MR: the package moved to a newer upstream version, so a build failure
+is quite likely to be genuine (dropped patch, changed build system, new dependency).
+{% elif source_agent == "Consolidation" %}
+This is a **consolidation** MR: several previously separate MRs were merged into one, so a
+failure may come from the interaction of changes that each passed CI on their own.
+{% else %}
+This is a **backport** MR: a specific upstream fix was applied to an older version, so a
+failure in `%prep` or `%build` is quite likely to be genuine.
+{% endif %}
+
+Failing jobs:
+```json
+{{ failed_jobs }}
+```
+
+Logs of the failing jobs (tails, already trimmed — use `get_pipeline_job_log` for more):
+
+{{ job_logs }}
+
+Files the MR changes ({{ changed_files | length }}):
+{% for f in changed_files %}
+- {{ f }}
+{% endfor %}
+
+The diff below is **context for attributing the failure**. It is not under review: do not
+report anything about it that did not break CI.
+
+```diff
+{{ diff }}
+```
+{% if diff_truncated %}
+
+**The diff above was truncated.** Use `view`, `search_text` and read-only `git` commands in
+{{ local_clone }} if you need to see more of it.
+{% endif %}
+
+Now triage the failure.

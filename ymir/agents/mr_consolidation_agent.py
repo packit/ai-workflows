@@ -1536,6 +1536,16 @@ async def run_workflow(
                         state.merge_request_url,
                         gateway_tools,
                     )
+                    await tasks.try_submit_verification_job(
+                        package=package,
+                        dist_git_branch=dist_git_branch,
+                        merge_request_url=state.merge_request_url,
+                        jira_issue=state.jira_issue or "",
+                        source_agent="Consolidation",
+                        cve_id=state.cves_collected[0] if state.cves_collected else None,
+                        gateway_tools=gateway_tools,
+                        redis_conn=redis_conn,
+                    )
             except Exception as e:
                 logger.error("Failed to create consolidated MR: %s", e)
                 state.consolidation_result = MRConsolidationOutputSchema(

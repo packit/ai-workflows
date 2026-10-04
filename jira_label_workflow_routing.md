@@ -54,6 +54,13 @@ flowchart TD
     BACKPORT_AGENT -->|Success| COMPLETED_B[completed_backport_list]
     BACKPORT_AGENT -->|Failed/Error| ERROR
 
+    REBASE_AGENT -->|MR opened| MRVERIFY_DELAYED[mr_verification_queue_delayed]
+    BACKPORT_AGENT -->|MR opened| MRVERIFY_DELAYED
+    MRVERIFY_DELAYED -->|Due| MRVERIFY[mr_verification_queue]
+    MRVERIFY --> MRVERIFY_AGENT[MR Verification Agent]
+    MRVERIFY_AGENT -->|CI still running| MRVERIFY_DELAYED
+    MRVERIFY_AGENT -->|CI finished| COMPLETED_V[completed_mr_verification_list]
+
     style TRIAGE fill:#fff9c4
     style REBASE_C9S fill:#e1f5fe
     style REBASE_C10S fill:#e1f5fe
@@ -62,6 +69,9 @@ flowchart TD
     style ERROR fill:#ffcdd2
     style COMPLETED_R fill:#c8e6c9
     style COMPLETED_B fill:#c8e6c9
+    style MRVERIFY fill:#ffe0b2
+    style MRVERIFY_DELAYED fill:#ffe0b2
+    style COMPLETED_V fill:#c8e6c9
 ```
 
 ## Label Reference
@@ -95,6 +105,7 @@ flowchart TD
 | `ymir_backport_errored` | Backport error | ✅ Yes | Check Jira comment |
 | `ymir_rebase_failed` | Rebase unsuccessful | ❌ No | May auto-retry |
 | `ymir_backport_failed` | Backport unsuccessful | ❌ No | May auto-retry |
+| `ymir_mr_verification_errored` | The MR CI watcher crashed after all retries | ❌ No | Advisory work only — the MR itself is untouched and CI is still visible to a human. Check `error_list` |
 
 ### Control Labels
 
@@ -118,6 +129,9 @@ These labels are applied to GitLab merge requests (not Jira issues):
 | `ymir_reproducer` | Marks a tests-repo MR as a Ymir reproducer | Used to find existing open test MRs for cross-stream reuse/adapt |
 | `ymir_consolidated` | Marks an MR that has been folded into a consolidated MR | The MR stays open but is excluded from future consolidation searches |
 | `ymir_mr_closure_handled` | Marks a closed MR that Phase 2 has processed | Prevents the mr-cleanup script from re-processing the same MR |
+| `ymir_ci_passed` | The MR's CI pipeline finished without failing | Label only, no comment: the MR widget already shows the pipeline |
+| `ymir_ci_failed` | CI failed and the failure is attributable to this MR's change | Comment on the MR explains which job failed and why; a Jira comment is added too |
+| `ymir_ci_infra_failure` | CI failed for infrastructure/flake reasons unrelated to the change | Comment on the MR only — usually "retry the pipeline" |
 
 ## Queue Types Summary
 
@@ -142,6 +156,12 @@ These labels are applied to GitLab merge requests (not Jira issues):
 | `completed_rebase_list` | Output | Rebase success | `ymir_rebased` | Active |
 | `completed_backport_list` | Output | Backport success | `ymir_backported` | Active |
 | `completed_reproducer_list` | Output | Reproducer success/failure (non-retry) | `ymir_reproducer_*` | Active |
+| `mr_verification_queue` | Input | Any agent opens an MR (one queue — this agent never builds, so no c9s/c10s split) | `ymir_ci_passed` / `ymir_ci_failed` / `ymir_ci_infra_failure` (on the **MR**, not the issue) | Active unless `MR_VERIFICATION_ENABLED=false` |
+| `mr_verification_queue_todo` | Input (priority) | Same, for `ymir_todo`-triggered runs | Same | Active unless `MR_VERIFICATION_ENABLED=false` |
+| `mr_verification_queue_delayed` | Input (ZSET) | MR opened, or its pipeline is still running | — | Promoted onto the input queue when due |
+| `completed_mr_verification_list` | Output | CI reached a terminal state (any verdict) | — | Active |
+
+> The MR verification queues are intentionally **excluded from the fetcher's deduplication scan**: these jobs wait for as long as CI runs, often hours, and a job waiting on a pipeline must never stop a maintainer from re-triggering the issue with `ymir_todo`.
 
 ## Deduplication Logic
 

@@ -9,7 +9,7 @@ import re
 from datetime import UTC, datetime
 from enum import Enum, StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, RootModel
@@ -881,6 +881,153 @@ class MergeRequestOutputSchema(BaseModel):
 
 
 # ============================================================================
+# MR Verification Agent Schemas
+# ============================================================================
+#
+# "Verification" here means one thing only: watching the merge request's CI
+# pipeline and explaining it when it fails.  The agent deliberately does NOT
+# review the change itself (patches, changelog, Release bumps, spec hygiene).
+# Those are produced by near-deterministic steps, so a reviewer that flags them
+# after the fact can only ask for the same step to run again and fail the same
+# way; and judging a spec change properly needs the per-package maintainer
+# rules, which belong to the step that writes the change.
+
+
+class CIVerificationVerdict(StrEnum):
+    """Outcome of watching a merge request's CI pipeline."""
+
+    # Pipeline reached a terminal, non-failing state. Nothing to report.
+    CI_PASSED = "ci_passed"
+    # Pipeline failed and at least one failure is attributable to the MR.
+    CI_FAILED_MR = "ci_failed_mr"
+    # Pipeline failed, but only for reasons outside the MR (runner died,
+    # network, quota, a known flake). A retry is the right next action.
+    CI_FAILED_INFRASTRUCTURE = "ci_failed_infrastructure"
+    # Pipeline is in a terminal state we cannot judge (canceled), or the
+    # analysis itself could not be completed.
+    INCONCLUSIVE = "inconclusive"
+    # The pipeline never reached a terminal state within the wait budget.
+    TIMED_OUT = "timed_out"
+
+
+class CIFailureCategory(StrEnum):
+    """What kind of CI failure a single job hit."""
+
+    BUILD = "build"
+    TEST = "test"
+    STATIC_CHECK = "static_check"
+    INFRASTRUCTURE = "infrastructure"
+    FLAKE = "flake"
+    UNKNOWN = "unknown"
+
+
+class CIJobFailureAnalysis(BaseModel):
+    """What the agent concluded about one failing CI job."""
+
+    job_name: str = Field(description="Name of the failing pipeline job")
+    job_url: str | None = Field(default=None, description="Link to the job in GitLab")
+    category: CIFailureCategory = Field(description="Kind of failure this job hit")
+    caused_by_mr: bool = Field(
+        description="True when the failure is attributable to the change in this MR, "
+        "false when it is infrastructure, environment or a known flake"
+    )
+    evidence: str = Field(description="The decisive log lines, quoted verbatim and trimmed to what matters")
+    retryable: bool = Field(
+        default=False,
+        description="True when simply re-running the job is a reasonable next action",
+    )
+    suggested_action: str | None = Field(
+        default=None, description="What a human should do about this job, in one sentence"
+    )
+
+
+class CIFailureAnalysis(BaseModel):
+    """The LLM's analysis of a failed pipeline. Pipeline facts are added by the workflow."""
+
+    verdict: Literal["ci_failed_mr", "ci_failed_infrastructure", "inconclusive"] = Field(
+        description="ci_failed_mr when any job failed because of this MR's change; "
+        "ci_failed_infrastructure when every failure is environmental or flaky; "
+        "inconclusive when the logs do not support either conclusion"
+    )
+    summary: str = Field(description="Two to four sentences explaining the failure for the MR comment")
+    job_analyses: list[CIJobFailureAnalysis] = Field(
+        default_factory=list,
+        description="One entry per analysed failing job, most important first",
+    )
+
+
+class MRVerificationTaskMetadata(BaseModel):
+    """``Task.metadata`` payload on the MR verification queue."""
+
+    merge_request_url: str = Field(description="URL of the merge request whose CI is being watched")
+    package: str = Field(description="RPM package name")
+    dist_git_branch: str = Field(description="Dist-git branch the MR targets")
+    jira_issue: str = Field(description="Primary Jira issue the MR resolves")
+    # Which agent produced the MR. Only used as context when explaining a
+    # failure ("a rebuild MR failing to build is a different story from a
+    # rebase MR failing to build"), never to decide what to check.
+    source_agent: Literal["Backport", "Rebase", "Rebuild", "Consolidation"] = Field(
+        description="Agent that opened the merge request"
+    )
+    cve_id: str | None = Field(default=None, description="CVE fixed by the MR, when applicable")
+    # Absolute deadline for the pipeline to finish. Set once when the job is
+    # first queued so that re-queued polls cannot extend the wait forever.
+    deadline_at: datetime | None = Field(
+        default=None, description="Give up waiting for the pipeline after this moment"
+    )
+    poll_count: int = Field(
+        default=0,
+        description="How many times the pipeline has been polled. Separate from Task.attempts, "
+        "which counts crashes: waiting is not failing",
+    )
+
+
+class CIVerificationInputSchema(BaseModel):
+    """Input schema for the CI failure analysis prompt."""
+
+    local_clone: Path = Field(description="Path to the local clone checked out at the MR source branch")
+    package: str = Field(description="RPM package name")
+    dist_git_branch: str = Field(description="Dist-git branch the MR targets")
+    jira_issue: str = Field(description="Primary Jira issue the MR resolves")
+    cve_id: str | None = Field(default=None, description="CVE fixed by the MR, when applicable")
+    source_agent: str = Field(description="Agent that opened the merge request")
+    merge_request_url: str = Field(description="URL of the merge request")
+    merge_request_title: str = Field(description="Title of the MR")
+    pipeline_url: str | None = Field(default=None, description="Link to the failed pipeline")
+    failed_jobs: str = Field(description="Failing jobs of the pipeline as JSON")
+    job_logs: str = Field(description="Tail of each failing job's log, already trimmed")
+    changed_files: list[str] = Field(description="Files the MR changes relative to the target branch")
+    diff: str = Field(
+        description="Diff of the MR against the target branch, truncated. Context for attributing "
+        "the failure only — the change itself is not under review"
+    )
+    diff_truncated: bool = Field(description="Whether the diff was truncated")
+
+
+class MRVerificationOutputSchema(BaseModel):
+    """Result record of one CI verification run."""
+
+    merge_request_url: str = Field(description="URL of the merge request")
+    verdict: CIVerificationVerdict = Field(description="Outcome of watching the pipeline")
+    summary: str = Field(description="Human-readable summary, posted on the MR when CI failed")
+    pipeline_status: str | None = Field(default=None, description="Raw GitLab pipeline status")
+    pipeline_url: str | None = Field(default=None, description="Link to the pipeline")
+    pipeline_sha: str | None = Field(default=None, description="Commit the pipeline ran against")
+    job_analyses: list[CIJobFailureAnalysis] = Field(
+        default_factory=list, description="Per-job analysis, empty unless CI failed"
+    )
+    error: str | None = Field(default=None, description="Set when the run could not be completed")
+
+    @property
+    def caused_by_mr(self) -> bool:
+        return self.verdict is CIVerificationVerdict.CI_FAILED_MR
+
+    @property
+    def all_failures_retryable(self) -> bool:
+        return bool(self.job_analyses) and all(job.retryable for job in self.job_analyses)
+
+
+# ============================================================================
 # Merge Request Metadata Cache Schema
 # ============================================================================
 
@@ -979,6 +1126,20 @@ class PackageReproducerConfig(BaseModel):
     )
 
 
+class PackageVerificationConfig(BaseModel):
+    """Machine-readable MR CI verification config from the per-package rules repo.
+
+    Parsed from the ``verification`` section of
+    ``gitlab.com/redhat/centos-stream/rules/<package>/ymir.yaml``.
+    """
+
+    analyze_ci_failures: bool = Field(
+        default=True,
+        description="Whether to watch the CI pipeline of Ymir-authored MRs for this package "
+        "and comment when it fails",
+    )
+
+
 class PackageReleaseBumpingConfig(BaseModel):
     """Machine-readable release bumping config from the per-package rules repo.
 
@@ -1058,6 +1219,45 @@ class FailedPipelineJob(BaseModel):
         description="True if the job is allowed to fail (allow_failure: true in .gitlab-ci.yml). "
         "A job with allow_failure=true does not block the pipeline even when it fails.",
     )
+
+
+class MergeRequestPipelineStatus(BaseModel):
+    """Current state of a merge request's head pipeline."""
+
+    # Raw GitLab status string: created, waiting_for_resource, preparing,
+    # pending, running, success, failed, canceled, skipped, manual, scheduled —
+    # or "none" when the MR has no pipeline at all.
+    status: str = Field(description="GitLab pipeline status, or 'none' when there is no pipeline")
+    pipeline_id: int | None = Field(default=None, description="Pipeline id, None when there is none")
+    sha: str | None = Field(default=None, description="Commit SHA the pipeline ran against")
+    web_url: str | None = Field(default=None, description="Link to the pipeline in GitLab")
+    failed_jobs: list[FailedPipelineJob] = Field(
+        default_factory=list, description="Jobs of this pipeline that failed"
+    )
+
+    # Statuses that mean "come back later".
+    PENDING_STATUSES: ClassVar[frozenset[str]] = frozenset(
+        {"created", "waiting_for_resource", "preparing", "pending", "running", "scheduled", "none"}
+    )
+    # Terminal and not a failure: nothing for this agent to say.
+    PASSING_STATUSES: ClassVar[frozenset[str]] = frozenset({"success", "skipped", "manual"})
+
+    @property
+    def is_pending(self) -> bool:
+        return self.status in self.PENDING_STATUSES
+
+    @property
+    def is_passing(self) -> bool:
+        return self.status in self.PASSING_STATUSES
+
+    @property
+    def is_failed(self) -> bool:
+        return self.status == "failed"
+
+    @property
+    def blocking_failed_jobs(self) -> list[FailedPipelineJob]:
+        """Failed jobs that actually fail the pipeline (``allow_failure: false``)."""
+        return [job for job in self.failed_jobs if not job.allow_failure]
 
 
 class CommentReply(BaseModel):

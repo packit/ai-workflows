@@ -81,6 +81,9 @@ show-clarification-queue:
 show-reproducer-queue:
 	$(call show_queue,reproducer_queue)
 
+show-mr-verification-queue:
+	$(call show_queue,mr_verification_queue)
+
 show-error-list:
 	@oc exec deployment/valkey -- valkey-cli --no-raw LRANGE error_list 0 -1 | python3 scripts/error_list.py --file -
 
@@ -117,6 +120,9 @@ logs-rebuild-c10s:
 
 logs-reproducer:
 	oc logs -f deployment/reproducer-agent
+
+logs-mr-verification:
+	oc logs -f deployment/mr-verification-agent
 
 logs-mcp:
 	oc logs -f deployment/mcp-gateway
@@ -219,9 +225,11 @@ unsuspend-sweeps:
 	show-backport-queue-c9s show-backport-queue-c10s \
 	show-rebuild-queue-c9s show-rebuild-queue-c10s \
 	show-clarification-queue show-reproducer-queue show-error-list requeue-error \
+	show-mr-verification-queue \
 	logs-triage logs-backport-c9s logs-backport-c10s \
 	logs-rebase-c9s logs-rebase-c10s logs-rebuild-c9s logs-rebuild-c10s \
-	logs-reproducer logs-mcp logs-supervisor logs-valkey logs-phoenix \
+	logs-reproducer logs-mr-verification \
+	logs-mcp logs-supervisor logs-valkey logs-phoenix \
 	logs-redis-commander logs-otel-collector process trigger-reproducer \
 	run-sweep-dependency run-sweep-y-stream run-sweep-pr-pending run-sweep-no-patch \
 	suspend-sweeps unsuspend-sweeps

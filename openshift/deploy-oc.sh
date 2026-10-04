@@ -141,6 +141,7 @@ apply deployment-rebuild-agent-c10s.yml
 apply deployment-reproducer-agent.yml
 apply deployment-mr-consolidation-agent-c9s.yml
 apply deployment-mr-consolidation-agent-c10s.yml
+apply deployment-mr-verification-agent.yml
 
 # Jira Issue Fetcher
 apply imagestream-jira-issue-fetcher.yml

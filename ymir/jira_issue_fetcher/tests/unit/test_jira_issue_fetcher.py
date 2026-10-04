@@ -320,6 +320,46 @@ async def test_get_existing_issue_keys_includes_reproducer_queues(fetcher, mock_
 
 
 @pytest.mark.asyncio
+async def test_get_existing_issue_keys_excludes_mr_verification_queues(fetcher, mock_redis_context):
+    """MR verification tasks must NOT act as a dedup anchor.
+
+    The opposite of the reproducer case above, and deliberately so: a review is
+    advisory work that happens after the MR already exists. If a queued — or
+    stuck — review counted as "this issue is already being worked on", a
+    maintainer could no longer re-trigger the issue with ymir_todo.
+    """
+    verification_task_json = json.dumps(
+        {
+            "metadata": {
+                "merge_request_url": "https://gitlab.com/redhat/rhel/rpms/bind/-/merge_requests/1",
+                "package": "bind",
+                "dist_git_branch": "rhel-9.4.0",
+                "jira_issue": "RHEL-VERIFY-1",
+                "source_agent": "Backport",
+            },
+            "attempts": 0,
+        }
+    )
+
+    mock_redis, _ = mock_redis_context
+    verification_queues = {
+        RedisQueues.MR_VERIFICATION_QUEUE_C9S.value,
+        RedisQueues.MR_VERIFICATION_QUEUE_C10S.value,
+        RedisQueues.MR_VERIFICATION_QUEUE_C9S_TODO.value,
+        RedisQueues.MR_VERIFICATION_QUEUE_C10S_TODO.value,
+    }
+    for queue in RedisQueues.all_queues():
+        payload = [verification_task_json] if queue in verification_queues else []
+        mock_redis.should_receive("lrange").with_args(queue, 0, -1).and_return(
+            create_async_mock_return_value(payload)
+        )
+
+    result = await fetcher._get_existing_issue_keys(mock_redis)
+
+    assert "RHEL-VERIFY-1" not in result
+
+
+@pytest.mark.asyncio
 async def test_get_existing_issue_keys_handles_error_list_entry_wrapper(fetcher, mock_redis_context):
     """error_list entries pushed as ErrorListEntry (queue/task/error_id wrapper)
 

@@ -11,11 +11,12 @@ This guide is designed for AI agents working on the Ymir AI workflows project. I
 
 ## Agent Architecture
 
-Five agents process tasks through Redis queues (see [README-agents.md](README-agents.md)):
+Agents process tasks through Redis queues (see [README-agents.md](README-agents.md)):
 - **Triage Agent**: Analyzes Jira issues, determines resolution path (rebase vs backport)
 - **Rebase Agent**: Updates packages to newer upstream versions
 - **Backport Agent**: Applies specific fixes/patches to packages
 - **Rebuild Agent**: Rebuilds packages in the build system
+- **MR Verification Agent**: Read-only review of Ymir-authored MRs; posts a review comment and labels the MR. Never modifies the branch it reviews (see [docs/mr_verification_architecture.md](docs/mr_verification_architecture.md))
 - **Supervisor Workflows**: Manage testing and release (see [README-supervisor.md](README-supervisor.md))
 
 ## Development Workflows
@@ -103,6 +104,7 @@ For detailed deployment info: see [openshift/README.md](openshift/README.md)
 | Change queue routing | [jira_label_workflow_routing.md](jira_label_workflow_routing.md) |
 | Reproducer design | [docs/reproducer_architecture.md](docs/reproducer_architecture.md) |
 | MR consolidation design | [docs/mr_consolidation_architecture.md](docs/mr_consolidation_architecture.md) |
+| MR verification design | [docs/mr_verification_architecture.md](docs/mr_verification_architecture.md) |
 
 ## Documentation to Understand Workflows
 
@@ -114,6 +116,7 @@ For detailed deployment info: see [openshift/README.md](openshift/README.md)
 - **[monitoring.md](monitoring.md)** — Observability and performance review
 - **[docs/reproducer_architecture.md](docs/reproducer_architecture.md)** — Reproducer agent, cross-stream reuse, create/adapt lock
 - **[docs/mr_consolidation_architecture.md](docs/mr_consolidation_architecture.md)** — MR consolidation agent and Redis queue
+- **[docs/mr_verification_architecture.md](docs/mr_verification_architecture.md)** — MR verification agent, read-only tool set, verdicts and labels
 
 ## Security
 

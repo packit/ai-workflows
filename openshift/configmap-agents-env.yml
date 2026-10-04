@@ -24,6 +24,16 @@ data:
   # When "true", triage enqueues reproducer jobs for eligible resolutions.
   # Set to "false" to disable auto-enqueue (manual: make trigger-reproducer).
   TRIAGE_ENQUEUE_REPRODUCER: "true"
+  # Global kill switch for the MR verification agent. When "false", the
+  # MR-producing agents stop enqueueing review jobs; already-queued jobs
+  # still drain. The per-package `verification.verify_mrs` key in the rules
+  # repo opts an individual package out.
+  MR_VERIFICATION_ENABLED: "true"
+  # Hard cap on how much of an MR diff is pasted into the review prompt.
+  # Anything beyond this the reviewer has to read from the clone itself.
+  MR_VERIFICATION_MAX_DIFF_CHARS: "120000"
+  # Lifetime of the already-reviewed marker (90 days).
+  MR_VERIFICATION_REVIEWED_TTL: "7776000"
 immutable: false
 kind: ConfigMap
 metadata:

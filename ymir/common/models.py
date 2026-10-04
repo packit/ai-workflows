@@ -881,6 +881,104 @@ class MergeRequestOutputSchema(BaseModel):
 
 
 # ============================================================================
+# MR Verification Agent Schemas
+# ============================================================================
+
+
+class MRVerificationVerdict(StrEnum):
+    """Overall outcome of a merge request review."""
+
+    APPROVED = "approved"
+    CHANGES_REQUESTED = "changes_requested"
+    # The agent could not gather enough evidence (e.g. sources unavailable).
+    # Treated as non-blocking: a human still reviews the MR.
+    INCONCLUSIVE = "inconclusive"
+
+
+class MRFindingSeverity(StrEnum):
+    """How much a single finding should weigh on the verdict."""
+
+    BLOCKER = "blocker"
+    WARNING = "warning"
+    NITPICK = "nitpick"
+
+
+class MRVerificationFinding(BaseModel):
+    """A single problem the verification agent found in a merge request."""
+
+    severity: MRFindingSeverity = Field(description="How serious the finding is")
+    category: str = Field(
+        description="Short kebab-case area, e.g. 'spec-correctness', 'patch-provenance', "
+        "'changelog', 'release-bump', 'jira-metadata', 'build'"
+    )
+    file: str | None = Field(default=None, description="Repository-relative file the finding is about")
+    description: str = Field(description="What is wrong, stated in one or two sentences")
+    suggestion: str | None = Field(default=None, description="Concrete fix the maintainer should apply")
+
+
+class MRVerificationTaskMetadata(BaseModel):
+    """``Task.metadata`` payload on the MR verification queues."""
+
+    merge_request_url: str = Field(description="URL of the merge request to verify")
+    package: str = Field(description="RPM package name")
+    dist_git_branch: str = Field(description="Dist-git branch the MR targets")
+    jira_issue: str = Field(description="Primary Jira issue the MR resolves")
+    # Which agent produced the MR. Drives the checklist emphasis in the prompt
+    # (a rebase is reviewed differently from a one-patch backport).
+    source_agent: Literal["Backport", "Rebase", "Rebuild", "Consolidation"] = Field(
+        description="Agent that opened the merge request"
+    )
+    cve_id: str | None = Field(default=None, description="CVE fixed by the MR, when applicable")
+
+
+class MRVerificationInputSchema(BaseModel):
+    """Input schema for the MR verification agent prompt."""
+
+    local_clone: Path = Field(description="Path to the local clone checked out at the MR source branch")
+    package: str = Field(description="RPM package name")
+    dist_git_branch: str = Field(description="Dist-git branch the MR targets")
+    jira_issue: str = Field(description="Primary Jira issue the MR resolves")
+    cve_id: str | None = Field(description="CVE fixed by the MR, when applicable")
+    source_agent: str = Field(description="Agent that opened the merge request")
+    merge_request_url: str = Field(description="URL of the merge request")
+    merge_request_title: str = Field(description="Title of the MR")
+    merge_request_description: str = Field(description="Description of the MR")
+    changed_files: list[str] = Field(description="Files changed by the MR relative to the target branch")
+    diff: str = Field(description="Unified diff of the MR against the target branch, possibly truncated")
+    diff_truncated: bool = Field(description="Whether the diff was truncated to fit the context window")
+    sources_available: bool = Field(
+        default=False,
+        description="Whether the source tarballs were downloaded, i.e. whether run_package_prep can run",
+    )
+    failed_pipeline_jobs: str | None = Field(
+        description="Failed CI jobs of the MR's latest pipeline as JSON, None when the pipeline is clean"
+    )
+
+
+class MRVerificationOutputSchema(BaseModel):
+    """Structured review produced by the MR verification agent."""
+
+    verdict: MRVerificationVerdict = Field(description="Overall outcome of the review")
+    summary: str = Field(description="Two to four sentence summary of the review for the MR comment")
+    findings: list[MRVerificationFinding] = Field(
+        default_factory=list,
+        description="Problems found, most severe first; empty when the MR looks correct",
+    )
+    checks_performed: list[str] = Field(
+        default_factory=list,
+        description="Short labels of the checks that were actually carried out",
+    )
+    error: str | None = Field(
+        default=None,
+        description="Set when the review could not be completed at all",
+    )
+
+    @property
+    def has_blockers(self) -> bool:
+        return any(f.severity is MRFindingSeverity.BLOCKER for f in self.findings)
+
+
+# ============================================================================
 # Merge Request Metadata Cache Schema
 # ============================================================================
 
@@ -976,6 +1074,24 @@ class PackageReproducerConfig(BaseModel):
     enabled: bool = Field(
         default=False,
         description="Whether to run the Ymir reproducer workflow for this package",
+    )
+
+
+class PackageVerificationConfig(BaseModel):
+    """Machine-readable MR verification config from the per-package rules repo.
+
+    Parsed from the ``verification`` section of
+    ``gitlab.com/redhat/centos-stream/rules/<package>/ymir.yaml``.
+    """
+
+    verify_mrs: bool = Field(
+        default=True,
+        description="Whether to review Ymir-authored merge requests for this package",
+    )
+    block_on_findings: bool = Field(
+        default=False,
+        description="Post blocker findings as an unresolved (merge-blocking) discussion instead "
+        "of a plain comment. Opt-in: it prevents a maintainer from merging until resolved",
     )
 
 

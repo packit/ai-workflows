@@ -512,6 +512,17 @@ class JiraIssueFetcher:
                                             | RedisQueues.REPRODUCER_QUEUE_TODO.value
                                         ):
                                             issue_key = task.metadata.get("jira_issue", "").upper()
+                                        case (
+                                            RedisQueues.MR_VERIFICATION_QUEUE_C9S.value
+                                            | RedisQueues.MR_VERIFICATION_QUEUE_C10S.value
+                                            | RedisQueues.MR_VERIFICATION_QUEUE_C9S_TODO.value
+                                            | RedisQueues.MR_VERIFICATION_QUEUE_C10S_TODO.value
+                                        ):
+                                            # Deliberately NOT used for dedup. An MR review is
+                                            # advisory work that happens after the MR exists; a
+                                            # queued (or stuck) review must not stop a maintainer
+                                            # from re-triggering the issue with ymir_todo.
+                                            continue
                                         case _:
                                             continue
 

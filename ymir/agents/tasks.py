@@ -10,12 +10,14 @@ import unicodedata
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypeVar
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import yaml
 from beeai_framework.errors import FrameworkError
 from beeai_framework.tools import Tool
+from pydantic import BaseModel
 from specfile import Specfile
 
 from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE, trace_viewer_issue_url
@@ -37,10 +39,12 @@ from ymir.common.models import (
     ErrorData,
     ErrorListEntry,
     MergeRequestDetails,
+    MRVerificationTaskMetadata,
     OpenMergeRequestResult,
     PackageConsolidationConfig,
     PackageReleaseBumpingConfig,
     PackageReproducerConfig,
+    PackageVerificationConfig,
     Task,
 )
 from ymir.common.reproducer_lock import resolve_clone_root
@@ -397,6 +401,51 @@ class InvalidReleaseBumpingConfigError(Exception):
     """Raised when ymir.yaml exists but the release_bumping section cannot be parsed."""
 
 
+_PackageConfigT = TypeVar("_PackageConfigT", bound=BaseModel)
+
+
+async def _fetch_ymir_yaml_section(
+    package: str,
+    available_tools: list,
+    *,
+    section: str,
+    model: type[_PackageConfigT],
+    error_class: type[Exception],
+) -> _PackageConfigT:
+    """Load one section of the per-package ``ymir.yaml`` rules file.
+
+    Shared by every ``fetch_*_config`` helper. A rules file that is missing,
+    unreadable, or simply has no *section* yields the model's defaults — only
+    a section that is present but malformed raises *error_class*.
+    """
+    try:
+        raw = await run_tool(
+            "get_maintainer_rules",
+            package=package,
+            file_path="ymir.yaml",
+            available_tools=available_tools,
+        )
+    except Exception as e:
+        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, e)
+        return model()
+
+    if "not found" in raw.lower():
+        return model()
+
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        raise error_class(f"ymir.yaml for {package} is not valid YAML: {e}") from e
+
+    if not isinstance(data, dict) or section not in data:
+        return model()
+
+    try:
+        return model.model_validate(data[section])
+    except Exception as e:
+        raise error_class(f"ymir.yaml {section} section for {package} is malformed: {e}") from e
+
+
 async def fetch_release_bumping_config(
     package: str,
     available_tools: list,
@@ -419,34 +468,13 @@ async def fetch_release_bumping_config(
     Returns:
         Parsed release bumping config.
     """
-    try:
-        raw = await run_tool(
-            "get_maintainer_rules",
-            package=package,
-            file_path="ymir.yaml",
-            available_tools=available_tools,
-        )
-    except Exception as e:
-        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, e)
-        return PackageReleaseBumpingConfig()
-
-    if "not found" in raw.lower():
-        return PackageReleaseBumpingConfig()
-
-    try:
-        data = yaml.safe_load(raw)
-    except yaml.YAMLError as e:
-        raise InvalidReleaseBumpingConfigError(f"ymir.yaml for {package} is not valid YAML: {e}") from e
-
-    if not isinstance(data, dict) or "release_bumping" not in data:
-        return PackageReleaseBumpingConfig()
-
-    try:
-        return PackageReleaseBumpingConfig.model_validate(data["release_bumping"])
-    except Exception as e:
-        raise InvalidReleaseBumpingConfigError(
-            f"ymir.yaml release_bumping section for {package} is malformed: {e}"
-        ) from e
+    return await _fetch_ymir_yaml_section(
+        package,
+        available_tools,
+        section="release_bumping",
+        model=PackageReleaseBumpingConfig,
+        error_class=InvalidReleaseBumpingConfigError,
+    )
 
 
 async def update_release(
@@ -1561,34 +1589,13 @@ async def fetch_consolidation_config(
     Returns:
         Parsed consolidation config.
     """
-    try:
-        raw = await run_tool(
-            "get_maintainer_rules",
-            package=package,
-            file_path="ymir.yaml",
-            available_tools=available_tools,
-        )
-    except Exception as e:
-        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, e)
-        return PackageConsolidationConfig()
-
-    if "not found" in raw.lower():
-        return PackageConsolidationConfig()
-
-    try:
-        data = yaml.safe_load(raw)
-    except yaml.YAMLError as e:
-        raise InvalidConsolidationConfigError(f"ymir.yaml for {package} is not valid YAML: {e}") from e
-
-    if not isinstance(data, dict) or "consolidation" not in data:
-        return PackageConsolidationConfig()
-
-    try:
-        return PackageConsolidationConfig.model_validate(data["consolidation"])
-    except Exception as e:
-        raise InvalidConsolidationConfigError(
-            f"ymir.yaml consolidation section for {package} is malformed: {e}"
-        ) from e
+    return await _fetch_ymir_yaml_section(
+        package,
+        available_tools,
+        section="consolidation",
+        model=PackageConsolidationConfig,
+        error_class=InvalidConsolidationConfigError,
+    )
 
 
 async def try_submit_consolidation_job(
@@ -1650,31 +1657,105 @@ async def fetch_reproducer_config(
     Returns:
         Parsed reproducer config.
     """
+    return await _fetch_ymir_yaml_section(
+        package,
+        available_tools,
+        section="reproducer",
+        model=PackageReproducerConfig,
+        error_class=InvalidReproducerConfigError,
+    )
+
+
+class InvalidVerificationConfigError(Exception):
+    """Raised when the ``verification`` section of ymir.yaml is malformed."""
+
+
+async def fetch_verification_config(
+    package: str,
+    available_tools: list,
+) -> PackageVerificationConfig:
+    """Fetch the MR verification config from the per-package rules repo.
+
+    Reads the ``verification`` section from ``ymir.yaml`` at
+    ``gitlab.com/redhat/centos-stream/rules/<package>``. Unlike the
+    reproducer and consolidation sections, the default here is *enabled*:
+    reviewing an MR only ever posts a comment, so it is safe to opt out of
+    rather than into.
+
+    Raises:
+        InvalidVerificationConfigError: When the file exists but the
+            ``verification`` section does not conform to the expected schema.
+
+    Args:
+        package: RPM package name.
+        available_tools: MCP gateway tools (must include ``get_maintainer_rules``).
+
+    Returns:
+        Parsed verification config.
+    """
+    return await _fetch_ymir_yaml_section(
+        package,
+        available_tools,
+        section="verification",
+        model=PackageVerificationConfig,
+        error_class=InvalidVerificationConfigError,
+    )
+
+
+async def try_submit_verification_job(
+    package: str,
+    dist_git_branch: str,
+    merge_request_url: str,
+    jira_issue: str,
+    source_agent: str,
+    gateway_tools: list,
+    redis_conn,
+    cve_id: str | None = None,
+    user_triggered: bool = False,
+) -> None:
+    """Queue a freshly opened MR for review, unless the package opted out.
+
+    Called by every agent that opens an MR. Deliberately best-effort: a
+    failure to queue a *review* must never fail the agent run that produced
+    a perfectly good MR, so everything here is caught and logged.
+
+    ``user_triggered`` is inherited from the run that opened the MR: somebody
+    waiting on a ``ymir_todo`` run wants the review promptly too, so it goes
+    on the priority twin queue.
+    """
+    if os.getenv("MR_VERIFICATION_ENABLED", "true").lower() not in ("true", "1", "yes"):
+        logger.info("MR verification globally disabled, skipping %s", merge_request_url)
+        return
+
+    if redis_conn is None:
+        logger.info("No Redis connection (direct mode), skipping verification job submission")
+        return
+
     try:
-        raw = await run_tool(
-            "get_maintainer_rules",
-            package=package,
-            file_path="ymir.yaml",
-            available_tools=available_tools,
-        )
-    except Exception as e:
-        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, e)
-        return PackageReproducerConfig()
+        config = await fetch_verification_config(package, gateway_tools)
+    except InvalidVerificationConfigError as e:
+        logger.warning("Ignoring malformed verification config for %s: %s", package, e)
+        config = PackageVerificationConfig()
 
-    if "not found" in raw.lower():
-        return PackageReproducerConfig()
+    if not config.verify_mrs:
+        logger.info("MR verification not enabled for %s, skipping", package)
+        return
+
+    metadata = MRVerificationTaskMetadata(
+        merge_request_url=merge_request_url,
+        package=package,
+        dist_git_branch=dist_git_branch,
+        jira_issue=jira_issue,
+        source_agent=source_agent,
+        cve_id=cve_id,
+    )
+    task = Task(metadata=metadata.model_dump(), user_triggered=user_triggered)
+    queue = RedisQueues.get_mr_verification_queue_for_branch(dist_git_branch, user_triggered)
 
     try:
-        data = yaml.safe_load(raw)
-    except yaml.YAMLError as e:
-        raise InvalidReproducerConfigError(f"ymir.yaml for {package} is not valid YAML: {e}") from e
+        await fix_await(redis_conn.lpush(queue, task.model_dump_json()))
+    except Exception:
+        logger.exception("Failed to queue MR verification job for %s", merge_request_url)
+        return
 
-    if not isinstance(data, dict) or "reproducer" not in data:
-        return PackageReproducerConfig()
-
-    try:
-        return PackageReproducerConfig.model_validate(data["reproducer"])
-    except Exception as e:
-        raise InvalidReproducerConfigError(
-            f"ymir.yaml reproducer section for {package} is malformed: {e}"
-        ) from e
+    logger.info("Submitted MR verification job for %s to %s", merge_request_url, queue)

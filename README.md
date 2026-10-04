@@ -74,6 +74,7 @@ For installation instructions (skill setup and MCP tool configuration), see the 
 - [Agent Monitoring and Performance Review](monitoring.md) - Monitoring processes, anomaly detection, and continuous improvement
 - [MR Consolidation Architecture](docs/mr_consolidation_architecture.md) - Merging multiple backport MRs into a single MR
 - [Reproducer Architecture](docs/reproducer_architecture.md) - Automated test reproducers, cross-stream reuse, and create/adapt locking
+- [MR Verification Architecture](docs/mr_verification_architecture.md) - Automated read-only review of Ymir-authored merge requests
 
 **Data management:**
 

@@ -60,6 +60,14 @@ class RedisQueues(Enum):
     REPRODUCER_QUEUE = "reproducer_queue"
     REPRODUCER_QUEUE_TODO = "reproducer_queue_todo"
     COMPLETED_REPRODUCER_LIST = "completed_reproducer_list"
+    # Split per container the same way the backport/rebuild queues are: the
+    # verification agent runs `rpmbuild -bp` against the MR branch, which needs
+    # the build root matching the target branch.
+    MR_VERIFICATION_QUEUE_C9S = "mr_verification_queue_c9s"
+    MR_VERIFICATION_QUEUE_C10S = "mr_verification_queue_c10s"
+    MR_VERIFICATION_QUEUE_C9S_TODO = "mr_verification_queue_c9s_todo"
+    MR_VERIFICATION_QUEUE_C10S_TODO = "mr_verification_queue_c10s_todo"
+    COMPLETED_MR_VERIFICATION_LIST = "completed_mr_verification_list"
     # Redis ZSET (score = unix ready-time) for delayed reproducer retries.
     # Not a BRPOP list — excluded from all_queues().
     REPRODUCER_DELAYED_QUEUE = "reproducer_queue_delayed"
@@ -105,6 +113,10 @@ class RedisQueues(Enum):
             cls.BACKPORT_QUEUE.value,
             cls.REPRODUCER_QUEUE.value,
             cls.REPRODUCER_QUEUE_TODO.value,
+            cls.MR_VERIFICATION_QUEUE_C9S.value,
+            cls.MR_VERIFICATION_QUEUE_C10S.value,
+            cls.MR_VERIFICATION_QUEUE_C9S_TODO.value,
+            cls.MR_VERIFICATION_QUEUE_C10S_TODO.value,
         }
 
     @classmethod
@@ -117,6 +129,7 @@ class RedisQueues(Enum):
             cls.COMPLETED_BACKPORT_LIST.value,
             cls.COMPLETED_REBUILD_LIST.value,
             cls.COMPLETED_REPRODUCER_LIST.value,
+            cls.COMPLETED_MR_VERIFICATION_LIST.value,
             cls.POSTPONED_LIST.value,
         }
 
@@ -152,6 +165,18 @@ class RedisQueues(Enum):
             cls.REBUILD_QUEUE_C9S.value
             if target_branch and cls._use_c9s_branch(target_branch)
             else cls.REBUILD_QUEUE_C10S.value
+        )
+        return cls.priority_twin(base) if user_triggered else base
+
+    @classmethod
+    def get_mr_verification_queue_for_branch(
+        cls, target_branch: str | None, user_triggered: bool = False
+    ) -> str:
+        """Return MR verification queue for the branch; the priority twin if user-triggered."""
+        base = (
+            cls.MR_VERIFICATION_QUEUE_C9S.value
+            if target_branch and cls._use_c9s_branch(target_branch)
+            else cls.MR_VERIFICATION_QUEUE_C10S.value
         )
         return cls.priority_twin(base) if user_triggered else base
 
@@ -216,6 +241,15 @@ class JiraLabels(Enum):
     MR_CLOSED = "ymir_mr_closed"
 
     MR_CONSOLIDATED = "ymir_consolidated"
+
+    # GitLab MR labels applied by the MR verification agent. They live here
+    # next to MR_CONSOLIDATED, which is also an MR-side label, so every Ymir
+    # label string has a single definition.
+    MR_VERIFIED = "ymir_mr_verified"
+    MR_CHANGES_REQUESTED = "ymir_mr_changes_requested"
+    # Jira label: verification crashed (as opposed to finding problems in
+    # the MR, which is MR_CHANGES_REQUESTED on the MR itself).
+    MR_VERIFICATION_ERRORED = "ymir_mr_verification_errored"
 
     CONSOLIDATE_BASE = "ymir_consolidate_base"
     CONSOLIDATE_NEXT = "ymir_consolidate_next"

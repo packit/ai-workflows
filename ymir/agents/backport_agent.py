@@ -1681,7 +1681,7 @@ async def run_workflow(
                 _disable_ystream_inheritance(state, task_metadata)
                 return "prepare_normal_backport"
             if dry_run:
-                return "submit_consolidation_job"
+                return "submit_verification_job"
             return "push_inherited_change"
 
         async def push_inherited_change(state):
@@ -1751,7 +1751,7 @@ async def run_workflow(
                     f"Validated inherited commit {state.inherit_local_commit} was pushed, "
                     f"but the merge request could not be opened: {error}"
                 )
-            return "submit_consolidation_job"
+            return "submit_verification_job"
 
         async def commit_push_and_open_mr(state):
             try:
@@ -1803,6 +1803,24 @@ async def run_workflow(
                 state.merge_request_url = None
                 state.backport_result.success = False
                 state.backport_result.error = f"Could not commit and open MR: {e}"
+            return "submit_verification_job"
+
+        async def submit_verification_job(state):
+            # Queue the MR for automated review. Modular issues skip
+            # consolidation but not review — reviewing a modular MR is no
+            # different from reviewing any other one.
+            if state.merge_request_url and state.merge_request_newly_created:
+                await tasks.try_submit_verification_job(
+                    package=state.package,
+                    dist_git_branch=state.dist_git_branch,
+                    merge_request_url=state.merge_request_url,
+                    jira_issue=state.jira_issue,
+                    source_agent="Backport",
+                    cve_id=state.cve_id,
+                    gateway_tools=gateway_tools,
+                    redis_conn=redis_conn,
+                    user_triggered=user_triggered,
+                )
             if is_modular_issue:
                 return "comment_in_jira"
             return "submit_consolidation_job"
@@ -1918,6 +1936,7 @@ async def run_workflow(
         workflow.add_step("push_inherited_change", push_inherited_change)
         workflow.add_step("open_inherited_mr", open_inherited_mr)
         workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
+        workflow.add_step("submit_verification_job", submit_verification_job)
         workflow.add_step("submit_consolidation_job", submit_consolidation_job)
         workflow.add_step("comment_in_jira", comment_in_jira)
 

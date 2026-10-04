@@ -7,11 +7,12 @@ See [README.md](README.md) for general notes about setting up the development en
 
 ## Architecture
 
-Three agents process tasks through Redis queues:
+These agents process tasks through Redis queues:
 - **Triage Agent**: Analyzes JIRA issues and determines resolution path. It uses title, description, fields, and comments to find out root cause of the issue. It can ask for clarification, create tasks for other agents or may take no action if not needed.
 - **Rebase Agent**: Updates packages to newer upstream versions. A Rebase is only to be chosen when the issue explicitly instructs you to "rebase" or "update". It looks for upstream references that are linked, attached and present in the description or comments in the issue.
 - **Backport Agent**: Applies specific fixes/patches to packages. It looks for patches that are linked, attached and present in the description or comments in the issue. It tries to apply the patch and resolve any conflicts that may arise during the backport process.
 - **Issue Verification Agent**: Manages the post-fix lifecycle of a JIRA issue — from merged MR through errata creation, testing analysis, and status transitions to RELEASE_PENDING. Migrated from the supervisor's `IssueHandler`.
+- **MR Verification Agent**: Reviews every Ymir-authored merge request before a human does. It reads the MR diff against the target branch and checks the RHEL packaging invariants — patch provenance, `Release:` bump, changelog/Jira metadata, `%prep` applicability, scope — then posts a review comment and labels the MR `ymir_mr_verified` or `ymir_mr_changes_requested`. Read-only by construction: it never touches the branch it reviews. See [docs/mr_verification_architecture.md](docs/mr_verification_architecture.md).
 
 ### Y-stream inheritance fast path
 

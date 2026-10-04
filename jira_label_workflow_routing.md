@@ -54,6 +54,11 @@ flowchart TD
     BACKPORT_AGENT -->|Success| COMPLETED_B[completed_backport_list]
     BACKPORT_AGENT -->|Failed/Error| ERROR
 
+    REBASE_AGENT -->|MR opened| MRVERIFY[mr_verification_queue_c9s/c10s]
+    BACKPORT_AGENT -->|MR opened| MRVERIFY
+    MRVERIFY --> MRVERIFY_AGENT[MR Verification Agent]
+    MRVERIFY_AGENT -->|Review posted| COMPLETED_V[completed_mr_verification_list]
+
     style TRIAGE fill:#fff9c4
     style REBASE_C9S fill:#e1f5fe
     style REBASE_C10S fill:#e1f5fe
@@ -62,6 +67,8 @@ flowchart TD
     style ERROR fill:#ffcdd2
     style COMPLETED_R fill:#c8e6c9
     style COMPLETED_B fill:#c8e6c9
+    style MRVERIFY fill:#ffe0b2
+    style COMPLETED_V fill:#c8e6c9
 ```
 
 ## Label Reference
@@ -95,6 +102,7 @@ flowchart TD
 | `ymir_backport_errored` | Backport error | ✅ Yes | Check Jira comment |
 | `ymir_rebase_failed` | Rebase unsuccessful | ❌ No | May auto-retry |
 | `ymir_backport_failed` | Backport unsuccessful | ❌ No | May auto-retry |
+| `ymir_mr_verification_errored` | MR review crashed after all retries | ❌ No | Advisory work only — the MR itself is untouched and still reviewable by a human. Check `error_list` |
 
 ### Control Labels
 
@@ -118,6 +126,8 @@ These labels are applied to GitLab merge requests (not Jira issues):
 | `ymir_reproducer` | Marks a tests-repo MR as a Ymir reproducer | Used to find existing open test MRs for cross-stream reuse/adapt |
 | `ymir_consolidated` | Marks an MR that has been folded into a consolidated MR | The MR stays open but is excluded from future consolidation searches |
 | `ymir_mr_closure_handled` | Marks a closed MR that Phase 2 has processed | Prevents the mr-cleanup script from re-processing the same MR |
+| `ymir_mr_verified` | The MR verification agent reviewed the MR and found no blockers | Advisory only — does not merge or approve. Warnings/nitpicks may still be in the review comment |
+| `ymir_mr_changes_requested` | The MR verification agent found at least one blocker | Advisory by default. Posted as a merge-blocking discussion only when the package set `verification.block_on_findings: true` in `ymir.yaml` |
 
 ## Queue Types Summary
 
@@ -142,6 +152,12 @@ These labels are applied to GitLab merge requests (not Jira issues):
 | `completed_rebase_list` | Output | Rebase success | `ymir_rebased` | Active |
 | `completed_backport_list` | Output | Backport success | `ymir_backported` | Active |
 | `completed_reproducer_list` | Output | Reproducer success/failure (non-retry) | `ymir_reproducer_*` | Active |
+| `mr_verification_queue_c9s` | Input | Any agent opens an MR on RHEL 8/9 | `ymir_mr_verified` / `ymir_mr_changes_requested` (on the **MR**, not the issue) | Active unless `MR_VERIFICATION_ENABLED=false` |
+| `mr_verification_queue_c10s` | Input | Any agent opens an MR on RHEL 10+ | Same as `mr_verification_queue_c9s` | Active unless `MR_VERIFICATION_ENABLED=false` |
+| `mr_verification_queue_c9s_todo` / `_c10s_todo` | Input (priority) | Same, for `ymir_todo`-triggered runs | Same | Active unless `MR_VERIFICATION_ENABLED=false` |
+| `completed_mr_verification_list` | Output | Review finished (any verdict) | — | Active |
+
+> The MR verification queues are intentionally **excluded from the fetcher's deduplication scan**: a review is advisory work that happens after the MR already exists, so a queued or stuck review must never stop a maintainer from re-triggering the issue with `ymir_todo`.
 
 ## Deduplication Logic
 

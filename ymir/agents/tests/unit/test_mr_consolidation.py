@@ -33,6 +33,22 @@ from ymir.agents.tasks import (
 from ymir.common.models import MergeConsolidationJob
 
 
+def test_consolidated_description_puts_branch_warning_first():
+    description = mc_agent._build_consolidated_description(
+        mr_titles=["Fix bash"],
+        mr_descriptions=["Backport description"],
+        mr_urls=["https://gitlab.example/mr/1"],
+        jira_issues=["RHEL-1"],
+        package="bash",
+        branch_warning="Target branch is behind the latest Brew build.",
+    )
+
+    assert description.startswith(
+        "> **⚠️ Z-stream branch warning:** Target branch is behind the latest Brew build."
+    )
+    assert "latest Brew build.\n\n## Consolidated Backport MR" in description
+
+
 class FakeRedis:
     """Minimal in-memory Redis mock for hash operations and Lua eval."""
 

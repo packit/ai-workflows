@@ -380,6 +380,7 @@ async def main() -> None:
                     state.fork_url,
                     state.fedora_clone,
                     state.zstream_branch_created,
+                    state.zstream_branch_warning,
                 ) = await tasks.fork_and_prepare_dist_git(
                     jira_issue=state.jira_issue,
                     package=state.package,
@@ -578,6 +579,9 @@ async def main() -> None:
                     all_issues = _consolidated_issue_keys(state.jira_issue, state.consolidated_issues)
                     resolves_lines = "\n".join(f"Resolves: {issue}" for issue in all_issues)
                     triage_details_text = format_mr_triage_details(state.justification, state.triage_summary)
+                    branch_note = format_zstream_branch_note(
+                        state.zstream_branch_created, state.zstream_branch_warning
+                    )
                     consolidation_text = (
                         f"\n\n{wrap_details('Consolidated issues', state.consolidation_summary)}"
                         if state.consolidation_summary
@@ -605,7 +609,7 @@ async def main() -> None:
                             f"{format_jira_links_for_mr(all_issues)}\n"
                             f"{wrap_details('Rebase status', state.rebase_log[-1])}"
                             f"{consolidation_text}"
-                            f"\n\n{format_zstream_branch_note(state.zstream_branch_created)}"
+                            f"\n\n{branch_note}"
                             f"{mr_description_footer(state.package)}"
                         ),
                         available_tools=gateway_tools,
@@ -870,20 +874,6 @@ async def main() -> None:
                         f"success: {state.rebase_result.success}"
                     )
 
-            except tasks.ZStreamBranchStaleError as e:
-                await tasks.handle_zstream_branch_stale_error(
-                    e,
-                    jira_issues=[rebase_data.jira_issue],
-                    primary_jira_issue=rebase_data.jira_issue,
-                    agent_type="Rebase",
-                    errored_label=JiraLabels.REBASE_ERRORED.value,
-                    triaged_label=JiraLabels.TRIAGED_REBASE.value,
-                    dry_run=dry_run,
-                    user_triggered=user_triggered,
-                    redis_conn=redis,
-                    task=task,
-                    queue=rebase_queue_todo if user_triggered else rebase_queue,
-                )
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during rebase processing for {rebase_data.jira_issue}: {error}")

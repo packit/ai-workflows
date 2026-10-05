@@ -117,6 +117,7 @@ async def main() -> None:
                     state.fork_url,
                     _,
                     state.zstream_branch_created,
+                    state.zstream_branch_warning,
                 ) = await tasks.fork_and_prepare_dist_git(
                     jira_issue=state.jira_issue,
                     package=state.package,
@@ -302,6 +303,9 @@ async def main() -> None:
                         )
 
                     triage_details_text = format_mr_triage_details(state.justification, state.triage_summary)
+                    branch_note = format_zstream_branch_note(
+                        state.zstream_branch_created, state.zstream_branch_warning
+                    )
 
                     (
                         state.merge_request_url,
@@ -328,7 +332,7 @@ async def main() -> None:
                             f"{side_tag_text}\n"
                             f"{triage_details_text}"
                             f"{consolidation_text}"
-                            f"\n\n{format_zstream_branch_note(state.zstream_branch_created)}"
+                            f"\n\n{branch_note}"
                             f"{mr_description_footer(state.package)}"
                         ),
                         available_tools=gateway_tools,
@@ -619,20 +623,6 @@ async def main() -> None:
                         f"success: {state.rebuild_success}"
                     )
 
-            except tasks.ZStreamBranchStaleError as e:
-                await tasks.handle_zstream_branch_stale_error(
-                    e,
-                    jira_issues=list(rebuild_data.all_jira_issues),
-                    primary_jira_issue=rebuild_data.jira_issue,
-                    agent_type="Rebuild",
-                    errored_label=JiraLabels.REBUILD_ERRORED.value,
-                    triaged_label=JiraLabels.TRIAGED_REBUILD.value,
-                    dry_run=dry_run,
-                    user_triggered=user_triggered,
-                    redis_conn=redis,
-                    task=task,
-                    queue=rebuild_queue_todo if user_triggered else rebuild_queue,
-                )
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during rebuild processing for {rebuild_data.jira_issue}: {error}")

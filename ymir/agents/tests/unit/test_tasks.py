@@ -2,14 +2,12 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import pytest
-from beeai_framework.errors import FrameworkError
 from flexmock import flexmock
 
 from ymir.agents import tasks as agent_tasks
-from ymir.agents.constants import JIRA_COMMENT_TEMPLATE
+from ymir.agents.constants import JIRA_COMMENT_TEMPLATE, format_zstream_branch_note
 from ymir.agents.tasks import (
     InvalidReleaseBumpingConfigError,
-    ZStreamBranchStaleError,
     _canonical_mr_title_key,
     _check_zstream_branch_consistency,
     _is_newer_summary,
@@ -25,7 +23,6 @@ from ymir.agents.tasks import (
     fetch_release_bumping_config,
     fork_and_prepare_dist_git,
     get_jira_issue_metadata,
-    handle_zstream_branch_stale_error,
     needs_zstream_target_label,
     post_user_ack_once,
     push_changes,
@@ -33,8 +30,7 @@ from ymir.agents.tasks import (
     resolve_canonical_mr_title,
     resolve_current_canonical_mr_title,
 )
-from ymir.common.constants import JiraLabels, RedisQueues
-from ymir.common.models import CachedMRMetadata, ErrorListEntry, Task
+from ymir.common.models import CachedMRMetadata, Task
 from ymir.tools.privileged.utils import ACTIVE_WORKSPACE_MARKER
 
 
@@ -863,6 +859,31 @@ async def test_fork_and_prepare_dist_git_reuses_task_workspace(git_repo_basepath
 
 
 @pytest.mark.asyncio
+async def test_fork_and_prepare_dist_git_continues_with_branch_warning(git_repo_basepath):
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "https://fork.example.com"
+
+    async def _mock_warning(*_args, **_kwargs):
+        return "Target branch is behind its latest Brew build."
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    flexmock(agent_tasks).should_receive("check_subprocess").replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+    flexmock(agent_tasks).should_receive("_check_zstream_branch_consistency").replace_with(_mock_warning)
+
+    prepared = await fork_and_prepare_dist_git(
+        jira_issue="RHEL-12345",
+        package="some-package",
+        dist_git_branch="rhel-10.0",
+        available_tools=[],
+        agent_type="Backport",
+    )
+
+    assert prepared[1] == "automated-package-update-RHEL-12345"
+    assert prepared[5] == "Target branch is behind its latest Brew build."
+
+
+@pytest.mark.asyncio
 async def test_fork_and_prepare_honors_explicit_centos_stream_namespace(git_repo_basepath):
     """Modular stream-* branches must use the explicit namespace, not is_cs_branch."""
     mock_tools = [flexmock()]
@@ -1439,7 +1460,7 @@ async def test_commit_push_and_open_mr_no_reviewers_without_package(tmp_path):
 
 @pytest.mark.asyncio
 async def test_zstream_consistency_stale_not_ancestor(tmp_path):
-    """Branch HEAD does not contain the build ref (exit 1) -> stale."""
+    """A branch missing the build ref produces a reviewer warning."""
 
     async def _mock_candidate(*_args, **_kwargs):
         return "1.0-1", "build-ref-sha"
@@ -1458,20 +1479,19 @@ async def test_zstream_consistency_stale_not_ancestor(tmp_path):
     flexmock(agent_tasks).should_receive("get_latest_candidate_build").replace_with(_mock_candidate)
     flexmock(agent_tasks).should_receive("run_subprocess").replace_with(_mock_run_subprocess)
 
-    with pytest.raises(ZStreamBranchStaleError) as exc_info:
-        await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
+    warning = await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
 
-    assert exc_info.value.package == "golang"
-    assert exc_info.value.branch == "rhel-9.8.0"
-    assert exc_info.value.build_ref == "build-ref-sha"
-    assert exc_info.value.branch_head == "branch-head-sha"
-    assert FrameworkError.ensure(exc_info.value) is exc_info.value
-    assert not FrameworkError.is_retryable(exc_info.value)
+    assert "rhel-9.8.0" in warning
+    assert "golang" in warning
+    assert "branch-head-" in warning
+    assert "build-ref-sh" in warning
+    assert "does not contain" in warning
+    assert "before merging" in warning
 
 
 @pytest.mark.asyncio
 async def test_zstream_consistency_stale_ref_not_in_repo(tmp_path):
-    """Build ref missing from clone (exit 128) -> stale."""
+    """A missing build ref produces a warning without claiming branch ancestry."""
 
     async def _mock_candidate(*_args, **_kwargs):
         return "1.0-1", "missing-build-ref"
@@ -1490,8 +1510,11 @@ async def test_zstream_consistency_stale_ref_not_in_repo(tmp_path):
     flexmock(agent_tasks).should_receive("get_latest_candidate_build").replace_with(_mock_candidate)
     flexmock(agent_tasks).should_receive("run_subprocess").replace_with(_mock_run_subprocess)
 
-    with pytest.raises(ZStreamBranchStaleError):
-        await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
+    warning = await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
+
+    assert "not available in the clone" in warning
+    assert "missing-buil" in warning
+    assert "does not contain" not in warning
 
 
 @pytest.mark.asyncio
@@ -1508,7 +1531,7 @@ async def test_zstream_consistency_up_to_date(tmp_path):
     flexmock(agent_tasks).should_receive("get_latest_candidate_build").replace_with(_mock_candidate)
     flexmock(agent_tasks).should_receive("run_subprocess").once().replace_with(_mock_run_subprocess)
 
-    await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
+    assert await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path) is None
 
 
 @pytest.mark.asyncio
@@ -1518,7 +1541,7 @@ async def test_zstream_consistency_skips_non_zstream(tmp_path):
     flexmock(agent_tasks).should_receive("get_latest_candidate_build").never()
     flexmock(agent_tasks).should_receive("get_latest_z_pending_build").never()
 
-    await _check_zstream_branch_consistency("bash", "c10s", tmp_path)
+    assert await _check_zstream_branch_consistency("bash", "c10s", tmp_path) is None
 
 
 @pytest.mark.asyncio
@@ -1532,7 +1555,7 @@ async def test_zstream_consistency_brew_unreachable_soft_fails(tmp_path, caplog)
     flexmock(agent_tasks).should_receive("run_subprocess").never()
     flexmock(agent_tasks).should_receive("get_latest_candidate_build").replace_with(_mock_candidate)
 
-    await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
+    assert await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path) is None
 
     assert "Could not query Brew" in caplog.text
 
@@ -1557,7 +1580,7 @@ async def test_zstream_consistency_older_uses_z_pending(tmp_path):
     flexmock(agent_tasks).should_receive("get_latest_candidate_build").never()
     flexmock(agent_tasks).should_receive("run_subprocess").replace_with(_mock_run_subprocess)
 
-    await _check_zstream_branch_consistency("bash", "rhel-9.6.0", tmp_path)
+    assert await _check_zstream_branch_consistency("bash", "rhel-9.6.0", tmp_path) is None
 
 
 @pytest.mark.asyncio
@@ -1574,90 +1597,19 @@ async def test_zstream_consistency_unexpected_git_exit_soft_fails(tmp_path, capl
     flexmock(agent_tasks).should_receive("get_latest_candidate_build").replace_with(_mock_candidate)
     flexmock(agent_tasks).should_receive("run_subprocess").once().replace_with(_mock_run_subprocess)
 
-    await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path)
+    assert await _check_zstream_branch_consistency("golang", "rhel-9.8.0", tmp_path) is None
 
     assert "Unexpected git merge-base exit 2" in caplog.text
 
 
-@pytest.mark.asyncio
-async def test_handle_zstream_branch_stale_error_labels_comments_and_error_list():
-    exc = ZStreamBranchStaleError("golang", "rhel-9.8.0", "build-ref-sha", "branch-head-sha")
+def test_zstream_branch_warning_is_prominent_in_mr_description():
+    warning = "Branch HEAD (abc) does not contain the latest Brew build source commit (def)."
 
-    async def _mock_incr(*_args, **_kwargs):
-        return 7
+    note = format_zstream_branch_note(None, warning)
 
-    lpush_args = []
-
-    async def _mock_lpush(queue, payload):
-        lpush_args.append((queue, payload))
-
-    redis = flexmock()
-    redis.should_receive("incr").with_args(RedisQueues.ERROR_ID_COUNTER.value).once().replace_with(_mock_incr)
-    redis.should_receive("lpush").replace_with(_mock_lpush).once()
-
-    task = _make_task(attempts=2)
-
-    flexmock(agent_tasks).should_receive("set_jira_labels").twice().replace_with(_async_noop)
-    flexmock(agent_tasks).should_receive("post_terminal_error_comment").once().replace_with(_async_noop)
-    flexmock(agent_tasks).should_receive("post_terminal_error_comment").with_args(
-        jira_issue="RHEL-1",
-        agent_type="Rebuild",
-        comment_text=str(exc),
-        available_tools=[],
-    ).once().replace_with(_async_noop)
-    flexmock(agent_tasks).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
-
-    await handle_zstream_branch_stale_error(
-        exc,
-        jira_issues=["RHEL-1", "RHEL-2", "RHEL-1"],
-        primary_jira_issue="RHEL-1",
-        agent_type="Rebuild",
-        errored_label=JiraLabels.REBUILD_ERRORED.value,
-        triaged_label=JiraLabels.TRIAGED_REBUILD.value,
-        dry_run=False,
-        user_triggered=False,
-        redis_conn=redis,
-        task=task,
-        queue=RedisQueues.REBUILD_QUEUE_C9S.value,
-    )
-
-    lpush_val, lpush_entry = lpush_args.pop(0)
-    entry = ErrorListEntry.model_validate_json(lpush_entry)
-
-    assert lpush_val == RedisQueues.ERROR_LIST.value
-    assert entry.error_id == 7
-    assert entry.queue == RedisQueues.REBUILD_QUEUE_C9S.value
-    assert entry.task == task
-    assert entry.error.jira_issue == "RHEL-1"
-    assert entry.error.details == str(exc)
-
-
-@pytest.mark.asyncio
-async def test_handle_zstream_branch_stale_error_skips_comment_on_dry_run():
-    exc = ZStreamBranchStaleError("golang", "rhel-9.8.0", "build-ref-sha", "branch-head-sha")
-
-    async def _mock_incr(*_args, **_kwargs):
-        return 1
-
-    redis = flexmock()
-    redis.should_receive("lpush").replace_with(_async_noop).once()
-    redis.should_receive("incr").replace_with(_mock_incr)
-
-    flexmock(agent_tasks).should_receive("set_jira_labels").once().replace_with(_async_noop)
-    flexmock(agent_tasks).should_receive("post_terminal_error_comment").never()
-    flexmock(agent_tasks).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
-
-    await handle_zstream_branch_stale_error(
-        exc,
-        jira_issues=["RHEL-1"],
-        primary_jira_issue="RHEL-1",
-        agent_type="Rebase",
-        errored_label=JiraLabels.REBASE_ERRORED.value,
-        triaged_label=JiraLabels.TRIAGED_REBASE.value,
-        dry_run=True,
-        user_triggered=False,
-        redis_conn=redis,
-    )
+    assert note.startswith("> **⚠️ Z-stream branch warning:**")
+    assert warning in note
+    assert format_zstream_branch_note(None) == ""
 
 
 # -- fetch_release_bumping_config ---------------------------------------------

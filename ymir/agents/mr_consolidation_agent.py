@@ -26,6 +26,7 @@ from ymir.agents.constants import (
     I_AM_YMIR,
     ZSTREAM_TARGET_LABEL,
     format_jira_links_for_mr,
+    format_zstream_branch_note,
     mr_description_footer,
     strip_resolves_from_mr_text,
 )
@@ -521,6 +522,7 @@ async def run_workflow(
                 state.fork_url,
                 _,
                 _,
+                state.zstream_branch_warning,
             ) = await tasks.fork_and_prepare_dist_git(
                 jira_issue=working_id,
                 package=package,
@@ -1474,6 +1476,7 @@ async def run_workflow(
                 package,
                 cves=state.cves_collected,
                 has_rebuild=has_rebuild,
+                branch_warning=state.zstream_branch_warning,
             )
             if has_rebuild:
                 title = f"[Consolidated] Backport + rebuild fixes for {package} ({dist_git_branch})"
@@ -1733,6 +1736,7 @@ def _build_consolidated_description(
     package: str,
     cves: list[str] | None = None,
     has_rebuild: bool = False,
+    branch_warning: str | None = None,
 ) -> str:
     """Build the description for the consolidated MR.
 
@@ -1761,7 +1765,11 @@ def _build_consolidated_description(
             "(https://ymir.pages.redhat.com/docs/agents/mr-consolidation/).\n"
         )
 
-    parts = [header, intro]
+    parts = []
+    if branch_warning:
+        parts.append(format_zstream_branch_note(None, branch_warning).rstrip())
+        parts.append("")
+    parts.extend([header, intro])
 
     if cves:
         parts.append("### CVEs Fixed\n")

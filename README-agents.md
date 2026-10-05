@@ -13,6 +13,16 @@ Three agents process tasks through Redis queues:
 - **Backport Agent**: Applies specific fixes/patches to packages. It looks for patches that are linked, attached and present in the description or comments in the issue. It tries to apply the patch and resolve any conflicts that may arise during the backport process.
 - **Issue Verification Agent**: Manages the post-fix lifecycle of a JIRA issue — from merged MR through errata creation, testing analysis, and status transitions to RELEASE_PENDING. Migrated from the supervisor's `IssueHandler`.
 
+### Z-stream branch consistency
+
+Before creating a working branch, backport, rebase, rebuild, and MR consolidation
+compare the target Z-stream branch with the latest Brew build source commit. If
+the target branch does not contain that commit, the workflow continues and adds
+a warning with the relevant commit IDs to the MR description. A build source
+commit missing from the clone is also flagged for review. The check is skipped
+for other branches; Brew lookup failures and unexpected Git errors are logged
+without claiming the branch is stale.
+
 ### Y-stream inheritance fast path
 
 For Important and Critical Y-stream CVEs, triage carries the shipped leading

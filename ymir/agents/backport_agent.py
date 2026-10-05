@@ -928,6 +928,7 @@ async def run_workflow(
                 state.fork_url,
                 _,
                 state.zstream_branch_created,
+                state.zstream_branch_warning,
             ) = await tasks.fork_and_prepare_dist_git(
                 jira_issue=state.jira_issue,
                 package=state.package,
@@ -1242,12 +1243,15 @@ async def run_workflow(
                     state.justification,
                     state.triage_summary,
                 )
+                branch_note = format_zstream_branch_note(
+                    state.zstream_branch_created, state.zstream_branch_warning
+                )
                 state.inherit_mr_description = (
                     f"{origin}\n\n"
                     f"{triage_details_text}"
                     f"{format_jira_links_for_mr(state.jira_issue)}\n"
                     f"{wrap_details('Backporting steps', state.backport_log[-1])}"
-                    f"\n\n{format_zstream_branch_note(state.zstream_branch_created)}"
+                    f"\n\n{branch_note}"
                     f"{mr_description_footer(state.package)}"
                 )
                 state.backport_result = BackportOutputSchema(
@@ -1767,6 +1771,9 @@ async def run_workflow(
             try:
                 formatted_patches = "\n".join(f" - {p}" for p in state.upstream_patches)
                 triage_details_text = format_mr_triage_details(state.justification, state.triage_summary)
+                branch_note = format_zstream_branch_note(
+                    state.zstream_branch_created, state.zstream_branch_warning
+                )
                 commit_message = (
                     f"{state.log_result.title}\n\n"
                     f"{state.log_result.description}\n\n"
@@ -1784,7 +1791,7 @@ async def run_workflow(
                     f"{triage_details_text}"
                     f"{format_jira_links_for_mr(state.jira_issue)}\n"
                     f"{wrap_details('Backporting steps', state.backport_log[-1])}"
-                    f"\n\n{format_zstream_branch_note(state.zstream_branch_created)}"
+                    f"\n\n{branch_note}"
                     f"{mr_description_footer(state.package)}"
                 )
                 (
@@ -2150,20 +2157,6 @@ async def main() -> None:
                         f"success: {state.backport_result.success}"
                     )
 
-            except tasks.ZStreamBranchStaleError as e:
-                await tasks.handle_zstream_branch_stale_error(
-                    e,
-                    jira_issues=[backport_data.jira_issue],
-                    primary_jira_issue=backport_data.jira_issue,
-                    agent_type="Backport",
-                    errored_label=JiraLabels.BACKPORT_ERRORED.value,
-                    triaged_label=JiraLabels.TRIAGED_BACKPORT.value,
-                    dry_run=dry_run,
-                    user_triggered=user_triggered,
-                    redis_conn=redis,
-                    task=task,
-                    queue=backport_queue_todo if user_triggered else backport_queue,
-                )
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during backport processing for {backport_data.jira_issue}: {error}")

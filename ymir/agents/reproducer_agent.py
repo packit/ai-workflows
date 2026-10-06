@@ -192,7 +192,6 @@ _REPRODUCER_MCP_TOOLS = [
     "list_testing_farm_composes",
     "reserve_testing_farm_machine",
     "get_testing_farm_reservation_details",
-    "cancel_testing_farm_request",
     "run_remote_command",
     "copy_files_to_remote",
 ]
@@ -225,12 +224,8 @@ def create_reproducer_agent(gateway_tools, local_tool_options=None, extra_middle
         role="Red Hat Enterprise Linux developer",
         instructions=[
             "Do not perform root cause analysis or source code tracing — use the provided triage summary.",
-            "Step 6 is mandatory: on publish-success (success=true with a test ready to "
-            "publish) you MUST NOT call cancel_testing_farm_request — leave the Testing "
-            "Farm reservation active so the workflow can run tmt lint and possibly return "
-            "with lint errors. On every other outcome (failure, not-reproducible, "
-            "retryable_error, or success that will not publish), you MUST call "
-            "cancel_testing_farm_request when you still hold a request ID — no exceptions.",
+            "Do not call cancel_testing_farm_request yourself — the workflow cancels "
+            "Testing Farm reservations programmatically after you return your output.",
             "When constructing patch URLs for upstream commits, always use https://. "
             "Use get_github_patch for HTTPS GitHub URLs and get_patch_from_url for all other URLs. "
             "For non-GitHub URLs, retry with http:// if https:// fails when validating a patch; "

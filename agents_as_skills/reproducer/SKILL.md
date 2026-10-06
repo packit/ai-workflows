@@ -32,7 +32,6 @@ This skill uses the following tools. Do not restrict tool usage — use any tool
 - `list_testing_farm_composes` — List available Testing Farm composes
 - `reserve_testing_farm_machine` — Reserve a Testing Farm machine with SSH access
 - `get_testing_farm_reservation_details` — Get status and SSH details of a TF reservation
-- `cancel_testing_farm_request` — Cancel/release a Testing Farm reservation
 - `run_remote_command` — Execute a command on a remote machine via SSH
 - `copy_files_to_remote` — Copy files to a remote machine via SCP
 
@@ -140,7 +139,7 @@ Treat maintainer rules as additional guidance for package-specific decisions, bu
 
 This step provisions a real RHEL machine via Testing Farm for verifying the reproducer. The machine must be reserved BEFORE running the test so it is ready when needed.
 
-**IMPORTANT:** Steps 3 through 5 form the try block. You MUST execute step 6 before returning output — see step 6 for the exact Path A / Path B rules on when to cancel and when to keep the reservation.
+**IMPORTANT:** If ANY error occurs during steps 3-5, skip to step 6 and produce your output. The workflow handles Testing Farm reservation cleanup programmatically — do not call `cancel_testing_farm_request` yourself.
 
 1. Determine the RHEL compose for the affected version:
    - Extract the RHEL major version from `{{fix_version}}`, `{{target_branch}}`, or the Jira issue's Affects Version field.
@@ -168,9 +167,9 @@ This step provisions a real RHEL machine via Testing Farm for verifying the repr
    - You MUST call this tool EXACTLY ONCE. Never call it a second time. The tool already retries internally.
    - Check the result:
      * If `ssh_connection` is present and is NOT `"not-yet-available"`: the machine is ready. Save `ssh_connection`.
-     * If `state` is `"error"`, `"canceled"`, or `ssh_connection` is `"not-yet-available"`: the reservation failed or timed out. You MUST immediately jump to step 6 (cancel the reservation) and then produce final output with `success: false`, `retryable_error: true`, `not_reproducible_reason: null`, `test_already_exists: false`, and a summary of the provisioning failure. Do NOT continue to step 4 or step 5. Do NOT retry `get_testing_farm_reservation_details`. Do NOT treat this as not-reproducible.
+     * If `state` is `"error"`, `"canceled"`, or `ssh_connection` is `"not-yet-available"`: the reservation failed or timed out. Skip to step 6 and produce final output with `success: false`, `retryable_error: true`, `not_reproducible_reason: null`, `test_already_exists: false`, and a summary of the provisioning failure. Do NOT continue to step 4 or step 5. Do NOT retry `get_testing_farm_reservation_details`. Do NOT treat this as not-reproducible.
 
-   If `reserve_testing_farm_machine` itself fails (tool error), produce the same `retryable_error: true` output after cancelling any obtained request ID.
+   If `reserve_testing_farm_machine` itself fails (tool error), skip to step 6 and produce the same `retryable_error: true` output.
 
 5. Verify SSH connectivity:
    - Call `run_remote_command` with `ssh_host` = `ssh_connection` and `command` = `"cat /etc/redhat-release"`.
@@ -475,7 +474,7 @@ Compare the output and exit code against the expected detection behavior:
 - The detection method fires: crash detected, wrong output observed, timeout hit, memory leak found, etc.
 - This means the reproducer WORKS. The test correctly detects the bug on the unpatched system.
 - Set `reproducer_verified` = true.
-- Proceed to step 6 (Path A — do not cancel), then produce your final output JSON. The workflow runs `tmt lint`, then creates the merge request from your output.
+- Produce your final output JSON. The workflow runs `tmt lint`, then creates the merge request from your output.
 
 **Case B: Bug is NOT reproduced (test PASSES — the bug is not triggered)**
 - The program does not crash, output is correct, no timeout, no leak, etc.
@@ -557,24 +556,15 @@ If the bug could not be reproduced after the maximum number of iterations:
 4. Save the documentation as `not_reproducible_reason` for the output schema.
 5. Propose setting Test Coverage to "Regression Only" in the Jira comment.
 
-### Step 6: Return Testing Farm Machine (mandatory — choose exactly one path)
+### Step 6: Produce Output (MR is orchestration-owned)
 
-**CRITICAL:** You MUST execute step 6 before producing final output. Never leave the reservation in an undefined state. The workflow runs deterministic `tmt lint` after you return; on publish-success it may reuse the same reservation for a fix loop (same pattern as backport build failures).
+After steps 3-5 (whether they succeeded or failed), produce your final output JSON. Do **NOT** create a merge request, fork, push, or open an MR — the workflow handles that. Do **NOT** post a Jira comment — the workflow handles that too.
 
-Decide which path applies, then follow it with no exceptions:
+The workflow cancels all Testing Farm reservations programmatically after you return your output — do not call `cancel_testing_farm_request` yourself. Simply include `testing_farm_request_id` in your output so the workflow knows which reservation to cancel.
 
-1. **Path A — publish success** (`success=true` and an MR is expected): you MUST NOT call `cancel_testing_farm_request`. Leave the reservation active. Keep `tf_request_id` set and include `testing_farm_request_id` in your output. The workflow will lint, then either open the MR or return to you with lint errors, and will cancel the reservation when finished.
-2. **Path B — every other outcome** (failure, not-reproducible, retryable_error, or any case where no MR will be published): if a machine was reserved (request ID is set), you MUST call `cancel_testing_farm_request` with that request ID. Log whether cancellation succeeded or failed, but do not halt on cancel failure. Treat Path B as a hard `finally` — even if an unrelated error occurred, even if you are about to report an error, the machine MUST be returned.
-3. If no machine was reserved (reservation never made / failed before a request ID), skip cancellation.
-4. Clear `ssh_connection` only after you cancel (Path B), or when you never had SSH.
+When `success` is true and dry-run is false, the BeeAI workflow runs `tmt lint`, then commits the test files from the tests clone, forks/pushes, and opens the MR with label `ymir_reproducer`. Leave `test_mr_url` out of your agent output — orchestration sets it.
 
-### After Step 6: Produce Output (MR is orchestration-owned)
-
-Do **NOT** create a merge request yourself. Do **NOT** fork, push, or open an MR.
-
-Produce your final output JSON after the step 6 rules above. When `success` is true and dry-run is false, the BeeAI workflow runs `tmt lint`, then commits the test files from the tests clone, forks/pushes, and opens the MR with label `ymir_reproducer`. Leave `test_mr_url` out of your agent output — orchestration sets it.
-
-Do NOT post a Jira comment yourself. The workflow handles Jira commenting automatically after you return your output. Focus on producing accurate output fields.
+Focus on producing accurate output fields.
 
 ---
 

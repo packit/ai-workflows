@@ -22,9 +22,7 @@ Dry run mode is enabled — do NOT create merge requests.
 **Critical Rules**
 - NEVER use direct `git clone` commands. Use `clone_repository` if you must re-clone.
 - Do NOT perform root cause analysis of the original bug. Only fix lint/metadata (and re-verify on TF if the harness or scripts must change as a result).
-- Testing Farm reservation policy (mandatory — choose exactly one path):
-  * **Path A — publish success** (metadata fixed, `success=true`, MR expected): you MUST NOT call `cancel_testing_farm_request`. Leave the reservation for the workflow to re-run `tmt lint`.
-  * **Path B — every other outcome** (failure / not-reproducible / retryable_error): if you still hold a request ID, you MUST call `cancel_testing_farm_request`. No exceptions on Path B.
+- Do NOT call `cancel_testing_farm_request` yourself. The workflow cancels all Testing Farm reservations programmatically after you return your output.
 
 **Required work**
 1. Inspect `{{ tests_clone_path }}/{{ test_directory }}/` (especially `main.fmf` and related `.fmf` files). Fix every issue reported by `tmt lint`.

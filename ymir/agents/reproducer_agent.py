@@ -141,7 +141,6 @@ async def run_tmt_lint(tests_clone: Path, test_directory: str) -> tuple[bool, st
     return False, output
 
 
-
 def _tests_clone_for_result(jira_issue: str, package: str) -> Path:
     return (
         Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos"))
@@ -1013,7 +1012,7 @@ async def run_workflow(
                 output[:2000],
             )
             # Attempts count completed fix rounds; only re-enter the agent while
-            # under the limit (MAX=3 ⇒ up to 3 fix_tmt_lint runs).
+            # under the limit (MAX=3 means up to 3 fix_tmt_lint runs).
             if state.tmt_lint_attempts >= max_tmt_lint_fix_attempts:
                 result.success = False
                 result.summary += (

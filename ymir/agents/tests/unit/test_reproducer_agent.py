@@ -31,7 +31,6 @@ from ymir.agents.reproducer_agent import (
     main,
 )
 from ymir.agents.tasks import InvalidReproducerConfigError, fetch_reproducer_config
-from ymir.agents.tf_cleanup_middleware import TFReservationCleanupMiddleware
 from ymir.common.base_utils import check_subprocess
 from ymir.common.constants import JiraLabels
 from ymir.common.models import MergeRequestDetails, ReproducerInputSchema, ReproducerOutputSchema, Task
@@ -1031,24 +1030,3 @@ async def test_run_tmt_lint_missing_metadata(tmp_path):
     ok, output = await r_agent.run_tmt_lint(tests_clone, "Regression/RHEL-1")
     assert ok is False
     assert "no FMF metadata" in output
-
-
-@pytest.mark.asyncio
-async def test_cancel_active_reservations_calls_run_tool():
-    mw = TFReservationCleanupMiddleware()
-    mw._reserved.update({"req-1", "req-2"})
-    mw._cancelled.add("req-2")
-    assert mw.active_reservations == {"req-1"}
-
-    cancelled_ids = []
-
-    async def _fake_run_tool(tool_name, *, request_id, available_tools):
-        assert tool_name == "cancel_testing_farm_request"
-        cancelled_ids.append(request_id)
-
-    import unittest.mock as um
-
-    with um.patch.object(r_agent, "run_tool", side_effect=_fake_run_tool):
-        await r_agent._cancel_active_reservations(mw, [], "RHEL-99")
-
-    assert cancelled_ids == ["req-1"]

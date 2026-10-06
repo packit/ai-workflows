@@ -139,35 +139,6 @@ async def run_tmt_lint(tests_clone: Path, test_directory: str) -> tuple[bool, st
     return False, output
 
 
-async def _cancel_active_reservations(
-    tf_cleanup: TFReservationCleanupMiddleware,
-    gateway_tools: list,
-    jira_issue: str,
-) -> None:
-    """Explicitly cancel all active TF reservations via MCP.
-
-    The middleware ``finally`` is the safety net for crashes; this is the
-    intentional release on the happy path (lint passed, or lint exhausted).
-    """
-    for request_id in list(tf_cleanup.active_reservations):
-        try:
-            await run_tool(
-                "cancel_testing_farm_request",
-                request_id=request_id,
-                available_tools=gateway_tools,
-            )
-            logger.info(
-                "Cancelled TF reservation %s for %s after tmt lint",
-                request_id,
-                jira_issue,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to cancel TF reservation %s for %s — middleware will retry in finally",
-                request_id,
-                jira_issue,
-            )
-
 
 def _tests_clone_for_result(jira_issue: str, package: str) -> Path:
     return (
@@ -1029,7 +1000,6 @@ async def run_workflow(
             if ok:
                 logger.info("tmt lint passed for %s", state.jira_issue)
                 state.tmt_lint_error = None
-                await _cancel_active_reservations(tf_cleanup, gateway_tools, state.jira_issue)
                 return "create_merge_request"
 
             state.tmt_lint_error = output
@@ -1047,7 +1017,6 @@ async def run_workflow(
                 result.summary += (
                     f" (tmt lint failed after {state.tmt_lint_attempts} fix attempts: {output[:500]})"
                 )
-                await _cancel_active_reservations(tf_cleanup, gateway_tools, state.jira_issue)
                 return "handle_results"
             state.tmt_lint_attempts += 1
             return "fix_tmt_lint"

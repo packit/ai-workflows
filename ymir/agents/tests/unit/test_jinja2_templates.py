@@ -211,6 +211,22 @@ class TestBackportInstructions:
         result = render_template("backport/instructions.j2")
         assert "spec file application" in result.lower() or "spec-only" in result.lower()
 
+    def test_dependency_changes_require_maintainer_permission(self):
+        for template_name in ("backport/instructions.j2", "backport/instructions_zstream.j2"):
+            result = render_template(template_name)
+            assert "regardless of whether a build failure occurs" in result
+            assert "do not explicitly allow adding dependencies" in result
+            assert "not add or modify any" in result
+            assert "`BuildRequires`" in result
+            assert "`Requires`" in result
+            assert "backported code directly" in result
+            assert "introduces" in result
+            assert "spec-only dist-git backport" in result
+
+        self_review = render_template("backport/_self_review.j2")
+        assert "successful `--nodeps` RPM operation" in self_review
+        assert "downstream build infrastructure" in self_review
+
     def test_zstream_has_distgit_workflow(self):
         result = render_template("backport/instructions_zstream.j2")
         assert "clone_repository" in result

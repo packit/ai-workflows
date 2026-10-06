@@ -17,8 +17,7 @@ RUN dnf -y install --allowerasing \
       python3-requests
 RUN pip3 install -v --no-cache-dir \
       "litellm!=1.82.7,!=1.82.8" \
-      "beeai-framework==0.1.82" \
-      "mcp<1.29.0" \
+      beeai-framework[mcp]==0.1.85 \
       pydantic \
       aiofiles \
       aiohttp \

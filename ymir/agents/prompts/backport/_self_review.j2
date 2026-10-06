@@ -26,6 +26,16 @@
       (Skip if no patch files were generated.)
    c. All pre-existing `Patch:` tags and their `%patch` directives remain
       present with the same tag numbers and `-p` arguments as before.
+   d. Any `BuildRequires` or `Requires` changes follow the BUILD DEPENDENCY CHANGES
+      policy from step 0. If maintainer rules do not explicitly allow additions,
+      verify that no such entries were added or modified. If additions are allowed,
+      verify that changes only add new entries directly required by code introduced
+      by this backport. For a spec-only dist-git backport, verify the dependency is
+      directly introduced by the source spec change being reproduced instead. In
+      either case, verify existing entries and version constraints were not changed.
+      Do not treat the local environment or a successful `--nodeps` RPM operation as
+      evidence that a dependency is available in the target RHEL buildroot. Target
+      buildroot availability is validated by the downstream build infrastructure.
 
    Criterion 3 — No unrelated changes:
 {{ criterion_3_body }}

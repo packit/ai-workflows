@@ -1146,7 +1146,6 @@ async def run_workflow(
                     state.inherit_saved_head,
                     state.inherit_change,
                 )
-
                 await tasks.update_release(
                     local_clone=state.local_clone,
                     package=state.package,

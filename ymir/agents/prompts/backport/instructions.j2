@@ -32,6 +32,21 @@ a backport that won't actually fix the shipped RPM.
    release field updating,
    and MR creation/description.
 
+   BUILD DEPENDENCY CHANGES:
+   The maintainer rules fetched above govern adding or modifying `BuildRequires` and
+   `Requires` for this backport, regardless of whether a build failure occurs.
+   If the rules do not explicitly allow adding dependencies for backport fixes, do
+   not add or modify any `BuildRequires` or `Requires` entries. If they do explicitly
+   allow additions, only add new entries when the backported code directly introduces
+   the dependency. For a spec-only dist-git backport, the dependency may instead be
+   directly introduced by the source spec change being reproduced. Use `BuildRequires`
+   for headers, libraries, or executables needed
+   during `%build` or `%check`, and `Requires` for executables, libraries, or modules
+   needed by the installed package at runtime. Add both when both cases apply.
+   Never remove or alter existing entries, loosen version constraints, or add a
+   dependency merely to work around a builder/environment difference or a pre-existing
+   issue. The dependency must be available in the target RHEL buildroot.
+
    PATCH NAMING AND SPLITTING:
    Determine the patch file naming convention and the comment style above
    `Patch` tags using the following priority (highest first):

@@ -1030,3 +1030,22 @@ async def test_run_tmt_lint_missing_metadata(tmp_path):
     ok, output = await r_agent.run_tmt_lint(tests_clone, "Regression/RHEL-1")
     assert ok is False
     assert "no FMF metadata" in output
+
+
+@pytest.mark.asyncio
+async def test_run_tmt_lint_no_tests_found(tmp_path, monkeypatch):
+    """tmt lint exit 0 with 'no tests found' must be treated as failure."""
+    tests_clone = tmp_path / "tests-bind"
+    test_dir = tests_clone / "Regression" / "RHEL-1"
+    test_dir.mkdir(parents=True)
+    (test_dir / "main.fmf").write_text("summary: broken\n")
+    (tests_clone / ".fmf").mkdir()
+    (tests_clone / ".fmf" / "version").write_text("1\n")
+
+    async def _fake_run_subprocess(cmd, shell=False, cwd=None, env=None):
+        return 0, "No tests found\n", None
+
+    monkeypatch.setattr(r_agent, "run_subprocess", _fake_run_subprocess)
+    ok, output = await r_agent.run_tmt_lint(tests_clone, "Regression/RHEL-1")
+    assert ok is False
+    assert "found no test" in output

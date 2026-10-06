@@ -133,6 +133,8 @@ async def run_tmt_lint(tests_clone: Path, test_directory: str) -> tuple[bool, st
         return False, f"tmt lint {lint_name} timed out after 60 seconds"
     output = "\n".join(part for part in (stdout, stderr) if part).strip()
     if exit_code == 0:
+        if not output or "no tests found" in output.lower():
+            return False, f"tmt lint {lint_name} passed but found no test to validate"
         return True, output
     if not output:
         output = f"tmt lint {lint_name} failed with exit code {exit_code}"

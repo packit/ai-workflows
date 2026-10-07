@@ -92,6 +92,8 @@ LOG_LEVEL = os.environ.get("TRACE_LOG_LEVEL", "INFO").upper()
 MAX_PAYLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_LAST_TRACES = 900
 RETENTION_DAYS = max(1, int(os.environ.get("TRACE_RETENTION_DAYS", "14")))
+TLS_CERT_FILE = os.environ.get("TLS_CERT_FILE", "")
+TLS_KEY_FILE = os.environ.get("TLS_KEY_FILE", "")
 
 OIDC_AUTHORITY = os.environ.get("OIDC_AUTHORITY", "")
 OIDC_CLIENT_ID = os.environ.get("OIDC_CLIENT_ID", "")
@@ -971,7 +973,15 @@ def main():
     configure_logging()
     init_db()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), TraceHandler)  # noqa: S104
-    logger.info("Trace server listening on port %d, db: %s", PORT, DB_PATH)
+    if TLS_CERT_FILE and TLS_KEY_FILE:
+        import ssl
+
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(TLS_CERT_FILE, TLS_KEY_FILE)
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+        logger.info("Trace server listening on port %d (TLS), db: %s", PORT, DB_PATH)
+    else:
+        logger.info("Trace server listening on port %d, db: %s", PORT, DB_PATH)
     server.serve_forever()
 
 

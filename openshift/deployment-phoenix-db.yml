@@ -11,6 +11,13 @@ metadata:
             "name": "phoenix-db:prod"
           },
           "fieldPath": "spec.template.spec.containers[?(@.name==\"phoenix-db\")].image"
+        },
+        {
+          "from": {
+            "kind": "ImageStreamTag",
+            "name": "phoenix-db:prod"
+          },
+          "fieldPath": "spec.template.spec.initContainers[?(@.name==\"setup-tls\")].image"
         }
       ]
 spec:

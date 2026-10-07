@@ -56,6 +56,10 @@ spec:
               capabilities:
                 drop:
                 - ALL
+            volumeMounts:
+            - mountPath: /etc/pki/service-ca
+              name: service-ca
+              readOnly: true
           securityContext:
             runAsNonRoot: true
             seccompProfile:
@@ -63,3 +67,7 @@ spec:
           dnsPolicy: ClusterFirst
           schedulerName: default-scheduler
           terminationGracePeriodSeconds: 30
+          volumes:
+          - name: service-ca
+            configMap:
+              name: service-ca-bundle

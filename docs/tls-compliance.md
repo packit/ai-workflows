@@ -49,8 +49,10 @@ The Phoenix database connection uses TLS with mutual authentication:
   rotate a TLS certificate for the database service
 - PostgreSQL is configured with `ssl = on` using the service-ca certificate
 - The Phoenix application connects with `sslmode=verify-full` and validates
-  the server certificate against the service-ca root at
-  `/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt`
+  the server certificate against the OpenShift service-CA bundle mounted
+  from a `service-ca-bundle` ConfigMap (annotated with
+  `service.beta.openshift.io/inject-cabundle: "true"`) at
+  `/etc/pki/service-ca/service-ca.crt`
 
 ### Valkey (Redis-compatible cache)
 
@@ -60,9 +62,14 @@ All agent-to-Valkey and internal tool connections use TLS:
   `service.beta.openshift.io/serving-cert-secret-name: valkey-tls`
 - Valkey is configured with `--tls-port 6379 --port 0` (TLS-only, no
   plaintext port)
+- Valkey TLS client authentication is disabled (`--tls-auth-clients no`)
+  since internal consumers authenticate via the Redis URL, not mTLS
 - All consumers connect via the `rediss://` URI scheme (TLS-enabled Redis
   protocol)
-- The service-ca root certificate is used for server verification
+- The service-CA trust bundle is mounted from a `service-ca-bundle`
+  ConfigMap into all Redis-consuming pods at `/etc/pki/service-ca/`
+- The Python Redis client verifies the server certificate against this
+  CA bundle automatically
 
 ## Internal HTTP Services (SDN Isolation)
 

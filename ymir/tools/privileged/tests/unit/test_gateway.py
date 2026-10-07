@@ -272,3 +272,53 @@ class TestGatewaySharedOptions:
 
         assert registered_tools, "No tools were registered"
         assert not any(t.name == "extract_log_snippets" for t in registered_tools)
+
+
+class TestBuildBackendToggle:
+    """BUILD_BACKEND selects the build_package / download_artifacts implementations."""
+
+    def _run_main_and_collect(self, monkeypatch, backend: str | None):
+        registered_tools = []
+
+        mock_server = flexmock()
+        mock_server.should_receive("register_many").once().replace_with(
+            lambda tools: registered_tools.extend(tools)
+        )
+        mock_server.should_receive("aserve").once().replace_with(mock_aserve)
+
+        import ymir.tools.privileged.gateway as gateway_module
+
+        if backend is None:
+            monkeypatch.delenv("BUILD_BACKEND", raising=False)
+        else:
+            monkeypatch.setenv("BUILD_BACKEND", backend)
+
+        flexmock(gateway_module, MCPServer=lambda config: mock_server)
+        flexmock(gateway_module).should_receive("setup_logging").once()
+        flexmock(gateway_module).should_receive("apply_zstream_override_from_env").once()
+        flexmock(gateway_module).should_receive("get_log_detective_mcp").once().and_return(
+            _create_async_return([])
+        )
+
+        gateway_module.main()
+        return {
+            type(t).__name__
+            for t in registered_tools
+            if getattr(t, "name", None) in ("build_package", "download_artifacts")
+        }
+
+    def test_default_backend_registers_copr_tools(self, monkeypatch):
+        names = self._run_main_and_collect(monkeypatch, None)
+        assert names == {"BuildPackageTool", "DownloadArtifactsTool"}
+
+    def test_copr_backend_registers_copr_tools(self, monkeypatch):
+        names = self._run_main_and_collect(monkeypatch, "copr")
+        assert names == {"BuildPackageTool", "DownloadArtifactsTool"}
+
+    def test_konflux_backend_registers_konflux_tools(self, monkeypatch):
+        names = self._run_main_and_collect(monkeypatch, "konflux")
+        assert names == {"KonfluxBuildTool", "KonfluxDownloadArtifactsTool"}
+
+    def test_unknown_backend_falls_back_to_copr(self, monkeypatch):
+        names = self._run_main_and_collect(monkeypatch, "bogus")
+        assert names == {"BuildPackageTool", "DownloadArtifactsTool"}

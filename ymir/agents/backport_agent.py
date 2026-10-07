@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from specfile import Specfile
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import run_build
+from ymir.agents.build_agent import is_konflux_backend, run_build
 from ymir.agents.constants import (
     I_AM_YMIR,
     ZSTREAM_TARGET_LABEL,
@@ -833,6 +833,9 @@ async def run_workflow(
     if max_incremental_fix_attempts is None:
         max_incremental_fix_attempts = max_build_attempts
     workspace_id = workspace_id or uuid4()
+    # Konflux builds from a pushed git ref, so it reorders commit/push to
+    # happen BEFORE the build; Copr (default) is unaffected.
+    konflux = is_konflux_backend()
 
     local_tool_options: dict[str, Any] = {"working_directory": None}
     if mock_env := get_mock_local_tool_env(jira_issue):
@@ -1261,7 +1264,7 @@ async def run_workflow(
                     error=None,
                 )
                 state.inherit_build_attempts = max_build_attempts
-                return "run_inherit_build_agent"
+                return "stage_changes" if konflux else "run_inherit_build_agent"
             except AlreadyInheritedError as error:
                 logger.error("Y-stream inheritance invariant failed: %s", error)
                 state.retry_mode = BackportRetryMode.NONE
@@ -1337,7 +1340,7 @@ async def run_workflow(
                     state.used_cherry_pick_workflow = False
                     logger.info("Git am workflow detected: no upstream repo exists")
 
-                return "update_release" if is_modular_issue else "run_build_agent"
+                return "run_build_agent" if not (is_modular_issue or konflux) else "update_release"
             return "comment_in_jira"
 
         async def fix_build_error(state):
@@ -1569,6 +1572,8 @@ async def run_workflow(
             if state.inherit_change:
                 return "commit_inherited_change"
             if state.log_result:
+                if konflux and not is_modular_issue:
+                    return "konflux_build_and_publish"
                 return "commit_push_and_open_mr"
             return "run_log_agent"
 
@@ -1694,7 +1699,9 @@ async def run_workflow(
                     return handle_inherit_cleanup_failure(state)
                 _disable_ystream_inheritance(state, task_metadata)
                 return "prepare_normal_backport"
-            if dry_run:
+            # Konflux must push the inherited commit so it can build from the ref,
+            # even in dry-run (the MR itself is still skipped later).
+            if dry_run and not konflux:
                 return "submit_consolidation_job"
             return "push_inherited_change"
 
@@ -1734,7 +1741,7 @@ async def run_workflow(
                         f"{reconcile_error}"
                     )
                     return "comment_in_jira"
-            return "open_inherited_mr"
+            return "konflux_inherit_build" if konflux else "open_inherited_mr"
 
         async def open_inherited_mr(state):
             try:
@@ -1767,33 +1774,43 @@ async def run_workflow(
                 )
             return "submit_consolidation_job"
 
+        async def _compose_backport_commit_and_mr(state):
+            """Build the (commit_message, mr_description, labels) for a normal backport."""
+            formatted_patches = "\n".join(f" - {p}" for p in state.upstream_patches)
+            triage_details_text = format_mr_triage_details(state.justification, state.triage_summary)
+            branch_note = format_zstream_branch_note(
+                state.zstream_branch_created, state.zstream_branch_warning
+            )
+            commit_message = (
+                f"{state.log_result.title}\n\n"
+                f"{state.log_result.description}\n\n"
+                + (f"CVE: {state.cve_id}\n" if state.cve_id else "")
+                + "Upstream patches:\n"
+                + formatted_patches
+                + "\n"
+                + f"Resolves: {state.jira_issue}\n\n"
+                f"This commit was backported {I_AM_YMIR}\n\n"
+                "Assisted-by: Ymir\n"
+            )
+            mr_description = (
+                f"{state.log_result.description}\n\n"
+                f"Upstream patches:\n{formatted_patches}\n\n"
+                f"{triage_details_text}"
+                f"{format_jira_links_for_mr(state.jira_issue)}\n"
+                f"{wrap_details('Backporting steps', state.backport_log[-1])}"
+                f"\n\n{branch_note}"
+                f"{mr_description_footer(state.package)}"
+            )
+            labels = ["ymir_backport"] + (
+                [ZSTREAM_TARGET_LABEL]
+                if await tasks.needs_zstream_target_label(state.dist_git_branch, state.fix_version)
+                else []
+            )
+            return commit_message, mr_description, labels
+
         async def commit_push_and_open_mr(state):
             try:
-                formatted_patches = "\n".join(f" - {p}" for p in state.upstream_patches)
-                triage_details_text = format_mr_triage_details(state.justification, state.triage_summary)
-                branch_note = format_zstream_branch_note(
-                    state.zstream_branch_created, state.zstream_branch_warning
-                )
-                commit_message = (
-                    f"{state.log_result.title}\n\n"
-                    f"{state.log_result.description}\n\n"
-                    + (f"CVE: {state.cve_id}\n" if state.cve_id else "")
-                    + "Upstream patches:\n"
-                    + formatted_patches
-                    + "\n"
-                    + f"Resolves: {state.jira_issue}\n\n"
-                    f"This commit was backported {I_AM_YMIR}\n\n"
-                    "Assisted-by: Ymir\n"
-                )
-                mr_description = (
-                    f"{state.log_result.description}\n\n"
-                    f"Upstream patches:\n{formatted_patches}\n\n"
-                    f"{triage_details_text}"
-                    f"{format_jira_links_for_mr(state.jira_issue)}\n"
-                    f"{wrap_details('Backporting steps', state.backport_log[-1])}"
-                    f"\n\n{branch_note}"
-                    f"{mr_description_footer(state.package)}"
-                )
+                commit_message, mr_description, labels = await _compose_backport_commit_and_mr(state)
                 (
                     state.merge_request_url,
                     state.merge_request_newly_created,
@@ -1807,12 +1824,7 @@ async def run_workflow(
                     mr_description=mr_description,
                     available_tools=gateway_tools,
                     commit_only=dry_run,
-                    labels=["ymir_backport"]
-                    + (
-                        [ZSTREAM_TARGET_LABEL]
-                        if await tasks.needs_zstream_target_label(state.dist_git_branch, state.fix_version)
-                        else []
-                    ),
+                    labels=labels,
                     package=state.package,
                 )
             except Exception as e:
@@ -1823,6 +1835,129 @@ async def run_workflow(
             if is_modular_issue:
                 return "comment_in_jira"
             return "submit_consolidation_job"
+
+        async def konflux_build_and_publish(state):
+            """Konflux builds from a pushed ref: commit + push, build, then open the MR.
+
+            Only reached for non-modular issues under BUILD_BACKEND=konflux. Mirrors
+            run_build_agent's failure/retry handling, but the fork push happens before
+            the build and the MR is opened only after a green build.
+            """
+            try:
+                commit_message, mr_description, labels = await _compose_backport_commit_and_mr(state)
+                revision = await tasks.commit_changes(state.local_clone, commit_message)
+                await tasks.push_changes(
+                    state.local_clone, state.fork_url, state.update_branch, gateway_tools
+                )
+            except Exception as e:
+                logger.warning(f"Error committing/pushing before Konflux build: {e}")
+                state.merge_request_url = None
+                state.backport_result.success = False
+                state.backport_result.error = f"Could not commit and push for build: {e}"
+                return "comment_in_jira"
+
+            build_result = await run_build(
+                build_input=BuildInputSchema(
+                    srpm_path=state.backport_result.srpm_path,
+                    dist_git_branch=state.dist_git_branch,
+                    jira_issue=state.jira_issue,
+                    git_url=state.fork_url,
+                    revision=revision,
+                    package_name=state.package,
+                    target_branch=state.dist_git_branch,
+                ),
+                available_tools=gateway_tools,
+                local_tool_options=local_tool_options,
+            )
+            if build_result.success or build_result.is_timeout:
+                if build_result.is_timeout:
+                    logger.info(f"Konflux build timed out for {state.jira_issue}, proceeding")
+                state.incremental_fix_attempts = 0
+                if dry_run:
+                    # The ref was pushed so Konflux could build; skip MR creation in
+                    # dry-run, mirroring the Copr commit_only path.
+                    state.merge_request_url = None
+                    state.merge_request_newly_created = False
+                    return "submit_consolidation_job"
+                try:
+                    (
+                        state.merge_request_url,
+                        state.merge_request_newly_created,
+                    ) = await tasks.open_update_merge_request(
+                        fork_url=state.fork_url,
+                        dist_git_branch=state.dist_git_branch,
+                        update_branch=state.update_branch,
+                        mr_title=state.log_result.title,
+                        mr_description=mr_description,
+                        available_tools=gateway_tools,
+                        labels=labels,
+                        package=state.package,
+                    )
+                except Exception as e:
+                    logger.warning(f"Konflux build passed but MR creation failed: {e}")
+                    state.merge_request_url = None
+                    state.backport_result.success = False
+                    state.backport_result.error = f"Could not open MR after build: {e}"
+                return "submit_consolidation_job"
+            if build_result.is_infra_error:
+                logger.error(f"Konflux infrastructure error for {state.jira_issue}: {build_result.error}")
+                state.backport_result.success = False
+                state.backport_result.error = build_result.error or "Konflux infrastructure error"
+                return "comment_in_jira"
+            state.attempts_remaining -= 1
+            if state.attempts_remaining <= 0:
+                state.backport_result.success = False
+                state.backport_result.error = (
+                    f"Unable to successfully build the package in {max_build_attempts} attempts"
+                )
+                return "comment_in_jira"
+            state.build_error = build_result.error
+            if state.used_cherry_pick_workflow:
+                upstream_repo = Path(f"{state.local_clone}-upstream")
+                if upstream_repo.exists():
+                    _move_build_logs(
+                        state.local_clone,
+                        _get_build_logs_dir(state.local_clone) / "attempt-0",
+                    )
+                logger.info("Cherry-pick workflow was used - starting incremental fix")
+                return "fix_build_error"
+            logger.info("Git am workflow was used - resetting for retry")
+            return "fork_and_prepare_dist_git"
+
+        async def konflux_inherit_build(state):
+            """Validate an already-pushed inherited commit via Konflux before the MR."""
+            build_result = await run_build(
+                build_input=BuildInputSchema(
+                    srpm_path=state.backport_result.srpm_path,
+                    dist_git_branch=state.dist_git_branch,
+                    jira_issue=state.jira_issue,
+                    git_url=state.fork_url,
+                    revision=state.inherit_local_commit,
+                    package_name=state.package,
+                    target_branch=state.dist_git_branch,
+                ),
+                available_tools=gateway_tools,
+                local_tool_options=local_tool_options,
+            )
+            if build_result.success or build_result.is_timeout:
+                if dry_run:
+                    return "submit_consolidation_job"
+                return "open_inherited_mr"
+
+            state.inherit_build_attempts -= 1
+            if state.inherit_build_attempts > 0:
+                logger.warning(
+                    "Inherited Konflux validation failed; retrying (%d attempts left): %s",
+                    state.inherit_build_attempts,
+                    build_result.error,
+                )
+                return "konflux_inherit_build"
+
+            logger.info("Inherited Konflux validation did not pass: %s", build_result.error)
+            if not await cleanup_inherit_attempt(state):
+                return handle_inherit_cleanup_failure(state)
+            _disable_ystream_inheritance(state, task_metadata)
+            return "prepare_normal_backport"
 
         async def submit_consolidation_job(state):
             if (
@@ -1935,6 +2070,8 @@ async def run_workflow(
         workflow.add_step("push_inherited_change", push_inherited_change)
         workflow.add_step("open_inherited_mr", open_inherited_mr)
         workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
+        workflow.add_step("konflux_build_and_publish", konflux_build_and_publish)
+        workflow.add_step("konflux_inherit_build", konflux_inherit_build)
         workflow.add_step("submit_consolidation_job", submit_consolidation_job)
         workflow.add_step("comment_in_jira", comment_in_jira)
 

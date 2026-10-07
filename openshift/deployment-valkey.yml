@@ -18,7 +18,18 @@ spec:
         deployment: valkey
     spec:
       containers:
-      - image: valkey:prod
+      - args:
+        - --tls-port
+        - "6379"
+        - --port
+        - "0"
+        - --tls-cert-file
+        - /tls/tls.crt
+        - --tls-key-file
+        - /tls/tls.key
+        - --tls-ca-cert-file
+        - /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+        image: valkey:prod
         imagePullPolicy: IfNotPresent
         name: valkey
         ports:
@@ -36,6 +47,9 @@ spec:
         volumeMounts:
         - mountPath: /data
           name: valkey-data
+        - mountPath: /tls
+          name: tls
+          readOnly: true
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
@@ -50,3 +64,6 @@ spec:
       - name: valkey-data
         persistentVolumeClaim:
           claimName: valkey-data
+      - name: tls
+        secret:
+          secretName: valkey-tls  # pragma: allowlist secret

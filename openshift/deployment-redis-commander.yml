@@ -42,6 +42,10 @@ spec:
           value: valkey
         - name: REDIS_PORT
           value: "6379"
+        - name: REDIS_TLS
+          value: "true"
+        - name: REDIS_TLS_CA_CERT_FILE
+          value: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
         image: redis-commander:prod
         imagePullPolicy: IfNotPresent
         name: redis-commander

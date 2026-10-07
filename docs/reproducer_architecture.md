@@ -87,6 +87,39 @@ the `reproducer` section of `ymir.yaml` from
 | `reproducer.enabled: false` | Skip silently (no workflow, no terminal reproducer label) |
 | Malformed `reproducer` section | Skip; at queue time post a Jira error comment asking maintainers to fix `ymir.yaml` |
 
+Package rules may also customize selected FMF metadata while retaining the
+default reproducer template:
+
+```yaml
+reproducer:
+  enabled: true
+  context:
+    by_fix_version:
+      rhel-10.3:
+        runtime_version: "3.3"
+  fmf:
+    require:
+      - package-specific-runtime
+    recommend:
+      - package-specific-tool
+    environment:
+      PACKAGE_SETTING: value
+    duration: 30m
+    tier: "1"
+    tag:
+      - package-specific-tag
+```
+
+FMF string values may use safe `${variable}` placeholders. The selected
+`context.by_fix_version` mapping provides package-defined variables, while
+basic task values such as `package`, `jira_issue`, `fix_version`, and
+`target_branch` are available automatically. Unknown variables are rejected.
+
+`require`, `recommend`, and `tag` extend the generated lists, while `environment`,
+`duration`, and `tier` override matching defaults. The reproducer agent still
+owns the test entrypoint, framework, Jira verification link, summary, and
+description. Unsupported FMF keys are rejected as malformed configuration.
+
 Triage enqueue also skips when config is disabled or invalid. Manual
 `make trigger-reproducer` bypasses triage enqueue but the queue worker still
 checks config before acquiring the lock.

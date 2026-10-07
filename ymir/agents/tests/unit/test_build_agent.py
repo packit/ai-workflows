@@ -49,6 +49,10 @@ async def test_success_submits_once_without_llm(build_input, monkeypatch):
         srpm_path=str(build_input.srpm_path),
         dist_git_branch="c10s",
         jira_issue="RHEL-123",
+        git_url=None,
+        revision=None,
+        package_name=None,
+        target_branch=None,
     ).replace_with(_mock_submit).once()
     flexmock(build_agent).should_receive("create_build_failure_agent").never()
     # Successful builds must not even require model configuration.
@@ -503,3 +507,64 @@ def test_failure_agent_has_no_build_or_edit_tools(has_extractor, has_downloader)
         assert "local sandbox" in kwargs["instructions"]
         assert "artifacts_urls" in kwargs["instructions"]
     assert "Do not submit or retry a build" in kwargs["instructions"]
+
+
+def test_build_backend_helpers(monkeypatch):
+    """build_backend() normalizes BUILD_BACKEND; default is copr."""
+    monkeypatch.delenv("BUILD_BACKEND", raising=False)
+    assert build_agent.build_backend() == "copr"
+    assert not build_agent.is_konflux_backend()
+
+    monkeypatch.setenv("BUILD_BACKEND", "Konflux")
+    assert build_agent.build_backend() == "konflux"
+    assert build_agent.is_konflux_backend()
+
+    monkeypatch.setenv("BUILD_BACKEND", "  COPR ")
+    assert build_agent.build_backend() == "copr"
+    assert not build_agent.is_konflux_backend()
+
+
+@pytest.mark.asyncio
+async def test_konflux_log_urls_trigger_diagnosis(build_input, monkeypatch):
+    """Konflux Kubearchive pod-log URLs lack a .log.gz suffix but must be diagnosed."""
+    monkeypatch.setenv("BUILD_BACKEND", "konflux")
+    kube_url = "https://kubearchive/api/v1/namespaces/ymir-tenant/pods/p/log?container=step-build"
+
+    async def _mock_submit(*_args, **_kwargs):
+        return BuildResult(success=False, error_message="Build failed", artifacts_urls=[kube_url])
+
+    async def _mock_analyst(*_args, **_kwargs):
+        return SimpleNamespace(last_message=SimpleNamespace(text='{"error": "Konflux diagnosis"}'))
+
+    def _mock_factory(*_args, **_kwargs):
+        return SimpleNamespace(run=_mock_analyst)
+
+    _mock_tool = SimpleNamespace(name="build_package")
+    flexmock(build_agent).should_receive("run_tool").replace_with(_mock_submit).once()
+    flexmock(build_agent).should_receive("create_build_failure_agent").replace_with(_mock_factory).once()
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
+
+    result = await _run(build_input, [_mock_tool])
+
+    assert not result.success
+    assert result.error == "Konflux diagnosis"
+
+
+@pytest.mark.asyncio
+async def test_copr_ignores_non_loggz_urls(build_input, monkeypatch):
+    """Under the default Copr backend, only .log.gz URLs trigger diagnosis."""
+    monkeypatch.delenv("BUILD_BACKEND", raising=False)
+    kube_url = "https://kubearchive/api/v1/namespaces/ymir-tenant/pods/p/log?container=step-build"
+
+    async def _mock_submit(*_args, **_kwargs):
+        return BuildResult(success=False, error_message="Build failed", artifacts_urls=[kube_url])
+
+    _mock_tool = SimpleNamespace(name="build_package")
+    flexmock(build_agent).should_receive("run_tool").replace_with(_mock_submit).once()
+    flexmock(build_agent).should_receive("create_build_failure_agent").never()
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
+
+    result = await _run(build_input, [_mock_tool])
+
+    assert not result.success
+    assert result.error == "Build failed"

@@ -121,6 +121,94 @@ async def test_fork_repository(repository, fork_exists, fork_namespace):
     assert (await ForkRepositoryTool().run(input={"repository": repository})).result == clone_url
 
 
+def _mock_original_project(*, repository, package, bot_username, fork, expected_data, fork_exists=False):
+    """Mock get_project_from_url for a redhat gitlab.com project (no fork yet)."""
+    original_git_url = f"{repository}.git"
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(url=repository).and_return(
+        flexmock(
+            get_forks=lambda: [fork] if fork_exists else [],
+            get_git_urls=lambda: {"git": original_git_url},
+            gitlab_repo=flexmock(
+                forks=flexmock()
+                .should_receive("create")
+                .with_args(data=expected_data)
+                .and_return(fork.gitlab_repo)
+                .mock(),
+                name=package,
+                namespace={
+                    "full_path": repository.removeprefix("https://gitlab.com/").removesuffix(f"/{package}")
+                },
+                path=package,
+            ),
+            service=flexmock(
+                instance_url="https://gitlab.com",
+                user=flexmock(get_username=lambda: bot_username),
+            ),
+        )
+    )
+    return original_git_url
+
+
+@pytest.mark.asyncio
+async def test_fork_repository_copr_dry_run_returns_original(monkeypatch):
+    """Copr builds from a local SRPM, so DRY_RUN skips fork creation and echoes the origin."""
+    monkeypatch.setenv("DRY_RUN", "true")
+    monkeypatch.delenv("BUILD_BACKEND", raising=False)  # default copr
+    monkeypatch.setenv("FORK_NAMESPACE", "redhat/rhel/bot-branches")
+    repository = "https://gitlab.com/redhat/centos-stream/rpms/bash"
+    package = "bash"
+    fork = _fork_project_mock(
+        target_namespace="redhat/rhel/bot-branches",
+        fork_name="centos_rpms_bash",
+        clone_url="https://gitlab.com/redhat/rhel/bot-branches/centos_rpms_bash.git",
+    )
+    expected_data = {
+        "name": "centos_rpms_bash",
+        "path": "centos_rpms_bash",
+        "namespace": "redhat/rhel/bot-branches",
+    }
+    original = _mock_original_project(
+        repository=repository,
+        package=package,
+        bot_username="test-bot",
+        fork=fork,
+        expected_data=expected_data,
+    )
+    result = (await ForkRepositoryTool().run(input={"repository": repository})).result
+    assert result == original
+
+
+@pytest.mark.asyncio
+async def test_fork_repository_konflux_dry_run_creates_fork(monkeypatch):
+    """Konflux builds from a pushed fork ref, so the fork is created even under DRY_RUN."""
+    monkeypatch.setenv("DRY_RUN", "true")
+    monkeypatch.setenv("BUILD_BACKEND", "konflux")
+    monkeypatch.setenv("FORK_NAMESPACE", "redhat/rhel/bot-branches")
+    repository = "https://gitlab.com/redhat/centos-stream/rpms/bash"
+    package = "bash"
+    clone_url = "https://gitlab.com/redhat/rhel/bot-branches/centos_rpms_bash.git"
+    fork = _fork_project_mock(
+        target_namespace="redhat/rhel/bot-branches",
+        fork_name="centos_rpms_bash",
+        clone_url=clone_url,
+    )
+    flexmock(GitlabProject).new_instances(fork)
+    expected_data = {
+        "name": "centos_rpms_bash",
+        "path": "centos_rpms_bash",
+        "namespace": "redhat/rhel/bot-branches",
+    }
+    _mock_original_project(
+        repository=repository,
+        package=package,
+        bot_username="test-bot",
+        fork=fork,
+        expected_data=expected_data,
+    )
+    result = (await ForkRepositoryTool().run(input={"repository": repository})).result
+    assert result == clone_url
+
+
 def test_wait_for_fork_ready_returns_when_import_finished():
     fork = _fork_project_mock(
         target_namespace="redhat/rhel/bot-branches",

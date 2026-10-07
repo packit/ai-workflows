@@ -1489,8 +1489,10 @@ async def main() -> None:
                 requeue = await _process_triage_locked(task, input)
             if requeue is not None:
                 await fix_await(redis.lpush(requeue[0], requeue[1]))
+                if len(requeue) > 2:
+                    await asyncio.sleep(requeue[2])
 
-        async def _process_triage_locked(task, input) -> tuple[str, str] | None:
+        async def _process_triage_locked(task, input) -> tuple[str, str] | tuple[str, str, int] | None:
             user_triggered = task.user_triggered
             logger.info(
                 f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}"
@@ -1673,11 +1675,14 @@ async def main() -> None:
                 )
                 error_msg = f"Failed to set in-progress label: {e}"
                 requeue = await retry(task, ErrorData(details=error_msg, jira_issue=input.issue))
+                if requeue is None:
+                    return None
                 # Long sleep on purpose: critical-write retries already burned
                 # ~7s, so we're past transient blips. Typical Jira outages last
-                # minutes; cycling faster just spams the API.
-                await asyncio.sleep(60)
-                return requeue
+                # minutes; cycling faster just spams the API.  The actual sleep
+                # happens in process_task after the lock is released and the
+                # retry payload is safely in Redis.
+                return (requeue[0], requeue[1], 60)
 
             try:
                 logger.info(f"Starting triage processing for {input.issue}")

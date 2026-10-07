@@ -11,6 +11,7 @@ x-beeai-env: &beeai-env
   MAX_CONCURRENT_TASKS: ${MAX_CONCURRENT_TASKS:-1}
   LOG_BUFFER_SIZE: ${LOG_BUFFER_SIZE:-0}
   DRY_RUN: ${DRY_RUN:-false}
+  BUILD_BACKEND: ${BUILD_BACKEND:-copr}
   JIRA_DRY_RUN: ${JIRA_DRY_RUN:-false}
   JIRA_ALLOW_STATUS_CHANGES: ${JIRA_ALLOW_STATUS_CHANGES:-false}
   ERRATA_ALLOW_STATUS_CHANGES: ${ERRATA_ALLOW_STATUS_CHANGES:-false}
@@ -121,7 +122,21 @@ services:
       - TESTING_FARM_DRY_RUN=${TESTING_FARM_DRY_RUN:-false}
       - TESTING_FARM_COMPOSE_FILTER=${TESTING_FARM_COMPOSE_FILTER:-}
       - GIT_REPO_BASEPATH=/git-repos
-      - FORK_NAMESPACE=${FORK_NAMESPACE:-}
+      # FORK_NAMESPACE is sourced from .secrets/mcp-gateway.env (env_file).
+      # Do NOT re-declare it here: a compose `environment:` entry overrides
+      # env_file, so `${FORK_NAMESPACE:-}` would blank the secret whenever the
+      # host var is unset, breaking fork push auth (_is_private_gitlab). A host
+      # override is still possible via `podman-compose run -e FORK_NAMESPACE=...`.
+      # Selects the build tool set (copr default | konflux). Konflux also needs
+      # the KONFLUX_* vars (API/PIPELINE urls + token) and GITLAB_TOKEN, supplied
+      # via .secrets/mcp-gateway.env. Every build targets one fixed, generic
+      # Component in ymir-tenant (ymir-scratch-build): its build-service-provisioned
+      # ServiceAccount carries the appstudio-pipelines-scc and its image repo
+      # receives the scratch build, while git-url + revision are overridden per run.
+      # The target defaults (namespace/SA/image repo) are baked into konflux.py and
+      # need no env; override only for a different deployment via KONFLUX_NAMESPACE,
+      # KONFLUX_SERVICE_ACCOUNT, and KONFLUX_IMAGE_REPO.
+      - BUILD_BACKEND=${BUILD_BACKEND:-copr}
       - JIRA_MOCK_FILES=ymir/tools/privileged/tests/data
       # e2e tests write insteadOf rewrites here; ignored when the file is absent
       - GIT_CONFIG_GLOBAL=${GIT_REPO_BASEPATH:-/git-repos}/.mock_gitconfig

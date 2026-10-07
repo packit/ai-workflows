@@ -235,6 +235,16 @@ run-mr-consolidation-agent-standalone:
 		-e DRY_RUN=$(DRY_RUN) \
 		mr-consolidation-agent-c10s
 
+.PHONY: run-mr-verification-agent-standalone
+run-mr-verification-agent-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e MERGE_REQUEST_URL=$(MERGE_REQUEST_URL) \
+		-e JIRA_ISSUE=$(JIRA_ISSUE) \
+		-e CVE_ID=$(CVE_ID) \
+		-e SOURCE_AGENT=$(or $(SOURCE_AGENT),Backport) \
+		-e DRY_RUN=$(DRY_RUN) \
+		mr-verification-agent-c10s
+
 .PHONY: run-mr-consolidation-agent-e2e-tests
 run-mr-consolidation-agent-e2e-tests:
 	$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
@@ -354,6 +364,10 @@ logs-rebuild:
 .PHONY: logs-mr-consolidation
 logs-mr-consolidation:
 	$(COMPOSE_AGENTS) logs -f mr-consolidation-agent-c9s mr-consolidation-agent-c10s
+
+.PHONY: logs-mr-verification
+logs-mr-verification:
+	$(COMPOSE_AGENTS) logs -f mr-verification-agent-c9s mr-verification-agent-c10s
 
 .PHONY: logs-jira-issue-fetcher
 logs-jira-issue-fetcher:

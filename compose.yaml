@@ -416,6 +416,16 @@ services:
     command: ["python", "-m", "ymir.agents.mr_consolidation_agent"]
     profiles: ["agents"]
 
+  mr-verification-agent-c9s:
+    <<: *beeai-agent-c9s
+    command: ["python", "-m", "ymir.agents.mr_verification_agent"]
+    profiles: ["agents"]
+
+  mr-verification-agent-c10s:
+    <<: *beeai-agent-c10s
+    command: ["python", "-m", "ymir.agents.mr_verification_agent"]
+    profiles: ["agents"]
+
   mr-consolidation-agent-e2e-tests:
     <<: *beeai-agent-c10s
     environment:

@@ -629,6 +629,21 @@ async def main() -> None:
                     state.merge_request_url = None
                     state.rebase_result.success = False
                     state.rebase_result.error = f"Could not commit and open MR: {e}"
+                return "submit_verification_job"
+
+            async def submit_verification_job(state):
+                if state.merge_request_url and state.merge_request_newly_created:
+                    await tasks.try_submit_verification_job(
+                        package=state.package,
+                        dist_git_branch=state.dist_git_branch,
+                        merge_request_url=state.merge_request_url,
+                        jira_issue=state.jira_issue,
+                        source_agent="Rebase",
+                        cve_id=state.cve_id,
+                        gateway_tools=gateway_tools,
+                        redis_conn=redis_conn,
+                        user_triggered=user_triggered,
+                    )
                 return "comment_in_jira"
 
             async def comment_in_jira(state):
@@ -687,6 +702,7 @@ async def main() -> None:
             workflow.add_step("stage_changes", stage_changes)
             workflow.add_step("run_log_agent", run_log_agent)
             workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
+            workflow.add_step("submit_verification_job", submit_verification_job)
             workflow.add_step("comment_in_jira", comment_in_jira)
 
             try:

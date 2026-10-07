@@ -1,0 +1,74 @@
+Review merge request {{ merge_request_url }}.
+
+Your working directory is {{ local_clone }}, a clone of the MR's source branch for package
+{{ package }}. The target branch {{ dist_git_branch }} is available as a local ref, so
+`git diff {{ dist_git_branch }}...HEAD` shows exactly what this MR changes.
+
+- Package: {{ package }}
+- Target branch: {{ dist_git_branch }}
+- Jira issue: {{ jira_issue }}
+{% if cve_id %}
+- CVE: {{ cve_id }}
+{% endif %}
+- Opened by: the Ymir {{ source_agent }} agent
+
+MR title:
+{{ merge_request_title }}
+
+MR description:
+{{ merge_request_description }}
+
+Files changed ({{ changed_files | length }}):
+{% for f in changed_files %}
+- {{ f }}
+{% endfor %}
+
+{% if source_agent == "Rebase" %}
+This is a **rebase** MR: the package is being moved to a newer upstream version. Focus on
+whether `Version:`/`Release:` and the sources are consistent, whether obsolete downstream
+patches were dropped (and whether dropping them was justified), and whether the remaining
+patches still apply. Do not expect a single small patch.
+{% elif source_agent == "Rebuild" %}
+This is a **rebuild** MR: no code change is expected, only a `Release:` bump and a changelog
+entry. Anything else in the diff is suspicious.
+{% elif source_agent == "Consolidation" %}
+This is a **consolidation** MR: it merges several previously separate MRs. Check that every
+source MR's patches and changelog entries survived, that patch ordering is sane, and that
+the `Release:` bump accounts for all of them.
+{% else %}
+This is a **backport** MR: a specific upstream fix is being applied to an older version.
+Focus on patch provenance and whether the patch actually fixes what the issue describes.
+{% endif %}
+
+{% if sources_available %}
+The source tarballs have already been downloaded into {{ local_clone }}, so
+`run_package_prep` will work there — use it to prove the patches actually apply.
+{% else %}
+The source tarballs could **not** be downloaded into {{ local_clone }}, so `run_package_prep`
+will fail for reasons unrelated to this MR. Do not spend time fetching them by hand: review
+the patches by reading them instead, and say in your summary that the prep check was skipped.
+{% endif %}
+
+Diff against {{ dist_git_branch }}:
+```diff
+{{ diff }}
+```
+{% if diff_truncated %}
+
+**The diff above was truncated.** Use `view`, `search_text` and read-only `git` commands in
+{{ local_clone }} to inspect anything the truncation cut off before you judge the MR. If you
+cannot see enough to judge, say so and return `inconclusive`.
+{% endif %}
+{% if failed_pipeline_jobs %}
+
+The MR's latest pipeline has failing jobs:
+```json
+{{ failed_pipeline_jobs }}
+```
+Read the failures and decide whether they are caused by this MR.
+{% else %}
+
+The MR's pipeline has no reported failures (it may still be running).
+{% endif %}
+
+Now perform the review.

@@ -2042,6 +2042,7 @@ async def main() -> None:
             triage_state = task.metadata
             backport_data = BackportData.model_validate(triage_state["triage_result"]["data"])
             current_jira_issue.set(backport_data.jira_issue)
+            requeue = None
             async with issue_lock(redis, backport_data.jira_issue, prefix="lock:backport:") as lock_token:
                 if lock_token is None:
                     logger.info(
@@ -2049,9 +2050,11 @@ async def main() -> None:
                         backport_data.jira_issue,
                     )
                     return
-                await _process_backport_locked(task, triage_state, backport_data)
+                requeue = await _process_backport_locked(task, triage_state, backport_data)
+            if requeue is not None:
+                await fix_await(redis.lpush(requeue[0], requeue[1]))
 
-        async def _process_backport_locked(task, triage_state, backport_data):
+        async def _process_backport_locked(task, triage_state, backport_data) -> tuple[str, str] | None:
             dist_git_branch = triage_state["target_branch"]
             dist_git_namespace = triage_state.get("dist_git_namespace")
             user_triggered = task.user_triggered
@@ -2112,7 +2115,18 @@ async def main() -> None:
                 comment_text=None,
                 backport_data=backport_data,
                 user_triggered=user_triggered,
-            ):
+            ) -> tuple[str, str] | None:
+                """Handle a failed task by re-queuing or finalizing.
+
+                Returns ``(queue, payload)`` when the task should be
+                re-queued for another attempt.  The caller is responsible
+                for pushing the payload **after** releasing the issue
+                lock to avoid a race where another worker picks up the
+                task while the lock is still held.
+
+                Returns ``None`` when retries are exhausted and the task
+                has been moved to the error list.
+                """
                 task.attempts += 1
                 retry_queue = backport_queue_todo if task.user_triggered else backport_queue
                 if task.attempts < max_retries:
@@ -2120,11 +2134,11 @@ async def main() -> None:
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {backport_data.jira_issue}"
                     )
-                    await fix_await(redis.lpush(retry_queue, task.model_dump_json()))
-                    return
+                    return (retry_queue, task.model_dump_json())
 
                 logger.error(f"Task failed after {max_retries} attempts: {backport_data.jira_issue}")
                 await finalize_failure(error, retry_queue, task, comment_text)
+                return None
 
             try:
                 logger.info(f"Starting backport processing for {backport_data.jira_issue}")
@@ -2160,7 +2174,7 @@ async def main() -> None:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during backport processing for {backport_data.jira_issue}: {error}")
                 reason = e.explain() if isinstance(e, FrameworkError) else e
-                await retry(
+                return await retry(
                     task,
                     ErrorData(details=error, jira_issue=backport_data.jira_issue),
                     comment_text=f"Agent failed to perform a backport: {reason}",
@@ -2204,7 +2218,7 @@ async def main() -> None:
                     if not _configure_task_retry(task, state):
                         retry_queue = backport_queue_todo if task.user_triggered else backport_queue
                         await finalize_failure(failure, retry_queue, task)
-                        return
+                        return None
                     await tasks.set_jira_labels(
                         jira_issue=backport_data.jira_issue,
                         labels_to_add=[JiraLabels.BACKPORT_FAILED.value],
@@ -2216,7 +2230,7 @@ async def main() -> None:
                     # already posted the failure feedback for this graceful path.
                     # Only the crash path (which never reaches that step) passes
                     # comment_text, so we never double-comment.
-                    await retry(
+                    return await retry(
                         task,
                         failure,
                     )

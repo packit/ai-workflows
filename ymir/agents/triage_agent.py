@@ -1478,6 +1478,7 @@ async def main() -> None:
             task = Task.model_validate_json(payload)
             input = InputSchema.model_validate(task.metadata)
             current_jira_issue.set(input.issue)
+            requeue = None
             async with issue_lock(redis, input.issue) as lock_token:
                 if lock_token is None:
                     logger.info(
@@ -1485,9 +1486,13 @@ async def main() -> None:
                         input.issue,
                     )
                     return
-                await _process_triage_locked(task, input)
+                requeue = await _process_triage_locked(task, input)
+            if requeue is not None:
+                await fix_await(redis.lpush(requeue[0], requeue[1]))
+                if len(requeue) > 2:
+                    await asyncio.sleep(requeue[2])
 
-        async def _process_triage_locked(task, input):
+        async def _process_triage_locked(task, input) -> tuple[str, str] | tuple[str, str, int] | None:
             user_triggered = task.user_triggered
             logger.info(
                 f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}"
@@ -1532,7 +1537,7 @@ async def main() -> None:
                     f"Skipping duplicate triage for {input.issue} — "
                     f"already has labels: {terminal_ymir_labels}"
                 )
-                return
+                return None
 
             if current_status in (IssueStatus.CLOSED.value, IssueStatus.DONE.value):
                 logger.info(f"Skipping triage for {input.issue} — issue is already {current_status}")
@@ -1551,7 +1556,7 @@ async def main() -> None:
                         user_triggered=True,
                         dry_run=dry_run,
                     )
-                return
+                return None
 
             async def retry(
                 task,
@@ -1559,7 +1564,14 @@ async def main() -> None:
                 comment_text=None,
                 input=input,
                 user_triggered=user_triggered,
-            ):
+            ) -> tuple[str, str] | None:
+                """Handle a failed task by re-queuing or finalizing.
+
+                Returns ``(queue, payload)`` when the task should be
+                re-queued.  The caller must push the payload **after**
+                releasing the issue lock to avoid a race where another
+                worker picks up the task while the lock is still held.
+                """
                 task.attempts += 1
                 # Preserve priority on retries: ymir_todo tasks go back to
                 # the priority queue, normal tasks to the standard one.
@@ -1576,42 +1588,40 @@ async def main() -> None:
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {input.issue}"
                     )
-                    await fix_await(redis.lpush(retry_queue, task.model_dump_json()))
-                else:
-                    logger.error(
-                        f"Task failed after {max_retries} attempts, moving to error list: {input.issue}"
+                    return (retry_queue, task.model_dump_json())
+                logger.error(f"Task failed after {max_retries} attempts, moving to error list: {input.issue}")
+                try:
+                    await tasks.set_jira_labels(
+                        jira_issue=input.issue,
+                        labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
+                        labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                        dry_run=dry_run,
+                        user_triggered=user_triggered,
                     )
+                except Exception as label_error:
+                    logger.warning(f"Failed to set error labels on {input.issue}: {label_error}")
+                if comment_text and not dry_run:
                     try:
-                        await tasks.set_jira_labels(
-                            jira_issue=input.issue,
-                            labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
-                            labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                            dry_run=dry_run,
-                            user_triggered=user_triggered,
-                        )
-                    except Exception as label_error:
-                        logger.warning(f"Failed to set error labels on {input.issue}: {label_error}")
-                    if comment_text and not dry_run:
-                        try:
-                            async with mcp_tools(
-                                os.environ["MCP_GATEWAY_URL"],
-                                call_meta={"jira_issue": input.issue},
-                            ) as gateway_tools:
-                                await tasks.post_terminal_error_comment(
-                                    jira_issue=input.issue,
-                                    agent_type="Triage",
-                                    comment_text=comment_text,
-                                    available_tools=gateway_tools,
-                                )
-                        except Exception as comment_error:
-                            logger.warning(
-                                "Failed to post final triage failure comment for %s: %s",
-                                input.issue,
-                                comment_error,
+                        async with mcp_tools(
+                            os.environ["MCP_GATEWAY_URL"],
+                            call_meta={"jira_issue": input.issue},
+                        ) as gateway_tools:
+                            await tasks.post_terminal_error_comment(
+                                jira_issue=input.issue,
+                                agent_type="Triage",
+                                comment_text=comment_text,
+                                available_tools=gateway_tools,
                             )
-                    error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
-                    entry = ErrorListEntry(error_id=error_id, queue=retry_queue, task=task, error=error)
-                    await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
+                    except Exception as comment_error:
+                        logger.warning(
+                            "Failed to post final triage failure comment for %s: %s",
+                            input.issue,
+                            comment_error,
+                        )
+                error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
+                entry = ErrorListEntry(error_id=error_id, queue=retry_queue, task=task, error=error)
+                await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
+                return None
 
             # ymir_triage_in_progress is the dedup anchor for the next fetcher
             # sweep. If we cannot write it, we must not proceed — otherwise the
@@ -1664,12 +1674,15 @@ async def main() -> None:
                     f"{input.issue} after retries: {e}; re-queuing to avoid duplicate triage."
                 )
                 error_msg = f"Failed to set in-progress label: {e}"
-                await retry(task, ErrorData(details=error_msg, jira_issue=input.issue))
+                requeue = await retry(task, ErrorData(details=error_msg, jira_issue=input.issue))
+                if requeue is None:
+                    return None
                 # Long sleep on purpose: critical-write retries already burned
                 # ~7s, so we're past transient blips. Typical Jira outages last
-                # minutes; cycling faster just spams the API.
-                await asyncio.sleep(60)
-                return
+                # minutes; cycling faster just spams the API.  The actual sleep
+                # happens in process_task after the lock is released and the
+                # retry payload is safely in Redis.
+                return (requeue[0], requeue[1], 60)
 
             try:
                 logger.info(f"Starting triage processing for {input.issue}")
@@ -1696,7 +1709,7 @@ async def main() -> None:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during triage processing for {input.issue}: {error}")
                 reason = e.explain() if isinstance(e, FrameworkError) else e
-                await retry(
+                return await retry(
                     task,
                     ErrorData(details=error, jira_issue=input.issue),
                     comment_text=f"Agent failed to perform triage: {reason}",
@@ -1866,12 +1879,12 @@ async def main() -> None:
                             jira_issue=input.issue,
                         )
                     )
-                    await retry(
+                    return await retry(
                         task,
                         error_data,
                         comment_text=f"Agent failed to perform triage: {error_data.details}",
                     )
-                elif output.resolution in POSTPONED_RESOLUTIONS:
+                if output.resolution in POSTPONED_RESOLUTIONS:
                     await fix_await(
                         redis.lpush(
                             RedisQueues.POSTPONED_LIST.value,

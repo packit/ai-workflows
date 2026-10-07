@@ -107,6 +107,16 @@ _FORK_READY_POLL_INTERVAL_SEC = 2.0
 _FORK_READY_TIMEOUT_SEC = 110  # leave margin under fork_repository tool timeout
 
 
+def _is_konflux_backend() -> bool:
+    """True when builds run on Konflux (build-from-git-ref) rather than Copr.
+
+    Konflux builds from a pushed fork ref, so the fork must exist and be pushed
+    to even under ``DRY_RUN`` — only the MR/Jira writes are suppressed. Copr, by
+    contrast, builds from a local SRPM and never needs a dry-run fork.
+    """
+    return os.getenv("BUILD_BACKEND", "copr").strip().lower() == "konflux"
+
+
 def _fork_api_project(fork: GitlabProject):
     """Return a python-gitlab Project object suitable for import_status polling.
 
@@ -427,7 +437,10 @@ class ForkRepositoryTool(Tool[ForkRepositoryToolInput, ToolRunOptions, StringToo
             if fork := await asyncio.to_thread(get_fork):
                 return StringToolOutput(result=fork.get_git_urls()["git"])
 
-            if os.getenv("DRY_RUN", "False").lower() == "true":
+            # Konflux must build from a real, pushed fork ref, so the fork is
+            # created even in DRY_RUN (only MR/Jira writes are suppressed). Copr
+            # builds from a local SRPM and needs no dry-run fork.
+            if os.getenv("DRY_RUN", "False").lower() == "true" and not _is_konflux_backend():
                 logger.info("DRY_RUN is set, skipping fork creation — returning original repo URL")
                 return StringToolOutput(result=project.get_git_urls()["git"])
 

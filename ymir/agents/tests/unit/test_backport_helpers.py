@@ -2,6 +2,7 @@ import pytest
 from flexmock import flexmock
 
 from ymir.agents import backport_agent
+from ymir.agents import tasks as agent_tasks
 from ymir.agents.backport_agent import (
     BackportRetryMode,
     BackportState,
@@ -176,6 +177,7 @@ async def test_resolved_sibling_source_uses_newest_shipped_build(tmp_path):
             "",
         )
 
+    flexmock(agent_tasks).should_receive("find_spec").with_args(tmp_path, "curl").and_return("curl.spec")
     flexmock(backport_agent).should_receive("resolve_brew_source").replace_with(
         mock_resolve_brew_source
     ).twice()
@@ -270,6 +272,7 @@ async def test_resolved_sibling_discovery_selects_latest_jira_resolution(tmp_pat
             "",
         )
 
+    flexmock(agent_tasks).should_receive("find_spec").with_args(tmp_path, "curl").and_return("curl.spec")
     flexmock(backport_agent).should_receive("run_tool").replace_with(mock_run_tool).twice()
     flexmock(backport_agent).should_receive("resolve_brew_source").replace_with(
         mock_resolve_brew_source

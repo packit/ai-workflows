@@ -361,6 +361,29 @@ def resolve_dist_git_namespace(
     return "centos-stream" if is_cs_branch(dist_git_branch) else "rhel"
 
 
+def find_spec(directory: Path, package: str) -> str:
+    """Return the spec filename for *package* inside *directory*.
+
+    RHEL and Fedora dist-git repos contain exactly one spec file whose name
+    matches the RPM ``Name`` tag, not necessarily the repo/directory name
+    (e.g. the ``openexr`` repo ships ``OpenEXR.spec``).
+
+    Mirrors the discovery logic of rpkg's ``Commands.load_spec()``: prefer
+    ``<package>.spec`` when it exists (the common case), otherwise fall back
+    to the single ``.spec`` file present in the directory.
+    """
+    canonical = f"{package}.spec"
+    if (directory / canonical).is_file():
+        return canonical
+    specs = [f for f in os.listdir(directory) if f.endswith(".spec") and not f.startswith(".")]
+    if len(specs) == 1:
+        logger.info("Spec file %s does not match package name %r, using %s", specs[0], package, specs[0])
+        return specs[0]
+    if not specs:
+        raise FileNotFoundError(f"No .spec file found in {directory}")
+    raise FileNotFoundError(f"Multiple .spec files found in {directory}: {specs}")
+
+
 class KerberosError(Exception):
     pass
 

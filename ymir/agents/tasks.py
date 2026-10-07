@@ -20,7 +20,7 @@ from specfile import Specfile
 
 from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE, trace_viewer_issue_url
 from ymir.agents.utils import check_subprocess, mcp_tools, run_subprocess, run_tool
-from ymir.common.base_utils import is_cs_branch, is_modular_branch, resolve_dist_git_namespace
+from ymir.common.base_utils import find_spec, is_cs_branch, is_modular_branch, resolve_dist_git_namespace
 from ymir.common.config import load_rhel_config
 from ymir.common.constants import JiraLabels
 from ymir.common.merge_queue import (  # noqa: F401 — re-exported for agents and tests
@@ -521,7 +521,7 @@ async def update_release(
     config = await fetch_release_bumping_config(package, available_tools)
     await run_tool(
         UpdateReleaseTool(options={"working_directory": local_clone}),
-        spec=f"{package}.spec",
+        spec=find_spec(local_clone, package),
         package=package,
         dist_git_branch=dist_git_branch,
         rebase=rebase,
@@ -1086,7 +1086,7 @@ async def _get_cached_canonical_metadata(
 
 def changelog_entry_count(local_clone: Path, package: str) -> int | None:
     """Return the explicit changelog entry count, or None for %autochangelog."""
-    with Specfile(local_clone / f"{package}.spec") as spec:
+    with Specfile(local_clone / find_spec(local_clone, package)) as spec:
         if spec.has_autochangelog:
             return None
         with spec.changelog() as changelog:
@@ -1118,7 +1118,7 @@ def ensure_canonical_changelog_title(
     """
     if expected_entry_count is None:
         return
-    with Specfile(local_clone / f"{package}.spec") as spec:
+    with Specfile(local_clone / find_spec(local_clone, package)) as spec:
         if spec.has_autochangelog:
             return
         with spec.changelog() as changelog:
@@ -1441,7 +1441,7 @@ def get_unpacked_sources(local_clone: Path, package: str, builddir: Path | None 
     there instead of under *local_clone*.
     """
     base = builddir or local_clone
-    with Specfile(local_clone / f"{package}.spec") as spec:
+    with Specfile(local_clone / find_spec(local_clone, package)) as spec:
         name = spec.expand("%{name}")
         version = spec.expand("%{version}")
         buildsubdir = spec.expand("%{buildsubdir}")
@@ -1473,9 +1473,10 @@ async def _fallback_extract_sources(local_clone: Path, package: str) -> tuple[Pa
     path the caller must clean up.
     """
     try:
-        with Specfile(local_clone / f"{package}.spec") as spec:
+        spec_name = find_spec(local_clone, package)
+        with Specfile(local_clone / spec_name) as spec:
             if not (sources := get_all_sources(spec)):
-                raise ValueError(f"No sources defined in {package}.spec")
+                raise ValueError(f"No sources defined in {spec_name}")
             archive = local_clone / sources[0].expanded_filename
             if not archive.is_file():
                 raise ValueError(f"Source0 '{sources[0].expanded_filename}' not found on disk")

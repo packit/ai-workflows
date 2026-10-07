@@ -15,7 +15,7 @@ from specfile.prep import AutopatchMacro, AutosetupMacro, PatchMacro
 from specfile.utils import EVR
 
 from ymir.agents.constants import RESOLVES_FOOTER_RE
-from ymir.common.base_utils import check_subprocess, run_subprocess
+from ymir.common.base_utils import check_subprocess, find_spec, run_subprocess
 from ymir.common.constants import BREWHUB_URL
 from ymir.common.models import ShippedZStreamCandidate
 from ymir.common.utils import (
@@ -320,7 +320,7 @@ async def inspect_commit_files(
     if any(item.status not in {"A", "M"} for item in inventory):
         raise InheritCandidateError(f"Commit {commit_sha} contains a rename, deletion, or copy")
 
-    spec_name = f"{package}.spec"
+    spec_name = find_spec(clone_path, package)
     z_spec, _ = await check_subprocess(
         ["git", "show", f"{commit_sha}:{spec_name}"],
         cwd=clone_path,
@@ -468,7 +468,7 @@ async def validate_inherited_adaptation(
 ) -> None:
     """Audit LLM changes before release/changelog metadata is added."""
     await verify_inherited_patches(clone_path, change)
-    spec_name = f"{package}.spec"
+    spec_name = find_spec(clone_path, package)
     original_spec, _ = await check_subprocess(
         ["git", "show", f"{saved_head}:{spec_name}"],
         cwd=clone_path,
@@ -531,7 +531,7 @@ async def apply_zstream_change(
 ) -> IntegratedChange:
     """Materialize immutable patches and source context without changing the target spec."""
     inventory = await inspect_commit_files(clone_path, commit_sha, package)
-    spec_name = f"{package}.spec"
+    spec_name = find_spec(clone_path, package)
     commit_message, _ = await check_subprocess(
         ["git", "log", "-1", "--format=%B", commit_sha],
         cwd=clone_path,

@@ -1177,7 +1177,7 @@ class TestFilesToStageForPatches:
 
         result = _files_to_stage_for_patches(
             repo,
-            "test",
+            "test.spec",
             original_patches=["0017-foo.patch"],
         )
 
@@ -1189,7 +1189,7 @@ class TestFilesToStageForPatches:
         self._write_spec_with_patches(repo, ["0018-foo.patch"])
 
         with pytest.raises(RuntimeError, match="do not exist"):
-            _files_to_stage_for_patches(repo, "test")
+            _files_to_stage_for_patches(repo, "test.spec")
 
     def test_stages_spec_and_current_patches_without_originals(self, tmp_path):
         repo = tmp_path / "repo"
@@ -1197,6 +1197,6 @@ class TestFilesToStageForPatches:
         (repo / "0017-bar.patch").write_text("diff --git a/x b/x\n")
         self._write_spec_with_patches(repo, ["0017-bar.patch"])
 
-        result = _files_to_stage_for_patches(repo, "test")
+        result = _files_to_stage_for_patches(repo, "test.spec")
 
         assert result == ["test.spec", "0017-bar.patch"]

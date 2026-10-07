@@ -143,6 +143,7 @@ async def main() -> None:
     class State(BaseModel):
         merge_request_url: str
         local_clone: Path | None = Field(default=None)
+        spec_name: str | None = Field(default=None)
         package: str | None = Field(default=None)
         dist_git_branch: str | None = Field(default=None)
         update_branch: str | None = Field(default=None)
@@ -207,6 +208,7 @@ async def main() -> None:
                 )
 
                 local_tool_options["working_directory"] = state.local_clone
+                state.spec_name = tasks.find_spec(state.local_clone, state.package)
                 return "run_merge_request_agent"
 
             async def run_merge_request_agent(state):
@@ -272,7 +274,7 @@ async def main() -> None:
 
             async def stage_changes(state):
                 # Use accumulated files from all iterations, fallback to *.spec if none specified
-                files_to_git_add = list(state.all_files_git_to_add) or [f"{state.package}.spec"]
+                files_to_git_add = list(state.all_files_git_to_add) or [state.spec_name]
 
                 try:
                     await tasks.stage_changes(

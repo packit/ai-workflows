@@ -61,7 +61,7 @@ def capture_consolidation_artifacts(
         except Exception as exc:
             logger.warning("Could not extract git diff: %s", exc)
 
-        spec_path = Path(clone) / f"{consolidation_state.package}.spec"
+        spec_path = Path(clone) / consolidation_state.spec_name
         if spec_path.is_file():
             content = spec_path.read_text()
             artifacts.spec_content = content

@@ -128,6 +128,7 @@ async def main() -> None:
                     dist_git_namespace=state.dist_git_namespace,
                 )
                 local_tool_options["working_directory"] = state.local_clone
+                state.spec_name = tasks.find_spec(state.local_clone, state.package)
                 return "update_release"
 
             async def update_release(state):
@@ -254,7 +255,7 @@ async def main() -> None:
                 try:
                     await tasks.stage_changes(
                         local_clone=state.local_clone,
-                        files_to_commit=[f"{state.package}.spec"],
+                        files_to_commit=[state.spec_name],
                     )
                 except Exception as e:
                     logger.warning(f"Error staging changes: {e}")

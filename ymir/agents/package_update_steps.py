@@ -22,6 +22,9 @@ class PackageUpdateState(BaseModel):
         ),
     )
     local_clone: Path | None = Field(default=None)
+    spec_name: str | None = Field(
+        default=None, description="Actual spec filename (may differ from package name)"
+    )
     update_branch: str | None = Field(default=None)
     fork_url: str | None = Field(default=None)
     build_error: str | None = Field(default=None)

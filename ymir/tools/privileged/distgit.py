@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TypeVar
 
 import git
@@ -15,7 +16,7 @@ from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 from specfile import Specfile
 
-from ymir.common.base_utils import init_kerberos_ticket
+from ymir.common.base_utils import find_spec, init_kerberos_ticket
 from ymir.common.utils import NoBuildFoundError, get_latest_buildroot_build, get_latest_z_pending_build
 from ymir.common.version_utils import parse_zstream_branch_name
 from ymir.tools.base import CloneableTool as Tool
@@ -144,7 +145,7 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
             Ref to base the new Z-Stream branch on.
         """
 
-        spec_filename = f"{package}.spec"
+        spec_filename = find_spec(Path(repo.working_dir), package)
         main_ref = f"origin/{source_branch}"
 
         try:

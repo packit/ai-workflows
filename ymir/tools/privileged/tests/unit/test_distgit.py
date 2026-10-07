@@ -350,7 +350,8 @@ async def test_find_latest_same_nvr_ref(commit_specs, expected_hexsha):
     build_ref = hexshas[0]
     main_ref = "origin/rhel-10-main"
 
-    repo = flexmock()
+    flexmock(distgit_tools).should_receive("find_spec").and_return("bash.spec")
+    repo = flexmock(working_dir="/fake")
     repo.should_receive("is_ancestor").with_args(build_ref, main_ref).and_return(True)
     repo.should_receive("commit").with_args(build_ref).and_return(commits[0])
     repo.should_receive("iter_commits").with_args(
@@ -365,7 +366,8 @@ async def test_find_latest_same_nvr_ref(commit_specs, expected_hexsha):
 async def test_find_latest_same_nvr_ref_not_ancestor():
     """Returns build_ref when it is not an ancestor of the source branch."""
     build_ref = "aaa111"
-    repo = flexmock()
+    flexmock(distgit_tools).should_receive("find_spec").and_return("bash.spec")
+    repo = flexmock(working_dir="/fake")
     repo.should_receive("is_ancestor").and_return(False)
 
     result = await CreateZstreamBranchTool._find_latest_same_nvr_ref(repo, "bash", build_ref, "rhel-10-main")
@@ -381,7 +383,8 @@ async def test_find_latest_same_nvr_ref_missing_spec():
             raise KeyError(name)
 
     build_ref = "aaa111"
-    repo = flexmock()
+    flexmock(distgit_tools).should_receive("find_spec").and_return("bash.spec")
+    repo = flexmock(working_dir="/fake")
     repo.should_receive("is_ancestor").and_return(True)
     repo.should_receive("commit").with_args(build_ref).and_return(
         flexmock(hexsha=build_ref, tree=EmptyTree())

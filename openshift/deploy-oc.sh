@@ -65,6 +65,9 @@ print(json.dumps({'spec':{'tls':{
 # Egress rules
 apply tenant-egress.yml
 
+# Service-CA bundle (must be applied before TLS-consuming deployments)
+apply configmap-service-ca.yml
+
 # Shared ConfigMaps
 apply configmap-agents-env.yml
 apply configmap-chat-env.yml

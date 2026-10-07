@@ -28,7 +28,9 @@ spec:
         - --tls-key-file
         - /tls/tls.key
         - --tls-ca-cert-file
-        - /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+        - /etc/pki/service-ca/service-ca.crt
+        - --tls-auth-clients
+        - "no"
         image: valkey:prod
         imagePullPolicy: IfNotPresent
         name: valkey
@@ -49,6 +51,9 @@ spec:
         - mountPath: /tls
           name: tls
           readOnly: true
+        - mountPath: /etc/pki/service-ca
+          name: service-ca
+          readOnly: true
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
@@ -64,3 +69,6 @@ spec:
       - name: tls
         secret:
           secretName: valkey-tls  # pragma: allowlist secret
+      - name: service-ca
+        configMap:
+          name: service-ca-bundle

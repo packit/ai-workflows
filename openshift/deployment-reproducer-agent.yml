@@ -58,6 +58,9 @@ spec:
         - mountPath: /etc/secrets/jotnar-vertex-prod.json
           name: vertex-key
           subPath: jotnar-vertex-prod.json
+        - mountPath: /etc/pki/service-ca
+          name: service-ca
+          readOnly: true
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
@@ -77,3 +80,6 @@ spec:
       - name: vertex-key
         secret:
           secretName: vertex-key #pragma: allowlist secret
+      - name: service-ca
+        configMap:
+          name: service-ca-bundle

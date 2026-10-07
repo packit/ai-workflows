@@ -45,7 +45,7 @@ spec:
         - name: REDIS_TLS
           value: "true"
         - name: REDIS_TLS_CA_CERT_FILE
-          value: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+          value: /etc/pki/service-ca/service-ca.crt
         image: redis-commander:prod
         imagePullPolicy: IfNotPresent
         name: redis-commander
@@ -63,9 +63,15 @@ spec:
         volumeMounts:
         - name: config
           mountPath: /usr/local/lib/node_modules/redis-commander/config
+        - name: service-ca
+          mountPath: /etc/pki/service-ca
+          readOnly: true
       volumes:
       - name: config
         emptyDir: {}
+      - name: service-ca
+        configMap:
+          name: service-ca-bundle
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler

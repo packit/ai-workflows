@@ -50,7 +50,7 @@ spec:
               name: phoenix-db-env
               key: POSTGRESQL_DATABASE
         - name: PHOENIX_SQL_DATABASE_URL
-          value: postgresql://$(PHOENIX_POSTGRES_USER):$(PHOENIX_POSTGRES_PASSWORD)@phoenix-db/$(PHOENIX_POSTGRES_DB)?sslmode=verify-full&sslrootcert=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+          value: postgresql://$(PHOENIX_POSTGRES_USER):$(PHOENIX_POSTGRES_PASSWORD)@phoenix-db/$(PHOENIX_POSTGRES_DB)?sslmode=verify-full&sslrootcert=/etc/pki/service-ca/service-ca.crt
         - name: PHOENIX_MIGRATE_INDEX_CONCURRENTLY
           value: "true"
         image: phoenix:prod
@@ -75,6 +75,9 @@ spec:
         volumeMounts:
         - mountPath: /mnt/data
           name: phoenix-data
+        - mountPath: /etc/pki/service-ca
+          name: service-ca
+          readOnly: true
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
@@ -87,3 +90,6 @@ spec:
       - name: phoenix-data
         persistentVolumeClaim:
           claimName: phoenix-data
+      - name: service-ca
+        configMap:
+          name: service-ca-bundle

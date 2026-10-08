@@ -975,6 +975,41 @@ class AddMergeRequestLabelsTool(Tool[AddMergeRequestLabelsToolInput, ToolRunOpti
         )
 
 
+class CloseMergeRequestToolInput(BaseModel):
+    merge_request_url: str = Field(description="URL of the merge request to close")
+
+
+class CloseMergeRequestTool(Tool[CloseMergeRequestToolInput, ToolRunOptions, StringToolOutput]):
+    name = "close_merge_request"
+    timeout = 120
+    description = """
+    Closes an existing merge request without merging it. Closing is reversible
+    (the MR can be reopened) and leaves the source branch untouched.
+    """
+    input_schema = CloseMergeRequestToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: CloseMergeRequestToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        merge_request_url = tool_input.merge_request_url
+        with tool_error_context(
+            "Failed to close merge request",
+            merge_request_url=merge_request_url,
+        ):
+            mr = await _get_merge_request_from_url(merge_request_url)
+            await asyncio.to_thread(mr.close)
+        return StringToolOutput(result=f"Successfully closed merge request {merge_request_url}")
+
+
 class SetMergeRequestReviewersToolInput(BaseModel):
     merge_request_url: str = Field(description="URL of the merge request")
     reviewer_ids: list[int] = Field(description="List of GitLab user IDs to set as reviewers")

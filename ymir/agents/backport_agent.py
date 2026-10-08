@@ -872,7 +872,7 @@ async def run_workflow(
                 return "resume_inherited_publication"
             if dry_run:
                 logger.info(f"Dry run: skipping Jira status change of {state.jira_issue} to In Progress")
-                return "fork_and_prepare_dist_git"
+                return "close_stale_merge_requests"
             # tasks.change_jira_status further gates the write on
             # JIRA_ALLOW_STATUS_CHANGES; nothing else to check here.
             try:
@@ -883,6 +883,27 @@ async def run_workflow(
                 )
             except Exception as status_error:
                 logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
+            return "close_stale_merge_requests"
+
+        async def close_stale_merge_requests(state):
+            # A rerun re-pushes the update branch; a lingering open MR would
+            # re-trigger GitLab CI (scratch builds) on every push and waste
+            # resources. Close it first so only the rerun's fresh MR runs CI.
+            # The inherited-publication resume path skips this step (it reuses
+            # its own MR). MR writes are suppressed under dry-run.
+            if not dry_run:
+                try:
+                    closed = await tasks.close_stale_update_merge_requests(
+                        jira_issue=state.jira_issue,
+                        package=state.package,
+                        dist_git_branch=state.dist_git_branch,
+                        available_tools=gateway_tools,
+                        dist_git_namespace=state.dist_git_namespace,
+                    )
+                    if closed:
+                        logger.info("Closed %d stale MR(s) for %s: %s", len(closed), state.jira_issue, closed)
+                except Exception as e:
+                    logger.warning("Failed to close stale MRs for %s: %s", state.jira_issue, e)
             return "fork_and_prepare_dist_git"
 
         async def resume_inherited_publication(state):
@@ -2055,6 +2076,7 @@ async def run_workflow(
             return Workflow.END
 
         workflow.add_step("change_jira_status", change_jira_status)
+        workflow.add_step("close_stale_merge_requests", close_stale_merge_requests)
         workflow.add_step("resume_inherited_publication", resume_inherited_publication)
         workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
         workflow.add_step("prepare_normal_backport", prepare_normal_backport)

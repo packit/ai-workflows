@@ -631,6 +631,56 @@ async def open_update_merge_request(
     return mr.url, mr.is_new_mr
 
 
+async def close_stale_update_merge_requests(
+    jira_issue: str,
+    package: str,
+    dist_git_branch: str,
+    available_tools: list[Tool],
+    dist_git_namespace: str | None = None,
+) -> list[str]:
+    """Close any still-open update MR for *jira_issue* before a rerun re-pushes.
+
+    A rerun force-pushes the update branch; a lingering open MR would re-trigger
+    GitLab CI (scratch builds) on every push and waste resources. Closing it
+    first means only the rerun's eventual fresh MR runs CI. Scoped to the bot's
+    own update branch (``{BRANCH_PREFIX}-<issue>``) so human MRs are never
+    touched. Returns the URLs of the MRs that were closed.
+    """
+    namespace = resolve_dist_git_namespace(dist_git_branch, dist_git_namespace)
+    project = f"redhat/{namespace}/rpms/{package}"
+    update_branch = f"{BRANCH_PREFIX}-{jira_issue}"
+    try:
+        mrs = await run_tool(
+            "list_project_merge_requests",
+            project=project,
+            state="opened",
+            target_branch=dist_git_branch,
+            available_tools=available_tools,
+        )
+    except Exception as e:
+        logger.warning("Could not list open MRs for %s in %s: %s", jira_issue, project, e)
+        return []
+
+    closed: list[str] = []
+    for mr in mrs or []:
+        if mr.get("source_branch") != update_branch:
+            continue
+        url = mr.get("url")
+        if not url:
+            continue
+        try:
+            await run_tool(
+                "close_merge_request",
+                merge_request_url=url,
+                available_tools=available_tools,
+            )
+            closed.append(url)
+            logger.info("Closed stale MR %s for %s before rerun", url, jira_issue)
+        except Exception as e:
+            logger.warning("Failed to close stale MR %s for %s: %s", url, jira_issue, e)
+    return closed
+
+
 async def comment_in_jira(
     jira_issue: str,
     agent_type: str,

@@ -16,6 +16,7 @@ from ymir.agents.tasks import (
     _validate_generated_title,
     canonical_title_mentions_components,
     change_jira_status,
+    close_stale_update_merge_requests,
     commit_changes,
     commit_push_and_open_mr,
     ensure_canonical_changelog_title,
@@ -1696,3 +1697,103 @@ async def test_fetch_release_bumping_config_returns_default_when_no_release_bump
     assert config.abandon_autorelease is False
     assert config.treat_maintenance_rhel_as_zstream is False
     assert config.disregard_zstream_nvr_policy is False
+
+
+# --------------------------------------------------------------------------- #
+# close_stale_update_merge_requests                                           #
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_close_stale_update_merge_requests_closes_only_bot_branch():
+    from ymir.agents.constants import BRANCH_PREFIX
+
+    jira = "RHEL-12345"
+    update_branch = f"{BRANCH_PREFIX}-{jira}"
+    mrs = [
+        {
+            "url": "https://gitlab.com/redhat/rhel/rpms/expat/-/merge_requests/1",
+            "source_branch": update_branch,
+            "target_branch": "rhel-10.1",
+            "state": "opened",
+        },
+        {
+            "url": "https://gitlab.com/redhat/rhel/rpms/expat/-/merge_requests/2",
+            "source_branch": "a-human-feature-branch",
+            "target_branch": "rhel-10.1",
+            "state": "opened",
+        },
+    ]
+    closed: list[str] = []
+
+    async def fake_run_tool(tool, available_tools=None, **kwargs):
+        if tool == "list_project_merge_requests":
+            assert kwargs["project"] == "redhat/rhel/rpms/expat"
+            assert kwargs["state"] == "opened"
+            assert kwargs["target_branch"] == "rhel-10.1"
+            return mrs
+        if tool == "close_merge_request":
+            closed.append(kwargs["merge_request_url"])
+            return "ok"
+        raise AssertionError(f"unexpected tool {tool}")
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(fake_run_tool)
+
+    result = await close_stale_update_merge_requests(
+        jira_issue=jira,
+        package="expat",
+        dist_git_branch="rhel-10.1",
+        available_tools=[],
+    )
+
+    assert result == ["https://gitlab.com/redhat/rhel/rpms/expat/-/merge_requests/1"]
+    assert closed == ["https://gitlab.com/redhat/rhel/rpms/expat/-/merge_requests/1"]
+
+
+@pytest.mark.asyncio
+async def test_close_stale_update_merge_requests_returns_empty_when_list_fails():
+    async def fake_run_tool(tool, available_tools=None, **kwargs):
+        if tool == "list_project_merge_requests":
+            raise RuntimeError("gitlab down")
+        raise AssertionError(f"close should not be attempted; got {tool}")
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(fake_run_tool)
+
+    result = await close_stale_update_merge_requests(
+        jira_issue="RHEL-1",
+        package="expat",
+        dist_git_branch="rhel-10.1",
+        available_tools=[],
+    )
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_close_stale_update_merge_requests_tolerates_close_failure():
+    from ymir.agents.constants import BRANCH_PREFIX
+
+    jira = "RHEL-7"
+    update_branch = f"{BRANCH_PREFIX}-{jira}"
+    mrs = [
+        {
+            "url": "https://gitlab.com/redhat/rhel/rpms/expat/-/merge_requests/9",
+            "source_branch": update_branch,
+            "target_branch": "rhel-10.1",
+            "state": "opened",
+        },
+    ]
+
+    async def fake_run_tool(tool, available_tools=None, **kwargs):
+        if tool == "list_project_merge_requests":
+            return mrs
+        if tool == "close_merge_request":
+            raise RuntimeError("permission denied")
+        raise AssertionError(f"unexpected tool {tool}")
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(fake_run_tool)
+
+    result = await close_stale_update_merge_requests(
+        jira_issue=jira,
+        package="expat",
+        dist_git_branch="rhel-10.1",
+        available_tools=[],
+    )
+    assert result == []

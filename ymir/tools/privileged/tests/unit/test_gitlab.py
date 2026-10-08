@@ -151,24 +151,26 @@ def _mock_original_project(*, repository, package, bot_username, fork, expected_
 
 
 @pytest.mark.asyncio
-async def test_fork_repository_copr_dry_run_returns_original(monkeypatch):
-    """Copr builds from a local SRPM, so DRY_RUN skips fork creation and echoes the origin."""
+async def test_fork_repository_copr_dry_run_creates_fork(monkeypatch):
+    """Both backends build after commit+push, so DRY_RUN creates the fork for Copr too."""
     monkeypatch.setenv("DRY_RUN", "true")
     monkeypatch.delenv("BUILD_BACKEND", raising=False)  # default copr
     monkeypatch.setenv("FORK_NAMESPACE", "redhat/rhel/bot-branches")
     repository = "https://gitlab.com/redhat/centos-stream/rpms/bash"
     package = "bash"
+    clone_url = "https://gitlab.com/redhat/rhel/bot-branches/centos_rpms_bash.git"
     fork = _fork_project_mock(
         target_namespace="redhat/rhel/bot-branches",
         fork_name="centos_rpms_bash",
-        clone_url="https://gitlab.com/redhat/rhel/bot-branches/centos_rpms_bash.git",
+        clone_url=clone_url,
     )
+    flexmock(GitlabProject).new_instances(fork)
     expected_data = {
         "name": "centos_rpms_bash",
         "path": "centos_rpms_bash",
         "namespace": "redhat/rhel/bot-branches",
     }
-    original = _mock_original_project(
+    _mock_original_project(
         repository=repository,
         package=package,
         bot_username="test-bot",
@@ -176,7 +178,7 @@ async def test_fork_repository_copr_dry_run_returns_original(monkeypatch):
         expected_data=expected_data,
     )
     result = (await ForkRepositoryTool().run(input={"repository": repository})).result
-    assert result == original
+    assert result == clone_url
 
 
 @pytest.mark.asyncio

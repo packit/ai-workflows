@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from specfile import Specfile
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import is_konflux_backend, run_build
+from ymir.agents.build_agent import run_build
 from ymir.agents.constants import (
     I_AM_YMIR,
     ZSTREAM_TARGET_LABEL,
@@ -647,6 +647,10 @@ class BackportState(PackageUpdateState):
     attempts_remaining: int = Field(default=10)
     used_cherry_pick_workflow: bool = Field(default=False)
     incremental_fix_attempts: int = Field(default=0)
+    # Pristine dist-git HEAD captured right after clone, before any backport work.
+    # The build step soft-resets to it so every build/fix cycle squashes into a
+    # single published commit (no agent attempts in history).
+    backport_base_head: str | None = Field(default=None)
     fix_version: str | None = Field(default=None)
     shipped_zstream_candidates: list[ShippedZStreamCandidate] = Field(default_factory=list)
     inherit_cleanup_retried: bool = Field(default=False)
@@ -833,9 +837,6 @@ async def run_workflow(
     if max_incremental_fix_attempts is None:
         max_incremental_fix_attempts = max_build_attempts
     workspace_id = workspace_id or uuid4()
-    # Konflux builds from a pushed git ref, so it reorders commit/push to
-    # happen BEFORE the build; Copr (default) is unaffected.
-    konflux = is_konflux_backend()
 
     local_tool_options: dict[str, Any] = {"working_directory": None}
     if mock_env := get_mock_local_tool_env(jira_issue):
@@ -968,6 +969,7 @@ async def run_workflow(
                 cwd=state.local_clone,
             )
             state.inherit_saved_head = state.inherit_saved_head.strip()
+            state.backport_base_head = state.inherit_saved_head
             if not state.inheritance_disabled and _can_attempt_ystream_inheritance(state):
                 state.inherit_candidate = same_major_candidate(
                     state.shipped_zstream_candidates,
@@ -1285,7 +1287,9 @@ async def run_workflow(
                     error=None,
                 )
                 state.inherit_build_attempts = max_build_attempts
-                return "stage_changes" if konflux else "run_inherit_build_agent"
+                # Both backends stage, commit and push the inherited commit, then
+                # validate it with a single build step (validate_inherited_build).
+                return "stage_changes"
             except AlreadyInheritedError as error:
                 logger.error("Y-stream inheritance invariant failed: %s", error)
                 state.retry_mode = BackportRetryMode.NONE
@@ -1308,18 +1312,6 @@ async def run_workflow(
                     return handle_inherit_cleanup_failure(state)
                 _disable_ystream_inheritance(state, task_metadata)
                 return "prepare_normal_backport"
-
-        def _post_backport_build_step() -> str:
-            """Single entry into the build step, identical for Copr and Konflux.
-
-            A freshly staged backport (or fix) hands off to the one step that
-            builds: Copr builds the generated SRPM directly via run_build_agent;
-            Konflux first refreshes the release and stages the regenerated
-            patches (update_release -> stage_changes) so it can commit, push and
-            build the git ref in konflux_build_and_publish. The package build
-            happens only there, and a failed build routes back to fix_build_error.
-            """
-            return "run_build_agent" if not (is_modular_issue or konflux) else "update_release"
 
         async def run_backport_agent(state):
             response = await backport_agent.run(
@@ -1373,18 +1365,22 @@ async def run_workflow(
                     state.used_cherry_pick_workflow = False
                     logger.info("Git am workflow detected: no upstream repo exists")
 
-                return _post_backport_build_step()
+                # A freshly staged backport refreshes the release and stages the
+                # regenerated patches (update_release -> stage_changes), then the
+                # single build step (commit_push_and_build) commits, pushes and
+                # builds for both backends. Modular issues skip the build in
+                # stage_changes. A failed build routes back to fix_build_error.
+                return "update_release"
             return "comment_in_jira"
 
         async def fix_build_error(state):
             """Produce a fix for the failed build; the build step re-validates it.
 
             The fix agent itself never builds. It regenerates the patch file(s)
-            (and a fresh SRPM for Copr) and reports. Routing then returns to the
-            single build step via ``_post_backport_build_step`` — run_build_agent
-            for Copr, or update_release -> stage_changes ->
-            konflux_build_and_publish for Konflux — which performs the only build
-            and loops back here with the new build error if it still fails.
+            (and a fresh SRPM) and reports. Routing then returns to the single
+            build step (update_release -> stage_changes -> commit_push_and_build,
+            identical for both backends), which performs the only build and loops
+            back here with the new build error if it still fails.
             """
             logger.info(
                 f"Producing incremental fix for cherry-pick workflow "
@@ -1445,7 +1441,7 @@ async def run_workflow(
                     state.backport_result = fix_result
                     state.backport_log.append(fix_result.status)
                     logger.info("Incremental fix produced — re-validating via the build step")
-                    return _post_backport_build_step()
+                    return "update_release"
 
                 # No candidate fix was produced, so the patches/SRPM are unchanged
                 # and rebuilding would fail identically. Stop and report. The build
@@ -1466,75 +1462,43 @@ async def run_workflow(
                 state.backport_result.error = f"Exception during incremental fix: {e!s}"
                 return "comment_in_jira"
 
-        async def run_build_agent(state):
-            if not state.backport_result or not state.backport_result.srpm_path:
-                logger.error("Cannot run build agent: no valid backport result or SRPM path")
-                state.backport_result = state.backport_result or BackportOutputSchema(
-                    success=False,
-                    srpm_path=None,
-                    status="",
-                    error="No SRPM generated by backport agent",
-                )
-                return "comment_in_jira"
+        async def validate_inherited_build(state):
+            """Validate the pushed inherited commit before opening the MR.
 
+            Unified across backends: the inherited commit is already staged,
+            committed and pushed, so Copr builds the generated SRPM while Konflux
+            builds the pushed git ref -- run_build dispatches on BUILD_BACKEND. A
+            green build opens the MR; repeated failures fall back to a normal
+            backport.
+            """
             build_result = await run_build(
                 build_input=BuildInputSchema(
                     srpm_path=state.backport_result.srpm_path,
                     dist_git_branch=state.dist_git_branch,
                     jira_issue=state.jira_issue,
+                    git_url=state.fork_url,
+                    revision=state.inherit_local_commit,
+                    package_name=state.package,
+                    target_branch=state.dist_git_branch,
                 ),
                 available_tools=gateway_tools,
                 local_tool_options=local_tool_options,
             )
-            if build_result.success:
-                state.incremental_fix_attempts = 0
-                return "update_release"
-            if build_result.is_timeout:
-                logger.info(f"Build timed out for {state.jira_issue}, proceeding")
-                return "update_release"
-            if build_result.is_infra_error:
-                logger.error(f"Copr infrastructure error for {state.jira_issue}: {build_result.error}")
-                state.backport_result.success = False
-                state.backport_result.error = build_result.error or "Copr API infrastructure error"
-                return "comment_in_jira"
-            state.attempts_remaining -= 1
-            if state.attempts_remaining <= 0:
-                state.backport_result.success = False
-                state.backport_result.error = (
-                    f"Unable to successfully build the package in {max_build_attempts} attempts"
-                )
-                return "comment_in_jira"
-            state.build_error = build_result.error
-            if state.used_cherry_pick_workflow:
-                logger.info("Cherry-pick workflow was used - starting incremental fix")
-                return "fix_build_error"
-            logger.info("Git am workflow was used - resetting for retry")
-            return "fork_and_prepare_dist_git"
-
-        async def run_inherit_build_agent(state):
-            """Require a successful Copr validation before publishing inheritance."""
-            build_result = await run_build(
-                build_input=BuildInputSchema(
-                    srpm_path=state.backport_result.srpm_path,
-                    dist_git_branch=state.dist_git_branch,
-                    jira_issue=state.jira_issue,
-                ),
-                available_tools=gateway_tools,
-                local_tool_options=local_tool_options,
-            )
-            if build_result.success:
-                return "stage_changes"
+            if build_result.success or build_result.is_timeout:
+                if dry_run:
+                    return "submit_consolidation_job"
+                return "open_inherited_mr"
 
             state.inherit_build_attempts -= 1
             if state.inherit_build_attempts > 0:
                 logger.warning(
-                    "Inherited Copr validation failed; retrying (%d attempts left): %s",
+                    "Inherited build validation failed; retrying (%d attempts left): %s",
                     state.inherit_build_attempts,
                     build_result.error,
                 )
-                return "run_inherit_build_agent"
+                return "validate_inherited_build"
 
-            logger.info("Inherited Copr validation did not pass: %s", build_result.error)
+            logger.info("Inherited build validation did not pass: %s", build_result.error)
             if not await cleanup_inherit_attempt(state):
                 return handle_inherit_cleanup_failure(state)
             _disable_ystream_inheritance(state, task_metadata)
@@ -1595,9 +1559,12 @@ async def run_workflow(
             if state.inherit_change:
                 return "commit_inherited_change"
             if state.log_result:
-                if konflux and not is_modular_issue:
-                    return "konflux_build_and_publish"
-                return "commit_push_and_open_mr"
+                # Modular issues are published without a build; everything else
+                # commits, pushes and builds via the single commit_push_and_build
+                # step (identical for Copr and Konflux).
+                if is_modular_issue:
+                    return "commit_push_and_open_mr"
+                return "commit_push_and_build"
             return "run_log_agent"
 
         async def run_log_agent(state):
@@ -1722,10 +1689,9 @@ async def run_workflow(
                     return handle_inherit_cleanup_failure(state)
                 _disable_ystream_inheritance(state, task_metadata)
                 return "prepare_normal_backport"
-            # Konflux must push the inherited commit so it can build from the ref,
-            # even in dry-run (the MR itself is still skipped later).
-            if dry_run and not konflux:
-                return "submit_consolidation_job"
+            # Both backends push the inherited commit before validating the
+            # build: Konflux builds from the pushed ref and Copr follows the same
+            # path. Even in dry-run the push happens; only the MR is skipped later.
             return "push_inherited_change"
 
         async def push_inherited_change(state):
@@ -1764,7 +1730,7 @@ async def run_workflow(
                         f"{reconcile_error}"
                     )
                     return "comment_in_jira"
-            return "konflux_inherit_build" if konflux else "open_inherited_mr"
+            return "validate_inherited_build"
 
         async def open_inherited_mr(state):
             try:
@@ -1859,21 +1825,42 @@ async def run_workflow(
                 return "comment_in_jira"
             return "submit_consolidation_job"
 
-        async def konflux_build_and_publish(state):
-            """Konflux builds from a pushed ref: commit + push, build, then open the MR.
+        async def commit_push_and_build(state):
+            """Commit, push and build the backport, then open the MR on success.
 
-            Only reached for non-modular issues under BUILD_BACKEND=konflux. Mirrors
-            run_build_agent's failure/retry handling, but the fork push happens before
-            the build and the MR is opened only after a green build.
+            The single build step for non-modular issues on both backends: the
+            fork branch is pushed first so Konflux can build the ref, while Copr
+            builds the generated SRPM (run_build dispatches on BUILD_BACKEND and
+            ignores the ref fields). The MR is opened only after a green build; a
+            failed build loops back to fix_build_error (cherry-pick) or restarts
+            the backport (git am).
             """
+            if not state.backport_result or not state.backport_result.srpm_path:
+                logger.error("Cannot build: no valid backport result or SRPM path")
+                state.backport_result = state.backport_result or BackportOutputSchema(
+                    success=False,
+                    srpm_path=None,
+                    status="",
+                    error="No SRPM generated by backport agent",
+                )
+                return "comment_in_jira"
             try:
                 commit_message, mr_description, labels = await _compose_backport_commit_and_mr(state)
+                # Collapse every build/fix cycle (and any cherry-pick commits the
+                # backport agent left) into one commit: soft-reset to the pristine
+                # base so the staged tree commits as a single backport commit.
+                # Force-push then overwrites the previous cycle's ref.
+                if state.backport_base_head:
+                    await check_subprocess(
+                        ["git", "reset", "--soft", state.backport_base_head],
+                        cwd=state.local_clone,
+                    )
                 revision = await tasks.commit_changes(state.local_clone, commit_message)
                 await tasks.push_changes(
                     state.local_clone, state.fork_url, state.update_branch, gateway_tools
                 )
             except Exception as e:
-                logger.warning(f"Error committing/pushing before Konflux build: {e}")
+                logger.warning(f"Error committing/pushing before build: {e}")
                 state.merge_request_url = None
                 state.backport_result.success = False
                 state.backport_result.error = f"Could not commit and push for build: {e}"
@@ -1894,11 +1881,11 @@ async def run_workflow(
             )
             if build_result.success or build_result.is_timeout:
                 if build_result.is_timeout:
-                    logger.info(f"Konflux build timed out for {state.jira_issue}, proceeding")
+                    logger.info(f"Build timed out for {state.jira_issue}, proceeding")
                 state.incremental_fix_attempts = 0
                 if dry_run:
-                    # The ref was pushed so Konflux could build; skip MR creation in
-                    # dry-run, mirroring the Copr commit_only path.
+                    # The branch was pushed so the build could run; skip MR
+                    # creation in dry-run.
                     state.merge_request_url = None
                     state.merge_request_newly_created = False
                     return "submit_consolidation_job"
@@ -1917,15 +1904,15 @@ async def run_workflow(
                         package=state.package,
                     )
                 except Exception as e:
-                    logger.warning(f"Konflux build passed but MR creation failed: {e}")
+                    logger.warning(f"Build passed but MR creation failed: {e}")
                     state.merge_request_url = None
                     state.backport_result.success = False
                     state.backport_result.error = f"Could not open MR after build: {e}"
                 return "submit_consolidation_job"
             if build_result.is_infra_error:
-                logger.error(f"Konflux infrastructure error for {state.jira_issue}: {build_result.error}")
+                logger.error(f"Build infrastructure error for {state.jira_issue}: {build_result.error}")
                 state.backport_result.success = False
-                state.backport_result.error = build_result.error or "Konflux infrastructure error"
+                state.backport_result.error = build_result.error or "Build infrastructure error"
                 return "comment_in_jira"
             state.attempts_remaining -= 1
             if state.attempts_remaining <= 0:
@@ -1940,41 +1927,6 @@ async def run_workflow(
                 return "fix_build_error"
             logger.info("Git am workflow was used - resetting for retry")
             return "fork_and_prepare_dist_git"
-
-        async def konflux_inherit_build(state):
-            """Validate an already-pushed inherited commit via Konflux before the MR."""
-            build_result = await run_build(
-                build_input=BuildInputSchema(
-                    srpm_path=state.backport_result.srpm_path,
-                    dist_git_branch=state.dist_git_branch,
-                    jira_issue=state.jira_issue,
-                    git_url=state.fork_url,
-                    revision=state.inherit_local_commit,
-                    package_name=state.package,
-                    target_branch=state.dist_git_branch,
-                ),
-                available_tools=gateway_tools,
-                local_tool_options=local_tool_options,
-            )
-            if build_result.success or build_result.is_timeout:
-                if dry_run:
-                    return "submit_consolidation_job"
-                return "open_inherited_mr"
-
-            state.inherit_build_attempts -= 1
-            if state.inherit_build_attempts > 0:
-                logger.warning(
-                    "Inherited Konflux validation failed; retrying (%d attempts left): %s",
-                    state.inherit_build_attempts,
-                    build_result.error,
-                )
-                return "konflux_inherit_build"
-
-            logger.info("Inherited Konflux validation did not pass: %s", build_result.error)
-            if not await cleanup_inherit_attempt(state):
-                return handle_inherit_cleanup_failure(state)
-            _disable_ystream_inheritance(state, task_metadata)
-            return "prepare_normal_backport"
 
         async def submit_consolidation_job(state):
             if (
@@ -2079,8 +2031,7 @@ async def run_workflow(
         workflow.add_step("evaluate_inherit_source", evaluate_inherit_source)
         workflow.add_step("run_backport_agent", run_backport_agent)
         workflow.add_step("fix_build_error", fix_build_error)
-        workflow.add_step("run_build_agent", run_build_agent)
-        workflow.add_step("run_inherit_build_agent", run_inherit_build_agent)
+        workflow.add_step("validate_inherited_build", validate_inherited_build)
         workflow.add_step("update_release", update_release)
         workflow.add_step("stage_changes", stage_changes)
         workflow.add_step("run_log_agent", run_log_agent)
@@ -2088,8 +2039,7 @@ async def run_workflow(
         workflow.add_step("push_inherited_change", push_inherited_change)
         workflow.add_step("open_inherited_mr", open_inherited_mr)
         workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
-        workflow.add_step("konflux_build_and_publish", konflux_build_and_publish)
-        workflow.add_step("konflux_inherit_build", konflux_inherit_build)
+        workflow.add_step("commit_push_and_build", commit_push_and_build)
         workflow.add_step("submit_consolidation_job", submit_consolidation_job)
         workflow.add_step("comment_in_jira", comment_in_jira)
 

@@ -140,7 +140,11 @@ class TestBuildInstructions:
         )
         assert "expert on analyzing package build failures" in result
         assert "Do not submit or retry a build" in result
-        assert "builder-live.log" in result
+        # The gateway-log (Konflux) branch must stay backend-neutral: Konflux logs
+        # are named after pods/containers, not Copr's builder-live.log/root.log.
+        assert "builder-live.log" not in result
+        assert "root.log" not in result
+        assert "main build log" in result
         assert "extract_log_snippets" in result
         assert "Start with" not in result
 
@@ -157,6 +161,8 @@ class TestBuildInstructions:
         assert "local sandbox" in result
         assert "artifacts_urls" in result
         assert "Start with" in result
+        assert "builder-live.log" in result
+        assert "root.log" in result
 
 
 class TestLogInstructions:

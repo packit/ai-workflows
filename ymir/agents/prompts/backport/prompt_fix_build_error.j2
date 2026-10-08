@@ -18,6 +18,12 @@ The cherry-pick workflow succeeded but the build failed:
 
 {{ build_error }}
 
+You do NOT build the package yourself. Your job is to produce a corrected
+backport: fix the patch(es), regenerate them, and regenerate the SRPM. A
+separate build step then rebuilds your fix. If the build still fails you will be
+called again with the new build error, so make ONE focused fix attempt per
+invocation.
+
 CRITICAL CONSTRAINTS:
 - The upstream repository at {{ local_clone }}-upstream has all your previous work intact.
   DO NOT clone it again. DO NOT reset to base commit.
@@ -40,7 +46,7 @@ CRITICAL CONSTRAINTS:
     Do NOT modify or remove existing BuildRequires/Requires entries.
 
     NEVER modify the spec for:
-    * Environmental issues (COPR vs RHEL builder differences like unbuffer/expect wrappers,
+    * Environmental issues (build-environment differences like unbuffer/expect wrappers,
       pipefail behavior, locale settings) — report success=false instead
     * Pre-existing build issues unrelated to your patch
     * Working around missing or too-old dependencies not yet in the buildroot
@@ -49,11 +55,11 @@ CRITICAL CONSTRAINTS:
 
   IF rules do NOT explicitly allow it (or no rules exist):
     NEVER modify the spec file — the build worked before your patches; fix the patches instead.
-    The build runs in COPR, not on official RHEL builders. COPR environments may have
-    differences (e.g. unbuffer/expect wrappers, pipefail behavior, locale settings) that
-    can cause spurious failures unrelated to your patches. If the failure is caused by the
-    build environment rather than by your code changes, report success=false and explain
-    the environmental issue — do not modify the spec to work around it.
+    The build environment may differ from your local environment (e.g. unbuffer/expect
+    wrappers, pipefail behavior, locale settings) and can cause spurious failures unrelated
+    to your patches. If the failure is caused by the build environment rather than by your
+    code changes, report success=false and explain the environmental issue — do not modify
+    the spec to work around it.
 
 - DO NOT modify anything in {{ local_clone }} dist-git repository except:
   a. The backport patch file(s) you created (by regenerating them from upstream repo)
@@ -63,13 +69,13 @@ CRITICAL CONSTRAINTS:
   Read the spec file to find the patch filenames you added — do NOT assume the name.
 
 - DO NOT commit any changes in {{ local_clone }} dist-git repository during the fix attempt.
-  Keep all dist-git changes (patch files and spec edits) uncommitted until the build passes.
-  Commit source fixes in {{ local_clone }}-upstream, staging only the intended source files.
-  Keep build logs and repair notes in {{ build_logs_dir }}, outside both Git repositories.
+  Keep all dist-git changes (patch files and spec edits) uncommitted — the build step
+  commits them. Commit source fixes in {{ local_clone }}-upstream, staging only the intended
+  source files. Keep repair notes in {{ build_logs_dir }}, outside both Git repositories.
   Do not copy these diagnostics into either repository or include them in generated patches.
 
 - Fix BOTH compilation errors AND test failures. NEVER skip or disable tests.
-- Make ONE attempt — you will be called again if the build still fails.
+- Make ONE attempt — the build step will re-invoke you if the build still fails.
 
 Before you start: Read {{ build_logs_dir }}/fix-attempts.md for a log of
 previous fix attempts. Do NOT repeat strategies that already failed.
@@ -89,7 +95,7 @@ WORKFLOW:
    IMPORTANT: If the tools fail to fetch rules (returns an error, timeout, etc.),
    treat this as "NOT allowed" — do NOT add any spec entries, fix patches only.
 
-1. Analyze the build error and identify what's missing (functions, types, headers, etc.)
+1. Analyze the build error above and identify what's missing (functions, types, headers, etc.)
 
 2. If the build error indicates missing dependencies that are DIRECTLY INTRODUCED by your
    backported patch AND rules (from step 0) explicitly allow it:
@@ -98,7 +104,7 @@ WORKFLOW:
    - If needed during build (%build or %check) AND at runtime: add both BuildRequires and Requires
    - Additions only — do NOT modify or remove existing entries
    - See CRITICAL CONSTRAINTS and Criterion 2 for validation requirements
-   - Then proceed to step 6 to rebuild and verify
+   - Then proceed to step 6 to regenerate the SRPM
 
 3. Otherwise, explore {{ local_clone }}-upstream to find solutions — use git log, git show, grep,
    and view files. The full upstream history is available.
@@ -121,23 +127,17 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
    - repository_path: {{ local_clone }}-upstream
    - patch_file_path: the path to each patch file in {{ local_clone }}/
 
-6. Test the build:
-   - Use the `run_package_prep` tool to verify patches apply cleanly
-   - Use the `build_srpm` tool to generate a SRPM
-   - Call `build_package` with the SRPM path, dist_git_branch, and jira_issue
-   - If build fails: use `download_artifacts` to get logs and identify the new error
-{% if has_extract_log_snippets %}
-   - Use `extract_log_snippets` with `log_path` pointing to `builder-live.log`
-     (or `root.log` if unavailable) to extract the most relevant snippets
-     and identify the new error
-{% endif %}
+6. Regenerate the SRPM so the build step can rebuild your fix:
+   - Use the `run_package_prep` tool to verify your patches apply cleanly
+   - Use the `build_srpm` tool to generate a fresh SRPM that includes your fix
+   Do NOT attempt to build the package yourself. The workflow's build step performs
+   the only build and will call you again with the new error if it still fails.
 
 7. Append a summary to {{ build_logs_dir }}/fix-attempts.md documenting:
    - What you identified as the root cause
    - Which commits you cherry-picked or what manual edits you made
    - Any BuildRequires or Requires additions to the spec file (if rules allowed
      adding new entries), including what was added and why
-   - The build result (pass/fail and error if applicable)
 
 8. Self-Review: Before reporting a result, verify your work meets all criteria
    below. Run `git diff HEAD -- *.spec` in {{ local_clone }} to inspect what
@@ -172,12 +172,12 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
         - Appears in the build error (missing header, undefined reference, "command not found"
           during %build/%check, etc.)
         - Is used by code in your backported patch (verify by reading the patch)
-        - Is not a workaround for COPR environmental differences
+        - Is not a workaround for build-environment differences
         For Requires additions:
         - Is introduced by your backported patch (installed binary calls a new executable,
           dlopen()s a library, imports a Python module, etc.)
         - Evidence comes from the patch diff or runtime test failures
-        - Is not a workaround for COPR environmental differences
+        - Is not a workaround for build-environment differences
         For both BuildRequires and Requires on the same package:
         - Justified when the dependency is needed during build (%build or %check) AND by the
           installed package at runtime
@@ -223,7 +223,7 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
    - Working around buildroot limitations (dependency not available or too old)
 
    If the build failure is caused by something unrelated to the patch content
-   (e.g. COPR environment, dependency version not yet available), report
+   (e.g. the build environment, dependency version not yet available), report
    success=false and explain the issue instead of working around it.
 
    If ALL criteria pass, report success as normal.
@@ -231,14 +231,14 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
    If ANY criterion fails, attempt to fix the problem before reporting failure:
    - Criterion 1, 3, or 6 (bad patch content, disabled tests, or unrelated
      changes): return to step 4 and re-fix the issue, then regenerate patches
-     (step 5) and rebuild (step 6). For criterion 6, revert unrelated hunks
-     from {{ local_clone }}-upstream before regenerating.
+     (step 5) and regenerate the SRPM (step 6). For criterion 6, revert unrelated
+     hunks from {{ local_clone }}-upstream before regenerating.
    - Criterion 2 (spec modified): revert the spec with
      `git checkout HEAD -- *.spec` in {{ local_clone }}, verify the revert with
-     `git diff HEAD -- *.spec`, then rebuild (step 6).
+     `git diff HEAD -- *.spec`, then regenerate the SRPM (step 6).
    - Criterion 4 (SRPM missing): re-run `build_srpm` (step 6).
    - Criterion 5 (wrong patch name): rename the file to match the spec, then
-     rebuild (step 6).
+     regenerate the SRPM (step 6).
 
    After fixing, re-run this self-review before reporting.
 
@@ -251,7 +251,8 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
 
    List only the failing criteria. Do not mention passing ones.
 
-Report success=true with SRPM path if build passes.
-Report success=false with the extracted error if build fails or you can't find a fix.
+Report success=true with the SRPM path once your patches apply cleanly and the
+SRPM has been regenerated.
+Report success=false with the problem you found if you cannot produce a fix.
 
 Unpacked upstream sources are in {{ unpacked_sources }}.

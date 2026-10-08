@@ -87,7 +87,7 @@ async def test_konflux_commits_and_pushes_before_build(monkeypatch, tmp_path, dr
 
     def start_at(workflow, state, options=None):
         _base_state(state, local_clone=local_clone)
-        workflow.set_start("konflux_build_and_publish")
+        workflow.set_start("commit_push_and_build")
         workflow.steps["submit_consolidation_job"].handler = lambda _: Workflow.END
         workflow.steps["comment_in_jira"].handler = lambda _: Workflow.END
         return run_workflow(workflow, state, options)
@@ -117,7 +117,7 @@ async def test_konflux_commits_and_pushes_before_build(monkeypatch, tmp_path, dr
 
 @pytest.mark.parametrize("dry_run", [False, True])
 @pytest.mark.asyncio
-async def test_konflux_inherit_build_validates_pushed_commit(monkeypatch, tmp_path, dry_run):
+async def test_inherit_build_validates_pushed_commit(monkeypatch, tmp_path, dry_run):
     monkeypatch.setenv("BUILD_BACKEND", "konflux")
     local_clone = tmp_path / "expat"
     local_clone.mkdir()
@@ -139,7 +139,7 @@ async def test_konflux_inherit_build_validates_pushed_commit(monkeypatch, tmp_pa
         _base_state(state, local_clone=local_clone)
         state.inherit_local_commit = "b" * 40
         state.inherit_build_attempts = 3
-        workflow.set_start("konflux_inherit_build")
+        workflow.set_start("validate_inherited_build")
         workflow.steps["open_inherited_mr"].handler = lambda _: (calls.append("open_mr"), Workflow.END)[1]
         workflow.steps["submit_consolidation_job"].handler = lambda _: (
             calls.append("submit"),

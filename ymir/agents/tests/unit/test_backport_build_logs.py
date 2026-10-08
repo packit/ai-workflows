@@ -42,6 +42,8 @@ async def test_build_repair_logs_stay_out_of_git(monkeypatch, tmp_path, branch):
     attempts = []
 
     async def repair(prompt, **kwargs):
+        # The fix agent never builds; it only produces a corrected backport. Each
+        # invocation follows a failed build from the dedicated build step.
         attempt = len(attempts) + 1
         attempts.append(prompt)
         notes = log_dir / "fix-attempts.md"
@@ -72,11 +74,12 @@ async def test_build_repair_logs_stay_out_of_git(monkeypatch, tmp_path, branch):
             (local_clone / "builder-live.log").write_text("retry build log")
             with notes.open("a") as stream:
                 stream.write("\nFirst repair summary\n")
+        # Each repair produces a candidate fix; the build step decides success.
         result = BackportOutputSchema(
-            success=attempt == 2,
+            success=True,
             status=f"Repair {attempt}",
             srpm_path=local_clone / "expat.src.rpm",
-            error="second build failure" if attempt == 1 else None,
+            error=None,
         )
         return SimpleNamespace(last_message=SimpleNamespace(text=result.model_dump_json()))
 
@@ -87,15 +90,24 @@ async def test_build_repair_logs_stay_out_of_git(monkeypatch, tmp_path, branch):
     async def create_repair_agent(*args, **kwargs):
         return flexmock(run=repair)
 
-    async def failed_build(**kwargs):
-        return BuildOutputSchema(success=False, error="initial build failure")
+    # The build step is the only builder: fail twice (driving two repair cycles),
+    # then pass so the workflow proceeds to release bookkeeping.
+    builds = []
+
+    async def staged_build(**kwargs):
+        builds.append(kwargs)
+        if len(builds) == 1:
+            return BuildOutputSchema(success=False, error="initial build failure")
+        if len(builds) == 2:
+            return BuildOutputSchema(success=False, error="second build failure")
+        return BuildOutputSchema(success=True, error=None)
 
     flexmock(backport_agent).should_receive("mcp_tools").replace_with(gateway).once()
     flexmock(backport_agent).should_receive("create_log_agent").and_return(None).once()
     flexmock(backport_agent).should_receive("get_mock_local_tool_env").and_return(None).once()
     flexmock(backport_agent).should_receive("get_agent_execution_config").and_return({}).twice()
     flexmock(backport_agent).should_receive("create_backport_agent").replace_with(create_repair_agent).twice()
-    flexmock(backport_agent).should_receive("run_build").replace_with(failed_build).once()
+    flexmock(backport_agent).should_receive("run_build").replace_with(staged_build)
     monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
 
     run_workflow = Workflow.run
@@ -111,7 +123,7 @@ async def test_build_repair_logs_stay_out_of_git(monkeypatch, tmp_path, branch):
             error=None,
         )
         workflow.set_start("run_build_agent")
-        # Exercise the real build-failure routing and both repair attempts,
+        # Exercise the real build-failure routing and both repair cycles,
         # stopping before release bookkeeping or external writes.
         workflow.steps["update_release"].handler = lambda _: Workflow.END
         workflow.steps["comment_in_jira"].handler = lambda _: Workflow.END
@@ -130,6 +142,7 @@ async def test_build_repair_logs_stay_out_of_git(monkeypatch, tmp_path, branch):
 
     assert state.backport_result.success, state.backport_result.error
     assert len(attempts) == 2
+    assert len(builds) == 3, "the build step is the sole builder and runs each cycle"
     git(local_clone, "add", "-A")
     assert git(local_clone, "diff", "--cached", "--name-only") == "fix.patch"
     assert not (upstream / "build-logs").exists()

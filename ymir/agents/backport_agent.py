@@ -1309,6 +1309,18 @@ async def run_workflow(
                 _disable_ystream_inheritance(state, task_metadata)
                 return "prepare_normal_backport"
 
+        def _post_backport_build_step() -> str:
+            """Single entry into the build step, identical for Copr and Konflux.
+
+            A freshly staged backport (or fix) hands off to the one step that
+            builds: Copr builds the generated SRPM directly via run_build_agent;
+            Konflux first refreshes the release and stages the regenerated
+            patches (update_release -> stage_changes) so it can commit, push and
+            build the git ref in konflux_build_and_publish. The package build
+            happens only there, and a failed build routes back to fix_build_error.
+            """
+            return "run_build_agent" if not (is_modular_issue or konflux) else "update_release"
+
         async def run_backport_agent(state):
             response = await backport_agent.run(
                 render_template(
@@ -1361,14 +1373,22 @@ async def run_workflow(
                     state.used_cherry_pick_workflow = False
                     logger.info("Git am workflow detected: no upstream repo exists")
 
-                return "run_build_agent" if not (is_modular_issue or konflux) else "update_release"
+                return _post_backport_build_step()
             return "comment_in_jira"
 
         async def fix_build_error(state):
-            """Try to fix build errors by finding and cherry-picking prerequisite commits."""
+            """Produce a fix for the failed build; the build step re-validates it.
+
+            The fix agent itself never builds. It regenerates the patch file(s)
+            (and a fresh SRPM for Copr) and reports. Routing then returns to the
+            single build step via ``_post_backport_build_step`` — run_build_agent
+            for Copr, or update_release -> stage_changes ->
+            konflux_build_and_publish for Konflux — which performs the only build
+            and loops back here with the new build error if it still fails.
+            """
             logger.info(
-                f"Attempting incremental fix for cherry-pick workflow "
-                f"(attempt {state.incremental_fix_attempts}/{max_incremental_fix_attempts})"
+                f"Producing incremental fix for cherry-pick workflow "
+                f"(cycle {state.incremental_fix_attempts + 1}/{max_incremental_fix_attempts})"
             )
 
             try:
@@ -1383,18 +1403,19 @@ async def run_workflow(
                 log_dir = _get_build_logs_dir(state.local_clone)
                 log_dir.mkdir(parents=True, exist_ok=True)
                 attempt_num = state.incremental_fix_attempts + 1
-
-                if state.incremental_fix_attempts > 0:
-                    _move_build_logs(
-                        state.local_clone,
-                        log_dir / f"attempt-{state.incremental_fix_attempts}",
-                    )
+                # The build step is the only builder; archive the logs from the
+                # build that just failed before producing this cycle's fix.
+                _move_build_logs(
+                    state.local_clone,
+                    log_dir / f"attempt-{state.incremental_fix_attempts}",
+                )
                 _update_fix_attempts_log(log_dir, attempt_num, state.build_error)
+                state.incremental_fix_attempts += 1
 
                 fix_agent = await create_backport_agent(
                     gateway_tools,
                     local_tool_options,
-                    include_build_tools=True,
+                    include_build_tools=False,
                     fix_version=state.fix_version,
                 )
 
@@ -1412,9 +1433,6 @@ async def run_workflow(
                             upstream_patches=state.upstream_patches,
                             build_error=state.build_error,
                             triage_summary=state.triage_summary,
-                            has_extract_log_snippets=any(
-                                t.name == "extract_log_snippets" for t in gateway_tools
-                            ),
                         ),
                     ),
                     expected_output=BackportOutputSchema,
@@ -1426,29 +1444,19 @@ async def run_workflow(
                 if fix_result.success:
                     state.backport_result = fix_result
                     state.backport_log.append(fix_result.status)
-                    logger.info("Incremental fix succeeded with passing build")
-                    state.incremental_fix_attempts = 0
-                    return "update_release"
+                    logger.info("Incremental fix produced — re-validating via the build step")
+                    return _post_backport_build_step()
 
-                logger.info(f"Build still failing after fix attempt: {fix_result.error}")
-                state.build_error = fix_result.error
+                # No candidate fix was produced, so the patches/SRPM are unchanged
+                # and rebuilding would fail identically. Stop and report. The build
+                # step itself bounds how many build/fix cycles we attempt via
+                # ``attempts_remaining``.
+                logger.info(f"Fix agent could not produce a fix: {fix_result.error}")
                 state.backport_result = fix_result
-
-                state.incremental_fix_attempts += 1
-                if state.incremental_fix_attempts < max_incremental_fix_attempts:
-                    logger.info(
-                        f"Will retry incremental fix "
-                        f"(attempt {state.incremental_fix_attempts + 1}/{max_incremental_fix_attempts})"
-                    )
-                    return "fix_build_error"
-                logger.error(
-                    f"Exhausted all {max_incremental_fix_attempts} incremental fix attempts, giving up"
-                )
                 state.backport_result.success = False
                 state.backport_result.error = (
-                    f"Unable to fix build errors after "
-                    f"{max_incremental_fix_attempts} incremental fix attempts. "
-                    f"Last error: {fix_result.error}"
+                    f"Unable to fix the build error. Last build error: {state.build_error}. "
+                    f"Fix attempt result: {fix_result.error}"
                 )
                 return "comment_in_jira"
 
@@ -1498,12 +1506,6 @@ async def run_workflow(
                 return "comment_in_jira"
             state.build_error = build_result.error
             if state.used_cherry_pick_workflow:
-                upstream_repo = Path(f"{state.local_clone}-upstream")
-                if upstream_repo.exists():
-                    _move_build_logs(
-                        state.local_clone,
-                        _get_build_logs_dir(state.local_clone) / "attempt-0",
-                    )
                 logger.info("Cherry-pick workflow was used - starting incremental fix")
                 return "fix_build_error"
             logger.info("Git am workflow was used - resetting for retry")
@@ -1934,12 +1936,6 @@ async def run_workflow(
                 return "comment_in_jira"
             state.build_error = build_result.error
             if state.used_cherry_pick_workflow:
-                upstream_repo = Path(f"{state.local_clone}-upstream")
-                if upstream_repo.exists():
-                    _move_build_logs(
-                        state.local_clone,
-                        _get_build_logs_dir(state.local_clone) / "attempt-0",
-                    )
                 logger.info("Cherry-pick workflow was used - starting incremental fix")
                 return "fix_build_error"
             logger.info("Git am workflow was used - resetting for retry")

@@ -5,10 +5,11 @@ Do not submit or retry a build, regenerate an SRPM, or change package sources or
 Your only task is to explain this existing failure using the supplied result and logs.
 
 {% if has_extract_log_snippets %}
-Download the *.log.gz files from the supplied `artifacts_urls` using the
+Download every log referenced by the supplied `artifacts_urls` using the
 `download_artifacts` tool to a temporary directory.
-Use the `extract_log_snippets` tool with `log_path` pointing to the location of
-`builder-live.log` and try to identify the build failure. The downloaded files are only
+Inspect each downloaded log file with the `extract_log_snippets` tool, passing its
+path as `log_path`; start with the main build log and work through the rest until you
+identify the build failure. The downloaded files are only
 accessible through `extract_log_snippets` — never use `view`, `search_text`, or shell
 commands to read them, even after a successful `extract_log_snippets` call; those tools
 run in a different sandbox and will always fail with "No such file or directory" on
@@ -18,12 +19,12 @@ Retrieve the *.log.gz files directly from the supplied `artifacts_urls` into a
 temporary directory in your local sandbox using shell commands (for example,
 curl or wget), then decompress and inspect them with the local tools.
 Start with `builder-live.log` and try to identify the build failure.
+If the failure is not found there, try the same with `root.log`.
 {% endif %}
 If there are no accessible logs, return the supplied error message and explain that
 a detailed diagnosis was unavailable.
-If the failure is not found, try the same with `root.log`. Summarize the findings
-and return them as `error`. Build status and retry decisions belong to the workflow,
-not to this analysis.
+Summarize the findings and return them as `error`. Build status and retry decisions
+belong to the workflow, not to this analysis.
 
 General instructions:
 

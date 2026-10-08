@@ -41,7 +41,9 @@ traffic is encrypted on both the client-to-router and router-to-pod segments.
 
 ### PostgreSQL (phoenix-db)
 
-The Phoenix database connection uses TLS with mutual authentication:
+The Phoenix database connection uses TLS with server authentication. The
+client validates the PostgreSQL server certificate, but PostgreSQL does not
+require a client certificate:
 
 - The `phoenix-db` Service is annotated with
   `service.beta.openshift.io/serving-cert-secret-name: phoenix-db-tls`,
@@ -70,6 +72,91 @@ All agent-to-Valkey and internal tool connections use TLS:
   ConfigMap into all Redis-consuming pods at `/etc/pki/service-ca/`
 - The Python Redis client verifies the server certificate against this
   CA bundle automatically
+
+## Certificate Lifecycle and Pod Restarts
+
+OpenShift owns the service certificates and the service CA:
+
+- **Service CA** — valid for 26 months, automatically rotated when less than
+  13 months remain. After rotation there is a 13-month grace period during
+  which the original CA is still valid, but all pods that trust it must be
+  restarted to pick up the new CA bundle.
+- **Serving certificates** — valid for approximately two years and replaced
+  automatically near expiration. Workloads that load certificates at startup
+  (PostgreSQL, Valkey, trace-server) must be restarted after the Secret is
+  replaced.
+
+### Annual Rotation Procedure
+
+A recurring Jira issue must be created to perform the following procedure
+once a year. This proactive rotation avoids relying on automatic expiry
+detection and ensures all workloads pick up fresh certificates well within
+the grace period.
+
+**Step 1 — Rotate the serving certificates** by deleting each Secret. The
+service-ca controller regenerates them automatically:
+
+```
+oc delete secret phoenix-db-tls valkey-tls otel-collector-tls
+```
+
+**Step 2 — Restart the TLS endpoints** that load certificates at startup.
+Restart servers before their clients:
+
+```
+oc rollout restart deployment/phoenix-db deployment/valkey deployment/otel-collector
+oc rollout status deployment/phoenix-db
+oc rollout status deployment/valkey
+oc rollout status deployment/otel-collector
+```
+
+**Step 3 — Restart all client deployments** that mount the
+`service-ca-bundle` ConfigMap, so they trust the new CA bundle:
+
+```
+oc rollout restart deployment/api
+oc rollout restart deployment/phoenix
+oc rollout restart deployment/redis-commander
+oc rollout restart deployment/backport-agent-c9s deployment/backport-agent-c10s
+oc rollout restart deployment/rebase-agent-c9s deployment/rebase-agent-c10s
+oc rollout restart deployment/rebuild-agent-c9s deployment/rebuild-agent-c10s
+oc rollout restart deployment/mr-consolidation-agent-c9s deployment/mr-consolidation-agent-c10s
+oc rollout restart deployment/triage-agent deployment/reproducer-agent
+```
+
+**Step 4 — Verify connectivity.** Confirm that each restarted deployment
+reaches Ready and that TLS connections succeed:
+
+```
+for secret in phoenix-db-tls valkey-tls otel-collector-tls; do
+  oc get secret "$secret" -o jsonpath="${secret}: expiry={.metadata.annotations.service\\.beta\\.openshift\\.io/expiry} version={.metadata.resourceVersion}{‘\\n’}"
+done
+```
+
+CronJob pods always start with the current ConfigMap, so no manual restart
+is required for completed CronJob pods.
+
+### Monitoring
+
+The annual rotation is tracked as a recurring Jira issue assigned to the
+team. The issue should be scheduled approximately 12 months after the
+previous rotation — well within the 13-month grace period.
+
+To manually rotate the service CA itself (not normally required):
+
+```
+oc delete secret/signing-key -n openshift-service-ca
+```
+
+This triggers re-generation of all serving certificates and the CA bundle.
+All pods must be restarted afterward using Steps 2–4 above.
+
+The public Route certificate is a separate concern. OpenShift manages the
+default Route certificate, while the `ymir.redhat.com` custom Route continues
+to use the separately supplied `ymir-cname-tls` Secret. Service certificate
+rotation should not produce a browser warning; a warning or a visible outage
+usually indicates an incorrectly configured Route certificate or a workload
+that was not restarted after rotation.
 
 ## Internal HTTP Services (SDN Isolation)
 

@@ -19,6 +19,7 @@ from ymir.tools.privileged.gitlab import (
     AddMergeRequestCommentTool,
     AddMergeRequestLabelsTool,
     CloneRepositoryTool,
+    CloseMergeRequestTool,
     FetchBranchTool,
     FetchCommitTool,
     ForkRepositoryTool,
@@ -660,6 +661,35 @@ async def test_add_merge_request_labels_invalid_url():
     with pytest.raises(Exception) as exc_info:
         await AddMergeRequestLabelsTool().run(
             input={"merge_request_url": merge_request_url, "labels": labels}
+        )
+
+    assert "Could not parse merge request URL" in str(exc_info.value.__cause__)
+
+
+@pytest.mark.asyncio
+async def test_close_merge_request():
+    merge_request_url = "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123"
+
+    mr_mock = flexmock()
+    mr_mock.should_receive("close").once()
+
+    project_mock = flexmock()
+    project_mock.should_receive("get_pr").and_return(mr_mock)
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url="https://gitlab.com/redhat/rhel/rpms/bash"
+    ).and_return(project_mock)
+
+    result = (await CloseMergeRequestTool().run(input={"merge_request_url": merge_request_url})).result
+
+    assert result == f"Successfully closed merge request {merge_request_url}"
+
+
+@pytest.mark.asyncio
+async def test_close_merge_request_invalid_url():
+    with pytest.raises(Exception) as exc_info:
+        await CloseMergeRequestTool().run(
+            input={"merge_request_url": "https://github.com/user/repo/pull/123"}
         )
 
     assert "Could not parse merge request URL" in str(exc_info.value.__cause__)

@@ -3,8 +3,9 @@
 
 This module owns the deployment flow: selecting the previous deployment
 reference, reviewing upstream source commits and local deployment configuration,
-invoking the OpenShift apply script, creating the immutable deployment tag after
-a successful deployment, and then extracting release notes.
+collecting release notes, invoking the OpenShift apply script, creating the
+immutable deployment tag after a successful deployment, and printing a
+copy-ready News entry.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, TypedDict
 from urllib.error import HTTPError, URLError
@@ -27,6 +28,7 @@ GITHUB_API_URL = "https://api.github.com"
 GITHUB_API_TIMEOUT = 10
 BUILD_WORKFLOW_FILE = "build-and-push.yml"
 BUILD_JOB_PREFIX = "build-and-push-"
+NEWS_PAGE_DESTINATION = "<path-to-ymir.pages.redhat.com>/content/news/_index.md"
 RELEASE_NOTES_RE = re.compile(
     r"(?ms)^[ \t]*RELEASE NOTES BEGIN[ \t]*\r?\n"
     r"(?P<notes>.*?)\r?\n^[ \t]*RELEASE NOTES END[ \t]*\r?$"
@@ -49,7 +51,7 @@ class DeploymentContext(TypedDict):
 
 
 class ReleaseNotesPullRequest(TypedDict):
-    """The PR fields retained for the generated changelog."""
+    """The PR fields used to render the generated changelog."""
 
     number: int
     url: str
@@ -461,39 +463,73 @@ def collect_release_notes(
     return prs, missing_notes, commits_without_prs
 
 
-def format_changelog(base_label: str, prs: list[ReleaseNotesPullRequest], missing_notes: list[int]) -> str:
-    lines = [f"Changes since `{base_label}`:"]
-    if prs:
-        for pr in prs:
-            notes_lines = pr["notes"].splitlines()
-            first_line = f"- {notes_lines[0]} ([#{pr['number']}]({pr['url']}))"
-            lines.append(first_line)
-            lines.extend(f"  {line}" for line in notes_lines[1:])
-    else:
-        lines.append("- No user-facing release notes found.")
+def format_release_note_bullets(prs: list[ReleaseNotesPullRequest]) -> list[str]:
+    lines: list[str] = []
+    for pr in prs:
+        notes_lines = pr["notes"].splitlines()
+        lines.append(f"- {notes_lines[0]} ([#{pr['number']}]({pr['url']}))")
+        lines.extend(f"  {line}" for line in notes_lines[1:])
+    return lines
 
-    if missing_notes:
-        lines.extend(
-            [
-                "",
-                "PRs without a usable release-notes section: "
-                + ", ".join(f"#{number}" for number in missing_notes),
-            ]
-        )
+
+def format_missing_notes_diagnostic(missing_notes: list[int]) -> str | None:
+    if not missing_notes:
+        return None
+    return "PRs without a usable release-notes section: " + ", ".join(
+        f"#{number}" for number in missing_notes
+    )
+
+
+def format_changelog(
+    base_label: str,
+    prs: list[ReleaseNotesPullRequest],
+    missing_notes: list[int],
+) -> str:
+    lines = [f"Changes since `{base_label}`:"]
+    lines.extend(format_release_note_bullets(prs) or ["- No user-facing release notes found."])
+
+    missing_notes_diagnostic = format_missing_notes_diagnostic(missing_notes)
+    if missing_notes_diagnostic:
+        lines.extend(["", missing_notes_diagnostic])
     return "\n".join(lines)
 
 
-def collect_deployment_changelog(
-    repo: Path, base_label: str, base: str, source_head: str
-) -> tuple[str, list[str]]:
+def format_news_entry(
+    tag: str,
+    base_label: str,
+    prs: list[ReleaseNotesPullRequest],
+    deployment_date: date,
+) -> str:
+    lines = [
+        f"<!-- ymir-deployment: {tag}; previous: {base_label} -->",
+        f"## {deployment_date.isoformat()}",
+        "",
+    ]
+    lines.extend(format_release_note_bullets(prs))
+    return "\n".join(lines)
+
+
+def collect_deployment_release_notes(
+    repo: Path, base: str, source_head: str
+) -> tuple[list[ReleaseNotesPullRequest], list[int], list[str]] | None:
     try:
-        prs, missing_notes, commits_without_prs = collect_release_notes(repo, base, source_head)
+        return collect_release_notes(repo, base, source_head)
     except ReleaseError as error:
         print(
             f"Warning: release-note collection failed; continuing without changelog: {error}",
             file=sys.stderr,
         )
+        return None
+
+
+def collect_deployment_changelog(
+    repo: Path, base_label: str, base: str, source_head: str
+) -> tuple[str, list[str]]:
+    release_notes = collect_deployment_release_notes(repo, base, source_head)
+    if release_notes is None:
         return f"Changes since `{base_label}`:\n- Release notes unavailable.", []
+
+    prs, missing_notes, commits_without_prs = release_notes
     return format_changelog(base_label, prs, missing_notes), commits_without_prs
 
 
@@ -667,20 +703,33 @@ def finalize(context: DeploymentContext, remote: str) -> None:
 
 
 def print_deployment_changelog(context: DeploymentContext) -> None:
+    deployment_date = datetime.now(UTC).date()
     print("\nCollecting release notes from GitHub...")
-    changelog, commits_without_prs = collect_deployment_changelog(
-        context["repo"],
-        context["base_label"],
-        context["base"],
-        context["source_head"],
-    )
+    release_notes = collect_deployment_release_notes(context["repo"], context["base"], context["source_head"])
+    if release_notes is None:
+        print("\nChangelog:")
+        print(f"Changes since `{context['base_label']}`:\n- Release notes unavailable.")
+        print("\nNo News entry was generated because release-note lookup failed.")
+        return
+
+    prs, missing_notes, commits_without_prs = release_notes
     if commits_without_prs:
         print(
             "Warning: no associated PR was found for commits: " + ", ".join(commits_without_prs),
             file=sys.stderr,
         )
-    print("\nChangelog:")
-    print(changelog)
+
+    if prs:
+        news_entry = format_news_entry(context["tag"], context["base_label"], prs, deployment_date)
+        print(f"\nNews page entry (copy into {NEWS_PAGE_DESTINATION}):")
+        print(news_entry)
+        diagnostics = format_missing_notes_diagnostic(missing_notes)
+        if diagnostics:
+            print(f"\nDiagnostic only (do not copy into News):\n{diagnostics}")
+    else:
+        print("\nChangelog:")
+        print(format_changelog(context["base_label"], prs, missing_notes))
+        print("\nNo News entry to copy: no user-facing PR notes were found in this deployment.")
 
 
 def deploy(dry_run: bool, remote: str) -> None:

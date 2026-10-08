@@ -772,7 +772,7 @@ def _build_mr_description(result: OutputSchema, input_data: InputSchema) -> str:
         f"- `main.fmf` — FMF metadata\n"
         f"- `test_*` — standalone reproducer script(s)\n\n"
         f"Resolves: {result.jira_issue}\n\n"
-        f"{mr_description_footer(result.package)}"
+        f"{mr_description_footer(result.package, input_data.jira_issue)}"
     )
 
 

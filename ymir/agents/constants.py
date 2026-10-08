@@ -37,6 +37,14 @@ def trace_viewer_issue_url(jira_issue: str) -> str | None:
     return f"{viewer_url}/#/issues/{encoded_issue}"
 
 
+def trace_viewer_run_url(trace_id: str) -> str | None:
+    """Link to a specific trace, including runs with no associated Jira issue."""
+    viewer_url = os.getenv("TRACE_VIEWER_URL")
+    if not viewer_url:
+        return None
+    return f"{viewer_url.rstrip('/')}/#/trace/_/{trace_id}"
+
+
 I_AM_YMIR = "by Ymir, a Red Hat Enterprise Linux software maintenance AI agent."
 
 # Captures a Jira resolution footer while retaining optional changelog-style
@@ -98,9 +106,24 @@ def format_zstream_branch_note(note: str | None, warning: str | None = None) -> 
     return result
 
 
-def mr_description_footer(package: str) -> str:
+def mr_description_footer(
+    package: str,
+    jira_issues: str | list[str] | None = None,
+    *,
+    trace_url: str | None = None,
+) -> str:
+    """Build the shared MR footer, with optional run and issue trace links."""
+    issues = [jira_issues] if isinstance(jira_issues, str) else jira_issues or []
+    trace_links = [
+        f"- [View all traces for {issue}]({url})"
+        for issue in dict.fromkeys(issues)
+        if issue and (url := trace_viewer_issue_url(issue))
+    ]
+    if trace_url:
+        trace_links.insert(0, f"- [View this run's trace]({trace_url})")
+    traces = "## Execution traces\n\n" + "\n".join(trace_links) + "\n\n" if trace_links else ""
     return (
-        "---\n"  # noqa: S608
+        traces + "---\n"  # noqa: S608
         "\n"
         "> **⚠️ AI-Generated MR**: Created by Ymir AI assistant. AI may make mistakes, "
         "select incorrect patches, or miss dependencies. **Carefully review the changes. "

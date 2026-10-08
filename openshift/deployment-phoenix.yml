@@ -50,7 +50,7 @@ spec:
               name: phoenix-db-env
               key: POSTGRESQL_DATABASE
         - name: PHOENIX_SQL_DATABASE_URL
-          value: postgresql://$(PHOENIX_POSTGRES_USER):$(PHOENIX_POSTGRES_PASSWORD)@phoenix-db/$(PHOENIX_POSTGRES_DB)?sslmode=verify-full&sslrootcert=/etc/pki/service-ca/service-ca.crt
+          value: postgresql://$(PHOENIX_POSTGRES_USER):$(PHOENIX_POSTGRES_PASSWORD)@phoenix-db.jotnar-ymir--jotnar-ymir.svc/$(PHOENIX_POSTGRES_DB)?sslmode=verify-full&sslrootcert=/etc/pki/service-ca/service-ca.crt
         - name: PHOENIX_MIGRATE_INDEX_CONCURRENTLY
           value: "true"
         image: phoenix:prod

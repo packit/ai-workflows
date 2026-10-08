@@ -978,7 +978,11 @@ def main():
 
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(TLS_CERT_FILE, TLS_KEY_FILE)
-        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+        server.socket = ctx.wrap_socket(
+            server.socket,
+            server_side=True,
+            do_handshake_on_connect=False,
+        )
         logger.info("Trace server listening on port %d (TLS), db: %s", PORT, DB_PATH)
     else:
         logger.info("Trace server listening on port %d, db: %s", PORT, DB_PATH)

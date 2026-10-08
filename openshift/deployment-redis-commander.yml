@@ -39,7 +39,7 @@ spec:
       containers:
       - env:
         - name: REDIS_HOST
-          value: valkey
+          value: valkey.jotnar-ymir--jotnar-ymir.svc
         - name: REDIS_PORT
           value: "6379"
         - name: REDIS_TLS

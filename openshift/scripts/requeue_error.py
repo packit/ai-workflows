@@ -56,7 +56,22 @@ def run_valkey_cli(deployment: str, args: list[str], stdin: bytes | None = None)
     # record (traceback, metadata), and the caller already prints a safe,
     # human-level summary of what's about to happen before invoking this.
     exec_flags = ["-i"] if stdin is not None else []
-    cmd = ["oc", "exec", *exec_flags, f"deployment/{deployment}", "--", "valkey-cli", *args]
+    cmd = [
+        "oc",
+        "exec",
+        *exec_flags,
+        f"deployment/{deployment}",
+        "--",
+        "valkey-cli",
+        "--tls",
+        "--cert",
+        "/tls/tls.crt",
+        "--key",
+        "/tls/tls.key",
+        "--cacert",
+        "/etc/pki/service-ca/service-ca.crt",
+        *args,
+    ]
     try:
         proc = subprocess.run(cmd, input=stdin, capture_output=True, timeout=60)  # noqa: S603
     except OSError as e:

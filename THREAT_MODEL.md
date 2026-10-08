@@ -55,6 +55,14 @@ Security-relevant assumptions this system makes about its environment:
   Within that whitelist, though, the model has genuine autonomous
   authority to trigger real credentialed actions, so injected content
   can still steer those specific calls (see T2).
+- **Internal TLS uses the OpenShift service-ca operator as the sole
+  trust anchor.** All intra-namespace TLS connections (Valkey, PostgreSQL,
+  trace-server) validate certificates against the service-ca-injected CA
+  bundle. Agent, API, and CronJob pods mount this bundle at
+  `/etc/pki/service-ca/` from a `service-ca-bundle` ConfigMap annotated
+  with `service.beta.openshift.io/inject-cabundle: "true"`. A compromise
+  or misconfiguration of the service-ca operator would break all internal
+  TLS trust.
 
 ## 2. Assets
 

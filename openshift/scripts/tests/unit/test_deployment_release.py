@@ -358,11 +358,11 @@ def test_print_deployment_changelog_uses_baseline_commit(monkeypatch):
     base = "a" * 40
     source_head = "b" * 40
 
-    def fake_collect(repo, received_label, received_base, received_head):
-        calls.append((repo, received_label, received_base, received_head))
-        return "Changes since the previous deployment:", []
+    def fake_collect(repo, received_base, received_head):
+        calls.append((repo, received_base, received_head))
+        return [], [], []
 
-    monkeypatch.setattr(deployment_release, "collect_deployment_changelog", fake_collect)
+    monkeypatch.setattr(deployment_release, "collect_deployment_release_notes", fake_collect)
 
     deployment_release.print_deployment_changelog(
         {
@@ -376,7 +376,7 @@ def test_print_deployment_changelog_uses_baseline_commit(monkeypatch):
         }
     )
 
-    assert calls == [(Path("."), base_label, base, source_head)]
+    assert calls == [(Path("."), base, source_head)]
 
 
 def test_deploy_runs_openshift_finalization_before_changelog(monkeypatch):

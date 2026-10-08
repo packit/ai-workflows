@@ -149,9 +149,10 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   from either the repository root or `openshift/`. It reviews the changes,
   asks for confirmation, applies the local manifests, pushes a
   `deployed/<timestamp>` tag for the captured `upstream/main` commit, and
-  prints the changelog. Before confirmation, all `build-and-push-*` jobs in the
-  `build-and-push` workflow for that commit must have succeeded. Release-note
-  lookup failures warn after deployment.
+  prints the user-facing changes as a copy-ready News entry. Before
+  confirmation, all `build-and-push-*` jobs in the `build-and-push` workflow
+  for that commit must have succeeded. Release-note lookup failures warn and do
+  not block the deployment.
   Answering `N` cancels without changing OpenShift or creating a tag.
 
   `make deploy` uses the `upstream` remote by default. To use another configured
@@ -160,6 +161,10 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   ```bash
   make deploy REMOTE=origin
   ```
+
+  The copy-ready News entry includes a placeholder for the website checkout
+  path. Replace it with the local path to
+  `ymir.pages.redhat.com/content/news/_index.md` when copying the entry.
 
   To review without deploying or creating a tag, use the Python CLI directly.
   The examples below assume the repository root; from `openshift/`, use
@@ -204,6 +209,11 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   ```bash
   make changelog REMOTE=origin CHANGELOG_BASE="deployed/<timestamp>"
   ```
+
+  After a successful deployment, follow the [change management
+  process](../docs/change_management.md) to add its user-facing notes to
+  the News page, share major changes in Slack, and prepare the monthly
+  mailing-list digest.
 
 ### DNS CNAME route (ymir.redhat.com)
 

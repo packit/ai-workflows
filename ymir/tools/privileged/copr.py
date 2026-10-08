@@ -19,7 +19,7 @@ from beeai_framework.tools import (
 )
 from copr.v3 import BuildProxy, ProjectChrootProxy, ProjectProxy
 from copr.v3.exceptions import CoprException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ymir.common import load_rhel_config
 from ymir.common.base_utils import init_kerberos_ticket
@@ -85,6 +85,21 @@ async def _copr_api_call(func, *args, **kwargs):
 
 
 class BuildPackageToolInput(BaseModel):
+    """Copr build inputs.
+
+    ``extra='allow'`` so the Konflux-only fields in the shared BuildInputSchema
+    (git_url, revision, package_name, target_branch) are tolerated when
+    build_agent dumps the whole model for either backend. This must be ``allow``
+    rather than ``ignore``: only ``allow`` makes Pydantic emit
+    ``additionalProperties: true`` in the advertised JSON schema, and beeai's MCP
+    client rebuilds the tool's input model from that schema with ``extra='forbid'``
+    unless ``additionalProperties`` is truthy. With ``ignore`` the extra Konflux
+    fields would be rejected client-side as "Tool input validation error" before
+    the build ever reaches the gateway.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
     srpm_path: AbsolutePath = Field(description="Absolute path to SRPM (*.src.rpm) file to build")
     dist_git_branch: str = Field(description="dist-git branch")
     jira_issue: str = Field(description="Jira issue key (e.g. RHEL-12345)")

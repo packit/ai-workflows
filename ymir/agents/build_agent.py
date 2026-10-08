@@ -97,7 +97,7 @@ async def run_build(
 
         state.output = BuildOutputSchema(
             success=False,
-            error=result.error_message or "Copr build failed without an error message",
+            error=result.error_message or "Build failed without an error message",
             is_timeout=result.is_timeout,
         )
         if result.is_timeout:

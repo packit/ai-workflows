@@ -119,3 +119,10 @@ async def test_middleware_ignores_dry_run_reservation_id():
         flexmock(),
     )
     assert mw._reserved == set()
+
+
+def test_active_reservations_excludes_cancelled():
+    mw = TFReservationCleanupMiddleware()
+    mw._reserved.update({"req-a", "req-b"})
+    mw._cancelled.add("req-a")
+    assert mw.active_reservations == {"req-b"}

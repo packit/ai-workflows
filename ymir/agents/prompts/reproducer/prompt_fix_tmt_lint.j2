@@ -1,0 +1,32 @@
+You previously created or adapted a reproducer test for {{ jira_issue }} (package {{ package }}). The workflow ran a deterministic `tmt lint` check on the test metadata and it **failed**. Fix the FMF/TMT metadata so lint passes, then return updated output. Do NOT redesign the reproducer from scratch unless the lint errors prove the metadata cannot be repaired.
+
+**Working paths**
+- Tests clone: `{{ tests_clone_path }}`
+- Test directory (relative to clone): `{{ test_directory }}`
+{% if testing_farm_request_id %}
+- Testing Farm reservation still active: `{{ testing_farm_request_id }}`
+  Call `get_testing_farm_reservation_details` with that request ID to recover `ssh_connection`. Prefer reusing this machine; only reserve a new one if the reservation is gone or SSH is unavailable.
+{% else %}
+- No active Testing Farm reservation was left for you. Reserve a new machine only if you must re-verify the test on a real host after the metadata fix.
+{% endif %}
+{% if dry_run %}
+Dry run mode is enabled — do NOT create merge requests.
+{% endif %}
+
+**tmt lint failure output**
+
+```
+{{ tmt_lint_error }}
+```
+
+**Critical Rules**
+- NEVER use direct `git clone` commands. Use `clone_repository` if you must re-clone.
+- Do NOT perform root cause analysis of the original bug. Only fix lint/metadata (and re-verify on TF if the harness or scripts must change as a result).
+- Do NOT call `cancel_testing_farm_request` yourself. The workflow cancels all Testing Farm reservations programmatically after you return your output.
+
+**Required work**
+1. Inspect `{{ tests_clone_path }}/{{ test_directory }}/` (especially `main.fmf` and related `.fmf` files). Fix every issue reported by `tmt lint`.
+2. If scripts must change to satisfy metadata (e.g. `test:` path, `require:`, framework), update them and re-copy / re-run on TF if a machine is available.
+3. Produce the same final JSON output schema as a normal reproducer run. Keep `test_directory` accurate. Set `success=true` only when the metadata is fixed and ready for the workflow to re-run `tmt lint`.
+
+Do NOT open a merge request yourself. Do NOT post a Jira comment yourself.

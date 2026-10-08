@@ -49,6 +49,18 @@ def _output(**overrides) -> ReproducerOutputSchema:
     return ReproducerOutputSchema(**data)
 
 
+@pytest.mark.parametrize("result_issue", ["RHEL-12345", "RHEL-99999"])
+def test_reproducer_description_links_to_input_issue_traces(monkeypatch, result_issue):
+    monkeypatch.setenv("TRACE_VIEWER_URL", "https://trace.example")
+    result = _output(jira_issue=result_issue)
+    input_data = ReproducerInputSchema(jira_issue="RHEL-12345", package=result.package)
+
+    description = r_agent._build_mr_description(result, input_data)
+
+    assert "[View all traces for RHEL-12345](https://trace.example/#/issues/RHEL-12345)" in description
+    assert "https://trace.example/#/issues/RHEL-99999" not in description
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected_label", "expected_resolution"),
     [

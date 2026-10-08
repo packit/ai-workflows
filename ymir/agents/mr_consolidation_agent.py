@@ -17,6 +17,7 @@ from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
 from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
+from opentelemetry import trace as trace_api
 from pydantic import Field
 from specfile import Specfile
 
@@ -29,6 +30,7 @@ from ymir.agents.constants import (
     format_zstream_branch_note,
     mr_description_footer,
     strip_resolves_from_mr_text,
+    trace_viewer_run_url,
 )
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
@@ -1488,6 +1490,7 @@ async def run_workflow(
                 cves=state.cves_collected,
                 has_rebuild=has_rebuild,
                 branch_warning=state.zstream_branch_warning,
+                trace_url=trace_url,
             )
             if has_rebuild:
                 title = f"[Consolidated] Backport + rebuild fixes for {package} ({dist_git_branch})"
@@ -1687,56 +1690,20 @@ async def run_workflow(
             # are fetched — do not seed from branch metadata.
 
         try:
-            response = await workflow.run(initial_state)
+            # BeeAI emits its workflow spans at completion. Start a parent span
+            # now so the MR can link to this run before those spans are exported.
+            tracer = trace_api.get_tracer(__name__)
+            with tracer.start_as_current_span("MRConsolidationJobWorkflow") as span:
+                trace_url = (
+                    trace_viewer_run_url(trace_api.format_trace_id(span.get_span_context().trace_id))
+                    if span.is_recording()
+                    else None
+                )
+                response = await workflow.run(initial_state)
             return response.state
         finally:
             if builddir := local_tool_options.get("builddir"):
                 shutil.rmtree(builddir, ignore_errors=True)
-
-
-_CONSOLIDATED_MARKER = "## Consolidated Backport MR"
-_SOURCE_MR_HEADER = re.compile(r"^####\s+MR\s+\d+:\s+(.+)$", re.MULTILINE)
-
-
-def _extract_sub_mrs(
-    title: str,
-    description: str,
-    url: str | None,
-) -> list[dict[str, str | None]]:
-    """If a source MR is itself a consolidation, extract its sub-MRs.
-
-    Returns a flat list of ``{title, description, url}`` dicts.
-    Non-consolidated MRs are returned as a single-element list.
-    """
-    if _CONSOLIDATED_MARKER not in (description or ""):
-        return [{"title": title, "description": description, "url": url}]
-
-    sub_mrs: list[dict[str, str | None]] = []
-    for header_match in _SOURCE_MR_HEADER.finditer(description):
-        sub_title = header_match.group(1).strip()
-        sub_url: str | None = None
-        link_match = re.match(r"\[(.+?)]\((.+?)\)", sub_title)
-        if link_match:
-            sub_title = link_match.group(1)
-            sub_url = link_match.group(2)
-
-        sub_desc = None
-        details_start = description.find("<details>", header_match.end())
-        if details_start != -1:
-            details_end = description.find("</details>", details_start)
-            if details_end != -1:
-                inner = description[details_start : details_end + len("</details>")]
-                content_match = re.search(
-                    r"<summary>.*?</summary>\s*(.+)",
-                    inner,
-                    re.DOTALL,
-                )
-                if content_match:
-                    sub_desc = content_match.group(1).strip()
-
-        sub_mrs.append({"title": sub_title, "description": sub_desc, "url": sub_url})
-
-    return sub_mrs if sub_mrs else [{"title": title, "description": description, "url": url}]
 
 
 def _build_consolidated_description(
@@ -1748,19 +1715,13 @@ def _build_consolidated_description(
     cves: list[str] | None = None,
     has_rebuild: bool = False,
     branch_warning: str | None = None,
+    trace_url: str | None = None,
 ) -> str:
     """Build the description for the consolidated MR.
 
-    When a source MR is itself a consolidation MR, its sub-MRs are
-    flattened into the top-level list so each original backport is
-    listed separately.
+    Preserve each source description inside a collapsed block, including
+    earlier consolidations and their own trace links and nested source MRs.
     """
-    all_sub_mrs: list[dict[str, str | None]] = []
-    for i, title in enumerate(mr_titles):
-        url = mr_urls[i] if i < len(mr_urls) else None
-        desc = mr_descriptions[i] if i < len(mr_descriptions) else None
-        all_sub_mrs.extend(_extract_sub_mrs(title, desc or "", url))
-
     if has_rebuild:
         header = "## Consolidated Backport + Rebuild MR\n"
         intro = (
@@ -1792,17 +1753,19 @@ def _build_consolidated_description(
         parts.append("")
 
     parts.append("### Source Merge Requests\n")
-    for i, sub in enumerate(all_sub_mrs, 1):
-        if sub["url"]:
-            parts.append(f"#### MR {i}: [{sub['title']}]({sub['url']})\n")
+    for i, title in enumerate(mr_titles):
+        url = mr_urls[i] if i < len(mr_urls) else None
+        description = mr_descriptions[i] if i < len(mr_descriptions) else None
+        if url:
+            parts.append(f"#### MR {i + 1}: [{title}]({url})\n")
         else:
-            parts.append(f"#### MR {i}: {sub['title']}\n")
-        if sub["description"]:
-            sanitized = strip_resolves_from_mr_text(sub["description"])
+            parts.append(f"#### MR {i + 1}: {title}\n")
+        if description:
+            sanitized = strip_resolves_from_mr_text(description)
             if sanitized:
                 parts.append(f"<details><summary>Original description</summary>\n\n{sanitized}\n</details>\n")
 
-    parts.append(mr_description_footer(package))
+    parts.append(mr_description_footer(package, trace_url=trace_url))
     return "\n".join(parts)
 
 

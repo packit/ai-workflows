@@ -1,8 +1,15 @@
 """Unit tests for MR Jira link helpers and issue extraction."""
 
+import re
+from html.parser import HTMLParser
+
 import pytest
 
-from ymir.agents.constants import format_jira_links_for_mr, strip_resolves_from_mr_text
+from ymir.agents.constants import (
+    format_jira_links_for_mr,
+    mr_description_footer,
+    strip_resolves_from_mr_text,
+)
 from ymir.agents.merge_request_agent import extract_jira_issue
 from ymir.agents.mr_consolidation_agent import _build_consolidated_description
 
@@ -125,3 +132,85 @@ def test_consolidated_description_strips_resolves_from_embedded_sources():
     assert "[RHEL-159051](https://redhat.atlassian.net/browse/RHEL-159051)" in desc
     assert "[RHEL-159075](https://redhat.atlassian.net/browse/RHEL-159075)" in desc
     assert "Backport fix." in desc
+
+
+class DescriptionParser(HTMLParser):
+    """Track which trace links require expanding original descriptions."""
+
+    def __init__(self):
+        super().__init__()
+        self.depth = 0
+        self.links = {}
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "details":
+            assert "open" not in dict(attrs)
+            self.depth += 1
+
+    def handle_endtag(self, tag):
+        if tag == "details":
+            self.depth -= 1
+            assert self.depth >= 0
+
+    def handle_data(self, data):
+        for url in re.findall(r"https://trace\.example/[^\s)]+", data):
+            self.links[url] = self.depth
+
+
+@pytest.mark.parametrize("has_rebuild", [False, True])
+def test_consolidated_description_preserves_nested_trace_links(monkeypatch, has_rebuild):
+    monkeypatch.setenv("TRACE_VIEWER_URL", "https://trace.example")
+    source = (
+        "<details>\n<summary>Triage Details</summary>\n\nReasoning\n\n</details>\n\n"
+        "<details>\n<summary>Backporting steps</summary>\n\nApplied fix\n\n</details>\n\n"
+        + mr_description_footer("bash", "RHEL-1")
+    )
+    earlier_trace = "https://trace.example/#/trace/_/" + "a" * 32
+    current_trace = "https://trace.example/#/trace/_/" + "b" * 32
+    earlier = _build_consolidated_description(
+        ["Original backport"],
+        [source],
+        ["https://gitlab.example/mr/1"],
+        ["RHEL-1"],
+        "bash",
+        has_rebuild=has_rebuild,
+        trace_url=earlier_trace,
+    )
+    description = _build_consolidated_description(
+        ["Earlier consolidation", "Another backport"],
+        [earlier, mr_description_footer("bash", "RHEL-2")],
+        ["https://gitlab.example/mr/2", "https://gitlab.example/mr/3"],
+        ["RHEL-1", "RHEL-2"],
+        "bash",
+        trace_url=current_trace,
+    )
+
+    assert strip_resolves_from_mr_text(earlier) in description
+    assert strip_resolves_from_mr_text(source) in description
+    parser = DescriptionParser()
+    parser.feed(description)
+    assert parser.depth == 0
+    assert parser.links == {
+        current_trace: 0,
+        earlier_trace: 1,
+        "https://trace.example/#/issues/RHEL-1": 2,
+        "https://trace.example/#/issues/RHEL-2": 1,
+    }
+    assert extract_jira_issue(description) == "RHEL-1"
+
+
+def test_consolidated_description_links_run_without_jira_footers():
+    trace_url = "https://trace.example/#/trace/_/" + "a" * 32
+    description = _build_consolidated_description(
+        ["A", "B"],
+        ["First fix", "Second fix"],
+        [],
+        [],
+        "bash",
+        trace_url=trace_url,
+    )
+
+    assert f"[View this run's trace]({trace_url})" in description
+    assert "Resolved Jira Issues" not in description
+    assert "First fix" in description
+    assert "Second fix" in description

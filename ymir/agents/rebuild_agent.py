@@ -334,7 +334,7 @@ async def main() -> None:
                             f"{triage_details_text}"
                             f"{consolidation_text}"
                             f"\n\n{branch_note}"
-                            f"{mr_description_footer(state.package)}"
+                            f"{mr_description_footer(state.package, all_issues)}"
                         ),
                         available_tools=gateway_tools,
                         commit_only=dry_run,

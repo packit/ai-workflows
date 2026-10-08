@@ -6,6 +6,7 @@ from flexmock import flexmock
 
 from ymir.common.base_utils import (
     _race_shutdown,
+    find_spec,
     install_shutdown_handler,
     is_cs_branch,
     is_modular_branch,
@@ -445,3 +446,57 @@ def test_is_modular_branch(branch, expected):
 )
 def test_resolve_dist_git_namespace(branch, namespace, expected):
     assert resolve_dist_git_namespace(branch, namespace) == expected
+
+
+MINIMAL_SPEC = """\
+Name: {name}
+Version: 1.0.0
+Release: 1%{{?dist}}
+Summary: Test package
+License: MIT
+
+%description
+Test
+
+%changelog
+* Mon Jan 01 2024 Test User <test@test.com> - 1.0.0-1
+- Initial build
+"""
+
+
+class TestFindSpec:
+    def test_canonical_name_matches_package(self, tmp_path):
+        (tmp_path / "openexr.spec").write_text(MINIMAL_SPEC.format(name="openexr"))
+        assert find_spec(tmp_path, "openexr") == "openexr.spec"
+
+    def test_mismatched_spec_name_falls_back_to_single_spec(self, tmp_path):
+        """Real-world case: repo is 'openexr' but spec is 'OpenEXR.spec' with Name: OpenEXR."""
+        (tmp_path / "OpenEXR.spec").write_text(MINIMAL_SPEC.format(name="OpenEXR"))
+        assert find_spec(tmp_path, "openexr") == "OpenEXR.spec"
+
+    def test_canonical_name_preferred_over_other_specs(self, tmp_path):
+        (tmp_path / "openexr.spec").write_text(MINIMAL_SPEC.format(name="openexr"))
+        (tmp_path / "OpenEXR.spec").write_text(MINIMAL_SPEC.format(name="OpenEXR"))
+        assert find_spec(tmp_path, "openexr") == "openexr.spec"
+
+    def test_no_spec_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError, match=r"No \.spec file found"):
+            find_spec(tmp_path, "openexr")
+
+    def test_multiple_non_canonical_specs_raises(self, tmp_path):
+        (tmp_path / "A.spec").write_text(MINIMAL_SPEC.format(name="A"))
+        (tmp_path / "B.spec").write_text(MINIMAL_SPEC.format(name="B"))
+        with pytest.raises(FileNotFoundError, match=r"Multiple \.spec files"):
+            find_spec(tmp_path, "openexr")
+
+    def test_specfile_can_parse_discovered_mismatched_spec(self, tmp_path):
+        """Verify the spec file returned by find_spec is actually usable by Specfile."""
+        from specfile import Specfile
+
+        (tmp_path / "OpenEXR.spec").write_text(MINIMAL_SPEC.format(name="OpenEXR"))
+        spec_name = find_spec(tmp_path, "openexr")
+        with Specfile(tmp_path / spec_name) as spec:
+            assert spec.name == "OpenEXR"
+            assert spec.version == "1.0.0"
+            with spec.changelog() as changelog:
+                assert len(changelog) == 1

@@ -174,7 +174,7 @@ class ConsolidationState(PackageUpdateState):
 
 def _files_to_stage_for_patches(
     local_clone: Path,
-    package: str,
+    spec_name: str,
     original_patches: list[str] | None = None,
 ) -> list[str]:
     """Return paths to stage after patch adaptation.
@@ -183,7 +183,6 @@ def _files_to_stage_for_patches(
     ``original_patches`` so renames/deletes of pre-adaptation filenames are
     staged. Raises if the spec references a patch file that is missing on disk.
     """
-    spec_name = f"{package}.spec"
     with Specfile(local_clone / spec_name) as spec:
         patch_files = [p.location for p in get_all_patches(spec) if p.location]
     missing = [p for p in patch_files if not (local_clone / p).is_file()]
@@ -542,6 +541,7 @@ async def run_workflow(
                 agent_type="MRConsolidation",
             )
             local_tool_options["working_directory"] = state.local_clone
+            state.spec_name = tasks.find_spec(state.local_clone, package)
 
             await run_tool(
                 "download_sources",
@@ -894,7 +894,7 @@ async def run_workflow(
             3. Build SRPM for Copr verification.
             """
             git_env = local_tool_options.get("env")
-            spec_name = f"{package}.spec"
+            spec_name = state.spec_name
 
             try:
                 base_branch, other_branches = await _choose_base_branch(
@@ -979,7 +979,7 @@ async def run_workflow(
                             env=git_env,
                         )
                         await check_subprocess(
-                            ["git", "checkout", "HEAD", "--", f"{package}.spec"],
+                            ["git", "checkout", "HEAD", "--", state.spec_name],
                             cwd=state.local_clone,
                             env=git_env,
                         )
@@ -1023,7 +1023,7 @@ async def run_workflow(
                                     f"{commit_sha}^",
                                     commit_sha,
                                     "--",
-                                    f"{package}.spec",
+                                    state.spec_name,
                                 ],
                                 cwd=state.local_clone,
                                 env=git_env,
@@ -1061,7 +1061,7 @@ async def run_workflow(
 
                         files_to_stage = _files_to_stage_for_patches(
                             state.local_clone,
-                            package,
+                            spec_name,
                             original_patches=state.patches_per_mr.get(other_branch, []),
                         )
                         logger.info("Staging files: %s", files_to_stage)
@@ -1163,7 +1163,7 @@ async def run_workflow(
             changelog.
             """
             git_env = local_tool_options.get("env")
-            spec_name = f"{package}.spec"
+            spec_name = state.spec_name
 
             try:
                 # The backport branch is always the base
@@ -1361,7 +1361,7 @@ async def run_workflow(
 
         async def stage_changes(state):
             try:
-                files_to_stage = _files_to_stage_for_patches(state.local_clone, package)
+                files_to_stage = _files_to_stage_for_patches(state.local_clone, state.spec_name)
                 logger.info("Staging files: %s", files_to_stage)
                 await tasks.stage_changes(
                     local_clone=state.local_clone,

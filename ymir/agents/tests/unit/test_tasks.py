@@ -549,6 +549,9 @@ def test_canonical_changelog_title_replaces_only_new_entry(tmp_path):
         def changelog(self):
             return changelog
 
+    flexmock(agent_tasks).should_receive("find_spec").with_args(tmp_path, "curl").and_return(
+        "curl.spec"
+    ).once()
     flexmock(agent_tasks).should_receive("Specfile").and_return(FakeSpecfile()).once()
     ensure_canonical_changelog_title(tmp_path, "curl", "Canonical title", expected_entry_count=1)
 
@@ -582,6 +585,9 @@ def test_canonical_changelog_title_escapes_rpm_macro_syntax(tmp_path):
         def changelog(self):
             return changelog
 
+    flexmock(agent_tasks).should_receive("find_spec").with_args(tmp_path, "curl").and_return(
+        "curl.spec"
+    ).once()
     flexmock(agent_tasks).should_receive("Specfile").and_return(FakeSpecfile()).once()
     ensure_canonical_changelog_title(tmp_path, "curl", "%{__python} --version", expected_entry_count=1)
 

@@ -469,8 +469,9 @@ async def discover_resolved_sibling_candidates(
 
 async def _read_commit_changelog(local_clone: Path, commit_sha: str, package: str) -> str | None:
     try:
+        # find_spec uses the current tree; may fail if the spec was renamed since this commit
         content, _ = await check_subprocess(
-            ["git", "-C", str(local_clone), "show", f"{commit_sha}:{package}.spec"],
+            ["git", "-C", str(local_clone), "show", f"{commit_sha}:{tasks.find_spec(local_clone, package)}"],
         )
         spec = Specfile(content=content, sourcedir=local_clone)
         with spec.changelog() as changelog:
@@ -607,8 +608,15 @@ async def extract_source_changelog(
             continue
 
         try:
+            # find_spec uses the current tree; may fail if the spec was renamed since this commit
             stdout, _ = await check_subprocess(
-                ["git", "-C", str(upstream_clone), "show", f"{commit_hash}:{package}.spec"],
+                [
+                    "git",
+                    "-C",
+                    str(upstream_clone),
+                    "show",
+                    f"{commit_hash}:{tasks.find_spec(upstream_clone, package)}",
+                ],
             )
         except Exception:
             logger.debug(f"Could not read spec from {commit_hash} in {upstream_clone}")
@@ -939,6 +947,7 @@ async def run_workflow(
                 dist_git_namespace=state.dist_git_namespace,
             )
             local_tool_options["working_directory"] = state.local_clone
+            state.spec_name = tasks.find_spec(state.local_clone, state.package)
             state.inherit_saved_head, _ = await check_subprocess(
                 ["git", "rev-parse", "HEAD"],
                 cwd=state.local_clone,
@@ -1068,7 +1077,7 @@ async def run_workflow(
                     state.package,
                 )
                 if not spec_matches_brew_version(
-                    state.local_clone / f"{state.package}.spec",
+                    state.local_clone / state.spec_name,
                     state.inherit_source,
                 ):
                     raise InheritCandidateError(
@@ -1102,7 +1111,7 @@ async def run_workflow(
                         InheritAdaptationInputSchema(
                             local_clone=state.local_clone,
                             package=state.package,
-                            target_spec=f"{state.package}.spec",
+                            target_spec=state.spec_name,
                             source_issue_key=candidate.issue_key,
                             target_issue_key=state.jira_issue,
                             source_commit=fix_commit,
@@ -1132,11 +1141,11 @@ async def run_workflow(
                         f"Inheritance adaptation reported {adaptation.strategy} without patch files"
                     )
                 original_spec, _ = await check_subprocess(
-                    ["git", "show", f"{state.inherit_saved_head}:{state.package}.spec"],
+                    ["git", "show", f"{state.inherit_saved_head}:{state.spec_name}"],
                     cwd=state.local_clone,
                 )
                 normalize_first_inherited_patch_applications(
-                    state.local_clone / f"{state.package}.spec",
+                    state.local_clone / state.spec_name,
                     original_spec,
                     state.inherit_change.patch_files,
                 )
@@ -1178,7 +1187,7 @@ async def run_workflow(
                         generate_title=generate_title,
                     )
                 title = state.canonical_title or state.inherit_change.commit_message.splitlines()[0]
-                spec_path = state.local_clone / f"{state.package}.spec"
+                spec_path = state.local_clone / state.spec_name
                 changelog_headers_before = (
                     changelog_entry_headers(spec_path)
                     if state.canonical_title and not uses_autochangelog(spec_path)
@@ -1186,7 +1195,7 @@ async def run_workflow(
                 )
                 await run_tool(
                     AddChangelogEntryTool(options=local_tool_options),
-                    spec=f"{state.package}.spec",
+                    spec=state.spec_name,
                     content=[
                         f"- {tasks.escape_rpm_changelog_text(title)}"
                         if state.canonical_title
@@ -1535,10 +1544,10 @@ async def run_workflow(
                     await verify_inherited_patches(state.local_clone, state.inherit_change)
                     files_to_git_add = state.inherit_change.changed_files
                 else:
-                    spec_path = state.local_clone / f"{state.package}.spec"
+                    spec_path = state.local_clone / state.spec_name
                     with Specfile(spec_path) as spec:
                         patch_files = [p.location for p in get_all_patches(spec) if p.location]
-                    files_to_git_add = [f"{state.package}.spec", *patch_files]
+                    files_to_git_add = [state.spec_name, *patch_files]
                 logger.info(f"Staging files: {files_to_git_add}")
 
                 await tasks.stage_changes(

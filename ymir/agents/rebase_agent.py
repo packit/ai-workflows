@@ -392,6 +392,7 @@ async def main() -> None:
                     dist_git_namespace=state.dist_git_namespace,
                 )
                 local_tool_options["working_directory"] = state.local_clone
+                state.spec_name = tasks.find_spec(state.local_clone, state.package)
                 state.leading_zstream_branch = await tasks.find_leading_zstream_branch(
                     state.dist_git_branch, local_clone=state.local_clone
                 )
@@ -478,7 +479,7 @@ async def main() -> None:
                 # Use accumulated files from all rebase iterations, fallback to *.spec if none specified
                 # The log agent and consolidation metadata update the spec after a
                 # rebase iteration, so always stage it along with agent-reported files.
-                files_to_git_add = list(state.all_files_git_to_add | {f"{state.package}.spec"})
+                files_to_git_add = list(state.all_files_git_to_add | {state.spec_name})
 
                 try:
                     await tasks.stage_changes(
@@ -496,7 +497,7 @@ async def main() -> None:
 
             async def run_log_agent(state):
                 all_issues = _consolidated_issue_keys(state.jira_issue, state.consolidated_issues)
-                spec_path = state.local_clone / f"{state.package}.spec"
+                spec_path = state.local_clone / state.spec_name
                 changelog_headers_before = changelog_entry_headers(spec_path)
                 if redis_conn is not None and not dry_run:
 

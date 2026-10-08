@@ -83,7 +83,7 @@ def capture_backport_artifacts(
             artifacts.commit_diff = diff
             (issue_dir / "commit.diff").write_text(diff)
 
-        spec_path = Path(state.local_clone) / f"{state.package}.spec"
+        spec_path = Path(state.local_clone) / state.spec_name
         if spec_path.is_file():
             content = spec_path.read_text()
             artifacts.spec_content = content

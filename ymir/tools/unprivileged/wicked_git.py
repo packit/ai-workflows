@@ -8,7 +8,7 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
-from ymir.common.base_utils import is_cs_branch, run_subprocess
+from ymir.common.base_utils import find_spec, is_cs_branch, run_subprocess
 from ymir.common.validators import AbsolutePath
 from ymir.common.version_utils import parse_branch_name
 from ymir.tools.base import CloneableTool as Tool
@@ -195,7 +195,7 @@ class RunPackagePrepTool(Tool[RunPackagePrepInput, ToolRunOptions, StringToolOut
             self.options["builddir"] = builddir
 
         try:
-            spec_path = dist_git / f"{tool_input.package}.spec"
+            spec_path = dist_git / find_spec(dist_git, tool_input.package)
             defines = build_rpmdefines(
                 dist_git, tool_input.dist_git_branch, spec_path, builddir=Path(builddir)
             )
@@ -253,7 +253,7 @@ class BuildSrpmTool(Tool[BuildSrpmInput, ToolRunOptions, StringToolOutput]):
         if not dist_git.exists():
             raise ToolError(f"Dist-git path does not exist: {dist_git}")
 
-        spec_path = dist_git / f"{tool_input.package}.spec"
+        spec_path = dist_git / find_spec(dist_git, tool_input.package)
         defines = build_rpmdefines(dist_git, tool_input.dist_git_branch, spec_path)
         cmd = ["rpmbuild", *defines, "--nodeps", "-bs", str(spec_path)]
 

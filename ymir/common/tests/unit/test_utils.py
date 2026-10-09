@@ -684,10 +684,14 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
         )
     )
 
-    # Mock Koji listRPMs for architecture lookup (candidate1 wins EVR selection)
+    # Mock Koji listRPMs for architecture lookup (buildID-aware to handle both packages)
     mock_koji_session = flexmock()
-    mock_koji_session.should_receive("listRPMs").and_return(
-        [{"arch": "x86_64", "name": "go-fdo-client", "nvr": "go-fdo-client-1.0.0-4.el10_2.7"}]
+    mock_koji_session.should_receive("listRPMs").replace_with(
+        lambda buildID: (
+            [{"arch": "x86_64", "name": "go-fdo-client", "nvr": "go-fdo-client-1.0.0-4.el10_2.7"}]
+            if buildID == 99910
+            else [{"arch": "x86_64", "name": "golang", "nvr": "golang-1.26.4-1.el10_2"}]
+        )
     )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
@@ -1078,8 +1082,12 @@ async def test_check_package_built_with_fixed_dependency_gzipped_log():
 
     # Mock Koji listRPMs for architecture lookup and _get_known_package_names
     mock_session = flexmock()
-    mock_session.should_receive("listRPMs").and_return(
-        [{"arch": "x86_64", "name": "go-fdo-client", "nvr": "go-fdo-client-1.0.0-4.el10_2.7"}]
+    mock_session.should_receive("listRPMs").replace_with(
+        lambda buildID: (
+            [{"arch": "x86_64", "name": "go-fdo-client", "nvr": "go-fdo-client-1.0.0-4.el10_2.7"}]
+            if buildID == 99902
+            else [{"arch": "x86_64", "name": "golang", "nvr": "golang-1.26.4-1.el10_2"}]
+        )
     )
     flexmock(koji).should_receive("ClientSession").and_return(mock_session)
 
@@ -1165,10 +1173,14 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
         )
     )
 
-    # Mock Koji listRPMs for candidate build architecture lookup
+    # Mock Koji listRPMs for candidate build architecture lookup (buildID-aware)
     mock_koji_session = flexmock()
-    mock_koji_session.should_receive("listRPMs").and_return(
-        [{"arch": "x86_64", "name": "some-app", "nvr": "some-app-1.0.0-1.el10_2"}]
+    mock_koji_session.should_receive("listRPMs").replace_with(
+        lambda buildID: (
+            [{"arch": "x86_64", "name": "some-app", "nvr": "some-app-1.0.0-1.el10_2"}]
+            if buildID == 99903
+            else [{"arch": "x86_64", "name": "python3.11", "nvr": "python3.11-3.11.9-1.el10_2"}]
+        )
     )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
@@ -1255,10 +1267,14 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
         )
     )
 
-    # Mock Koji listRPMs for candidate build architecture lookup
+    # Mock Koji listRPMs for candidate build architecture lookup (buildID-aware)
     mock_koji_session = flexmock()
-    mock_koji_session.should_receive("listRPMs").and_return(
-        [{"arch": "x86_64", "name": "some-app", "nvr": "some-app-1.0.0-1.el10_2"}]
+    mock_koji_session.should_receive("listRPMs").replace_with(
+        lambda buildID: (
+            [{"arch": "x86_64", "name": "some-app", "nvr": "some-app-1.0.0-1.el10_2"}]
+            if buildID == 99904
+            else [{"arch": "x86_64", "name": "python-libs", "nvr": "python-libs-3.11.9-1.el10_2"}]
+        )
     )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
@@ -2019,6 +2035,66 @@ def test_installed_pkgs_sample_epoch_and_subpackage():
     ) == ("libjpeg-turbo-1.5.3-12.el8", None)
 
 
+def test_resolve_binary_rpm_to_source_build_success():
+    """Test _resolve_binary_rpm_to_source_build uses getRPM to resolve binary to source."""
+    from ymir.common.utils import _resolve_binary_rpm_to_source_build
+
+    mock_session = flexmock()
+    mock_session.should_receive("getRPM").with_args(
+        {"name": "perl-Errno", "version": "1.37", "release": "2.el10", "arch": "x86_64"}
+    ).and_return({"name": "perl-Errno", "build_id": 555, "epoch": None})
+    mock_session.should_receive("getBuild").with_args(555).and_return(
+        {"name": "perl", "version": "5.40.0", "release": "2.el10", "epoch": 4}
+    )
+    flexmock(koji).should_receive("ClientSession").and_return(mock_session)
+
+    nvr, epoch = _resolve_binary_rpm_to_source_build(
+        "https://brewhub.example.com", "perl-Errno-1.37-2.el10.x86_64", "perl-Errno", "perl"
+    )
+
+    assert nvr == "perl-5.40.0-2.el10"
+    assert epoch == 4
+
+
+def test_resolve_binary_rpm_to_source_build_not_found():
+    """Test _resolve_binary_rpm_to_source_build returns None when RPM not in Koji."""
+    from ymir.common.utils import _resolve_binary_rpm_to_source_build
+
+    mock_session = flexmock()
+    mock_session.should_receive("getRPM").and_return(None)
+    flexmock(koji).should_receive("ClientSession").and_return(mock_session)
+
+    nvr, epoch = _resolve_binary_rpm_to_source_build(
+        "https://brewhub.example.com", "missing-pkg-1.0-1.el10.x86_64", "missing-pkg", "missing"
+    )
+
+    assert nvr is None
+    assert epoch is None
+
+
+def test_parse_dependency_subpackage_with_koji_resolution():
+    """Test subpackage resolution via Koji getRPM when pkg_name != dep_component."""
+    from ymir.common.utils import _parse_dependency_from_installed_pkgs_log
+
+    log = "openssl-libs-1:3.2.2-6.el10.x86_64 1 2 abc installed\n"
+
+    mock_session = flexmock()
+    mock_session.should_receive("getRPM").with_args(
+        {"name": "openssl-libs", "version": "3.2.2", "release": "6.el10", "arch": "x86_64"}
+    ).and_return({"name": "openssl-libs", "build_id": 777, "epoch": 1})
+    mock_session.should_receive("getBuild").with_args(777).and_return(
+        {"name": "openssl", "version": "3.2.2", "release": "6.el10", "epoch": 1}
+    )
+    flexmock(koji).should_receive("ClientSession").and_return(mock_session)
+
+    nvr, epoch = _parse_dependency_from_installed_pkgs_log(
+        log, "openssl", ["openssl", "openssl-libs"], koji_url="https://brewhub.example.com"
+    )
+
+    assert nvr == "openssl-3.2.2-6.el10"
+    assert epoch == 1
+
+
 def test_installed_pkgs_parser_ignores_noninstalled_and_similar_names():
     from ymir.common.utils import _parse_dependency_from_installed_pkgs_log
 
@@ -2351,10 +2427,14 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
         )
     )
 
-    # Mock Koji listRPMs for candidate build architecture lookup
+    # Mock Koji listRPMs for candidate build architecture lookup (buildID-aware)
     mock_session = flexmock()
-    mock_session.should_receive("listRPMs").and_return(
-        [{"arch": "x86_64", "name": "go-fdo-client", "nvr": "go-fdo-client-1.0.0-4.el10_2.7"}]
+    mock_session.should_receive("listRPMs").replace_with(
+        lambda buildID: (
+            [{"arch": "x86_64", "name": "go-fdo-client", "nvr": "go-fdo-client-1.0.0-4.el10_2.7"}]
+            if buildID == 99905
+            else [{"arch": "x86_64", "name": "golang", "nvr": "golang-1.26.4-1.el10_2"}]
+        )
     )
     flexmock(koji).should_receive("ClientSession").and_return(mock_session)
 
@@ -2612,13 +2692,17 @@ other-package-1.0-1.el10.aarch64 1 2 abc installed
         )
     )
 
-    # Mock Koji listRPMs for candidate build architecture lookup
+    # Mock Koji listRPMs for candidate build architecture lookup (buildID-aware)
     mock_koji_session = flexmock()
-    mock_koji_session.should_receive("listRPMs").and_return(
-        [
-            {"arch": "x86_64", "name": "some-package", "nvr": "some-package-2.0-1.el10"},
-            {"arch": "aarch64", "name": "some-package", "nvr": "some-package-2.0-1.el10"},
-        ]
+    mock_koji_session.should_receive("listRPMs").replace_with(
+        lambda buildID: (
+            [
+                {"arch": "x86_64", "name": "some-package", "nvr": "some-package-2.0-1.el10"},
+                {"arch": "aarch64", "name": "some-package", "nvr": "some-package-2.0-1.el10"},
+            ]
+            if buildID == 99907
+            else [{"arch": "x86_64", "name": "golang", "nvr": "golang-1.22.7-1.el10"}]
+        )
     )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 

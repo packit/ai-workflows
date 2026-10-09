@@ -12,7 +12,7 @@ jobs:
     steps:
       - name: Install packages required
         run: |
-          sudo apt-get install -y podman-compose
+          sudo apt-get install -y podman-compose python3-yaml
 
       - name: Checkout Git Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -22,3 +22,6 @@ jobs:
       - name: Run container builds
         run: |
           podman-compose -f compose.yaml build
+
+      - name: Check agent init entrypoints
+        run: python3 scripts/check_agent_init.py

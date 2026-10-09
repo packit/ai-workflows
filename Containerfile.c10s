@@ -102,6 +102,12 @@ RUN MALICIOUS=$(find /usr /opt -name "litellm_init.pth" 2>/dev/null); \
 # Create user
 RUN useradd -m -G wheel beeai
 
+# Reap orphaned subprocesses while the agent keeps running.
+RUN dnf -y install catatonit \
+    && dnf clean all \
+    && ln -s /usr/libexec/catatonit/catatonit /usr/bin/catatonit \
+    && test -x /usr/bin/catatonit
+
 # Copy required directories
 # Individual directories are mounted as volumes in development
 COPY ymir/agents/ /home/beeai/ymir/agents/
@@ -134,4 +140,5 @@ RUN git config --global user.email "redhat-ymir-agent@redhat.com" \
     && printf "Host *\n    ServerAliveInterval 60\n    ServerAliveCountMax 15\n" > ~/.ssh/config \
     && chmod 0600 ~/.ssh/config
 
+ENTRYPOINT ["/usr/bin/catatonit", "--"]
 CMD ["/bin/bash"]

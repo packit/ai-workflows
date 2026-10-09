@@ -1,5 +1,12 @@
 # OpenShift Deployment
 
+## Agent container startup
+
+The c9s and c10s agent images use catatonit as PID 1 to forward signals and reap
+orphaned subprocesses. Agent Deployments specify the Python executable and
+module in `args`, leaving the image entrypoint active. Setting `command` to
+Python would bypass catatonit. Agents retain their persistent worker model.
+
 ## Deployment Location
 
 Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.

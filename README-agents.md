@@ -5,6 +5,20 @@ Every agent can run individually or pick up tasks from a Redis queue.
 
 See [README.md](README.md) for general notes about setting up the development environment.
 
+## Container init
+
+Both agent images run catatonit as PID 1. It forwards signals to the agent and
+reaps orphaned subprocesses after they exit. Agents remain persistent queue
+workers; automatic recycling and a per-task pod model are not enabled.
+
+CI runs `python3 scripts/check_agent_init.py` to verify that Containerfiles
+install catatonit and set the ENTRYPOINT, and that no OpenShift deployment
+overrides it with `command:`. After building the images locally, run
+`python3 scripts/test_agent_init.py` (or add `--engine docker`) for runtime
+checks: orphan reaping, signal forwarding, exit codes, non-root execution,
+and agent module imports through the image entrypoint. The static check requires
+PyYAML, which CI installs.
+
 ## Architecture
 
 Three agents process tasks through Redis queues:

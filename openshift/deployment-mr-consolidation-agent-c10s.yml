@@ -19,10 +19,9 @@ spec:
     spec:
       containers:
       - args:
+        - /usr/bin/python3
         - -m
         - ymir.agents.mr_consolidation_agent
-        command:
-        - /usr/bin/python3
         env:
         - name: CONTAINER_VERSION
           value: "c10s"

@@ -7,7 +7,6 @@ import gzip
 import logging
 import os
 import re
-import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -27,7 +26,7 @@ from pydantic import BaseModel
 from specfile import Specfile
 from specfile.sourcelist import Sourcelist
 from specfile.sources import Patches, Sources
-from specfile.utils import EVR
+from specfile.utils import EVR, NEVRA
 
 from ymir.common.base_utils import is_cs_branch
 from ymir.common.constants import BREWHUB_URL, CENTOS_STREAM_KOJIHUB_URL
@@ -279,7 +278,28 @@ class TransientInfrastructureError(Exception):
 
 
 class BuildLogMissingError(TransientInfrastructureError):
-    """Brew confirmed a requested build log is absent (HTTP 404 or 410)."""
+    """Brew confirmed a requested build log is absent (HTTP 404 or 410).
+
+    Attributes:
+        partial_logs: List of (url, content) tuples for logs that were successfully fetched,
+                     even when some required logs are missing.
+    """
+
+    def __init__(self, message: str, partial_logs: list[tuple[str, str]] | None = None):
+        super().__init__(message)
+        self.partial_logs = partial_logs or []
+
+
+class PermanentValidationError(Exception):
+    """Raised when data validation fails due to permanent issues (name mismatches, missing data).
+
+    These are not transient infrastructure failures. Examples:
+    - Dependency NVR resolves to wrong package name
+    - Jira component metadata is missing or invalid
+    - Data consistency checks reveal permanent problems
+
+    Should be handled gracefully (logged + fallback) rather than retried.
+    """
 
 
 async def _get_latest_build_from_tags(
@@ -700,7 +720,8 @@ async def _fetch_installed_pkgs_log(
                 if not decoded_logs:
                     raise BuildLogMissingError(
                         f"No installed_pkgs.log available for {package_nvr} from any architecture "
-                        f"(all returned 404/410, expected: {list(built_architectures)})"
+                        f"(all returned 404/410, expected: {list(built_architectures)})",
+                        partial_logs=[],
                     )
 
                 fetched_archs = {url.split("/")[-2] for url, _ in decoded_logs}
@@ -709,7 +730,8 @@ async def _fetch_installed_pkgs_log(
                 if missing_archs and require_all:
                     raise BuildLogMissingError(
                         f"Missing installed_pkgs.log for {package_nvr} from {len(missing_archs)} "
-                        f"architecture(s): {list(missing_archs)} (fetched: {list(fetched_archs)})"
+                        f"architecture(s): {list(missing_archs)} (fetched: {list(fetched_archs)})",
+                        partial_logs=decoded_logs,  # Include partial logs for analysis
                     )
 
                 logger.debug(
@@ -773,7 +795,8 @@ async def _get_known_package_names(dep_component: str, fixed_dep_nvr: str) -> li
         logger.error(f"Failed to fetch RPM list for {fixed_dep_nvr}: {e}")
         return None
 
-    # Also include the source component name itself
+    # Ensure the component name itself is in the list (some builds don't produce
+    # a binary package matching the source component name)
     if dep_component not in known_names:
         known_names.insert(0, dep_component)
 
@@ -781,38 +804,144 @@ async def _get_known_package_names(dep_component: str, fixed_dep_nvr: str) -> li
     return known_names
 
 
+def _resolve_binary_rpm_to_source_build(
+    koji_url: str, binary_nevra: str, binary_pkg_name: str, dep_component: str
+) -> tuple[str | None, int | None]:
+    """Resolve a binary RPM NEVRA to its source build NVR and epoch.
+
+    This handles independently versioned subpackages (e.g., perl-Errno with its own version)
+    by using Koji API to query the actual source build that produced the binary RPM.
+
+    Args:
+        koji_url: Koji hub URL
+        binary_nevra: Full NEVRA of the binary package as found in installed_pkgs.log
+        binary_pkg_name: Binary package name (e.g., "perl-Errno")
+        dep_component: Source component name (e.g., "perl")
+
+    Returns:
+        Tuple of (source_nvr, source_epoch) if successfully resolved.
+        Returns (None, None) if the binary package cannot be found in Koji.
+
+    Raises:
+        TransientInfrastructureError: If Koji API calls fail (network, service issues)
+    """
+    try:
+        session = koji.ClientSession(koji_url)
+        nevra = NEVRA.from_string(binary_nevra)
+
+        rpm_info = session.getRPM(
+            {"name": nevra.name, "version": nevra.version, "release": nevra.release, "arch": nevra.arch}
+        )
+        if not rpm_info:
+            logger.warning(
+                f"Koji getRPM returned nothing for {binary_nevra} "
+                f"(binary_pkg: {binary_pkg_name}, source: {dep_component})"
+            )
+            return None, None
+
+        build_id = rpm_info.get("build_id")
+        if not build_id:
+            logger.warning(f"No build_id found for RPM {binary_nevra} ({binary_pkg_name})")
+            return None, None
+
+        build = session.getBuild(build_id)
+        if not build:
+            logger.warning(f"Could not fetch Koji build info for build_id {build_id}")
+            return None, None
+
+        # Construct the source NVR and get source epoch
+        source_nvr = f"{build['name']}-{build['version']}-{build['release']}"
+        source_epoch = build.get("epoch")
+        logger.info(
+            f"Resolved binary RPM {binary_nevra} ({binary_pkg_name}) to source build: "
+            f"{f'{source_epoch}:' if source_epoch else ''}{source_nvr}"
+        )
+        return source_nvr, source_epoch
+
+    except koji.GenericError as e:
+        # Koji API failures are transient - should retry
+        logger.error(f"Transient Koji failure resolving {binary_nevra} ({binary_pkg_name}): {e}")
+        raise TransientInfrastructureError(f"Failed to query Koji for binary RPM {binary_nevra}: {e}") from e
+    except Exception as e:
+        # Unexpected errors - also treat as transient to avoid wrong rebuild decisions
+        logger.error(f"Unexpected error resolving {binary_nevra} ({binary_pkg_name}) to source build: {e}")
+        raise TransientInfrastructureError(f"Unexpected error querying Koji for {binary_nevra}: {e}") from e
+
+
 def _parse_dependency_from_installed_pkgs_log(
-    installed_pkgs_log: str, dep_component: str, known_names: list[str]
+    installed_pkgs_log: str, dep_component: str, known_names: list[str], koji_url: str | None = None
 ) -> tuple[str | None, int | None]:
     """Parse installed_pkgs.log to find which version of dependency was installed.
+
+    For independently versioned subpackages (e.g., perl-Errno), uses Koji API to resolve
+    the binary RPM to its source build instead of string manipulation.
 
     Args:
         installed_pkgs_log: Content of installed_pkgs.log
         dep_component: Source component name
         known_names: List of known binary package names to search for
+        koji_url: Koji hub URL for resolving binary RPMs to source builds.
+                  If provided, uses Koji API for robust resolution. Otherwise falls back
+                  to string manipulation (which fails for independently versioned subpackages).
 
     Returns:
         Tuple of (nvr, epoch) where nvr is in format "name-version-release"
         and epoch is the epoch number if present in installed_pkgs.log, else None
+
+    Raises:
+        TransientInfrastructureError: If koji_url is provided but Koji query fails for subpackages
     """
     # Brew records: name-[epoch:]version-release.arch timestamp size digest installed.
     # Prefer a known subpackage over a shorter source name with the same prefix.
     for pkg_name in sorted(known_names, key=len, reverse=True):
-        pattern = re.compile(rf"{re.escape(pkg_name)}-(?:(\d+):)?([^-\s]+)-([^-\s]+)\.([\w]+)")
-
         for line in installed_pkgs_log.splitlines():
             fields = line.split()
             if len(fields) != 5 or fields[-1] != "installed":
                 continue
-            match = pattern.fullmatch(fields[0])
-            if match:
-                epoch = int(match.group(1)) if match.group(1) is not None else None
-                nvr = f"{dep_component}-{match.group(2)}-{match.group(3)}"
-                logger.info(
-                    f"Found {dep_component} package {pkg_name} in installed_pkgs.log: "
-                    f"{f'{epoch}:' if epoch else ''}{nvr}"
+
+            # Parse NEVRA from the first field
+            try:
+                nevra = NEVRA.from_string(fields[0])
+            except ValueError:
+                continue
+
+            # Check if this matches the known package name
+            if nevra.name != pkg_name:
+                continue
+
+            # Extract epoch (None if absent, not 0)
+            # NEVRA sets epoch to 0 by default, but we need None when it wasn't in the original string
+            epoch = nevra.epoch if ":" in fields[0] else None
+
+            # Resolve binary RPM to source build NVR and epoch
+            if koji_url and pkg_name != dep_component:
+                # Try to use Koji API to resolve the binary RPM to source build.
+                # This handles independently versioned subpackages correctly.
+                # Only do this for subpackages (pkg_name != dep_component), not the source package itself.
+                binary_nevra = fields[0]  # Full NEVRA as found in log
+                resolved_nvr, resolved_epoch = _resolve_binary_rpm_to_source_build(
+                    koji_url, binary_nevra, pkg_name, dep_component
                 )
-                return nvr, epoch
+                if resolved_nvr:
+                    nvr = resolved_nvr
+                    # Use source build epoch, not binary subpackage epoch
+                    epoch = resolved_epoch
+                else:
+                    # Koji resolution failed (confirmed absent); skip to next candidate
+                    logger.debug(
+                        f"Could not resolve {binary_nevra} ({pkg_name}) to source build, "
+                        f"trying next candidate"
+                    )
+                    continue
+            else:
+                # Use string manipulation (works for source package itself, or when Koji URL not provided)
+                nvr = f"{dep_component}-{nevra.version}-{nevra.release}"
+
+            logger.info(
+                f"Found {dep_component} package {pkg_name} in installed_pkgs.log: "
+                f"{f'{epoch}:' if epoch else ''}{nvr}"
+            )
+            return nvr, epoch
 
     logger.warning(f"Could not find {dep_component} or its subpackages in installed_pkgs.log")
     return None, None
@@ -1058,10 +1187,9 @@ async def check_package_built_with_fixed_dependency(
             }
 
             if not built_archs:
-                # Noarch builds have installed_pkgs.log under the builder's arch.
-                # Try common arches — we only need one log for noarch.
-                logger.info(f"Noarch-only build {package_nvr}, trying common arches for installed_pkgs.log")
-                built_archs = {"x86_64", "aarch64", "ppc64le", "s390x"}
+                # Noarch builds have installed_pkgs.log under noarch/ directory
+                logger.info(f"Noarch-only build {package_nvr}, fetching from noarch directory")
+                built_archs = {"noarch"}
                 noarch_build = True
             else:
                 noarch_build = False
@@ -1079,25 +1207,41 @@ async def check_package_built_with_fixed_dependency(
         # Step 3b: Fetch installed_pkgs.log from Brew
         # For arch builds: require ALL arches. For noarch: accept any log found.
         installed_pkgs_logs = []
+        partial_logs_error = False
         if built_archs:
             try:
                 installed_pkgs_logs = await _fetch_installed_pkgs_log(
                     package_nvr, built_archs, require_all=not noarch_build
                 )
-            except BuildLogMissingError:
-                completion_ts = package_build.get("completion_ts")
-                if completion_ts:
-                    cutoff_ts = time.time() - (90 * 24 * 60 * 60)
-                    if completion_ts > cutoff_ts:
-                        raise
-
-                logger.info(
-                    f"installed_pkgs.log unavailable for {package_nvr} (completion_ts: "
-                    f"{completion_ts or 'unknown'}), "
-                    f"falling back to timestamp comparison"
-                )
+            except BuildLogMissingError as e:
+                # installed_pkgs.log is absent (404/410). This indicates the log is genuinely
+                # unavailable (e.g., retention policy, very old build), not a transient error.
+                # Distinguish between: (1) no logs at all → timestamp fallback
+                # (2) some logs retrieved but not all → use partial logs if they exist
+                if "from any architecture" in str(e):
+                    # Case 1: No logs at all — fall back to timestamp comparison
+                    logger.info(
+                        f"installed_pkgs.log unavailable for {package_nvr}, "
+                        f"falling back to timestamp comparison"
+                    )
+                elif e.partial_logs:
+                    # Case 2: Partial logs retrieved — use them for verification
+                    installed_pkgs_logs = e.partial_logs
+                    logger.warning(f"Using partial installed_pkgs.log for {package_nvr}: {e}")
+                else:
+                    # Case 3: Error says partial but no logs attached — request clarification
+                    partial_logs_error = True
+                    logger.warning(f"Partial installed_pkgs.log availability for {package_nvr}: {e}")
 
         if not installed_pkgs_logs:
+            # If partial logs were available but not all architectures, request manual verification
+            if partial_logs_error:
+                logger.warning(
+                    f"Some but not all architecture logs available for {package_nvr}. "
+                    f"Requesting manual verification."
+                )
+                return None, package_issue_key, package_nvr, "partial_architecture_coverage"
+
             # Fallback: compare build timestamps
             logger.info(
                 f"installed_pkgs.log unavailable for {package_nvr}; "
@@ -1145,7 +1289,7 @@ async def check_package_built_with_fixed_dependency(
         for arch_url, log_content in installed_pkgs_logs:
             arch_name = arch_url.split("/")[-2]
             used_dep_nvr, used_dep_epoch = _parse_dependency_from_installed_pkgs_log(
-                log_content, dep_component, known_names
+                log_content, dep_component, known_names, BREWHUB_URL
             )
             if used_dep_nvr:
                 dep_versions[arch_name] = (used_dep_nvr, used_dep_epoch)

@@ -95,6 +95,25 @@ run-backport-agent-e2e-tests:
 		-e BACKPORT_E2E_EXCLUDE_ISSUES="$(BACKPORT_E2E_EXCLUDE_ISSUES)" \
 		backport-agent-e2e-tests
 
+.PHONY: run-backport-agent-konflux-e2e-tests
+run-backport-agent-konflux-e2e-tests:
+	# Konflux build backend variant of the backport e2e. Unlike Copr (which
+	# builds from a local SRPM), Konflux builds from a real pushed fork ref:
+	# even under DRY_RUN the workflow creates the fork under FORK_NAMESPACE,
+	# pushes the backport branch (carrying the fixture's pre-fix history), and
+	# submits a real Konflux build; only the MR/Jira writes stay suppressed.
+	# The dist-git SOURCE stays mocked (local bare clones via insteadOf).
+	# Requires FORK_NAMESPACE + GITLAB_TOKEN + KONFLUX_* in the environment /
+	# .secrets/mcp-gateway.env and a reachable Konflux cluster.
+	MOCK_JIRA=true DRY_RUN=true BUILD_BACKEND=konflux FORK_NAMESPACE="$(FORK_NAMESPACE)" \
+		$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+		-e MOCK_JIRA="true" \
+		-e DRY_RUN="true" \
+		-e BUILD_BACKEND="konflux" \
+		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \
+		-e BACKPORT_E2E_EXCLUDE_ISSUES="$(BACKPORT_E2E_EXCLUDE_ISSUES)" \
+		backport-agent-e2e-tests
+
 
 .PHONY: run-reproducer-agent-e2e-tests
 run-reproducer-agent-e2e-tests:

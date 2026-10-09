@@ -371,6 +371,31 @@ async def main() -> None:
                     logger.info(
                         f"Using {len(state.consolidated_issues)} consolidated siblings from triage result"
                     )
+                return "close_stale_merge_requests"
+
+            async def close_stale_merge_requests(state):
+                # A rerun re-pushes the update branch; a lingering open MR would
+                # re-trigger GitLab CI (scratch builds) on every push and waste
+                # resources. Close it first so only the rerun's fresh MR runs CI.
+                # MR writes are suppressed under dry-run.
+                if not dry_run:
+                    try:
+                        closed = await tasks.close_stale_update_merge_requests(
+                            jira_issue=state.jira_issue,
+                            package=state.package,
+                            dist_git_branch=state.dist_git_branch,
+                            available_tools=gateway_tools,
+                            dist_git_namespace=state.dist_git_namespace,
+                        )
+                        if closed:
+                            logger.info(
+                                "Closed %d stale MR(s) for %s: %s",
+                                len(closed),
+                                state.jira_issue,
+                                closed,
+                            )
+                    except Exception as e:
+                        logger.warning("Failed to close stale MRs for %s: %s", state.jira_issue, e)
                 return "fork_and_prepare_dist_git"
 
             async def fork_and_prepare_dist_git(state):
@@ -681,6 +706,7 @@ async def main() -> None:
             workflow.add_step("check_if_sibling", check_if_sibling)
             workflow.add_step("change_jira_status", change_jira_status)
             workflow.add_step("find_consolidated_siblings", find_consolidated_siblings)
+            workflow.add_step("close_stale_merge_requests", close_stale_merge_requests)
             workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
             workflow.add_step("run_rebase_agent", run_rebase_agent)
             workflow.add_step("run_build_agent", run_build_agent)

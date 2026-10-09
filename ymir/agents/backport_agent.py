@@ -655,6 +655,10 @@ class BackportState(PackageUpdateState):
     attempts_remaining: int = Field(default=10)
     used_cherry_pick_workflow: bool = Field(default=False)
     incremental_fix_attempts: int = Field(default=0)
+    # Pristine dist-git HEAD captured right after clone, before any backport work.
+    # The build step soft-resets to it so every build/fix cycle squashes into a
+    # single published commit (no agent attempts in history).
+    backport_base_head: str | None = Field(default=None)
     fix_version: str | None = Field(default=None)
     shipped_zstream_candidates: list[ShippedZStreamCandidate] = Field(default_factory=list)
     inherit_cleanup_retried: bool = Field(default=False)
@@ -877,7 +881,7 @@ async def run_workflow(
                 return "resume_inherited_publication"
             if dry_run:
                 logger.info(f"Dry run: skipping Jira status change of {state.jira_issue} to In Progress")
-                return "fork_and_prepare_dist_git"
+                return "close_stale_merge_requests"
             # tasks.change_jira_status further gates the write on
             # JIRA_ALLOW_STATUS_CHANGES; nothing else to check here.
             try:
@@ -888,6 +892,27 @@ async def run_workflow(
                 )
             except Exception as status_error:
                 logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
+            return "close_stale_merge_requests"
+
+        async def close_stale_merge_requests(state):
+            # A rerun re-pushes the update branch; a lingering open MR would
+            # re-trigger GitLab CI (scratch builds) on every push and waste
+            # resources. Close it first so only the rerun's fresh MR runs CI.
+            # The inherited-publication resume path skips this step (it reuses
+            # its own MR). MR writes are suppressed under dry-run.
+            if not dry_run:
+                try:
+                    closed = await tasks.close_stale_update_merge_requests(
+                        jira_issue=state.jira_issue,
+                        package=state.package,
+                        dist_git_branch=state.dist_git_branch,
+                        available_tools=gateway_tools,
+                        dist_git_namespace=state.dist_git_namespace,
+                    )
+                    if closed:
+                        logger.info("Closed %d stale MR(s) for %s: %s", len(closed), state.jira_issue, closed)
+                except Exception as e:
+                    logger.warning("Failed to close stale MRs for %s: %s", state.jira_issue, e)
             return "fork_and_prepare_dist_git"
 
         async def resume_inherited_publication(state):
@@ -953,6 +978,7 @@ async def run_workflow(
                 cwd=state.local_clone,
             )
             state.inherit_saved_head = state.inherit_saved_head.strip()
+            state.backport_base_head = state.inherit_saved_head
             if not state.inheritance_disabled and _can_attempt_ystream_inheritance(state):
                 state.inherit_candidate = same_major_candidate(
                     state.shipped_zstream_candidates,
@@ -1269,7 +1295,9 @@ async def run_workflow(
                     error=None,
                 )
                 state.inherit_build_attempts = max_build_attempts
-                return "run_inherit_build_agent"
+                # Both backends stage, commit and push the inherited commit, then
+                # validate it with a single build step (validate_inherited_build).
+                return "stage_changes"
             except AlreadyInheritedError as error:
                 logger.error("Y-stream inheritance invariant failed: %s", error)
                 state.retry_mode = BackportRetryMode.NONE
@@ -1345,14 +1373,26 @@ async def run_workflow(
                     state.used_cherry_pick_workflow = False
                     logger.info("Git am workflow detected: no upstream repo exists")
 
-                return "update_release" if is_modular_issue else "run_build_agent"
+                # A freshly staged backport refreshes the release and stages the
+                # regenerated patches (update_release -> stage_changes), then the
+                # single build step (commit_push_and_build) commits, pushes and
+                # builds for both backends. Modular issues skip the build in
+                # stage_changes. A failed build routes back to fix_build_error.
+                return "update_release"
             return "comment_in_jira"
 
         async def fix_build_error(state):
-            """Try to fix build errors by finding and cherry-picking prerequisite commits."""
+            """Produce a fix for the failed build; the build step re-validates it.
+
+            The fix agent itself never builds. It regenerates the patch file(s)
+            (and a fresh SRPM) and reports. Routing then returns to the single
+            build step (update_release -> stage_changes -> commit_push_and_build,
+            identical for both backends), which performs the only build and loops
+            back here with the new build error if it still fails.
+            """
             logger.info(
-                f"Attempting incremental fix for cherry-pick workflow "
-                f"(attempt {state.incremental_fix_attempts}/{max_incremental_fix_attempts})"
+                f"Producing incremental fix for cherry-pick workflow "
+                f"(cycle {state.incremental_fix_attempts + 1}/{max_incremental_fix_attempts})"
             )
 
             try:
@@ -1367,18 +1407,19 @@ async def run_workflow(
                 log_dir = _get_build_logs_dir(state.local_clone)
                 log_dir.mkdir(parents=True, exist_ok=True)
                 attempt_num = state.incremental_fix_attempts + 1
-
-                if state.incremental_fix_attempts > 0:
-                    _move_build_logs(
-                        state.local_clone,
-                        log_dir / f"attempt-{state.incremental_fix_attempts}",
-                    )
+                # The build step is the only builder; archive the logs from the
+                # build that just failed before producing this cycle's fix.
+                _move_build_logs(
+                    state.local_clone,
+                    log_dir / f"attempt-{state.incremental_fix_attempts}",
+                )
                 _update_fix_attempts_log(log_dir, attempt_num, state.build_error)
+                state.incremental_fix_attempts += 1
 
                 fix_agent = await create_backport_agent(
                     gateway_tools,
                     local_tool_options,
-                    include_build_tools=True,
+                    include_build_tools=False,
                     fix_version=state.fix_version,
                 )
 
@@ -1396,9 +1437,6 @@ async def run_workflow(
                             upstream_patches=state.upstream_patches,
                             build_error=state.build_error,
                             triage_summary=state.triage_summary,
-                            has_extract_log_snippets=any(
-                                t.name == "extract_log_snippets" for t in gateway_tools
-                            ),
                         ),
                     ),
                     expected_output=BackportOutputSchema,
@@ -1410,29 +1448,19 @@ async def run_workflow(
                 if fix_result.success:
                     state.backport_result = fix_result
                     state.backport_log.append(fix_result.status)
-                    logger.info("Incremental fix succeeded with passing build")
-                    state.incremental_fix_attempts = 0
+                    logger.info("Incremental fix produced — re-validating via the build step")
                     return "update_release"
 
-                logger.info(f"Build still failing after fix attempt: {fix_result.error}")
-                state.build_error = fix_result.error
+                # No candidate fix was produced, so the patches/SRPM are unchanged
+                # and rebuilding would fail identically. Stop and report. The build
+                # step itself bounds how many build/fix cycles we attempt via
+                # ``attempts_remaining``.
+                logger.info(f"Fix agent could not produce a fix: {fix_result.error}")
                 state.backport_result = fix_result
-
-                state.incremental_fix_attempts += 1
-                if state.incremental_fix_attempts < max_incremental_fix_attempts:
-                    logger.info(
-                        f"Will retry incremental fix "
-                        f"(attempt {state.incremental_fix_attempts + 1}/{max_incremental_fix_attempts})"
-                    )
-                    return "fix_build_error"
-                logger.error(
-                    f"Exhausted all {max_incremental_fix_attempts} incremental fix attempts, giving up"
-                )
                 state.backport_result.success = False
                 state.backport_result.error = (
-                    f"Unable to fix build errors after "
-                    f"{max_incremental_fix_attempts} incremental fix attempts. "
-                    f"Last error: {fix_result.error}"
+                    f"Unable to fix the build error. Last build error: {state.build_error}. "
+                    f"Fix attempt result: {fix_result.error}"
                 )
                 return "comment_in_jira"
 
@@ -1442,81 +1470,43 @@ async def run_workflow(
                 state.backport_result.error = f"Exception during incremental fix: {e!s}"
                 return "comment_in_jira"
 
-        async def run_build_agent(state):
-            if not state.backport_result or not state.backport_result.srpm_path:
-                logger.error("Cannot run build agent: no valid backport result or SRPM path")
-                state.backport_result = state.backport_result or BackportOutputSchema(
-                    success=False,
-                    srpm_path=None,
-                    status="",
-                    error="No SRPM generated by backport agent",
-                )
-                return "comment_in_jira"
+        async def validate_inherited_build(state):
+            """Validate the pushed inherited commit before opening the MR.
 
+            Unified across backends: the inherited commit is already staged,
+            committed and pushed, so Copr builds the generated SRPM while Konflux
+            builds the pushed git ref -- run_build dispatches on BUILD_BACKEND. A
+            green build opens the MR; repeated failures fall back to a normal
+            backport.
+            """
             build_result = await run_build(
                 build_input=BuildInputSchema(
                     srpm_path=state.backport_result.srpm_path,
                     dist_git_branch=state.dist_git_branch,
                     jira_issue=state.jira_issue,
+                    git_url=state.fork_url,
+                    revision=state.inherit_local_commit,
+                    package_name=state.package,
+                    target_branch=state.dist_git_branch,
                 ),
                 available_tools=gateway_tools,
                 local_tool_options=local_tool_options,
             )
-            if build_result.success:
-                state.incremental_fix_attempts = 0
-                return "update_release"
-            if build_result.is_timeout:
-                logger.info(f"Build timed out for {state.jira_issue}, proceeding")
-                return "update_release"
-            if build_result.is_infra_error:
-                logger.error(f"Copr infrastructure error for {state.jira_issue}: {build_result.error}")
-                state.backport_result.success = False
-                state.backport_result.error = build_result.error or "Copr API infrastructure error"
-                return "comment_in_jira"
-            state.attempts_remaining -= 1
-            if state.attempts_remaining <= 0:
-                state.backport_result.success = False
-                state.backport_result.error = (
-                    f"Unable to successfully build the package in {max_build_attempts} attempts"
-                )
-                return "comment_in_jira"
-            state.build_error = build_result.error
-            if state.used_cherry_pick_workflow:
-                upstream_repo = Path(f"{state.local_clone}-upstream")
-                if upstream_repo.exists():
-                    _move_build_logs(
-                        state.local_clone,
-                        _get_build_logs_dir(state.local_clone) / "attempt-0",
-                    )
-                logger.info("Cherry-pick workflow was used - starting incremental fix")
-                return "fix_build_error"
-            logger.info("Git am workflow was used - resetting for retry")
-            return "fork_and_prepare_dist_git"
-
-        async def run_inherit_build_agent(state):
-            """Require a successful Copr validation before publishing inheritance."""
-            build_result = await run_build(
-                build_input=BuildInputSchema(
-                    srpm_path=state.backport_result.srpm_path,
-                    dist_git_branch=state.dist_git_branch,
-                    jira_issue=state.jira_issue,
-                ),
-                available_tools=gateway_tools,
-                local_tool_options=local_tool_options,
-            )
-            if build_result.success:
-                return "stage_changes"
+            if build_result.success or build_result.is_timeout:
+                if dry_run:
+                    return "submit_consolidation_job"
+                return "open_inherited_mr"
 
             state.inherit_build_attempts -= 1
             if state.inherit_build_attempts > 0:
                 logger.warning(
-                    "Inherited Copr validation failed; retrying (%d attempts left): %s",
+                    "Inherited build validation failed; retrying (%d attempts left): %s",
                     state.inherit_build_attempts,
                     build_result.error,
                 )
-                return "run_inherit_build_agent"
+                return "validate_inherited_build"
 
-            logger.info("Inherited Copr validation did not pass: %s", build_result.error)
+            logger.info("Inherited build validation did not pass: %s", build_result.error)
             if not await cleanup_inherit_attempt(state):
                 return handle_inherit_cleanup_failure(state)
             _disable_ystream_inheritance(state, task_metadata)
@@ -1577,7 +1567,12 @@ async def run_workflow(
             if state.inherit_change:
                 return "commit_inherited_change"
             if state.log_result:
-                return "commit_push_and_open_mr"
+                # Modular issues are published without a build; everything else
+                # commits, pushes and builds via the single commit_push_and_build
+                # step (identical for Copr and Konflux).
+                if is_modular_issue:
+                    return "commit_push_and_open_mr"
+                return "commit_push_and_build"
             return "run_log_agent"
 
         async def run_log_agent(state):
@@ -1702,8 +1697,9 @@ async def run_workflow(
                     return handle_inherit_cleanup_failure(state)
                 _disable_ystream_inheritance(state, task_metadata)
                 return "prepare_normal_backport"
-            if dry_run:
-                return "submit_consolidation_job"
+            # Both backends push the inherited commit before validating the
+            # build: Konflux builds from the pushed ref and Copr follows the same
+            # path. Even in dry-run the push happens; only the MR is skipped later.
             return "push_inherited_change"
 
         async def push_inherited_change(state):
@@ -1742,7 +1738,7 @@ async def run_workflow(
                         f"{reconcile_error}"
                     )
                     return "comment_in_jira"
-            return "open_inherited_mr"
+            return "validate_inherited_build"
 
         async def open_inherited_mr(state):
             try:
@@ -1775,33 +1771,43 @@ async def run_workflow(
                 )
             return "submit_consolidation_job"
 
+        async def _compose_backport_commit_and_mr(state):
+            """Build the (commit_message, mr_description, labels) for a normal backport."""
+            formatted_patches = "\n".join(f" - {p}" for p in state.upstream_patches)
+            triage_details_text = format_mr_triage_details(state.justification, state.triage_summary)
+            branch_note = format_zstream_branch_note(
+                state.zstream_branch_created, state.zstream_branch_warning
+            )
+            commit_message = (
+                f"{state.log_result.title}\n\n"
+                f"{state.log_result.description}\n\n"
+                + (f"CVE: {state.cve_id}\n" if state.cve_id else "")
+                + "Upstream patches:\n"
+                + formatted_patches
+                + "\n"
+                + f"Resolves: {state.jira_issue}\n\n"
+                f"This commit was backported {I_AM_YMIR}\n\n"
+                "Assisted-by: Ymir\n"
+            )
+            mr_description = (
+                f"{state.log_result.description}\n\n"
+                f"Upstream patches:\n{formatted_patches}\n\n"
+                f"{triage_details_text}"
+                f"{format_jira_links_for_mr(state.jira_issue)}\n"
+                f"{wrap_details('Backporting steps', state.backport_log[-1])}"
+                f"\n\n{branch_note}"
+                f"{mr_description_footer(state.package)}"
+            )
+            labels = ["ymir_backport"] + (
+                [ZSTREAM_TARGET_LABEL]
+                if await tasks.needs_zstream_target_label(state.dist_git_branch, state.fix_version)
+                else []
+            )
+            return commit_message, mr_description, labels
+
         async def commit_push_and_open_mr(state):
             try:
-                formatted_patches = "\n".join(f" - {p}" for p in state.upstream_patches)
-                triage_details_text = format_mr_triage_details(state.justification, state.triage_summary)
-                branch_note = format_zstream_branch_note(
-                    state.zstream_branch_created, state.zstream_branch_warning
-                )
-                commit_message = (
-                    f"{state.log_result.title}\n\n"
-                    f"{state.log_result.description}\n\n"
-                    + (f"CVE: {state.cve_id}\n" if state.cve_id else "")
-                    + "Upstream patches:\n"
-                    + formatted_patches
-                    + "\n"
-                    + f"Resolves: {state.jira_issue}\n\n"
-                    f"This commit was backported {I_AM_YMIR}\n\n"
-                    "Assisted-by: Ymir\n"
-                )
-                mr_description = (
-                    f"{state.log_result.description}\n\n"
-                    f"Upstream patches:\n{formatted_patches}\n\n"
-                    f"{triage_details_text}"
-                    f"{format_jira_links_for_mr(state.jira_issue)}\n"
-                    f"{wrap_details('Backporting steps', state.backport_log[-1])}"
-                    f"\n\n{branch_note}"
-                    f"{mr_description_footer(state.package)}"
-                )
+                commit_message, mr_description, labels = await _compose_backport_commit_and_mr(state)
                 (
                     state.merge_request_url,
                     state.merge_request_newly_created,
@@ -1815,12 +1821,7 @@ async def run_workflow(
                     mr_description=mr_description,
                     available_tools=gateway_tools,
                     commit_only=dry_run,
-                    labels=["ymir_backport"]
-                    + (
-                        [ZSTREAM_TARGET_LABEL]
-                        if await tasks.needs_zstream_target_label(state.dist_git_branch, state.fix_version)
-                        else []
-                    ),
+                    labels=labels,
                     package=state.package,
                 )
             except Exception as e:
@@ -1831,6 +1832,109 @@ async def run_workflow(
             if is_modular_issue:
                 return "comment_in_jira"
             return "submit_consolidation_job"
+
+        async def commit_push_and_build(state):
+            """Commit, push and build the backport, then open the MR on success.
+
+            The single build step for non-modular issues on both backends: the
+            fork branch is pushed first so Konflux can build the ref, while Copr
+            builds the generated SRPM (run_build dispatches on BUILD_BACKEND and
+            ignores the ref fields). The MR is opened only after a green build; a
+            failed build loops back to fix_build_error (cherry-pick) or restarts
+            the backport (git am).
+            """
+            if not state.backport_result or not state.backport_result.srpm_path:
+                logger.error("Cannot build: no valid backport result or SRPM path")
+                state.backport_result = state.backport_result or BackportOutputSchema(
+                    success=False,
+                    srpm_path=None,
+                    status="",
+                    error="No SRPM generated by backport agent",
+                )
+                return "comment_in_jira"
+            try:
+                commit_message, mr_description, labels = await _compose_backport_commit_and_mr(state)
+                # Collapse every build/fix cycle (and any cherry-pick commits the
+                # backport agent left) into one commit: soft-reset to the pristine
+                # base so the staged tree commits as a single backport commit.
+                # Force-push then overwrites the previous cycle's ref.
+                if state.backport_base_head:
+                    await check_subprocess(
+                        ["git", "reset", "--soft", state.backport_base_head],
+                        cwd=state.local_clone,
+                    )
+                revision = await tasks.commit_changes(state.local_clone, commit_message)
+                await tasks.push_changes(
+                    state.local_clone, state.fork_url, state.update_branch, gateway_tools
+                )
+            except Exception as e:
+                logger.warning(f"Error committing/pushing before build: {e}")
+                state.merge_request_url = None
+                state.backport_result.success = False
+                state.backport_result.error = f"Could not commit and push for build: {e}"
+                return "comment_in_jira"
+
+            build_result = await run_build(
+                build_input=BuildInputSchema(
+                    srpm_path=state.backport_result.srpm_path,
+                    dist_git_branch=state.dist_git_branch,
+                    jira_issue=state.jira_issue,
+                    git_url=state.fork_url,
+                    revision=revision,
+                    package_name=state.package,
+                    target_branch=state.dist_git_branch,
+                ),
+                available_tools=gateway_tools,
+                local_tool_options=local_tool_options,
+            )
+            if build_result.success or build_result.is_timeout:
+                if build_result.is_timeout:
+                    logger.info(f"Build timed out for {state.jira_issue}, proceeding")
+                state.incremental_fix_attempts = 0
+                if dry_run:
+                    # The branch was pushed so the build could run; skip MR
+                    # creation in dry-run.
+                    state.merge_request_url = None
+                    state.merge_request_newly_created = False
+                    return "submit_consolidation_job"
+                try:
+                    (
+                        state.merge_request_url,
+                        state.merge_request_newly_created,
+                    ) = await tasks.open_update_merge_request(
+                        fork_url=state.fork_url,
+                        dist_git_branch=state.dist_git_branch,
+                        update_branch=state.update_branch,
+                        mr_title=state.log_result.title,
+                        mr_description=mr_description,
+                        available_tools=gateway_tools,
+                        labels=labels,
+                        package=state.package,
+                    )
+                except Exception as e:
+                    logger.warning(f"Build passed but MR creation failed: {e}")
+                    state.merge_request_url = None
+                    state.backport_result.success = False
+                    state.backport_result.error = f"Could not open MR after build: {e}"
+                return "submit_consolidation_job"
+            if build_result.is_infra_error:
+                logger.error(f"Build infrastructure error for {state.jira_issue}: {build_result.error}")
+                state.backport_result.success = False
+                state.backport_result.error = build_result.error or "Build infrastructure error"
+                return "comment_in_jira"
+            state.attempts_remaining -= 1
+            if state.attempts_remaining <= 0:
+                state.backport_result.success = False
+                state.backport_result.error = (
+                    f"Unable to successfully build the package in {max_build_attempts} attempts"
+                )
+                return "comment_in_jira"
+            state.build_error = build_result.error
+            if state.used_cherry_pick_workflow:
+                logger.info("Cherry-pick workflow was used - starting incremental fix")
+                return "fix_build_error"
+            logger.info("Git am workflow was used - resetting for retry")
+            return "fork_and_prepare_dist_git"
 
         async def submit_consolidation_job(state):
             if (
@@ -1928,14 +2032,14 @@ async def run_workflow(
             return Workflow.END
 
         workflow.add_step("change_jira_status", change_jira_status)
+        workflow.add_step("close_stale_merge_requests", close_stale_merge_requests)
         workflow.add_step("resume_inherited_publication", resume_inherited_publication)
         workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
         workflow.add_step("prepare_normal_backport", prepare_normal_backport)
         workflow.add_step("evaluate_inherit_source", evaluate_inherit_source)
         workflow.add_step("run_backport_agent", run_backport_agent)
         workflow.add_step("fix_build_error", fix_build_error)
-        workflow.add_step("run_build_agent", run_build_agent)
-        workflow.add_step("run_inherit_build_agent", run_inherit_build_agent)
+        workflow.add_step("validate_inherited_build", validate_inherited_build)
         workflow.add_step("update_release", update_release)
         workflow.add_step("stage_changes", stage_changes)
         workflow.add_step("run_log_agent", run_log_agent)
@@ -1943,6 +2047,7 @@ async def run_workflow(
         workflow.add_step("push_inherited_change", push_inherited_change)
         workflow.add_step("open_inherited_mr", open_inherited_mr)
         workflow.add_step("commit_push_and_open_mr", commit_push_and_open_mr)
+        workflow.add_step("commit_push_and_build", commit_push_and_build)
         workflow.add_step("submit_consolidation_job", submit_consolidation_job)
         workflow.add_step("comment_in_jira", comment_in_jira)
 

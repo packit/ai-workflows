@@ -17,6 +17,7 @@ from ymir.tools.privileged.copr import (
     COPR_BUILD_TIMEOUT,
     COPR_PROJECT_LIFETIME,
     BuildPackageTool,
+    BuildPackageToolInput,
     DownloadArtifactsTool,
     _copr_api_call,
     _copr_error_detail,
@@ -297,3 +298,32 @@ async def test_copr_api_call_no_retry_on_non_copr_exception():
     with pytest.raises(ValueError, match="not a copr error"):
         await _copr_api_call(non_copr_error)
     assert call_count == 1
+
+
+def test_build_input_tolerates_konflux_only_fields():
+    # build_agent.run_build dumps the whole shared BuildInputSchema for every
+    # backend, so the Copr tool receives the Konflux-only fields (git_url,
+    # revision, package_name, target_branch). It must accept that payload rather
+    # than reject the extra keys.
+    model = BuildPackageToolInput.model_validate(
+        {
+            "srpm_path": "/x.src.rpm",
+            "dist_git_branch": "rhel-10.2",
+            "jira_issue": "RHEL-12345",
+            "git_url": "https://fork.example/repo.git",
+            "revision": "a" * 40,
+            "package_name": "expat",
+            "target_branch": "rhel-10.2",
+        }
+    )
+    assert model.srpm_path == Path("/x.src.rpm")
+    assert model.dist_git_branch == "rhel-10.2"
+
+
+def test_input_schema_advertises_additional_properties():
+    # beeai's MCP client rebuilds the tool's input model from the advertised JSON
+    # schema with extra="forbid" UNLESS additionalProperties is truthy. Without
+    # this the Konflux-only fields would fail client-side validation ("Tool input
+    # validation error") before the build ever reaches the gateway.
+    schema = BuildPackageToolInput.model_json_schema()
+    assert schema.get("additionalProperties") is True

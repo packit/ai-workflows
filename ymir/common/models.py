@@ -757,11 +757,18 @@ class BuildInstructionsInput(BaseModel):
 
 
 class BuildInputSchema(BaseModel):
-    """Inputs for deterministic Copr build execution."""
+    """Inputs for deterministic build execution (Copr or Konflux)."""
 
     srpm_path: Path = Field(description="Path to SRPM to build")
     dist_git_branch: str = Field(description="dist-git branch to update")
     jira_issue: str | None = Field(description="Jira issue to reference as resolved")
+    # Konflux-only fields (Copr ignores them). The Konflux backend builds from a
+    # pushed git ref rather than a local SRPM, so the caller supplies these once
+    # the fork branch has been pushed.
+    git_url: str | None = Field(default=None, description="Clonable fork URL holding the pushed commit")
+    revision: str | None = Field(default=None, description="Pushed commit SHA to build")
+    package_name: str | None = Field(default=None, description="RPM package name")
+    target_branch: str | None = Field(default=None, description="dist-git branch the build targets")
 
 
 class BuildResult(BaseModel):

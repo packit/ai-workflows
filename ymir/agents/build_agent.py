@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -37,6 +38,16 @@ from ymir.tools.unprivileged.filesystem import GetCWDTool
 from ymir.tools.unprivileged.text import SearchTextTool, ViewTool
 
 logger = logging.getLogger(__name__)
+
+
+def build_backend() -> str:
+    """Return the configured build backend ("copr" default, or "konflux")."""
+    return os.getenv("BUILD_BACKEND", "copr").strip().lower()
+
+
+def is_konflux_backend() -> bool:
+    """True when builds are driven by Konflux (build-from-git-ref) rather than Copr."""
+    return build_backend() == "konflux"
 
 
 class BuildState(BaseModel):
@@ -86,13 +97,20 @@ async def run_build(
 
         state.output = BuildOutputSchema(
             success=False,
-            error=result.error_message or "Copr build failed without an error message",
+            error=result.error_message or "Build failed without an error message",
             is_timeout=result.is_timeout,
         )
         if result.is_timeout:
             return Workflow.END
 
-        if not any(urlsplit(url).path.endswith(".log.gz") for url in result.artifacts_urls or []):
+        # Copr advertises gzipped build logs; Konflux returns authenticated
+        # Kubearchive pod-log URLs (no .log.gz suffix). Diagnose whenever the
+        # backend handed us any log URLs to inspect.
+        if is_konflux_backend():
+            has_logs = bool(result.artifacts_urls)
+        else:
+            has_logs = any(urlsplit(url).path.endswith(".log.gz") for url in result.artifacts_urls or [])
+        if not has_logs:
             return Workflow.END
 
         return "diagnose_failure"

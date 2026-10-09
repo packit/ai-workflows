@@ -35,6 +35,7 @@ from ymir.tools.privileged.gitlab import (
     AddMergeRequestCommentTool,
     AddMergeRequestLabelsTool,
     CloneRepositoryTool,
+    CloseMergeRequestTool,
     FetchBranchTool,
     FetchCommitTool,
     FetchGitlabMrNotesTool,
@@ -71,6 +72,10 @@ from ymir.tools.privileged.jira import (
     UpdateJiraCommentTool,
     VerifyIssueAuthorTool,
 )
+from ymir.tools.privileged.konflux import (
+    KonfluxBuildTool,
+    KonfluxDownloadArtifactsTool,
+)
 from ymir.tools.privileged.lookaside import (
     DownloadSourcesTool,
     UploadSourcesTool,
@@ -90,6 +95,28 @@ from ymir.tools.privileged.testing_farm import (
 from ymir.tools.privileged.zstream_search import ZStreamSearchTool
 
 logger = logging.getLogger(__name__)
+
+
+def _select_build_tools(tool_options: dict) -> list:
+    """Return the (build_package, download_artifacts) tools for the configured backend.
+
+    Both backends register the same tool names so the agents stay backend-agnostic.
+    Selected by BUILD_BACKEND (default: copr).
+    """
+    backend = os.getenv("BUILD_BACKEND", "copr").strip().lower()
+    if backend == "konflux":
+        logger.info("Build backend: konflux")
+        return [
+            KonfluxBuildTool(options=tool_options),
+            KonfluxDownloadArtifactsTool(options=tool_options),
+        ]
+    if backend not in ("copr", ""):
+        logger.warning("Unknown BUILD_BACKEND=%r, falling back to copr", backend)
+    logger.info("Build backend: copr")
+    return [
+        BuildPackageTool(options=tool_options),
+        DownloadArtifactsTool(options=tool_options),
+    ]
 
 
 async def _async_main():
@@ -116,15 +143,16 @@ async def _async_main():
     else:
         logger.info("Gateway starting without LogDetective MCP tools.")
 
+    build_tools = _select_build_tools(tool_options)
     mcp.register_many(
         [
-            BuildPackageTool(options=tool_options),
-            DownloadArtifactsTool(options=tool_options),
+            *build_tools,
             CreateZstreamBranchTool(options=tool_options),
             AddBlockingMergeRequestCommentTool(options=tool_options),
             AddMergeRequestCommentTool(options=tool_options),
             AddMergeRequestLabelsTool(options=tool_options),
             CloneRepositoryTool(options=tool_options),
+            CloseMergeRequestTool(options=tool_options),
             FetchBranchTool(options=tool_options),
             FetchCommitTool(options=tool_options),
             ForkRepositoryTool(options=tool_options),

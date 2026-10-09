@@ -140,7 +140,11 @@ class TestBuildInstructions:
         )
         assert "expert on analyzing package build failures" in result
         assert "Do not submit or retry a build" in result
-        assert "builder-live.log" in result
+        # The gateway-log (Konflux) branch must stay backend-neutral: Konflux logs
+        # are named after pods/containers, not Copr's builder-live.log/root.log.
+        assert "builder-live.log" not in result
+        assert "root.log" not in result
+        assert "main build log" in result
         assert "extract_log_snippets" in result
         assert "Start with" not in result
 
@@ -157,6 +161,8 @@ class TestBuildInstructions:
         assert "local sandbox" in result
         assert "artifacts_urls" in result
         assert "Start with" in result
+        assert "builder-live.log" in result
+        assert "root.log" in result
 
 
 class TestLogInstructions:
@@ -448,7 +454,7 @@ class TestInheritAdaptationTemplate:
 
 
 class TestBackportFixBuildErrorTemplate:
-    def test_renders_with_extract_log_snippets(self):
+    def test_renders_fix_build_error(self):
         result = render_template(
             "backport/prompt_fix_build_error.j2",
             BackportFixBuildInputSchema(
@@ -460,37 +466,20 @@ class TestBackportFixBuildErrorTemplate:
                 jira_issue="RHEL-12345",
                 upstream_patches=["https://example.com/p1.patch"],
                 build_error="undefined reference to 'bar'",
-                has_extract_log_snippets=True,
             ),
         )
         assert "cherry-pick workflow succeeded but the build failed" in result
         assert "undefined reference" in result
         assert "Before you start: Read /tmp/clone-build-logs/fix-attempts.md" in result
         assert "/tmp/clone-upstream/build-logs" not in result
-        assert "extract_log_snippets" in result
         assert "start with" not in result
-
-    def test_renders_without_extract_log_snippets(self):
-        result = render_template(
-            "backport/prompt_fix_build_error.j2",
-            BackportFixBuildInputSchema(
-                local_clone=Path("/tmp/clone"),
-                build_logs_dir=Path("/tmp/clone-build-logs"),
-                unpacked_sources=Path("/tmp/sources"),
-                package="libfoo",
-                dist_git_branch="c9s",
-                jira_issue="RHEL-12345",
-                upstream_patches=["https://example.com/p1.patch"],
-                build_error="undefined reference to 'bar'",
-                has_extract_log_snippets=False,
-            ),
-        )
-        assert "cherry-pick workflow succeeded but the build failed" in result
-        assert "undefined reference" in result
-        assert "Before you start: Read /tmp/clone-build-logs/fix-attempts.md" in result
-        assert "/tmp/clone-upstream/build-logs" not in result
+        # The fix agent produces a corrected backport + SRPM but never builds
+        # the package itself — the dedicated build step is the only builder.
+        assert "Do NOT attempt to build the package yourself" in result
+        assert "build_srpm" in result
+        assert "build_package" not in result
+        assert "download_artifacts" not in result
         assert "extract_log_snippets" not in result
-        assert "get logs and identify the new error" in result
 
 
 class TestRebaseTemplate:

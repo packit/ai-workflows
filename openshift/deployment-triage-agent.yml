@@ -22,10 +22,9 @@ spec:
     spec:
       containers:
       - args:
+        - /usr/bin/python3
         - -m
         - ymir.agents.triage_agent
-        command:
-        - /usr/bin/python3
         env:
         - name: REQUESTS_CA_BUNDLE
           value: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem

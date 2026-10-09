@@ -11,6 +11,13 @@ metadata:
             "name": "phoenix-db:prod"
           },
           "fieldPath": "spec.template.spec.containers[?(@.name==\"phoenix-db\")].image"
+        },
+        {
+          "from": {
+            "kind": "ImageStreamTag",
+            "name": "phoenix-db:prod"
+          },
+          "fieldPath": "spec.template.spec.initContainers[?(@.name==\"setup-tls\")].image"
         }
       ]
 spec:
@@ -28,6 +35,27 @@ spec:
         app: phoenix-db
         deployment: phoenix-db
     spec:
+      initContainers:
+      - name: setup-tls
+        image: phoenix-db:prod
+        command:
+        - /bin/sh
+        - -c
+        - |
+          cp /tls-secret/tls.crt /pg-tls/server.crt
+          cp /tls-secret/tls.key /pg-tls/server.key
+          chmod 0600 /pg-tls/server.key
+          cat > /pg-tls/ssl.conf << 'CONF'
+          ssl = on
+          ssl_cert_file = '/pg-tls/server.crt'
+          ssl_key_file = '/pg-tls/server.key'
+          CONF
+        volumeMounts:
+        - name: tls-secret
+          mountPath: /tls-secret
+          readOnly: true
+        - name: pg-tls
+          mountPath: /pg-tls
       containers:
       - envFrom:
         - secretRef:
@@ -70,6 +98,11 @@ spec:
         volumeMounts:
         - mountPath: /var/lib/pgsql/data
           name: phoenix-db-data
+        - mountPath: /pg-tls
+          name: pg-tls
+        - mountPath: /opt/app-root/src/postgresql-cfg/ssl.conf
+          name: pg-tls
+          subPath: ssl.conf
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
@@ -82,3 +115,8 @@ spec:
       - name: phoenix-db-data
         persistentVolumeClaim:
           claimName: phoenix-db-data
+      - name: tls-secret
+        secret:
+          secretName: phoenix-db-tls  # pragma: allowlist secret
+      - name: pg-tls
+        emptyDir: {}

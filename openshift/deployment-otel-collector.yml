@@ -65,6 +65,10 @@ spec:
         env:
         - name: TRACE_DB_PATH
           value: /data/traces.db
+        - name: TLS_CERT_FILE
+          value: /tls/tls.crt
+        - name: TLS_KEY_FILE
+          value: /tls/tls.key
         envFrom:
         - configMapRef:
             name: trace-server-oidc-env
@@ -75,17 +79,20 @@ spec:
           httpGet:
             path: /health
             port: 8080
+            scheme: HTTPS
           failureThreshold: 30
           periodSeconds: 10
         livenessProbe:
           httpGet:
             path: /health
             port: 8080
+            scheme: HTTPS
           periodSeconds: 15
         readinessProbe:
           httpGet:
             path: /health
             port: 8080
+            scheme: HTTPS
           periodSeconds: 10
         resources:
           limits:
@@ -99,6 +106,9 @@ spec:
         volumeMounts:
         - mountPath: /data
           name: trace-server-data
+        - mountPath: /tls
+          name: tls
+          readOnly: true
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
@@ -114,3 +124,6 @@ spec:
       - name: trace-server-data
         persistentVolumeClaim:
           claimName: trace-server-data
+      - name: tls
+        secret:
+          secretName: otel-collector-tls  # pragma: allowlist secret

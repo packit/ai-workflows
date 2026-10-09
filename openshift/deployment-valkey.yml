@@ -18,7 +18,20 @@ spec:
         deployment: valkey
     spec:
       containers:
-      - image: valkey:prod
+      - args:
+        - --tls-port
+        - "6379"
+        - --port
+        - "0"
+        - --tls-cert-file
+        - /tls/tls.crt
+        - --tls-key-file
+        - /tls/tls.key
+        - --tls-ca-cert-file
+        - /etc/pki/service-ca/service-ca.crt
+        - --tls-auth-clients
+        - "no"
+        image: valkey:prod
         imagePullPolicy: IfNotPresent
         name: valkey
         ports:
@@ -35,6 +48,12 @@ spec:
         volumeMounts:
         - mountPath: /data
           name: valkey-data
+        - mountPath: /tls
+          name: tls
+          readOnly: true
+        - mountPath: /etc/pki/service-ca
+          name: service-ca
+          readOnly: true
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
@@ -47,3 +66,9 @@ spec:
       - name: valkey-data
         persistentVolumeClaim:
           claimName: valkey-data
+      - name: tls
+        secret:
+          secretName: valkey-tls  # pragma: allowlist secret
+      - name: service-ca
+        configMap:
+          name: service-ca-bundle

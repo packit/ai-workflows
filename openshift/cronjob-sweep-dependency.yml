@@ -56,6 +56,9 @@ spec:
             - mountPath: /home/sweepbot/rhel-config.json
               name: rhel-config
               subPath: rhel-config.json
+            - mountPath: /etc/pki/service-ca
+              name: service-ca
+              readOnly: true
           securityContext:
             runAsNonRoot: true
             seccompProfile:
@@ -67,3 +70,6 @@ spec:
             - name: rhel-config
               configMap:
                 name: rhel-config
+            - name: service-ca
+              configMap:
+                name: service-ca-bundle

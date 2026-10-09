@@ -60,7 +60,12 @@ async def redis_client(
         async with redis_client("redis://localhost:6379/0") as client:
             await client.ping()
     """
-    client = redis.Redis.from_url(redis_url, socket_timeout=socket_timeout)
+    ssl_kwargs = {}
+    if redis_url.startswith("rediss://"):
+        ca_path = os.environ.get("REDIS_TLS_CA_CERT_FILE", "/etc/pki/service-ca/service-ca.crt")
+        if os.path.isfile(ca_path):
+            ssl_kwargs["ssl_ca_certs"] = ca_path
+    client = redis.Redis.from_url(redis_url, socket_timeout=socket_timeout, **ssl_kwargs)
     try:
         await client.ping()
         logger.debug("Connected to Redis")

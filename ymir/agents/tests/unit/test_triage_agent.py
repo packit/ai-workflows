@@ -21,6 +21,9 @@ from ymir.agents.triage_agent import (
     render_prompt,
     run_workflow,
 )
+from ymir.common import (
+    utils as common_utils,
+)
 from ymir.common.constants import YMIR_COMMENT_MARKER, JiraLabels
 from ymir.common.models import (
     ApplicabilityResult,
@@ -37,7 +40,7 @@ from ymir.common.models import (
     TriageInputSchema,
     TriageOutputSchema,
 )
-from ymir.common.utils import FIXED_IN_BUILD_CUSTOM_FIELD
+from ymir.common.utils import FIXED_IN_BUILD_CUSTOM_FIELD, ToolError
 from ymir.common.version_utils import extract_downstream_package, is_modular, parse_module_stream
 
 
@@ -940,6 +943,10 @@ async def test_branch_creation_notice_uses_final_resolution(
                     "comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]
                 }
             return {"fields": fields}
+        if name == "search_jira_issues":
+            # Mock Jira search for check_package_built_with_fixed_dependency
+            # Return empty list to indicate no builds found (so package needs rebuild)
+            return []
         raise AssertionError(f"Unexpected tool: {name}")
 
     async def _mock_rules(name, **kwargs):
@@ -965,6 +972,15 @@ async def test_branch_creation_notice_uses_final_resolution(
     monkeypatch.setattr(agent_tasks, "mcp_tools", _mock_mcp_tools)
     flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
     flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_rules)
+
+    # Mock run_tool in common_utils for check_package_built_with_fixed_dependency
+    async def _mock_common_utils_run_tool(name, **kwargs):
+        if name == "search_jira_issues":
+            # Return empty list to indicate no builds found
+            return []
+        raise ToolError(f"Unexpected tool in common_utils: {name}")
+
+    flexmock(common_utils).should_receive("run_tool").replace_with(_mock_common_utils_run_tool)
     monkeypatch.setattr(t_agent, "get_mock_local_tool_env", lambda *_: None)
     monkeypatch.setattr(t_agent, "get_agent_execution_config", dict)
     monkeypatch.setattr(t_agent, "render_template", lambda *_: "output format")

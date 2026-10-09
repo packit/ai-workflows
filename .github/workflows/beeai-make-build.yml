@@ -12,13 +12,25 @@ jobs:
     steps:
       - name: Install packages required
         run: |
-          sudo apt-get install -y podman-compose
+          sudo apt-get install -y podman-compose python3-yaml
 
       - name: Checkout Git Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
 
+      - name: Check agent deployment entrypoints
+        run: python3 scripts/check_agent_init.py
+
       - name: Run container builds
         run: |
           podman-compose -f compose.yaml build
+          # Compose versions differ in which profiled services they build.
+          for stream in c9s c10s; do
+            if ! podman image exists "beeai-agent:${stream}"; then
+              podman build -t "beeai-agent:${stream}" -f "Containerfile.${stream}" .
+            fi
+          done
+
+      - name: Check agent init behavior in built images
+        run: python3 scripts/test_agent_init.py

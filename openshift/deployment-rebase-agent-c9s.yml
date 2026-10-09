@@ -22,10 +22,9 @@ spec:
     spec:
       containers:
       - args:
+        - python
         - -m
         - ymir.agents.rebase_agent
-        command:
-        - python
         env:
         - name: CONTAINER_VERSION
           value: "c9s"

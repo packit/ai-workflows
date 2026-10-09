@@ -75,6 +75,10 @@ For installation instructions (skill setup and MCP tool configuration), see the 
 - [MR Consolidation Architecture](docs/mr_consolidation_architecture.md) - Merging multiple backport MRs into a single MR
 - [Reproducer Architecture](docs/reproducer_architecture.md) - Automated test reproducers, cross-stream reuse, and create/adapt locking
 
+**Change management:**
+
+- [Communication process](docs/change_management.md) - Post-deployment updates to News, Slack, and the mailing list
+
 **Data management:**
 
 - [Data Retention Policy](data_retention_policy.md) - Retention periods for logs, queues, and temporary data

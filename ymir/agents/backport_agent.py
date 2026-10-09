@@ -1260,7 +1260,7 @@ async def run_workflow(
                     f"{format_jira_links_for_mr(state.jira_issue)}\n"
                     f"{wrap_details('Backporting steps', state.backport_log[-1])}"
                     f"\n\n{branch_note}"
-                    f"{mr_description_footer(state.package)}"
+                    f"{mr_description_footer(state.package, state.jira_issue)}"
                 )
                 state.backport_result = BackportOutputSchema(
                     success=True,
@@ -1800,7 +1800,7 @@ async def run_workflow(
                     f"{format_jira_links_for_mr(state.jira_issue)}\n"
                     f"{wrap_details('Backporting steps', state.backport_log[-1])}"
                     f"\n\n{branch_note}"
-                    f"{mr_description_footer(state.package)}"
+                    f"{mr_description_footer(state.package, state.jira_issue)}"
                 )
                 (
                     state.merge_request_url,

@@ -98,9 +98,17 @@ def format_zstream_branch_note(note: str | None, warning: str | None = None) -> 
     return result
 
 
-def mr_description_footer(package: str) -> str:
+def mr_description_footer(package: str, jira_issues: str | list[str] | None = None) -> str:
+    """Build the shared MR footer, with links to all traces for the included issues."""
+    issues = [jira_issues] if isinstance(jira_issues, str) else jira_issues or []
+    trace_links = [
+        f"- [View all traces for {issue}]({url})"
+        for issue in dict.fromkeys(issues)
+        if issue and (url := trace_viewer_issue_url(issue))
+    ]
+    traces = "## Execution traces\n\n" + "\n".join(trace_links) + "\n\n" if trace_links else ""
     return (
-        "---\n"  # noqa: S608
+        traces + "---\n"  # noqa: S608
         "\n"
         "> **⚠️ AI-Generated MR**: Created by Ymir AI assistant. AI may make mistakes, "
         "select incorrect patches, or miss dependencies. **Carefully review the changes. "

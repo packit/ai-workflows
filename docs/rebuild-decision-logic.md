@@ -12,15 +12,13 @@ How Ymir determines whether a package needs to be rebuilt for a CVE dependency f
    - Any Koji lookup failure → `TransientInfrastructureError` (retry)
    - Prevents selecting from an incomplete candidate set
 3. **Determine built architectures** from Koji RPM list
-   - Noarch-only builds: try common arches, accept any log found
+   - Noarch builds: fetch from noarch/ directory
 4. **Fetch installed_pkgs.log** for each built architecture
    - Read installed RPM records in `name-[epoch:]version-release.arch timestamp size digest installed` format
-   - 404/410 → log genuinely absent (retention)
+   - 404/410 → log genuinely absent (retention policy or very old build), fall back to timestamp comparison
    - 5xx/401/403/429 → `TransientInfrastructureError` (retry)
    - Transport errors → `TransientInfrastructureError` (retry)
-   - Old builds (>90 days): confirmed absent logs fall back to timestamp comparison
-   - Recent builds: absent logs → `TransientInfrastructureError` (retry)
-   - Server, authorization, transport, or decoding failures → retry regardless of build age
+   - Server, authorization, transport, or decoding failures → retry
 5. **Compare dependency versions**:
    - **installed_pkgs.log available**: Compare EVRs (used vs fixed)
      - Used >= Fixed → Already Fixed

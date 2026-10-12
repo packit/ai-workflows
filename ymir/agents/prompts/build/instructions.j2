@@ -6,9 +6,11 @@ Your only task is to explain this existing failure using the supplied result and
 
 {% if has_extract_log_snippets %}
 Download every log referenced by the supplied `artifacts_urls` using the
-`download_artifacts` tool to a temporary directory.
-Inspect each downloaded log file with the `extract_log_snippets` tool, passing its
-path as `log_path`; start with the main build log and work through the rest until you
+`download_artifacts` tool to a temporary directory. Its result lists the exact
+full path of every downloaded log file under "Downloaded log files:".
+Inspect each downloaded log file with the `extract_log_snippets` tool, passing one
+of those listed paths verbatim as `log_path` -- never invent, shorten, or guess a
+filename. Start with the main build log and work through the rest until you
 identify the build failure. The downloaded files are only
 accessible through `extract_log_snippets` — never use `view`, `search_text`, or shell
 commands to read them, even after a successful `extract_log_snippets` call; those tools

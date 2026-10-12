@@ -21,11 +21,12 @@ from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import run_build
+from ymir.agents.build_agent import is_konflux_backend, run_build
 from ymir.agents.constants import I_AM_YMIR
 from ymir.agents.observability import setup_observability
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import (
+    check_subprocess,
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
@@ -132,6 +133,254 @@ def extract_jira_issue(mr_description: str) -> str:
     raise RuntimeError("Failed to extract Jira issue from MR description")
 
 
+class State(BaseModel):
+    merge_request_url: str
+    local_clone: Path | None = Field(default=None)
+    spec_name: str | None = Field(default=None)
+    package: str | None = Field(default=None)
+    dist_git_branch: str | None = Field(default=None)
+    update_branch: str | None = Field(default=None)
+    fork_url: str | None = Field(default=None)
+    jira_issue: str | None = Field(default=None)
+    merge_request_title: str | None = Field(default=None)
+    merge_request_description: str | None = Field(default=None)
+    merge_request_comments: str | None = Field(default=None)
+    build_error: str | None = Field(default=None)
+    fedora_clone: Path | None = Field(default=None)
+    mr_update_log: list[str] = Field(default_factory=list)
+    mr_update_result: MergeRequestOutputSchema | None = Field(default=None)
+    attempts_remaining: int = Field(default=10)
+    all_files_git_to_add: set[str] = Field(default_factory=set)
+
+
+async def run_workflow(
+    merge_request_url,
+    *,
+    dry_run: bool = False,
+    max_build_attempts: int = 10,
+    span_processor=None,
+):
+    local_tool_options = {"working_directory": None}
+
+    async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
+        merge_request_agent = create_merge_request_agent(gateway_tools, local_tool_options)
+
+        workflow = Workflow(State, name="MergeRequestWorkflow")
+
+        async def prepare_dist_git_from_mr(state):
+            (
+                state.local_clone,
+                mr_details,
+                state.fedora_clone,
+            ) = await tasks.prepare_dist_git_from_merge_request(
+                merge_request_url=state.merge_request_url,
+                available_tools=gateway_tools,
+                with_fedora=True,
+            )
+
+            if not mr_details.comments:
+                logger.info("No user feedback provided, nothing to do")
+                return Workflow.END
+
+            state.package = mr_details.target_repo_name
+            state.dist_git_branch = mr_details.target_branch
+            state.update_branch = mr_details.source_branch
+            state.fork_url = mr_details.source_repo
+            state.jira_issue = extract_jira_issue(mr_details.description)
+            if span_processor is not None:
+                span_processor.set_jira_issue(state.jira_issue)
+            state.merge_request_title = mr_details.title
+            state.merge_request_description = mr_details.description
+
+            comments_schema = mr_details.comments.model_json_schema(mode="serialization")
+            comments = mr_details.comments.model_dump_json(indent=4)
+            state.merge_request_comments = dedent(
+                f"""
+                JSON schema of the comments:
+                ```json
+                {comments_schema}
+                ```
+
+                Comments:
+                ```json
+                {comments}
+                ```
+                """
+            )
+
+            local_tool_options["working_directory"] = state.local_clone
+            state.spec_name = tasks.find_spec(state.local_clone, state.package)
+            return "run_merge_request_agent"
+
+        async def run_merge_request_agent(state):
+            response = await merge_request_agent.run(
+                render_template(
+                    get_prompt(),
+                    MergeRequestInputSchema(
+                        local_clone=state.local_clone,
+                        package=state.package,
+                        dist_git_branch=state.dist_git_branch,
+                        jira_issue=state.jira_issue,
+                        merge_request_url=state.merge_request_url,
+                        merge_request_title=state.merge_request_title,
+                        merge_request_description=state.merge_request_description,
+                        comments=state.merge_request_comments,
+                        fedora_clone=state.fedora_clone,
+                        build_error=state.build_error,
+                    ),
+                ),
+                expected_output=MergeRequestOutputSchema,
+                **get_agent_execution_config(),
+            )
+            state.mr_update_result = MergeRequestOutputSchema.model_validate_json(response.last_message.text)
+            if state.mr_update_result.success:
+                state.mr_update_log.append(state.mr_update_result.status)
+                # Accumulate files from this iteration
+                if state.mr_update_result.files_to_git_add:
+                    state.all_files_git_to_add.update(state.mr_update_result.files_to_git_add)
+                return "run_build_agent"
+            return "comment_in_mr"
+
+        async def _prepare_konflux_mr_ref(state):
+            """Push a throwaway build candidate so Konflux can build the fix.
+
+            The MR agent's update_branch is the live source branch of an
+            existing MR, so we must never push an unvalidated commit there --
+            especially under dry_run. Instead commit the current working tree
+            locally, push it to a dedicated scratch branch on the fork for the
+            build, then soft-reset so the normal stage_changes ->
+            commit_and_push flow runs unchanged (and still honours
+            commit_only=dry_run on the real branch).
+            """
+            base_sha, _ = await check_subprocess(["git", "rev-parse", "HEAD"], cwd=state.local_clone)
+            base_sha = (base_sha or "").strip()
+            files_to_git_add = list(state.all_files_git_to_add) or [state.spec_name]
+            await tasks.stage_changes(
+                local_clone=state.local_clone,
+                files_to_commit=files_to_git_add,
+            )
+            revision = await tasks.commit_changes(
+                state.local_clone,
+                f"Konflux build candidate for {state.package} ({state.jira_issue})",
+            )
+            scratch_branch = f"{state.update_branch}-ymir-konflux-build"
+            await check_subprocess(["git", "branch", "-f", scratch_branch, revision], cwd=state.local_clone)
+            await tasks.push_changes(state.local_clone, state.fork_url, scratch_branch, gateway_tools)
+            # Restore the pre-commit working tree so the real commit/push flow
+            # is identical to the Copr path.
+            if base_sha:
+                await check_subprocess(["git", "reset", "--soft", base_sha], cwd=state.local_clone)
+            return revision
+
+        async def run_build_agent(state):
+            if is_konflux_backend():
+                revision = await _prepare_konflux_mr_ref(state)
+                build_input = BuildInputSchema(
+                    srpm_path=state.mr_update_result.srpm_path,
+                    dist_git_branch=state.dist_git_branch,
+                    jira_issue=state.jira_issue,
+                    git_url=state.fork_url,
+                    revision=revision,
+                    package_name=state.package,
+                    target_branch=state.dist_git_branch,
+                )
+            else:
+                build_input = BuildInputSchema(
+                    srpm_path=state.mr_update_result.srpm_path,
+                    dist_git_branch=state.dist_git_branch,
+                    jira_issue=state.jira_issue,
+                )
+            build_result = await run_build(
+                build_input=build_input,
+                available_tools=gateway_tools,
+                local_tool_options=local_tool_options,
+            )
+            if build_result.success:
+                return "stage_changes"
+            if build_result.is_timeout:
+                logger.info(f"Build timed out for {state.jira_issue}, proceeding")
+                return "stage_changes"
+            if build_result.is_infra_error:
+                logger.error(f"Build infrastructure error for {state.jira_issue}: {build_result.error}")
+                state.mr_update_result.success = False
+                state.mr_update_result.error = build_result.error or "Build infrastructure error"
+                return "comment_in_mr"
+            state.attempts_remaining -= 1
+            if state.attempts_remaining <= 0:
+                state.mr_update_result.success = False
+                state.mr_update_result.error = (
+                    f"Unable to successfully build the package in {max_build_attempts} attempts"
+                )
+                return "comment_in_mr"
+            state.build_error = build_result.error
+            return "prepare_dist_git_from_mr"
+
+        async def stage_changes(state):
+            # Use accumulated files from all iterations, fallback to *.spec if none specified
+            files_to_git_add = list(state.all_files_git_to_add) or [state.spec_name]
+
+            try:
+                await tasks.stage_changes(
+                    local_clone=state.local_clone,
+                    files_to_commit=files_to_git_add,
+                )
+            except Exception as e:
+                logger.warning(f"Error staging changes: {e}")
+                state.mr_update_result.success = False
+                state.mr_update_result.error = f"Could not stage changes: {e}"
+                return "comment_in_mr"
+            return "commit_and_push"
+
+        async def commit_and_push(state):
+            try:
+                await tasks.commit_and_push(
+                    local_clone=state.local_clone,
+                    commit_message=(
+                        f"{state.mr_update_log[-1]}\n\n"
+                        f"Related: {state.jira_issue}\n\n"
+                        f"This commit was created {I_AM_YMIR}\n\n"
+                        f"Assisted-by: Ymir\n"
+                    ),
+                    fork_url=state.fork_url,
+                    update_branch=state.update_branch,
+                    available_tools=gateway_tools,
+                    commit_only=dry_run,
+                )
+            except Exception as e:
+                logger.warning(f"Error committing: {e}")
+                state.mr_update_result.success = False
+                state.mr_update_result.error = f"Could not commit: {e}"
+                return "comment_in_mr"
+            return Workflow.END
+
+        async def comment_in_mr(state):
+            if dry_run:
+                return Workflow.END
+            if not state.mr_update_result.success:
+                await tasks.comment_in_mr(
+                    merge_request_url=state.merge_request_url,
+                    comment_text=f"Agent failed to update MR: {state.mr_update_result.error}",
+                    available_tools=gateway_tools,
+                )
+            return Workflow.END
+
+        workflow.add_step("prepare_dist_git_from_mr", prepare_dist_git_from_mr)
+        workflow.add_step("run_merge_request_agent", run_merge_request_agent)
+        workflow.add_step("run_build_agent", run_build_agent)
+        workflow.add_step("stage_changes", stage_changes)
+        workflow.add_step("commit_and_push", commit_and_push)
+        workflow.add_step("comment_in_mr", comment_in_mr)
+
+        try:
+            response = await workflow.run(
+                State(merge_request_url=merge_request_url, attempts_remaining=max_build_attempts)
+            )
+            return response.state
+        finally:
+            if builddir := local_tool_options.get("builddir"):
+                shutil.rmtree(builddir, ignore_errors=True)
+
+
 async def main() -> None:
     configure_logging(level=logging.INFO)
 
@@ -140,204 +389,14 @@ async def main() -> None:
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     max_build_attempts = int(os.getenv("MAX_BUILD_ATTEMPTS", "10"))
 
-    class State(BaseModel):
-        merge_request_url: str
-        local_clone: Path | None = Field(default=None)
-        spec_name: str | None = Field(default=None)
-        package: str | None = Field(default=None)
-        dist_git_branch: str | None = Field(default=None)
-        update_branch: str | None = Field(default=None)
-        fork_url: str | None = Field(default=None)
-        jira_issue: str | None = Field(default=None)
-        merge_request_title: str | None = Field(default=None)
-        merge_request_description: str | None = Field(default=None)
-        merge_request_comments: str | None = Field(default=None)
-        build_error: str | None = Field(default=None)
-        fedora_clone: Path | None = Field(default=None)
-        mr_update_log: list[str] = Field(default_factory=list)
-        mr_update_result: MergeRequestOutputSchema | None = Field(default=None)
-        attempts_remaining: int = Field(default=max_build_attempts)
-        all_files_git_to_add: set[str] = Field(default_factory=set)
-
-    async def run_workflow(merge_request_url):
-        local_tool_options = {"working_directory": None}
-
-        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-            merge_request_agent = create_merge_request_agent(gateway_tools, local_tool_options)
-
-            workflow = Workflow(State, name="MergeRequestWorkflow")
-
-            async def prepare_dist_git_from_mr(state):
-                (
-                    state.local_clone,
-                    mr_details,
-                    state.fedora_clone,
-                ) = await tasks.prepare_dist_git_from_merge_request(
-                    merge_request_url=state.merge_request_url,
-                    available_tools=gateway_tools,
-                    with_fedora=True,
-                )
-
-                if not mr_details.comments:
-                    logger.info("No user feedback provided, nothing to do")
-                    return Workflow.END
-
-                state.package = mr_details.target_repo_name
-                state.dist_git_branch = mr_details.target_branch
-                state.update_branch = mr_details.source_branch
-                state.fork_url = mr_details.source_repo
-                state.jira_issue = extract_jira_issue(mr_details.description)
-                span_processor.set_jira_issue(state.jira_issue)
-                state.merge_request_title = mr_details.title
-                state.merge_request_description = mr_details.description
-
-                comments_schema = mr_details.comments.model_json_schema(mode="serialization")
-                comments = mr_details.comments.model_dump_json(indent=4)
-                state.merge_request_comments = dedent(
-                    f"""
-                    JSON schema of the comments:
-                    ```json
-                    {comments_schema}
-                    ```
-
-                    Comments:
-                    ```json
-                    {comments}
-                    ```
-                    """
-                )
-
-                local_tool_options["working_directory"] = state.local_clone
-                state.spec_name = tasks.find_spec(state.local_clone, state.package)
-                return "run_merge_request_agent"
-
-            async def run_merge_request_agent(state):
-                response = await merge_request_agent.run(
-                    render_template(
-                        get_prompt(),
-                        MergeRequestInputSchema(
-                            local_clone=state.local_clone,
-                            package=state.package,
-                            dist_git_branch=state.dist_git_branch,
-                            jira_issue=state.jira_issue,
-                            merge_request_url=state.merge_request_url,
-                            merge_request_title=state.merge_request_title,
-                            merge_request_description=state.merge_request_description,
-                            comments=state.merge_request_comments,
-                            fedora_clone=state.fedora_clone,
-                            build_error=state.build_error,
-                        ),
-                    ),
-                    expected_output=MergeRequestOutputSchema,
-                    **get_agent_execution_config(),
-                )
-                state.mr_update_result = MergeRequestOutputSchema.model_validate_json(
-                    response.last_message.text
-                )
-                if state.mr_update_result.success:
-                    state.mr_update_log.append(state.mr_update_result.status)
-                    # Accumulate files from this iteration
-                    if state.mr_update_result.files_to_git_add:
-                        state.all_files_git_to_add.update(state.mr_update_result.files_to_git_add)
-                    return "run_build_agent"
-                return "comment_in_mr"
-
-            async def run_build_agent(state):
-                build_result = await run_build(
-                    build_input=BuildInputSchema(
-                        srpm_path=state.mr_update_result.srpm_path,
-                        dist_git_branch=state.dist_git_branch,
-                        jira_issue=state.jira_issue,
-                    ),
-                    available_tools=gateway_tools,
-                    local_tool_options=local_tool_options,
-                )
-                if build_result.success:
-                    return "stage_changes"
-                if build_result.is_timeout:
-                    logger.info(f"Build timed out for {state.jira_issue}, proceeding")
-                    return "stage_changes"
-                if build_result.is_infra_error:
-                    logger.error(f"Copr infrastructure error for {state.jira_issue}: {build_result.error}")
-                    state.mr_update_result.success = False
-                    state.mr_update_result.error = build_result.error or "Copr API infrastructure error"
-                    return "comment_in_mr"
-                state.attempts_remaining -= 1
-                if state.attempts_remaining <= 0:
-                    state.mr_update_result.success = False
-                    state.mr_update_result.error = (
-                        f"Unable to successfully build the package in {max_build_attempts} attempts"
-                    )
-                    return "comment_in_mr"
-                state.build_error = build_result.error
-                return "prepare_dist_git_from_merge_request"
-
-            async def stage_changes(state):
-                # Use accumulated files from all iterations, fallback to *.spec if none specified
-                files_to_git_add = list(state.all_files_git_to_add) or [state.spec_name]
-
-                try:
-                    await tasks.stage_changes(
-                        local_clone=state.local_clone,
-                        files_to_commit=files_to_git_add,
-                    )
-                except Exception as e:
-                    logger.warning(f"Error staging changes: {e}")
-                    state.mr_update_result.success = False
-                    state.mr_update_result.error = f"Could not stage changes: {e}"
-                    return "comment_in_mr"
-                return "commit_and_push"
-
-            async def commit_and_push(state):
-                try:
-                    await tasks.commit_and_push(
-                        local_clone=state.local_clone,
-                        commit_message=(
-                            f"{state.mr_update_log[-1]}\n\n"
-                            f"Related: {state.jira_issue}\n\n"
-                            f"This commit was created {I_AM_YMIR}\n\n"
-                            f"Assisted-by: Ymir\n"
-                        ),
-                        fork_url=state.fork_url,
-                        update_branch=state.update_branch,
-                        available_tools=gateway_tools,
-                        commit_only=dry_run,
-                    )
-                except Exception as e:
-                    logger.warning(f"Error committing: {e}")
-                    state.mr_update_result.success = False
-                    state.mr_update_result.error = f"Could not commit: {e}"
-                    return "comment_in_mr"
-                return Workflow.END
-
-            async def comment_in_mr(state):
-                if dry_run:
-                    return Workflow.END
-                if not state.mr_update_result.success:
-                    await tasks.comment_in_mr(
-                        merge_request_url=state.merge_request_url,
-                        comment_text=f"Agent failed to update MR: {state.mr_update_result.error}",
-                        available_tools=gateway_tools,
-                    )
-                return Workflow.END
-
-            workflow.add_step("prepare_dist_git_from_mr", prepare_dist_git_from_mr)
-            workflow.add_step("run_merge_request_agent", run_merge_request_agent)
-            workflow.add_step("run_build_agent", run_build_agent)
-            workflow.add_step("stage_changes", stage_changes)
-            workflow.add_step("commit_and_push", commit_and_push)
-            workflow.add_step("comment_in_mr", comment_in_mr)
-
-            try:
-                response = await workflow.run(State(merge_request_url=merge_request_url))
-                return response.state
-            finally:
-                if builddir := local_tool_options.get("builddir"):
-                    shutil.rmtree(builddir, ignore_errors=True)
-
     if merge_request_url := os.getenv("MERGE_REQUEST_URL", None):
         logger.info("Running in direct mode with environment variables")
-        state = await run_workflow(merge_request_url=merge_request_url)
+        state = await run_workflow(
+            merge_request_url=merge_request_url,
+            dry_run=dry_run,
+            max_build_attempts=max_build_attempts,
+            span_processor=span_processor,
+        )
         logger.info(f"Direct run completed: {state.mr_update_result.model_dump_json(indent=4)}")
 
 

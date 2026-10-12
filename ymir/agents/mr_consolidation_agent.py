@@ -22,7 +22,7 @@ from pydantic import Field
 from specfile import Specfile
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import run_build
+from ymir.agents.build_agent import is_konflux_backend, run_build
 from ymir.agents.constants import (
     I_AM_YMIR,
     ZSTREAM_TARGET_LABEL,
@@ -792,6 +792,72 @@ async def run_workflow(
                 return "handle_failure"
             return "run_build_agent"
 
+        async def _prepare_konflux_build_input(state) -> BuildInputSchema:
+            """Build the BuildInputSchema for the Konflux backend.
+
+            Konflux builds a pushed git ref rather than a local SRPM, so the
+            consolidated work must be committed on the working branch and
+            pushed to the fork before the build. The per_commit and
+            rebuild_append flows already commit their work; the merged flow
+            leaves changes in the working tree, so make a provisional commit
+            here -- commit_push_and_open_mr later squashes every commit ahead
+            of the target branch into the final message, so the extra commit
+            is harmless. Mirrors the backport agent's push-then-build-the-ref
+            flow; like that flow, Konflux pushes the fork branch even under
+            dry_run (only the MR/Jira writes stay suppressed).
+            """
+            git_env = local_tool_options.get("env")
+            # The per_commit and rebuild_append flows already committed their
+            # work, leaving the spec + patches clean against HEAD. The merged
+            # flow (including merged-flow retries) leaves them uncommitted, so
+            # stage that same file set and, only if it differs from HEAD, make
+            # a provisional commit -- giving Konflux a ref to build.
+            # commit_push_and_open_mr squashes it away into the final commit.
+            files_to_stage = _files_to_stage_for_patches(state.local_clone, package)
+            await tasks.stage_changes(
+                local_clone=state.local_clone,
+                files_to_commit=files_to_stage,
+            )
+            index_clean, _, _ = await run_subprocess(
+                ["git", "diff", "--cached", "--quiet"],
+                cwd=state.local_clone,
+                env=git_env,
+            )
+            if index_clean != 0:
+                await check_subprocess(
+                    [
+                        "git",
+                        "commit",
+                        "-m",
+                        f"Consolidation build candidate for {package} on {dist_git_branch}",
+                    ],
+                    cwd=state.local_clone,
+                    env=git_env,
+                )
+            await run_tool(
+                "push_to_remote_repository",
+                repository=state.fork_url,
+                clone_path=str(state.local_clone),
+                branch=state.update_branch,
+                force=True,
+                available_tools=gateway_tools,
+            )
+            _, revision, _ = await run_subprocess(
+                ["git", "rev-parse", "HEAD"],
+                cwd=state.local_clone,
+                env=git_env,
+            )
+            return BuildInputSchema(
+                srpm_path=state.consolidation_result.srpm_path,
+                dist_git_branch=dist_git_branch,
+                # jira_issue is logging-only for Konflux; keep the Copr fallback.
+                jira_issue=state.jira_issue or _build_project_name(package, dist_git_branch),
+                git_url=state.fork_url,
+                revision=(revision or "").strip(),
+                package_name=package,
+                target_branch=dist_git_branch,
+            )
+
         async def run_build_agent(state):
             if not state.consolidation_result or not state.consolidation_result.srpm_path:
                 logger.warning("No SRPM generated, skipping build verification")
@@ -807,14 +873,18 @@ async def run_workflow(
                 return "run_consolidation_agent"
 
             try:
-                build_output = await run_build(
-                    build_input=BuildInputSchema(
+                if is_konflux_backend():
+                    build_input = await _prepare_konflux_build_input(state)
+                else:
+                    build_input = BuildInputSchema(
                         srpm_path=state.consolidation_result.srpm_path,
                         dist_git_branch=dist_git_branch,
                         # Copr requires a project name even without Jira footers.
                         # Keep the fallback out of the workflow's Jira metadata.
                         jira_issue=state.jira_issue or _build_project_name(package, dist_git_branch),
-                    ),
+                    )
+                build_output = await run_build(
+                    build_input=build_input,
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
                 )

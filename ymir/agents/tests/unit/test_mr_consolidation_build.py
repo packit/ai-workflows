@@ -167,3 +167,154 @@ async def test_build_project_identifier_preserves_jira_metadata(
     assert state.jira_issue == jira_issue
     assert state.jira_issues_collected == ([jira_issue] if jira_issue else [])
     assert state.attempts_remaining == 3 - int(retry_first)
+
+
+@pytest.mark.parametrize("release_strategy,index_clean", [("per_commit", True), ("merged", False)])
+@pytest.mark.asyncio
+async def test_konflux_build_pushes_ref_and_populates_build_fields(
+    monkeypatch, release_strategy, index_clean
+):
+    """Under the Konflux backend the consolidation build must push the fork
+    branch and hand the build tool git_url/revision/package_name/target_branch,
+    not an SRPM. The merged flow (index not clean) also makes a provisional
+    commit before pushing."""
+    package = "package"
+    fork_url = "https://fork.invalid/package.git"
+    update_branch = "consolidation-update"
+    revision = "abc123def456abc123def456abc123def456abcd"  # pragma: allowlist secret
+
+    monkeypatch.setenv("BUILD_BACKEND", "konflux")
+
+    call_tool_args = []
+
+    async def _mock_call_tool(*_args, **_kwargs):
+        call_tool_args.append((_args, _kwargs))
+        return CallToolResult(content=[TextContent(type="text", text=json.dumps({"success": True}))])
+
+    _mock_session = flexmock()
+    _mock_session.should_receive("call_tool").replace_with(_mock_call_tool)
+    # Mirror the real Konflux build_package schema (konflux.py): git_url,
+    # revision, package_name, target_branch are mandatory strings; jira_issue
+    # is optional; and additionalProperties is true (ConfigDict extra="allow")
+    # so the COPR-only fields (srpm_path, dist_git_branch) pass through.
+    tool = MCPTool(
+        _mock_session,
+        MCPToolInfo(
+            name="build_package",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "git_url": {"type": "string"},
+                    "revision": {"type": "string"},
+                    "package_name": {"type": "string"},
+                    "target_branch": {"type": "string"},
+                    "jira_issue": {"type": "string"},
+                },
+                "required": ["git_url", "revision", "package_name", "target_branch"],
+                "additionalProperties": True,
+            },
+        ),
+    )
+
+    @contextlib.asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield [tool]
+
+    flexmock(mr_consolidation_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(mr_consolidation_agent).should_receive("create_log_agent").and_return(flexmock())
+    flexmock(mr_consolidation_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    flexmock(mr_consolidation_agent).should_receive("_files_to_stage_for_patches").and_return(
+        ["package.spec"]
+    )
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+
+    async def _mock_stage_changes(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(mr_consolidation_agent.tasks, "stage_changes", _mock_stage_changes)
+
+    commit_calls = []
+
+    async def _mock_check_subprocess(cmd, *_args, **_kwargs):
+        commit_calls.append(cmd)
+        return (0, "", "")
+
+    monkeypatch.setattr(mr_consolidation_agent, "check_subprocess", _mock_check_subprocess)
+
+    async def _mock_run_subprocess(cmd, *_args, **_kwargs):
+        if cmd[:4] == ["git", "diff", "--cached", "--quiet"]:
+            return (0 if index_clean else 1, "", "")
+        if cmd[:3] == ["git", "rev-parse", "HEAD"]:
+            return (0, f"{revision}\n", "")
+        return (0, "", "")
+
+    monkeypatch.setattr(mr_consolidation_agent, "run_subprocess", _mock_run_subprocess)
+
+    push_calls = []
+
+    async def _mock_run_tool(tool_name, *_args, **_kwargs):
+        push_calls.append((tool_name, _kwargs))
+        return
+
+    monkeypatch.setattr(mr_consolidation_agent, "run_tool", _mock_run_tool)
+
+    run_workflow = Workflow.run
+    completed = []
+
+    def stop_after_build(state):
+        completed.append(state)
+        return Workflow.END
+
+    def start_at_build(workflow, state, options=None):
+        if workflow.name == "MRConsolidationWorkflow":
+            state.jira_issue = "RHEL-12345"
+            state.local_clone = Path("/git-repos/package")
+            state.fork_url = fork_url
+            state.update_branch = update_branch
+            state.consolidation_result = MRConsolidationOutputSchema(
+                success=True,
+                status="Prepared SRPM",
+                srpm_path=Path("/git-repos/package/package-1-1.src.rpm"),
+            )
+            workflow.set_start("run_build_agent")
+            workflow.steps["push_and_open_mr"].handler = stop_after_build
+            workflow.steps["update_release"].handler = stop_after_build
+        return run_workflow(workflow, state, options)
+
+    monkeypatch.setattr(Workflow, "run", start_at_build)
+
+    state = await mr_consolidation_agent.run_workflow(
+        package=package,
+        dist_git_branch="c10s",
+        release_strategy=release_strategy,
+        dry_run=True,
+        consolidation_agent_factory=lambda *_args, **_kwargs: SimpleNamespace(),
+    )
+
+    assert len(completed) == 1, "Build validation did not reach its success route"
+
+    # The fork branch is pushed (force) before the build is submitted.
+    assert len(push_calls) == 1
+    push_name, push_kwargs = push_calls[0]
+    assert push_name == "push_to_remote_repository"
+    assert push_kwargs["repository"] == fork_url
+    assert push_kwargs["branch"] == update_branch
+    assert push_kwargs["force"] is True
+
+    # merged flow (index not clean) makes a provisional commit; per_commit does not.
+    git_commits = [c for c in commit_calls if c[:2] == ["git", "commit"]]
+    assert len(git_commits) == (0 if index_clean else 1)
+
+    # The build tool receives the git ref, not just an SRPM.
+    assert len(call_tool_args) == 1
+    _, build_kwargs = call_tool_args[0]
+    assert build_kwargs["arguments"] == {
+        "srpm_path": "/git-repos/package/package-1-1.src.rpm",
+        "dist_git_branch": "c10s",
+        "jira_issue": "RHEL-12345",
+        "git_url": fork_url,
+        "revision": revision,
+        "package_name": package,
+        "target_branch": "c10s",
+    }
+    assert state.jira_issue == "RHEL-12345"

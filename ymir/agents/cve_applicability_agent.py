@@ -82,9 +82,24 @@ def build_applicability_prompt(
             f"is very high. A false negative means skipping a security rebuild "
             f"entirely. Only classify as not affected if you have strong, concrete "
             f"evidence — e.g. the package provably does not import/link/use the "
-            f"affected module at all. If there is any ambiguity — transitive "
-            f"dependencies, conditional imports, build-time usage, or you simply "
-            f"cannot verify the full dependency chain — classify as 'Inconclusive'.\n"
+            f"affected module at all. If there is any ambiguity — conditional "
+            f"imports, build-time usage, or you simply cannot verify the full "
+            f"dependency chain — classify as 'Inconclusive'.\n"
+            f"\n"
+            f"TRANSITIVE DEPENDENCY NUANCE: A transitive dependency does NOT "
+            f"automatically mean 'Inconclusive'. When the dependency is only "
+            f"transitive (not directly imported), you MAY classify as 'not "
+            f"affected' IF you can demonstrate ALL of the following:\n"
+            f"  1. The package's architecture provably prevents triggering the "
+            f"vulnerability (e.g. a CLI-only tool cannot be affected by a "
+            f"server-side TLS vulnerability).\n"
+            f"  2. The transitive import chain does not exercise the vulnerable "
+            f"API — e.g. importing a module only for type definitions or "
+            f"constants, not for the functionality containing the flaw.\n"
+            f"  3. Your evidence is concrete and architecture-level, not merely "
+            f"'I did not find a direct import'. You must positively demonstrate "
+            f"that the vulnerable code path is unreachable.\n"
+            f"If ANY of these conditions is uncertain, default to 'Inconclusive'.\n"
         )
 
     if patch_files:
@@ -168,9 +183,15 @@ def build_applicability_prompt(
         5. For dependency rebuilds: verify whether the package uses
            the specific affected API/module of the dependency. Check
            direct imports, linked libraries, and build dependencies.
-           Remember: transitive dependencies and build-time usage
-           also count — a package that vendors or bundles the
-           dependency is affected even without a direct import.
+           Remember: build-time usage also counts — a package that
+           vendors or bundles the dependency is affected even
+           without a direct import. For transitive dependencies,
+           distinguish between cases where the vulnerable code
+           path IS exercised (classify as Inconclusive) versus
+           cases where you can prove the vulnerable code path is
+           NOT reachable (use the appropriate Red Hat justification
+           category, e.g. "Vulnerable Code not in Execute Path"
+           or "Vulnerable Code cannot be Controlled by Adversary").
 
         Classify using Red Hat justification categories:
         - "Component not Present" — the affected component/subcomponent

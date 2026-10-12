@@ -302,7 +302,7 @@ async def test_build_failure_collects_logs():
     assert "boom" in out.result.error_message
     urls = out.result.artifacts_urls
     assert any("pods/pod-1/log?container=step-build" in u for u in urls)
-    assert all(u.startswith(cfg.kubearchive_url) for u in urls)
+    assert all(u.startswith(cfg.api_url) for u in urls)
 
 
 @pytest.mark.asyncio
@@ -374,6 +374,12 @@ async def test_download_artifacts_sends_bearer_token():
     target = Path(out.result.target_path) / "pod-1__step-build.log"
     assert target.read_bytes() == b"log-bytes"
     assert captured["headers"]["Authorization"] == "Bearer tok-123"
+    # The exact saved path is returned so the agent can hand it to
+    # extract_log_snippets verbatim instead of guessing filenames.
+    assert out.result.artifact_paths == [target]
+    text = out.get_text_content()
+    assert str(target) in text
+    assert "Downloaded log files:" in text
 
 
 @pytest.mark.asyncio
@@ -404,3 +410,26 @@ async def test_download_artifacts_raises_on_http_error():
     flexmock(requests.Session).should_receive("get").replace_with(_get)
     with pytest.raises(ToolError):
         await KonfluxDownloadArtifactsTool().run(input={"artifacts_urls": [url]})
+
+
+@pytest.mark.asyncio
+async def test_download_artifacts_falls_back_to_kubearchive_on_404():
+    """A just-failed pod's log 404s on the live API until GC; fall back to Kubearchive."""
+    cfg = _config()
+    flexmock(konflux_mod).should_receive("_load_config").and_return(cfg)
+    live_url = f"{cfg.api_url}/api/v1/namespaces/ymir-tenant/pods/pod-1/log?container=step-build"
+    calls = []
+
+    def _get(*args, **kwargs):
+        url = args[-1]
+        calls.append(url)
+        if url.startswith(cfg.kubearchive_url):
+            return flexmock(status_code=200, reason="OK", content=b"archived-log")
+        return flexmock(status_code=404, reason="Not Found", content=b"")
+
+    flexmock(requests.Session).should_receive("get").replace_with(_get)
+    out = await KonfluxDownloadArtifactsTool().run(input={"artifacts_urls": [live_url]})
+    target = Path(out.result.target_path) / "pod-1__step-build.log"
+    assert target.read_bytes() == b"archived-log"
+    assert calls[0].startswith(cfg.api_url)
+    assert any(u.startswith(cfg.kubearchive_url) for u in calls)

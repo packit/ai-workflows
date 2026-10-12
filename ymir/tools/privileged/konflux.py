@@ -400,9 +400,14 @@ async def _resolve_pipeline_revision(pipeline_url: str) -> str:
 
 
 def _collect_failure_log_urls(client: KonfluxClient, pipelinerun: dict, config: KonfluxConfig) -> list[str]:
-    """Authenticated Kubearchive pod-log URLs for non-successful taskruns."""
-    if not config.kubearchive_url:
-        return []
+    """Authenticated LIVE pod-log URLs for non-successful taskruns.
+
+    Uses the live cluster API (``config.api_url``): a just-failed build's pods
+    are still on the cluster and only move to Kubearchive after GC, so a
+    Kubearchive URL 404s right after failure (exactly when diagnosis runs). The
+    downloader falls back to Kubearchive for any pod already GC'd by the time
+    logs are fetched.
+    """
     urls: list[str] = []
     child_refs = (pipelinerun.get("status") or {}).get("childReferences", []) or []
     for child in child_refs:
@@ -421,8 +426,7 @@ def _collect_failure_log_urls(client: KonfluxClient, pipelinerun: dict, config: 
             continue
         steps = [s["container"] for s in task_status.get("steps", []) if "container" in s]
         urls.extend(
-            f"{config.kubearchive_url}/api/v1/namespaces/{client.namespace}"
-            f"/pods/{pod_name}/log?container={container}"
+            f"{config.api_url}/api/v1/namespaces/{client.namespace}/pods/{pod_name}/log?container={container}"
             for container in steps
         )
     return urls
@@ -568,10 +572,16 @@ class DownloadArtifactsToolInput(BaseModel):
 
 class DownloadArtifactsResult(BaseModel):
     target_path: Path = Field(description="Location of downloaded files")
+    artifact_paths: list[Path] = Field(
+        default_factory=list, description="Full paths of the downloaded log files"
+    )
 
 
 class DownloadArtifactsToolOutput(JSONToolOutput[DownloadArtifactsResult]):
     def get_text_content(self) -> str:
+        if self.result.artifact_paths:
+            listing = "\n".join(str(path) for path in self.result.artifact_paths)
+            return f"target_path: {self.result.target_path}\nDownloaded log files:\n{listing}"
         return f"target_path: {self.result.target_path}"
 
 
@@ -600,20 +610,45 @@ class KonfluxDownloadArtifactsTool(
         headers = {"Authorization": f"Bearer {config.token}", "User-Agent": YMIR_USER_AGENT}
         session = _build_session()
         target_path = Path(tempfile.mkdtemp())
+        artifact_paths: list[Path] = []
         try:
             for url in tool_input.artifacts_urls:
                 logger.info("Downloading Konflux build artifact from: %s", url)
                 with tool_error_context("Failed to download build artifact", artifacts_url=url):
-                    content = await asyncio.to_thread(self._download, session, url, headers)
-                (target_path / self._filename_for(url)).write_bytes(content)
+                    content = await asyncio.to_thread(self._download, session, url, headers, config)
+                artifact_file = target_path / self._filename_for(url)
+                artifact_file.write_bytes(content)
+                artifact_paths.append(artifact_file)
         except Exception:
             rmtree(target_path)
             raise
-        return DownloadArtifactsToolOutput(result=DownloadArtifactsResult(target_path=target_path))
+        return DownloadArtifactsToolOutput(
+            result=DownloadArtifactsResult(target_path=target_path, artifact_paths=artifact_paths)
+        )
 
     @staticmethod
-    def _download(session: requests.Session, url: str, headers: dict) -> bytes:
+    def _fallback_url(url: str, config: KonfluxConfig) -> str | None:
+        """Swap a pod-log URL between the live API host and Kubearchive.
+
+        A pod is readable on the live API until GC, then only via Kubearchive;
+        retrying the other host on a 404 covers both sides of that handoff.
+        """
+        if not config.kubearchive_url:
+            return None
+        if url.startswith(config.api_url):
+            return config.kubearchive_url + url[len(config.api_url) :]
+        if url.startswith(config.kubearchive_url):
+            return config.api_url + url[len(config.kubearchive_url) :]
+        return None
+
+    @staticmethod
+    def _download(session: requests.Session, url: str, headers: dict, config: KonfluxConfig) -> bytes:
         response = session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
+        if response.status_code == 404:
+            fallback = KonfluxDownloadArtifactsTool._fallback_url(url, config)
+            if fallback:
+                logger.info("Konflux log 404 at %s; retrying via %s", url, fallback)
+                response = session.get(fallback, headers=headers, timeout=DEFAULT_TIMEOUT)
         if response.status_code >= 400:
             raise ToolError(f"{response.status_code} {response.reason}")
         content = response.content

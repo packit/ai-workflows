@@ -44,6 +44,12 @@ push:
 .PHONY: build-and-push
 build-and-push: build push
 
+.PHONY: konflux-token
+# Refresh the local Konflux backend token from your current `oc` login.
+# Run this before local konflux builds, and again whenever a build 401s.
+konflux-token:
+	scripts/refresh-konflux-token.sh
+
 .PHONY: run-beeai-bash
 run-beeai-bash:
 	$(COMPOSE_AGENTS) run --rm triage-agent /bin/bash

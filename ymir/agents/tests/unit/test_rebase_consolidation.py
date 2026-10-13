@@ -541,6 +541,22 @@ class TestTerminalLabels:
         for label in retriable_labels:
             assert f'"{label}"' not in jql, f"Retriable label {label} must NOT be excluded in JQL"
 
+    def test_jql_excludes_triaged_already_fixed_label(self):
+        """Verify that TRIAGED_ALREADY_FIXED label is excluded in pending sibling JQL.
+
+        Regression test: TRIAGED_ALREADY_FIXED must be in the terminal labels list
+        that gets excluded when querying for pending siblings. This prevents re-queuing
+        siblings that have already been triaged as already-fixed.
+        """
+        # Verify the label constant exists and has expected value
+        assert JiraLabels.TRIAGED_ALREADY_FIXED.value == "ymir_triaged_already_fixed"
+
+        # Verify JQL excludes this label
+        jql = build_rebase_siblings_jql("RHEL-100", "python3.12", "rhel-9.8")
+        assert f'"{JiraLabels.TRIAGED_ALREADY_FIXED.value}"' in jql, (
+            "JQL must exclude TRIAGED_ALREADY_FIXED in the labels not in clause"
+        )
+
     def test_queued_sibling_blocks_primary(self):
         """Regression: Queued siblings with ymir_rebase_sibling must be found as pending.
 

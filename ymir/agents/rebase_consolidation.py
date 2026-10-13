@@ -531,6 +531,7 @@ async def check_and_queue_primary_if_ready(
             JiraLabels.TRIAGED_REBUILD.value,
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
             JiraLabels.TRIAGED_POSTPONED.value,
+            JiraLabels.TRIAGED_ALREADY_FIXED.value,
             # Completions
             JiraLabels.BACKPORTED.value,
             JiraLabels.REBASED.value,

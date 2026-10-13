@@ -960,6 +960,7 @@ async def _check_zstream_pending_triage(
         f' AND labels != "ymir_triaged_rebuild"'
         f' AND labels != "ymir_triaged_postponed"'
         f' AND labels != "ymir_triaged_not_affected"'
+        f' AND labels != "ymir_triaged_already_fixed"'
         f' AND labels != "ymir_triaged"'
         f' AND labels != "ymir_postponed_dependency"'
         f' AND labels != "ymir_postponed_no_patch"'

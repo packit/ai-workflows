@@ -6,7 +6,6 @@ import shutil
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import TypeVar
 
 import git
@@ -16,7 +15,7 @@ from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 from specfile import Specfile
 
-from ymir.common.base_utils import find_spec, init_kerberos_ticket
+from ymir.common.base_utils import init_kerberos_ticket
 from ymir.common.utils import NoBuildFoundError, get_latest_buildroot_build, get_latest_z_pending_build
 from ymir.common.version_utils import parse_zstream_branch_name
 from ymir.tools.base import CloneableTool as Tool
@@ -145,7 +144,6 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
             Ref to base the new Z-Stream branch on.
         """
 
-        spec_filename = find_spec(Path(repo.working_dir), package)
         main_ref = f"origin/{source_branch}"
 
         try:
@@ -162,9 +160,19 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
             def evr_at(rev):
                 try:
                     commit = repo.commit(rev) if isinstance(rev, str) else rev
-                    content = (
-                        (commit.tree / spec_filename).data_stream.read().decode("utf-8", errors="replace")
-                    )
+                    # Discover the spec in this revision, independent of the checkout
+                    # and any spec renames between the build and subsequent fixups.
+                    specs = {
+                        blob.name: blob
+                        for blob in commit.tree.blobs
+                        if blob.name.endswith(".spec") and not blob.name.startswith(".")
+                    }
+                    spec_blob = specs.get(f"{package}.spec")
+                    if spec_blob is None:
+                        if len(specs) != 1:
+                            return None
+                        spec_blob = next(iter(specs.values()))
+                    content = spec_blob.data_stream.read().decode("utf-8", errors="replace")
                     # sourcedir is required when passing content, but its value doesn't matter in this case
                     with Specfile(content=content, sourcedir="/") as spec:
                         return spec.expanded_epoch, spec.expanded_version, spec.expanded_release

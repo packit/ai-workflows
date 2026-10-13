@@ -39,6 +39,21 @@ spec:
           value: "true"
         - name: REQUESTS_CA_BUNDLE
           value: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+        # --- Konflux build backend ---
+        # Builds run on kflux-rhel-p01 as konflux-bot-0 (ymir-tenant). The
+        # namespace/SA/image-repo defaults are baked into konflux.py.
+        - name: BUILD_BACKEND
+          value: konflux
+        - name: KONFLUX_API_URL
+          value: https://api.kflux-rhel-p01.fc38.p1.openshiftapps.com:6443
+        - name: KUBEARCHIVE_API_URL
+          value: https://kubearchive-api-server-product-kubearchive.apps.kflux-rhel-p01.fc38.p1.openshiftapps.com
+        - name: KONFLUX_PIPELINE_URL
+          value: https://gitlab.cee.redhat.com/rhel-on-konflux/rpmbuild-pipeline.git
+        # Read fresh per build from the rotated konflux-bot-0-token Secret
+        # (see openshift/README.md). GITLAB_TOKEN comes from gitlab-env.
+        - name: KONFLUX_TOKEN_FILE
+          value: /home/mcp/konflux/token
         envFrom:
         - secretRef:
             name: gitlab-env
@@ -76,6 +91,11 @@ spec:
         - mountPath: /home/mcp/rhel-config.json
           name: rhel-config
           subPath: rhel-config.json
+        # No subPath: subPath mounts are NOT refreshed on Secret rotation,
+        # which would freeze the token. Mount the dir so rotation propagates.
+        - mountPath: /home/mcp/konflux
+          name: konflux-bot-0-token
+          readOnly: true
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
@@ -94,3 +114,7 @@ spec:
       - name: rhel-config
         configMap:
           name: rhel-config
+      # Rotated by the konflux-token-rotation CronJob (kflux-rhel-p01).
+      - name: konflux-bot-0-token
+        secret:
+          secretName: konflux-bot-0-token  # pragma: allowlist secret

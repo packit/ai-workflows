@@ -1258,6 +1258,7 @@ async def run_workflow(
                         dep_component=dep_component,
                         fixed_dep_nvr=fixed_in_build,
                         available_tools=gateway_tools,
+                        jira_issue=state.jira_issue,
                     )
                     if already_fixed is True:
                         # Confirmed via installed_pkgs.log that package has the fix
@@ -1347,6 +1348,37 @@ async def run_workflow(
                                 ),
                             )
                             return "comment_in_jira"
+                        if reason and reason.startswith("subpackage_match_needs_verification:"):
+                            subpkg_list = reason.split(":", 1)[1]
+                            logger.info(
+                                f"{package} build {pkg_nvr} has fixed dependency version "
+                                f"but matched via subpackage(s): {subpkg_list}. "
+                                f"Requesting manual verification."
+                            )
+                            state.triage_result = OutputSchema(
+                                resolution=Resolution.CLARIFICATION_NEEDED,
+                                data=ClarificationNeededData(
+                                    findings=(
+                                        f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
+                                        f"{pkg_issue_key}) was built with {dep_component} at the required "
+                                        f"version or newer ({fixed_in_build}). The {dep_component} "
+                                        f"component produces multiple binary packages. The following "
+                                        f"installed packages from this source RPM were found: "
+                                        f"{subpkg_list}. We cannot automatically determine which of "
+                                        f"these packages carry the fixed code."
+                                    ),
+                                    additional_info_needed=(
+                                        f"Please verify whether the installed packages ({subpkg_list}) "
+                                        f"from {dep_component} {fixed_in_build} contain the fix "
+                                        f"for this issue. If confirmed, mark as Already Fixed and add "
+                                        f"build {pkg_nvr} to the errata. If the fix is in a different "
+                                        f"binary package from {dep_component} that was not installed, "
+                                        f"proceed with rebuild."
+                                    ),
+                                    jira_issue=state.jira_issue,
+                                ),
+                            )
+                            return "comment_in_jira"
                         if reason == "partial_architecture_coverage":
                             # Dependency found in some architectures but not others
                             logger.warning(
@@ -1394,6 +1426,31 @@ async def run_workflow(
                                         f"used. Mark as Already Fixed only if ALL architectures used "
                                         f"{fixed_in_build} or newer. If any architecture used an older "
                                         f"version, rebuild the affected architectures."
+                                    ),
+                                    jira_issue=state.jira_issue,
+                                ),
+                            )
+                            return "comment_in_jira"
+                        if reason and reason.startswith("invalid_build_records:"):
+                            rejected_issues = reason.split(":", 1)[1]
+                            logger.warning(
+                                f"Closed builds for {package} in Jira have mismatched "
+                                f"package names in Koji: {rejected_issues}"
+                            )
+                            state.triage_result = OutputSchema(
+                                resolution=Resolution.CLARIFICATION_NEEDED,
+                                data=ClarificationNeededData(
+                                    findings=(
+                                        f"Found closed builds for {package} in Jira "
+                                        f"({rejected_issues}), but their NVRs resolve to a "
+                                        f"different package name in Koji. This data inconsistency "
+                                        f"prevents automated rebuild verification."
+                                    ),
+                                    additional_info_needed=(
+                                        f"Please verify the builds referenced in {rejected_issues} "
+                                        f"and confirm whether {package} has a valid completed build "
+                                        f"with {dep_component} {fixed_in_build} or newer. If the "
+                                        f"build records are incorrect, proceed with rebuild."
                                     ),
                                     jira_issue=state.jira_issue,
                                 ),

@@ -70,6 +70,13 @@ graph TD
 
 ### Git Operations
 
+When creating a Z-stream branch from a Brew build, the same-NVR scan discovers
+the spec in each commit's Git tree, preferring `<package>.spec` and otherwise
+using the single non-hidden spec blob at the repository root. This supports
+custom spec names and renames without depending on the default checkout.
+If the build spec cannot be identified or parsed, the build commit is used
+directly; a later missing, ambiguous, or changed NVR stops the scan.
+
 | Tool | Purpose | API/Git |
 |------|---------|---------|
 | **fork_repository** | Create or get existing fork | GitLab API |

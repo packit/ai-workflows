@@ -317,16 +317,87 @@ async def test_create_zstream_branch_skips_nvr_walk_on_zstream_source(monkeypatc
 
 def _mock_spec_commit(hexsha, spec_content):
     """Create a mock commit whose tree contains a spec file with given content."""
-
-    class Tree:
-        def __truediv__(self, name):
-            return flexmock(data_stream=flexmock(read=lambda: spec_content.encode()))
-
-    return flexmock(hexsha=hexsha, tree=Tree())
+    blob = flexmock(name="bash.spec", data_stream=flexmock(read=lambda: spec_content.encode()))
+    return flexmock(hexsha=hexsha, tree=flexmock(blobs=[blob]))
 
 
 _SPEC_V1 = "Name: bash\nVersion: 5.2.26\nRelease: 1.el10\nSummary: x\nLicense: x\n"
 _SPEC_V2 = "Name: bash\nVersion: 5.2.27\nRelease: 1.el10\nSummary: x\nLicense: x\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "build_files, fixup_files, advance",
+    [
+        pytest.param({"bash.spec": _SPEC_V1}, {"bash.spec": _SPEC_V1}, True, id="canonical"),
+        pytest.param({"bash-extra.spec": _SPEC_V1}, {"bash-extra.spec": _SPEC_V1}, True, id="custom"),
+        pytest.param({"Bash.spec": _SPEC_V1}, {"Bash.spec": _SPEC_V1}, True, id="case"),
+        pytest.param({"bash-extra.spec": _SPEC_V1}, {"Bash.spec": _SPEC_V1}, True, id="renamed"),
+        pytest.param(
+            {"bash.spec": _SPEC_V1, "other.spec": _SPEC_V2},
+            {"bash.spec": _SPEC_V1, "other.spec": _SPEC_V2},
+            True,
+            id="prefer-canonical",
+        ),
+        pytest.param(
+            {"bash-extra.spec": _SPEC_V1, ".hidden.spec": _SPEC_V2, "nested.spec/file": "x"},
+            {"bash-extra.spec": _SPEC_V1},
+            True,
+            id="ignore-hidden-and-directory",
+        ),
+        pytest.param({}, {"bash.spec": _SPEC_V1}, False, id="missing-build-spec"),
+        pytest.param(
+            {"bash-extra.spec": _SPEC_V1, "other.spec": _SPEC_V1},
+            {"bash-extra.spec": _SPEC_V1},
+            False,
+            id="ambiguous-build-spec",
+        ),
+        pytest.param({"bash.spec": _SPEC_V1}, {}, False, id="missing-fixup-spec"),
+        pytest.param(
+            {"bash.spec": _SPEC_V1},
+            {"bash-extra.spec": _SPEC_V1, "other.spec": _SPEC_V1},
+            False,
+            id="ambiguous-fixup-spec",
+        ),
+    ],
+)
+async def test_find_latest_same_nvr_ref_with_empty_checkout(
+    tmp_path, monkeypatch, build_files, fixup_files, advance
+):
+    """Discover specs in commit trees even when the default checkout has no spec."""
+    # Earlier new_instances() mocks can break Git's inherited allocator.
+    # Restore allocation so GitPython can create real Git commands.
+    monkeypatch.setattr(git.Git, "__new__", staticmethod(lambda cls, *args, **kwargs: object.__new__(cls)))
+    repo = git.Repo.init(tmp_path)
+    actor = git.Actor("Test", "test@example.com")
+    default_commit = repo.index.commit("Empty default branch", author=actor, committer=actor)
+
+    def commit_files(files, message):
+        tracked = [path for path, stage in repo.index.entries if stage == 0]
+        if tracked:
+            repo.index.remove(tracked, working_tree=True)
+        for name, content in files.items():
+            path = tmp_path / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        if files:
+            repo.index.add(list(files))
+        return repo.index.commit(message, author=actor, committer=actor)
+
+    build_commit = commit_files(build_files, "Build")
+    fixup_commit = commit_files(fixup_files, "Fixup")
+    bumped_files = dict.fromkeys(fixup_files, _SPEC_V2)
+    bump_commit = commit_files(bumped_files, "Version bump")
+    repo.git.update_ref("refs/remotes/origin/rhel-10-main", bump_commit.hexsha)
+    repo.git.checkout(default_commit.hexsha)
+
+    result = await CreateZstreamBranchTool._find_latest_same_nvr_ref(
+        repo, "bash", build_commit.hexsha, "rhel-10-main"
+    )
+
+    assert result == (fixup_commit.hexsha if advance else build_commit.hexsha)
+    assert repo.head.commit == default_commit
+    assert not repo.is_dirty(untracked_files=True)
 
 
 @pytest.mark.asyncio
@@ -350,8 +421,7 @@ async def test_find_latest_same_nvr_ref(commit_specs, expected_hexsha):
     build_ref = hexshas[0]
     main_ref = "origin/rhel-10-main"
 
-    flexmock(distgit_tools).should_receive("find_spec").and_return("bash.spec")
-    repo = flexmock(working_dir="/fake")
+    repo = flexmock()
     repo.should_receive("is_ancestor").with_args(build_ref, main_ref).and_return(True)
     repo.should_receive("commit").with_args(build_ref).and_return(commits[0])
     repo.should_receive("iter_commits").with_args(
@@ -366,8 +436,7 @@ async def test_find_latest_same_nvr_ref(commit_specs, expected_hexsha):
 async def test_find_latest_same_nvr_ref_not_ancestor():
     """Returns build_ref when it is not an ancestor of the source branch."""
     build_ref = "aaa111"
-    flexmock(distgit_tools).should_receive("find_spec").and_return("bash.spec")
-    repo = flexmock(working_dir="/fake")
+    repo = flexmock()
     repo.should_receive("is_ancestor").and_return(False)
 
     result = await CreateZstreamBranchTool._find_latest_same_nvr_ref(repo, "bash", build_ref, "rhel-10-main")
@@ -378,16 +447,11 @@ async def test_find_latest_same_nvr_ref_not_ancestor():
 async def test_find_latest_same_nvr_ref_missing_spec():
     """Returns build_ref when the spec file is missing at that revision."""
 
-    class EmptyTree:
-        def __truediv__(self, name):
-            raise KeyError(name)
-
     build_ref = "aaa111"
-    flexmock(distgit_tools).should_receive("find_spec").and_return("bash.spec")
-    repo = flexmock(working_dir="/fake")
+    repo = flexmock()
     repo.should_receive("is_ancestor").and_return(True)
     repo.should_receive("commit").with_args(build_ref).and_return(
-        flexmock(hexsha=build_ref, tree=EmptyTree())
+        flexmock(hexsha=build_ref, tree=flexmock(blobs=[]))
     )
 
     result = await CreateZstreamBranchTool._find_latest_same_nvr_ref(repo, "bash", build_ref, "rhel-10-main")

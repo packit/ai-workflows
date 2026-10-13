@@ -17,6 +17,7 @@ from ymir.tools.privileged.konflux import (
     KonfluxConfig,
     KonfluxDownloadArtifactsTool,
     _git_auth_secret_body,
+    _map_centos_build_target,
     _pipelinerun_body,
     _pipelinerun_status,
     _sanitize_tag,
@@ -167,6 +168,82 @@ def test_pipelinerun_body_shape():
     # Standalone run: no application/component labels, no pull_request annotation.
     assert "appstudio.openshift.io/application" not in body["metadata"]["labels"]
     assert "build.appstudio.redhat.com/pull_request_number" not in body["metadata"]["annotations"]
+
+
+# Mirrors the production rhel-config.json shape: major 8 is in maintenance phase
+# (a Z-stream but no Y-stream), majors 9 and 10 are still shipping a Y-stream.
+_RHEL_CONFIG = {
+    "current_y_streams": {"9": "rhel-9.10", "10": "rhel-10.4"},
+    "current_z_streams": {"8": "rhel-8.10.z", "9": "rhel-9.8.z", "10": "rhel-10.2.z"},
+}
+
+
+def _mock_rhel_config():
+    """Make ``load_rhel_config`` return the fixed stream table above.
+
+    Patch both the shared ``ymir.common.config`` binding (used by
+    ``get_maintenance_rhel_branch``) and the copy imported into ``konflux``.
+    """
+    from ymir.common import config as config_mod
+
+    async def _load():
+        return _RHEL_CONFIG
+
+    flexmock(config_mod).should_receive("load_rhel_config").replace_with(_load)
+    flexmock(konflux_mod).should_receive("load_rhel_config").replace_with(_load)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "branch,expected",
+    [
+        # Maintenance-phase major (Z-stream only) -> current Z-stream branch.
+        ("c8s", "rhel-8.10.0"),
+        # Active major < 10 -> current Y-stream, internal branch form (.0 suffix).
+        ("c9s", "rhel-9.10.0"),
+        # Active major >= 10 -> current Y-stream, no .0 suffix.
+        ("c10s", "rhel-10.4"),
+        # Non-CentOS branches pass through unchanged.
+        ("rhel-10.2", "rhel-10.2"),
+        ("rhel-9.8.0", "rhel-9.8.0"),
+        ("rhel-10-main", "rhel-10-main"),
+    ],
+)
+async def test_map_centos_build_target(branch, expected):
+    _mock_rhel_config()
+    assert await _map_centos_build_target(branch) == expected
+
+
+@pytest.mark.asyncio
+async def test_build_remaps_centos_target_to_rhel_branch():
+    """A c8s build must submit against the current RHEL Z-stream branch
+    (rhel-8.10.0, major 8 being in maintenance phase), since CentOS Stream is
+    not buildable on the RHEL/Brew-backed Konflux."""
+    cfg = _config()
+    _mock_prelude(cfg)
+    _mock_rhel_config()
+    _no_sleep()
+    captured = {}
+
+    def _create_pr(*args):
+        body = args[-1]
+        captured["pr"] = body
+        return body["metadata"]["name"]
+
+    flexmock(KonfluxClient).should_receive("create_secret").and_return("gitlab-secret-abc").once()
+    flexmock(KonfluxClient).should_receive("create_pipelinerun").replace_with(_create_pr).once()
+    flexmock(KonfluxClient).should_receive("get_pipelinerun").and_return(
+        {"status": {"conditions": [{"reason": "Succeeded"}]}}
+    )
+    flexmock(KonfluxClient).should_receive("delete_secret").with_args("gitlab-secret-abc").once()
+
+    out = await KonfluxBuildTool().run(input={**BUILD_INPUT, "target_branch": "c8s"})
+    assert out.result.success is True
+
+    params = {p["name"]: p["value"] for p in captured["pr"]["spec"]["params"]}
+    assert params["target-branch"] == "rhel-8.10.0"
+    annotations = captured["pr"]["metadata"]["annotations"]
+    assert annotations["build.appstudio.redhat.com/target_branch"] == "rhel-8.10.0"
 
 
 # --------------------------------------------------------------------------- #

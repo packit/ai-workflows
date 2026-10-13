@@ -30,7 +30,15 @@ from beeai_framework.tools import JSONToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, ConfigDict, Field
 from requests.adapters import HTTPAdapter, Retry
 
+from ymir.common.base_utils import is_cs_branch
+from ymir.common.config import load_rhel_config
 from ymir.common.models import BuildResult
+from ymir.common.version_utils import (
+    construct_internal_branch_name,
+    get_maintenance_rhel_branch,
+    parse_branch_name,
+    parse_rhel_version,
+)
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.base import make_additional_context, tool_error_context
 from ymir.tools.constants import YMIR_USER_AGENT
@@ -182,6 +190,58 @@ def _build_session() -> requests.Session:
 
 def _sanitize_tag(value: str) -> str:
     return _INVALID_TAG_CHARS.sub("-", value)
+
+
+# CentOS Stream dist-git branches cannot be built on this RHEL/Brew-backed Konflux:
+# the pipeline's get-build-target step resolves ``<branch>-candidate`` against Brew,
+# which only carries RHEL targets (e.g. ``c8s-candidate`` does not exist, so the build
+# fails with "No such tagInfo: 'null'"). Konflux cannot build CentOS Stream at all, so
+# remap each CentOS Stream branch to the real RHEL branch Brew can build and build the
+# source against that target instead. The stream data comes from ``rhel-config.json``
+# (no versions are hard-coded here):
+#   * maintenance-phase majors (a Z-stream but no Y-stream) build against the current
+#     Z-stream branch -- reusing the shared ``get_maintenance_rhel_branch`` helper;
+#   * active majors build against the current Y-stream.
+async def _map_centos_build_target(target_branch: str) -> str:
+    """Remap a CentOS Stream branch to the RHEL branch Konflux can actually build.
+
+    Non-CentOS branches (e.g. ``rhel-10.2``) are returned unchanged.
+    """
+    if not is_cs_branch(target_branch):
+        return target_branch
+
+    # Maintenance phase (Z-stream only): build against the current Z-stream branch.
+    maintenance_branch = await get_maintenance_rhel_branch(target_branch)
+    if maintenance_branch is not None:
+        logger.info(
+            "CentOS Stream target %s is in maintenance phase; remapping to current "
+            "Z-stream branch %s for the Konflux build",
+            target_branch,
+            maintenance_branch,
+        )
+        return maintenance_branch
+
+    # Active phase: build against the current Y-stream. The ``current_y_streams``
+    # value is a fixVersion-style string (e.g. ``rhel-9.8``); normalize it to the
+    # internal build-target branch form, which carries the ``.0`` suffix for
+    # RHEL < 10 (``rhel-9.8.0``) that Brew's ``<branch>-candidate`` resolves
+    # against. RHEL >= 10 has no ``.0`` suffix (``rhel-10.2``).
+    if parsed := parse_branch_name(target_branch):
+        major, _ = parsed
+        config = await load_rhel_config()
+        y_stream = config.get("current_y_streams", {}).get(major)
+        if y_stream and (y_parsed := parse_rhel_version(y_stream)):
+            y_major, y_minor, _ = y_parsed
+            build_branch = construct_internal_branch_name(y_major, y_minor)
+            logger.info(
+                "CentOS Stream target %s cannot be built on Konflux; remapping to "
+                "current RHEL Y-stream branch %s",
+                target_branch,
+                build_branch,
+            )
+            return build_branch
+
+    return target_branch
 
 
 def _pipelinerun_status(data: dict | None) -> str:
@@ -498,6 +558,8 @@ class KonfluxBuildTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
             secret_body = _git_auth_secret_body(tool_input.git_url, config.gitlab_token)
             secret_name = await asyncio.to_thread(client.create_secret, secret_body)
 
+        build_target_branch = await _map_centos_build_target(tool_input.target_branch)
+
         try:
             body = _pipelinerun_body(
                 config=config,
@@ -507,7 +569,7 @@ class KonfluxBuildTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 package_name=tool_input.package_name,
                 git_url=tool_input.git_url,
                 revision=tool_input.revision,
-                target_branch=tool_input.target_branch,
+                target_branch=build_target_branch,
                 specfile=tool_input.specfile,
                 ocistorage=ocistorage,
                 pipeline_revision=pipeline_revision,

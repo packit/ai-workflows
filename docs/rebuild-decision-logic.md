@@ -21,7 +21,8 @@ How Ymir determines whether a package needs to be rebuilt for a CVE dependency f
    - Server, authorization, transport, or decoding failures → retry
 5. **Compare dependency versions**:
    - **installed_pkgs.log available**: Compare EVRs (used vs fixed)
-     - Used >= Fixed → Already Fixed
+     - Used >= Fixed, **single installable binary** (component produces only one binary RPM after filtering out debuginfo/debugsource, regardless of whether its name matches the source component) → Already Fixed
+     - Used >= Fixed, **multiple installable binaries** (component produces more than one binary RPM after filtering out debuginfo/debugsource) → Clarification (cannot determine which binary carries the fix)
      - Used < Fixed → Check for active builds, else Rebuild
    - **installed_pkgs.log unavailable**: Compare build timestamps
      - Built before fix → Check for active builds, else Rebuild
@@ -48,6 +49,8 @@ Before returning "rebuild needed", checks if active (in-progress) builds exist:
 | `built_after_fix_no_installed_pkgs_log` | Package built after fix but installed_pkgs.log unavailable (Brew retention policy) |
 | `architecture_dependency_conflict` | Different architectures show different dependency versions |
 | `partial_architecture_coverage` | Dependency missing from some architecture logs |
+| `subpackage_match_needs_verification` | Dependency component produces multiple installable binaries (after filtering debuginfo/debugsource) — cannot confirm which binary carries the fix |
+| `invalid_build_records` | Closed Jira builds have mismatched package names in Koji — data inconsistency prevents verification |
 | `active_builds_not_closed` | Builds in progress exist (might be rejected before closure) |
 
 ## Infrastructure Failures

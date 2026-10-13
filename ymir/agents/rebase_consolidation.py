@@ -411,6 +411,7 @@ async def _pending_rebase_siblings(
         *JiraLabels.deferred_triage_labels(),
         JiraLabels.TRIAGED_NOT_AFFECTED.value,
         JiraLabels.TRIAGED_POSTPONED.value,
+        JiraLabels.TRIAGED_ALREADY_FIXED.value,
         # Completions
         JiraLabels.BACKPORTED.value,
         JiraLabels.REBASED.value,

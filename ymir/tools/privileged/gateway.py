@@ -75,6 +75,7 @@ from ymir.tools.privileged.jira import (
 from ymir.tools.privileged.konflux import (
     KonfluxBuildTool,
     KonfluxDownloadArtifactsTool,
+    _load_config,
 )
 from ymir.tools.privileged.lookaside import (
     DownloadSourcesTool,
@@ -105,6 +106,16 @@ def _select_build_tools(tool_options: dict) -> list:
     """
     backend = os.getenv("BUILD_BACKEND", "copr").strip().lower()
     if backend == "konflux":
+        # Fail fast: validate the backend config at startup so a missing/empty
+        # SA token file (e.g. the rotation CronJob has not populated it yet) or
+        # any other misconfiguration refuses the process rather than surfacing
+        # only on the first build. _load_config raises on an empty/unreadable
+        # token file and on missing API URLs / GITLAB_TOKEN.
+        try:
+            _load_config()
+        except Exception as e:
+            logger.critical("Konflux build backend is misconfigured; refusing to start: %s", e)
+            raise
         logger.info("Build backend: konflux")
         return [
             KonfluxBuildTool(options=tool_options),

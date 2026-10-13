@@ -315,10 +315,57 @@ class TestBuildBackendToggle:
         names = self._run_main_and_collect(monkeypatch, "copr")
         assert names == {"BuildPackageTool", "DownloadArtifactsTool"}
 
-    def test_konflux_backend_registers_konflux_tools(self, monkeypatch):
+    @staticmethod
+    def _set_valid_konflux_env(monkeypatch, token_file: str):
+        monkeypatch.setenv("KONFLUX_API_URL", "https://api.example.com:6443")
+        monkeypatch.setenv("KONFLUX_PIPELINE_URL", "https://gitlab.example.com/p.git")
+        monkeypatch.setenv("GITLAB_TOKEN", "glpat-xyz")
+        monkeypatch.setenv("KONFLUX_TOKEN_FILE", token_file)
+        monkeypatch.delenv("KONFLUX_TOKEN", raising=False)
+
+    def test_konflux_backend_registers_konflux_tools(self, monkeypatch, tmp_path):
+        # Konflux startup now validates its config; supply a populated token file.
+        token_file = tmp_path / "token"
+        token_file.write_text("sa-token\n")
+        self._set_valid_konflux_env(monkeypatch, str(token_file))
         names = self._run_main_and_collect(monkeypatch, "konflux")
         assert names == {"KonfluxBuildTool", "KonfluxDownloadArtifactsTool"}
 
     def test_unknown_backend_falls_back_to_copr(self, monkeypatch):
         names = self._run_main_and_collect(monkeypatch, "bogus")
         assert names == {"BuildPackageTool", "DownloadArtifactsTool"}
+
+    def _run_main_expecting_no_registration(self, monkeypatch):
+        """Run main() with the server mocked but register_many/aserve forbidden.
+
+        Used for the fail-fast cases: startup must abort before any tool is
+        registered or the server is served.
+        """
+        mock_server = flexmock()
+        mock_server.should_receive("register_many").never()
+        mock_server.should_receive("aserve").never()
+
+        import ymir.tools.privileged.gateway as gateway_module
+
+        monkeypatch.setenv("BUILD_BACKEND", "konflux")
+        flexmock(gateway_module, MCPServer=lambda config: mock_server)
+        flexmock(gateway_module).should_receive("setup_logging")
+        flexmock(gateway_module).should_receive("apply_zstream_override_from_env")
+        flexmock(gateway_module).should_receive("get_log_detective_mcp").and_return(_create_async_return([]))
+        gateway_module.main()
+
+    def test_konflux_backend_refuses_start_on_empty_token_file(self, monkeypatch, tmp_path):
+        from ymir.tools.errors import ToolErrorWithContext
+
+        token_file = tmp_path / "token"
+        token_file.write_text("")  # populated mount, but empty (not yet rotated)
+        self._set_valid_konflux_env(monkeypatch, str(token_file))
+        with pytest.raises(ToolErrorWithContext):
+            self._run_main_expecting_no_registration(monkeypatch)
+
+    def test_konflux_backend_refuses_start_on_missing_token_file(self, monkeypatch, tmp_path):
+        from ymir.tools.errors import ToolErrorWithContext
+
+        self._set_valid_konflux_env(monkeypatch, str(tmp_path / "does-not-exist"))
+        with pytest.raises(ToolErrorWithContext):
+            self._run_main_expecting_no_registration(monkeypatch)

@@ -7,10 +7,71 @@ RHEL configuration across agents and MCP gateway.
 
 import json
 import os
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import aiofiles
+from mcp.server.lowlevel.server import request_ctx
+
+# Actual config used inside the agent process
+current_rhel_config_override: ContextVar[dict[str, Any] | None] = ContextVar(
+    "current_rhel_config_override", default=None
+)
+
+
+def merge_rhel_config(base_config: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a recursive merge of a RHEL config and a fixture override."""
+    merged = deepcopy(dict(base_config))
+    for key, value in override.items():
+        if isinstance(current_value := merged.get(key), Mapping) and isinstance(value, Mapping):
+            merged[key] = merge_rhel_config(current_value, value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
+@contextmanager
+def rhel_config_override(override: Mapping[str, Any] | None) -> Generator[None, None, None]:
+    """Temporarily apply a task-local RHEL config override.
+
+    E2E test cases run concurrently, so an environment-variable override
+    would leak between workflows. ``ContextVar`` keeps an override local to
+    the current async task and any child tasks it creates. MCP tool sessions
+    forward this override in request metadata to the gateway.
+    """
+    if override is not None and not isinstance(override, Mapping):
+        raise ValueError("rhel_config_override must be a JSON object")
+    token = current_rhel_config_override.set(deepcopy(dict(override)) if override is not None else None)
+    try:
+        yield
+    finally:
+        current_rhel_config_override.reset(token)
+
+
+def _mcp_rhel_config_override() -> dict[str, Any] | None:
+    """Read a permitted per-test E2E override from MCP request metadata."""
+    if os.getenv("ALLOW_RHEL_CONFIG_OVERRIDE", "").lower() != "true":
+        return None
+    try:
+        meta = request_ctx.get().meta
+    except LookupError:
+        return None
+
+    if meta is None:
+        return None
+
+    extra = getattr(meta, "__pydantic_extra__", None) or {}
+    if (override := getattr(meta, "rhel_config_override", None)) is None:
+        override = extra.get("rhel_config_override")
+    if override is None:
+        return None
+    if not isinstance(override, dict):
+        raise ValueError("rhel_config_override must be a JSON object")
+    return override
 
 
 async def load_rhel_config() -> dict[str, Any]:
@@ -18,6 +79,8 @@ async def load_rhel_config() -> dict[str, Any]:
 
     The file path is read from the ``RHEL_CONFIG_PATH`` environment variable,
     falling back to ``rhel-config.json`` in the current working directory.
+    Optional fixture overrides are merged recursively: dictionaries retain
+    unspecified entries, while lists and scalar values are replaced.
 
     Returns:
         Dictionary containing RHEL configuration.
@@ -33,6 +96,10 @@ async def load_rhel_config() -> dict[str, Any]:
     try:
         async with aiofiles.open(config_file) as f:
             content = await f.read()
-            return json.loads(content)
+            config = json.loads(content)
     except json.JSONDecodeError as e:
         raise ValueError(f"Error decoding {config_file}: {e}") from e
+
+    if (override := current_rhel_config_override.get()) is None:
+        override = _mcp_rhel_config_override()
+    return merge_rhel_config(config, override) if override else config

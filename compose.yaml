@@ -116,6 +116,8 @@ services:
       # from writing to production Jira when run via make targets.
       - DRY_RUN=${DRY_RUN:-false}
       - MOCK_JIRA=${MOCK_JIRA:-false}
+      # Per-test RHEL configuration is accepted only when explicitly enabled.
+      - ALLOW_RHEL_CONFIG_OVERRIDE=${ALLOW_RHEL_CONFIG_OVERRIDE:-false}
       - JIRA_DRY_RUN=${JIRA_DRY_RUN:-false}
       - SHARED_RULES_ENABLED=${SHARED_RULES_ENABLED:-true}
       - TESTING_FARM_DRY_RUN=${TESTING_FARM_DRY_RUN:-false}

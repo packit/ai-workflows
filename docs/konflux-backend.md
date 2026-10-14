@@ -60,16 +60,11 @@ token is rotated roughly every 12h, so re-run the command whenever a build
 starts returning 401. Override the defaults with `GATEWAY_API_URL`,
 `GATEWAY_NAMESPACE`, `SECRET_NAME`, or `OC` if your setup differs.
 
-`konflux-bot-0` **cannot mint its own token** (platform RBAC forbids it -- see
-`deploy/konflux-token-rotation/README.md`); production mints and rotates it with
-an in-cluster minter CronJob (same doc), which is exactly the token you pull
-here.
-
-> Not using Konflux? The token mount still has to resolve. If you do not have
-> `.secrets/konflux/token`, create an empty placeholder:
-> `mkdir -p .secrets/konflux && touch .secrets/konflux/token`.
+`konflux-bot-0` **cannot mint its own token** (platform RBAC forbids it);
+production mints and rotates it with an in-cluster minter CronJob, which is
+exactly the token you pull here.
 
 ## Production rotation
 
-Automated via a CronJob in `kflux-rhel-p01/ymir-tenant` (GitOps in
-`konflux-release-data`). See `deploy/konflux-token-rotation/`.
+Automated via a CronJob in `kflux-rhel-p01/ymir-tenant`, defined in the Konflux
+tenant GitOps repository (`konflux-release-data`).

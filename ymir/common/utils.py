@@ -6,7 +6,6 @@ import asyncio
 import gzip
 import logging
 import os
-import re
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -26,7 +25,7 @@ from pydantic import BaseModel
 from specfile import Specfile
 from specfile.sourcelist import Sourcelist
 from specfile.sources import Patches, Sources
-from specfile.utils import EVR, NEVRA
+from specfile.utils import EVR, NEVR, NEVRA
 
 from ymir.common.base_utils import is_cs_branch
 from ymir.common.config import current_rhel_config_override
@@ -230,6 +229,16 @@ def _evr_from_build(build: dict) -> EVR:
     )
 
 
+def _nevr_from_build(build: dict) -> NEVR:
+    """Extract a NEVR from a Koji build dict."""
+    return NEVR(
+        name=build["name"],
+        epoch=build.get("epoch") or 0,
+        version=build["version"],
+        release=build["release"],
+    )
+
+
 def get_all_sources(spec: Specfile) -> Sources:
     parsed_sections = spec.parsed_sections
     sourcelists = [Sourcelist.parse(s, context=spec) for s in parsed_sections if s.id == "sourcelist"]
@@ -312,6 +321,32 @@ class PermanentValidationError(Exception):
 
     Should be handled gracefully (logged + fallback) rather than retried.
     """
+
+
+class InvalidDependencyDataError(PermanentValidationError):
+    """Raised when dependency metadata contains invalid or inconsistent data.
+
+    Examples:
+    - Fixed dependency NVR resolves to a different component name than expected
+    - Data corruption or injection attack in dependency records
+
+    Should be routed to user clarification, not retried.
+
+    Attributes:
+        dep_component: Expected dependency component name
+        actual_component: Actual component name from the resolved build
+        fixed_dep_nvr: The NVR that was resolved
+    """
+
+    def __init__(self, dep_component: str, actual_component: str, fixed_dep_nvr: NEVR):
+        self.dep_component = dep_component
+        self.actual_component = actual_component
+        self.fixed_dep_nvr = fixed_dep_nvr
+        super().__init__(
+            f"Fixed dependency NVR {fixed_dep_nvr.name}-{fixed_dep_nvr.version}-{fixed_dep_nvr.release} "
+            f"resolves to package '{actual_component}', not expected component '{dep_component}'. "
+            f"Possible data corruption or injection."
+        )
 
 
 async def _get_latest_build_from_tags(
@@ -585,7 +620,7 @@ async def _find_completed_builds_jira(
 
 async def _select_highest_evr_build(
     candidates: list[tuple[str, str]], expected_package: str
-) -> tuple[str, str, EVR] | None:
+) -> tuple[NEVR, str] | None:
     """Select build with highest EVR from candidate NVRs.
 
     Args:
@@ -593,7 +628,7 @@ async def _select_highest_evr_build(
         expected_package: Expected package name to validate against
 
     Returns:
-        Tuple of (nvr, issue_key, evr) for highest build, or None if none found
+        Tuple of (nevr, issue_key) for highest build, or None if none found
     """
     if not candidates:
         return None
@@ -605,6 +640,7 @@ async def _select_highest_evr_build(
     # Associate successful builds with their metadata
     candidate_builds = []
     koji_failures = []
+    missing_builds = []
     for (issue_key, nvr), build in zip(candidates, builds, strict=True):
         if isinstance(build, Exception):
             logger.warning(f"Failed to fetch build {nvr}: {build}")
@@ -619,8 +655,11 @@ async def _select_highest_evr_build(
                     f"package name '{build_package_name}' does not match expected '{expected_package}'"
                 )
                 continue
-            evr = _evr_from_build(build)
-            candidate_builds.append((evr, nvr, issue_key))
+            nevr = _nevr_from_build(build)
+            candidate_builds.append((nevr, issue_key))
+        else:
+            # Build exists in Jira but not in Koji
+            missing_builds.append((issue_key, nvr))
 
     if koji_failures:
         failed_nvrs = [nvr for nvr, _ in koji_failures]
@@ -628,23 +667,34 @@ async def _select_highest_evr_build(
             f"Koji lookup failed for {len(koji_failures)} candidate(s): {failed_nvrs}"
         )
 
+    # Log warning if builds are missing from Koji
+    if missing_builds:
+        missing_issues = ", ".join(f"{key} ({nvr})" for key, nvr in missing_builds)
+        logger.warning(f"Builds referenced in Jira but not found in Koji: {missing_issues}")
+
+    # If no valid builds found in Koji, return None to signal invalid_build_records
     if not candidate_builds:
+        if missing_builds:
+            logger.warning(
+                f"All {len(candidates)} candidate builds are missing from Koji. "
+                f"Latest build verification cannot proceed."
+            )
         return None
 
     # Sort by EVR descending and pick highest
     candidate_builds.sort(key=lambda x: x[0], reverse=True)
-    latest_evr, package_nvr, package_issue_key = candidate_builds[0]
+    latest_nevr, package_issue_key = candidate_builds[0]
 
-    return package_nvr, package_issue_key, latest_evr
+    return latest_nevr, package_issue_key
 
 
 async def _fetch_installed_pkgs_log(
-    package_nvr: str, built_architectures: set[str], *, require_all: bool = True
+    package_nevr: NEVR, built_architectures: set[str], *, require_all: bool = True
 ) -> list[tuple[str, str]]:
-    """Fetch installed_pkgs.log from Brew for the given package NVR for specific architectures.
+    """Fetch installed_pkgs.log from Brew for the given package for specific architectures.
 
     Args:
-        package_nvr: Package NVR (e.g., "go-fdo-client-1.0.0-4.el10_2.7")
+        package_nevr: Package NEVR
         built_architectures: Set of architectures to try
         require_all: If True, raise if any architecture's log is missing.
             If False, return whatever logs are found (for noarch builds).
@@ -655,18 +705,15 @@ async def _fetch_installed_pkgs_log(
     Raises:
         TransientInfrastructureError: If require_all and logs missing, or no logs at all
     """
-    # Parse NVR to construct installed_pkgs.log URL
-    nvr_match = re.match(r"^(.+)-([^-]+)-([^-]+)$", package_nvr)
-    if not nvr_match:
-        logger.warning(f"Could not parse package NVR: {package_nvr}")
-        return []
-
-    package_name, version, release = nvr_match.groups()
+    package_nvr = f"{package_nevr.name}-{package_nevr.version}-{package_nevr.release}"  # For error messages
 
     # Fetch logs only for architectures that were actually built
     installed_pkgs_log_urls = [
-        f"https://brewweb.engineering.redhat.com/brew/packages/"
-        f"{package_name}/{version}/{release}/data/logs/{arch}/installed_pkgs.log"
+        (
+            f"https://brewweb.engineering.redhat.com/brew/packages/"
+            f"{package_nevr.name}/{package_nevr.version}/{package_nevr.release}/"
+            f"data/logs/{arch}/installed_pkgs.log"
+        )
         for arch in built_architectures
     ]
 
@@ -688,6 +735,8 @@ async def _fetch_installed_pkgs_log(
             response = await client.get(url)
             if response.status_code == 200:
                 return url, response.content
+            if response.status_code in (404, 410):
+                raise _LogAbsent(f"GET HTTP {response.status_code}")
             raise _LogFetchError(f"GET HTTP {response.status_code} from {url}")
         except (_LogAbsent, _LogFetchError):
             raise
@@ -773,54 +822,64 @@ async def _fetch_installed_pkgs_log(
         ) from None
 
 
-async def _get_known_package_names(dep_component: str, fixed_dep_nvr: str) -> tuple[list[str], int] | None:
-    """Get list of binary package names produced by the dependency source build.
+async def _get_known_package_names(
+    dep_component: str, fixed_dep_nvr: NEVR
+) -> tuple[list[str], int, NEVR] | None:
+    """Get binary package names and validated NEVR for the fixed dependency build.
 
     Args:
-        dep_component: Source component name (e.g., "golang")
-        fixed_dep_nvr: Fixed dependency NVR
+        dep_component: Dependency component name (e.g., "golang"). This is kept as a
+            cross-validation input from the triage LLM, independent of fixed_dep_nvr.name,
+            used to detect data corruption or LLM hallucination.
+        fixed_dep_nvr: Fixed dependency NEVR object
 
     Returns:
-        Tuple of (known_names, real_binary_count) or None if metadata unavailable.
+        Tuple of (known_names, real_binary_rpm_count, fixed_dep_nevr) or None if
+        metadata unavailable.
         known_names: search terms for _parse_dependency_from_installed_pkgs_log.
-            Always includes the source component name (e.g., "python-foobar") even
-            when the build only produces differently-named binaries (e.g., "python3-foobar").
-        real_binary_count: distinct installable binaries from the build (excluding
+            Always includes the dependency component name (e.g., "python-foobar") even
+            when the build only produces differently-named binary RPMs (e.g., "python3-foobar").
+        real_binary_rpm_count: distinct installable binary RPMs from the build (excluding
             debuginfo, debugsource, src). Used to decide ambiguity: 1 means the fix
-            is unambiguously in that binary (already_fixed); >1 means we can't tell
-            which binary carries the fix (clarification needed). Computed before the
+            is unambiguously in that binary RPM (already_fixed); >1 means we can't tell
+            which binary RPMs carry the fix (clarification needed). Computed before the
             synthetic component-name insertion so it reflects actual build output.
+        fixed_dep_nevr: validated NEVR with authoritative epoch from Brew.
+
+    Raises:
+        InvalidDependencyDataError: If the fixed_dep_nvr resolves to a build with a different
+            component name than dep_component (data corruption or injection).
     """
-    fixed_build = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, fixed_dep_nvr)
+    fixed_dep_nvr_str = f"{fixed_dep_nvr.name}-{fixed_dep_nvr.version}-{fixed_dep_nvr.release}"
+    fixed_build = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, fixed_dep_nvr_str)
     if not fixed_build:
-        logger.error(f"Could not find build info for fixed dependency: {fixed_dep_nvr}")
+        logger.error(f"Could not find build info for fixed dependency: {fixed_dep_nvr_str}")
         return None
 
-    # Validate that the fixed build is actually for the expected dependency
     build_name = fixed_build.get("name")
     if build_name != dep_component:
         logger.error(
-            f"Fixed dependency NVR {fixed_dep_nvr} resolves to package '{build_name}', "
+            f"Fixed dependency NVR {fixed_dep_nvr_str} resolves to package '{build_name}', "
             f"not expected component '{dep_component}'. Possible data corruption or injection."
         )
-        return None
+        raise InvalidDependencyDataError(dep_component, build_name, fixed_dep_nvr)
 
     build_id = fixed_build.get("build_id")
     if not build_id:
-        logger.error(f"No build_id for {fixed_dep_nvr}")
+        logger.error(f"No build_id for {fixed_dep_nvr_str}")
         return None
+
+    fixed_dep_nevr = _nevr_from_build(fixed_build)
 
     # Get list of binary package names produced by this source build
     try:
         session = koji.ClientSession(BREWHUB_URL)
         rpms = await asyncio.to_thread(session.listRPMs, buildID=build_id)
         if not isinstance(rpms, list):
-            logger.error(f"Invalid RPM list response from Koji for build {build_id}")
+            logger.error(f"Invalid RPM list response from Brew for build {build_id}")
             return None
-        # Filter out debuginfo, debugsource, and src packages — these are auxiliary
-        # and don't represent distinct binary subpackages for the purposes of
-        # determining whether a component has multiple installable binaries
-        known_names = [
+        # Filter installable binary RPMs for the count (exclude debuginfo, debugsource, src)
+        installable_binary_rpms = [
             rpm.get("name")
             for rpm in rpms
             if rpm.get("name")
@@ -828,25 +887,33 @@ async def _get_known_package_names(dep_component: str, fixed_dep_nvr: str) -> tu
             and not rpm.get("name", "").endswith("-debugsource")
             and rpm.get("arch") != "src"
         ]
+        real_binary_rpm_count = len(set(installable_binary_rpms))
+
+        # Keep all non-debug packages in known_names for search (including src)
+        known_names = [
+            rpm.get("name")
+            for rpm in rpms
+            if rpm.get("name")
+            and not rpm.get("name", "").endswith("-debuginfo")
+            and not rpm.get("name", "").endswith("-debugsource")
+        ]
     except Exception as e:
-        logger.error(f"Failed to fetch RPM list for {fixed_dep_nvr}: {e}")
+        logger.error(f"Failed to fetch RPM list for {fixed_dep_nvr_str}: {e}")
         return None
 
-    real_binary_count = len(set(known_names))
-
-    # Ensure the component name itself is in the list (some builds don't produce
-    # a binary package matching the source component name)
+    # The component name should already be in the list from the src RPM,
+    # but include this as a safety measure for edge cases
     if dep_component not in known_names:
         known_names.insert(0, dep_component)
 
     logger.debug(f"Known package names for {dep_component}: {known_names[:5]}...")
-    return known_names, real_binary_count
+    return known_names, real_binary_rpm_count, fixed_dep_nevr
 
 
 async def _resolve_binary_rpm_to_source_build(
     koji_url: str, binary_nevra: str, binary_pkg_name: str, dep_component: str
-) -> tuple[str | None, int | None]:
-    """Resolve a binary RPM NEVRA to its source build NVR and epoch.
+) -> NEVR | None:
+    """Resolve a binary RPM NEVRA to its source build NEVR.
 
     This handles independently versioned subpackages (e.g., perl-Errno with its own version)
     by using Koji API to query the actual source build that produced the binary RPM.
@@ -858,8 +925,7 @@ async def _resolve_binary_rpm_to_source_build(
         dep_component: Source component name (e.g., "perl")
 
     Returns:
-        Tuple of (source_nvr, source_epoch) if successfully resolved.
-        Returns (None, None) if the binary package cannot be found in Koji.
+        Source build NEVR if successfully resolved, None if not found in Koji.
 
     Raises:
         TransientInfrastructureError: If Koji API calls fail (network, service issues)
@@ -879,26 +945,33 @@ async def _resolve_binary_rpm_to_source_build(
                     f"Koji getRPM returned nothing for {binary_nevra} "
                     f"(binary_pkg: {binary_pkg_name}, source: {dep_component})"
                 )
-                return None, None
+                return None
 
             build_id = rpm_info.get("build_id")
             if not build_id:
                 logger.warning(f"No build_id found for RPM {binary_nevra} ({binary_pkg_name})")
-                return None, None
+                return None
 
             build = session.getBuild(build_id)
             if not build:
-                logger.warning(f"Could not fetch Koji build info for build_id {build_id}")
-                return None, None
+                logger.warning(f"Could not fetch Brew build info for build_id {build_id}")
+                return None
 
-            # Construct the source NVR and get source epoch
-            source_nvr = f"{build['name']}-{build['version']}-{build['release']}"
-            source_epoch = build.get("epoch")
+            if build["name"] != dep_component:
+                logger.warning(
+                    f"Binary RPM {binary_nevra} ({binary_pkg_name}) resolves to source "
+                    f"'{build['name']}', not expected '{dep_component}'"
+                )
+                return None
+
+            # Get source build NEVR
+            source_nevr = _nevr_from_build(build)
+            epoch_prefix = f"{source_nevr.epoch}:" if source_nevr.epoch else ""
             logger.info(
                 f"Resolved binary RPM {binary_nevra} ({binary_pkg_name}) to source build: "
-                f"{f'{source_epoch}:' if source_epoch else ''}{source_nvr}"
+                f"{epoch_prefix}{source_nevr.name}-{source_nevr.version}-{source_nevr.release}"
             )
-            return source_nvr, source_epoch
+            return source_nevr
 
         except koji.GenericError as e:
             # Koji API failures are transient - should retry
@@ -922,183 +995,90 @@ async def _resolve_binary_rpm_to_source_build(
 
 
 async def _parse_dependency_from_installed_pkgs_log(
-    installed_pkgs_log: str, dep_component: str, known_names: list[str], koji_url: str | None = None
-) -> tuple[str | None, int | None, list[str] | None]:
+    installed_pkgs_log: str, dep_component: str, known_names: list[str], brew_url: str | None = None
+) -> tuple[NEVR | None, list[str] | None]:
     """Parse installed_pkgs.log to find which version of dependency was installed.
 
-    For independently versioned subpackages (e.g., perl-Errno), uses Koji API to resolve
-    the binary RPM to its source build instead of string manipulation.
+    For independently versioned subpackages (e.g., perl-Errno), uses Brew API to resolve
+    the binary RPM to its source package instead of string manipulation.
 
     Args:
         installed_pkgs_log: Content of installed_pkgs.log
         dep_component: Source component name
-        known_names: List of known binary package names to search for
-        koji_url: Koji hub URL for resolving binary RPMs to source builds.
-                  If provided, uses Koji API for robust resolution. Otherwise falls back
+        known_names: List of known binary RPM names to search for
+        brew_url: Brew hub URL for resolving binary RPMs to source packages.
+                  If provided, uses Brew API for robust resolution. Otherwise falls back
                   to string manipulation (which fails for independently versioned subpackages).
 
     Returns:
-        Tuple of (nvr, epoch, matched_pkg_names) where:
-        - nvr is in format "name-version-release" (None if no match or conflicting versions)
-        - epoch is the epoch number if present in installed_pkgs.log, else None
-        - matched_pkg_names is a list of all binary package names that were installed.
-          When nvr is None: if matched_pkg_names is not None, indicates either unresolved
-          subpackages (Koji resolution failed) or conflicting versions (multiple source builds).
+        Tuple of (used_dep_nevr, matched_pkg_names) where:
+        - used_dep_nevr is the source NEVR of the installed dependency (None if no match)
+        - matched_pkg_names is a list with the matched binary RPM name (single element).
+          When used_dep_nevr is None and matched_pkg_names is not None, it contains
+          unresolved subpackage names (Brew resolution to source RPM failed).
 
     Raises:
-        TransientInfrastructureError: If koji_url is provided but Koji query fails for subpackages
+        TransientInfrastructureError: If brew_url is provided but Brew query fails for subpackages
     """
 
-    # Brew records: name-[epoch:]version-release.arch timestamp size digest installed.
-    # Collect all matching installed binary names for this architecture.
-    # Try the direct component name first, then subpackages by length (longest first)
-    # to prefer specific subpackage matches over shorter prefix collisions.
-    def _sort_key(name):
-        return (0 if name == dep_component else 1, -len(name))
+    known_names_set = set(known_names)
+    unresolved_subpackages = []
 
-    matched_binaries = []  # list of (nvr, epoch, pkg_name) tuples
-    unresolved_subpackages = []  # packages found in log but couldn't resolve via Koji
+    for line in installed_pkgs_log.splitlines():
+        fields = line.split()
+        if len(fields) != 5 or fields[-1] != "installed":
+            continue
 
-    for pkg_name in sorted(known_names, key=_sort_key):
-        for line in installed_pkgs_log.splitlines():
-            fields = line.split()
-            if len(fields) != 5 or fields[-1] != "installed":
-                continue
+        try:
+            nevra = NEVRA.from_string(fields[0])
+        except ValueError:
+            continue
 
-            # Parse NEVRA from the first field
-            try:
-                nevra = NEVRA.from_string(fields[0])
-            except ValueError:
-                continue
+        if nevra.name not in known_names_set:
+            continue
 
-            # Check if this matches the known package name
-            if nevra.name != pkg_name:
-                continue
+        pkg_name = nevra.name
+        epoch = nevra.epoch if ":" in fields[0] else 0
 
-            # Extract epoch (None if absent, not 0)
-            # NEVRA sets epoch to 0 by default, but we need None when it wasn't in the original string
-            epoch = nevra.epoch if ":" in fields[0] else None
-
-            # Resolve binary RPM to source build NVR and epoch
-            if koji_url and pkg_name != dep_component:
-                # Try to use Koji API to resolve the binary RPM to source build.
-                # This handles independently versioned subpackages correctly.
-                # Only do this for subpackages (pkg_name != dep_component), not the source package itself.
-                binary_nevra = fields[0]  # Full NEVRA as found in log
-                resolved_nvr, resolved_epoch = await _resolve_binary_rpm_to_source_build(
-                    koji_url, binary_nevra, pkg_name, dep_component
-                )
-                if resolved_nvr:
-                    nvr = resolved_nvr
-                    # Use source build epoch, not binary subpackage epoch
-                    epoch = resolved_epoch
-                else:
-                    # Koji resolution failed (confirmed absent); track for later
-                    logger.debug(
-                        f"Could not resolve {binary_nevra} ({pkg_name}) to source build in Koji, "
-                        f"skipping this match"
-                    )
-                    # Only track this as unresolved if it was the component name match attempt
-                    # (subpackages are expected to be independently versioned and may not exist in Koji)
-                    unresolved_subpackages.append(pkg_name)
-                    continue
+        if brew_url and pkg_name != dep_component:
+            resolved_nevr = await _resolve_binary_rpm_to_source_build(
+                brew_url, fields[0], pkg_name, dep_component
+            )
+            if resolved_nevr:
+                used_nevr = resolved_nevr
             else:
-                # Use string manipulation (works for source package itself, or when Koji URL not provided)
-                nvr = f"{dep_component}-{nevra.version}-{nevra.release}"
+                logger.debug(
+                    f"Could not resolve {fields[0]} ({pkg_name}) to source package in Brew, "
+                    f"skipping this match"
+                )
+                unresolved_subpackages.append(pkg_name)
+                continue
+        else:
+            used_nevr = NEVR(name=dep_component, epoch=epoch, version=nevra.version, release=nevra.release)
 
-            logger.info(
-                f"Found {dep_component} package {pkg_name} in installed_pkgs.log: "
-                f"{f'{epoch}:' if epoch else ''}{nvr}"
-            )
-            matched_binaries.append((nvr, epoch, pkg_name))
-
-    if not matched_binaries:
-        # If we found evidence of the dependency being installed but couldn't resolve it,
-        # this is a clarification-needed case, not a missing dependency
-        if unresolved_subpackages:
-            logger.warning(
-                f"Found evidence of {dep_component} subpackage(s) in installed_pkgs.log "
-                f"but could not resolve to source build in Koji: {unresolved_subpackages}. "
-                f"Cannot determine installed version — needs manual verification."
-            )
-            # Return special marker to indicate unresolvable subpackage match
-            # Use the subpackage names as a marker and let the caller handle it
-            return None, None, unresolved_subpackages
-        logger.warning(f"Could not find {dep_component} or its subpackages in installed_pkgs.log")
-        return None, None, None
-
-    # Return the preferred match (first in sorted order) but collect all pkg_names
-    nvr, epoch, _ = matched_binaries[0]
-    all_pkg_names = [pkg_name for _, _, pkg_name in matched_binaries]
-    return nvr, epoch, all_pkg_names
-
-
-async def _compare_dependency_evrs(
-    used_dep_nvr: str, used_dep_epoch: int | None, fixed_dep_nvr: str, dep_component: str
-) -> bool | None:
-    """Compare used dependency EVR with fixed dependency EVR.
-
-    Args:
-        used_dep_nvr: NVR of dependency that was used during build
-        used_dep_epoch: Epoch from installed_pkgs.log (None if not present)
-        fixed_dep_nvr: NVR of fixed dependency
-        dep_component: Expected dependency component name for validation
-
-    Returns:
-        True if used_dep >= fixed_dep, False if used_dep < fixed_dep, None if comparison failed
-    """
-    # Get build info for both dependencies
-    used_build, fixed_build = await asyncio.gather(
-        asyncio.to_thread(_get_koji_build, BREWHUB_URL, used_dep_nvr),
-        asyncio.to_thread(_get_koji_build, BREWHUB_URL, fixed_dep_nvr),
-    )
-
-    if not used_build:
-        logger.error(f"Could not find build info for used dependency: {used_dep_nvr}")
-        return None
-
-    if not fixed_build:
-        logger.error(f"Could not find build info for fixed dependency: {fixed_dep_nvr}")
-        return None
-
-    # Validate both builds are for the expected dependency component
-    used_name = used_build.get("name")
-    if used_name != dep_component:
-        logger.error(
-            f"Used dependency NVR {used_dep_nvr} resolves to package '{used_name}', "
-            f"not expected component '{dep_component}'. Data validation failed."
+        logger.info(
+            f"Found {dep_component} package {pkg_name} in installed_pkgs.log: "
+            f"{f'{used_nevr.epoch}:' if used_nevr.epoch else ''}"
+            f"{used_nevr.name}-{used_nevr.version}-{used_nevr.release}"
         )
-        return None
+        return used_nevr, [pkg_name]
 
-    fixed_name = fixed_build.get("name")
-    if fixed_name != dep_component:
-        logger.error(
-            f"Fixed dependency NVR {fixed_dep_nvr} resolves to package '{fixed_name}', "
-            f"not expected component '{dep_component}'. Data validation failed."
+    if unresolved_subpackages:
+        logger.warning(
+            f"Found evidence of {dep_component} subpackage(s) in installed_pkgs.log "
+            f"but could not resolve to source package in Brew: {unresolved_subpackages}. "
+            f"Cannot determine installed version — needs manual verification."
         )
-        return None
-
-    fixed_evr = _evr_from_build(fixed_build)
-
-    # Use the epoch from installed_pkgs.log if present, otherwise use Koji's epoch
-    # (installed_pkgs.log epoch takes precedence as it's what was actually installed)
-    if used_dep_epoch is not None:
-        used_evr = EVR(
-            epoch=used_dep_epoch,
-            version=used_build["version"],
-            release=used_build["release"],
-        )
-    else:
-        used_evr = _evr_from_build(used_build)
-
-    return used_evr >= fixed_evr
+        return None, unresolved_subpackages
+    logger.warning(f"Could not find {dep_component} or its subpackages in installed_pkgs.log")
+    return None, None
 
 
 async def _compare_build_timestamps(
     package: str,
     package_nvr: str,
     dep_component: str,
-    fixed_dep_nvr: str,
+    fixed_dep_nvr: NEVR,
 ) -> bool | None:
     """Compare build timestamps as fallback when installed_pkgs.log is unavailable.
 
@@ -1106,15 +1086,16 @@ async def _compare_build_timestamps(
         package: Package name (e.g., "go-fdo-client")
         package_nvr: Package NVR to check
         dep_component: Dependency component name (e.g., "golang")
-        fixed_dep_nvr: Fixed dependency NVR
+        fixed_dep_nvr: Fixed dependency NEVR object
 
     Returns:
         True if package was built after dependency fix,
         False if built before fix,
         None if metadata unavailable or validation failed
     """
+    fixed_dep_nvr_str = f"{fixed_dep_nvr.name}-{fixed_dep_nvr.version}-{fixed_dep_nvr.release}"
     package_build = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, package_nvr)
-    fixed_build = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, fixed_dep_nvr)
+    fixed_build = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, fixed_dep_nvr_str)
 
     if not package_build or not fixed_build:
         logger.warning("Could not fetch build metadata for timestamp comparison")
@@ -1128,10 +1109,9 @@ async def _compare_build_timestamps(
         )
         return None
 
-    # Validate fixed build is for expected component
     if fixed_build.get("name") != dep_component:
         logger.error(
-            f"Fixed dependency {fixed_dep_nvr} has name '{fixed_build.get('name')}', "
+            f"Fixed dependency {fixed_dep_nvr_str} has name '{fixed_build.get('name')}', "
             f"expected '{dep_component}'. Possible data error."
         )
         return None
@@ -1164,7 +1144,7 @@ async def check_package_built_with_fixed_dependency(
     package: str,
     fix_version: str,
     dep_component: str,
-    fixed_dep_nvr: str,
+    fixed_dep_nvr: NEVR,
     available_tools: list[Tool],
     jira_issue: str | None = None,
 ) -> tuple[bool | None, str | None, str | None, str | None]:
@@ -1177,8 +1157,10 @@ async def check_package_built_with_fixed_dependency(
     Args:
         package: Package name (e.g., "go-fdo-client")
         fix_version: RHEL fix version (e.g., "rhel-10.2.z")
-        dep_component: Dependency component name (e.g., "golang")
-        fixed_dep_nvr: The fixed dependency NVR from "Fixed in Build" field
+        dep_component: Dependency component name (e.g., "golang"). This is a cross-validation
+            input from the triage LLM, independent of fixed_dep_nvr.name, used to detect data
+            corruption or LLM hallucination.
+        fixed_dep_nvr: The fixed dependency NEVR object (from "Fixed in Build" field)
         available_tools: List of available tools for Jira queries
         jira_issue: Jira issue key to exclude from search (the ticket being triaged)
 
@@ -1217,6 +1199,39 @@ async def check_package_built_with_fixed_dependency(
             logger.info(f"No builds found for {package} in {fix_version}")
             return False, None, None, None
 
+        # Validate active candidates to filter out builds for different packages
+        # This prevents unrelated active builds from blocking rebuild decisions
+        if active_candidates:
+            filtered_active = []
+            for active_key, active_nvr in active_candidates:
+                try:
+                    active_build = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, active_nvr)
+                    if not active_build:
+                        # Active build not in Koji yet (might still be building)
+                        # Keep it so we can request clarification
+                        logger.info(
+                            f"Active build {active_nvr} (issue {active_key}) "
+                            f"not yet in Koji — keeping for clarification"
+                        )
+                        filtered_active.append((active_key, active_nvr))
+                        continue
+                    # Check if the active build is for the expected package
+                    active_build_name = active_build.get("name")
+                    if active_build_name != package:
+                        logger.warning(
+                            f"Active build {active_nvr} (issue {active_key}) "
+                            f"resolves to '{active_build_name}', "
+                            f"not expected package '{package}' — ignoring"
+                        )
+                        continue
+                    # Build belongs to the correct package
+                    filtered_active.append((active_key, active_nvr))
+                except Exception as e:
+                    logger.warning(f"Error validating active build {active_nvr}: {e}")
+                    # Keep it anyway to request clarification
+                    filtered_active.append((active_key, active_nvr))
+            active_candidates = filtered_active if filtered_active else None
+
         # If only active (not closed) builds exist, request clarification
         # These might be rejected/abandoned, so we can't trust them yet
         if not closed_candidates and active_candidates:
@@ -1251,14 +1266,15 @@ async def check_package_built_with_fixed_dependency(
             rejected_issues = ", ".join(key for key, _ in closed_candidates)
             return None, None, None, f"invalid_build_records:{rejected_issues}"
 
-        package_nvr, package_issue_key, latest_evr = result
+        latest_nevr, package_issue_key = result
+        package_nvr = f"{latest_nevr.name}-{latest_nevr.version}-{latest_nevr.release}"
         logger.info(
-            f"Found latest build for {package} by EVR: {package_nvr} "
-            f"(issue: {package_issue_key}, EVR: {latest_evr})"
+            f"Found latest build for {package}: {package_nvr} "
+            f"(issue: {package_issue_key}, NEVR: {latest_nevr})"
         )
 
-        # Step 2b: Filter active builds to only those with EVR > selected closed build
-        # Resolve active NVRs through Koji and validate they are for the correct package.
+        # Step 2b: Filter active builds to only those with NEVR > selected closed build
+        # Note: package-name validation already done earlier, so names always match.
         # If we can't resolve an active build's metadata but it has a valid NVR pattern,
         # keep it (it might be building) to request clarification from the user.
         if active_candidates:
@@ -1275,24 +1291,14 @@ async def check_package_built_with_fixed_dependency(
                         )
                         filtered_active.append((active_key, active_nvr))
                         continue
-                    # Check if the active build is for the expected package
-                    active_build_name = active_build.get("name")
-                    if active_build_name != package:
-                        logger.warning(
-                            f"Active build {active_nvr} (issue {active_key}) "
-                            f"resolves to '{active_build_name}', "
-                            f"not expected package '{package}' — ignoring"
-                        )
-                        continue
-                    # Check if active EVR is higher than selected closed build
-                    active_evr = _evr_from_build(active_build)
-                    if active_evr <= latest_evr:
+                    active_nevr = _nevr_from_build(active_build)
+                    if active_nevr <= latest_nevr:
                         logger.info(
-                            f"Active build {active_nvr} (issue {active_key}) has EVR {active_evr} "
-                            f"<= selected closed build EVR {latest_evr} — ignoring"
+                            f"Active build {active_nvr} (issue {active_key}) has NEVR {active_nevr} "
+                            f"<= selected closed build NEVR {latest_nevr} — ignoring"
                         )
                         continue
-                    # Active build exists, has correct package name, and higher EVR
+                    # Active build exists and has higher NEVR
                     filtered_active.append((active_key, active_nvr))
                 except Exception as e:
                     logger.warning(f"Error validating active build {active_nvr}: {e}")
@@ -1349,7 +1355,7 @@ async def check_package_built_with_fixed_dependency(
         if built_archs:
             try:
                 installed_pkgs_logs = await _fetch_installed_pkgs_log(
-                    package_nvr, built_archs, require_all=not noarch_build
+                    latest_nevr, built_archs, require_all=not noarch_build
                 )
             except BuildLogMissingError as e:
                 # installed_pkgs.log is absent (404/410). This indicates the log is genuinely
@@ -1410,20 +1416,34 @@ async def check_package_built_with_fixed_dependency(
                     active_issues = ", ".join(key for key, _ in active_candidates)
                     return None, package_issue_key, package_nvr, f"active_builds_not_closed:{active_issues}"
                 return False, package_issue_key, package_nvr, None
-            # Timestamp comparison failed (metadata unavailable) - transient Koji issue
+            fixed_dep_nvr_str = f"{fixed_dep_nvr.name}-{fixed_dep_nvr.version}-{fixed_dep_nvr.release}"
             raise TransientInfrastructureError(
                 f"Koji metadata unavailable for timestamp comparison: {package} ({package_nvr}) "
-                f"vs {dep_component} ({fixed_dep_nvr})"
+                f"vs {dep_component} ({fixed_dep_nvr_str})"
             )
 
-        # Step 4: Get known package names for the dependency
-        known_names_result = await _get_known_package_names(dep_component, fixed_dep_nvr)
-        if known_names_result is None:
-            raise TransientInfrastructureError(
-                f"Koji metadata unavailable: could not fetch subpackage list for "
-                f"{dep_component} ({fixed_dep_nvr})"
+        # Step 4: Get known package names and validated NEVR for the fixed dependency
+        try:
+            known_names_result = await _get_known_package_names(dep_component, fixed_dep_nvr)
+            if known_names_result is None:
+                fixed_dep_nvr_str = f"{fixed_dep_nvr.name}-{fixed_dep_nvr.version}-{fixed_dep_nvr.release}"
+                raise TransientInfrastructureError(
+                    f"Brew metadata unavailable: could not fetch subpackage list for "
+                    f"{dep_component} ({fixed_dep_nvr_str})"
+                )
+            known_names, real_binary_rpm_count, fixed_dep_nevr = known_names_result
+        except InvalidDependencyDataError as e:
+            # Invalid dependency record - route to clarification, not retry
+            logger.warning(
+                f"Invalid dependency data: {dep_component} resolves to {e.actual_component}. "
+                f"Requesting clarification."
             )
-        known_names, real_binary_count = known_names_result
+            return (
+                None,
+                package_issue_key,
+                package_nvr,
+                f"invalid_dependency_record:{dep_component}_resolves_to_{e.actual_component}",
+            )
 
         # Step 5: Parse dependency from all architecture installed_pkgs.logs and verify consistency
         # Parse all architectures concurrently
@@ -1436,7 +1456,7 @@ async def check_package_built_with_fixed_dependency(
         parse_tasks = [_parse_arch(arch_url, log_content) for arch_url, log_content in installed_pkgs_logs]
         parse_results = await asyncio.gather(*parse_tasks, return_exceptions=True)
 
-        dep_versions = {}
+        dep_nevrs = {}  # arch -> NEVR
         matched_pkg_names = {}  # arch -> list of pkg names
         missing_archs = list(
             missing_archs_from_error
@@ -1449,25 +1469,25 @@ async def check_package_built_with_fixed_dependency(
             if isinstance(result, Exception):
                 raise result
 
-            arch_name, (used_dep_nvr, used_dep_epoch, matched_pkg_names_list) = result
-            if used_dep_nvr:
-                dep_versions[arch_name] = (used_dep_nvr, used_dep_epoch)
+            arch_name, (used_dep_nevr, matched_pkg_names_list) = result
+            if used_dep_nevr is not None:
+                dep_nevrs[arch_name] = used_dep_nevr
                 matched_pkg_names[arch_name] = matched_pkg_names_list
             elif matched_pkg_names_list:
-                # Package found in log but couldn't be resolved via Koji (unresolved subpackage)
+                # Package found in log but couldn't be resolved via Brew (unresolved subpackage)
                 unresolved_subpackage_match = True
                 unresolved_subpkg_names.update(matched_pkg_names_list)
                 missing_archs.append(arch_name)
             else:
                 missing_archs.append(arch_name)
 
-        if not dep_versions:
+        if not dep_nevrs:
             # No dependency found in any architecture log
             # But check if we found evidence of an unresolved subpackage match
             if unresolved_subpackage_match:
                 logger.warning(
                     f"Found evidence of {dep_component} subpackage(s) in {package_nvr} installed_pkgs.log "
-                    f"but could not resolve via Koji: {unresolved_subpkg_names}. "
+                    f"but could not resolve via Brew: {unresolved_subpkg_names}. "
                     f"Cannot determine whether rebuilt with fixed dependency."
                 )
                 subpkg_list = ", ".join(sorted(unresolved_subpkg_names))
@@ -1497,76 +1517,50 @@ async def check_package_built_with_fixed_dependency(
             logger.warning(
                 f"Dependency {dep_component} missing from {len(missing_archs)} architecture(s) "
                 f"for {package_nvr}: {', '.join(missing_archs)}. Found in: "
-                f"{', '.join(dep_versions.keys())}. Needs manual verification."
+                f"{', '.join(dep_nevrs.keys())}. Needs manual verification."
             )
             return None, package_issue_key, package_nvr, "partial_architecture_coverage"
 
         # Verify all architectures agree on the dependency version
-        # Normalize epochs through Koji to handle None vs 0 equivalence
-        normalized_evrs = {}
-        for arch, (nvr, epoch_from_log) in dep_versions.items():
-            build = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, nvr)
-            if not build:
-                raise TransientInfrastructureError(
-                    f"Koji metadata unavailable for {nvr} ({arch} architecture)"
-                )
-
-            # Use epoch from installed_pkgs.log if present, otherwise Koji's epoch
-            if epoch_from_log is not None:
-                evr = EVR(
-                    epoch=epoch_from_log,
-                    version=build["version"],
-                    release=build["release"],
-                )
-            else:
-                evr = _evr_from_build(build)
-
-            normalized_evrs[arch] = (nvr, evr)
-
-        # Compare normalized EVRs
-        unique_evrs = {evr for _, evr in normalized_evrs.values()}
-        if len(unique_evrs) > 1:
-            # Different architectures have different dependency versions
+        unique_nevrs = set(dep_nevrs.values())
+        if len(unique_nevrs) > 1:
             logger.warning(
                 f"Dependency version conflict across architectures for {package_nvr}: "
-                f"{', '.join(f'{arch}={nvr} (EVR: {evr})' for arch, (nvr, evr) in normalized_evrs.items())}. "
+                f"{', '.join(f'{arch}={nevr}' for arch, nevr in dep_nevrs.items())}. "
                 f"Different buildroots used. Needs manual verification."
             )
             return None, package_issue_key, package_nvr, "architecture_dependency_conflict"
 
-        # All architectures agree - use the common version (pick first)
-        used_dep_nvr, _ = dep_versions[next(iter(dep_versions))]
-        # Use epoch from first architecture's installed_pkgs.log for final comparison
-        used_dep_epoch = dep_versions[next(iter(dep_versions))][1]
+        # All architectures agree — use the common NEVR
+        used_dep_nevr = next(iter(dep_nevrs.values()))
+        used_dep_nvr = f"{used_dep_nevr.name}-{used_dep_nevr.version}-{used_dep_nevr.release}"
         logger.info(
-            f"All {len(dep_versions)} architecture(s) agree: {package_nvr} used {dep_component}"
-            f" {used_dep_nvr}"
+            f"All {len(dep_nevrs)} architecture(s) agree: {package_nvr} used {dep_component} {used_dep_nvr}"
         )
 
         # Step 5b: Check if dependency component produces multiple binary packages
         # When the component produces more than one installable binary (after filtering
         # debuginfo/debugsource), we can't be sure which binary carries the fixed code.
-        # A single installable binary is unambiguous regardless of whether its name
-        # matches the source component name.
 
         # Collect all matched package names from all architectures for the clarification message
         all_matched_names = set()
         for pkg_list in matched_pkg_names.values():
             all_matched_names.update(pkg_list)
 
-        matched_via_subpackage = real_binary_count > 1
+        matched_via_subpackage = real_binary_rpm_count > 1
 
-        # Step 6: Compare EVRs
-        is_fixed = await _compare_dependency_evrs(used_dep_nvr, used_dep_epoch, fixed_dep_nvr, dep_component)
+        # Step 6: Compare NEVRs directly
+        is_fixed = used_dep_nevr >= fixed_dep_nevr
+        fixed_dep_nvr_str = f"{fixed_dep_nevr.name}-{fixed_dep_nvr.version}-{fixed_dep_nvr.release}"
 
-        if is_fixed is True:
+        if is_fixed:
             if matched_via_subpackage:
                 subpkg_list = ", ".join(sorted(all_matched_names))
                 logger.info(
-                    f"{package} ({package_nvr}) was built with {used_dep_nvr} >= {fixed_dep_nvr}, "
-                    f"but {dep_component} produces multiple binary packages. "
+                    f"{package} ({package_nvr}) was built with {used_dep_nvr} >= {fixed_dep_nvr_str}, "
+                    f"but {dep_component} produces multiple binary RPMs. "
                     f"Matched package(s): {subpkg_list}. "
-                    f"Cannot confirm which binary contains the fix — requesting verification."
+                    f"Cannot confirm which binary RPM contains the fix — requesting verification."
                 )
                 return (
                     None,
@@ -1576,27 +1570,22 @@ async def check_package_built_with_fixed_dependency(
                 )
             logger.info(
                 f"{package} ({package_nvr}) was built with {used_dep_nvr}, "
-                f"which is >= fixed dependency {fixed_dep_nvr}"
+                f"which is >= fixed dependency {fixed_dep_nvr_str}"
             )
             return True, package_issue_key, package_nvr, None
-        if is_fixed is False:
-            logger.info(
-                f"{package} ({package_nvr}) was built with {used_dep_nvr}, "
-                f"which is < fixed dependency {fixed_dep_nvr}"
-            )
-            # Check if there are active builds that might be newer
-            if active_candidates:
-                logger.warning(
-                    f"Closed build {package_nvr} does not have fix, but {len(active_candidates)} "
-                    f"active builds exist. Requesting clarification on active builds."
-                )
-                active_issues = ", ".join(key for key, _ in active_candidates)
-                return None, package_issue_key, package_nvr, f"active_builds_not_closed:{active_issues}"
-            return False, package_issue_key, package_nvr, None
-        # EVR comparison failed due to missing Koji metadata or validation error
-        raise TransientInfrastructureError(
-            f"Koji metadata unavailable for EVR comparison: {package} ({package_nvr})"
+        logger.info(
+            f"{package} ({package_nvr}) was built with {used_dep_nvr}, "
+            f"which is < fixed dependency {fixed_dep_nvr_str}"
         )
+        # Check if there are active builds that might be newer
+        if active_candidates:
+            logger.warning(
+                f"Closed build {package_nvr} does not have fix, but {len(active_candidates)} "
+                f"active builds exist. Requesting clarification on active builds."
+            )
+            active_issues = ", ".join(key for key, _ in active_candidates)
+            return None, package_issue_key, package_nvr, f"active_builds_not_closed:{active_issues}"
+        return False, package_issue_key, package_nvr, None
 
     except TransientInfrastructureError:
         # Re-raise infrastructure errors for task retry

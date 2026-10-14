@@ -17,6 +17,7 @@ from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field
+from specfile.utils import NEVR
 
 import ymir.agents.tasks as tasks
 from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_applicability_agent
@@ -1240,6 +1241,31 @@ async def run_workflow(
                 logger.warning(f"Dependency {dep_issue_key} has no Fixed in Build — skipping buildroot check")
                 return "consolidate_rebuild_siblings"
 
+            try:
+                fixed_dep_nevr = NEVR.from_string(fixed_in_build)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to parse 'Fixed in Build' field for dependency {dep_issue_key}: "
+                    f"{fixed_in_build!r} — {e}"
+                )
+                state.triage_result = OutputSchema(
+                    resolution=Resolution.CLARIFICATION_NEEDED,
+                    data=ClarificationNeededData(
+                        findings=(
+                            f"The dependency issue {dep_issue_key} has a malformed value in the "
+                            f"'Fixed in Build' field: {fixed_in_build!r}. This value cannot be parsed "
+                            f"as a valid NEVR (Name-Epoch-Version-Release) string."
+                        ),
+                        additional_info_needed=(
+                            f"Please correct the 'Fixed in Build' field on {dep_issue_key} to contain "
+                            f"a valid build identifier in NEVR format (e.g., 'package-0:1.2.3-4.el9'). "
+                            f"Once corrected, re-run the triage to verify whether rebuild is still needed."
+                        ),
+                        jira_issue=state.jira_issue,
+                    ),
+                )
+                return "comment_in_jira"
+
             # fix_version is already normalized by run_triage_analysis (e.g. rhel-9.8 → rhel-9.8.z)
             fix_version = getattr(data, "fix_version", None) or ""
             package = getattr(data, "package", None)
@@ -1256,7 +1282,7 @@ async def run_workflow(
                         package=package,
                         fix_version=fix_version,
                         dep_component=dep_component,
-                        fixed_dep_nvr=fixed_in_build,
+                        fixed_dep_nvr=fixed_dep_nevr,
                         available_tools=gateway_tools,
                         jira_issue=state.jira_issue,
                     )
@@ -1451,6 +1477,35 @@ async def run_workflow(
                                         f"and confirm whether {package} has a valid completed build "
                                         f"with {dep_component} {fixed_in_build} or newer. If the "
                                         f"build records are incorrect, proceed with rebuild."
+                                    ),
+                                    jira_issue=state.jira_issue,
+                                ),
+                            )
+                            return "comment_in_jira"
+                        if reason and reason.startswith("invalid_dependency_record:"):
+                            # Dependency component resolves to different package in Koji
+                            dep_details = reason.split(":", 1)[1]
+                            logger.warning(
+                                f"Dependency component {dep_component} resolves to a different "
+                                f"package in Koji: {dep_details}"
+                            )
+                            state.triage_result = OutputSchema(
+                                resolution=Resolution.CLARIFICATION_NEEDED,
+                                data=ClarificationNeededData(
+                                    findings=(
+                                        f"The dependency component {dep_component} (from issue "
+                                        f"{dep_issue_key}, Fixed in Build: {fixed_in_build}) resolves "
+                                        f"to a different package name in Koji ({dep_details}). This "
+                                        f"inconsistency between the Jira dependency information and the "
+                                        f"actual Koji package data prevents automated verification of "
+                                        f"whether {package} was rebuilt with the fixed dependency."
+                                    ),
+                                    additional_info_needed=(
+                                        f"Please verify the dependency information for {dep_component}. "
+                                        f"If the dependency component name in Jira is incorrect, update "
+                                        f"the dependency link. If the Koji package name mapping is "
+                                        f"correct but unexpected, please manually verify whether "
+                                        f"{package} needs to be rebuilt with the fixed dependency."
                                     ),
                                     jira_issue=state.jira_issue,
                                 ),

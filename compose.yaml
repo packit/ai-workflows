@@ -155,9 +155,9 @@ services:
       - .secrets/keytab:/home/mcp/keytab:ro,z,U
       - ${GIT_REPOS_HOST:-git-repos}:${GIT_REPO_BASEPATH:-/git-repos}:z
       - .secrets/rhel-config.json:/home/mcp/rhel-config.json:ro,z,U
-      # Rotated Konflux SA token (konflux backend only). Create it with
-      #   mkdir -p .secrets/konflux && touch .secrets/konflux/token
-      # if you are not using the konflux build backend.
+      # Rotated Konflux SA token (konflux backend only). If you are not using
+      # the konflux build backend, seed the mount with the empty placeholder:
+      #   cp templates/konflux/token .secrets/konflux/token
       - ${KONFLUX_TOKEN_HOST:-.secrets/konflux/token}:/home/mcp/konflux-token:ro,z,U
     command: ["python", "-m", "ymir.tools.privileged.gateway"]
     restart: unless-stopped

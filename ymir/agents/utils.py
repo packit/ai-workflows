@@ -143,6 +143,17 @@ def render_template(
     return template.render(input.model_dump(mode="json") if input else {})
 
 
+def get_reference_dir(agent: str) -> Path:
+    """Directory holding on-demand prompt references for *agent*.
+
+    References are static markdown files with YAML frontmatter (not Jinja
+    templates); ``LoadPromptTool`` reads them when an agent asks for one by
+    name. Keeping this path next to the prompts root avoids each caller
+    re-deriving the package layout.
+    """
+    return _PROMPTS_DIR / agent / "references"
+
+
 def set_litellm_debug() -> None:
     """Set litellm to print debug information.
 

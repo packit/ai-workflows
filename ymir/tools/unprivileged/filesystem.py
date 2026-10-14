@@ -7,6 +7,7 @@ from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.common.utils import get_absolute_path
+from ymir.common.validators import ToolPath
 from ymir.tools.base import CloneableTool as Tool
 
 
@@ -38,7 +39,7 @@ class GetCWDTool(Tool[GetCWDToolInput, ToolRunOptions, StringToolOutput]):
 
 
 class RemoveToolInput(BaseModel):
-    file: Path = Field(description="Path to a file to remove")
+    file: ToolPath = Field(description="Path to a file to remove")
 
 
 class RemoveTool(Tool[RemoveToolInput, ToolRunOptions, StringToolOutput]):

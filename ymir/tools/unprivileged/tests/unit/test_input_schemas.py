@@ -15,7 +15,9 @@ def test_tool_input_schemas_contain_no_json_schema_format():
     ``format: "path"``; path inputs must serialize as plain strings.
     """
     offenders = [
-        name for module in (text, specfile, filesystem) for name, schema in _input_schemas(module)
+        name
+        for module in (text, specfile, filesystem)
+        for name, schema in _input_schemas(module)
         if '"format"' in json.dumps(schema)
     ]
     assert not offenders, f"tool input schemas emit JSON schema formats: {offenders}"

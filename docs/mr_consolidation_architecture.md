@@ -199,7 +199,9 @@ Squashes all commits into a single commit with the generated log message, pushes
 the fork, and opens a new consolidated MR against the target branch. The consolidated
 MR is labeled `ymir_backport` so it can be discovered by subsequent consolidation runs.
 
-In dry-run mode, this step skips the push and MR creation.
+In dry-run mode, this final publication step skips the push and MR creation.
+With the Konflux backend, `run_build_agent` has already pushed a build candidate
+to the fork, including in dry-run mode.
 
 ### Step 8: `mark_original_mrs`
 
@@ -355,7 +357,7 @@ agent discovers eligible pairs regardless of which agent triggered the job.
 | No infinite requeue loop | Requeue only when `non_stale_count - 2 >= 1`; each consolidation reduces count by 1 |
 | Build verification before MR creation | Build agent with retry loop, same pattern as backport agent |
 | No re-consolidation of consumed MRs | Original MRs are labeled `ymir_consolidated` and filtered out of future searches |
-| No accidental real writes in tests | `DRY_RUN=true` skips push, MR creation, MR labeling, and Jira comments |
+| Dry-run publication limits | `DRY_RUN=true` skips final MR creation, MR labeling, and Jira comments; Konflux build validation still pushes a candidate to the fork |
 | Label pair atomicity | Fetcher removes both consolidation labels and posts comments only after successful job submission |
 | Jira traceability | `update_jira_issues` posts consolidated MR URL to every involved Jira issue |
 

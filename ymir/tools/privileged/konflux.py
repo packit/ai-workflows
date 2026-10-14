@@ -314,6 +314,12 @@ class KonfluxClient:
             url = f"{self._tekton_base(self._config.kubearchive_url)}/pipelineruns/{name}"
             response = self._session.get(url, headers=self._headers, timeout=DEFAULT_TIMEOUT)
         if response.status_code != 200:
+            logger.warning(
+                "Failed to get Konflux PipelineRun %s: HTTP %s %s",
+                name,
+                response.status_code,
+                response.reason,
+            )
             return None
         return response.json()
 

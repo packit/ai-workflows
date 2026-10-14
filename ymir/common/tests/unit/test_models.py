@@ -872,3 +872,22 @@ def test_already_fixed_formatting_rebase_no_jira_issue():
     assert "*Action Required*: Search for the existing build" in formatted
     assert AUTOMATED_RESOLUTION_NOT_SUPPORTED in formatted
     assert TRIAGE_DISCLAIMER in formatted
+
+
+def test_already_fixed_sparse_payload_parsing():
+    """Minimal already-fixed payload with only required fields must parse as AlreadyFixedData."""
+
+    minimal_payload = {
+        "resolution": "already-fixed",
+        "data": {
+            "explanation": "Package contains the fix",
+            "jira_issue": "RHEL-99999",
+            "package": "testpkg",
+        },
+    }
+    output = TriageOutputSchema.model_validate(minimal_payload)
+    assert output.resolution == Resolution.ALREADY_FIXED
+    assert isinstance(output.data, AlreadyFixedData)
+    assert output.data.explanation == "Package contains the fix"
+    assert output.data.jira_issue == "RHEL-99999"
+    assert output.data.package == "testpkg"

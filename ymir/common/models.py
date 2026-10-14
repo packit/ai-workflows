@@ -608,8 +608,8 @@ class TriageOutputSchema(BaseModel):
         | ClarificationNeededData
         | OpenEndedAnalysisData
         | PostponedData
-        | NotAffectedData
         | AlreadyFixedData
+        | NotAffectedData
         | ErrorData
     ) = Field(description="Associated data")
 

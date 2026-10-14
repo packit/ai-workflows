@@ -431,6 +431,18 @@ def test_get_pipelinerun_falls_back_to_kubearchive():
     assert any("kubearchive" in u for u in calls)
 
 
+def test_get_pipelinerun_logs_http_error(caplog):
+    client = KonfluxClient(_config(), "ymir-tenant")
+    flexmock(requests.Session).should_receive("get").and_return(
+        flexmock(status_code=401, reason="Unauthorized")
+    ).once()
+
+    with caplog.at_level("WARNING", logger=konflux_mod.__name__):
+        assert client.get_pipelinerun("run-1") is None
+
+    assert "Failed to get Konflux PipelineRun run-1: HTTP 401 Unauthorized" in caplog.text
+
+
 # --------------------------------------------------------------------------- #
 # Download artifacts                                                          #
 # --------------------------------------------------------------------------- #

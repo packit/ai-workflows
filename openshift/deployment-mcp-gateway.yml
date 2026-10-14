@@ -39,11 +39,12 @@ spec:
           value: "true"
         - name: REQUESTS_CA_BUNDLE
           value: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
-        # --- Konflux build backend ---
-        # Builds run on kflux-rhel-p01 as konflux-bot-0 (ymir-tenant). The
-        # namespace/SA/image-repo defaults are baked into konflux.py.
+        # Build backend: "copr" (default) or "konflux". The KONFLUX_* vars below
+        # are only used when BUILD_BACKEND is konflux; builds then run on
+        # kflux-rhel-p01 as konflux-bot-0 (ymir-tenant), with namespace/SA/
+        # image-repo defaults baked into konflux.py.
         - name: BUILD_BACKEND
-          value: konflux
+          value: copr
         - name: KONFLUX_API_URL
           value: https://api.kflux-rhel-p01.fc38.p1.openshiftapps.com:6443
         - name: KUBEARCHIVE_API_URL

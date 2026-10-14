@@ -371,11 +371,6 @@ a:hover { text-decoration: underline; }
   color: var(--fg-muted);
 }
 
-.span-cost {
-  font-size: 11px;
-  color: var(--fg-muted);
-}
-
 /* Span detail blocks */
 .span-detail { margin-top: 6px; }
 

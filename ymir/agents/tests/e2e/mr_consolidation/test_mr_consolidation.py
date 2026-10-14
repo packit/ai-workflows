@@ -18,6 +18,7 @@ from ymir.agents.tests.e2e.mr_consolidation.evaluation import (
     ConsolidationEvaluator,
     capture_consolidation_artifacts,
 )
+from ymir.common.config import rhel_config_override
 from ymir.common.mock_repos import (
     cleanup_mock_gitconfig,
     load_all_fixture_configs,
@@ -38,6 +39,7 @@ class ConsolidationTestCase:
     def __init__(self, name: str, config: dict):
         self.name = name
         self.config = config
+        self.rhel_config_override: dict | None = config.get("rhel_config_override")
         self.backport_issues: list[dict] = config["backport_issues"]
         self.repos: list[dict] = config.get("repos", [])
         self.expected: dict = config.get("expected", {})
@@ -58,11 +60,12 @@ class ConsolidationTestCase:
 
     async def run(self) -> None:
         try:
-            if self.has_cached_backports:
-                self._replay_cached_backports()
-            else:
-                await self._run_backports()
-            await self._run_consolidation()
+            with rhel_config_override(self.rhel_config_override):
+                if self.has_cached_backports:
+                    self._replay_cached_backports()
+                else:
+                    await self._run_backports()
+                await self._run_consolidation()
         except BaseException as e:
             self.error = e
 
@@ -244,23 +247,23 @@ def mock_centos_stream_repos():
         shutil.rmtree(SHARED_BARE_REPOS_DIR)
     SHARED_BARE_REPOS_DIR.mkdir(parents=True, exist_ok=True)
 
-    for test_name, config in configs.items():
-        repos = config.get("repos", [])
-        if not repos:
-            continue
+    try:
+        for test_name, config in configs.items():
+            if not (repos := config.get("repos", [])):
+                continue
 
-        git_env = setup_mock_repos(repos, test_name, SHARED_BARE_REPOS_DIR)
+            git_env = setup_mock_repos(repos, test_name, SHARED_BARE_REPOS_DIR)
 
-        for issue_cfg in config.get("backport_issues", []):
-            write_mock_gitconfig(git_env, issue_key=issue_cfg["jira_issue"])
+            for issue_cfg in config.get("backport_issues", []):
+                write_mock_gitconfig(git_env, issue_key=issue_cfg["jira_issue"])
 
-        first = config["backport_issues"][0]
-        consolidation_id = f"consolidation-{first['package']}-{first['dist_git_branch']}"
-        write_mock_gitconfig(git_env, issue_key=consolidation_id)
+            first = config["backport_issues"][0]
+            consolidation_id = f"consolidation-{first['package']}-{first['dist_git_branch']}"
+            write_mock_gitconfig(git_env, issue_key=consolidation_id)
 
-    yield
-
-    cleanup_mock_gitconfig()
+        yield
+    finally:
+        cleanup_mock_gitconfig()
 
 
 @pytest.fixture(scope="session", autouse=True)

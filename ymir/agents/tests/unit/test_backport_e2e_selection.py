@@ -56,7 +56,7 @@ def test_build_ref_validation_only_checks_selected_cases(monkeypatch, selection,
 
     monkeypatch.setattr(backport_e2e.BackportAgentTestCase, "run", run)
     request = _request_for_cases(cases, selection)
-    runner = backport_e2e.run_test_cases_concurrently.__wrapped__(request, configs)
+    runner = backport_e2e.run_test_cases_concurrently.__wrapped__(request, configs, None)
 
     if selection == "selected":
         with pytest.raises(ValueError, match=r"zstream_build_ref|conflicting z-stream build refs"):

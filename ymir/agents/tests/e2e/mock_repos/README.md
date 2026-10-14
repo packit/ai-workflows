@@ -43,8 +43,48 @@ mock_repos/
 ```
 
 Each JSON file describes the repos to clone at a pre-fix state and an
-optional z-stream override for a given Jira issue. See
+optional z-stream or RHEL configuration override for a given Jira issue. See
 `ymir/common/mock_repos.py` for the schema documentation.
 
 Backport fixtures additionally contain `input`, `expected`, and optionally
 reference patches for LLM judge evaluation.
+
+## Per-test RHEL configuration
+
+> **Note:** To keep an E2E fixture reproducible, include the release-stream
+> values from the `rhel-config.json` snapshot that was in effect when its
+> expected result was created. This prevents later release-stream changes
+> from silently changing the test's behavior.
+
+To set RHEL configuration values for an E2E test, add an optional
+`rhel_config_override` at the top level of its fixture in
+`mock_data/triage/`, `mock_data/backport/`, `mock_data/reproducer/`, or
+`mock_data/mr_consolidation/`:
+
+```json
+{
+  "rhel_config_override": {
+    "current_y_streams": {
+      "9": "rhel-9.10",
+      "10": "rhel-10.2"
+    },
+    "current_z_streams": {
+      "8": "rhel-8.10.z",
+      "9": "rhel-9.8.z",
+      "10": "rhel-10.1.z"
+    },
+    "upcoming_z_streams": {
+      "9": "rhel-9.9.z",
+      "10": "rhel-10.2.z"
+    }
+  }
+}
+```
+
+This example records a complete configuration snapshot for one test case.
+Copy the corresponding values from the `rhel-config.json` used when creating
+the fixture, rather than using the streams current at a later date.
+
+Values that are not included in the override use the general
+`rhel-config.json` (cases without `rhel_config_override` use that file
+unchanged).

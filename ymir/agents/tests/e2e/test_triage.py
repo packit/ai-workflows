@@ -4,6 +4,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 from tabulate import tabulate
@@ -11,6 +12,7 @@ from tabulate import tabulate
 from ymir.agents.metrics_middleware import MetricsMiddleware
 from ymir.agents.observability import setup_observability
 from ymir.agents.triage_agent import TriageState, create_triage_agent, run_workflow
+from ymir.common.config import rhel_config_override
 from ymir.common.mock_repos import (
     apply_zstream_override,
     cleanup_mock_gitconfig,
@@ -32,6 +34,7 @@ class TriageAgentTestCase:
     finished_state: TriageState | None = None
     error: BaseException | None = None
     zstream_override: dict[str, str] | None = None
+    rhel_config_override: dict[str, Any] | None = None
     skip_reason: str | None = None
 
     async def run(self) -> None:
@@ -49,7 +52,10 @@ class TriageAgentTestCase:
             return triage_agent
 
         try:
-            with _span_processor.jira_issue_context(self.input):
+            with (
+                rhel_config_override(self.rhel_config_override),
+                _span_processor.jira_issue_context(self.input),
+            ):
                 self.finished_state = await run_workflow(self.input, False, testing_factory)
         except BaseException as e:
             self.error = e
@@ -308,26 +314,33 @@ def mock_centos_stream_repos(tmp_path_factory):
     else:
         repo_dir = tmp_path_factory.mktemp("centos_stream_repos")
 
-    for issue_key, config in configs.items():
-        repos = config.get("repos", [])
-        if not repos:
-            continue
+    try:
+        for issue_key, config in configs.items():
+            rhel_override = config.get("rhel_config_override")
 
-        setup_mock_repos(repos, issue_key, repo_dir)
+            for tc in test_cases:
+                if tc.input == issue_key:
+                    tc.zstream_override = config.get("zstream_override")
+                    tc.rhel_config_override = rhel_override
+                    break
 
-        for tc in test_cases:
-            if tc.input == issue_key:
-                tc.zstream_override = config.get("zstream_override")
-                break
+            if not (repos := config.get("repos", [])):
+                continue
 
-    yield
+            setup_mock_repos(repos, issue_key, repo_dir)
 
-    cleanup_mock_gitconfig()
+        yield
+    finally:
+        cleanup_mock_gitconfig()
 
 
 @pytest.fixture(scope="session", autouse=True)
-def run_test_cases_concurrently(request, mock_centos_stream_repos):
-    """Execute selected triage test cases concurrently via asyncio.gather, then collect metrics."""
+def run_test_cases_concurrently(request, mock_centos_stream_repos, observability_fixture):
+    """Execute selected triage test cases concurrently via asyncio.gather, then collect metrics.
+
+    ``observability_fixture`` is an ordering dependency: test cases need its
+    initialized span processor before their workflows start.
+    """
     selected = {
         item.callspec.params["test_case"]
         for item in request.session.items

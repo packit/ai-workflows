@@ -73,13 +73,13 @@ run-triage-agent-e2e-tests:
 	# comments to production. Setting them in the environment (not just -e flags)
 	# ensures dependent services like mcp-gateway pick them up via ${VAR:-default}.
 	# The conftest.py enforces this in the test container itself.
-	MOCK_JIRA=true DRY_RUN=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		triage-agent-e2e-tests
 
 list-triage-agent-e2e-tests:
-	MOCK_JIRA=true DRY_RUN=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		triage-agent-e2e-tests pytest ymir/agents/tests/e2e/test_triage.py --collect-only
@@ -88,7 +88,7 @@ list-triage-agent-e2e-tests:
 run-backport-agent-e2e-tests:
 	# SAFETY: MOCK_JIRA=true and DRY_RUN=true prevent writes to production Jira.
 	# Setting them in the environment ensures mcp-gateway picks them up.
-	MOCK_JIRA=true DRY_RUN=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \
@@ -98,7 +98,7 @@ run-backport-agent-e2e-tests:
 
 .PHONY: run-reproducer-agent-e2e-tests
 run-reproducer-agent-e2e-tests:
-	$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+	ALLOW_RHEL_CONFIG_OVERRIDE=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		-e TESTING_FARM_DRY_RUN="false" \
@@ -237,7 +237,7 @@ run-mr-consolidation-agent-standalone:
 
 .PHONY: run-mr-consolidation-agent-e2e-tests
 run-mr-consolidation-agent-e2e-tests:
-	$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+	ALLOW_RHEL_CONFIG_OVERRIDE=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \

@@ -91,6 +91,99 @@ def test_triage_agent_exposes_authenticated_github_patch_tool(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("chat_model", "reasoning_effort", "expected"),
+    [
+        ("openai:gpt-6.1-sol", "high", True),
+        ("openai:gpt-6.1-sol", "none", False),
+        ("openai:gpt-6.1-sol", "", False),
+        ("vertexai:claude-opus-4-6", "high", True),
+        ("gemini:gemini-2.5-pro", "high", False),
+    ],
+)
+def test_is_reasoning_enabled(monkeypatch, chat_model, reasoning_effort, expected):
+    from ymir.agents import utils as agent_utils
+
+    monkeypatch.setenv("CHAT_MODEL", chat_model)
+    if reasoning_effort:
+        monkeypatch.setenv("REASONING_EFFORT", reasoning_effort)
+    else:
+        monkeypatch.delenv("REASONING_EFFORT", raising=False)
+
+    assert agent_utils.is_reasoning_enabled() is expected
+
+
+@pytest.mark.parametrize(
+    ("chat_model", "reasoning_effort", "expected_temp"),
+    [
+        ("openai:gpt-6.1-sol", "high", 1),
+        ("openai:gpt-4o", "", 0.6),
+        ("vertexai:claude-opus-4-6", "high", 1),
+        ("gemini:gemini-2.5-pro", "high", 0.6),
+    ],
+)
+def test_get_chat_model_temperature_for_reasoning(monkeypatch, chat_model, reasoning_effort, expected_temp):
+    from beeai_framework.backend import ChatModel
+
+    from ymir.agents import utils as agent_utils
+
+    monkeypatch.setenv("CHAT_MODEL", chat_model)
+    monkeypatch.delenv("TEMPERATURE", raising=False)
+    if reasoning_effort:
+        monkeypatch.setenv("REASONING_EFFORT", reasoning_effort)
+    else:
+        monkeypatch.delenv("REASONING_EFFORT", raising=False)
+
+    captured_params = {}
+
+    def fake_from_name(name, params, **kwargs):
+        captured_params["name"] = name
+        captured_params["params"] = params
+        return flexmock(tool_choice_support=set(), allow_prompt_caching=True)
+
+    monkeypatch.setattr(ChatModel, "from_name", fake_from_name)
+
+    agent_utils.get_chat_model()
+    assert captured_params["params"].temperature == expected_temp
+
+
+@pytest.mark.asyncio
+async def test_triage_agent_openai_reasoning_uses_unconstrained_auto_tool_choice(monkeypatch):
+    from beeai_framework.agents import AgentExecutionConfig
+    from beeai_framework.agents.tool_calling.utils import ToolCallChecker, ToolCallCheckerConfig
+    from beeai_framework.emitter import Emitter
+    from beeai_framework.tools.think import ThinkTool
+
+    from ymir.agents.reasoning_agent._runner import ReasoningAgentRunner
+    from ymir.agents.reasoning_agent.types import ReasoningAgentTemplates
+
+    monkeypatch.setenv("CHAT_MODEL", "openai:gpt-6.1-sol")
+    monkeypatch.setenv("REASONING_EFFORT", "high")
+    monkeypatch.setattr(t_agent, "get_chat_model", lambda: flexmock(allow_parallel_tool_calls=True))
+
+    agent = t_agent.create_triage_agent([])
+
+    assert agent._unconstrained is True
+    assert not any(isinstance(t, ThinkTool) for t in agent._tools)
+
+    runner = ReasoningAgentRunner(
+        config=AgentExecutionConfig(max_retries_per_step=1, total_max_retries=1),
+        tool_call_cycle_checker=ToolCallChecker(ToolCallCheckerConfig()),
+        force_final_answer_as_tool=True,
+        expected_output=None,
+        run_context=flexmock(emitter=Emitter.root().child(namespace=["test"])),
+        tools=agent._tools,
+        templates=ReasoningAgentTemplates(),
+        llm=agent._llm,
+        requirements=agent._requirements,
+        unconstrained=agent._unconstrained,
+    )
+    await runner._init_requirements()
+    evaluation = await runner._evaluate_requirements()
+
+    assert evaluation.tool_choice == "auto"
+
+
+@pytest.mark.parametrize(
     "resolution",
     [
         Resolution.REBASE,

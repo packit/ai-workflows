@@ -22,6 +22,7 @@ app = typer.Typer(
 _INFERENCE_CREDENTIALS: dict[str, tuple[str, str]] = {
     "gemini:": ("GEMINI_API_KEY", "Google Gemini API key"),
     "anthropic:": ("ANTHROPIC_API_KEY", "Anthropic API key"),
+    "openai:": ("OPENAI_API_KEY", "OpenAI API key"),
     "vertexai:": ("GOOGLE_APPLICATION_CREDENTIALS", "Path to Google Vertex AI service account JSON"),
 }
 

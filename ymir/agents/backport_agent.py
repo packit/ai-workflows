@@ -655,6 +655,12 @@ class BackportState(PackageUpdateState):
     attempts_remaining: int = Field(default=10)
     used_cherry_pick_workflow: bool = Field(default=False)
     incremental_fix_attempts: int = Field(default=0)
+    # The spec Release is bumped exactly once per backport. update_release is on
+    # the build/fix retry path (update_release -> stage_changes ->
+    # commit_push_and_build), and UpdateReleaseTool is non-idempotent while the
+    # build step's soft reset does not revert the working-tree Release, so this
+    # guards against bumping the Release again on every fix cycle.
+    release_updated: bool = Field(default=False)
     # Pristine dist-git HEAD captured right after clone, before any backport work.
     # The build step soft-resets to it so every build/fix cycle squashes into a
     # single published commit (no agent attempts in history).
@@ -943,6 +949,9 @@ async def run_workflow(
         async def fork_and_prepare_dist_git(state):
             state.used_cherry_pick_workflow = False
             state.incremental_fix_attempts = 0
+            # Fresh re-clone below resets the working tree to a pristine Release, so
+            # the next update_release must bump it again.
+            state.release_updated = False
             state.inherit_candidate = None
             state.inherit_source = None
             state.inherit_change = None
@@ -1513,6 +1522,13 @@ async def run_workflow(
             return "prepare_normal_backport"
 
         async def update_release(state):
+            # The Release is bumped once for the whole backport. Fix/build retries
+            # re-enter this step, but UpdateReleaseTool is non-idempotent and the
+            # soft reset in commit_push_and_build keeps the working-tree Release, so
+            # re-bumping here would inflate the Release by one per fix cycle.
+            if state.release_updated:
+                logger.info("Release already updated for this backport — skipping bump")
+                return "stage_changes"
             try:
                 await tasks.update_release(
                     local_clone=state.local_clone,
@@ -1526,6 +1542,7 @@ async def run_workflow(
                 state.backport_result.success = False
                 state.backport_result.error = f"Could not update release: {e}"
                 return "comment_in_jira"
+            state.release_updated = True
             return "stage_changes"
 
         async def stage_changes(state):

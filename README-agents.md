@@ -208,11 +208,16 @@ rule, or tool-result contents.
 
 ## Dry run mode
 
-**Without setting `DRY_RUN=true` env var, agents will make real changes:**
-- **Modify JIRA issues** (add comments, update fields, apply labels)
-- **Create GitLab merge requests** and push commits
+`DRY_RUN=true` suppresses Jira writes and merge request creation. Builds still run.
+It does **not** make Git operations read-only: backport commits and pushes its
+fork branch before building with either Copr or Konflux; Konflux rebase, MR
+update, and MR consolidation push build candidates. Preparing a checkout can
+also create a GitLab fork or a missing internal Z-stream branch.
 
-**Always** use `DRY_RUN=true` if you are developing locally or just wanna give the agents a try.
+For local testing, use `DRY_RUN=true` to avoid Jira and MR writes, and use mock
+repositories and a disposable `FORK_NAMESPACE` when you need to avoid changes to
+shared Git repositories. Check the target branch before running against real
+internal dist-git.
 
 ## Jira status changes (opt-in)
 
@@ -299,7 +304,7 @@ Please do not run `podman-compose up` directly; use the provided Makefile instea
 make start
 
 # With options:
-make start DRY_RUN=true                    # Skip Jira writes and git pushes
+make start DRY_RUN=true                    # Skip Jira writes and MR creation; builds may push Git refs
 make start AUTO_CHAIN=false                # Disable downstream queue routing (triage only)
 make start DRY_RUN=true AUTO_CHAIN=false   # Combine both
 
@@ -320,7 +325,7 @@ for full `trigger-reproducer` options.
 **Environment variables:**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DRY_RUN` | `false` | Skip Jira writes, git pushes, and MR creation |
+| `DRY_RUN` | `false` | Skip Jira writes and MR creation; build workflows may create forks or push Git refs |
 | `AUTO_CHAIN` | `true` | Route triaged issues to downstream backport/rebase queues. Set to `false` to disable routing. |
 | `MOCK_JIRA` | `false` | Use mock Jira API instead of real Jira |
 | `JIRA_DRY_RUN` | `false` | Skip all Jira write operations (status, comments, labels, fields) while keeping reads working |

@@ -14,9 +14,117 @@ from ymir.common.models import BackportOutputSchema, BuildOutputSchema, LogOutpu
 from ymir.tools.unprivileged.wicked_git import GitPatchCreationTool
 
 
-@pytest.mark.parametrize("branch", ["c9s", "c10s"])
+@pytest.mark.parametrize(
+    ("fix_successes", "initial_attempts", "expected_step"),
+    [
+        ([False, True], 0, "update_release"),
+        ([False, False], 0, "comment_in_jira"),
+        ([], 2, "comment_in_jira"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_build_repair_logs_stay_out_of_git(monkeypatch, tmp_path, branch):
+async def test_failed_fix_response_uses_incremental_retry_budget(
+    monkeypatch, tmp_path, fix_successes, initial_attempts, expected_step
+):
+    local_clone = tmp_path / "expat"
+    local_clone.mkdir()
+    (tmp_path / "expat-upstream").mkdir()
+    log_dir = tmp_path / "expat-build-logs"
+    attempts = []
+    reached = []
+
+    async def repair(prompt, **kwargs):
+        attempt = len(attempts)
+        attempts.append(prompt)
+        assert "initial build failure" in prompt
+        assert f"## Attempt {attempt + 1}" in (log_dir / "fix-attempts.md").read_text()
+        if attempt:
+            assert "**Fix agent result:** No fix on attempt 1" in (log_dir / "fix-attempts.md").read_text()
+        success = fix_successes[attempt]
+        result = BackportOutputSchema(
+            success=success,
+            status=f"Repair {attempt + 1}",
+            srpm_path=local_clone / "expat.src.rpm" if success else None,
+            error=None if success else f"No fix on attempt {attempt + 1}",
+        )
+        return SimpleNamespace(last_message=SimpleNamespace(text=result.model_dump_json()))
+
+    @asynccontextmanager
+    async def gateway(*args, **kwargs):
+        yield []
+
+    async def create_repair_agent(*args, **kwargs):
+        return flexmock(run=repair)
+
+    flexmock(backport_agent).should_receive("mcp_tools").replace_with(gateway).once()
+    flexmock(backport_agent).should_receive("create_log_agent").and_return(None).once()
+    flexmock(backport_agent).should_receive("get_mock_local_tool_env").and_return(None).once()
+    if fix_successes:
+        flexmock(backport_agent).should_receive("get_agent_execution_config").and_return({}).twice()
+        flexmock(backport_agent).should_receive("create_backport_agent").replace_with(
+            create_repair_agent
+        ).twice()
+    else:
+        flexmock(backport_agent).should_receive("create_backport_agent").never()
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+
+    run_workflow = Workflow.run
+
+    def start_at_fix(workflow, state, options=None):
+        state.local_clone = local_clone
+        state.unpacked_sources = tmp_path / "expat-upstream"
+        state.build_error = "initial build failure"
+        state.incremental_fix_attempts = initial_attempts
+        state.backport_result = BackportOutputSchema(
+            success=True,
+            status="Backported",
+            srpm_path=local_clone / "expat.src.rpm",
+            error=None,
+        )
+        workflow.set_start("fix_build_error")
+        for step in ("update_release", "comment_in_jira"):
+            workflow.steps[step].handler = lambda _, step=step: reached.append(step) or Workflow.END
+        return run_workflow(workflow, state, options)
+
+    monkeypatch.setattr(Workflow, "run", start_at_fix)
+    state = await backport_agent.run_workflow(
+        package="expat",
+        dist_git_branch="c10s",
+        upstream_patches=[],
+        jira_issue="RHEL-123",
+        cve_id=None,
+        dry_run=True,
+        backport_agent_factory=lambda *_: None,
+        max_incremental_fix_attempts=2,
+    )
+
+    assert len(attempts) == len(fix_successes)
+    assert state.incremental_fix_attempts == 2
+    assert reached == [expected_step]
+    assert state.backport_result.success is (expected_step == "update_release")
+    if expected_step == "comment_in_jira":
+        assert "2 incremental fix attempts" in state.backport_result.error
+        if fix_successes:
+            assert "No fix on attempt 2" in state.backport_result.error
+        else:
+            assert "initial build failure" in state.backport_result.error
+
+
+@pytest.mark.parametrize("branch", ["c9s", "c10s"])
+@pytest.mark.parametrize(
+    ("max_incremental_fix_attempts", "expected_fixes", "expected_builds", "expected_success"),
+    [(1, 1, 2, False), (2, 2, 3, True)],
+)
+@pytest.mark.asyncio
+async def test_build_repair_logs_stay_out_of_git_and_respect_fix_budget(
+    monkeypatch,
+    tmp_path,
+    branch,
+    max_incremental_fix_attempts,
+    expected_fixes,
+    expected_builds,
+    expected_success,
+):
     local_clone = tmp_path / "expat"
     upstream = tmp_path / "expat-upstream"
     log_dir = tmp_path / "expat-build-logs"
@@ -91,8 +199,8 @@ async def test_build_repair_logs_stay_out_of_git(monkeypatch, tmp_path, branch):
     async def create_repair_agent(*args, **kwargs):
         return flexmock(run=repair)
 
-    # The build step is the only builder: fail twice (driving two repair cycles),
-    # then pass so the workflow proceeds to release bookkeeping.
+    # The build step is the only builder: fail twice, then pass if the repair
+    # budget permits a second fix cycle.
     builds = []
 
     async def staged_build(**kwargs):
@@ -106,8 +214,10 @@ async def test_build_repair_logs_stay_out_of_git(monkeypatch, tmp_path, branch):
     flexmock(backport_agent).should_receive("mcp_tools").replace_with(gateway).once()
     flexmock(backport_agent).should_receive("create_log_agent").and_return(None).once()
     flexmock(backport_agent).should_receive("get_mock_local_tool_env").and_return(None).once()
-    flexmock(backport_agent).should_receive("get_agent_execution_config").and_return({}).twice()
-    flexmock(backport_agent).should_receive("create_backport_agent").replace_with(create_repair_agent).twice()
+    flexmock(backport_agent).should_receive("get_agent_execution_config").and_return({}).times(expected_fixes)
+    flexmock(backport_agent).should_receive("create_backport_agent").replace_with(create_repair_agent).times(
+        expected_fixes
+    )
     flexmock(backport_agent).should_receive("run_build").replace_with(staged_build)
 
     # The single build step commits + pushes before building; keep those out of
@@ -161,13 +271,23 @@ async def test_build_repair_logs_stay_out_of_git(monkeypatch, tmp_path, branch):
         cve_id=None,
         dry_run=True,
         backport_agent_factory=lambda *_: None,
+        max_incremental_fix_attempts=max_incremental_fix_attempts,
     )
 
-    assert state.backport_result.success, state.backport_result.error
-    assert len(attempts) == 2
-    assert len(builds) == 3, "the build step is the sole builder and runs each cycle"
-    git(local_clone, "add", "-A")
-    assert git(local_clone, "diff", "--cached", "--name-only") == "fix.patch"
+    assert state.backport_result.success is expected_success, state.backport_result.error
+    assert len(attempts) == expected_fixes
+    assert len(builds) == expected_builds, "the build step is the sole builder and runs each cycle"
+    if not expected_success:
+        assert "1 incremental fix attempts" in state.backport_result.error
+        assert "second build failure" in state.backport_result.error
+        assert state.incremental_fix_attempts == 1
+        # No further repair archives the final build log, and no staging step
+        # follows the terminal failure.
+        assert git(local_clone, "diff", "--cached", "--name-only") == ""
+    else:
+        assert state.incremental_fix_attempts == 0
+        git(local_clone, "add", "-A")
+        assert git(local_clone, "diff", "--cached", "--name-only") == "fix.patch"
     assert not (upstream / "build-logs").exists()
 
 

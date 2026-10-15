@@ -769,6 +769,9 @@ class BuildInputSchema(BaseModel):
     revision: str | None = Field(default=None, description="Pushed commit SHA to build")
     package_name: str | None = Field(default=None, description="RPM package name")
     target_branch: str | None = Field(default=None, description="dist-git branch the build targets")
+    specfile: str | None = Field(
+        default=None, description="Discovered spec filename when it differs from <package>.spec"
+    )
 
 
 class BuildResult(BaseModel):

@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 import pytest
+from beeai_framework.errors import FrameworkError
 from beeai_framework.tools.mcp import MCPTool
 from beeai_framework.workflows import Workflow
 from flexmock import flexmock
@@ -43,8 +44,9 @@ def _konflux_build_tool(session):
     )
 
 
+@pytest.mark.parametrize("build_raises", [False, True])
 @pytest.mark.asyncio
-async def test_konflux_build_pushes_scratch_branch_and_populates_build_fields(monkeypatch):
+async def test_konflux_build_pushes_scratch_branch_and_populates_build_fields(monkeypatch, build_raises):
     package = "package"
     fork_url = "https://fork.invalid/package.git"
     update_branch = "mr-source-branch"
@@ -86,6 +88,12 @@ async def test_konflux_build_pushes_scratch_branch_and_populates_build_fields(mo
     monkeypatch.setattr(merge_request_agent.tasks, "stage_changes", _mock_stage_changes)
     monkeypatch.setattr(merge_request_agent.tasks, "commit_changes", _mock_commit_changes)
     monkeypatch.setattr(merge_request_agent.tasks, "push_changes", _mock_push_changes)
+    deleted = []
+
+    async def _mock_delete_remote_branch(*args):
+        deleted.append(args)
+
+    monkeypatch.setattr(merge_request_agent.tasks, "delete_remote_branch", _mock_delete_remote_branch)
 
     check_calls = []
 
@@ -96,6 +104,13 @@ async def test_konflux_build_pushes_scratch_branch_and_populates_build_fields(mo
         return ("", "")
 
     monkeypatch.setattr(merge_request_agent, "check_subprocess", _mock_check_subprocess)
+
+    if build_raises:
+
+        async def _failing_build(**_kwargs):
+            raise RuntimeError("build call failed")
+
+        monkeypatch.setattr(merge_request_agent, "run_build", _failing_build)
 
     run_workflow = Workflow.run
     completed = []
@@ -109,6 +124,7 @@ async def test_konflux_build_pushes_scratch_branch_and_populates_build_fields(mo
             state.local_clone = Path("/git-repos/package")
             state.fork_url = fork_url
             state.update_branch = update_branch
+            state.spec_name = "renamed.spec"
             state.jira_issue = "RHEL-12345"
             state.package = package
             state.dist_git_branch = "c10s"
@@ -127,37 +143,50 @@ async def test_konflux_build_pushes_scratch_branch_and_populates_build_fields(mo
 
     monkeypatch.setattr(Workflow, "run", start_at_build)
 
-    state = await merge_request_agent.run_workflow(
-        merge_request_url="https://gitlab.invalid/pkg/-/merge_requests/1",
-        dry_run=True,
-    )
-
-    assert len(completed) == 1, "Build validation did not reach its success route"
+    if build_raises:
+        with pytest.raises(FrameworkError) as error:
+            await merge_request_agent.run_workflow(
+                merge_request_url="https://gitlab.invalid/pkg/-/merge_requests/1",
+                dry_run=True,
+            )
+        assert isinstance(error.value.__cause__, RuntimeError)
+        assert completed == []
+    else:
+        state = await merge_request_agent.run_workflow(
+            merge_request_url="https://gitlab.invalid/pkg/-/merge_requests/1",
+            dry_run=True,
+        )
+        assert len(completed) == 1, "Build validation did not reach its success route"
 
     # The build is pushed to a dedicated scratch branch, never the live MR branch.
     assert len(push_calls) == 1
     _local, pushed_fork, pushed_branch, _tools = push_calls[0]
     assert pushed_fork == fork_url
-    assert pushed_branch == f"{update_branch}-ymir-konflux-build"
+    assert pushed_branch.startswith(f"{update_branch}-ymir-konflux-build-")
+    assert len(pushed_branch.rsplit("-", 1)[-1]) == 32
     assert pushed_branch != update_branch
+    assert deleted == [(Path("/git-repos/package"), fork_url, pushed_branch, [tool])]
 
     # The working tree is restored (soft reset to the captured base) after pushing.
     soft_resets = [c for c in check_calls if c[:3] == ["git", "reset", "--soft"]]
     assert soft_resets == [["git", "reset", "--soft", base_sha]]
+    assert ["git", "branch", "-D", pushed_branch] in check_calls
 
     # The build tool receives the git ref, not just an SRPM.
-    assert len(call_tool_args) == 1
-    _, build_kwargs = call_tool_args[0]
-    assert build_kwargs["arguments"] == {
-        "srpm_path": "/git-repos/package/package-2-1.src.rpm",
-        "dist_git_branch": "c10s",
-        "jira_issue": "RHEL-12345",
-        "git_url": fork_url,
-        "revision": revision,
-        "package_name": package,
-        "target_branch": "c10s",
-    }
-    assert state.mr_update_result.success is True
+    if not build_raises:
+        assert len(call_tool_args) == 1
+        _, build_kwargs = call_tool_args[0]
+        assert build_kwargs["arguments"] == {
+            "srpm_path": "/git-repos/package/package-2-1.src.rpm",
+            "dist_git_branch": "c10s",
+            "jira_issue": "RHEL-12345",
+            "git_url": fork_url,
+            "revision": revision,
+            "package_name": package,
+            "target_branch": "c10s",
+            "specfile": "renamed.spec",
+        }
+        assert state.mr_update_result.success is True
 
 
 @pytest.mark.asyncio
@@ -197,6 +226,12 @@ async def test_build_failure_retries_via_registered_step(monkeypatch):
     monkeypatch.setattr(merge_request_agent.tasks, "stage_changes", _noop)
     monkeypatch.setattr(merge_request_agent.tasks, "commit_changes", _mock_commit_changes)
     monkeypatch.setattr(merge_request_agent.tasks, "push_changes", _noop)
+    deleted = []
+
+    async def _mock_delete_remote_branch(*args):
+        deleted.append(args)
+
+    monkeypatch.setattr(merge_request_agent.tasks, "delete_remote_branch", _mock_delete_remote_branch)
 
     async def _mock_check_subprocess(cmd, *_args, **_kwargs):
         if cmd[:3] == ["git", "rev-parse", "HEAD"]:
@@ -246,3 +281,94 @@ async def test_build_failure_retries_via_registered_step(monkeypatch):
     # One attempt was consumed and the retry carries the build error forward.
     assert state.attempts_remaining == 2
     assert state.build_error == "boom"
+    assert len(deleted) == 1
+    assert deleted[0][2].startswith("mr-source-branch-ymir-konflux-build-")
+
+
+@pytest.mark.parametrize("failure", ["rev_parse", "stage", "commit", "branch", "push", "reset"])
+@pytest.mark.asyncio
+async def test_konflux_ref_preparation_failure_routes_to_mr_error_and_cleans_up(monkeypatch, failure):
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+    monkeypatch.setenv("BUILD_BACKEND", "konflux")
+
+    @contextlib.asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    flexmock(merge_request_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(merge_request_agent).should_receive("create_merge_request_agent").and_return(flexmock())
+    flexmock(merge_request_agent).should_receive("run_build").never()
+
+    async def _mock_stage_changes(*_args, **_kwargs):
+        if failure == "stage":
+            raise RuntimeError("stage failed")
+
+    async def _mock_commit_changes(*_args, **_kwargs):
+        if failure == "commit":
+            raise RuntimeError("commit failed")
+        return "a" * 40
+
+    async def _mock_push_changes(*_args, **_kwargs):
+        if failure == "push":
+            raise RuntimeError("push failed")
+
+    deleted = []
+
+    async def _mock_delete_remote_branch(*args):
+        deleted.append(args)
+
+    monkeypatch.setattr(merge_request_agent.tasks, "stage_changes", _mock_stage_changes)
+    monkeypatch.setattr(merge_request_agent.tasks, "commit_changes", _mock_commit_changes)
+    monkeypatch.setattr(merge_request_agent.tasks, "push_changes", _mock_push_changes)
+    monkeypatch.setattr(merge_request_agent.tasks, "delete_remote_branch", _mock_delete_remote_branch)
+
+    check_calls = []
+
+    async def _mock_check_subprocess(cmd, *_args, **_kwargs):
+        check_calls.append(cmd)
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            if failure == "rev_parse":
+                raise RuntimeError("rev_parse failed")
+            return ("0" * 40 + "\n", "")
+        if cmd[:3] == ["git", "branch", "-f"] and failure == "branch":
+            raise RuntimeError("branch failed")
+        if cmd[:3] == ["git", "reset", "--soft"] and failure == "reset":
+            raise RuntimeError("reset failed")
+        return ("", "")
+
+    monkeypatch.setattr(merge_request_agent, "check_subprocess", _mock_check_subprocess)
+
+    run_workflow = Workflow.run
+    reached = []
+
+    def start_at_build(workflow, state, options=None):
+        state.local_clone = Path("/git-repos/package")
+        state.fork_url = "https://fork.invalid/package.git"
+        state.update_branch = "mr-source-branch"
+        state.spec_name = "package.spec"
+        state.jira_issue = "RHEL-12345"
+        state.package = "package"
+        state.dist_git_branch = "c10s"
+        state.mr_update_result = MergeRequestOutputSchema(
+            success=True,
+            status="Updated",
+            srpm_path=Path("/git-repos/package/package.src.rpm"),
+            files_to_git_add=None,
+            error=None,
+        )
+        workflow.set_start("run_build_agent")
+        workflow.steps["comment_in_mr"].handler = lambda _: reached.append("comment_in_mr") or Workflow.END
+        return run_workflow(workflow, state, options)
+
+    monkeypatch.setattr(Workflow, "run", start_at_build)
+    state = await merge_request_agent.run_workflow(
+        "https://gitlab.invalid/pkg/-/merge_requests/1", dry_run=True
+    )
+
+    assert reached == ["comment_in_mr"]
+    assert state.mr_update_result.success is False
+    assert f"Could not prepare Konflux build ref: {failure} failed" in state.mr_update_result.error
+    assert bool(deleted) is (failure in {"push", "reset"})
+    if deleted:
+        assert deleted[0][2].startswith("mr-source-branch-ymir-konflux-build-")
+    assert any(cmd[:3] == ["git", "reset", "--soft"] for cmd in check_calls) is (failure != "rev_parse")

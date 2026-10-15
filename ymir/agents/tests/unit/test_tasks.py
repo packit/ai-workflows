@@ -20,6 +20,7 @@ from ymir.agents.tasks import (
     close_stale_update_merge_requests,
     commit_changes,
     commit_push_and_open_mr,
+    delete_remote_branch,
     ensure_canonical_changelog_title,
     escape_rpm_changelog_text,
     fetch_branch_creation_config,
@@ -1304,6 +1305,20 @@ async def test_commit_and_push_phases_are_independent(tmp_path):
     ).replace_with(_async_noop)
 
     await push_changes(tmp_path, "https://gitlab.com/bot/curl", "update", [])
+
+
+@pytest.mark.asyncio
+async def test_delete_remote_branch_uses_authenticated_push_tool(tmp_path):
+    flexmock(agent_tasks).should_receive("run_tool").once().with_args(
+        "push_to_remote_repository",
+        repository="https://gitlab.com/bot/curl",
+        clone_path=str(tmp_path),
+        branch=":refs/heads/update-ymir-konflux-build-1234",
+        force=False,
+        available_tools=[],
+    ).replace_with(_async_noop)
+
+    await delete_remote_branch(tmp_path, "https://gitlab.com/bot/curl", "update-ymir-konflux-build-1234", [])
 
 
 @pytest.mark.asyncio

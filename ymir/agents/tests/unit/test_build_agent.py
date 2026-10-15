@@ -53,6 +53,7 @@ async def test_success_submits_once_without_llm(build_input, monkeypatch):
         revision=None,
         package_name=None,
         target_branch=None,
+        specfile=None,
     ).replace_with(_mock_submit).once()
     flexmock(build_agent).should_receive("create_build_failure_agent").never()
     # Successful builds must not even require model configuration.

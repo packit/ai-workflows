@@ -8,6 +8,7 @@ import traceback
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
+from uuid import uuid4
 
 from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
@@ -241,6 +242,14 @@ async def run_workflow(
                 return "run_build_agent"
             return "comment_in_mr"
 
+        async def _delete_konflux_mr_ref(state, scratch_branch):
+            try:
+                await tasks.delete_remote_branch(
+                    state.local_clone, state.fork_url, scratch_branch, gateway_tools
+                )
+            except Exception as error:
+                logger.warning("Could not delete Konflux scratch branch %s: %s", scratch_branch, error)
+
         async def _prepare_konflux_mr_ref(state):
             """Push a throwaway build candidate so Konflux can build the fix.
 
@@ -254,47 +263,82 @@ async def run_workflow(
             """
             base_sha, _ = await check_subprocess(["git", "rev-parse", "HEAD"], cwd=state.local_clone)
             base_sha = (base_sha or "").strip()
-            files_to_git_add = list(state.all_files_git_to_add) or [state.spec_name]
-            await tasks.stage_changes(
-                local_clone=state.local_clone,
-                files_to_commit=files_to_git_add,
-            )
-            revision = await tasks.commit_changes(
-                state.local_clone,
-                f"Konflux build candidate for {state.package} ({state.jira_issue})",
-            )
-            scratch_branch = f"{state.update_branch}-ymir-konflux-build"
-            await check_subprocess(["git", "branch", "-f", scratch_branch, revision], cwd=state.local_clone)
-            await tasks.push_changes(state.local_clone, state.fork_url, scratch_branch, gateway_tools)
-            # Restore the pre-commit working tree so the real commit/push flow
-            # is identical to the Copr path.
-            if base_sha:
+            if not base_sha:
+                raise RuntimeError("Could not determine the base commit for Konflux validation")
+            scratch_branch = f"{state.update_branch}-ymir-konflux-build-{uuid4().hex}"
+            local_branch_created = False
+            push_attempted = False
+            prepared = False
+            try:
+                files_to_git_add = list(state.all_files_git_to_add) or [state.spec_name]
+                await tasks.stage_changes(
+                    local_clone=state.local_clone,
+                    files_to_commit=files_to_git_add,
+                )
+                revision = await tasks.commit_changes(
+                    state.local_clone,
+                    f"Konflux build candidate for {state.package} ({state.jira_issue})",
+                )
+                await check_subprocess(
+                    ["git", "branch", "-f", scratch_branch, revision], cwd=state.local_clone
+                )
+                local_branch_created = True
+                push_attempted = True
+                await tasks.push_changes(state.local_clone, state.fork_url, scratch_branch, gateway_tools)
+                # Restore the pre-commit working tree so the real commit/push
+                # flow is identical to the Copr path.
                 await check_subprocess(["git", "reset", "--soft", base_sha], cwd=state.local_clone)
-            return revision
+                prepared = True
+                return revision, scratch_branch
+            finally:
+                if not prepared:
+                    try:
+                        await check_subprocess(["git", "reset", "--soft", base_sha], cwd=state.local_clone)
+                    except Exception as error:
+                        logger.warning("Could not restore MR checkout after Konflux setup: %s", error)
+                    if push_attempted:
+                        await _delete_konflux_mr_ref(state, scratch_branch)
+                if local_branch_created:
+                    try:
+                        await check_subprocess(["git", "branch", "-D", scratch_branch], cwd=state.local_clone)
+                    except Exception as error:
+                        logger.warning("Could not delete local Konflux scratch branch: %s", error)
 
         async def run_build_agent(state):
-            if is_konflux_backend():
-                revision = await _prepare_konflux_mr_ref(state)
-                build_input = BuildInputSchema(
-                    srpm_path=state.mr_update_result.srpm_path,
-                    dist_git_branch=state.dist_git_branch,
-                    jira_issue=state.jira_issue,
-                    git_url=state.fork_url,
-                    revision=revision,
-                    package_name=state.package,
-                    target_branch=state.dist_git_branch,
+            scratch_branch = None
+            try:
+                if is_konflux_backend():
+                    try:
+                        revision, scratch_branch = await _prepare_konflux_mr_ref(state)
+                    except Exception as error:
+                        logger.warning("Could not prepare Konflux build ref: %s", error)
+                        state.mr_update_result.success = False
+                        state.mr_update_result.error = f"Could not prepare Konflux build ref: {error}"
+                        return "comment_in_mr"
+                    build_input = BuildInputSchema(
+                        srpm_path=state.mr_update_result.srpm_path,
+                        dist_git_branch=state.dist_git_branch,
+                        jira_issue=state.jira_issue,
+                        git_url=state.fork_url,
+                        revision=revision,
+                        package_name=state.package,
+                        target_branch=state.dist_git_branch,
+                        specfile=state.spec_name,
+                    )
+                else:
+                    build_input = BuildInputSchema(
+                        srpm_path=state.mr_update_result.srpm_path,
+                        dist_git_branch=state.dist_git_branch,
+                        jira_issue=state.jira_issue,
+                    )
+                build_result = await run_build(
+                    build_input=build_input,
+                    available_tools=gateway_tools,
+                    local_tool_options=local_tool_options,
                 )
-            else:
-                build_input = BuildInputSchema(
-                    srpm_path=state.mr_update_result.srpm_path,
-                    dist_git_branch=state.dist_git_branch,
-                    jira_issue=state.jira_issue,
-                )
-            build_result = await run_build(
-                build_input=build_input,
-                available_tools=gateway_tools,
-                local_tool_options=local_tool_options,
-            )
+            finally:
+                if scratch_branch:
+                    await _delete_konflux_mr_ref(state, scratch_branch)
             if build_result.success:
                 return "stage_changes"
             if build_result.is_timeout:

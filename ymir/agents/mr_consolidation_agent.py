@@ -856,6 +856,7 @@ async def run_workflow(
                 revision=(revision or "").strip(),
                 package_name=package,
                 target_branch=dist_git_branch,
+                specfile=state.spec_name,
             )
 
         async def run_build_agent(state):

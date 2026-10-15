@@ -611,6 +611,23 @@ async def push_changes(
     )
 
 
+async def delete_remote_branch(
+    local_clone: Path,
+    fork_url: str,
+    branch: str,
+    available_tools: list[Tool],
+) -> None:
+    """Delete a scratch ref through the authenticated GitLab push tool."""
+    await run_tool(
+        "push_to_remote_repository",
+        repository=fork_url,
+        clone_path=str(local_clone),
+        branch=f":refs/heads/{branch}",
+        force=False,
+        available_tools=available_tools,
+    )
+
+
 async def request_mr_reviews(
     package: str,
     dist_git_branch: str,

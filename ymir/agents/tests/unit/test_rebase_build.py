@@ -112,6 +112,7 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(monkeypatch, 
             state.local_clone = Path("/git-repos/package")
             state.fork_url = fork_url
             state.update_branch = update_branch
+            state.spec_name = "renamed.spec"
             state.rebase_base_head = base_head if has_base_head else None
             state.all_files_git_to_add = set()
             state.rebase_result = RebaseOutputSchema(
@@ -161,5 +162,6 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(monkeypatch, 
         "revision": revision,
         "package_name": package,
         "target_branch": "c10s",
+        "specfile": "renamed.spec",
     }
     assert state.rebase_result.success is True

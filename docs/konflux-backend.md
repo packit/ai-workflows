@@ -19,6 +19,15 @@ The namespace / service account / image repo defaults are baked into
 `konflux.py`; override only for a different deployment via `KONFLUX_NAMESPACE`,
 `KONFLUX_SERVICE_ACCOUNT`, `KONFLUX_IMAGE_REPO`.
 
+## Build lifecycle
+
+By default, each PipelineRun has a three-hour Tekton timeout. Ymir polls for
+one additional minute to observe completion. If polling times out or the tool
+call is cancelled, Ymir requests PipelineRun cancellation and waits for a
+terminal status before deleting its per-build git-auth Secret. If cancellation
+or status confirmation fails, Ymir keeps the Secret and logs its name for
+cleanup after the run stops.
+
 ## The SA token
 
 Builds authenticate as `konflux-bot-0` in `ymir-tenant`. `kflux-rhel-p01`

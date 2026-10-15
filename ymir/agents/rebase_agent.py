@@ -496,6 +496,7 @@ async def run_workflow(
                     revision=revision,
                     package_name=state.package,
                     target_branch=state.dist_git_branch,
+                    specfile=state.spec_name,
                 )
             else:
                 build_input = BuildInputSchema(

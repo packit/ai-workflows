@@ -113,7 +113,12 @@ from ymir.common.models import (
 )
 from ymir.common.reproducer_lock import resolve_clone_root
 from ymir.common.utils import get_all_patches, init_sentry
-from ymir.common.version_utils import detect_modular_issue, is_older_zstream, parse_rhel_version
+from ymir.common.version_utils import (
+    detect_modular_issue,
+    is_older_zstream,
+    parse_module_stream,
+    parse_rhel_version,
+)
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.distgit_detector import DistgitDetectorTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
@@ -837,6 +842,7 @@ async def run_workflow(
     inherit_agent_factory=None,
     workspace_id: UUID | None = None,
     is_modular_issue=False,
+    module_stream=None,
 ):
     if max_incremental_fix_attempts is None:
         max_incremental_fix_attempts = max_build_attempts
@@ -1345,7 +1351,7 @@ async def run_workflow(
                     state.used_cherry_pick_workflow = False
                     logger.info("Git am workflow detected: no upstream repo exists")
 
-                return "update_release" if is_modular_issue else "run_build_agent"
+                return "run_build_agent"
             return "comment_in_jira"
 
         async def fix_build_error(state):
@@ -1399,6 +1405,7 @@ async def run_workflow(
                             has_extract_log_snippets=any(
                                 t.name == "extract_log_snippets" for t in gateway_tools
                             ),
+                            module_stream=module_stream if is_modular_issue else None,
                         ),
                     ),
                     expected_output=BackportOutputSchema,
@@ -1458,6 +1465,7 @@ async def run_workflow(
                     srpm_path=state.backport_result.srpm_path,
                     dist_git_branch=state.dist_git_branch,
                     jira_issue=state.jira_issue,
+                    module_stream=module_stream if is_modular_issue else None,
                 ),
                 available_tools=gateway_tools,
                 local_tool_options=local_tool_options,
@@ -1500,6 +1508,7 @@ async def run_workflow(
                     srpm_path=state.backport_result.srpm_path,
                     dist_git_branch=state.dist_git_branch,
                     jira_issue=state.jira_issue,
+                    module_stream=module_stream if is_modular_issue else None,
                 ),
                 available_tools=gateway_tools,
                 local_tool_options=local_tool_options,
@@ -1900,9 +1909,13 @@ async def run_workflow(
                     )
                 if is_modular_issue:
                     comment_text += (
-                        "\n\n*Note:* Modular package support is in development. "
-                        "No build was performed — please verify the MR and trigger "
-                        "a build manually."
+                        "\n\n*Note:* Modular package — Copr build was attempted with "
+                        f"module stream `{module_stream}` enabled in the buildroot. "
+                        "Please verify the MR and build result before shipping."
+                        if module_stream
+                        else "\n\n*Note:* Modular package support is in development. "
+                        "The module:stream could not be determined, so no build was "
+                        "attempted — please verify the MR and trigger a build manually."
                     )
                 is_error = False
             else:
@@ -2072,12 +2085,30 @@ async def main() -> None:
                 raw_downstream_component=triage_state.get("raw_downstream_component"),
                 downstream_component=triage_state.get("downstream_component"),
             )
+            _module_stream = None
+            if _modular:
+                parsed_module = parse_module_stream(
+                    triage_state.get("jira_summary"),
+                    triage_state.get("downstream_component"),
+                )
+                if parsed_module:
+                    _module_stream = f"{parsed_module[0]}:{parsed_module[1]}"
+                else:
+                    logger.warning(
+                        "Issue %s detected as modular but module:stream could not be parsed "
+                        "from summary=%r, downstream_component=%r — build will proceed "
+                        "without enabling a module in the buildroot",
+                        backport_data.jira_issue,
+                        triage_state.get("jira_summary"),
+                        triage_state.get("downstream_component"),
+                    )
             logger.info(
-                "Modular check for %s: jira_summary=%r, downstream_component=%r, result=%s",
+                "Modular check for %s: jira_summary=%r, downstream_component=%r, result=%s, module_stream=%s",
                 backport_data.jira_issue,
                 triage_state.get("jira_summary"),
                 triage_state.get("downstream_component"),
                 _modular,
+                _module_stream,
             )
             logger.info(
                 f"Processing backport for package: {backport_data.package}, "
@@ -2173,6 +2204,7 @@ async def main() -> None:
                         task_metadata=triage_state,
                         workspace_id=task.execution_id,
                         is_modular_issue=_modular,
+                        module_stream=_module_stream,
                     )
                     logger.info(
                         f"Backport processing completed for {backport_data.jira_issue}, "

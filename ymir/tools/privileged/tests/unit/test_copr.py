@@ -170,6 +170,103 @@ async def test_build_package(build_failure, build_timeout, exclusive_arch, dist_
         )
 
 
+@pytest.mark.parametrize("module_stream_already_set", [False, True])
+@pytest.mark.asyncio
+async def test_build_package_enables_module_stream_in_buildroot(module_stream_already_set):
+    """Modular packages must get their module:stream enabled in the chroot buildroot.
+
+    There is no feature flag: whenever a module_stream is given, `additional_modules`
+    must be requested unless the chroot is already configured for it.
+    """
+    ownername = "jotnar-bot"
+    srpm_path = Path("/tmp/test.src.rpm")
+    jira_issue = "RHEL-12345"
+    build_arch = "x86_64"
+    chroot = f"custom-1-{build_arch}"
+    internal_repos_host = "http://example.com"
+    module_stream = "postgresql:16"
+
+    async def init_kerberos_ticket():
+        return f"{ownername}@EXAMPLE.COM"
+
+    async def load_rhel_config():
+        return {
+            "current_y_streams": {"10": "rhel-10.2"},
+            "current_z_streams": {"10": "rhel-10.0.z"},
+            "upcoming_z_streams": {"10": "rhel-10.1.z"},
+            "internal_repos_host": internal_repos_host,
+        }
+
+    async def _get_exclusive_arches(*_):
+        return set()
+
+    async def sleep(*_):
+        return
+
+    flexmock(copr_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
+    flexmock(copr_tools).should_receive("load_rhel_config").replace_with(load_rhel_config).once()
+    flexmock(copr_tools.BuildPackageTool).should_receive("get_exclusive_arches").replace_with(
+        _get_exclusive_arches
+    ).once()
+    flexmock(asyncio).should_receive("sleep").replace_with(sleep)
+
+    flexmock(ProjectProxy).should_receive("add").and_return(
+        flexmock(chroot_repos={chroot: "http://some.url"})
+    ).once()
+    flexmock(ProjectChrootProxy).should_receive("get").with_args(
+        ownername=ownername,
+        projectname=jira_issue,
+        chrootname=chroot,
+    ).and_return(
+        flexmock(
+            additional_repos=[
+                f"{internal_repos_host}/brewroot/repos/rhel-10.2-build/latest/{build_arch}?module_hotfixes=True"
+            ],
+            additional_packages=["@build"],
+            bootstrap="image",
+            bootstrap_image="registry.access.redhat.com/ubi10/ubi",
+            additional_modules=[module_stream] if module_stream_already_set else None,
+        )
+    ).once()
+    expected_edit_kwargs = {
+        "ownername": ownername,
+        "projectname": jira_issue,
+        "chrootname": chroot,
+    }
+    if not module_stream_already_set:
+        expected_edit_kwargs["additional_modules"] = [module_stream]
+        flexmock(ProjectChrootProxy).should_receive("edit").with_args(**expected_edit_kwargs).once()
+    else:
+        # Already configured for this module stream: no redundant edit call.
+        flexmock(ProjectChrootProxy).should_receive("edit").never()
+    flexmock(BuildProxy).should_receive("create_from_file").and_return(flexmock(id=12345)).once()
+    flexmock(BuildProxy).should_receive("get").with_args(12345).and_return(
+        flexmock(
+            state="succeeded",
+            started_on=1000,
+            ended_on=1100,
+            source_package={"name": "test"},
+            repo_url="http://some.url",
+            id=12345,
+        )
+    ).once()
+    flexmock(BuildProxy).should_receive("get_built_packages").with_args(12345).and_return(
+        {chroot: {"packages": [{"name": "test", "version": "0.1", "release": "1.el10", "arch": build_arch}]}}
+    ).once()
+
+    out = await BuildPackageTool().run(
+        input={
+            "srpm_path": srpm_path,
+            "dist_git_branch": "c10s",
+            "jira_issue": jira_issue,
+            "module_stream": module_stream,
+        }
+    )
+    result = out.result
+    assert isinstance(result, BuildResult)
+    assert result.success
+
+
 @pytest.mark.parametrize(
     ("branch", "rhel_config", "expected"),
     [

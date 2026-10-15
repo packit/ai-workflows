@@ -49,6 +49,7 @@ async def test_success_submits_once_without_llm(build_input, monkeypatch):
         srpm_path=str(build_input.srpm_path),
         dist_git_branch="c10s",
         jira_issue="RHEL-123",
+        module_stream=None,
     ).replace_with(_mock_submit).once()
     flexmock(build_agent).should_receive("create_build_failure_agent").never()
     # Successful builds must not even require model configuration.

@@ -196,6 +196,13 @@ class BackportInputSchema(BaseModel):
         default=False,
         description="Whether the extract_log_snippets tool is available",
     )
+    module_stream: str | None = Field(
+        default=None,
+        description=(
+            "'module:stream' to pass to build_package for modular packages "
+            "(e.g. 'postgresql:16'). None for non-modular packages."
+        ),
+    )
 
 
 class BackportFixBuildInputSchema(BackportInputSchema):
@@ -762,6 +769,13 @@ class BuildInputSchema(BaseModel):
     srpm_path: Path = Field(description="Path to SRPM to build")
     dist_git_branch: str = Field(description="dist-git branch to update")
     jira_issue: str | None = Field(description="Jira issue to reference as resolved")
+    module_stream: str | None = Field(
+        default=None,
+        description=(
+            "'module:stream' to enable in the Copr chroot buildroot (e.g. 'postgresql:16') "
+            "so BuildRequires from a modular package resolve. None for non-modular builds."
+        ),
+    )
 
 
 class BuildResult(BaseModel):

@@ -74,7 +74,7 @@ from ymir.common.models import (
     TitleOutputSchema,
 )
 from ymir.common.utils import extract_text_from_adf, init_sentry
-from ymir.common.version_utils import detect_modular_issue
+from ymir.common.version_utils import detect_modular_issue, parse_module_stream
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
 from ymir.tools.unprivileged.text import (
@@ -284,6 +284,7 @@ async def main() -> None:
         dist_git_namespace=None,
         workspace_id: UUID | None = None,
         is_modular_issue=False,
+        module_stream=None,
     ):
         workspace_id = workspace_id or uuid4()
         local_tool_options: dict[str, Any] = {"working_directory": None}
@@ -423,9 +424,6 @@ async def main() -> None:
                     # Accumulate files from this rebase iteration
                     if state.rebase_result.files_to_git_add:
                         state.all_files_git_to_add.update(state.rebase_result.files_to_git_add)
-                    if is_modular_issue:
-                        logger.info(f"Skipping Copr build for modular issue {state.jira_issue}")
-                        return "update_release"
                     return "run_build_agent"
                 return "comment_in_jira"
 
@@ -435,6 +433,7 @@ async def main() -> None:
                         srpm_path=state.rebase_result.srpm_path,
                         dist_git_branch=state.dist_git_branch,
                         jira_issue=state.jira_issue,
+                        module_stream=module_stream if is_modular_issue else None,
                     ),
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
@@ -641,9 +640,13 @@ async def main() -> None:
                     )
                     if is_modular_issue:
                         comment_text += (
-                            "\n\n*Note:* Modular package support is in development. "
-                            "No build was performed — please verify the MR and trigger "
-                            "a build manually."
+                            "\n\n*Note:* Modular package — Copr build was attempted with "
+                            f"module stream `{module_stream}` enabled in the buildroot. "
+                            "Please verify the MR and build result before shipping."
+                            if module_stream
+                            else "\n\n*Note:* Modular package support is in development. "
+                            "The module:stream could not be determined, so no build was "
+                            "attempted — please verify the MR and trigger a build manually."
                         )
                     # Post same success message to all issues in parallel with per-issue error handling
                     await post_comments_to_all_issues(
@@ -778,6 +781,23 @@ async def main() -> None:
                 raw_downstream_component=triage_state.get("raw_downstream_component"),
                 downstream_component=triage_state.get("downstream_component"),
             )
+            _module_stream = None
+            if _modular:
+                parsed_module = parse_module_stream(
+                    triage_state.get("jira_summary"),
+                    triage_state.get("downstream_component"),
+                )
+                if parsed_module:
+                    _module_stream = f"{parsed_module[0]}:{parsed_module[1]}"
+                else:
+                    logger.warning(
+                        "Issue %s detected as modular but module:stream could not be parsed "
+                        "from summary=%r, downstream_component=%r — build will proceed "
+                        "without enabling a module in the buildroot",
+                        rebase_data.jira_issue,
+                        triage_state.get("jira_summary"),
+                        triage_state.get("downstream_component"),
+                    )
             logger.info(
                 f"Processing rebase for package: {rebase_data.package}, "
                 f"version: {rebase_data.version}, JIRA: {rebase_data.jira_issue}, "
@@ -879,6 +899,7 @@ async def main() -> None:
                         dist_git_namespace=dist_git_namespace,
                         workspace_id=task.execution_id,
                         is_modular_issue=_modular,
+                        module_stream=_module_stream,
                     )
                     logger.info(
                         f"Rebase processing completed for {rebase_data.jira_issue}, "

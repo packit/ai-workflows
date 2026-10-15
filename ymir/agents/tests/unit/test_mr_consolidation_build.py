@@ -85,6 +85,7 @@ async def test_build_project_identifier_preserves_jira_metadata(
                     "srpm_path": {"type": "string"},
                     "dist_git_branch": {"type": "string"},
                     "jira_issue": {"type": "string"},
+                    "module_stream": {"type": ["string", "null"]},
                 },
                 "required": ["srpm_path", "dist_git_branch", "jira_issue"],
             },
@@ -153,6 +154,7 @@ async def test_build_project_identifier_preserves_jira_metadata(
             "srpm_path": "/git-repos/package/package-1-1.src.rpm",
             "dist_git_branch": "c10s",
             "jira_issue": project,
+            "module_stream": None,
         }
     assert state.jira_issue == jira_issue
     assert state.jira_issues_collected == ([jira_issue] if jira_issue else [])

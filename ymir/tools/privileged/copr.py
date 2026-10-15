@@ -88,6 +88,13 @@ class BuildPackageToolInput(BaseModel):
     srpm_path: AbsolutePath = Field(description="Absolute path to SRPM (*.src.rpm) file to build")
     dist_git_branch: str = Field(description="dist-git branch")
     jira_issue: str = Field(description="Jira issue key (e.g. RHEL-12345)")
+    module_stream: str | None = Field(
+        default=None,
+        description=(
+            "'module:stream' to enable in the chroot buildroot (e.g. 'postgresql:16'). "
+            "Required for modular package builds so BuildRequires resolve from the module."
+        ),
+    )
 
 
 class BuildPackageToolOutput(JSONToolOutput[BuildResult]):
@@ -201,6 +208,12 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
             build_group = "@build"
             if build_group not in chroot_config.additional_packages:
                 kwargs["additional_packages"] = sorted(set(chroot_config.additional_packages) | {build_group})
+            # modular packages need their module stream enabled in the buildroot
+            # so their BuildRequires resolve against the module's content
+            if tool_input.module_stream:
+                desired_modules = [tool_input.module_stream]
+                if getattr(chroot_config, "additional_modules", None) != desired_modules:
+                    kwargs["additional_modules"] = desired_modules
             if kwargs:
                 await _copr_api_call(
                     chroot_proxy.edit,

@@ -616,11 +616,11 @@ class TestTriageTemplate:
         assert "zstream_search" not in result
         assert "centos-stream" in result
         assert "redhat/rhel/rpms" not in result
-        # Patch-validation detail is deferred to the load_prompt tool.
-        assert "load_prompt" in result
+        # Patch-validation and rebuild detail is deferred to Agent Skills.
+        assert "load_skill" in result
+        assert 'name: "triage-validate-fix"' in result
+        assert 'name: "triage-rebuild"' in result
         assert "Check for follow-up commits" not in result
-        # Rebuild procedure is deferred too.
-        assert 'name: "rebuild"' in result
         assert "Check dependency readiness" not in result
 
     def test_renders_older_zstream(self):

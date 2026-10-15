@@ -1,5 +1,5 @@
 ---
-name: rebuild
+name: triage-rebuild
 description: >-
   Full Rebuild procedure: search for the dependency ticket, validate its
   fixVersion, verify Fixed in Build / dropped resolutions, and handle the

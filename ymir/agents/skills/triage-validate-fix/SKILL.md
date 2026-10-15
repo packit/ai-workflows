@@ -1,5 +1,5 @@
 ---
-name: validate_fix
+name: triage-validate-fix
 description: >-
   Full procedure for validating backport patch/commit URLs: patch-format checks,
   CVE-ID matching, follow-up-commit rules, merged-only rules, and

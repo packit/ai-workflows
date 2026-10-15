@@ -33,7 +33,7 @@ from ymir.agents.utils import (
     build_agent_factory_with_mock_repos,
     get_agent_execution_config,
     get_chat_model,
-    get_reference_dir,
+    get_skills_dir,
     get_tool_call_checker_config,
     is_reasoning_enabled,
     mcp_tools,
@@ -95,7 +95,7 @@ from ymir.tools.unprivileged.commands import RunShellCommandTool
 
 ## UpstreamSearchTool is currently unmaintained and disabled.
 # from ymir.tools.unprivileged.upstream_search import UpstreamSearchTool
-from ymir.tools.unprivileged.prompt_reference import LoadPromptTool
+from ymir.tools.unprivileged.skills import LoadSkillTool
 from ymir.tools.unprivileged.version_mapper import VersionMapperTool
 
 logger = logging.getLogger(__file__)
@@ -580,7 +580,7 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
             ThinkTool(),
             RunShellCommandTool(options=local_tool_options) if local_tool_options else RunShellCommandTool(),
             VersionMapperTool(),
-            LoadPromptTool(get_reference_dir("triage")),
+            LoadSkillTool(get_skills_dir()),
         ]
         + [
             t
@@ -618,7 +618,7 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
             ConditionalRequirement("search_jira_issues", only_after=["get_jira_details"]),
             ConditionalRequirement("zstream_search", only_after=["get_jira_details"]),
             ConditionalRequirement("clone_repository", only_after=["get_jira_details"]),
-            ConditionalRequirement("load_prompt", only_after=["get_jira_details"]),
+            ConditionalRequirement("load_skill", only_after=["get_jira_details"]),
         ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat Enterprise Linux developer",

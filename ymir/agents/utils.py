@@ -109,6 +109,7 @@ def get_tool_call_checker_config() -> ToolCallCheckerConfig:
 
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
+_SKILLS_DIR = Path(__file__).parent / "skills"
 
 _jinja2_envs: dict[str, Environment] = {}
 
@@ -143,15 +144,13 @@ def render_template(
     return template.render(input.model_dump(mode="json") if input else {})
 
 
-def get_reference_dir(agent: str) -> Path:
-    """Directory holding on-demand prompt references for *agent*.
+def get_skills_dir() -> Path:
+    """Directory holding the on-demand Agent Skills.
 
-    References are static markdown files with YAML frontmatter (not Jinja
-    templates); ``LoadPromptTool`` reads them when an agent asks for one by
-    name. Keeping this path next to the prompts root avoids each caller
-    re-deriving the package layout.
+    A skill is a directory with a ``SKILL.md`` (markdown + YAML frontmatter);
+    ``LoadSkillTool`` reads them when an agent asks for one by name.
     """
-    return _PROMPTS_DIR / agent / "references"
+    return _SKILLS_DIR
 
 
 def set_litellm_debug() -> None:

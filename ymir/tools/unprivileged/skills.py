@@ -38,10 +38,7 @@ DEFAULT_TOOL_NAME = "load_skill"
 class LoadSkillInput(BaseModel):
     name: str | None = Field(
         default=None,
-        description=(
-            "Name of the skill to load. Omit to list the available skills with "
-            "their descriptions."
-        ),
+        description=("Name of the skill to load. Omit to list the available skills with their descriptions."),
     )
 
 
@@ -78,9 +75,7 @@ def load_skills(directory: Path) -> list[Skill]:
         if not description or not name:
             raise ValueError(f"Skill {path} needs frontmatter 'name' and 'description'")
         if name != path.parent.name:
-            raise ValueError(
-                f"Skill {path} declares name {name!r} but its directory is {path.parent.name!r}"
-            )
+            raise ValueError(f"Skill {path} declares name {name!r} but its directory is {path.parent.name!r}")
         skills.append(Skill(name=name, description=description, path=path))
     return skills
 

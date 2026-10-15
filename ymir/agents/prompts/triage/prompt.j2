@@ -194,7 +194,7 @@ You must decide between one of the following actions. Follow these guidelines to
        - Check upstream release notes and changelogs after the RHEL package version date
 
    2.3. Validate the Fix and URL
-   * Call the `load_prompt` tool with `name: "validate_fix"` to load the full
+   * Call the `load_skill` tool with `name: "triage-validate-fix"` to load the full
      validation procedure, then follow it to confirm every patch URL is a real,
      merged patch that fixes this issue before deciding the outcome.
 
@@ -264,7 +264,7 @@ You must decide between one of the following actions. Follow these guidelines to
    linked C libraries). It does NOT cover dependencies shipped as pre-built bundled artifacts
    (e.g. a prebuilt webpack/JS bundle) — those are handled in step 2.4 as backport/not-affected.
 
-   3.1. Call the `load_prompt` tool with `name: "rebuild"` to load the full
+   3.1. Call the `load_skill` tool with `name: "triage-rebuild"` to load the full
         rebuild procedure — search for the dependency ticket, validate its
         fixVersion, verify Fixed in Build / dropped resolutions, handle the
         postponed_dependency outcome, and set the Jira fields — then follow it.

@@ -143,7 +143,7 @@ function fmtTokens(n) {
 }
 
 function aggregateLlmStats(spans) {
-  let calls = 0, promptTokens = 0, completionTokens = 0, cost = 0, cacheRead = 0, cacheWrite = 0;
+  let calls = 0, promptTokens = 0, completionTokens = 0, cacheRead = 0, cacheWrite = 0;
   const models = new Set();
   for (const s of spans) {
     const attrs = s.attributes || {};
@@ -152,18 +152,16 @@ function aggregateLlmStats(spans) {
     calls++;
     const pt = getVal(attrs['llm.token_count.prompt']);
     const ct = getVal(attrs['llm.token_count.completion']);
-    const tc = getVal(attrs['llm.cost.total']);
     const cr = getVal(attrs['metadata.usage.cached_prompt_tokens']);
     const cw = getVal(attrs['metadata.usage.cached_creation_tokens']);
     const model = getVal(attrs['llm.model_name']);
     if (pt) promptTokens += Number(pt);
     if (ct) completionTokens += Number(ct);
-    if (tc) cost += Number(tc);
     if (cr) cacheRead += Number(cr);
     if (cw) cacheWrite += Number(cw);
     if (model) models.add(model);
   }
-  return {calls, promptTokens, completionTokens, cost, cacheRead, cacheWrite, models};
+  return {calls, promptTokens, completionTokens, cacheRead, cacheWrite, models};
 }
 
 function isTraceComplete(spans) {
@@ -761,7 +759,6 @@ async function renderTraceDetail(container, issue, traceId, prevHash, targetSpan
         }
         tokenSummary += ' / ' + fmtTokens(llmStats.completionTokens) + ' out';
         meta.appendChild(el('span', {}, tokenSummary));
-        if (llmStats.cost > 0) meta.appendChild(el('span', {}, 'cost: $' + llmStats.cost.toFixed(2)));
         if (llmStats.models.size > 0) meta.appendChild(el('span', {}, 'model: ' + [...llmStats.models].join(', ')));
       }
     }
@@ -869,7 +866,6 @@ async function pollNewSpans(issue, traceId) {
         }
         tokenSummary += ' / ' + fmtTokens(llmStats.completionTokens) + ' out';
         meta.appendChild(el('span', {}, tokenSummary));
-        if (llmStats.cost > 0) meta.appendChild(el('span', {}, 'cost: $' + llmStats.cost.toFixed(2)));
         if (llmStats.models.size > 0) meta.appendChild(el('span', {}, 'model: ' + [...llmStats.models].join(', ')));
       }
     }
@@ -977,18 +973,16 @@ function buildSpanTree(spans) {
 }
 
 function treeLlmStats(node) {
-  let promptTokens = 0, completionTokens = 0, cost = 0, cacheRead = 0, cacheWrite = 0;
+  let promptTokens = 0, completionTokens = 0, cacheRead = 0, cacheWrite = 0;
   const attrs = node.attributes || {};
   const kind = getSpanKind(attrs);
   if (kind === 'LLM' || node.name.endsWith('ChatModel')) {
     const pt = getVal(attrs['llm.token_count.prompt']);
     const ct = getVal(attrs['llm.token_count.completion']);
-    const tc = getVal(attrs['llm.cost.total']);
     const cr = getVal(attrs['metadata.usage.cached_prompt_tokens']);
     const cw = getVal(attrs['metadata.usage.cached_creation_tokens']);
     if (pt) promptTokens += Number(pt);
     if (ct) completionTokens += Number(ct);
-    if (tc) cost += Number(tc);
     if (cr) cacheRead += Number(cr);
     if (cw) cacheWrite += Number(cw);
   }
@@ -997,12 +991,11 @@ function treeLlmStats(node) {
       const s = treeLlmStats(child);
       promptTokens += s.promptTokens;
       completionTokens += s.completionTokens;
-      cost += s.cost;
       cacheRead += s.cacheRead;
       cacheWrite += s.cacheWrite;
     }
   }
-  return {promptTokens, completionTokens, cost, cacheRead, cacheWrite};
+  return {promptTokens, completionTokens, cacheRead, cacheWrite};
 }
 
 function isEmptyLlm(node) {
@@ -1104,7 +1097,6 @@ function renderSpanRow(span, depth, parent) {
   if (isLlm) {
     const pt = Number(getVal(attrs['llm.token_count.prompt']) || 0);
     const ct = Number(getVal(attrs['llm.token_count.completion']) || 0);
-    const tc = Number(getVal(attrs['llm.cost.total']) || 0);
     const cr = Number(getVal(attrs['metadata.usage.cached_prompt_tokens']) || 0);
     const cw = Number(getVal(attrs['metadata.usage.cached_creation_tokens']) || 0);
     if (pt || ct) {
@@ -1118,9 +1110,6 @@ function renderSpanRow(span, depth, parent) {
       tokenText += ' → ' + fmtTokens(ct);
       header.appendChild(el('span', {className: 'span-tokens'}, tokenText));
     }
-    if (tc > 0) {
-      header.appendChild(el('span', {className: 'span-cost'}, '$' + tc.toFixed(4)));
-    }
   } else if (isAgent && span.children && span.children.length > 0) {
     const stats = treeLlmStats(span);
     if (stats.promptTokens || stats.completionTokens) {
@@ -1133,9 +1122,6 @@ function renderSpanRow(span, depth, parent) {
       }
       tokenText += ' → ' + fmtTokens(stats.completionTokens);
       header.appendChild(el('span', {className: 'span-tokens'}, tokenText));
-    }
-    if (stats.cost > 0) {
-      header.appendChild(el('span', {className: 'span-cost'}, '$' + stats.cost.toFixed(2)));
     }
   }
 
@@ -1392,7 +1378,10 @@ function extractDetail(attrs, spanName, statusCode) {
 
 function renderAttrs(attrs) {
   if (!attrs) return null;
-  const keys = Object.keys(attrs).sort();
+  // Keep price data in the trace, but omit it from the attribute viewer.
+  const keys = Object.keys(attrs)
+    .filter(key => !/(?:^|[._-])(?:cost|price)(?:$|[._-])/i.test(key))
+    .sort();
   if (keys.length === 0) return null;
 
   const lines = keys.map(k => {

@@ -759,7 +759,7 @@ class BuildInstructionsInput(BaseModel):
 class BuildInputSchema(BaseModel):
     """Inputs for deterministic build execution (Copr or Konflux)."""
 
-    srpm_path: Path = Field(description="Path to SRPM to build")
+    srpm_path: Path = Field(description="Path to SRPM to build or inspect for architecture tags")
     dist_git_branch: str = Field(description="dist-git branch to update")
     jira_issue: str | None = Field(description="Jira issue to reference as resolved")
     # Konflux-only fields (Copr ignores them). The Konflux backend builds from a

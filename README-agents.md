@@ -150,7 +150,8 @@ consolidation use a shared `BuildWorkflow`. Its `execute_build` step calls
 `build_package` through the existing MCP gateway. The default backend submits
 and polls Copr; `BUILD_BACKEND=konflux` instead builds the pushed fork commit
 as a scratch Konflux PipelineRun. The discovered spec filename is passed to
-Konflux when it differs from the package name. See
+Konflux when it differs from the package name. The generated SRPM determines
+which single architecture Konflux validates, preferring x86_64 when supported. See
 [Konflux backend](docs/konflux-backend.md) for configuration and
 [the threat model](THREAT_MODEL.md) for its external
 dependencies. Shared `run_tool()` validates the response as a `BuildResult`

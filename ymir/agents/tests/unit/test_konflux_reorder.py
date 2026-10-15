@@ -35,6 +35,7 @@ def _prepare_common_mocks(monkeypatch):
 
 def _base_state(state, *, local_clone):
     state.local_clone = local_clone
+    state.spec_name = "renamed.spec"
     state.fork_url = "https://fork.example/repo.git"
     state.update_branch = "ymir-RHEL-123"
     state.used_cherry_pick_workflow = False
@@ -69,6 +70,7 @@ async def test_konflux_commits_and_pushes_before_build(monkeypatch, tmp_path, dr
         assert bi.git_url == "https://fork.example/repo.git"
         assert bi.revision == "a" * 40
         assert bi.package_name == "expat"
+        assert bi.specfile == "renamed.spec"
         return BuildOutputSchema(success=True, error=None)
 
     async def _open_mr(**kwargs):
@@ -128,6 +130,7 @@ async def test_inherit_build_validates_pushed_commit(monkeypatch, tmp_path, dry_
         bi = kwargs["build_input"]
         assert bi.git_url == "https://fork.example/repo.git"
         assert bi.revision == "b" * 40
+        assert bi.specfile == "renamed.spec"
         return BuildOutputSchema(success=True, error=None)
 
     flexmock(backport_agent).should_receive("run_build").replace_with(_build).once()

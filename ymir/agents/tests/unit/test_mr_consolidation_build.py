@@ -91,6 +91,7 @@ async def test_build_project_identifier_preserves_jira_metadata(
                     "revision": {"type": ["string", "null"]},
                     "package_name": {"type": ["string", "null"]},
                     "target_branch": {"type": ["string", "null"]},
+                    "specfile": {"type": ["string", "null"]},
                 },
                 "required": ["srpm_path", "dist_git_branch", "jira_issue"],
             },
@@ -163,6 +164,7 @@ async def test_build_project_identifier_preserves_jira_metadata(
             "revision": None,
             "package_name": None,
             "target_branch": None,
+            "specfile": None,
         }
     assert state.jira_issue == jira_issue
     assert state.jira_issues_collected == ([jira_issue] if jira_issue else [])
@@ -208,6 +210,7 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(
                     "revision": {"type": "string"},
                     "package_name": {"type": "string"},
                     "target_branch": {"type": "string"},
+                    "specfile": {"type": "string"},
                     "jira_issue": {"type": "string"},
                 },
                 "required": ["git_url", "revision", "package_name", "target_branch"],
@@ -271,6 +274,7 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(
             state.local_clone = Path("/git-repos/package")
             state.fork_url = fork_url
             state.update_branch = update_branch
+            state.spec_name = "renamed.spec"
             state.consolidation_result = MRConsolidationOutputSchema(
                 success=True,
                 status="Prepared SRPM",
@@ -316,5 +320,6 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(
         "revision": revision,
         "package_name": package,
         "target_branch": "c10s",
+        "specfile": "renamed.spec",
     }
     assert state.jira_issue == "RHEL-12345"

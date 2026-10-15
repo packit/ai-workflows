@@ -1,5 +1,6 @@
 import asyncio
 import gzip
+import threading
 from pathlib import Path
 
 import pytest
@@ -132,7 +133,8 @@ def test_git_auth_secret_body_parses_host_and_repo():
     assert body["stringData"]["password"] == "glpat-xyz"  # pragma: allowlist secret
 
 
-def test_pipelinerun_body_shape():
+@pytest.mark.parametrize("specfile, expected_specfile", [(None, "null"), ("renamed.spec", "renamed.spec")])
+def test_pipelinerun_body_shape(specfile, expected_specfile):
     cfg = _config()
     body = _pipelinerun_body(
         config=cfg,
@@ -143,7 +145,7 @@ def test_pipelinerun_body_shape():
         git_url=BUILD_INPUT["git_url"],
         revision=BUILD_INPUT["revision"],
         target_branch="rhel-10.1",
-        specfile=None,
+        specfile=specfile,
         ocistorage=f"{_IMG}:expat-abc-1234",
         pipeline_revision="psha",
         secret_name="gitlab-secret-xyz",  # pragma: allowlist secret
@@ -155,7 +157,7 @@ def test_pipelinerun_body_shape():
     assert params["target-branch"] == "rhel-10.1"
     assert params["koji-target"] == "DEFAULT"
     assert params["hermetic"] == "true"
-    assert params["specfile"] == "null"
+    assert params["specfile"] == expected_specfile
     assert params["build-architectures"] == ["x86_64"]
     assert params["build-platforms"] == ["linux-mxlarge/amd64"]
     assert body["spec"]["taskRunTemplate"]["serviceAccountName"] == _SA
@@ -233,7 +235,7 @@ async def test_build_remaps_centos_target_to_rhel_branch():
     flexmock(KonfluxClient).should_receive("create_secret").and_return("gitlab-secret-abc").once()
     flexmock(KonfluxClient).should_receive("create_pipelinerun").replace_with(_create_pr).once()
     flexmock(KonfluxClient).should_receive("get_pipelinerun").and_return(
-        {"status": {"conditions": [{"reason": "Succeeded"}]}}
+        {"status": {"conditions": [{"status": "True", "reason": "Succeeded"}]}}
     )
     flexmock(KonfluxClient).should_receive("delete_secret").with_args("gitlab-secret-abc").once()
 
@@ -330,8 +332,8 @@ async def test_build_success_submits_and_cleans_up():
     flexmock(KonfluxClient).should_receive("create_secret").replace_with(_create_secret).once()
     flexmock(KonfluxClient).should_receive("create_pipelinerun").replace_with(_create_pr).once()
     flexmock(KonfluxClient).should_receive("get_pipelinerun").and_return(
-        {"status": {"conditions": [{"reason": "Running"}]}}
-    ).and_return({"status": {"conditions": [{"reason": "Succeeded"}]}})
+        {"status": {"conditions": [{"status": "Unknown", "reason": "Running"}]}}
+    ).and_return({"status": {"conditions": [{"status": "True", "reason": "Succeeded"}]}})
     flexmock(KonfluxClient).should_receive("delete_secret").with_args("gitlab-secret-abc").once()
 
     out = await KonfluxBuildTool().run(input=BUILD_INPUT)
@@ -346,6 +348,7 @@ async def test_build_success_submits_and_cleans_up():
     ws_secret = captured["pr"]["spec"]["workspaces"][0]["secret"]["secretName"]
     assert ws_secret == "gitlab-secret-abc"  # pragma: allowlist secret
     assert captured["secret"]["type"] == "kubernetes.io/basic-auth"
+    assert captured["pr"]["spec"]["timeouts"] == {"pipeline": f"{konflux_mod.KONFLUX_BUILD_TIMEOUT}s"}
 
 
 @pytest.mark.asyncio
@@ -357,7 +360,7 @@ async def test_build_failure_collects_logs():
     flexmock(KonfluxClient).should_receive("create_pipelinerun").and_return("ymir-build-x")
     pipelinerun = {
         "status": {
-            "conditions": [{"reason": "Failed", "message": "boom"}],
+            "conditions": [{"status": "False", "reason": "Failed", "message": "boom"}],
             "childReferences": [{"name": "tr-1"}],
         }
     }
@@ -390,12 +393,133 @@ async def test_build_timeout(monkeypatch):
     # Negative budget -> poll loop exits immediately into the timeout branch.
     monkeypatch.setattr(konflux_mod, "KONFLUX_BUILD_TIMEOUT", -100)
     monkeypatch.setattr(konflux_mod, "KONFLUX_TIMEOUT_GRACE_PERIOD", 0)
+    calls = []
+
+    def cancel(*args):
+        calls.append(("cancel", args[-1]))
+        return True
+
+    def delete(*args):
+        calls.append(("delete_secret", args[-1]))
+
     flexmock(KonfluxClient).should_receive("create_secret").and_return("sec")
     flexmock(KonfluxClient).should_receive("create_pipelinerun").and_return("run")
-    flexmock(KonfluxClient).should_receive("delete_secret").with_args("sec").once()
+    flexmock(KonfluxClient).should_receive("cancel_pipelinerun").replace_with(cancel).once()
+    flexmock(KonfluxClient).should_receive("get_pipelinerun").and_return(
+        {"status": {"conditions": [{"status": "False", "reason": "Cancelled"}]}}
+    ).once()
+    flexmock(KonfluxClient).should_receive("delete_secret").replace_with(delete).once()
 
     out = await KonfluxBuildTool().run(input=BUILD_INPUT)
     assert out.result.success is False
+    assert out.result.is_timeout is True
+    assert calls == [("cancel", "run"), ("delete_secret", "sec")]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_tool_stops_run_before_deleting_secret():
+    cfg = _config()
+    _mock_prelude(cfg)
+    _no_sleep()
+    calls = []
+    polling = asyncio.Event()
+
+    async def interrupted_poll(*_args):
+        polling.set()
+        await asyncio.Event().wait()
+
+    def cancel(*args):
+        calls.append(("cancel", args[-1]))
+        return True
+
+    def delete(*args):
+        calls.append(("delete_secret", args[-1]))
+
+    def get(*args):
+        calls.append(("get", args[-1]))
+        status = "Unknown" if calls.count(("get", "run")) == 1 else "False"
+        return {"status": {"conditions": [{"status": status, "reason": "Cancelled"}]}}
+
+    flexmock(KonfluxClient).should_receive("create_secret").and_return("sec")
+    flexmock(KonfluxClient).should_receive("create_pipelinerun").and_return("run")
+    flexmock(KonfluxBuildTool).should_receive("_poll_to_completion").replace_with(interrupted_poll).once()
+    flexmock(KonfluxClient).should_receive("cancel_pipelinerun").replace_with(cancel).once()
+    flexmock(KonfluxClient).should_receive("get_pipelinerun").replace_with(get).twice()
+    flexmock(KonfluxClient).should_receive("delete_secret").replace_with(delete).once()
+
+    build = asyncio.create_task(KonfluxBuildTool()._run(BuildPackageToolInput(**BUILD_INPUT), None, None))
+    await polling.wait()
+    build.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await build
+    assert calls == [
+        ("cancel", "run"),
+        ("get", "run"),
+        ("get", "run"),
+        ("delete_secret", "sec"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_submission_waits_before_cleanup():
+    cfg = _config()
+    _mock_prelude(cfg)
+    submitting = threading.Event()
+    release_submission = threading.Event()
+    calls = []
+
+    def submit(*_args):
+        submitting.set()
+        assert release_submission.wait(timeout=5)
+        calls.append("submitted")
+        return "run"
+
+    def cancel(*args):
+        calls.append(("cancel", args[-1]))
+        return True
+
+    def delete(*args):
+        calls.append(("delete_secret", args[-1]))
+
+    flexmock(KonfluxClient).should_receive("create_secret").and_return("sec")
+    flexmock(KonfluxClient).should_receive("create_pipelinerun").replace_with(submit).once()
+    flexmock(KonfluxClient).should_receive("cancel_pipelinerun").replace_with(cancel).once()
+    flexmock(KonfluxClient).should_receive("get_pipelinerun").and_return(
+        {"status": {"conditions": [{"status": "False", "reason": "Cancelled"}]}}
+    ).once()
+    flexmock(KonfluxClient).should_receive("delete_secret").replace_with(delete).once()
+
+    build = asyncio.create_task(KonfluxBuildTool()._run(BuildPackageToolInput(**BUILD_INPUT), None, None))
+    try:
+        assert await asyncio.to_thread(submitting.wait, 5)
+        build.cancel()
+    finally:
+        release_submission.set()
+    with pytest.raises(asyncio.CancelledError):
+        await build
+    assert calls == ["submitted", ("cancel", "run"), ("delete_secret", "sec")]
+
+
+@pytest.mark.parametrize("cancel_mode", ["error", "unconfirmed"])
+@pytest.mark.asyncio
+async def test_unconfirmed_run_stop_retains_secret(monkeypatch, cancel_mode):
+    cfg = _config()
+    _mock_prelude(cfg)
+    monkeypatch.setattr(konflux_mod, "KONFLUX_BUILD_TIMEOUT", -100)
+    monkeypatch.setattr(konflux_mod, "KONFLUX_TIMEOUT_GRACE_PERIOD", 0)
+    flexmock(KonfluxClient).should_receive("create_secret").and_return("sec")
+    flexmock(KonfluxClient).should_receive("create_pipelinerun").and_return("run")
+    if cancel_mode == "error":
+        flexmock(KonfluxClient).should_receive("cancel_pipelinerun").and_raise(RuntimeError("cannot cancel"))
+        flexmock(KonfluxClient).should_receive("get_pipelinerun").and_return(None).once()
+    else:
+        flexmock(KonfluxClient).should_receive("cancel_pipelinerun").and_return(True).once()
+        flexmock(KonfluxClient).should_receive("get_pipelinerun").and_return(
+            {"status": {"conditions": [{"status": "Unknown", "reason": "Cancelled"}]}}
+        ).once()
+    flexmock(KonfluxClient).should_receive("delete_secret").never()
+
+    out = await KonfluxBuildTool().run(input=BUILD_INPUT)
     assert out.result.is_timeout is True
 
 
@@ -405,15 +529,50 @@ async def test_secret_cleanup_on_submit_failure():
     _mock_prelude(cfg)
     flexmock(KonfluxClient).should_receive("create_secret").and_return("sec")
     flexmock(KonfluxClient).should_receive("create_pipelinerun").and_raise(RuntimeError("submit boom"))
+    flexmock(KonfluxClient).should_receive("cancel_pipelinerun").and_return(False).once()
     flexmock(KonfluxClient).should_receive("delete_secret").with_args("sec").once()
 
     with pytest.raises(ToolError):
         await KonfluxBuildTool().run(input=BUILD_INPUT)
 
 
+@pytest.mark.asyncio
+async def test_secret_cleanup_on_target_mapping_failure():
+    cfg = _config()
+    _mock_prelude(cfg)
+
+    async def fail_target_mapping(_branch):
+        raise RuntimeError("target mapping boom")
+
+    flexmock(KonfluxClient).should_receive("create_secret").and_return("sec").once()
+    flexmock(konflux_mod).should_receive("_map_centos_build_target").replace_with(fail_target_mapping).once()
+    flexmock(KonfluxClient).should_receive("create_pipelinerun").never()
+    flexmock(KonfluxClient).should_receive("delete_secret").with_args("sec").once()
+
+    with pytest.raises(ToolError):
+        await KonfluxBuildTool().run(input={**BUILD_INPUT, "target_branch": "c8s"})
+
+
 # --------------------------------------------------------------------------- #
 # KonfluxClient Kubearchive fallback                                          #
 # --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(("status_code", "found"), [(200, True), (404, False)])
+def test_cancel_pipelinerun_requests_tekton_cancellation(status_code, found):
+    client = KonfluxClient(_config(), _NS)
+    captured = {}
+
+    def patch(url, **kwargs):
+        captured.update(url=url, **kwargs)
+        return flexmock(status_code=status_code, raise_for_status=lambda: None)
+
+    flexmock(client._session).should_receive("patch").replace_with(patch).once()
+
+    assert client.cancel_pipelinerun("run-1") is found
+    assert captured["url"].endswith(f"/namespaces/{_NS}/pipelineruns/run-1")
+    assert captured["json"] == {"spec": {"status": "Cancelled"}}
+    assert captured["headers"]["Content-Type"] == "application/merge-patch+json"
+
+
 def test_get_pipelinerun_falls_back_to_kubearchive():
     client = KonfluxClient(_config(), "ymir-tenant")
     calls = []
@@ -446,6 +605,72 @@ def test_get_pipelinerun_logs_http_error(caplog):
 # --------------------------------------------------------------------------- #
 # Download artifacts                                                          #
 # --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://attacker.example.com/api/v1/namespaces/ymir-tenant/pods/pod-1/log?container=step-build",
+        "https://konflux.example.com.attacker.example.com/api/v1/namespaces/ymir-tenant/pods/pod-1/log?container=step-build",
+        "https://konflux.example.com@attacker.example.com/api/v1/namespaces/ymir-tenant/pods/pod-1/log?container=step-build",
+        "http://konflux.example.com/api/v1/namespaces/ymir-tenant/pods/pod-1/log?container=step-build",
+        "https://konflux.example.com/api/v1/namespaces/other/pods/pod-1/log?container=step-build",
+        "https://konflux.example.com/api/v1/namespaces/ymir-tenant/secrets/token",
+        "https://konflux.example.com/api/v1/namespaces/ymir-tenant/pods/%2e%2e/log?container=step-build",
+        "https://konflux.example.com/api/v1/namespaces/ymir-tenant/pods/pod-1/log?container=step-build&container=other",
+    ],
+)
+async def test_download_artifacts_rejects_untrusted_urls_without_sending_token(url):
+    flexmock(konflux_mod).should_receive("_load_config").and_return(_config())
+    calls = []
+
+    def _get(*args, **kwargs):
+        calls.append(args[-1])
+        return flexmock(status_code=200, reason="OK", content=b"log-bytes")
+
+    flexmock(requests.Session).should_receive("get").replace_with(_get)
+
+    with pytest.raises(ToolError):
+        await KonfluxDownloadArtifactsTool().run(input={"artifacts_urls": [url]})
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_download_artifacts_does_not_follow_redirects():
+    cfg = _config()
+    flexmock(konflux_mod).should_receive("_load_config").and_return(cfg)
+    url = f"{cfg.api_url}/api/v1/namespaces/ymir-tenant/pods/pod-1/log?container=step-build"
+    calls = []
+    redirect_flags = []
+
+    def _get(*args, **kwargs):
+        calls.append(args[-1])
+        redirect_flags.append(kwargs.get("allow_redirects"))
+        return flexmock(status_code=302, reason="Found", content=b"")
+
+    flexmock(requests.Session).should_receive("get").replace_with(_get)
+    with pytest.raises(ToolError):
+        await KonfluxDownloadArtifactsTool().run(input={"artifacts_urls": [url]})
+    assert calls == [url]
+    assert redirect_flags == [False]
+
+
+@pytest.mark.asyncio
+async def test_download_artifacts_rejects_archive_url_when_not_configured():
+    cfg = _config().model_copy(update={"kubearchive_url": None})
+    flexmock(konflux_mod).should_receive("_load_config").and_return(cfg)
+    url = "https://kubearchive.example.com/api/v1/namespaces/ymir-tenant/pods/pod-1/log?container=step-build"
+    calls = []
+
+    def _get(*args, **kwargs):
+        calls.append(args[-1])
+        return flexmock(status_code=200, reason="OK", content=b"log-bytes")
+
+    flexmock(requests.Session).should_receive("get").replace_with(_get)
+    with pytest.raises(ToolError):
+        await KonfluxDownloadArtifactsTool().run(input={"artifacts_urls": [url]})
+    assert calls == []
+
+
 @pytest.mark.asyncio
 async def test_download_artifacts_sends_bearer_token():
     cfg = _config()
@@ -508,10 +733,12 @@ async def test_download_artifacts_falls_back_to_kubearchive_on_404():
     flexmock(konflux_mod).should_receive("_load_config").and_return(cfg)
     live_url = f"{cfg.api_url}/api/v1/namespaces/ymir-tenant/pods/pod-1/log?container=step-build"
     calls = []
+    redirect_flags = []
 
     def _get(*args, **kwargs):
         url = args[-1]
         calls.append(url)
+        redirect_flags.append(kwargs.get("allow_redirects"))
         if url.startswith(cfg.kubearchive_url):
             return flexmock(status_code=200, reason="OK", content=b"archived-log")
         return flexmock(status_code=404, reason="Not Found", content=b"")
@@ -522,3 +749,4 @@ async def test_download_artifacts_falls_back_to_kubearchive_on_404():
     assert target.read_bytes() == b"archived-log"
     assert calls[0].startswith(cfg.api_url)
     assert any(u.startswith(cfg.kubearchive_url) for u in calls)
+    assert redirect_flags == [False, False]

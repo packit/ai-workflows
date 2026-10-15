@@ -57,18 +57,6 @@ DEFAULT_TIMEOUT = (20, 60)
 
 # Tekton PipelineRun status reasons.
 # https://github.com/tektoncd/pipeline/blob/main/pkg/apis/pipeline/v1/pipelinerun_types.go
-RUNNING_STATES = frozenset(
-    {
-        "Started",
-        "Running",
-        "PipelineRunPending",
-        "PipelineRunStopping",
-        "ResolvingPipelineRef",
-        "ResolvingTaskRef",
-        "CancelledRunningFinally",
-        "StoppedRunningFinally",
-    }
-)
 SUCCESSFUL_STATES = frozenset({"Succeeded", "Completed"})
 
 # Single-arch scratch validation (mirrors COPR building one arch for speed).
@@ -254,6 +242,14 @@ def _pipelinerun_status(data: dict | None) -> str:
         return "Unknown"
 
 
+def _pipelinerun_is_done(data: dict | None) -> bool:
+    """Only a True or False Succeeded condition is terminal in Tekton."""
+    try:
+        return data["status"]["conditions"][0]["status"] in ("True", "False")
+    except (KeyError, IndexError, TypeError):
+        return False
+
+
 def _pipelinerun_message(data: dict | None) -> str:
     if not data:
         return ""
@@ -299,6 +295,20 @@ class KonfluxClient:
         response = self._session.post(url, headers=self._headers, json=body, timeout=DEFAULT_TIMEOUT)
         response.raise_for_status()
         return response.json()["metadata"]["name"]
+
+    def cancel_pipelinerun(self, name: str) -> bool:
+        """Ask Tekton to stop TaskRuns; return False if the run is already absent."""
+        url = f"{self._tekton_base(self._config.api_url)}/pipelineruns/{name}"
+        response = self._session.patch(
+            url,
+            headers={**self._headers, "Content-Type": "application/merge-patch+json"},
+            json={"spec": {"status": "Cancelled"}},
+            timeout=DEFAULT_TIMEOUT,
+        )
+        if response.status_code == 404:
+            return False
+        response.raise_for_status()
+        return True
 
     def delete_pipelinerun(self, name: str) -> None:
         url = f"{self._tekton_base(self._config.api_url)}/pipelineruns/{name}"
@@ -434,7 +444,7 @@ def _pipelinerun_body(
                     {"name": "pathInRepo", "value": PIPELINE_PATH_IN_REPO},
                 ],
             },
-            "timeouts": {"pipeline": "0", "tasks": "0", "finally": "0"},
+            "timeouts": {"pipeline": f"{KONFLUX_BUILD_TIMEOUT}s"},
             "taskRunTemplate": {"serviceAccountName": service_account},
             "workspaces": [
                 {"name": "git-auth", "secret": {"secretName": secret_name}},
@@ -529,8 +539,8 @@ class BuildPackageToolOutput(JSONToolOutput[BuildResult]):
 
 class KonfluxBuildTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageToolOutput]):
     name = "build_package"
-    # Must exceed the polling budget (KONFLUX_BUILD_TIMEOUT + grace).
-    timeout = KONFLUX_BUILD_TIMEOUT + 2 * KONFLUX_TIMEOUT_GRACE_PERIOD
+    # Leave room after polling for Tekton cancellation and Secret cleanup.
+    timeout = KONFLUX_BUILD_TIMEOUT + 5 * KONFLUX_TIMEOUT_GRACE_PERIOD
     description = """
     Builds the specified package revision in Konflux (Tekton PipelineRun).
     """
@@ -564,9 +574,11 @@ class KonfluxBuildTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
             secret_body = _git_auth_secret_body(tool_input.git_url, config.gitlab_token)
             secret_name = await asyncio.to_thread(client.create_secret, secret_body)
 
-        build_target_branch = await _map_centos_build_target(tool_input.target_branch)
-
+        run_to_cleanup: str | None = None
+        submission: asyncio.Task[str] | None = None
+        run_terminal = False
         try:
+            build_target_branch = await _map_centos_build_target(tool_input.target_branch)
             body = _pipelinerun_body(
                 config=config,
                 namespace=config.namespace,
@@ -586,19 +598,81 @@ class KonfluxBuildTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 package=tool_input.package_name,
                 run_name=run_name,
             ):
-                submitted_name = await asyncio.to_thread(client.create_pipelinerun, body)
+                # The request can finish after our task is cancelled. Keep its
+                # name and await the shielded request before cleanup in that case.
+                run_to_cleanup = run_name
+                submission = asyncio.create_task(asyncio.to_thread(client.create_pipelinerun, body))
+                submitted_name = await asyncio.shield(submission)
+                run_to_cleanup = submitted_name
             logger.info(
                 "%s: Konflux build submitted: %s (ociStorage %s)",
                 tool_input.jira_issue or tool_input.package_name,
                 submitted_name,
                 ocistorage,
             )
-            return await self._poll_to_completion(client, submitted_name, config)
+            result = await self._poll_to_completion(client, submitted_name, config)
+            run_terminal = not result.result.is_timeout
+            return result
         finally:
+            if submission is not None:
+                try:
+                    run_to_cleanup = await asyncio.shield(submission)
+                except Exception as error:
+                    # The request may have reached the API before its response
+                    # failed. The generated name still lets us check/cancel it.
+                    logger.warning(
+                        "Konflux PipelineRun submission did not return a name for %s: %s",
+                        run_name,
+                        error,
+                    )
+            await asyncio.shield(self._cleanup_git_auth(client, secret_name, run_to_cleanup, run_terminal))
+
+    async def _cleanup_git_auth(
+        self,
+        client: KonfluxClient,
+        secret_name: str,
+        run_name: str | None,
+        run_terminal: bool,
+    ) -> None:
+        if run_name and not run_terminal:
+            run_terminal = await self._cancel_and_wait(client, run_name)
+        if not run_name or run_terminal:
             try:
                 await asyncio.to_thread(client.delete_secret, secret_name)
             except Exception as e:
                 logger.warning("Failed to delete Konflux git-auth secret %s: %s", secret_name, e)
+        else:
+            logger.warning(
+                "Keeping Konflux git-auth secret %s: PipelineRun %s may still be active",
+                secret_name,
+                run_name,
+            )
+
+    async def _cancel_and_wait(self, client: KonfluxClient, run_name: str) -> bool:
+        try:
+            if not await asyncio.to_thread(client.cancel_pipelinerun, run_name):
+                return True  # The live PipelineRun is already gone.
+        except Exception as e:
+            logger.warning("Failed to cancel Konflux PipelineRun %s: %s", run_name, e)
+            try:
+                return _pipelinerun_is_done(await asyncio.to_thread(client.get_pipelinerun, run_name))
+            except Exception:
+                return False
+
+        deadline = time.monotonic() + KONFLUX_TIMEOUT_GRACE_PERIOD
+        while True:
+            try:
+                pipelinerun = await asyncio.to_thread(client.get_pipelinerun, run_name)
+            except Exception as e:
+                logger.warning("Failed to confirm Konflux PipelineRun %s stopped: %s", run_name, e)
+                return False
+            if _pipelinerun_is_done(pipelinerun):
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning("Timed out waiting for Konflux PipelineRun %s to stop", run_name)
+                return False
+            await asyncio.sleep(min(KONFLUX_POLLING_INTERVAL, remaining))
 
     async def _poll_to_completion(
         self,
@@ -610,12 +684,12 @@ class KonfluxBuildTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
         while time.monotonic() - start < KONFLUX_BUILD_TIMEOUT + KONFLUX_TIMEOUT_GRACE_PERIOD:
             pipelinerun = await asyncio.to_thread(client.get_pipelinerun, run_name)
             status = _pipelinerun_status(pipelinerun)
+            if not _pipelinerun_is_done(pipelinerun):
+                await asyncio.sleep(KONFLUX_POLLING_INTERVAL)
+                continue
             if status in SUCCESSFUL_STATES:
                 logger.info("Konflux build %s succeeded", run_name)
                 return BuildPackageToolOutput(result=BuildResult(success=True))
-            if status in RUNNING_STATES or status == "Unknown":
-                await asyncio.sleep(KONFLUX_POLLING_INTERVAL)
-                continue
             message = _pipelinerun_message(pipelinerun) or status
             logger.info("Konflux build %s failed: %s (%s)", run_name, status, message)
             log_urls = await asyncio.to_thread(_collect_failure_log_urls, client, pipelinerun or {}, config)
@@ -675,6 +749,9 @@ class KonfluxDownloadArtifactsTool(
     ) -> DownloadArtifactsToolOutput:
         # Kubearchive pod-log endpoints are authenticated (unlike COPR's public URLs).
         config = _load_config()
+        # Reject every caller-supplied URL before logging it or making a request.
+        for url in tool_input.artifacts_urls:
+            self._validate_log_url(url, config)
         headers = {"Authorization": f"Bearer {config.token}", "User-Agent": YMIR_USER_AGENT}
         session = _build_session()
         target_path = Path(tempfile.mkdtemp())
@@ -695,29 +772,84 @@ class KonfluxDownloadArtifactsTool(
         )
 
     @staticmethod
+    def _validate_log_url(url: str, config: KonfluxConfig) -> str:
+        """Return the configured API base for an authenticated pod-log URL.
+
+        Only URLs in the format produced by ``_collect_failure_log_urls`` (or
+        their archive equivalents) may receive the token. Compare complete
+        origins rather than string prefixes, and restrict the API resource so
+        a caller cannot use this tool to read other cluster objects.
+        """
+        error = ToolError("Invalid Konflux pod-log URL")
+        if url != url.strip() or any(ord(char) < 32 or ord(char) == 127 for char in url):
+            raise error
+        try:
+            parts = urlsplit(url)
+            allowed_bases = [base for base in (config.api_url, config.kubearchive_url) if base]
+            matching_base = next(
+                (
+                    base
+                    for base in allowed_bases
+                    if (parsed := urlsplit(base)).scheme == "https"
+                    and parsed.netloc
+                    and parsed.netloc == parts.netloc
+                    and parsed.path in ("", "/")
+                    and not parsed.query
+                    and not parsed.fragment
+                    and parsed.username is None
+                ),
+                None,
+            )
+            query = parse_qs(parts.query, keep_blank_values=True, strict_parsing=True)
+        except ValueError as e:
+            raise error from e
+
+        pod_log_path = (
+            rf"/api/v1/namespaces/{re.escape(config.namespace)}"
+            r"/pods/[a-z0-9](?:[-.a-z0-9]*[a-z0-9])?/log"
+        )
+        container = query.get("container", [])
+        if (
+            parts.scheme != "https"
+            or parts.username is not None
+            or parts.fragment
+            or matching_base is None
+            or re.fullmatch(pod_log_path, parts.path) is None
+            or set(query) != {"container"}
+            or len(container) != 1
+            or re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", container[0]) is None
+        ):
+            raise error
+        return matching_base
+
+    @staticmethod
     def _fallback_url(url: str, config: KonfluxConfig) -> str | None:
         """Swap a pod-log URL between the live API host and Kubearchive.
 
         A pod is readable on the live API until GC, then only via Kubearchive;
         retrying the other host on a 404 covers both sides of that handoff.
         """
+        source = KonfluxDownloadArtifactsTool._validate_log_url(url, config)
         if not config.kubearchive_url:
             return None
-        if url.startswith(config.api_url):
-            return config.kubearchive_url + url[len(config.api_url) :]
-        if url.startswith(config.kubearchive_url):
-            return config.api_url + url[len(config.kubearchive_url) :]
-        return None
+        destination = config.kubearchive_url if source == config.api_url else config.api_url
+        parts = urlsplit(url)
+        fallback = f"{destination.rstrip('/')}{parts.path}?{parts.query}"
+        KonfluxDownloadArtifactsTool._validate_log_url(fallback, config)
+        return fallback
 
     @staticmethod
     def _download(session: requests.Session, url: str, headers: dict, config: KonfluxConfig) -> bytes:
-        response = session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
+        KonfluxDownloadArtifactsTool._validate_log_url(url, config)
+        response = session.get(url, headers=headers, timeout=DEFAULT_TIMEOUT, allow_redirects=False)
         if response.status_code == 404:
             fallback = KonfluxDownloadArtifactsTool._fallback_url(url, config)
             if fallback:
                 logger.info("Konflux log 404 at %s; retrying via %s", url, fallback)
-                response = session.get(fallback, headers=headers, timeout=DEFAULT_TIMEOUT)
-        if response.status_code >= 400:
+                response = session.get(
+                    fallback, headers=headers, timeout=DEFAULT_TIMEOUT, allow_redirects=False
+                )
+        if response.status_code >= 300:
             raise ToolError(f"{response.status_code} {response.reason}")
         content = response.content
         if content.startswith(b"\x1f\x8b"):

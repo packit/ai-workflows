@@ -22,6 +22,7 @@ from ymir.tools.privileged.konflux import (
     _pipelinerun_body,
     _pipelinerun_status,
     _sanitize_tag,
+    _select_build_architecture,
 )
 
 BUILD_INPUT = {
@@ -87,6 +88,7 @@ def test_input_schema_tolerates_copr_only_fields():
     )
     assert model.package_name == "expat"
     assert model.git_url == BUILD_INPUT["git_url"]
+    assert model.srpm_path == Path("/x.src.rpm")
 
 
 def test_input_schema_advertises_additional_properties():
@@ -101,6 +103,51 @@ def test_input_schema_advertises_additional_properties():
 # --------------------------------------------------------------------------- #
 # Pure helpers                                                                 #
 # --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("exclusive_arches", "exclude_arches", "expected"),
+    [
+        (None, None, "x86_64"),
+        ([], [], "x86_64"),
+        (["x86_64", "aarch64"], [], "x86_64"),
+        (["ppc64le"], [], "ppc64le"),
+        ([], ["x86_64"], "ppc64le"),
+        ([], ["x86_64", "ppc64le"], "s390x"),
+        ([], ["x86_64", "ppc64le", "s390x"], "aarch64"),
+        (["aarch64", "s390x", "ppc64le"], [], "ppc64le"),
+        (["x86_64", "s390x"], ["x86_64"], "s390x"),
+    ],
+)
+def test_select_build_architecture(tmp_path, exclusive_arches, exclude_arches, expected):
+    srpm_path = tmp_path / "test.src.rpm"
+    srpm_path.touch()
+    header = {
+        konflux_mod.rpm.RPMTAG_EXCLUSIVEARCH: exclusive_arches,
+        konflux_mod.rpm.RPMTAG_EXCLUDEARCH: exclude_arches,
+    }
+    transaction = flexmock()
+    transaction.should_receive("setVSFlags").once()
+    transaction.should_receive("hdrFromFdno").and_return(header).once()
+    flexmock(konflux_mod.rpm).should_receive("TransactionSet").and_return(transaction).once()
+
+    assert _select_build_architecture(srpm_path) == expected
+
+
+def test_select_build_architecture_rejects_unsupported_arch(tmp_path):
+    srpm_path = tmp_path / "test.src.rpm"
+    srpm_path.touch()
+    header = {
+        konflux_mod.rpm.RPMTAG_EXCLUSIVEARCH: ["riscv64"],
+        konflux_mod.rpm.RPMTAG_EXCLUDEARCH: [],
+    }
+    transaction = flexmock()
+    transaction.should_receive("setVSFlags").once()
+    transaction.should_receive("hdrFromFdno").and_return(header).once()
+    flexmock(konflux_mod.rpm).should_receive("TransactionSet").and_return(transaction).once()
+
+    with pytest.raises(ValueError, match="No Konflux build architecture"):
+        _select_build_architecture(srpm_path)
+
+
 def test_sanitize_tag_replaces_invalid_chars():
     assert _sanitize_tag("gtk+2.0") == "gtk-2.0"
     assert _sanitize_tag("valid_tag-1.2.3") == "valid_tag-1.2.3"
@@ -134,7 +181,16 @@ def test_git_auth_secret_body_parses_host_and_repo():
 
 
 @pytest.mark.parametrize("specfile, expected_specfile", [(None, "null"), ("renamed.spec", "renamed.spec")])
-def test_pipelinerun_body_shape(specfile, expected_specfile):
+@pytest.mark.parametrize(
+    ("architecture", "platform"),
+    [
+        ("x86_64", "linux-mxlarge/amd64"),
+        ("aarch64", "linux/arm64"),
+        ("s390x", "linux/s390x"),
+        ("ppc64le", "linux/ppc64le"),
+    ],
+)
+def test_pipelinerun_body_shape(specfile, expected_specfile, architecture, platform):
     cfg = _config()
     body = _pipelinerun_body(
         config=cfg,
@@ -146,6 +202,7 @@ def test_pipelinerun_body_shape(specfile, expected_specfile):
         revision=BUILD_INPUT["revision"],
         target_branch="rhel-10.1",
         specfile=specfile,
+        build_architecture=architecture,
         ocistorage=f"{_IMG}:expat-abc-1234",
         pipeline_revision="psha",
         secret_name="gitlab-secret-xyz",  # pragma: allowlist secret
@@ -158,8 +215,8 @@ def test_pipelinerun_body_shape(specfile, expected_specfile):
     assert params["koji-target"] == "DEFAULT"
     assert params["hermetic"] == "true"
     assert params["specfile"] == expected_specfile
-    assert params["build-architectures"] == ["x86_64"]
-    assert params["build-platforms"] == ["linux-mxlarge/amd64"]
+    assert params["build-architectures"] == [architecture]
+    assert params["build-platforms"] == [platform]
     assert body["spec"]["taskRunTemplate"]["serviceAccountName"] == _SA
     assert body["metadata"]["namespace"] == _NS
     body_secret = body["spec"]["workspaces"][0]["secret"]["secretName"]
@@ -170,6 +227,27 @@ def test_pipelinerun_body_shape(specfile, expected_specfile):
     # Standalone run: no application/component labels, no pull_request annotation.
     assert "appstudio.openshift.io/application" not in body["metadata"]["labels"]
     assert "build.appstudio.redhat.com/pull_request_number" not in body["metadata"]["annotations"]
+
+
+def test_pipelinerun_platform_label_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("KONFLUX_BUILD_PLATFORM_AARCH64", "linux-mxlarge/arm64")
+    body = _pipelinerun_body(
+        config=_config(),
+        namespace=_NS,
+        service_account=_SA,
+        run_name="ymir-build-abc-1234",
+        package_name="expat",
+        git_url=BUILD_INPUT["git_url"],
+        revision=BUILD_INPUT["revision"],
+        target_branch="rhel-10.1",
+        specfile=None,
+        build_architecture="aarch64",
+        ocistorage=f"{_IMG}:expat-abc-1234",
+        pipeline_revision="psha",
+        secret_name="gitlab-secret-xyz",  # pragma: allowlist secret
+    )
+    params = {p["name"]: p["value"] for p in body["spec"]["params"]}
+    assert params["build-platforms"] == ["linux-mxlarge/arm64"]
 
 
 # Mirrors the production rhel-config.json shape: major 8 is in maintenance phase
@@ -345,10 +423,51 @@ async def test_build_success_submits_and_cleans_up():
     assert params["package-name"] == "expat"
     assert params["git-url"] == BUILD_INPUT["git_url"]
     assert params["ociStorage"].startswith(f"{_IMG}:expat-0123456789ab-")
+    assert params["build-architectures"] == ["x86_64"]
     ws_secret = captured["pr"]["spec"]["workspaces"][0]["secret"]["secretName"]
     assert ws_secret == "gitlab-secret-abc"  # pragma: allowlist secret
     assert captured["secret"]["type"] == "kubernetes.io/basic-auth"
     assert captured["pr"]["spec"]["timeouts"] == {"pipeline": f"{konflux_mod.KONFLUX_BUILD_TIMEOUT}s"}
+
+
+@pytest.mark.asyncio
+async def test_build_selects_architecture_from_srpm_before_submission(tmp_path):
+    _mock_prelude(_config())
+    srpm_path = tmp_path / "package.src.rpm"
+    captured = {}
+
+    def submit(*args):
+        body = args[-1]
+        captured["params"] = {p["name"]: p["value"] for p in body["spec"]["params"]}
+        return body["metadata"]["name"]
+
+    flexmock(konflux_mod).should_receive("_select_build_architecture").with_args(srpm_path).and_return(
+        "ppc64le"
+    ).once()
+    flexmock(KonfluxClient).should_receive("create_secret").and_return("sec").once()
+    flexmock(KonfluxClient).should_receive("create_pipelinerun").replace_with(submit).once()
+    flexmock(KonfluxClient).should_receive("get_pipelinerun").and_return(
+        {"status": {"conditions": [{"status": "True", "reason": "Succeeded"}]}}
+    ).once()
+    flexmock(KonfluxClient).should_receive("delete_secret").with_args("sec").once()
+
+    out = await KonfluxBuildTool().run(input={**BUILD_INPUT, "srpm_path": str(srpm_path)})
+    assert out.result.success is True
+    assert captured["params"]["build-architectures"] == ["ppc64le"]
+    assert captured["params"]["build-platforms"] == ["linux/ppc64le"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_srpm_architecture_fails_before_secret_creation(tmp_path):
+    _mock_prelude(_config())
+    srpm_path = tmp_path / "package.src.rpm"
+    flexmock(konflux_mod).should_receive("_select_build_architecture").with_args(srpm_path).and_raise(
+        ValueError("No Konflux build architecture is usable")
+    ).once()
+    flexmock(KonfluxClient).should_receive("create_secret").never()
+
+    with pytest.raises(ToolError, match="Failed to choose a Konflux build architecture"):
+        await KonfluxBuildTool().run(input={**BUILD_INPUT, "srpm_path": str(srpm_path)})
 
 
 @pytest.mark.asyncio

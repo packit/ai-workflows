@@ -143,12 +143,17 @@ fork branch still points at the validated commit before it resumes at MR
 creation. Routing-invariant failures are terminal and are not requeued.
 
 
-### Copr build validation
+### Build validation
 
 Backport (including Y-stream inheritance), rebase, MR updates, and MR
 consolidation use a shared `BuildWorkflow`. Its `execute_build` step calls
-`build_package` through the existing MCP gateway; the tool submits and polls
-Copr as before. Shared `run_tool()` validates the response as a `BuildResult`
+`build_package` through the existing MCP gateway. The default backend submits
+and polls Copr; `BUILD_BACKEND=konflux` instead builds the pushed fork commit
+as a scratch Konflux PipelineRun. The discovered spec filename is passed to
+Konflux when it differs from the package name. See
+[Konflux backend](docs/konflux-backend.md) for configuration and
+[the threat model](THREAT_MODEL.md) for its external
+dependencies. Shared `run_tool()` validates the response as a `BuildResult`
 using its opt-in `expected_output` schema; other callers' raw results are unchanged.
 Successful validation makes no build-stage LLM calls. Timeouts, tool errors,
 and failures without log artifacts are returned directly to the workflow.
@@ -170,10 +175,9 @@ the name to 100 characters. Changed names include a hash suffix to distinguish
 packages and branches across sanitization or truncation. This fallback is stable
 across retries and is not added to Jira metadata or commit footers.
 
-Standalone rebuild does not have this Copr validation stage. The backport
-incremental repair agent's own edit/build loop is also unchanged. Dry-run mode
-still performs real build validation; it does not turn a build into a success
-without running it.
+Standalone rebuild does not have this Copr validation stage. Dry-run mode still
+performs real build validation; it does not turn a build into a success without
+running it.
 
 Incremental backport repairs keep `fix-attempts.md` and archived build logs in
 `<local_clone>-build-logs`, beside the dist-git and upstream checkouts. This
@@ -182,6 +186,12 @@ staging in either checkout to include those files in generated patches. The
 repair prompt provides the file path for reading previous attempts and
 appending the outcome. The directory is removed with the issue's working
 directory on a fresh run.
+
+A repair response that reports failure is recorded there and retried without
+another build, up to `MAX_INCREMENTAL_FIX_ATTEMPTS` (default:
+`MAX_BUILD_ATTEMPTS`). A successful repair candidate goes through the build
+step for validation. The workflow reports failure when either budget is
+exhausted.
 
 Backport context management is initially disabled. Set
 `BACKPORT_CONTEXT_MANAGEMENT=true` to let the model compact older investigation

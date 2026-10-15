@@ -88,7 +88,7 @@ class BuildPackageToolInput(BaseModel):
     """Copr build inputs.
 
     ``extra='allow'`` so the Konflux-only fields in the shared BuildInputSchema
-    (git_url, revision, package_name, target_branch) are tolerated when
+    (git_url, revision, package_name, target_branch, specfile) are tolerated when
     build_agent dumps the whole model for either backend. This must be ``allow``
     rather than ``ignore``: only ``allow`` makes Pydantic emit
     ``additionalProperties: true`` in the advertised JSON schema, and beeai's MCP

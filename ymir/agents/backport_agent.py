@@ -1390,6 +1390,14 @@ async def run_workflow(
                 return "update_release"
             return "comment_in_jira"
 
+        def stop_after_incremental_fix_budget(state):
+            state.backport_result.success = False
+            state.backport_result.error = (
+                f"Unable to fix build errors after {state.incremental_fix_attempts} "
+                f"incremental fix attempts. Last build error: {state.build_error}"
+            )
+            return "comment_in_jira"
+
         async def fix_build_error(state):
             """Produce a fix for the failed build; the build step re-validates it.
 
@@ -1399,6 +1407,9 @@ async def run_workflow(
             identical for both backends), which performs the only build and loops
             back here with the new build error if it still fails.
             """
+            if state.incremental_fix_attempts >= max_incremental_fix_attempts:
+                return stop_after_incremental_fix_budget(state)
+
             logger.info(
                 f"Producing incremental fix for cherry-pick workflow "
                 f"(cycle {state.incremental_fix_attempts + 1}/{max_incremental_fix_attempts})"
@@ -1460,16 +1471,20 @@ async def run_workflow(
                     logger.info("Incremental fix produced — re-validating via the build step")
                     return "update_release"
 
-                # No candidate fix was produced, so the patches/SRPM are unchanged
-                # and rebuilding would fail identically. Stop and report. The build
-                # step itself bounds how many build/fix cycles we attempt via
-                # ``attempts_remaining``.
-                logger.info(f"Fix agent could not produce a fix: {fix_result.error}")
+                # No candidate fix was produced, so rebuilding the unchanged
+                # patches/SRPM would fail identically. Record the agent's reason
+                # for the next fix attempt and retry without rebuilding.
+                fix_error = fix_result.error or fix_result.status or "No fix produced"
+                logger.info("Fix agent could not produce a fix: %s", fix_error)
                 state.backport_result = fix_result
-                state.backport_result.success = False
+                with (log_dir / "fix-attempts.md").open("a") as attempts_log:
+                    attempts_log.write(f"**Fix agent result:** {fix_error}\n\n")
+                if state.incremental_fix_attempts < max_incremental_fix_attempts:
+                    return "fix_build_error"
                 state.backport_result.error = (
-                    f"Unable to fix the build error. Last build error: {state.build_error}. "
-                    f"Fix attempt result: {fix_result.error}"
+                    f"Unable to fix build errors after {state.incremental_fix_attempts} "
+                    f"incremental fix attempts. Last build error: {state.build_error}. "
+                    f"Fix attempt result: {fix_error}"
                 )
                 return "comment_in_jira"
 
@@ -1497,6 +1512,7 @@ async def run_workflow(
                     revision=state.inherit_local_commit,
                     package_name=state.package,
                     target_branch=state.dist_git_branch,
+                    specfile=state.spec_name,
                 ),
                 available_tools=gateway_tools,
                 local_tool_options=local_tool_options,
@@ -1900,6 +1916,7 @@ async def run_workflow(
                     revision=revision,
                     package_name=state.package,
                     target_branch=state.dist_git_branch,
+                    specfile=state.spec_name,
                 ),
                 available_tools=gateway_tools,
                 local_tool_options=local_tool_options,
@@ -1948,6 +1965,10 @@ async def run_workflow(
                 return "comment_in_jira"
             state.build_error = build_result.error
             if state.used_cherry_pick_workflow:
+                # A failed rebuild consumes the current fix cycle. Stop here if
+                # no more fix calls are allowed, instead of routing back to one.
+                if state.incremental_fix_attempts >= max_incremental_fix_attempts:
+                    return stop_after_incremental_fix_budget(state)
                 logger.info("Cherry-pick workflow was used - starting incremental fix")
                 return "fix_build_error"
             logger.info("Git am workflow was used - resetting for retry")

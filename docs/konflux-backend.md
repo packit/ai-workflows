@@ -21,6 +21,21 @@ The namespace / service account / image repo defaults are baked into
 
 ## Build lifecycle
 
+For agent validation, the gateway reads `ExclusiveArch` and `ExcludeArch` from
+the generated SRPM and requests one compatible Konflux build architecture. It
+prefers `x86_64`, then `ppc64le`, `s390x`, and `aarch64`. If none is compatible,
+the tool reports an error before submitting a PipelineRun. Calls without an
+SRPM retain the `x86_64` default.
+
+The matching `build-platforms` label defaults to `linux-mxlarge/amd64` for
+`x86_64`, `linux/ppc64le` for `ppc64le`, `linux/s390x` for `s390x`, and
+`linux/arm64` for `aarch64`. The non-x86 labels follow the
+[upstream RPM pipeline defaults](https://github.com/konflux-ci/rpmbuild-pipeline/blob/main/docs/parameters.md).
+Since available labels depend on the Konflux cluster, set
+`KONFLUX_BUILD_PLATFORM_X86_64`, `KONFLUX_BUILD_PLATFORM_PPC64LE`,
+`KONFLUX_BUILD_PLATFORM_S390X`, or `KONFLUX_BUILD_PLATFORM_AARCH64` in the
+gateway environment when a cluster uses a different label.
+
 By default, each PipelineRun has a three-hour Tekton timeout. Ymir polls for
 one additional minute to observe completion. If polling times out or the tool
 call is cancelled, Ymir requests PipelineRun cancellation and waits for a

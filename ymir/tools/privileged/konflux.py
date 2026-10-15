@@ -24,6 +24,7 @@ from shutil import rmtree
 from urllib.parse import parse_qs, urlsplit
 
 import requests
+import rpm
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, ToolError, ToolRunOptions
@@ -59,9 +60,15 @@ DEFAULT_TIMEOUT = (20, 60)
 # https://github.com/tektoncd/pipeline/blob/main/pkg/apis/pipeline/v1/pipelinerun_types.go
 SUCCESSFUL_STATES = frozenset({"Succeeded", "Completed"})
 
-# Single-arch scratch validation (mirrors COPR building one arch for speed).
-DEFAULT_BUILD_ARCHITECTURES = ["x86_64"]
-DEFAULT_BUILD_PLATFORMS = ["linux-mxlarge/amd64"]
+# Single-arch scratch validation. Use this preference order while respecting
+# the SRPM's ExclusiveArch and ExcludeArch tags.
+BUILD_ARCH_PREFERENCE = ("x86_64", "ppc64le", "s390x", "aarch64")
+BUILD_PLATFORMS = {
+    "x86_64": "linux-mxlarge/amd64",
+    "ppc64le": "linux/ppc64le",
+    "s390x": "linux/s390x",
+    "aarch64": "linux/arm64",
+}
 
 # Pipeline definition to resolve the build from.
 PIPELINE_PATH_IN_REPO = "pipeline/build-rpm-package.yaml"
@@ -178,6 +185,27 @@ def _build_session() -> requests.Session:
 
 def _sanitize_tag(value: str) -> str:
     return _INVALID_TAG_CHARS.sub("-", value)
+
+
+def _select_build_architecture(srpm_path: Path) -> str:
+    """Choose one supported architecture allowed by the generated SRPM."""
+    transaction = rpm.TransactionSet()
+    transaction.setVSFlags(rpm._RPMVSF_NOSIGNATURES | rpm._RPMVSF_NODIGESTS)
+    with srpm_path.open("rb") as srpm:
+        header = transaction.hdrFromFdno(srpm.fileno())
+
+    excluded = set(header[rpm.RPMTAG_EXCLUDEARCH] or ())
+    exclusive = set(header[rpm.RPMTAG_EXCLUSIVEARCH] or ())
+    for architecture in BUILD_ARCH_PREFERENCE:
+        if architecture not in excluded and (not exclusive or architecture in exclusive):
+            return architecture
+    raise ValueError("No Konflux build architecture is usable for this SRPM")
+
+
+def _build_platform(architecture: str) -> str:
+    """Return the cluster's host label for an RPM architecture."""
+    environment_key = f"KONFLUX_BUILD_PLATFORM_{architecture.upper()}"
+    return os.environ.get(environment_key, "").strip() or BUILD_PLATFORMS[architecture]
 
 
 # CentOS Stream dist-git branches cannot be built on this RHEL/Brew-backed Konflux:
@@ -384,6 +412,7 @@ def _pipelinerun_body(
     revision: str,
     target_branch: str,
     specfile: str | None,
+    build_architecture: str,
     ocistorage: str,
     pipeline_revision: str,
     secret_name: str,
@@ -430,8 +459,8 @@ def _pipelinerun_body(
                 {"name": "hermetic", "value": "true"},
                 {"name": "koji-target", "value": "DEFAULT"},
                 {"name": "specfile", "value": specfile or "null"},
-                {"name": "build-platforms", "value": DEFAULT_BUILD_PLATFORMS},
-                {"name": "build-architectures", "value": DEFAULT_BUILD_ARCHITECTURES},
+                {"name": "build-platforms", "value": [_build_platform(build_architecture)]},
+                {"name": "build-architectures", "value": [build_architecture]},
                 {"name": "self-ref-url", "value": config.pipeline_url},
                 {"name": "self-ref-revision", "value": pipeline_revision},
                 {"name": "ociArtifactExpiresAfter", "value": OCI_ARTIFACT_EXPIRES_AFTER},
@@ -511,9 +540,9 @@ def _collect_failure_log_urls(client: KonfluxClient, pipelinerun: dict, config: 
 class BuildPackageToolInput(BaseModel):
     """Konflux build inputs.
 
-    ``extra='allow'`` so the COPR-only fields in the shared BuildInputSchema
-    (srpm_path, dist_git_branch) are tolerated when build_agent dumps the whole
-    model. This must be ``allow`` rather than ``ignore``: only ``allow`` makes
+    ``extra='allow'`` so the COPR-only ``dist_git_branch`` field in the shared
+    BuildInputSchema is tolerated when build_agent dumps the whole model.
+    This must be ``allow`` rather than ``ignore``: only ``allow`` makes
     Pydantic emit ``additionalProperties: true`` in the advertised JSON schema,
     and beeai's MCP client rebuilds the tool's input model from that schema with
     ``extra='forbid'`` unless ``additionalProperties`` is truthy. With ``ignore``
@@ -529,6 +558,9 @@ class BuildPackageToolInput(BaseModel):
     target_branch: str = Field(description="dist-git branch the build targets")
     specfile: str | None = Field(
         default=None, description="Spec file name when it differs from <package>.spec"
+    )
+    srpm_path: Path | None = Field(
+        default=None, description="Generated SRPM used to choose a supported build architecture"
     )
     jira_issue: str | None = Field(default=None, description="Jira issue key, for logging only")
 
@@ -557,6 +589,15 @@ class KonfluxBuildTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
     ) -> BuildPackageToolOutput:
         config = _load_config()
         client = KonfluxClient(config, config.namespace)
+
+        build_architecture = BUILD_ARCH_PREFERENCE[0]
+        if tool_input.srpm_path is not None:
+            with tool_error_context(
+                "Failed to choose a Konflux build architecture",
+                srpm_path=tool_input.srpm_path,
+            ):
+                build_architecture = await asyncio.to_thread(_select_build_architecture, tool_input.srpm_path)
+        logger.info("Konflux build architecture for %s: %s", tool_input.package_name, build_architecture)
 
         pipeline_revision = await _resolve_pipeline_revision(config.pipeline_url)
 
@@ -589,6 +630,7 @@ class KonfluxBuildTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 revision=tool_input.revision,
                 target_branch=build_target_branch,
                 specfile=tool_input.specfile,
+                build_architecture=build_architecture,
                 ocistorage=ocistorage,
                 pipeline_revision=pipeline_revision,
                 secret_name=secret_name,

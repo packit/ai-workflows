@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from specfile import Specfile
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import run_build
+from ymir.agents.build_agent import is_konflux_backend, run_build
 from ymir.agents.constants import (
     I_AM_YMIR,
     ZSTREAM_TARGET_LABEL,
@@ -887,7 +887,7 @@ async def run_workflow(
                 return "resume_inherited_publication"
             if dry_run:
                 logger.info(f"Dry run: skipping Jira status change of {state.jira_issue} to In Progress")
-                return "close_stale_merge_requests"
+                return "fork_and_prepare_dist_git"
             # tasks.change_jira_status further gates the write on
             # JIRA_ALLOW_STATUS_CHANGES; nothing else to check here.
             try:
@@ -898,27 +898,6 @@ async def run_workflow(
                 )
             except Exception as status_error:
                 logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
-            return "close_stale_merge_requests"
-
-        async def close_stale_merge_requests(state):
-            # A rerun re-pushes the update branch; a lingering open MR would
-            # re-trigger GitLab CI (scratch builds) on every push and waste
-            # resources. Close it first so only the rerun's fresh MR runs CI.
-            # The inherited-publication resume path skips this step (it reuses
-            # its own MR). MR writes are suppressed under dry-run.
-            if not dry_run:
-                try:
-                    closed = await tasks.close_stale_update_merge_requests(
-                        jira_issue=state.jira_issue,
-                        package=state.package,
-                        dist_git_branch=state.dist_git_branch,
-                        available_tools=gateway_tools,
-                        dist_git_namespace=state.dist_git_namespace,
-                    )
-                    if closed:
-                        logger.info("Closed %d stale MR(s) for %s: %s", len(closed), state.jira_issue, closed)
-                except Exception as e:
-                    logger.warning("Failed to close stale MRs for %s: %s", state.jira_issue, e)
             return "fork_and_prepare_dist_git"
 
         async def resume_inherited_publication(state):
@@ -1495,32 +1474,46 @@ async def run_workflow(
                 return "comment_in_jira"
 
         async def validate_inherited_build(state):
-            """Validate the pushed inherited commit before opening the MR.
+            """Validate the inherited commit before publishing the MR branch.
 
-            Unified across backends: the inherited commit is already staged,
-            committed and pushed, so Copr builds the generated SRPM while Konflux
-            builds the pushed git ref -- run_build dispatches on BUILD_BACKEND. A
+            The inherited commit is already local. Copr builds the generated
+            SRPM while Konflux builds a temporary pushed ref. A
             green build opens the MR; repeated failures fall back to a normal
             backport.
             """
-            build_result = await run_build(
-                build_input=BuildInputSchema(
-                    srpm_path=state.backport_result.srpm_path,
-                    dist_git_branch=state.dist_git_branch,
-                    jira_issue=state.jira_issue,
-                    git_url=state.fork_url,
-                    revision=state.inherit_local_commit,
-                    package_name=state.package,
-                    target_branch=state.dist_git_branch,
-                    specfile=state.spec_name,
-                ),
-                available_tools=gateway_tools,
-                local_tool_options=local_tool_options,
+            build_input = BuildInputSchema(
+                srpm_path=state.backport_result.srpm_path,
+                dist_git_branch=state.dist_git_branch,
+                jira_issue=state.jira_issue,
+                git_url=state.fork_url,
+                revision=state.inherit_local_commit,
+                package_name=state.package,
+                target_branch=state.dist_git_branch,
+                specfile=state.spec_name,
             )
+            if is_konflux_backend():
+                async with tasks.scratch_build_branch(
+                    state.local_clone,
+                    state.fork_url,
+                    state.update_branch,
+                    state.inherit_local_commit,
+                    gateway_tools,
+                ):
+                    build_result = await run_build(
+                        build_input=build_input,
+                        available_tools=gateway_tools,
+                        local_tool_options=local_tool_options,
+                    )
+            else:
+                build_result = await run_build(
+                    build_input=build_input,
+                    available_tools=gateway_tools,
+                    local_tool_options=local_tool_options,
+                )
             if build_result.success or build_result.is_timeout:
                 if dry_run:
                     return "submit_consolidation_job"
-                return "open_inherited_mr"
+                return "push_inherited_change"
 
             state.inherit_build_attempts -= 1
             if state.inherit_build_attempts > 0:
@@ -1730,10 +1723,7 @@ async def run_workflow(
                     return handle_inherit_cleanup_failure(state)
                 _disable_ystream_inheritance(state, task_metadata)
                 return "prepare_normal_backport"
-            # Both backends push the inherited commit before validating the
-            # build: Konflux builds from the pushed ref and Copr follows the same
-            # path. Even in dry-run the push happens; only the MR is skipped later.
-            return "push_inherited_change"
+            return "validate_inherited_build"
 
         async def push_inherited_change(state):
             state.retry_mode = BackportRetryMode.RESUME_INHERITED_MR
@@ -1771,7 +1761,7 @@ async def run_workflow(
                         f"{reconcile_error}"
                     )
                     return "comment_in_jira"
-            return "validate_inherited_build"
+            return "open_inherited_mr"
 
         async def open_inherited_mr(state):
             try:
@@ -1867,10 +1857,10 @@ async def run_workflow(
             return "submit_consolidation_job"
 
         async def commit_push_and_build(state):
-            """Commit, push and build the backport, then open the MR on success.
+            """Build the backport, then push and open the MR on success.
 
             The single build step for non-modular issues on both backends: the
-            fork branch is pushed first so Konflux can build the ref, while Copr
+            scratch branch is pushed first so Konflux can build the ref, while Copr
             builds the generated SRPM (run_build dispatches on BUILD_BACKEND and
             ignores the ref fields). The MR is opened only after a green build; a
             failed build loops back to fix_build_error (cherry-pick) or restarts
@@ -1890,48 +1880,63 @@ async def run_workflow(
                 # Collapse every build/fix cycle (and any cherry-pick commits the
                 # backport agent left) into one commit: soft-reset to the pristine
                 # base so the staged tree commits as a single backport commit.
-                # Force-push then overwrites the previous cycle's ref.
+                # The final push happens only after the build validates.
                 if state.backport_base_head:
                     await check_subprocess(
                         ["git", "reset", "--soft", state.backport_base_head],
                         cwd=state.local_clone,
                     )
                 revision = await tasks.commit_changes(state.local_clone, commit_message)
-                await tasks.push_changes(
-                    state.local_clone, state.fork_url, state.update_branch, gateway_tools
-                )
             except Exception as e:
-                logger.warning(f"Error committing/pushing before build: {e}")
+                logger.warning(f"Error committing before build: {e}")
                 state.merge_request_url = None
                 state.backport_result.success = False
-                state.backport_result.error = f"Could not commit and push for build: {e}"
+                state.backport_result.error = f"Could not commit for build: {e}"
                 return "comment_in_jira"
 
-            build_result = await run_build(
-                build_input=BuildInputSchema(
-                    srpm_path=state.backport_result.srpm_path,
-                    dist_git_branch=state.dist_git_branch,
-                    jira_issue=state.jira_issue,
-                    git_url=state.fork_url,
-                    revision=revision,
-                    package_name=state.package,
-                    target_branch=state.dist_git_branch,
-                    specfile=state.spec_name,
-                ),
-                available_tools=gateway_tools,
-                local_tool_options=local_tool_options,
+            build_input = BuildInputSchema(
+                srpm_path=state.backport_result.srpm_path,
+                dist_git_branch=state.dist_git_branch,
+                jira_issue=state.jira_issue,
+                git_url=state.fork_url,
+                revision=revision,
+                package_name=state.package,
+                target_branch=state.dist_git_branch,
+                specfile=state.spec_name,
             )
+            if is_konflux_backend():
+                try:
+                    async with tasks.scratch_build_branch(
+                        state.local_clone, state.fork_url, state.update_branch, revision, gateway_tools
+                    ):
+                        build_result = await run_build(
+                            build_input=build_input,
+                            available_tools=gateway_tools,
+                            local_tool_options=local_tool_options,
+                        )
+                except Exception as error:
+                    logger.warning("Could not validate Konflux scratch ref: %s", error)
+                    state.backport_result.success = False
+                    state.backport_result.error = f"Could not validate build ref: {error}"
+                    return "comment_in_jira"
+            else:
+                build_result = await run_build(
+                    build_input=build_input,
+                    available_tools=gateway_tools,
+                    local_tool_options=local_tool_options,
+                )
             if build_result.success or build_result.is_timeout:
                 if build_result.is_timeout:
                     logger.info(f"Build timed out for {state.jira_issue}, proceeding")
                 state.incremental_fix_attempts = 0
                 if dry_run:
-                    # The branch was pushed so the build could run; skip MR
-                    # creation in dry-run.
                     state.merge_request_url = None
                     state.merge_request_newly_created = False
                     return "submit_consolidation_job"
                 try:
+                    await tasks.push_changes(
+                        state.local_clone, state.fork_url, state.update_branch, gateway_tools
+                    )
                     (
                         state.merge_request_url,
                         state.merge_request_newly_created,
@@ -2070,7 +2075,6 @@ async def run_workflow(
             return Workflow.END
 
         workflow.add_step("change_jira_status", change_jira_status)
-        workflow.add_step("close_stale_merge_requests", close_stale_merge_requests)
         workflow.add_step("resume_inherited_publication", resume_inherited_publication)
         workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
         workflow.add_step("prepare_normal_backport", prepare_normal_backport)

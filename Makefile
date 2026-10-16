@@ -106,8 +106,8 @@ run-backport-agent-konflux-e2e-tests:
 	# Konflux build backend variant of the backport e2e. Unlike Copr (which
 	# builds from a local SRPM), Konflux builds from a real pushed fork ref:
 	# even under DRY_RUN the workflow creates the fork under FORK_NAMESPACE,
-	# pushes the backport branch (carrying the fixture's pre-fix history), and
-	# submits a real Konflux build; only the MR/Jira writes stay suppressed.
+	# pushes a temporary build branch, and submits a real Konflux build. It
+	# deletes the temporary branch after validation and skips MR/Jira writes.
 	# The dist-git SOURCE stays mocked (local bare clones via insteadOf).
 	# Requires FORK_NAMESPACE + GITLAB_TOKEN + KONFLUX_* in the environment /
 	# .secrets/mcp-gateway.env and a reachable Konflux cluster.

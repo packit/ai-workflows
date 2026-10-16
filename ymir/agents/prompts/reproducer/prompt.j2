@@ -16,6 +16,19 @@ Triage context (from the triage agent):
 {% endif %}
 Fix version: {{ fix_version }}. Target branch: {{ target_branch }}.
 {% if dry_run %}Dry run mode is enabled — do NOT create merge requests.{% endif %}
+{% if fmf_config %}
+Package-specific FMF metadata from `ymir.yaml`:
+```json
+{{ fmf_config | tojson(indent=2) }}
+```
+Apply these values when creating or adapting `main.fmf`. Merge them with the
+default metadata: additional `require`, `recommend`, and `tag` values should
+extend and deduplicate the defaults, `environment` values should merge with
+configured values taking precedence, and configured scalar values should
+override the defaults. Do not change the test link, framework, or test
+entrypoint unless the configuration explicitly contains a supported value for
+that field.
+{% endif %}
 
 **Critical Rules**
 

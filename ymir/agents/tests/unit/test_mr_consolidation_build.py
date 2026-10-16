@@ -14,7 +14,7 @@ from mcp.types import CallToolResult, TextContent
 from mcp.types import Tool as MCPToolInfo
 
 from ymir.agents import mr_consolidation_agent
-from ymir.common.models import MRConsolidationOutputSchema
+from ymir.common.models import BuildOutputSchema, MRConsolidationOutputSchema
 
 
 @pytest.mark.parametrize(
@@ -169,6 +169,7 @@ async def test_build_project_identifier_preserves_jira_metadata(
     assert state.jira_issue == jira_issue
     assert state.jira_issues_collected == ([jira_issue] if jira_issue else [])
     assert state.attempts_remaining == 3 - int(retry_first)
+    assert state.build_verified is True
 
 
 @pytest.mark.parametrize("release_strategy,index_clean", [("per_commit", True), ("merged", False)])
@@ -226,9 +227,13 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(
     flexmock(mr_consolidation_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
     flexmock(mr_consolidation_agent).should_receive("create_log_agent").and_return(flexmock())
     flexmock(mr_consolidation_agent).should_receive("get_mock_local_tool_env").and_return(None)
-    flexmock(mr_consolidation_agent).should_receive("_files_to_stage_for_patches").and_return(
-        ["package.spec"]
-    )
+    staged_spec_args = []
+
+    def _mock_files_to_stage(local_clone, spec_name):
+        staged_spec_args.append((local_clone, spec_name))
+        return [spec_name]
+
+    monkeypatch.setattr(mr_consolidation_agent, "_files_to_stage_for_patches", _mock_files_to_stage)
     monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
 
     async def _mock_stage_changes(*_args, **_kwargs):
@@ -296,6 +301,8 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(
     )
 
     assert len(completed) == 1, "Build validation did not reach its success route"
+    assert staged_spec_args == [(Path("/git-repos/package"), "renamed.spec")]
+    assert state.build_verified is True
 
     # The fork branch is pushed (force) before the build is submitted.
     assert len(push_calls) == 1
@@ -323,3 +330,76 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(
         "specfile": "renamed.spec",
     }
     assert state.jira_issue == "RHEL-12345"
+
+
+@pytest.mark.parametrize("failure_kind", ["build_failed", "build_error", "missing_srpm", "prepare_error"])
+@pytest.mark.asyncio
+async def test_terminal_build_failure_is_reported(monkeypatch, failure_kind):
+    monkeypatch.setenv("BUILD_BACKEND", "konflux" if failure_kind == "prepare_error" else "copr")
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+
+    @contextlib.asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    flexmock(mr_consolidation_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(mr_consolidation_agent).should_receive("create_log_agent").and_return(flexmock())
+    flexmock(mr_consolidation_agent).should_receive("get_mock_local_tool_env").and_return(None)
+
+    build_calls = []
+
+    async def _mock_run_build(**kwargs):
+        build_calls.append(kwargs)
+        if failure_kind == "build_error":
+            raise RuntimeError("Build service unavailable")
+        return BuildOutputSchema(success=False, error="Package build failed")
+
+    flexmock(mr_consolidation_agent).should_receive("run_build").replace_with(_mock_run_build)
+    if failure_kind == "prepare_error":
+
+        def _mock_files_to_stage(*_args):
+            raise FileNotFoundError("Missing package.spec")
+
+        flexmock(mr_consolidation_agent).should_receive("_files_to_stage_for_patches").replace_with(
+            _mock_files_to_stage
+        )
+
+    run_workflow = Workflow.run
+
+    def start_at_build(workflow, state, options=None):
+        if workflow.name == "MRConsolidationWorkflow":
+            state.local_clone = Path("/git-repos/package")
+            state.spec_name = "package.spec"
+            state.consolidation_result = MRConsolidationOutputSchema(
+                success=True,
+                status="Consolidated patches",
+                srpm_path=(
+                    None if failure_kind == "missing_srpm" else Path("/git-repos/package/package-1-1.src.rpm")
+                ),
+            )
+            workflow.set_start("run_build_agent")
+        return run_workflow(workflow, state, options)
+
+    monkeypatch.setattr(Workflow, "run", start_at_build)
+
+    state = await mr_consolidation_agent.run_workflow(
+        package="package",
+        dist_git_branch="c10s",
+        dry_run=True,
+        max_build_attempts=1,
+        consolidation_agent_factory=lambda *_args, **_kwargs: SimpleNamespace(),
+    )
+
+    assert len(build_calls) == (0 if failure_kind in {"missing_srpm", "prepare_error"} else 1)
+    assert state.consolidation_result.success is False
+    assert state.consolidation_result.status == "Build verification failed"
+    assert (
+        state.consolidation_result.error
+        == {
+            "build_failed": "Package build failed",
+            "build_error": "Build service unavailable",
+            "missing_srpm": "No SRPM generated by consolidation agent",
+            "prepare_error": "Missing package.spec",
+        }[failure_kind]
+    )
+    assert state.build_verified is False

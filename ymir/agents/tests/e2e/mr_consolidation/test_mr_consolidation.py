@@ -335,6 +335,8 @@ def test_consolidation_succeeded(test_case: ConsolidationTestCase):
         f"got success={state.consolidation_result.success}, "
         f"error={state.consolidation_result.error}"
     )
+    if expected_success:
+        assert state.build_verified, f"{test_case.name}: consolidation build was not verified"
 
 
 @pytest.mark.parametrize("test_case", test_cases, ids=[tc.name for tc in test_cases])

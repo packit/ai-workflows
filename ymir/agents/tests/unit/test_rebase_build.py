@@ -1,7 +1,7 @@
 """Konflux build path for the rebase agent.
 
-Under the Konflux backend the rebase build step must push the Ymir-owned fork
-update branch and hand the build tool git_url/revision/package_name/target_branch
+Under the Konflux backend the rebase build step must push a temporary fork
+branch and hand the build tool git_url/revision/package_name/target_branch
 (a git ref) rather than only an SRPM. When a pristine base is known it first
 soft-resets so the provisional build commit stays collapsible into one MR commit.
 """
@@ -92,6 +92,13 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(monkeypatch, 
     monkeypatch.setattr(rebase_agent.tasks, "commit_changes", _mock_commit_changes)
     monkeypatch.setattr(rebase_agent.tasks, "push_changes", _mock_push_changes)
 
+    delete_calls = []
+
+    async def _mock_delete_remote_branch(*args, **_kwargs):
+        delete_calls.append(args)
+
+    monkeypatch.setattr(rebase_agent.tasks, "delete_remote_branch", _mock_delete_remote_branch)
+
     check_calls = []
 
     async def _mock_check_subprocess(cmd, *_args, **_kwargs):
@@ -99,6 +106,7 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(monkeypatch, 
         return ("", "")
 
     monkeypatch.setattr(rebase_agent, "check_subprocess", _mock_check_subprocess)
+    monkeypatch.setattr(rebase_agent.tasks, "check_subprocess", _mock_check_subprocess)
 
     run_workflow = Workflow.run
     completed = []
@@ -139,11 +147,14 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(monkeypatch, 
 
     assert len(completed) == 1, "Build validation did not reach its success route"
 
-    # The Ymir-owned fork update branch is pushed before the build is submitted.
+    # A temporary branch is pushed before the build and deleted afterwards.
     assert len(push_calls) == 1
     _local, pushed_fork, pushed_branch, _tools = push_calls[0]
     assert pushed_fork == fork_url
-    assert pushed_branch == update_branch
+    assert pushed_branch.startswith(f"{update_branch}-ymir-konflux-build-")
+    assert delete_calls[0][2] == pushed_branch
+    assert ["git", "branch", "-f", pushed_branch, revision] in check_calls
+    assert ["git", "branch", "-D", pushed_branch] in check_calls
 
     # The pristine base is soft-reset only when known.
     soft_resets = [c for c in check_calls if c[:3] == ["git", "reset", "--soft"]]

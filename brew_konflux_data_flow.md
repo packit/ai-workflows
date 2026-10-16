@@ -243,16 +243,17 @@ principal = await init_kerberos_ticket()
 
 ### Konflux
 
-**Agent build validation (`BUILD_BACKEND=konflux`):** After the agent pushes a
-candidate commit to its fork, `build_package` in the privileged MCP gateway
-creates a short-lived GitLab clone Secret and a scratch Tekton PipelineRun in
-`ymir-tenant` on `kflux-rhel-p01`. The gateway uses the `konflux-bot-0` bearer
-token, polls build status, and reads task/pod logs on failure. If a live result
+**Agent build validation (`BUILD_BACKEND=konflux`):** The agent pushes a
+candidate commit to a temporary branch on its fork. `build_package` in the
+privileged MCP gateway creates a short-lived GitLab clone Secret and a scratch
+Tekton PipelineRun in `ymir-tenant` on `kflux-rhel-p01`. The gateway uses the
+`konflux-bot-0` bearer token, polls build status, and reads task/pod logs on failure. If a live result
 has been garbage-collected, it reads the optional KubeArchive API with the
 same token. The gateway resolves the RPM pipeline repository's `main` branch
 to a SHA for each run; Konflux executes that pinned pipeline definition. A
 successful status lets the agent proceed, while failed logs can be analyzed
-for a diagnosis. See [Konflux backend](docs/konflux-backend.md) for deployment
+for a diagnosis. The agent deletes the temporary branch when validation ends.
+See [Konflux backend](docs/konflux-backend.md) for deployment
 configuration and [the threat model](THREAT_MODEL.md) for trust boundaries.
 
 **MR draft/release builds:** GitLab CI authenticates separately and triggers

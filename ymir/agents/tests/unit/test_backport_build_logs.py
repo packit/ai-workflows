@@ -220,7 +220,7 @@ async def test_build_repair_logs_stay_out_of_git_and_respect_fix_budget(
     )
     flexmock(backport_agent).should_receive("run_build").replace_with(staged_build)
 
-    # The single build step commits + pushes before building; keep those out of
+    # The single build step commits before building; keep those out of
     # the real checkout so the Git assertions below see only the repair patch.
     async def _commit(_clone, _message, *a, **k):
         return "a" * 40

@@ -220,10 +220,11 @@ rule, or tool-result contents.
 ## Dry run mode
 
 `DRY_RUN=true` suppresses Jira writes and merge request creation. Builds still run.
-It does **not** make Git operations read-only: backport commits and pushes its
-fork branch before building with either Copr or Konflux; Konflux rebase, MR
-update, and MR consolidation push build candidates. Preparing a checkout can
-also create a GitLab fork or a missing internal Z-stream branch.
+It does **not** make Git operations read-only: Konflux validation pushes a
+temporary scratch branch to the fork and deletes it when the build finishes.
+The live MR branch is pushed only after a successful build outside dry-run.
+Copr validates its local SRPM without pushing a build candidate. Preparing a
+checkout can also create a GitLab fork or a missing internal Z-stream branch.
 
 For local testing, use `DRY_RUN=true` to avoid Jira and MR writes, and use mock
 repositories and a disposable `FORK_NAMESPACE` when you need to avoid changes to

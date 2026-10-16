@@ -797,15 +797,13 @@ async def run_workflow(
             """Build the BuildInputSchema for the Konflux backend.
 
             Konflux builds a pushed git ref rather than a local SRPM, so the
-            consolidated work must be committed on the working branch and
-            pushed to the fork before the build. The per_commit and
+            consolidated work must be committed locally and pushed to a
+            temporary fork branch before the build. The per_commit and
             rebuild_append flows already commit their work; the merged flow
             leaves changes in the working tree, so make a provisional commit
             here -- commit_push_and_open_mr later squashes every commit ahead
             of the target branch into the final message, so the extra commit
-            is harmless. Mirrors the backport agent's push-then-build-the-ref
-            flow; like that flow, Konflux pushes the fork branch even under
-            dry_run (only the MR/Jira writes stay suppressed).
+            is harmless. The live MR branch is pushed only after validation.
             """
             git_env = local_tool_options.get("env")
             # The per_commit and rebuild_append flows already committed their
@@ -835,14 +833,6 @@ async def run_workflow(
                     cwd=state.local_clone,
                     env=git_env,
                 )
-            await run_tool(
-                "push_to_remote_repository",
-                repository=state.fork_url,
-                clone_path=str(state.local_clone),
-                branch=state.update_branch,
-                force=True,
-                available_tools=gateway_tools,
-            )
             _, revision, _ = await run_subprocess(
                 ["git", "rev-parse", "HEAD"],
                 cwd=state.local_clone,
@@ -897,11 +887,26 @@ async def run_workflow(
                         # Keep the fallback out of the workflow's Jira metadata.
                         jira_issue=state.jira_issue or _build_project_name(package, dist_git_branch),
                     )
-                build_output = await run_build(
-                    build_input=build_input,
-                    available_tools=gateway_tools,
-                    local_tool_options=local_tool_options,
-                )
+                if is_konflux_backend():
+                    async with tasks.scratch_build_branch(
+                        state.local_clone,
+                        state.fork_url,
+                        state.update_branch,
+                        build_input.revision,
+                        gateway_tools,
+                        env=local_tool_options.get("env"),
+                    ):
+                        build_output = await run_build(
+                            build_input=build_input,
+                            available_tools=gateway_tools,
+                            local_tool_options=local_tool_options,
+                        )
+                else:
+                    build_output = await run_build(
+                        build_input=build_input,
+                        available_tools=gateway_tools,
+                        local_tool_options=local_tool_options,
+                    )
                 if not build_output.success:
                     state.build_error = build_output.error or "Package build failed without details"
                     state.attempts_remaining -= 1

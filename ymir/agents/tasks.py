@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unicodedata
 from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -628,6 +629,43 @@ async def delete_remote_branch(
     )
 
 
+@asynccontextmanager
+async def scratch_build_branch(
+    local_clone: Path,
+    fork_url: str,
+    update_branch: str,
+    revision: str,
+    available_tools: list[Tool],
+    env: dict[str, str] | None = None,
+):
+    """Publish a build candidate without changing the live MR source branch.
+
+    Keep the ref until the build call finishes, then delete both copies. A push
+    error may have occurred after the remote accepted the ref, so attempt remote
+    cleanup in that case too.
+    """
+    branch = f"{update_branch}-ymir-konflux-build-{uuid4().hex}"
+    created = False
+    push_attempted = False
+    try:
+        await check_subprocess(["git", "branch", "-f", branch, revision], cwd=local_clone, env=env)
+        created = True
+        push_attempted = True
+        await push_changes(local_clone, fork_url, branch, available_tools)
+        yield branch
+    finally:
+        if push_attempted:
+            try:
+                await delete_remote_branch(local_clone, fork_url, branch, available_tools)
+            except Exception as error:
+                logger.warning("Could not delete Konflux scratch branch %s: %s", branch, error)
+        if created:
+            try:
+                await check_subprocess(["git", "branch", "-D", branch], cwd=local_clone, env=env)
+            except Exception as error:
+                logger.warning("Could not delete local Konflux scratch branch %s: %s", branch, error)
+
+
 async def request_mr_reviews(
     package: str,
     dist_git_branch: str,
@@ -770,56 +808,6 @@ async def open_update_merge_request(
     if mr.url and mr.is_new_mr and package:
         await request_mr_reviews(package, dist_git_branch, mr.url, available_tools)
     return mr.url, mr.is_new_mr
-
-
-async def close_stale_update_merge_requests(
-    jira_issue: str,
-    package: str,
-    dist_git_branch: str,
-    available_tools: list[Tool],
-    dist_git_namespace: str | None = None,
-) -> list[str]:
-    """Close any still-open update MR for *jira_issue* before a rerun re-pushes.
-
-    A rerun force-pushes the update branch; a lingering open MR would re-trigger
-    GitLab CI (scratch builds) on every push and waste resources. Closing it
-    first means only the rerun's eventual fresh MR runs CI. Scoped to the bot's
-    own update branch (``{BRANCH_PREFIX}-<issue>``) so human MRs are never
-    touched. Returns the URLs of the MRs that were closed.
-    """
-    namespace = resolve_dist_git_namespace(dist_git_branch, dist_git_namespace)
-    project = f"redhat/{namespace}/rpms/{package}"
-    update_branch = f"{BRANCH_PREFIX}-{jira_issue}"
-    try:
-        mrs = await run_tool(
-            "list_project_merge_requests",
-            project=project,
-            state="opened",
-            target_branch=dist_git_branch,
-            available_tools=available_tools,
-        )
-    except Exception as e:
-        logger.warning("Could not list open MRs for %s in %s: %s", jira_issue, project, e)
-        return []
-
-    closed: list[str] = []
-    for mr in mrs or []:
-        if mr.get("source_branch") != update_branch:
-            continue
-        url = mr.get("url")
-        if not url:
-            continue
-        try:
-            await run_tool(
-                "close_merge_request",
-                merge_request_url=url,
-                available_tools=available_tools,
-            )
-            closed.append(url)
-            logger.info("Closed stale MR %s for %s before rerun", url, jira_issue)
-        except Exception as e:
-            logger.warning("Failed to close stale MR %s for %s: %s", url, jira_issue, e)
-    return closed
 
 
 async def comment_in_jira(

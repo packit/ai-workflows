@@ -177,7 +177,7 @@ async def test_build_project_identifier_preserves_jira_metadata(
 async def test_konflux_build_pushes_ref_and_populates_build_fields(
     monkeypatch, release_strategy, index_clean
 ):
-    """Under the Konflux backend the consolidation build must push the fork
+    """Under the Konflux backend the consolidation build must push a temporary
     branch and hand the build tool git_url/revision/package_name/target_branch,
     not an SRPM. The merged flow (index not clean) also makes a provisional
     commit before pushing."""
@@ -248,6 +248,7 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(
         return (0, "", "")
 
     monkeypatch.setattr(mr_consolidation_agent, "check_subprocess", _mock_check_subprocess)
+    monkeypatch.setattr(mr_consolidation_agent.tasks, "check_subprocess", _mock_check_subprocess)
 
     async def _mock_run_subprocess(cmd, *_args, **_kwargs):
         if cmd[:4] == ["git", "diff", "--cached", "--quiet"]:
@@ -259,12 +260,16 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(
     monkeypatch.setattr(mr_consolidation_agent, "run_subprocess", _mock_run_subprocess)
 
     push_calls = []
+    delete_calls = []
 
-    async def _mock_run_tool(tool_name, *_args, **_kwargs):
-        push_calls.append((tool_name, _kwargs))
-        return
+    async def _mock_push(*args):
+        push_calls.append(args)
 
-    monkeypatch.setattr(mr_consolidation_agent, "run_tool", _mock_run_tool)
+    async def _mock_delete(*args):
+        delete_calls.append(args)
+
+    monkeypatch.setattr(mr_consolidation_agent.tasks, "push_changes", _mock_push)
+    monkeypatch.setattr(mr_consolidation_agent.tasks, "delete_remote_branch", _mock_delete)
 
     run_workflow = Workflow.run
     completed = []
@@ -304,13 +309,14 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(
     assert staged_spec_args == [(Path("/git-repos/package"), "renamed.spec")]
     assert state.build_verified is True
 
-    # The fork branch is pushed (force) before the build is submitted.
+    # The scratch ref is pushed for the build and deleted afterwards.
     assert len(push_calls) == 1
-    push_name, push_kwargs = push_calls[0]
-    assert push_name == "push_to_remote_repository"
-    assert push_kwargs["repository"] == fork_url
-    assert push_kwargs["branch"] == update_branch
-    assert push_kwargs["force"] is True
+    pushed_branch = push_calls[0][2]
+    assert push_calls[0][1] == fork_url
+    assert pushed_branch.startswith(f"{update_branch}-ymir-konflux-build-")
+    assert delete_calls[0][2] == pushed_branch
+    assert ["git", "branch", "-f", pushed_branch, revision] in commit_calls
+    assert ["git", "branch", "-D", pushed_branch] in commit_calls
 
     # merged flow (index not clean) makes a provisional commit; per_commit does not.
     git_commits = [c for c in commit_calls if c[:2] == ["git", "commit"]]

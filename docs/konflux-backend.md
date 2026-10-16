@@ -21,6 +21,12 @@ The namespace / service account / image repo defaults are baked into
 
 ## Build lifecycle
 
+Rebase, backport, inherited backport, MR update, and MR consolidation builds
+use a temporary branch on the package fork. The branch is deleted after the
+build returns, including on failure. A validated change is pushed to the live
+MR branch only during publication. Reruns reuse an existing open MR for that
+branch instead of closing it before validation.
+
 For agent validation, the gateway reads `ExclusiveArch` and `ExcludeArch` from
 the generated SRPM and requests one compatible Konflux build architecture. It
 prefers `x86_64`, then `ppc64le`, `s390x`, and `aarch64`. If none is compatible,

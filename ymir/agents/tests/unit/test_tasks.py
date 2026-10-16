@@ -1,3 +1,4 @@
+import subprocess
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -17,7 +18,6 @@ from ymir.agents.tasks import (
     _validate_generated_title,
     canonical_title_mentions_components,
     change_jira_status,
-    close_stale_update_merge_requests,
     commit_changes,
     commit_push_and_open_mr,
     delete_remote_branch,
@@ -33,6 +33,7 @@ from ymir.agents.tasks import (
     request_mr_qe_reviews,
     resolve_canonical_mr_title,
     resolve_current_canonical_mr_title,
+    scratch_build_branch,
 )
 from ymir.common.models import CachedMRMetadata, Task
 from ymir.tools.privileged.utils import ACTIVE_WORKSPACE_MARKER
@@ -1322,6 +1323,94 @@ async def test_delete_remote_branch_uses_authenticated_push_tool(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_point", [None, "push", "build"])
+async def test_scratch_build_branch_cleans_up_after_failure(tmp_path, monkeypatch, failure_point):
+    calls = []
+
+    async def git(command, **kwargs):
+        calls.append(command)
+        return ("", "")
+
+    async def push(*args):
+        calls.append(("push", args[2]))
+        if failure_point == "push":
+            raise RuntimeError("push failed")
+
+    async def delete(*args):
+        calls.append(("delete", args[2]))
+
+    monkeypatch.setattr(agent_tasks, "check_subprocess", git)
+    monkeypatch.setattr(agent_tasks, "push_changes", push)
+    monkeypatch.setattr(agent_tasks, "delete_remote_branch", delete)
+
+    if failure_point:
+        with pytest.raises(RuntimeError, match=f"{failure_point} failed"):
+            async with scratch_build_branch(tmp_path, "https://fork.invalid/repo", "ymir-123", "abc", []):
+                assert failure_point == "build"
+                calls.append("build")
+                raise RuntimeError("build failed")
+    else:
+        async with scratch_build_branch(
+            tmp_path, "https://fork.invalid/repo", "ymir-123", "abc", []
+        ) as branch:
+            assert branch.startswith("ymir-123-ymir-konflux-build-")
+            calls.append("build")
+
+    branch = calls[0][3]
+    assert calls == [
+        ["git", "branch", "-f", branch, "abc"],
+        ("push", branch),
+        *([] if failure_point == "push" else ["build"]),
+        ("delete", branch),
+        ["git", "branch", "-D", branch],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scratch_build_branch_preserves_live_remote_ref(tmp_path):
+    repo = tmp_path / "repo"
+    remote = tmp_path / "remote.git"
+    repo.mkdir()
+
+    def git(*args, cwd=repo):
+        return subprocess.run(
+            ["git", *map(str, args)], cwd=cwd, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    git("init", "--bare", remote, cwd=tmp_path)
+    git("init", repo, cwd=tmp_path)
+    git("config", "user.name", "Ymir Tests")
+    git("config", "user.email", "ymir-tests@example.com")
+    (repo / "package.spec").write_text("Release: 1\n")
+    git("add", "package.spec")
+    git("commit", "-m", "Base")
+    base = git("rev-parse", "HEAD")
+    git("branch", "ymir-123")
+    git("push", remote, "ymir-123")
+    (repo / "package.spec").write_text("Release: 2\n")
+    git("commit", "-am", "Candidate")
+    candidate = git("rev-parse", "HEAD")
+
+    async def push_tool(name, **kwargs):
+        assert name == "push_to_remote_repository"
+        git("push", kwargs["repository"], kwargs["branch"])
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(push_tool).twice()
+
+    def remote_head(branch):
+        output = git("ls-remote", "--heads", remote, branch)
+        return output.split()[0] if output else None
+
+    async with scratch_build_branch(repo, str(remote), "ymir-123", candidate, []) as scratch:
+        assert remote_head(scratch) == candidate
+        assert remote_head("ymir-123") == base
+
+    assert remote_head(scratch) is None
+    assert remote_head("ymir-123") == base
+    assert not git("branch", "--list", scratch)
+
+
+@pytest.mark.asyncio
 async def test_commit_push_and_open_mr_assigns_reviewers(tmp_path, monkeypatch):
     monkeypatch.setenv("ASSIGN_MR_REVIEWERS", "true")
     tool_calls = []
@@ -1806,103 +1895,3 @@ async def test_fetch_release_bumping_config_returns_default_when_no_release_bump
     assert config.abandon_autorelease is False
     assert config.treat_maintenance_rhel_as_zstream is False
     assert config.disregard_zstream_nvr_policy is False
-
-
-# --------------------------------------------------------------------------- #
-# close_stale_update_merge_requests                                           #
-# --------------------------------------------------------------------------- #
-@pytest.mark.asyncio
-async def test_close_stale_update_merge_requests_closes_only_bot_branch():
-    from ymir.agents.constants import BRANCH_PREFIX
-
-    jira = "RHEL-12345"
-    update_branch = f"{BRANCH_PREFIX}-{jira}"
-    mrs = [
-        {
-            "url": "https://gitlab.com/redhat/rhel/rpms/expat/-/merge_requests/1",
-            "source_branch": update_branch,
-            "target_branch": "rhel-10.1",
-            "state": "opened",
-        },
-        {
-            "url": "https://gitlab.com/redhat/rhel/rpms/expat/-/merge_requests/2",
-            "source_branch": "a-human-feature-branch",
-            "target_branch": "rhel-10.1",
-            "state": "opened",
-        },
-    ]
-    closed: list[str] = []
-
-    async def fake_run_tool(tool, available_tools=None, **kwargs):
-        if tool == "list_project_merge_requests":
-            assert kwargs["project"] == "redhat/rhel/rpms/expat"
-            assert kwargs["state"] == "opened"
-            assert kwargs["target_branch"] == "rhel-10.1"
-            return mrs
-        if tool == "close_merge_request":
-            closed.append(kwargs["merge_request_url"])
-            return "ok"
-        raise AssertionError(f"unexpected tool {tool}")
-
-    flexmock(agent_tasks).should_receive("run_tool").replace_with(fake_run_tool)
-
-    result = await close_stale_update_merge_requests(
-        jira_issue=jira,
-        package="expat",
-        dist_git_branch="rhel-10.1",
-        available_tools=[],
-    )
-
-    assert result == ["https://gitlab.com/redhat/rhel/rpms/expat/-/merge_requests/1"]
-    assert closed == ["https://gitlab.com/redhat/rhel/rpms/expat/-/merge_requests/1"]
-
-
-@pytest.mark.asyncio
-async def test_close_stale_update_merge_requests_returns_empty_when_list_fails():
-    async def fake_run_tool(tool, available_tools=None, **kwargs):
-        if tool == "list_project_merge_requests":
-            raise RuntimeError("gitlab down")
-        raise AssertionError(f"close should not be attempted; got {tool}")
-
-    flexmock(agent_tasks).should_receive("run_tool").replace_with(fake_run_tool)
-
-    result = await close_stale_update_merge_requests(
-        jira_issue="RHEL-1",
-        package="expat",
-        dist_git_branch="rhel-10.1",
-        available_tools=[],
-    )
-    assert result == []
-
-
-@pytest.mark.asyncio
-async def test_close_stale_update_merge_requests_tolerates_close_failure():
-    from ymir.agents.constants import BRANCH_PREFIX
-
-    jira = "RHEL-7"
-    update_branch = f"{BRANCH_PREFIX}-{jira}"
-    mrs = [
-        {
-            "url": "https://gitlab.com/redhat/rhel/rpms/expat/-/merge_requests/9",
-            "source_branch": update_branch,
-            "target_branch": "rhel-10.1",
-            "state": "opened",
-        },
-    ]
-
-    async def fake_run_tool(tool, available_tools=None, **kwargs):
-        if tool == "list_project_merge_requests":
-            return mrs
-        if tool == "close_merge_request":
-            raise RuntimeError("permission denied")
-        raise AssertionError(f"unexpected tool {tool}")
-
-    flexmock(agent_tasks).should_receive("run_tool").replace_with(fake_run_tool)
-
-    result = await close_stale_update_merge_requests(
-        jira_issue=jira,
-        package="expat",
-        dist_git_branch="rhel-10.1",
-        available_tools=[],
-    )
-    assert result == []

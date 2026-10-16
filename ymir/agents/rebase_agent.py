@@ -370,31 +370,6 @@ async def run_workflow(
                 logger.info(
                     f"Using {len(state.consolidated_issues)} consolidated siblings from triage result"
                 )
-            return "close_stale_merge_requests"
-
-        async def close_stale_merge_requests(state):
-            # A rerun re-pushes the update branch; a lingering open MR would
-            # re-trigger GitLab CI (scratch builds) on every push and waste
-            # resources. Close it first so only the rerun's fresh MR runs CI.
-            # MR writes are suppressed under dry-run.
-            if not dry_run:
-                try:
-                    closed = await tasks.close_stale_update_merge_requests(
-                        jira_issue=state.jira_issue,
-                        package=state.package,
-                        dist_git_branch=state.dist_git_branch,
-                        available_tools=gateway_tools,
-                        dist_git_namespace=state.dist_git_namespace,
-                    )
-                    if closed:
-                        logger.info(
-                            "Closed %d stale MR(s) for %s: %s",
-                            len(closed),
-                            state.jira_issue,
-                            closed,
-                        )
-                except Exception as e:
-                    logger.warning("Failed to close stale MRs for %s: %s", state.jira_issue, e)
             return "fork_and_prepare_dist_git"
 
         async def fork_and_prepare_dist_git(state):
@@ -456,17 +431,15 @@ async def run_workflow(
             return "comment_in_jira"
 
         async def _prepare_konflux_rebase_ref(state) -> str:
-            """Commit and push the rebase tree so Konflux can build the ref.
+            """Commit the rebase tree so Konflux can build a scratch ref.
 
             Konflux builds a pushed git ref rather than the local SRPM, and
             the rebase agent leaves its work uncommitted until after the
-            build. Make a provisional commit here and push the Ymir-owned
-            fork branch. On a retry the previous attempt's provisional commit
-            is collapsed first via a soft reset to the pristine base; the
-            final commit_push_and_open_mr resets to the same base, so the MR
-            still lands as a single commit. Like the backport agent, Konflux
-            pushes the fork branch even under dry_run (only MR/Jira writes
-            stay suppressed).
+            build. Make a provisional commit here. On a retry the previous
+            attempt's provisional commit is collapsed via a soft reset to the
+            pristine base; final publication resets to the same base, so the MR
+            still lands as a single commit. The live branch is pushed only
+            after validation and only outside dry-run.
             """
             if state.rebase_base_head:
                 await check_subprocess(
@@ -478,12 +451,10 @@ async def run_workflow(
                 local_clone=state.local_clone,
                 files_to_commit=files_to_git_add,
             )
-            revision = await tasks.commit_changes(
+            return await tasks.commit_changes(
                 state.local_clone,
                 f"Rebase build candidate for {state.package} on {state.dist_git_branch}",
             )
-            await tasks.push_changes(state.local_clone, state.fork_url, state.update_branch, gateway_tools)
-            return revision
 
         async def run_build_agent(state):
             if is_konflux_backend():
@@ -504,11 +475,21 @@ async def run_workflow(
                     dist_git_branch=state.dist_git_branch,
                     jira_issue=state.jira_issue,
                 )
-            build_result = await run_build(
-                build_input=build_input,
-                available_tools=gateway_tools,
-                local_tool_options=local_tool_options,
-            )
+            if is_konflux_backend():
+                async with tasks.scratch_build_branch(
+                    state.local_clone, state.fork_url, state.update_branch, revision, gateway_tools
+                ):
+                    build_result = await run_build(
+                        build_input=build_input,
+                        available_tools=gateway_tools,
+                        local_tool_options=local_tool_options,
+                    )
+            else:
+                build_result = await run_build(
+                    build_input=build_input,
+                    available_tools=gateway_tools,
+                    local_tool_options=local_tool_options,
+                )
             if build_result.success:
                 return "update_release"
             if build_result.is_timeout:
@@ -749,7 +730,6 @@ async def run_workflow(
         workflow.add_step("check_if_sibling", check_if_sibling)
         workflow.add_step("change_jira_status", change_jira_status)
         workflow.add_step("find_consolidated_siblings", find_consolidated_siblings)
-        workflow.add_step("close_stale_merge_requests", close_stale_merge_requests)
         workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
         workflow.add_step("run_rebase_agent", run_rebase_agent)
         workflow.add_step("run_build_agent", run_build_agent)

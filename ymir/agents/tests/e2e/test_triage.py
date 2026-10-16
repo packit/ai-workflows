@@ -68,6 +68,19 @@ class TriageAgentTestCase:
 
 test_cases = [
     TriageAgentTestCase(
+        input="RHEL-278652",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.NOT_AFFECTED,
+            data=NotAffectedData(
+                package="butane",
+                jira_issue="RHEL-278652",
+                cve_id="CVE-2026-97031",
+                explanation="Server-side TLS vulnerability is not reachable from butane.",
+                justification_category="Vulnerable Code not in Execute Path",
+            ),
+        ),
+    ),
+    TriageAgentTestCase(
         input="RHEL-29712",
         expected_output=TriageOutputSchema(
             resolution=Resolution.BACKPORT,
@@ -406,3 +419,9 @@ def test_triage_agent(test_case: TriageAgentTestCase, observability_fixture):
         assert isinstance(real_output.data, NotAffectedData)
         assert real_output.data.explanation
         assert real_output.data.justification_category
+        if expected_output.data.justification_category:
+            assert real_output.data.justification_category == expected_output.data.justification_category
+        if expected_output.data.package:
+            assert real_output.data.package == expected_output.data.package
+        if expected_output.data.cve_id:
+            assert real_output.data.cve_id == expected_output.data.cve_id

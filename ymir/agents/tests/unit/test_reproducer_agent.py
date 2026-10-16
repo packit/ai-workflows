@@ -981,3 +981,71 @@ async def test_process_task_skips_when_reproducer_disabled(_mock_env_vars):
     flexmock(r_agent).should_receive("run_workflow").never()
     flexmock(r_agent).should_receive("try_acquire_reproducer_lock").never()
     await _run_process_task(_make_reproducer_payload())
+
+
+@pytest.mark.asyncio
+async def test_run_tmt_lint_passes(tmp_path, monkeypatch):
+    tests_clone = tmp_path / "tests-bind"
+    test_dir = tests_clone / "Regression" / "RHEL-1"
+    test_dir.mkdir(parents=True)
+    (test_dir / "main.fmf").write_text("summary: demo\ntest: ./runtest.sh\n")
+    (tests_clone / ".fmf").mkdir()
+    (tests_clone / ".fmf" / "version").write_text("1\n")
+
+    async def _fake_run_subprocess(cmd, shell=False, cwd=None, env=None):
+        assert cmd == ["tmt", "lint", "/Regression/RHEL-1"]
+        assert cwd == tests_clone
+        return 0, "pass\n", None
+
+    monkeypatch.setattr(r_agent, "run_subprocess", _fake_run_subprocess)
+    ok, output = await r_agent.run_tmt_lint(tests_clone, "Regression/RHEL-1")
+    assert ok is True
+    assert "pass" in output
+
+
+@pytest.mark.asyncio
+async def test_run_tmt_lint_fails_with_output(tmp_path, monkeypatch):
+    tests_clone = tmp_path / "tests-bind"
+    test_dir = tests_clone / "Regression" / "RHEL-1"
+    test_dir.mkdir(parents=True)
+    (test_dir / "main.fmf").write_text("summary: demo\n")
+
+    async def _fake_run_subprocess(cmd, shell=False, cwd=None, env=None):
+        return 1, "error: missing test key\n", None
+
+    monkeypatch.setattr(r_agent, "run_subprocess", _fake_run_subprocess)
+    ok, output = await r_agent.run_tmt_lint(tests_clone, "Regression/RHEL-1")
+    assert ok is False
+    assert "missing test key" in output
+    assert (tests_clone / ".fmf" / "version").is_file()
+
+
+@pytest.mark.asyncio
+async def test_run_tmt_lint_missing_metadata(tmp_path):
+    tests_clone = tmp_path / "tests-bind"
+    test_dir = tests_clone / "Regression" / "RHEL-1"
+    test_dir.mkdir(parents=True)
+    # Dir must have at least one file so _resolve_test_dir doesn't return None
+    (test_dir / "runtest.sh").write_text("#!/bin/bash\nexit 1\n")
+    ok, output = await r_agent.run_tmt_lint(tests_clone, "Regression/RHEL-1")
+    assert ok is False
+    assert "no FMF metadata" in output
+
+
+@pytest.mark.asyncio
+async def test_run_tmt_lint_no_tests_found(tmp_path, monkeypatch):
+    """tmt lint exit 0 with 'no tests found' must be treated as failure."""
+    tests_clone = tmp_path / "tests-bind"
+    test_dir = tests_clone / "Regression" / "RHEL-1"
+    test_dir.mkdir(parents=True)
+    (test_dir / "main.fmf").write_text("summary: broken\n")
+    (tests_clone / ".fmf").mkdir()
+    (tests_clone / ".fmf" / "version").write_text("1\n")
+
+    async def _fake_run_subprocess(cmd, shell=False, cwd=None, env=None):
+        return 0, "No tests found\n", None
+
+    monkeypatch.setattr(r_agent, "run_subprocess", _fake_run_subprocess)
+    ok, output = await r_agent.run_tmt_lint(tests_clone, "Regression/RHEL-1")
+    assert ok is False
+    assert "found no test" in output

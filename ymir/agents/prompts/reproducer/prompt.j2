@@ -174,7 +174,7 @@ Execute the following steps in order.
           `adapted_existing`: `true`, `existing_mr_url` set to the open CVE MR URL,
           and `test_directory` set to that relative path.
           Orchestration will push to that MR's source branch (even if unmerged).
-     4. Always cancel the TF reservation (step 6) before returning output.
+     4. Proceed to step 6 (produce output).
 
    * **If no existing test or open MR is found:** proceed to create a new test (steps 2–6).
 
@@ -210,7 +210,7 @@ Execute the following steps in order.
 
    This step provisions a real RHEL machine via Testing Farm for verifying the reproducer. The machine must be reserved BEFORE running the test so it is ready when needed.
 
-   **IMPORTANT:** Steps 3 through 5 form the try block and step 6 is the finally block. If ANY error occurs during steps 3-5 (including step 4), you MUST still execute step 6 to release the machine. Never leave a Testing Farm machine reserved.
+   **IMPORTANT:** If ANY error occurs during steps 3-5, skip to step 6 and produce your output. The workflow handles Testing Farm reservation cleanup programmatically — do not call `cancel_testing_farm_request` yourself.
 
    3.1. Determine the RHEL compose for the affected version:
    * Extract the RHEL major version from `{{ fix_version }}`, `{{ target_branch }}`, or the Jira issue's Affects Version field.
@@ -236,7 +236,7 @@ Execute the following steps in order.
    * You MUST call this tool EXACTLY ONCE. Never call it a second time. The tool already retries internally.
    * Check the result:
      - If `ssh_connection` is present and is NOT `"not-yet-available"`: the machine is ready. Save it.
-     - If `state` is `"error"`, `"canceled"`, or `ssh_connection` is `"not-yet-available"`: the reservation failed or timed out. You MUST immediately jump to step 6 (cancel the reservation) and then produce your final output JSON with:
+     - If `state` is `"error"`, `"canceled"`, or `ssh_connection` is `"not-yet-available"`: the reservation failed or timed out. Skip to step 6 and produce your final output JSON with:
        - `success`: `false`
        - `retryable_error`: `true`
        - `not_reproducible_reason`: null
@@ -249,7 +249,7 @@ Execute the following steps in order.
        - Fill in `package`, `jira_issue`, `reproducer_type`, and `compose`/`arch` if known
        Do NOT continue to step 4 or step 5. Do NOT retry `get_testing_farm_reservation_details`. Do NOT treat this as not-reproducible.
 
-   If `reserve_testing_farm_machine` itself fails (tool error) before returning a request ID, produce the same retryable_error output after attempting step 6 if a request ID was obtained.
+   If `reserve_testing_farm_machine` itself fails (tool error) before returning a request ID, skip to step 6 and produce the same retryable_error output.
 
    3.5. Verify SSH connectivity:
    * Call `run_remote_command` with the SSH host and `command` = `"cat /etc/redhat-release"`.
@@ -556,7 +556,7 @@ Execute the following steps in order.
    * This means the reproducer WORKS. The test correctly detects the bug on the unpatched system.
    * **Before declaring success, reason about the fixed system:** Would this exact test PASS (exit 0) once the fix is applied? Review the patch's activation conditions and default thresholds. If the fix has a protection threshold that your payload does not exceed, the test will also FAIL on a fixed system — that means the reproducer is broken. Redesign the payload to exceed the fix's defaults so behavior actually changes between fixed and unfixed.
    * Once you are confident the test differentiates fixed from unfixed, the reproducer is verified.
-   * Proceed to step 6 (return machine), then produce your final output JSON. The workflow creates the merge request from your output.
+   * Produce your final output JSON. The workflow runs `tmt lint`, then creates the merge request from your output.
 
    *Case B: Bug is NOT reproduced (test PASSES — the bug is not triggered)*
    * The program does not crash, output is correct, no timeout, no leak, etc.
@@ -637,22 +637,12 @@ Execute the following steps in order.
    * Save the documentation for the output.
    * Propose setting Test Coverage to "Regression Only" in the Jira comment.
 
-6. **Return Testing Farm Machine**
+6. **Produce Output**
 
-   CRITICAL: This step MUST always execute, regardless of whether steps 3-5 succeeded or failed. Treat the entire step 3-5-6 sequence as a try/finally block — step 6 is the `finally`.
+   After steps 3-5 (whether they succeeded or failed), produce your final output JSON. Do NOT create a merge request, fork, push, or open an MR — the workflow handles that. Do NOT post a Jira comment — the workflow handles that too.
 
-   * If a machine was reserved (request ID is set):
-     - Call `cancel_testing_farm_request` with the request ID.
-     - Log whether the cancellation succeeded or failed (but do not halt the workflow on failure).
-   * If no machine was reserved (reservation was never made or failed before returning a request ID), skip this step.
+   The workflow cancels all Testing Farm reservations programmatically after you return your output — do not call `cancel_testing_farm_request` yourself. Simply include `testing_farm_request_id` in your output so the workflow knows which reservation to cancel.
 
-   Even if the reproducer verification succeeded, the machine must be returned. Even if an unrelated error occurred, the machine must be returned. Even if the agent is about to report an error, the machine must be returned. There are no exceptions.
+   Include `test_directory` (relative to the tests clone root) whenever you created or adapted test files — the workflow commits that path as-is when opening/updating the MR. Do not leave `test_directory` null if an MR is needed.
 
-Note: Do NOT create a merge request yourself. Do NOT fork, push, or open an MR.
-After returning the TF machine (step 6), produce your final output JSON. Include
-`test_directory` (relative to the tests clone root) whenever you created or
-adapted test files — the workflow commits that path as-is when opening/updating
-the MR. Do not leave `test_directory` null if an MR is needed.
-
-Do NOT post a Jira comment yourself. The workflow handles Jira commenting
-automatically after you return your output. Focus on producing accurate output fields.
+   Focus on producing accurate output fields.

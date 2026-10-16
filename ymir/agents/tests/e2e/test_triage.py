@@ -19,7 +19,14 @@ from ymir.common.mock_repos import (
     load_all_fixture_configs,
     setup_mock_repos,
 )
-from ymir.common.models import BackportData, NotAffectedData, RebaseData, Resolution, TriageOutputSchema
+from ymir.common.models import (
+    BackportData,
+    NotAffectedData,
+    PostponedData,
+    RebaseData,
+    Resolution,
+    TriageOutputSchema,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +74,23 @@ class TriageAgentTestCase:
 
 
 test_cases = [
+    # A TLS server must retain its rebuild for the same CVE as the butane case.
+    TriageAgentTestCase(
+        input="RHEL-285393",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.POSTPONED_DEPENDENCY,
+            data=PostponedData(
+                summary="Rebuild waiting for the golang fix for the TLS server vulnerability.",
+                pending_issues=["RHEL-285391"],
+                jira_issue="RHEL-285393",
+                package="opentelemetry-collector",
+                fix_version="rhel-10.3.z",
+                cve_id="CVE-2026-97031",
+                dependency_issue="RHEL-285391",
+                dependency_component="golang",
+            ),
+        ),
+    ),
     TriageAgentTestCase(
         input="RHEL-278652",
         expected_output=TriageOutputSchema(
@@ -425,3 +449,15 @@ def test_triage_agent(test_case: TriageAgentTestCase, observability_fixture):
             assert real_output.data.package == expected_output.data.package
         if expected_output.data.cve_id:
             assert real_output.data.cve_id == expected_output.data.cve_id
+    elif expected_output.resolution == Resolution.POSTPONED_DEPENDENCY:
+        assert isinstance(real_output.data, PostponedData)
+        # Retaining a rebuild because analysis failed does not verify applicability.
+        assert test_case.finished_state.target_branch
+        assert not test_case.finished_state.applicability_check_skipped
+        assert not test_case.finished_state.applicability_used_fallback
+        assert real_output.data.package == expected_output.data.package
+        assert real_output.data.fix_version == expected_output.data.fix_version
+        assert real_output.data.cve_id == expected_output.data.cve_id
+        assert real_output.data.pending_issues == expected_output.data.pending_issues
+        assert real_output.data.dependency_issue == expected_output.data.dependency_issue
+        assert real_output.data.dependency_component == expected_output.data.dependency_component

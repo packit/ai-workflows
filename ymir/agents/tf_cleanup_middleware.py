@@ -62,6 +62,11 @@ class TFReservationCleanupMiddleware(RunMiddlewareProtocol):
         self._reserved: set[str] = set()
         self._cancelled: set[str] = set()
 
+    @property
+    def active_reservations(self) -> set[str]:
+        """Reservation IDs still held (reserved and not yet cancelled)."""
+        return set(self._reserved - self._cancelled)
+
     def bind(self, ctx: RunContext) -> None:
         ctx.emitter.on(_RESERVE_SUCCESS, self._on_reserve)
         ctx.emitter.on(_CANCEL_SUCCESS, self._on_cancel)

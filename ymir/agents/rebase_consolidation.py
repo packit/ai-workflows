@@ -183,6 +183,7 @@ def build_rebase_siblings_jql(
         excluded = [
             # Triage decisions (non-retriable - sibling has been triaged and decided)
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
+            JiraLabels.TRIAGED_ALREADY_FIXED.value,
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBUILD.value,
             JiraLabels.TRIAGED_REBASE.value,
@@ -315,6 +316,7 @@ async def queue_siblings_for_triage(
                 JiraLabels.TRIAGED_BACKPORT.value,
                 JiraLabels.TRIAGED_REBUILD.value,
                 JiraLabels.TRIAGED_NOT_AFFECTED.value,
+                JiraLabels.TRIAGED_ALREADY_FIXED.value,
                 JiraLabels.TRIAGED_POSTPONED.value,
                 JiraLabels.TRIAGED.value,
                 JiraLabels.BACKPORTED.value,
@@ -529,6 +531,7 @@ async def check_and_queue_primary_if_ready(
             JiraLabels.TRIAGED_REBUILD.value,
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
             JiraLabels.TRIAGED_POSTPONED.value,
+            JiraLabels.TRIAGED_ALREADY_FIXED.value,
             # Completions
             JiraLabels.BACKPORTED.value,
             JiraLabels.REBASED.value,

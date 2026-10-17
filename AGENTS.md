@@ -123,7 +123,7 @@ If you introduce a new service as a dependency to our agents, make sure to read 
 
 - [ ] Write tests first (especially for tools/git operations) — make sure they use `flexmock` for mocking.
 - [ ] Run `make check-in-container` — all tests pass
-- [ ] Test with `DRY_RUN=true` — don't touch real Jira/git
+- [ ] Test with `DRY_RUN=true` and mock repositories or a disposable fork namespace — Jira and MR writes are skipped, but build workflows may create forks and push Git refs
 - [ ] Use rebase merge (see [CONTRIBUTING.md](CONTRIBUTING.md))
 - [ ] Don't modify `.env`, `.secrets/`, keytab files in PRs
 - [ ] Update relevant documentation (README-agents.md, jira_data_flow.md, etc.)

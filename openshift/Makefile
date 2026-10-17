@@ -85,14 +85,15 @@ show-error-list:
 	@oc exec deployment/valkey -- valkey-cli --no-raw LRANGE error_list 0 -1 | python3 scripts/error_list.py --file -
 
 # Requeue a specific error_list entry (by the [id=...] shown in show-error-list)
-# back onto its original trigger queue, with attempts reset to 0.
+# onto its priority trigger queue, with attempts reset to 0. By default it
+# avoids user-triggered maintainer feedback; set USER_TRIGGERED=true to opt in.
 # Required: ERROR_ID
 requeue-error:
 	@if [ -z "$(ERROR_ID)" ]; then \
-		echo "Usage: make requeue-error ERROR_ID=42"; \
+		echo "Usage: make requeue-error ERROR_ID=42 [USER_TRIGGERED=true]"; \
 		exit 1; \
 	fi
-	python3 scripts/requeue_error.py $(ERROR_ID)
+	python3 scripts/requeue_error.py $(ERROR_ID) $(if $(filter true TRUE 1 yes YES,$(USER_TRIGGERED)),--user-triggered)
 
 logs-triage:
 	oc logs -f deployment/triage-agent

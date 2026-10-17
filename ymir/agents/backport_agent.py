@@ -91,6 +91,7 @@ from ymir.common.base_utils import (
 )
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.cve import extract_cve_ids
+from ymir.common.error_list import clear_resolved_errors
 from ymir.common.issue_lock import issue_lock
 from ymir.common.logging_setup import configure_logging, current_jira_issue, get_trajectory_writeable
 from ymir.common.mock_repos import get_mock_local_tool_env
@@ -2216,6 +2217,13 @@ async def main() -> None:
                                 state.backport_result.model_dump_json(),
                             )
                         )
+                    await clear_resolved_errors(
+                        redis,
+                        backport_data.jira_issue,
+                        backport_queue,
+                        target_branch=dist_git_branch,
+                        dry_run=dry_run,
+                    )
                 else:
                     logger.warning(
                         f"Backport failed for {backport_data.jira_issue}: {state.backport_result.error}"

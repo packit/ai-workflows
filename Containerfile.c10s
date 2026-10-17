@@ -33,6 +33,7 @@ RUN dnf -y install --allowerasing \
       rpm-build \
       rpmdevtools \
       rpmlint \
+      tmt \
       autoconf \
       automake \
       gettext-devel \

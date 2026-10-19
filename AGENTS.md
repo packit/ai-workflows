@@ -80,6 +80,10 @@ make check-unprivileged-tools-in-container
 - **SSH config**: Update `files/internal_dist-git_ssh.conf` User field with your Kerberos ID
 - **Clone timeouts**: Large repos may timeout; adjust timeout in `ymir/tools/privileged/distgit.py` if needed
 
+### Konflux Builds
+
+- **Local token prerequisite**: Before using `BUILD_BACKEND=konflux`, log in to the gateway OpenShift cluster and run `make konflux-token`. The short-lived token is stored in `.secrets/konflux/token`; refresh it if a build returns 401. See [Konflux backend setup](docs/konflux-backend.md).
+
 ### CI Pipeline
 - **COPY <<EOF variable trap**: Shell variables in COPY instructions don't expand. Use `RUN` with shell redirection instead
 - **quay.io naming**: Images must push to `quay.io/jotnar/` namespace; verify Containerfile registry config

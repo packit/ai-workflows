@@ -18,6 +18,10 @@ catatonit as PID 1, orphan reaping, signal forwarding, exit codes, non-root
 execution, and agent module imports through the image entrypoint. Both scripts
 can also run locally; add `--engine podman` to the runtime check to use Podman.
 
+The API image runs an import and route setup check during its build. PR CI also
+builds `Containerfile.api` and checks `/healthz` as the image's non-root user,
+so missing Python dependencies fail before the image is published.
+
 ## Architecture
 
 Three agents process tasks through Redis queues:

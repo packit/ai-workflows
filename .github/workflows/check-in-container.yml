@@ -92,3 +92,27 @@ jobs:
     - name: Test sweep CLI entrypoint
       run: |
         podman run --rm sweep-test:pr python3 -m ymir.sweep --help
+
+  smoke-test-api-containerfile:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+    - name: Build API container
+      run: podman build --no-cache -f Containerfile.api -t ymir-api-test:pr .
+    - name: Test API startup and health endpoint as container user
+      run: |
+        podman run --rm -i ymir-api-test:pr python3 - <<'PY'
+        import asyncio
+
+        from aiohttp.test_utils import TestClient, TestServer
+        from ymir.api.server import create_app
+
+        async def check_health():
+            async with TestClient(TestServer(create_app(redis_conn=object()))) as client:
+                response = await client.get("/healthz")
+                assert response.status == 200
+                assert await response.json() == {"status": "ok"}
+
+        asyncio.run(check_health())
+        PY

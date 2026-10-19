@@ -281,6 +281,13 @@ cp -r templates .secrets
 
 - Follow the comments to fill out the needed credentials.
 
+For local Konflux builds, log in to the gateway OpenShift cluster and run
+`make konflux-token` before setting `BUILD_BACKEND=konflux`. This writes the
+short-lived service-account token to `.secrets/konflux/token`, which the gateway
+reads for each build. Refresh it when a build returns 401; a gateway restart is
+not needed. See [Konflux backend setup](docs/konflux-backend.md) for the login
+command, required access, and remaining configuration.
+
 The `mcp-gateway` requires a `keytab` file.
 
 Steps to generate a personal kerberos keytab file:

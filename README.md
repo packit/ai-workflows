@@ -12,7 +12,7 @@ The AI Workflows system automates RHEL package maintenance by triaging incoming 
 ### Key Features
 - **Automated Triage**: AI analyzes Jira issues to determine appropriate workflow (rebase vs backport)
 - **Patch Selection**: AI selects and applies upstream patches to spec files
-- **Build Testing**: Automated Copr builds with failure diagnosis
+- **Build Testing**: Automated Copr or Konflux builds with failure diagnosis
 - **MR Creation**: Automatic merge request creation with detailed checklists
 - **Release Management**: Automated progression through RHEL testing and release pipeline
 
@@ -70,6 +70,7 @@ For installation instructions (skill setup and MCP tool configuration), see the 
 - [Jira Label-Based Workflow Routing](jira_label_workflow_routing.md) - Label state machine and queue routing
 - [GitLab Dist-Git Data Flow](gitlab_distgit_data_flow.md) - CentOS Stream and RHEL dist-git repositories
 - [Brew/Konflux Build System Data Flow](brew_konflux_data_flow.md) - Build system integration
+- [Konflux Backend Setup](docs/konflux-backend.md) - Local configuration and token refresh
 - [AI Providers Data Flow](ai_providers_data_flow.md) - Google Vertex AI integration and model usage
 - [Agent Monitoring and Performance Review](monitoring.md) - Monitoring processes, anomaly detection, and continuous improvement
 - [MR Consolidation Architecture](docs/mr_consolidation_architecture.md) - Merging multiple backport MRs into a single MR

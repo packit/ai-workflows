@@ -260,9 +260,7 @@ class ParsedMrTestResults(BaseModel):
         description="Per-architecture results for the unfixed-build companion run (empty if none)",
     )
     note_id: Any = Field(default=None, description="Identifier of anewa's completed comment, if found")
-    note_body: str | None = Field(
-        default=None, description="Raw body of anewa's completed comment, if found"
-    )
+    note_body: str | None = Field(default=None, description="Raw body of anewa's completed comment, if found")
     report_portal_url: str | None = Field(
         default=None, description="Report Portal link found in an anewa comment"
     )
@@ -907,9 +905,7 @@ class FormatMrTestingCommentInput(BaseModel):
     failures: list[dict[str, Any]] | None = None
 
 
-class FormatMrTestingCommentTool(
-    Tool[FormatMrTestingCommentInput, ToolRunOptions, StringToolOutput]
-):
+class FormatMrTestingCommentTool(Tool[FormatMrTestingCommentInput, ToolRunOptions, StringToolOutput]):
     """Format Testing Farm/CVE test results into markdown for GitLab MR
     comments, or Jira-facing markdown for Jira comments, for the
     ``mr_testing`` workflow.

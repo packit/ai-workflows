@@ -1191,9 +1191,7 @@ class UpdateMergeRequestCommentTool(
                 try:
                     note = mr._raw_pr.notes.get(note_id)
                 except gitlab.GitlabGetError as ex:
-                    raise ToolError(
-                        f"Note {note_id} not found on merge request {merge_request_url}"
-                    ) from ex
+                    raise ToolError(f"Note {note_id} not found on merge request {merge_request_url}") from ex
                 note.body = comment
                 note.save()
 

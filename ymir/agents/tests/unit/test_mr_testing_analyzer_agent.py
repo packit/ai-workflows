@@ -76,7 +76,9 @@ async def test_linked_issues_gather_jira_context_and_thread_flags(monkeypatch):
         if name == "get_merge_request_details":
             return {"description": "Resolves: RHEL-111\nResolves: RHEL-222"}
         if name == "get_authorized_comments_from_merge_request":
-            return {"comments": [{"body": "**ANEWA:** testing completed.", "created_at": "2024-01-01T00:00:00Z"}]}
+            return {
+                "comments": [{"body": "**ANEWA:** testing completed.", "created_at": "2024-01-01T00:00:00Z"}]
+            }
         if name == "get_jira_details":
             return {"fields": jira_fields[kwargs["issue_key"]]}
         raise AssertionError(f"Unexpected tool call: {name}")
@@ -156,9 +158,7 @@ async def test_fetch_test_results_falls_back_to_mr_notes(monkeypatch):
 
     class _FakeAgent:
         async def run(self, prompt, **kwargs):
-            return _FakeResponse(
-                MrTestingAnalyzerResult(analyzed=True, summary="done").model_dump_json()
-            )
+            return _FakeResponse(MrTestingAnalyzerResult(analyzed=True, summary="done").model_dump_json())
 
     flexmock(m).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
     flexmock(m).should_receive("run_tool").replace_with(_mock_run_tool)

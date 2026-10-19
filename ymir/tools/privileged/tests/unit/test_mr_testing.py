@@ -2,7 +2,6 @@ import pytest
 
 from ymir.tools.privileged.mr_testing import FormatMrTestingCommentTool, ParseMrTestResultsTool
 
-
 # ---------------------------------------------------------------------------
 # ParseMrTestResultsTool
 # ---------------------------------------------------------------------------

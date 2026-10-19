@@ -719,11 +719,7 @@ async def test_update_merge_request_comment():
             flexmock(
                 id=123,
                 _raw_pr=flexmock(
-                    notes=flexmock()
-                    .should_receive("get")
-                    .with_args(note_id)
-                    .and_return(note)
-                    .mock(),
+                    notes=flexmock().should_receive("get").with_args(note_id).and_return(note).mock(),
                 ),
             ),
         )

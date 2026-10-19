@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any
 
 import aiofiles
-from mcp.server.lowlevel.server import request_ctx
 
 # Actual config used inside the agent process
 current_rhel_config_override: ContextVar[dict[str, Any] | None] = ContextVar(
@@ -56,6 +55,11 @@ def _mcp_rhel_config_override() -> dict[str, Any] | None:
     """Read a permitted per-test E2E override from MCP request metadata."""
     if os.getenv("ALLOW_RHEL_CONFIG_OVERRIDE", "").lower() != "true":
         return None
+
+    # Only the MCP gateway needs this dependency. Other users of ymir.common,
+    # including the API image, must be able to import the config module without it.
+    from mcp.server.lowlevel.server import request_ctx
+
     try:
         meta = request_ctx.get().meta
     except LookupError:

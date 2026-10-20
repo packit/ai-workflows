@@ -56,7 +56,7 @@ RUN pip wheel --no-build-isolation --no-deps --wheel-dir /tmp/wheels /home/mcp/y
 
 # Install the built wheels and all dependencies with standard pip (build isolation
 # enabled for third-party packages); litellm pinned separately to exclude compromised versions
-RUN pip install --no-cache-dir "litellm!=1.82.7,!=1.82.8" /tmp/wheels/*.whl && rm -rf /tmp/wheels \
+RUN pip install --no-cache-dir "litellm<1.106.0,!=1.82.7,!=1.82.8" /tmp/wheels/*.whl && rm -rf /tmp/wheels \
     && cd /opt/beeai-venv/lib/python3.13/site-packages
 
 # Verify no malicious litellm_init.pth was introduced by compromised litellm packages (e.g. 1.82.7, 1.82.8)

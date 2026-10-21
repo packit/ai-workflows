@@ -505,6 +505,34 @@ async def test_build_failure_collects_logs():
 
 
 @pytest.mark.asyncio
+async def test_tekton_pipeline_timeout_is_classified_without_cancelling_terminal_run():
+    _mock_prelude(_config())
+    flexmock(KonfluxClient).should_receive("create_secret").and_return("sec").once()
+    flexmock(KonfluxClient).should_receive("create_pipelinerun").and_return("run").once()
+    flexmock(KonfluxClient).should_receive("get_pipelinerun").and_return(
+        {
+            "status": {
+                "conditions": [
+                    {
+                        "status": "False",
+                        "reason": "PipelineRunTimeout",
+                        "message": "PipelineRun failed to finish within 3h",
+                    }
+                ]
+            }
+        }
+    ).once()
+    flexmock(KonfluxClient).should_receive("cancel_pipelinerun").never()
+    flexmock(KonfluxClient).should_receive("delete_secret").with_args("sec").once()
+
+    out = await KonfluxBuildTool().run(input=BUILD_INPUT)
+
+    assert out.result.success is False
+    assert out.result.is_timeout is True
+    assert "PipelineRunTimeout" in out.result.error_message
+
+
+@pytest.mark.asyncio
 async def test_build_timeout(monkeypatch):
     cfg = _config()
     _mock_prelude(cfg)
@@ -577,6 +605,41 @@ async def test_cancelled_tool_stops_run_before_deleting_secret():
         ("get", "run"),
         ("delete_secret", "sec"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_secret_creation_waits_before_cleanup():
+    _mock_prelude(_config())
+    creating = threading.Event()
+    release_creation = threading.Event()
+    created = threading.Event()
+    calls = []
+
+    def create(*_args):
+        creating.set()
+        assert release_creation.wait(timeout=5)
+        calls.append("created")
+        created.set()
+        return "sec"
+
+    def delete(*args):
+        calls.append(("delete_secret", args[-1]))
+
+    flexmock(KonfluxClient).should_receive("create_secret").replace_with(create).once()
+    flexmock(KonfluxClient).should_receive("create_pipelinerun").never()
+    flexmock(KonfluxClient).should_receive("delete_secret").replace_with(delete).once()
+
+    build = asyncio.create_task(KonfluxBuildTool()._run(BuildPackageToolInput(**BUILD_INPUT), None, None))
+    try:
+        assert await asyncio.to_thread(creating.wait, 5)
+        build.cancel()
+        await asyncio.sleep(0)
+    finally:
+        release_creation.set()
+    with pytest.raises(asyncio.CancelledError):
+        await build
+    assert await asyncio.to_thread(created.wait, 5)
+    assert calls == ["created", ("delete_secret", "sec")]
 
 
 @pytest.mark.asyncio

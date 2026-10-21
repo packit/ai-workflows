@@ -357,14 +357,18 @@ def test_e2e_fixture_candidate_enables_ystream_inheritance():
     )
 
 
-def test_disabling_inheritance_is_durable_in_task_metadata():
-    state = _state()
-    metadata = {}
+def test_disabling_inheritance_clears_checkpoint_and_is_durable_in_task_metadata():
+    state = _published_state()
+    checkpoint = _build_inherited_publication_checkpoint(state)
+    state.inherited_publication_checkpoint = checkpoint
+    metadata = {"inherited_publication_checkpoint": checkpoint.model_dump(mode="json")}
 
     _disable_ystream_inheritance(state, metadata)
 
     assert state.inheritance_disabled
+    assert state.inherited_publication_checkpoint is None
     assert metadata["ystream_inheritance_disabled"] is True
+    assert "inherited_publication_checkpoint" not in metadata
 
 
 def test_patch_prep_failure_requires_immediate_normal_backport():

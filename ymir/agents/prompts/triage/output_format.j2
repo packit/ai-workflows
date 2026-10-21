@@ -155,7 +155,7 @@ Already-fixed resolution (rebase/backport/rebuild already done):
     }
 }
 ```
-Note: Use this when the rebase, backport, or rebuild has already been completed. For rebases, set dependency fields to null. For rebuilds, include dependency_issue_key and dependency_nvr. If no Jira issue or build is found, set package_nvr and package_issue_key to null and include generic guidance in the explanation.
+Note: Use this ONLY when a completed (Closed/Done) Jira issue with a non-empty Fixed in Build field confirms the fix. For rebases, set dependency fields to null. For rebuilds, include dependency_issue_key and dependency_nvr. If no completed issue with a Fixed in Build value is found, use "clarification-needed" instead.
 
 Open-ended analysis resolution:
 ```json

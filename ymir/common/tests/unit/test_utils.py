@@ -5,7 +5,7 @@ import httpx
 import koji
 import pytest
 from flexmock import flexmock
-from specfile.utils import EVR, NEVR
+from specfile.utils import EVR, NEVR, NEVRA
 
 import ymir.common.utils as _ymir_utils
 from ymir.common.base_utils import KerberosError, extract_principal, init_kerberos_ticket
@@ -693,6 +693,12 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
             else [{"arch": "x86_64", "name": "golang", "nvr": "golang-1.26.4-1.el10_2"}]
         )
     )
+    mock_koji_session.should_receive("getRPM").replace_with(
+        lambda info: {"name": info["name"], "build_id": 123456, "epoch": None}
+    )
+    mock_koji_session.should_receive("getBuild").replace_with(
+        lambda bid: {"name": "golang", "version": "1.26.4", "release": "1.el10_2", "epoch": None}
+    )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
     # Mock httpx client for installed_pkgs.log fetch
@@ -726,13 +732,13 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
         package="go-fdo-client",
         fix_version="rhel-10.2.z",
         dep_component="golang",
-        fixed_dep_nvr=NEVR.from_string("golang-1.26.4-1.el10_2"),
+        fixed_dep_nevr=NEVR.from_string("golang-1.26.4-1.el10_2"),
         available_tools=[mock_tool],
     )
 
     assert already_fixed is True
     assert issue_key == "RHEL-242375"
-    assert _nvr == "go-fdo-client-1.0.0-4.el10_2.7"
+    assert _nvr == NEVR.from_string("go-fdo-client-1.0.0-4.el10_2.7")
 
 
 @pytest.mark.asyncio
@@ -829,14 +835,14 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
         package="go-fdo-client",
         fix_version="rhel-10.2.z",
         dep_component="golang",
-        fixed_dep_nvr=NEVR.from_string("golang-1.26.4-1.el10_2"),
+        fixed_dep_nevr=NEVR.from_string("golang-1.26.4-1.el10_2"),
         available_tools=[mock_tool],
     )
 
     assert already_fixed is None
     assert issue_key == "RHEL-242375"
-    assert _nvr == "go-fdo-client-1.0.0-4.el10_2.7"
-    assert reason == "subpackage_match_needs_verification:golang-bin"
+    assert _nvr == NEVR.from_string("go-fdo-client-1.0.0-4.el10_2.7")
+    assert reason.reason == "subpackage_match_needs_verification:golang-bin"
 
 
 @pytest.mark.asyncio
@@ -902,6 +908,12 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
             ]
         )
     )
+    mock_koji_session.should_receive("getRPM").replace_with(
+        lambda info: {"name": info["name"], "build_id": 123456, "epoch": None}
+    )
+    mock_koji_session.should_receive("getBuild").replace_with(
+        lambda bid: {"name": "golang", "version": "1.26.4", "release": "1.el10_2", "epoch": None}
+    )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
     mock_head_response = flexmock(status_code=200)
@@ -929,14 +941,14 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
         package="go-fdo-client",
         fix_version="rhel-10.2.z",
         dep_component="golang",
-        fixed_dep_nvr=NEVR.from_string("golang-1.26.4-1.el10_2"),
+        fixed_dep_nevr=NEVR.from_string("golang-1.26.4-1.el10_2"),
         available_tools=[mock_tool],
     )
 
     assert already_fixed is None
     assert issue_key == "RHEL-242375"
-    assert _nvr == "go-fdo-client-1.0.0-4.el10_2.7"
-    assert reason == "subpackage_match_needs_verification:golang"
+    assert _nvr == NEVR.from_string("go-fdo-client-1.0.0-4.el10_2.7")
+    assert reason.reason == "subpackage_match_needs_verification:golang"
 
 
 @pytest.mark.asyncio
@@ -1053,15 +1065,17 @@ async def test_check_package_built_with_fixed_dependency_real_glibc_with_subpack
         package="some-app",
         fix_version="rhel-8.0.z",
         dep_component="glibc",
-        fixed_dep_nvr=NEVR.from_string("glibc-2.28-248.el8"),
+        fixed_dep_nevr=NEVR.from_string("glibc-2.28-248.el8"),
         available_tools=[mock_tool],
     )
 
     assert already_fixed is None
     assert issue_key == "RHEL-242375"
-    assert _nvr == "some-app-1.0.0-1.el8"
-    # First matching subpackage is enough to request verification
-    assert reason == "subpackage_match_needs_verification:glibc-all-langpacks"
+    assert _nvr == NEVR.from_string("some-app-1.0.0-1.el8")
+    assert reason.reason == (
+        "subpackage_match_needs_verification:"
+        "glibc, glibc-all-langpacks, glibc-common, glibc-devel, glibc-gconv-extra, glibc-headers"
+    )
 
 
 @pytest.mark.asyncio
@@ -1123,6 +1137,12 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
             else [{"arch": "x86_64", "name": "golang", "nvr": "golang-1.26.4-1.el10_2"}]
         )
     )
+    mock_koji_session.should_receive("getRPM").replace_with(
+        lambda info: {"name": info["name"], "build_id": 555, "epoch": None}
+    )
+    mock_koji_session.should_receive("getBuild").replace_with(
+        lambda bid: {"name": "golang", "version": "1.26.3", "release": "1.el10_2", "epoch": None}
+    )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
     mock_head_response = flexmock(status_code=200)
@@ -1153,13 +1173,13 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
         package="go-fdo-client",
         fix_version="rhel-10.2.z",
         dep_component="golang",
-        fixed_dep_nvr=NEVR.from_string("golang-1.26.4-1.el10_2"),
+        fixed_dep_nevr=NEVR.from_string("golang-1.26.4-1.el10_2"),
         available_tools=[mock_tool],
     )
 
     assert already_fixed is False
     assert issue_key == "RHEL-242375"
-    assert _nvr == "go-fdo-client-1.0.0-4.el10_2.7"
+    assert _nvr == NEVR.from_string("go-fdo-client-1.0.0-4.el10_2.7")
 
 
 @pytest.mark.asyncio
@@ -1176,7 +1196,7 @@ async def test_check_package_built_with_fixed_dependency_no_build_found():
         package="go-fdo-client",
         fix_version="rhel-10.2.z",
         dep_component="golang",
-        fixed_dep_nvr=NEVR.from_string("golang-1.26.4-1.el10_2"),
+        fixed_dep_nevr=NEVR.from_string("golang-1.26.4-1.el10_2"),
         available_tools=[mock_tool],
     )
 
@@ -1262,15 +1282,15 @@ async def test_check_package_built_with_fixed_dependency_no_installed_pkgs_log_b
         package="git-lfs",
         fix_version="rhel-8.10.z",
         dep_component="golang",
-        fixed_dep_nvr=NEVR.from_string("golang-1.26.7-1.el10"),
+        fixed_dep_nevr=NEVR.from_string("golang-1.26.7-1.el10"),
         available_tools=[mock_tool],
     )
 
     # Should return None (needs manual verification) since built after fix but no installed_pkgs.log
     assert already_fixed is None
-    assert reason == "built_after_fix_no_installed_pkgs_log"
+    assert reason.reason == "built_after_fix_no_installed_pkgs_log"
     assert issue_key == "RHEL-228612"
-    assert _nvr == "git-lfs-3.4.1-13.el8_10"
+    assert _nvr == NEVR.from_string("git-lfs-3.4.1-13.el8_10")
 
 
 @pytest.mark.asyncio
@@ -1350,14 +1370,14 @@ async def test_check_package_built_with_fixed_dependency_no_installed_pkgs_log_b
         package="git-lfs",
         fix_version="rhel-8.10.z",
         dep_component="golang",
-        fixed_dep_nvr=NEVR.from_string("golang-1.26.7-1.el10"),
+        fixed_dep_nevr=NEVR.from_string("golang-1.26.7-1.el10"),
         available_tools=[mock_tool],
     )
 
     # Should return False (needs rebuild) since built before fix
     assert already_fixed is False
     assert issue_key == "RHEL-228612"
-    assert _nvr == "git-lfs-3.4.1-12.el8_10"
+    assert _nvr == NEVR.from_string("git-lfs-3.4.1-12.el8_10")
 
 
 @pytest.mark.asyncio
@@ -1418,6 +1438,12 @@ async def test_check_package_built_with_fixed_dependency_gzipped_log():
             else [{"arch": "x86_64", "name": "golang", "nvr": "golang-1.26.4-1.el10_2"}]
         )
     )
+    mock_session.should_receive("getRPM").replace_with(
+        lambda info: {"name": info["name"], "build_id": 1234, "epoch": None}
+    )
+    mock_session.should_receive("getBuild").replace_with(
+        lambda bid: {"name": "golang", "version": "1.26.4", "release": "1.el10_2", "epoch": None}
+    )
     flexmock(koji).should_receive("ClientSession").and_return(mock_session)
 
     mock_head_response = flexmock(status_code=200)
@@ -1447,7 +1473,7 @@ async def test_check_package_built_with_fixed_dependency_gzipped_log():
         package="go-fdo-client",
         fix_version="rhel-10.2.z",
         dep_component="golang",
-        fixed_dep_nvr=NEVR.from_string("golang-1.26.4-1.el10_2"),
+        fixed_dep_nevr=NEVR.from_string("golang-1.26.4-1.el10_2"),
         available_tools=[mock_tool],
     )
 
@@ -1511,6 +1537,12 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
             else [{"arch": "x86_64", "name": "python3.11", "nvr": "python3.11-3.11.9-1.el10_2"}]
         )
     )
+    mock_koji_session.should_receive("getRPM").replace_with(
+        lambda info: {"name": info["name"], "build_id": 123456, "epoch": None}
+    )
+    mock_koji_session.should_receive("getBuild").replace_with(
+        lambda bid: {"name": "python3.11", "version": "3.11.9", "release": "1.el10_2", "epoch": None}
+    )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
     mock_head_response = flexmock(status_code=200)
@@ -1539,7 +1571,7 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
         package="some-app",
         fix_version="rhel-10.2.z",
         dep_component="python3.11",
-        fixed_dep_nvr=NEVR.from_string("python3.11-3.11.9-1.el10_2"),
+        fixed_dep_nevr=NEVR.from_string("python3.11-3.11.9-1.el10_2"),
         available_tools=[mock_tool],
     )
 
@@ -1604,6 +1636,12 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
             else [{"arch": "x86_64", "name": "python-libs", "nvr": "python-libs-3.11.9-1.el10_2"}]
         )
     )
+    mock_koji_session.should_receive("getRPM").replace_with(
+        lambda info: {"name": info["name"], "build_id": 123456, "epoch": 1}
+    )
+    mock_koji_session.should_receive("getBuild").replace_with(
+        lambda bid: {"name": "python-libs", "version": "3.11.9", "release": "1.el10_2", "epoch": 1}
+    )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
     mock_head_response = flexmock(status_code=200)
@@ -1632,7 +1670,7 @@ other-package-1.0-1.el10_2.x86_64 1 2 abc installed
         package="some-app",
         fix_version="rhel-10.2.z",
         dep_component="python-libs",
-        fixed_dep_nvr=NEVR.from_string("python-libs-3.11.9-1.el10_2"),
+        fixed_dep_nevr=NEVR.from_string("python-libs-3.11.9-1.el10_2"),
         available_tools=[mock_tool],
     )
 
@@ -1703,6 +1741,12 @@ other-package-1.0-1.el10.x86_64 1 2 abc installed
             else [{"arch": "x86_64", "name": "bash", "nvr": "bash-5.1.16-1.el10"}]
         )
     )
+    mock_koji_session.should_receive("getRPM").replace_with(
+        lambda info: {"name": info["name"], "build_id": 123456, "epoch": None}
+    )
+    mock_koji_session.should_receive("getBuild").replace_with(
+        lambda bid: {"name": "bash", "version": "5.1.16", "release": "1.el10", "epoch": None}
+    )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
     # Mock HTTP client for installed_pkgs.log fetch
@@ -1739,13 +1783,13 @@ other-package-1.0-1.el10.x86_64 1 2 abc installed
         package="build-tool",
         fix_version="rhel-10.0.z",
         dep_component="bash",
-        fixed_dep_nvr=NEVR.from_string("bash-5.1.16-1.el10"),
+        fixed_dep_nevr=NEVR.from_string("bash-5.1.16-1.el10"),
         available_tools=[mock_tool],
     )
 
     assert already_fixed is True
     assert issue_key == "RHEL-123456"
-    assert nvr == "build-tool-1.0.0-1.el10"
+    assert nvr == NEVR.from_string("build-tool-1.0.0-1.el10")
     assert reason is None
 
 
@@ -1855,13 +1899,13 @@ other-package-1.0-1.el10.x86_64 1 2 abc installed
         package="my-app",
         fix_version="rhel-10.0.z",
         dep_component="python-foobar",
-        fixed_dep_nvr=NEVR.from_string("python-foobar-1.5.0-3.el10"),
+        fixed_dep_nevr=NEVR.from_string("python-foobar-1.5.0-3.el10"),
         available_tools=[mock_tool],
     )
 
     assert already_fixed is True
     assert issue_key == "RHEL-300001"
-    assert nvr == "my-app-2.0.0-1.el10"
+    assert nvr == NEVR.from_string("my-app-2.0.0-1.el10")
     assert reason is None
 
 
@@ -2201,7 +2245,8 @@ async def test_select_highest_evr_build_success():
     result = await _select_highest_evr_build(candidates, "pkg")
 
     assert result is not None
-    nevr, issue_key = result
+    resolved_build, issue_key = result
+    nevr = resolved_build.nevr
     assert nevr.name == "pkg"
     assert nevr.version == "2.0"
     assert nevr.release == "1.el10"
@@ -2239,7 +2284,8 @@ async def test_select_highest_evr_build_with_epoch():
 
     result = await _select_highest_evr_build(candidates, "pkg")
 
-    nevr, issue_key = result
+    resolved_build, issue_key = result
+    nevr = resolved_build.nevr
     assert nevr.name == "pkg"
     assert nevr.epoch == 2
     assert nevr.version == "1.0"
@@ -2249,8 +2295,8 @@ async def test_select_highest_evr_build_with_epoch():
 
 @pytest.mark.asyncio
 async def test_select_highest_evr_build_koji_failures():
-    """Test _select_highest_evr_build raises when any Brew lookup fails."""
-    from ymir.common.utils import TransientInfrastructureError, _select_highest_evr_build
+    """Test _select_highest_evr_build retries failed Brew lookups."""
+    from ymir.common.utils import _select_highest_evr_build
 
     candidates = [
         ("RHEL-123", "pkg-1.0-1.el10"),
@@ -2270,7 +2316,7 @@ async def test_select_highest_evr_build_koji_failures():
 
     flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(mock_get_build)
 
-    with pytest.raises(TransientInfrastructureError, match="Brew lookup failed for 1 candidate"):
+    with pytest.raises(_ymir_utils.TransientInfrastructureError, match="Brew lookup failed for 1 candidate"):
         await _select_highest_evr_build(candidates, "pkg")
 
 
@@ -2297,7 +2343,8 @@ async def test_select_highest_evr_build_wrong_package():
     result = await _select_highest_evr_build(candidates, "pkg")
 
     # Should only return the correct package build, ignoring the wrong-pkg build
-    nevr, issue_key = result
+    resolved_build, issue_key = result
+    nevr = resolved_build.nevr
     assert nevr.name == "pkg"
     assert nevr.version == "1.0"
     assert nevr.release == "1.el10"
@@ -2450,14 +2497,15 @@ async def test_fetch_installed_pkgs_log_server_error():
 
 
 @pytest.mark.asyncio
-async def test_get_known_package_names_success():
+@pytest.mark.parametrize("brew_epoch", [None, 2])
+async def test_get_known_package_names_success(brew_epoch):
     """Test _get_known_package_names returns binary RPM names and validated NEVR."""
     from ymir.common.utils import _get_known_package_names
 
     fixed_build = {
         "name": "golang",
         "build_id": 123456,
-        "epoch": None,
+        "epoch": brew_epoch,
         "version": "1.22.7",
         "release": "1.el10",
     }
@@ -2468,9 +2516,11 @@ async def test_get_known_package_names_success():
     )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
-    flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(fixed_build)
+    flexmock(_ymir_utils).should_receive("_get_koji_build").with_args(
+        _ymir_utils.BREWHUB_URL, "golang-1.22.7-1.el10"
+    ).and_return(fixed_build)
 
-    result = await _get_known_package_names(NEVR.from_string("golang-1.22.7-1.el10"))
+    result = await _get_known_package_names(NEVR(name="golang", epoch=99, version="1.22.7", release="1.el10"))
 
     assert result is not None
     names, real_binary_count, fixed_dep_nevr, build_name = result
@@ -2481,7 +2531,7 @@ async def test_get_known_package_names_success():
     assert fixed_dep_nevr.name == "golang"
     assert fixed_dep_nevr.version == "1.22.7"
     assert fixed_dep_nevr.release == "1.el10"
-    assert fixed_dep_nevr.epoch == 0
+    assert fixed_dep_nevr.epoch == (brew_epoch or 0)
     assert build_name == "golang"
 
 
@@ -2657,7 +2707,7 @@ async def test_get_known_package_names_excludes_src_from_count():
 
 
 @pytest.mark.asyncio
-async def test_parse_dependency_from_installed_pkgs_log_success():
+async def test_parse_dependency_from_installed_pkgs_log_success(parser_koji_metadata):
     """Test _parse_dependency_from_installed_pkgs_log finds dependency."""
     from ymir.common.utils import _parse_dependency_from_installed_pkgs_log
 
@@ -2665,7 +2715,9 @@ async def test_parse_dependency_from_installed_pkgs_log_success():
 other-package-1.0-1.el10.x86_64 1 2 abc installed
 """
 
-    nevr, matched = await _parse_dependency_from_installed_pkgs_log(installed_pkgs_log, "golang", ["golang"])
+    nevr, matched = await _parse_dependency_from_installed_pkgs_log(
+        installed_pkgs_log, "golang", ["golang"], _ymir_utils.BREWHUB_URL
+    )
 
     assert nevr is not None
     assert nevr.name == "golang"
@@ -2676,13 +2728,15 @@ other-package-1.0-1.el10.x86_64 1 2 abc installed
 
 
 @pytest.mark.asyncio
-async def test_parse_dependency_from_installed_pkgs_log_with_epoch():
+async def test_parse_dependency_from_installed_pkgs_log_with_epoch(parser_koji_metadata):
     """Test _parse_dependency_from_installed_pkgs_log parses epoch."""
     from ymir.common.utils import _parse_dependency_from_installed_pkgs_log
 
     installed_pkgs_log = "vim-2:9.0.1-1.el10.x86_64 1 2 abc installed\n"
 
-    nevr, matched = await _parse_dependency_from_installed_pkgs_log(installed_pkgs_log, "vim", ["vim"])
+    nevr, matched = await _parse_dependency_from_installed_pkgs_log(
+        installed_pkgs_log, "vim", ["vim"], _ymir_utils.BREWHUB_URL
+    )
 
     assert nevr is not None
     assert nevr.name == "vim"
@@ -2693,14 +2747,14 @@ async def test_parse_dependency_from_installed_pkgs_log_with_epoch():
 
 
 @pytest.mark.asyncio
-async def test_parse_dependency_from_installed_pkgs_log_subpackage():
+async def test_parse_dependency_from_installed_pkgs_log_subpackage(parser_koji_metadata):
     """Test _parse_dependency_from_installed_pkgs_log finds subpackage."""
     from ymir.common.utils import _parse_dependency_from_installed_pkgs_log
 
     installed_pkgs_log = "golang-bin-1.22.7-1.el10.x86_64 1 2 abc installed\n"
 
     nevr, matched = await _parse_dependency_from_installed_pkgs_log(
-        installed_pkgs_log, "golang", ["golang", "golang-bin"]
+        installed_pkgs_log, "golang", ["golang", "golang-bin"], _ymir_utils.BREWHUB_URL
     )
 
     assert nevr is not None
@@ -2712,14 +2766,16 @@ async def test_parse_dependency_from_installed_pkgs_log_subpackage():
 
 
 @pytest.mark.asyncio
-async def test_parse_dependency_from_installed_pkgs_log_nonnumeric_version():
+async def test_parse_dependency_from_installed_pkgs_log_nonnumeric_version(parser_koji_metadata):
     """Test _parse_dependency_from_installed_pkgs_log handles versions starting with non-digit."""
     from ymir.common.utils import _parse_dependency_from_installed_pkgs_log
 
     # Version starts with 'v' (valid in RPM)
     installed_pkgs_log = "myapp-v1.2.3-1.el10.x86_64 1 2 abc installed\n"
 
-    nevr, matched = await _parse_dependency_from_installed_pkgs_log(installed_pkgs_log, "myapp", ["myapp"])
+    nevr, matched = await _parse_dependency_from_installed_pkgs_log(
+        installed_pkgs_log, "myapp", ["myapp"], _ymir_utils.BREWHUB_URL
+    )
 
     assert nevr is not None
     assert nevr.name == "myapp"
@@ -2730,14 +2786,14 @@ async def test_parse_dependency_from_installed_pkgs_log_nonnumeric_version():
 
 
 @pytest.mark.asyncio
-async def test_parse_dependency_from_installed_pkgs_log_dotted_name():
+async def test_parse_dependency_from_installed_pkgs_log_dotted_name(parser_koji_metadata):
     """Test _parse_dependency_from_installed_pkgs_log handles package names with dots."""
     from ymir.common.utils import _parse_dependency_from_installed_pkgs_log
 
     installed_pkgs_log = "python3.11-3.11.9-1.el10.x86_64 1 2 abc installed\n"
 
     nevr, matched = await _parse_dependency_from_installed_pkgs_log(
-        installed_pkgs_log, "python3.11", ["python3.11"]
+        installed_pkgs_log, "python3.11", ["python3.11"], _ymir_utils.BREWHUB_URL
     )
 
     assert nevr is not None
@@ -2749,20 +2805,22 @@ async def test_parse_dependency_from_installed_pkgs_log_dotted_name():
 
 
 @pytest.mark.asyncio
-async def test_parse_dependency_from_installed_pkgs_log_not_found():
+async def test_parse_dependency_from_installed_pkgs_log_not_found(parser_koji_metadata):
     """Test _parse_dependency_from_installed_pkgs_log returns None when not found."""
     from ymir.common.utils import _parse_dependency_from_installed_pkgs_log
 
     installed_pkgs_log = "other-package-1.0-1.el10.x86_64 1 2 abc installed\n"
 
-    nevr, matched = await _parse_dependency_from_installed_pkgs_log(installed_pkgs_log, "golang", ["golang"])
+    nevr, matched = await _parse_dependency_from_installed_pkgs_log(
+        installed_pkgs_log, "golang", ["golang"], _ymir_utils.BREWHUB_URL
+    )
 
     assert nevr is None
     assert matched is None
 
 
 @pytest.mark.asyncio
-async def test_installed_pkgs_sample_epoch_and_subpackage():
+async def test_installed_pkgs_sample_epoch_and_subpackage(parser_koji_metadata):
     """Brew's installed_pkgs.log puts the epoch after the RPM name."""
     from specfile.utils import NEVR
 
@@ -2775,21 +2833,23 @@ async def test_installed_pkgs_sample_epoch_and_subpackage():
         "12deaf38928bd089ec1826234c54c2b4 installed\n"
     )
 
-    nevr, matched = await _parse_dependency_from_installed_pkgs_log(log, "gmp", ["gmp"])
+    nevr, matched = await _parse_dependency_from_installed_pkgs_log(
+        log, "gmp", ["gmp"], _ymir_utils.BREWHUB_URL
+    )
     assert nevr == NEVR(name="gmp", epoch=1, version="6.1.2", release="10.el8")
     assert matched == ["gmp"]
 
     nevr2, matched2 = await _parse_dependency_from_installed_pkgs_log(
-        log, "libjpeg-turbo", ["libjpeg-turbo", "libjpeg-turbo-devel"]
+        log, "libjpeg-turbo", ["libjpeg-turbo", "libjpeg-turbo-devel"], _ymir_utils.BREWHUB_URL
     )
     assert nevr2 == NEVR(name="libjpeg-turbo", epoch=0, version="1.5.3", release="12.el8")
     assert matched2 == ["libjpeg-turbo-devel"]
 
 
 @pytest.mark.asyncio
-async def test_resolve_binary_rpm_to_source_build_success():
-    """Test _resolve_binary_rpm_to_source_build uses getRPM to resolve binary to source."""
-    from ymir.common.utils import _resolve_binary_rpm_to_source_build
+async def test_resolve_binary_rpm_to_source_rpm_success():
+    """Test _resolve_binary_rpm_to_source_rpm uses getRPM to resolve binary to source."""
+    from ymir.common.utils import _resolve_binary_rpm_to_source_rpm
 
     mock_session = flexmock()
     mock_session.should_receive("getRPM").with_args(
@@ -2800,8 +2860,8 @@ async def test_resolve_binary_rpm_to_source_build_success():
     )
     flexmock(koji).should_receive("ClientSession").and_return(mock_session)
 
-    result = await _resolve_binary_rpm_to_source_build(
-        "https://brewhub.example.com", "perl-Errno-1.37-2.el10.x86_64", "perl-Errno", "perl"
+    result = await _resolve_binary_rpm_to_source_rpm(
+        "https://brewhub.example.com", NEVRA.from_string("perl-Errno-1.37-2.el10.x86_64"), "perl"
     )
 
     assert result is not None
@@ -2812,16 +2872,16 @@ async def test_resolve_binary_rpm_to_source_build_success():
 
 
 @pytest.mark.asyncio
-async def test_resolve_binary_rpm_to_source_build_not_found():
-    """Test _resolve_binary_rpm_to_source_build returns None when RPM not in Koji."""
-    from ymir.common.utils import _resolve_binary_rpm_to_source_build
+async def test_resolve_binary_rpm_to_source_rpm_not_found():
+    """Test _resolve_binary_rpm_to_source_rpm returns None when RPM not in Koji."""
+    from ymir.common.utils import _resolve_binary_rpm_to_source_rpm
 
     mock_session = flexmock()
     mock_session.should_receive("getRPM").and_return(None)
     flexmock(koji).should_receive("ClientSession").and_return(mock_session)
 
-    result = await _resolve_binary_rpm_to_source_build(
-        "https://brewhub.example.com", "missing-pkg-1.0-1.el10.x86_64", "missing-pkg", "missing"
+    result = await _resolve_binary_rpm_to_source_rpm(
+        "https://brewhub.example.com", NEVRA.from_string("missing-pkg-1.0-1.el10.x86_64"), "missing"
     )
 
     assert result is None
@@ -2856,15 +2916,17 @@ async def test_parse_dependency_subpackage_with_brew_resolution():
 
 
 @pytest.mark.asyncio
-async def test_installed_pkgs_parser_ignores_noninstalled_and_similar_names():
+async def test_installed_pkgs_parser_ignores_noninstalled_and_similar_names(parser_koji_metadata):
     from ymir.common.utils import _parse_dependency_from_installed_pkgs_log
 
     log = "golang-extra-1.0-1.el10.x86_64 1 2 abc installed\ngolang-1.0-1.el10.x86_64 1 2 abc erased\n"
-    assert await _parse_dependency_from_installed_pkgs_log(log, "golang", ["golang"]) == (None, None)
+    assert await _parse_dependency_from_installed_pkgs_log(
+        log, "golang", ["golang"], _ymir_utils.BREWHUB_URL
+    ) == (None, None)
 
 
 @pytest.mark.asyncio
-async def test_parse_dependency_collects_all_matching_subpackages():
+async def test_parse_dependency_collects_all_matching_subpackages(parser_koji_metadata):
     """Test _parse_dependency_from_installed_pkgs_log collects all matching packages, not just the first."""
     from ymir.common.utils import _parse_dependency_from_installed_pkgs_log
 
@@ -2877,7 +2939,7 @@ async def test_parse_dependency_collects_all_matching_subpackages():
     )
 
     nevr, matched = await _parse_dependency_from_installed_pkgs_log(
-        log, "golang", ["golang", "golang-bin", "golang-src"]
+        log, "golang", ["golang", "golang-bin", "golang-src"], _ymir_utils.BREWHUB_URL
     )
 
     assert nevr is not None
@@ -2885,6 +2947,33 @@ async def test_parse_dependency_collects_all_matching_subpackages():
     assert nevr.version == "1.22.7"
     assert nevr.release == "1.el10"
     assert matched == ["golang", "golang-bin", "golang-src"]
+
+
+@pytest.mark.asyncio
+async def test_parse_dependency_conflicting_versions_returns_none(parser_koji_metadata):
+    """Test _parse_dependency_from_installed_pkgs_log returns None when multiple versions conflict."""
+    from ymir.common.utils import _parse_dependency_from_installed_pkgs_log
+
+    old_nevr = NEVR(name="golang", epoch=0, version="1.21.0", release="1.el10")
+    new_nevr = NEVR(name="golang", epoch=0, version="1.22.7", release="1.el10")
+    call_count = {"n": 0}
+    original_versions = [old_nevr, new_nevr]
+
+    async def mock_resolve(brew_url, nevra, dep_component):
+        idx = call_count["n"]
+        call_count["n"] += 1
+        return original_versions[idx]
+
+    flexmock(_ymir_utils).should_receive("_resolve_binary_rpm_to_source_rpm").replace_with(mock_resolve)
+
+    log = "golang-1.21.0-1.el10.x86_64 1 2 abc installed\ngolang-bin-1.22.7-1.el10.x86_64 1 2 abc installed\n"
+
+    nevr, matched = await _parse_dependency_from_installed_pkgs_log(
+        log, "golang", ["golang", "golang-bin"], _ymir_utils.BREWHUB_URL
+    )
+
+    assert nevr is None, "Should return None when conflicting versions are found"
+    assert set(matched) == {"golang", "golang-bin"}
 
 
 @pytest.mark.asyncio
@@ -2906,7 +2995,10 @@ async def test_compare_build_timestamps_package_built_after_fix():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(package_build).and_return(fixed_build)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-13.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-13.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is True
@@ -2931,7 +3023,10 @@ async def test_compare_build_timestamps_package_built_before_fix():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(package_build).and_return(fixed_build)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-12.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is False
@@ -2951,7 +3046,10 @@ async def test_compare_build_timestamps_same_time():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(package_build).and_return(fixed_build)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-12.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is True
@@ -2969,7 +3067,10 @@ async def test_compare_build_timestamps_missing_package_build():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(None).and_return(fixed_build)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-12.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is None
@@ -2987,7 +3088,10 @@ async def test_compare_build_timestamps_missing_fixed_build():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(package_build).and_return(None)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-12.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is None
@@ -3004,7 +3108,10 @@ async def test_compare_build_timestamps_missing_completion_time():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(package_build).and_return(fixed_build)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-12.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is None
@@ -3026,7 +3133,10 @@ async def test_compare_build_timestamps_wrong_package_name():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(package_build).and_return(fixed_build)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-12.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is None
@@ -3048,7 +3158,10 @@ async def test_compare_build_timestamps_wrong_dependency_name():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(package_build).and_return(fixed_build)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-12.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is None
@@ -3056,8 +3169,7 @@ async def test_compare_build_timestamps_wrong_dependency_name():
 
 @pytest.mark.asyncio
 async def test_check_package_built_with_fixed_dependency_all_koji_lookups_fail():
-    """Test that TransientInfrastructureError is raised when all candidate Brew lookups fail."""
-    from ymir.common.utils import TransientInfrastructureError
+    """Test that failed Brew lookups propagate to the retry handler."""
 
     mock_tool = flexmock()
 
@@ -3090,20 +3202,19 @@ async def test_check_package_built_with_fixed_dependency_all_koji_lookups_fail()
         ConnectionError("Koji connection refused")
     )
 
-    with pytest.raises(TransientInfrastructureError, match="Brew lookup failed for 2 candidate"):
+    with pytest.raises(_ymir_utils.TransientInfrastructureError, match="Brew lookup failed for 2 candidate"):
         await check_package_built_with_fixed_dependency(
             package="pkg",
             fix_version="rhel-10.0.z",
             dep_component="dep",
-            fixed_dep_nvr=NEVR.from_string("dep-1.0-1.el10"),
+            fixed_dep_nevr=NEVR.from_string("dep-1.0-1.el10"),
             available_tools=[mock_tool],
         )
 
 
 @pytest.mark.asyncio
 async def test_check_package_built_with_fixed_dependency_partial_koji_lookup_fail():
-    """Test that TransientInfrastructureError is raised when any candidate Brew lookup fails."""
-    from ymir.common.utils import TransientInfrastructureError
+    """Test that any failed Brew lookup prevents a conclusive comparison and retries."""
 
     mock_tool = flexmock()
 
@@ -3141,12 +3252,12 @@ async def test_check_package_built_with_fixed_dependency_partial_koji_lookup_fai
 
     flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(mock_get_build)
 
-    with pytest.raises(TransientInfrastructureError, match="Brew lookup failed for 1 candidate"):
+    with pytest.raises(_ymir_utils.TransientInfrastructureError, match="Brew lookup failed for 1 candidate"):
         await check_package_built_with_fixed_dependency(
             package="pkg",
             fix_version="rhel-10.0.z",
             dep_component="dep",
-            fixed_dep_nvr=NEVR.from_string("dep-1.0-1.el10"),
+            fixed_dep_nevr=NEVR.from_string("dep-1.0-1.el10"),
             available_tools=[mock_tool],
         )
 
@@ -3193,20 +3304,19 @@ async def test_check_package_built_with_fixed_dependency_invalid_build_records()
         package="my-pkg",
         fix_version="rhel-10.0.z",
         dep_component="dep",
-        fixed_dep_nvr=NEVR.from_string("dep-1.0-1.el10"),
+        fixed_dep_nevr=NEVR.from_string("dep-1.0-1.el10"),
         available_tools=[mock_tool],
     )
 
     assert already_fixed is None
     assert issue_key is None
     assert nvr is None
-    assert reason == "invalid_build_records:RHEL-999999"
+    assert reason.reason == "invalid_build_records:RHEL-999999"
 
 
 @pytest.mark.asyncio
 async def test_check_package_built_with_fixed_dependency_subpackage_list_unavailable():
     """Test when subpackage list fetch fails due to Koji error - should raise exception."""
-    from ymir.common.utils import TransientInfrastructureError
 
     mock_tool = flexmock()
 
@@ -3262,12 +3372,12 @@ async def test_check_package_built_with_fixed_dependency_subpackage_list_unavail
     flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(mock_get_build)
 
     # Should raise TransientInfrastructureError when architecture list unavailable
-    with pytest.raises(TransientInfrastructureError, match="Failed to fetch architecture list"):
+    with pytest.raises(_ymir_utils.TransientInfrastructureError, match="Failed to fetch architecture list"):
         await check_package_built_with_fixed_dependency(
             package="some-app",
             fix_version="rhel-10.z",
             dep_component="golang",
-            fixed_dep_nvr=NEVR.from_string("golang-1.22.7-1.el10"),
+            fixed_dep_nevr=NEVR.from_string("golang-1.22.7-1.el10"),
             available_tools=[mock_tool],
         )
 
@@ -3344,6 +3454,12 @@ other-package-1.0-1.el10.aarch64 1 2 abc installed
             else [{"arch": "x86_64", "name": "golang", "nvr": "golang-1.22.7-1.el10"}]
         )
     )
+    mock_koji_session.should_receive("getRPM").replace_with(
+        lambda info: {"name": info["name"], "build_id": 123456, "epoch": 0}
+    )
+    mock_koji_session.should_receive("getBuild").replace_with(
+        lambda bid: {"name": "golang", "version": "1.22.7", "release": "1.el10", "epoch": 0}
+    )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
     # Mock installed_pkgs.log fetch - return both x86_64 and aarch64 logs
@@ -3387,20 +3503,19 @@ other-package-1.0-1.el10.aarch64 1 2 abc installed
         package="some-package",
         fix_version="rhel-10.z",
         dep_component="golang",
-        fixed_dep_nvr=NEVR.from_string("golang-1.22.5-1.el10"),
+        fixed_dep_nevr=NEVR.from_string("golang-1.22.5-1.el10"),
         available_tools=[mock_tool],
     )
 
     # Should recognize both architectures agree (epoch 0 == no epoch) and return True
     assert already_fixed is True
     assert issue_key == "RHEL-999999"
-    assert _nvr == "some-package-2.0-1.el10"
+    assert _nvr == NEVR.from_string("some-package-2.0-1.el10")
 
 
 @pytest.mark.asyncio
 async def test_check_package_built_with_fixed_dependency_active_query_failed_no_closed():
     """Test when active query fails and no closed builds found - should raise exception."""
-    from ymir.common.utils import TransientInfrastructureError
 
     mock_tool = flexmock()
 
@@ -3415,52 +3530,49 @@ async def test_check_package_built_with_fixed_dependency_active_query_failed_no_
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
 
     # Should raise TransientInfrastructureError when no closed builds and active query failed
-    with pytest.raises(TransientInfrastructureError, match="Jira query failed"):
+    with pytest.raises(_ymir_utils.TransientInfrastructureError, match="Jira query failed"):
         await check_package_built_with_fixed_dependency(
             package="some-pkg",
             fix_version="rhel-10.z",
             dep_component="golang",
-            fixed_dep_nvr=NEVR.from_string("golang-1.22.7-1.el10"),
+            fixed_dep_nevr=NEVR.from_string("golang-1.22.7-1.el10"),
             available_tools=[mock_tool],
         )
 
 
 @pytest.mark.asyncio
 async def test_check_package_built_with_fixed_dependency_closed_query_raises():
-    """Test that closed-build Jira query failure raises TransientInfrastructureError."""
+    """Test that a failed closed-build Jira search raises a retryable error."""
     from beeai_framework.tools import ToolError
-
-    from ymir.common.utils import TransientInfrastructureError
 
     mock_tool = flexmock()
 
     flexmock(_ymir_utils).should_receive("run_tool").and_raise(ToolError("Jira connection refused"))
 
-    with pytest.raises(TransientInfrastructureError, match="Closed-build Jira query failed"):
+    with pytest.raises(_ymir_utils.TransientInfrastructureError, match="Closed-build Jira query failed"):
         await check_package_built_with_fixed_dependency(
             package="some-pkg",
             fix_version="rhel-10.z",
             dep_component="golang",
-            fixed_dep_nvr=NEVR.from_string("golang-1.22.7-1.el10"),
+            fixed_dep_nevr=NEVR.from_string("golang-1.22.7-1.el10"),
             available_tools=[mock_tool],
         )
 
 
 @pytest.mark.asyncio
 async def test_check_package_built_with_fixed_dependency_closed_query_malformed():
-    """Test that malformed closed-build response raises TransientInfrastructureError."""
-    from ymir.common.utils import TransientInfrastructureError
+    """Test that a malformed Jira response raises a retryable error."""
 
     mock_tool = flexmock()
 
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(lambda *args, **kwargs: _coro("not a list"))
 
-    with pytest.raises(TransientInfrastructureError, match="Invalid response from closed-build"):
+    with pytest.raises(_ymir_utils.TransientInfrastructureError, match="Invalid response from closed-build"):
         await check_package_built_with_fixed_dependency(
             package="some-pkg",
             fix_version="rhel-10.z",
             dep_component="golang",
-            fixed_dep_nvr=NEVR.from_string("golang-1.22.7-1.el10"),
+            fixed_dep_nevr=NEVR.from_string("golang-1.22.7-1.el10"),
             available_tools=[mock_tool],
         )
 
@@ -3468,7 +3580,6 @@ async def test_check_package_built_with_fixed_dependency_closed_query_malformed(
 @pytest.mark.asyncio
 async def test_check_package_built_with_fixed_dependency_active_query_failed_with_closed():
     """An active-query outage must not make an old closed build look conclusive."""
-    from ymir.common.utils import TransientInfrastructureError
 
     async def search(_tool, **kwargs):
         if "status in (Closed, Done)" in kwargs["jql"]:
@@ -3484,12 +3595,16 @@ async def test_check_package_built_with_fixed_dependency_active_query_failed_wit
 
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(search)
 
-    with pytest.raises(TransientInfrastructureError, match="Active-build Jira query failed"):
+    flexmock(_ymir_utils).should_receive("_get_koji_build").with_args(
+        _ymir_utils.BREWHUB_URL, "test-app-3.0-1.el10"
+    ).never()
+
+    with pytest.raises(_ymir_utils.TransientInfrastructureError, match="Active-build Jira query failed"):
         await check_package_built_with_fixed_dependency(
             package="test-app",
             fix_version="rhel-10.z",
             dep_component="golang",
-            fixed_dep_nvr=NEVR.from_string("golang-1.22.5-1.el10"),
+            fixed_dep_nevr=NEVR.from_string("golang-1.22.5-1.el10"),
             available_tools=[flexmock()],
         )
 
@@ -3550,6 +3665,12 @@ other-package-1.0-1.el10.x86_64 1 2 abc installed
     mock_session.should_receive("listRPMs").and_return(
         [{"arch": "x86_64", "name": "pkg", "nvr": "pkg-1.0-1.el10"}]
     )
+    mock_session.should_receive("getRPM").replace_with(
+        lambda info: {"name": info["name"], "build_id": 123, "epoch": None}
+    )
+    mock_session.should_receive("getBuild").replace_with(
+        lambda bid: {"name": "golang", "version": "1.22.4", "release": "1.el10", "epoch": None}
+    )
     flexmock(koji).should_receive("ClientSession").and_return(mock_session)
 
     mock_head_response = flexmock(status_code=200)
@@ -3567,6 +3688,8 @@ other-package-1.0-1.el10.x86_64 1 2 abc installed
     def mock_get_build(url, nvr):
         if nvr == "pkg-1.0-1.el10":
             return closed_build
+        if nvr == "pkg-2.0-1.el10":
+            return {"name": "pkg", "epoch": None, "version": "2.0", "release": "1.el10"}
         if nvr == "golang-1.22.4-1.el10":
             return used_golang
         if nvr == "golang-1.22.7-1.el10":
@@ -3579,15 +3702,16 @@ other-package-1.0-1.el10.x86_64 1 2 abc installed
         package="pkg",
         fix_version="rhel-10.z",
         dep_component="golang",
-        fixed_dep_nvr=NEVR.from_string("golang-1.22.7-1.el10"),
+        fixed_dep_nevr=NEVR.from_string("golang-1.22.7-1.el10"),
         available_tools=[mock_tool],
     )
 
     # Should request clarification because active builds exist
     assert already_fixed is None
-    assert reason == "active_builds_not_closed:RHEL-222"
+    assert isinstance(reason, _ymir_utils.BuildVerificationReport)
+    assert reason.reason == "active_builds_not_closed:RHEL-222"
     assert issue_key == "RHEL-111"  # Closed build issue
-    assert _nvr == "pkg-1.0-1.el10"
+    assert _nvr == NEVR.from_string("pkg-1.0-1.el10")
 
 
 @pytest.mark.asyncio
@@ -3654,6 +3778,12 @@ async def test_check_package_built_with_fixed_dependency_partial_logs_one_arch_m
             else [{"arch": "x86_64", "name": "golang", "nvr": "golang-1.26.4-1.el10_2"}]
         )
     )
+    mock_koji_session.should_receive("getRPM").replace_with(
+        lambda info: {"name": info["name"], "build_id": 123456, "epoch": None}
+    )
+    mock_koji_session.should_receive("getBuild").replace_with(
+        lambda bid: {"name": "golang", "version": "1.26.4", "release": "1.el10_2", "epoch": None}
+    )
     flexmock(koji).should_receive("ClientSession").and_return(mock_koji_session)
 
     # Mock httpx client: x86_64 succeeds, ppc64le returns 404
@@ -3688,15 +3818,15 @@ async def test_check_package_built_with_fixed_dependency_partial_logs_one_arch_m
         package="go-fdo-client",
         fix_version="rhel-10.2.z",
         dep_component="golang",
-        fixed_dep_nvr=NEVR.from_string("golang-1.26.4-1.el10_2"),
+        fixed_dep_nevr=NEVR.from_string("golang-1.26.4-1.el10_2"),
         available_tools=[mock_tool],
     )
 
     # Should request clarification due to missing architecture, not return True
     assert already_fixed is None
-    assert reason == "partial_architecture_coverage"
+    assert reason.reason == "partial_architecture_coverage"
     assert issue_key == "RHEL-242375"
-    assert _nvr == "go-fdo-client-1.0.0-4.el10_2.7"
+    assert _nvr == NEVR.from_string("go-fdo-client-1.0.0-4.el10_2.7")
 
 
 @pytest.mark.asyncio
@@ -3707,9 +3837,15 @@ async def test_old_build_retries_brew_outage(monkeypatch):
         return [("RHEL-1", "pkg-1-1.el8")], []
 
     async def select(*_args):
-        from specfile.utils import NEVR
-
-        return NEVR(name="pkg", epoch=0, version="1", release="1.el8"), "RHEL-1"
+        return _ymir_utils.ResolvedBrewBuild(
+            {
+                "name": "pkg",
+                "epoch": 0,
+                "version": "1",
+                "release": "1.el8",
+                "build_id": 123,
+            },
+        ), "RHEL-1"
 
     async def fetch(*_args, **_kwargs):
         raise TransientInfrastructureError("Brew HTTP 503")
@@ -3720,27 +3856,34 @@ async def test_old_build_retries_brew_outage(monkeypatch):
     monkeypatch.setattr(
         _ymir_utils,
         "_get_koji_build",
-        lambda *_args: {"name": "pkg", "build_id": 123, "completion_ts": 1},
+        lambda *_args: {"name": "golang", "epoch": 0, "version": "1", "release": "1.el8", "build_id": 456},
     )
     session = flexmock()
     session.should_receive("listRPMs").and_return([{"arch": "x86_64"}])
     flexmock(koji).should_receive("ClientSession").and_return(session)
 
-    with pytest.raises(TransientInfrastructureError, match="Brew HTTP 503"):
-        await check_package_built_with_fixed_dependency("pkg", "rhel-8.z", "golang", "golang-1-1.el8", [])
+    with pytest.raises(_ymir_utils.TransientInfrastructureError, match="Brew HTTP 503"):
+        await check_package_built_with_fixed_dependency(
+            "pkg", "rhel-8.z", "golang", NEVR.from_string("golang-1-1.el8"), []
+        )
 
 
 @pytest.mark.asyncio
-async def test_koji_lookup_exception_retries_after_candidate_selection(monkeypatch):
-    from ymir.common.utils import TransientInfrastructureError
+async def test_fixed_dependency_lookup_failure_retries(monkeypatch):
 
     async def find(*_args):
         return [("RHEL-1", "pkg-1-1.el8")], []
 
     async def select(*_args):
-        from specfile.utils import NEVR
-
-        return NEVR(name="pkg", epoch=0, version="1", release="1.el8"), "RHEL-1"
+        return _ymir_utils.ResolvedBrewBuild(
+            {
+                "name": "pkg",
+                "epoch": 0,
+                "version": "1",
+                "release": "1.el8",
+                "build_id": 123,
+            },
+        ), "RHEL-1"
 
     def failed_lookup(*_args):
         raise ConnectionError("Koji unavailable")
@@ -3749,8 +3892,10 @@ async def test_koji_lookup_exception_retries_after_candidate_selection(monkeypat
     monkeypatch.setattr(_ymir_utils, "_select_highest_evr_build", select)
     monkeypatch.setattr(_ymir_utils, "_get_koji_build", failed_lookup)
 
-    with pytest.raises(TransientInfrastructureError, match="Koji unavailable"):
-        await check_package_built_with_fixed_dependency("pkg", "rhel-8.z", "golang", "golang-1-1.el8", [])
+    with pytest.raises(_ymir_utils.TransientInfrastructureError, match="Koji unavailable"):
+        await check_package_built_with_fixed_dependency(
+            "pkg", "rhel-8.z", "golang", NEVR.from_string("golang-1-1.el8"), []
+        )
 
 
 @pytest.mark.asyncio
@@ -3802,9 +3947,60 @@ async def test_check_package_built_filtered_active_empty_no_false_transient_erro
         package="my-pkg",
         fix_version="rhel-10.0.z",
         dep_component="dep",
-        fixed_dep_nvr=NEVR.from_string("dep-1.0-1.el10"),
+        fixed_dep_nevr=NEVR.from_string("dep-1.0-1.el10"),
         available_tools=[mock_tool],
     )
 
     assert already_fixed is None
-    assert reason == "invalid_build_records:RHEL-111"
+    assert reason.reason == "invalid_build_records:RHEL-111"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("latest_epoch, expected", [(0, False), (2, True)])
+async def test_check_build_in_buildroot_resolves_epoch_from_brew(latest_epoch, expected):
+    """Jira NVRs omit epoch; Brew's epoch must govern buildroot comparisons."""
+    import ymir.common.config as config
+
+    flexmock(config).should_receive("load_rhel_config").and_return(_coro({}))
+    flexmock(_ymir_utils).should_receive("_resolve_buildroot_checks").and_return(
+        [("https://koji.example", "buildroot-tag")]
+    )
+    flexmock(_ymir_utils).should_receive("_get_koji_build").with_args(
+        _ymir_utils.BREWHUB_URL, "pkg-1.0-1.el10"
+    ).and_return({"name": "pkg", "epoch": 2, "version": "1.0", "release": "1.el10"})
+    flexmock(_ymir_utils).should_receive("_get_latest_koji_build").with_args(
+        "https://koji.example", "buildroot-tag", "pkg"
+    ).and_return(
+        {
+            "name": "pkg",
+            "epoch": latest_epoch,
+            "version": "9.0",
+            "release": "1.el10",
+            "nvr": "pkg-9.0-1.el10",
+        }
+    )
+
+    assert await _ymir_utils.check_build_in_buildroot("rhel-10.0", "pkg", "pkg-1.0-1.el10") is expected
+
+
+@pytest.fixture
+def parser_koji_metadata():
+    session = flexmock()
+    session.should_receive("getRPM").replace_with(lambda info: {"build_id": info["name"]})
+    builds = {
+        "golang": ("golang", 0, "1.22.7", "1.el10"),
+        "golang-bin": ("golang", 0, "1.22.7", "1.el10"),
+        "golang-src": ("golang", 0, "1.22.7", "1.el10"),
+        "vim": ("vim", 2, "9.0.1", "1.el10"),
+        "myapp": ("myapp", 0, "v1.2.3", "1.el10"),
+        "python3.11": ("python3.11", 0, "3.11.9", "1.el10"),
+        "gmp": ("gmp", 1, "6.1.2", "10.el8"),
+        "libjpeg-turbo-devel": ("libjpeg-turbo", 0, "1.5.3", "12.el8"),
+    }
+
+    def get_build(build_id):
+        name, epoch, version, release = builds[build_id]
+        return {"name": name, "epoch": epoch, "version": version, "release": release}
+
+    session.should_receive("getBuild").replace_with(get_build)
+    flexmock(koji).should_receive("ClientSession").and_return(session)

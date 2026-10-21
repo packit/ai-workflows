@@ -1248,3 +1248,71 @@ def test_jira_comment_template_output_unchanged():
     """Rebuilding JIRA_COMMENT_TEMPLATE from the shared marker keeps output identical."""
     rendered = JIRA_COMMENT_TEMPLATE.substitute(AGENT_TYPE="Triage", JIRA_COMMENT="hello")
     assert rendered.startswith("Output from Ymir Triage Agent: \n\nhello\n\n")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["final", "transient_verification", "transient_buildroot"])
+async def test_rebuild_verification_distinguishes_transient_and_final_errors(monkeypatch, tmp_path, outcome):
+    """Only final errors produce a clarification; transient failures reach task retries."""
+    report = common_utils.BuildVerificationReport(
+        candidates=[("RHEL-1", "pkg-1-1.el9", "closed"), ("RHEL-2", "pkg-2-1.el9", "active")],
+        problems=["RHEL-1: Brew epoch missing", "RHEL-2: Invalid Brew epoch"],
+    )
+
+    @asynccontextmanager
+    async def tools(*args, **kwargs):
+        yield []
+
+    async def details(*args, **kwargs):
+        return {"fields": {FIXED_IN_BUILD_CUSTOM_FIELD: "dep-1-1.el9"}}
+
+    async def check(*args, **kwargs):
+        if outcome == "transient_verification":
+            raise common_utils.TransientInfrastructureError("Brew test outage")
+        if outcome == "transient_buildroot":
+            return False, None, None, None
+        return None, None, None, report
+
+    async def run_verification(workflow, state):
+        state.target_branch = "rhel-9.8"
+        state.triage_result = TriageOutputSchema(
+            resolution=Resolution.REBUILD,
+            data=RebuildData(
+                jira_issue=state.jira_issue,
+                package="pkg",
+                fix_version="rhel-9.8.z",
+                dependency_issue="RHEL-DEP",
+                dependency_component="dep",
+            ),
+        )
+        next_step = await workflow.steps["verify_rebuild_buildroot"].handler(state)
+        assert next_step == "comment_in_jira"
+        return flexmock(state=state)
+
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(tools)
+    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    flexmock(t_agent).should_receive("run_tool").replace_with(details)
+    flexmock(t_agent).should_receive("check_package_built_with_fixed_dependency").replace_with(check)
+
+    async def buildroot(*args, **kwargs):
+        raise common_utils.TransientInfrastructureError("Brew test outage")
+
+    if outcome == "transient_buildroot":
+        flexmock(t_agent).should_receive("check_build_in_buildroot").replace_with(buildroot).once()
+    else:
+        flexmock(t_agent).should_receive("check_build_in_buildroot").never()
+    monkeypatch.setattr(t_agent.Workflow, "run", run_verification)
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+
+    if outcome != "final":
+        with pytest.raises(common_utils.TransientInfrastructureError, match="Brew test outage"):
+            await run_workflow("RHEL-REBUILD", True, lambda *_: flexmock())
+        return
+    state = await run_workflow("RHEL-REBUILD", True, lambda *_: flexmock())
+
+    assert state.triage_result.resolution == Resolution.CLARIFICATION_NEEDED
+    findings = state.triage_result.data.findings
+    for text in ("RHEL-1", "RHEL-2", "pkg-1-1.el9", "pkg-2-1.el9", "epoch missing", "Invalid Brew epoch"):
+        assert text in findings
+    assert "RHEL-DEP" in findings
+    assert "dep-1-1.el9" in findings

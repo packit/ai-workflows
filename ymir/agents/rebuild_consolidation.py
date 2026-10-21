@@ -26,7 +26,11 @@ from ymir.common.models import (
     Resolution,
     TriageEligibility,
 )
-from ymir.common.utils import FIXED_IN_BUILD_CUSTOM_FIELD, check_build_in_buildroot
+from ymir.common.utils import (
+    FIXED_IN_BUILD_CUSTOM_FIELD,
+    InvalidDependencyDataError,
+    check_build_in_buildroot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +226,13 @@ async def find_rebuild_siblings(
                                 f"({analysis.dependency_component} not yet in buildroot)"
                             )
                             continue
+                    except InvalidDependencyDataError as e:
+                        logger.warning(f"Sibling {candidate_key}: mismatched dependency metadata: {e}")
+                        summary_lines.append(
+                            f"* {candidate_key} — excluded "
+                            f"(mismatched dependency metadata for {analysis.dependency_component})"
+                        )
+                        continue
                     except Exception as e:
                         logger.warning(f"Buildroot check failed for sibling {candidate_key}: {e}")
 

@@ -201,9 +201,11 @@ You must decide between one of the following actions. Follow these guidelines to
      `rpmspec -q --queryformat "%{VERSION}\n" --srpm <package>.spec | head -1`
      Compare it with the target version using `rpmdev-vercmp <current> <target>`.
      If the current version is equal to or newer than the target version:
-     - Search for the issue that performed this rebase using `search_jira_issues` with a query like: `project = RHEL AND component = "<package>" AND (summary ~ "rebase" OR summary ~ "update") AND summary ~ "<target_version>" AND status in (Closed, Done, In Progress) AND fixVersion = "<fix_version>"` Include fields `["key", "summary", "status", "customfield_10578"]` (Fixed in Build)
-     - Return resolution `"already-fixed"` instead of `"rebase"`
-     - In the explanation field, reference the existing issue if found: "Package is already at version X.Y.Z in the <branch> branch (tracked by ISSUE-KEY with Fixed in Build: package-X.Y.Z-R.elN). Please add this ticket to that build's Errata." If no issue found, provide generic guidance: "Package is already at version X.Y.Z in the <branch> branch. Please search for existing builds and add this ticket to the appropriate Errata."
+     - Search for the issue that performed this rebase using `search_jira_issues` with a query like: `project = RHEL AND component = "<package>" AND (summary ~ "rebase" OR summary ~ "update") AND summary ~ "<target_version>" AND status in (Closed, Done, Resolved) AND fixVersion = "<fix_version>"` Include fields `["key", "summary", "status", "customfield_10578"]` (Fixed in Build)
+     - Do NOT treat issues with status "In Progress" as proof that the package is already fixed — an in-progress rebase may not have produced a shipped build yet.
+     - Return resolution `"already-fixed"` instead of `"rebase"` only when a completed (Closed/Done/Resolved) issue with a non-empty Fixed in Build field is found.
+     - In the explanation field, reference the existing issue: "Package is already at version X.Y.Z in the <branch> branch (tracked by ISSUE-KEY with Fixed in Build: package-X.Y.Z-R.elN). Please add this ticket to that build's Errata."
+     - If no completed issue with a Fixed in Build value is found, return resolution `"clarification-needed"` with findings: "Package spec is already at version X.Y.Z in the <branch> branch, but no completed Jira issue with a Fixed in Build value was found." and additional_info_needed: "Please verify if a build exists for version X.Y.Z. If a build exists, provide the issue key and NVR so this ticket can be added to the appropriate Errata. If no build exists, proceed with the rebase."
    * You must provide a clear justification explaining why this version addresses the issue.
    * Set the Jira fields as per section 3.4 below.
 

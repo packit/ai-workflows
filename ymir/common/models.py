@@ -13,7 +13,7 @@ from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
 from ymir.common.constants import REPRODUCER_TEST_REPOSITORY_HOST
 from ymir.common.validators import UniqueSortedList
@@ -639,6 +639,22 @@ AUTOMATED_RESOLUTION_NOT_SUPPORTED = (
 POSTPONEMENT_NOTE = "\n\n_This issue will be monitored by Ymir and processed once it is unblocked._"
 
 
+_RESOLUTION_DATA_MAP: dict[Resolution, type[BaseModel]] = {
+    Resolution.REBASE: RebaseData,
+    Resolution.BACKPORT: BackportData,
+    Resolution.REBUILD: RebuildData,
+    Resolution.CLARIFICATION_NEEDED: ClarificationNeededData,
+    Resolution.OPEN_ENDED_ANALYSIS: OpenEndedAnalysisData,
+    Resolution.ALREADY_FIXED: AlreadyFixedData,
+    Resolution.NOT_AFFECTED: NotAffectedData,
+    Resolution.ERROR: ErrorData,
+    Resolution.POSTPONED_DEPENDENCY: PostponedData,
+    Resolution.POSTPONED_Y_STREAM: PostponedData,
+    Resolution.POSTPONED_NO_PATCH: PostponedData,
+    Resolution.POSTPONED_PR_PENDING: PostponedData,
+}
+
+
 class TriageOutputSchema(BaseModel):
     """Output schema for the triage agent."""
 
@@ -661,6 +677,21 @@ class TriageOutputSchema(BaseModel):
     confidence: ConfidenceAssessment | None = Field(
         default=None, description="Confidence in target-source applicability; None means unassessed"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _select_data_model(cls, values: Any) -> Any:
+        if not isinstance(values, dict):
+            return values
+        resolution_raw = values.get("resolution")
+        data_raw = values.get("data")
+        if resolution_raw is None or data_raw is None or not isinstance(data_raw, dict):
+            return values
+        resolution = Resolution(resolution_raw) if isinstance(resolution_raw, str) else resolution_raw
+        expected_cls = _RESOLUTION_DATA_MAP.get(resolution)
+        if expected_cls is not None:
+            values["data"] = expected_cls.model_validate(data_raw)
+        return values
 
     def format_for_comment(self, auto_chain: bool = False, triage_only: bool = False) -> str:
         """Format the triage result in a human-readable format for Jira comments."""

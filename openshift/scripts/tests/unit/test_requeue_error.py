@@ -231,3 +231,9 @@ def test_labels_to_clear_triage_includes_downstream() -> None:
 
 def test_labels_to_clear_returns_empty_for_unknown_queue() -> None:
     assert _labels_to_clear("unknown_queue") == set()
+
+
+@pytest.mark.parametrize("queue", ["triage_queue", "triage_queue_todo"])
+def test_requeue_triage_clears_already_fixed(queue):
+    assert "ymir_triaged_already_fixed" in _labels_to_clear(queue)
+    assert "ymir_triaged_already_fixed" not in _labels_to_clear("backport_queue_c9s")

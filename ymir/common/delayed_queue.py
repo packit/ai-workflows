@@ -12,6 +12,17 @@ from ymir.common.base_utils import fix_await
 
 logger = logging.getLogger(__name__)
 
+# A stale ZRANGEBYSCORE result must not let two workers enqueue the same retry.
+_PROMOTE_TASK = """
+local ready_at = redis.call('ZSCORE', KEYS[1], ARGV[1])
+if ready_at and tonumber(ready_at) <= tonumber(ARGV[2]) then
+    redis.call('LPUSH', KEYS[2], ARGV[1])
+    redis.call('ZREM', KEYS[1], ARGV[1])
+    return 1
+end
+return 0
+"""
+
 
 async def schedule_task(
     redis_conn: redis.Redis,
@@ -50,11 +61,11 @@ async def promote_due_tasks(
     for member in due:
         payload = member.decode() if isinstance(member, bytes) else str(member)
         target_queue = target_queue_for_payload(payload)
-        pipe = redis_conn.pipeline()
-        pipe.lpush(target_queue, payload)
-        pipe.zrem(delayed_key, member)
-        await fix_await(pipe.execute())
-        promoted += 1
-        logger.info("Promoted delayed task from %s to %s", delayed_key, target_queue)
+        claimed = await fix_await(
+            redis_conn.eval(_PROMOTE_TASK, 2, delayed_key, target_queue, member, cutoff)
+        )
+        if claimed:
+            promoted += 1
+            logger.info("Promoted delayed task from %s to %s", delayed_key, target_queue)
 
     return promoted

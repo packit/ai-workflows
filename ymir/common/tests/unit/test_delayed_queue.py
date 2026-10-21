@@ -42,29 +42,29 @@ async def test_promote_due_tasks_moves_ready_members():
         attempts=1,
         user_triggered=False,
     ).model_dump_json()
-    future_payload = Task(
-        metadata={"jira_issue": "RHEL-3"},
-        attempts=1,
-        user_triggered=False,
-    ).model_dump_json()
 
-    # future_payload was not returned by zrangebyscore — stays delayed
+    # Future payloads are excluded by the Redis score cutoff.
     async def _mock_zrangebyscore(*_args, **_kwargs):
         return [todo_payload.encode(), normal_payload.encode()]
 
-    async def _mock_execute(*_args, **_kwargs):
-        return [1, 1]
-
-    pipe = flexmock()
-    pipe.should_receive("lpush").with_args("reproducer_queue_todo", todo_payload).once().ordered()
-    pipe.should_receive("lpush").with_args("reproducer_queue", normal_payload).once().ordered()
-    pipe.should_receive("lpush").with_args("reproducer_queue", future_payload).never()
-    pipe.should_receive("zrem")
-    pipe.should_receive("execute").replace_with(_mock_execute)
-
     redis = flexmock()
     redis.should_receive("zrangebyscore").replace_with(_mock_zrangebyscore).once()
-    redis.should_receive("pipeline").and_return(pipe)
+    redis.should_receive("eval").with_args(
+        str,
+        2,
+        "reproducer_queue_delayed",
+        "reproducer_queue_todo",
+        todo_payload.encode(),
+        float,
+    ).and_return(1).once()
+    redis.should_receive("eval").with_args(
+        str,
+        2,
+        "reproducer_queue_delayed",
+        "reproducer_queue",
+        normal_payload.encode(),
+        float,
+    ).and_return(1).once()
 
     def target(payload: str) -> str:
         task = Task.model_validate_json(payload)
@@ -87,7 +87,16 @@ async def test_promote_due_tasks_noop_when_empty():
 
     redis = flexmock()
     redis.should_receive("zrangebyscore").replace_with(_mock_zrangebyscore).once()
-    redis.should_receive("pipeline").never()
+    redis.should_receive("eval").never()
 
     promoted = await promote_due_tasks(redis, "reproducer_queue_delayed", lambda _: "reproducer_queue")
     assert promoted == 0
+
+
+@pytest.mark.asyncio
+async def test_promote_due_tasks_does_not_duplicate_claimed_member():
+    redis = flexmock()
+    redis.should_receive("zrangebyscore").and_return([b"task"]).once()
+    # Another worker already removed this member before this worker's claim.
+    redis.should_receive("eval").with_args(str, 2, "delayed", "ready", b"task", 100).and_return(0).once()
+    assert await promote_due_tasks(redis, "delayed", lambda _: "ready", now=100) == 0

@@ -149,6 +149,7 @@ These labels are applied to GitLab merge requests (not Jira issues):
 | Queue | Type | Triggers | Labels Added | Status |
 |-------|------|----------|--------------|--------|
 | `triage_queue` | Input | No labels OR `ymir_retry_needed` | `ymir_triage_in_progress` (set by fetcher atomic flip for retry/todo, or by agent at triage start for fresh issues) | Active |
+| `triage_queue_delayed` | Delayed (ZSET) | Transient triage or Jira label-write failure | Keeps `ymir_triage_in_progress`; due retries return to their normal or priority queue | Active |
 | `triage_queue_todo` | Input (priority) | `ymir_todo` | Same as `triage_queue`. The triage agent BRPOPs `[triage_queue_todo, triage_queue]`, so ymir_todo tasks jump ahead of fresh/retry tasks. | Active |
 | `rebase_queue_c9s` | Input | Resolution=REBASE, RHEL 8/9 | `ymir_triaged_rebase` | Active (AUTO_CHAIN only) |
 | `rebase_queue_c9s_todo` | Input (priority) | Resolution=REBASE, RHEL 8/9 (ymir_todo) | Same as `rebase_queue_c9s`. The rebase agent BRPOPs `[rebase_queue_c9s_todo, rebase_queue_c9s]`. | Active (AUTO_CHAIN only) |
@@ -242,3 +243,9 @@ JQL no longer restricts `ymir_todo` / `ymir_todo_triage` by assignee — the fet
 ---
 
 **Last Updated:** 2026-07-21
+
+Transient triage failures are scheduled in `triage_queue_delayed` after the issue
+lock is released. Brew and Jira verification retries wait 60 seconds per attempt;
+failed in-progress label writes wait 60 seconds. Queue polling promotes due tasks
+atomically, retaining their attempt count and user-triggered priority, so backoff
+leaves worker slots free for other issues.

@@ -40,6 +40,7 @@ from ymir.common import (
 )
 from ymir.common.constants import YMIR_COMMENT_MARKER, JiraLabels
 from ymir.common.models import (
+    AlreadyFixedData,
     AssessedApplicabilityResult,
     AutoProcessingMode,
     BackportData,
@@ -409,6 +410,7 @@ async def _capture_process_task(main_fn, redis_mock=None):
 
     async def _mock_run_task_loop(_redis, _queues, process_fn, **_kw):
         captured["process_task"] = process_fn
+        process_fn.poll_fn = _kw.get("poll_fn")
 
     @asynccontextmanager
     async def _mock_redis_client(*_args, **_kwargs):
@@ -928,7 +930,13 @@ async def test_process_task_acquires_lock_and_proceeds(_mock_env_vars_redis):
 
 
 @pytest.mark.asyncio
-async def test_triage_retry_is_queued_after_issue_lock_release(_mock_env_vars_redis):
+@pytest.mark.parametrize("failure", ["ordinary", "transient", "wrapped_transient", "label_write"])
+@pytest.mark.parametrize("attempts", [0, 1])
+@pytest.mark.parametrize("priority", [False, True])
+async def test_triage_retry_is_queued_after_issue_lock_release(
+    _mock_env_vars_redis, monkeypatch, failure, attempts, priority
+):
+    monkeypatch.setenv("MAX_RETRIES", "3")
     events = []
     client = flexmock()
 
@@ -947,19 +955,45 @@ async def test_triage_retry_is_queued_after_issue_lock_release(_mock_env_vars_re
         return [], "New"
 
     async def _failed_workflow(*_args, **_kwargs):
+        if failure != "ordinary":
+            error = common_utils.TransientInfrastructureError("Brew unavailable")
+            if failure == "wrapped_transient":
+                raise t_agent.FrameworkError("workflow failed", cause=error)
+            raise error
         raise RuntimeError("triage failed")
+
+    async def _record_schedule(redis, delayed_key, payload, delay_seconds):
+        delayed_task = Task.model_validate_json(payload)
+        events.append(
+            ("schedule", delayed_key, delayed_task.attempts, delayed_task.user_triggered, delay_seconds)
+        )
+
+    async def _set_labels(**kwargs):
+        if failure == "label_write":
+            raise ConnectionError("Jira unavailable")
 
     client.should_receive("lpush").replace_with(_record_push)
     flexmock(t_agent).should_receive("issue_lock").replace_with(_record_lock)
     flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
-    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_set_labels)
     flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
     flexmock(t_agent).should_receive("run_workflow").replace_with(_failed_workflow)
+    flexmock(t_agent.asyncio).should_receive("sleep").never()
+    flexmock(t_agent).should_receive("schedule_task").replace_with(_record_schedule)
 
     process_task = await _capture_process_task(main, client)
-    await process_task(_make_payload())
+    task = Task.from_issue("RHEL-99999", user_triggered=priority)
+    task.attempts = attempts
+    await process_task(task.model_dump_json().encode())
 
-    assert events == ["lock_acquired", "lock_released", ("push", "triage_queue", 1)]
+    queue = "triage_queue_todo" if priority else "triage_queue"
+    expected = ["lock_acquired", "lock_released"]
+    if failure == "ordinary":
+        expected.append(("push", queue, attempts + 1))
+    else:
+        delay = 60 if failure == "label_write" else 60 * (attempts + 1)
+        expected.append(("schedule", "triage_queue_delayed", attempts + 1, priority, delay))
+    assert events == expected
 
 
 @pytest.mark.asyncio
@@ -1656,6 +1690,35 @@ def test_validate_triage_output_rejects_malformed_answers(text, expected):
         validate_triage_output(text, jira_issue="RHEL-1")
 
 
+def test_validate_triage_output_accepts_already_fixed():
+    """The prompt directs the agent to return already-fixed; the validator must accept it."""
+    answer = {
+        "resolution": "already-fixed",
+        "data": {
+            "explanation": "Build foo-1.0-2.el9 already contains the fix.",
+            "package": "foo",
+        },
+    }
+
+    normalized = validate_triage_output(json.dumps(answer), jira_issue="RHEL-1")
+
+    output = TriageOutputSchema.model_validate_json(normalized)
+    assert output.resolution == Resolution.ALREADY_FIXED
+    assert isinstance(output.data, AlreadyFixedData)
+    assert output.data.jira_issue == "RHEL-1"
+    assert output.data.package == "foo"
+
+
+def test_triage_resolution_models_match_shared_schema():
+    from ymir.common.models import _RESOLUTION_DATA_MAP
+
+    assert {
+        resolution: model
+        for resolution, model in _RESOLUTION_DATA_MAP.items()
+        if resolution != Resolution.POSTPONED_Y_STREAM
+    } == t_agent._RESOLUTION_DATA_MODELS
+
+
 def test_validate_triage_output_keeps_resolution_model_despite_extra_keys():
     """A stray `version` must not turn a rebuild answer into RebaseData."""
     answer = {
@@ -1946,3 +2009,99 @@ async def test_is_rebase_sibling_fails_when_own_details_unreadable(monkeypatch, 
     state = TriageState(jira_issue="RHEL-200")
     with pytest.raises(RuntimeError, match="RHEL-200"):
         await _is_rebase_sibling(state, [], user_triggered=user_triggered)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["final", "transient_verification", "transient_buildroot"])
+async def test_rebuild_verification_distinguishes_transient_and_final_errors(monkeypatch, tmp_path, outcome):
+    """Only final errors produce a clarification; transient failures reach task retries."""
+    report = common_utils.BuildVerificationReport(
+        candidates=[("RHEL-1", "pkg-1-1.el9", "closed"), ("RHEL-2", "pkg-2-1.el9", "active")],
+        problems=["RHEL-1: Brew epoch missing", "RHEL-2: Invalid Brew epoch"],
+    )
+
+    @asynccontextmanager
+    async def tools(*args, **kwargs):
+        yield []
+
+    async def details(*args, **kwargs):
+        return {"fields": {FIXED_IN_BUILD_CUSTOM_FIELD: "dep-1-1.el9"}}
+
+    async def check(*args, **kwargs):
+        assert kwargs["downstream_component"] == "module:16/pkg"
+        if outcome == "transient_verification":
+            raise common_utils.TransientInfrastructureError("Brew test outage")
+        if outcome == "transient_buildroot":
+            return False, None, None, None
+        return None, None, None, report
+
+    async def run_verification(workflow, state):
+        state.raw_downstream_component = "module:16/pkg"
+        state.target_branch = "rhel-9.8"
+        state.triage_result = TriageOutputSchema(
+            resolution=Resolution.REBUILD,
+            data=RebuildData(
+                jira_issue=state.jira_issue,
+                package="pkg",
+                fix_version="rhel-9.8.z",
+                dependency_issue="RHEL-DEP",
+                dependency_component="dep",
+            ),
+        )
+        next_step = await workflow.steps["verify_rebuild_buildroot"].handler(state)
+        assert next_step == "comment_in_jira"
+        return flexmock(state=state)
+
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(tools)
+    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    flexmock(t_agent).should_receive("run_tool").replace_with(details)
+    flexmock(t_agent).should_receive("check_package_built_with_fixed_dependency").replace_with(check)
+
+    async def buildroot(*args, **kwargs):
+        raise common_utils.TransientInfrastructureError("Brew test outage")
+
+    if outcome == "transient_buildroot":
+        flexmock(t_agent).should_receive("check_build_in_buildroot").replace_with(buildroot).once()
+    else:
+        flexmock(t_agent).should_receive("check_build_in_buildroot").never()
+    monkeypatch.setattr(t_agent.Workflow, "run", run_verification)
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+
+    if outcome != "final":
+        with pytest.raises(common_utils.TransientInfrastructureError, match="Brew test outage"):
+            await run_workflow("RHEL-REBUILD", True, lambda *_: flexmock())
+        return
+    state = await run_workflow("RHEL-REBUILD", True, lambda *_: flexmock())
+
+    assert state.triage_result.resolution == Resolution.CLARIFICATION_NEEDED
+    findings = state.triage_result.data.findings
+    for text in ("RHEL-1", "RHEL-2", "pkg-1-1.el9", "pkg-2-1.el9", "epoch missing", "Invalid Brew epoch"):
+        assert text in findings
+    assert "RHEL-DEP" in findings
+    assert "dep-1-1.el9" in findings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("priority", [False, True])
+async def test_triage_poller_promotes_due_retries_before_dequeue(_mock_env_vars_redis, priority):
+    client = flexmock()
+    events = []
+    payload = Task.from_issue("RHEL-1", user_triggered=priority).model_dump_json()
+
+    async def promote(redis, key, target):
+        assert redis is client
+        assert key == "triage_queue_delayed"
+        expected = "triage_queue_todo" if priority else "triage_queue"
+        assert target(payload) == expected
+        events.append("promote")
+
+    async def dequeue(queues, timeout):
+        assert queues == ["triage_queue_todo", "triage_queue"]
+        assert timeout == 5
+        events.append("dequeue")
+        return b"triage_queue", payload.encode()
+
+    flexmock(t_agent).should_receive("promote_due_tasks").replace_with(promote).once()
+    client.should_receive("brpop").replace_with(dequeue).once()
+    process = await _capture_process_task(main, client)
+    assert await process.poll_fn() == (b"triage_queue", payload.encode())
+    assert events == ["promote", "dequeue"]

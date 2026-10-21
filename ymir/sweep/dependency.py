@@ -12,6 +12,7 @@ yet landed in the target buildroot.
 import re
 
 import requests
+from specfile.utils import NEVR
 
 from ymir.common.config import load_rhel_config
 from ymir.common.constants import JiraLabels
@@ -143,17 +144,26 @@ class DependencySweep(SweepStrategy):
         fix_version = normalize_fix_version(raw_fix_version, rhel_config)
 
         try:
+            fixed_nevr = NEVR.from_string(blocker.fixed_in_build)
+        except Exception:
+            return SweepResult(
+                issue_key=issue.key,
+                action="error",
+                detail=(f"Cannot parse Fixed in Build {blocker.fixed_in_build!r} on {blocker_key} as NEVR"),
+            )
+
+        try:
             in_buildroot = await check_build_in_buildroot(
                 target_branch,
                 dep_component,
-                blocker.fixed_in_build,
+                fixed_nevr,
                 fix_version=fix_version,
             )
         except Exception as exc:
             return SweepResult(
                 issue_key=issue.key,
                 action="error",
-                detail=(f"Buildroot check failed for {dep_component} ({blocker.fixed_in_build}): {exc}"),
+                detail=(f"Buildroot check failed for {dep_component} ({fixed_nevr}): {exc}"),
             )
 
         if in_buildroot:

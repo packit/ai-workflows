@@ -1290,7 +1290,7 @@ async def run_workflow(
                         # Confirmed via installed_pkgs.log that package has the fix
                         logger.info(
                             f"{package} already built with fixed dependency {dep_component} "
-                            f"({fixed_in_build}) — resolving as ALREADY_FIXED"
+                            f"({fixed_dep_nevr}) — resolving as ALREADY_FIXED"
                         )
                         cve_id = getattr(data, "cve_id", None) or ""
                         cve_list = [c.strip() for c in cve_id.split(",") if c.strip()]
@@ -1309,7 +1309,7 @@ async def run_workflow(
                                 package_nvr=pkg_nvr,
                                 package_issue_key=pkg_issue_key,
                                 dependency_issue_key=dep_issue_key,
-                                dependency_nvr=fixed_in_build,
+                                dependency_nvr=str(fixed_dep_nevr),
                                 cve_id=cve_id,
                                 fix_version=fix_version,
                             ),
@@ -1331,7 +1331,7 @@ async def run_workflow(
                                         f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
                                         f"{pkg_issue_key}) was completed after the {dep_component} fix "
                                         f"(dependency issue {dep_issue_key}, Fixed in Build: "
-                                        f"{fixed_in_build}). This suggests the package likely already "
+                                        f"{fixed_dep_nevr}). This suggests the package likely already "
                                         f"has the fix, but build logs are unavailable to confirm which "
                                         f"dependency version was actually used. Overlapping builds or "
                                         f"buildroot tagging delays could mean an older version was used "
@@ -1339,7 +1339,7 @@ async def run_workflow(
                                     ),
                                     additional_info_needed=(
                                         f"Please verify whether build {pkg_nvr} was created with "
-                                        f"{dep_component} {fixed_in_build} or newer. If confirmed, mark as "
+                                        f"{dep_component} {fixed_dep_nevr} or newer. If confirmed, mark as "
                                         f"Already Fixed and add build {pkg_nvr} to the errata. If the old "
                                         f"version was used, proceed with rebuild."
                                     ),
@@ -1365,7 +1365,7 @@ async def run_workflow(
                                     ),
                                     additional_info_needed=(
                                         f"Please verify whether any of these builds ({active_issues}) "
-                                        f"actually shipped with {dep_component} {fixed_in_build} or newer. "
+                                        f"actually shipped with {dep_component} {fixed_dep_nevr} or newer. "
                                         f"If yes and the build is valid, close the issue and mark as "
                                         f"Already Fixed. If the builds are invalid or won't ship, "
                                         f"proceed with rebuild."
@@ -1387,15 +1387,15 @@ async def run_workflow(
                                     findings=(
                                         f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
                                         f"{pkg_issue_key}) was built with {dep_component} at the required "
-                                        f"version or newer ({fixed_in_build}). The {dep_component} "
+                                        f"version or newer ({fixed_dep_nevr}). The {dep_component} "
                                         f"component produces multiple binary packages. The following "
-                                        f"installed packages from this source build were found: "
+                                        f"installed packages from this source RPM were found: "
                                         f"{subpkg_list}. We cannot automatically determine which of "
                                         f"these packages carry the fixed code."
                                     ),
                                     additional_info_needed=(
                                         f"Please verify whether the installed packages ({subpkg_list}) "
-                                        f"from {dep_component} {fixed_in_build} contain the fix "
+                                        f"from {dep_component} {fixed_dep_nevr} contain the fix "
                                         f"for this issue. If confirmed, mark as Already Fixed and add "
                                         f"build {pkg_nvr} to the errata. If the fix is in a different "
                                         f"binary package from {dep_component} that was not installed, "
@@ -1424,7 +1424,7 @@ async def run_workflow(
                                     additional_info_needed=(
                                         "Please manually inspect installed_pkgs.log for all architectures of "
                                         f"{pkg_nvr} to verify which {dep_component} version was actually "
-                                        f"used across all architectures. If all archs used {fixed_in_build} "
+                                        f"used across all architectures. If all archs used {fixed_dep_nevr} "
                                         f"or newer, mark as Already Fixed. Otherwise, rebuild."
                                     ),
                                     jira_issue=state.jira_issue,
@@ -1450,7 +1450,7 @@ async def run_workflow(
                                         f"Please inspect installed_pkgs.log for {pkg_nvr} across "
                                         f"architectures to determine which {dep_component} version was "
                                         f"used. Mark as Already Fixed only if ALL architectures used "
-                                        f"{fixed_in_build} or newer. If any architecture used an older "
+                                        f"{fixed_dep_nevr} or newer. If any architecture used an older "
                                         f"version, rebuild the affected architectures."
                                     ),
                                     jira_issue=state.jira_issue,
@@ -1499,7 +1499,7 @@ async def run_workflow(
                                     additional_info_needed=(
                                         f"Please verify the builds referenced in {rejected_issues} "
                                         f"and confirm whether {package} has a valid completed build "
-                                        f"with {dep_component} {fixed_in_build} or newer. If the "
+                                        f"with {dep_component} {fixed_dep_nevr} or newer. If the "
                                         f"build records are incorrect, proceed with rebuild."
                                     ),
                                     jira_issue=state.jira_issue,
@@ -1518,7 +1518,7 @@ async def run_workflow(
                                 data=ClarificationNeededData(
                                     findings=(
                                         f"The dependency component {dep_component} (from issue "
-                                        f"{dep_issue_key}, Fixed in Build: {fixed_in_build}) resolves "
+                                        f"{dep_issue_key}, Fixed in Build: {fixed_dep_nevr}) resolves "
                                         f"to a different package name in Koji ({dep_details}). This "
                                         f"inconsistency between the Jira dependency information and the "
                                         f"actual Koji package data prevents automated verification of "
@@ -1552,18 +1552,18 @@ async def run_workflow(
                 in_buildroot = await check_build_in_buildroot(
                     state.target_branch,
                     dep_component,
-                    fixed_in_build,
+                    fixed_dep_nevr,
                     fix_version=fix_version,
                 )
             except Exception as e:
-                logger.warning(f"Buildroot check failed for {dep_component} ({fixed_in_build}): {e}")
+                logger.warning(f"Buildroot check failed for {dep_component} ({fixed_dep_nevr}): {e}")
                 return "consolidate_rebuild_siblings"
 
             if in_buildroot:
                 return "consolidate_rebuild_siblings"
 
             logger.info(
-                f"Dependency {dep_component} ({fixed_in_build}) not in "
+                f"Dependency {dep_component} ({fixed_dep_nevr}) not in "
                 f"{state.target_branch} buildroot — postponing {state.jira_issue}"
             )
             state.triage_result = OutputSchema(
@@ -1571,7 +1571,7 @@ async def run_workflow(
                 data=PostponedData(
                     summary=(
                         f"Rebuild of {data.package} waiting for {dep_component} "
-                        f"({fixed_in_build}) to land in {state.target_branch} buildroot"
+                        f"({fixed_dep_nevr}) to land in {state.target_branch} buildroot"
                     ),
                     pending_issues=[dep_issue_key],
                     jira_issue=state.jira_issue,

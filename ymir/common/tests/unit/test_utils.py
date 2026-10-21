@@ -1060,8 +1060,10 @@ async def test_check_package_built_with_fixed_dependency_real_glibc_with_subpack
     assert already_fixed is None
     assert issue_key == "RHEL-242375"
     assert _nvr == "some-app-1.0.0-1.el8"
-    # First matching subpackage is enough to request verification
-    assert reason == "subpackage_match_needs_verification:glibc-all-langpacks"
+    assert reason == (
+        "subpackage_match_needs_verification:"
+        "glibc, glibc-all-langpacks, glibc-common, glibc-devel, glibc-gconv-extra, glibc-headers"
+    )
 
 
 @pytest.mark.asyncio
@@ -2906,7 +2908,10 @@ async def test_compare_build_timestamps_package_built_after_fix():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(package_build).and_return(fixed_build)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-13.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-13.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is True
@@ -2931,7 +2936,10 @@ async def test_compare_build_timestamps_package_built_before_fix():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(package_build).and_return(fixed_build)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-12.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is False
@@ -2951,7 +2959,10 @@ async def test_compare_build_timestamps_same_time():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(package_build).and_return(fixed_build)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-12.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is True
@@ -2969,7 +2980,10 @@ async def test_compare_build_timestamps_missing_package_build():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(None).and_return(fixed_build)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-12.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is None
@@ -2987,7 +3001,10 @@ async def test_compare_build_timestamps_missing_fixed_build():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(package_build).and_return(None)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-12.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is None
@@ -3004,7 +3021,10 @@ async def test_compare_build_timestamps_missing_completion_time():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(package_build).and_return(fixed_build)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-12.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is None
@@ -3026,7 +3046,10 @@ async def test_compare_build_timestamps_wrong_package_name():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(package_build).and_return(fixed_build)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-12.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is None
@@ -3048,7 +3071,10 @@ async def test_compare_build_timestamps_wrong_dependency_name():
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(package_build).and_return(fixed_build)
 
     result = await _compare_build_timestamps(
-        "git-lfs", "git-lfs-3.4.1-12.el8_10", "golang", NEVR.from_string("golang-1.26.7-1.el10")
+        "git-lfs",
+        NEVR.from_string("git-lfs-3.4.1-12.el8_10"),
+        "golang",
+        NEVR.from_string("golang-1.26.7-1.el10"),
     )
 
     assert result is None

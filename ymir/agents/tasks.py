@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unicodedata
 from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -609,6 +610,60 @@ async def push_changes(
         force=True,
         available_tools=available_tools,
     )
+
+
+async def delete_remote_branch(
+    local_clone: Path,
+    fork_url: str,
+    branch: str,
+    available_tools: list[Tool],
+) -> None:
+    """Delete a scratch ref through the authenticated GitLab push tool."""
+    await run_tool(
+        "push_to_remote_repository",
+        repository=fork_url,
+        clone_path=str(local_clone),
+        branch=f":refs/heads/{branch}",
+        force=False,
+        available_tools=available_tools,
+    )
+
+
+@asynccontextmanager
+async def scratch_build_branch(
+    local_clone: Path,
+    fork_url: str,
+    update_branch: str,
+    revision: str,
+    available_tools: list[Tool],
+    env: dict[str, str] | None = None,
+):
+    """Publish a build candidate without changing the live MR source branch.
+
+    Keep the ref until the build call finishes, then delete both copies. A push
+    error may have occurred after the remote accepted the ref, so attempt remote
+    cleanup in that case too.
+    """
+    branch = f"{update_branch}-ymir-konflux-build-{uuid4().hex}"
+    created = False
+    push_attempted = False
+    try:
+        await check_subprocess(["git", "branch", "-f", branch, revision], cwd=local_clone, env=env)
+        created = True
+        push_attempted = True
+        await push_changes(local_clone, fork_url, branch, available_tools)
+        yield branch
+    finally:
+        if push_attempted:
+            try:
+                await delete_remote_branch(local_clone, fork_url, branch, available_tools)
+            except Exception as error:
+                logger.warning("Could not delete Konflux scratch branch %s: %s", branch, error)
+        if created:
+            try:
+                await check_subprocess(["git", "branch", "-D", branch], cwd=local_clone, env=env)
+            except Exception as error:
+                logger.warning("Could not delete local Konflux scratch branch %s: %s", branch, error)
 
 
 async def request_mr_reviews(

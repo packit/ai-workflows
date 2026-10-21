@@ -1,3 +1,4 @@
+import subprocess
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -19,6 +20,7 @@ from ymir.agents.tasks import (
     change_jira_status,
     commit_changes,
     commit_push_and_open_mr,
+    delete_remote_branch,
     ensure_canonical_changelog_title,
     escape_rpm_changelog_text,
     fetch_branch_creation_config,
@@ -31,6 +33,7 @@ from ymir.agents.tasks import (
     request_mr_qe_reviews,
     resolve_canonical_mr_title,
     resolve_current_canonical_mr_title,
+    scratch_build_branch,
 )
 from ymir.common.models import CachedMRMetadata, Task
 from ymir.tools.privileged.utils import ACTIVE_WORKSPACE_MARKER
@@ -1303,6 +1306,108 @@ async def test_commit_and_push_phases_are_independent(tmp_path):
     ).replace_with(_async_noop)
 
     await push_changes(tmp_path, "https://gitlab.com/bot/curl", "update", [])
+
+
+@pytest.mark.asyncio
+async def test_delete_remote_branch_uses_authenticated_push_tool(tmp_path):
+    flexmock(agent_tasks).should_receive("run_tool").once().with_args(
+        "push_to_remote_repository",
+        repository="https://gitlab.com/bot/curl",
+        clone_path=str(tmp_path),
+        branch=":refs/heads/update-ymir-konflux-build-1234",
+        force=False,
+        available_tools=[],
+    ).replace_with(_async_noop)
+
+    await delete_remote_branch(tmp_path, "https://gitlab.com/bot/curl", "update-ymir-konflux-build-1234", [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_point", [None, "push", "build"])
+async def test_scratch_build_branch_cleans_up_after_failure(tmp_path, monkeypatch, failure_point):
+    calls = []
+
+    async def git(command, **kwargs):
+        calls.append(command)
+        return ("", "")
+
+    async def push(*args):
+        calls.append(("push", args[2]))
+        if failure_point == "push":
+            raise RuntimeError("push failed")
+
+    async def delete(*args):
+        calls.append(("delete", args[2]))
+
+    monkeypatch.setattr(agent_tasks, "check_subprocess", git)
+    monkeypatch.setattr(agent_tasks, "push_changes", push)
+    monkeypatch.setattr(agent_tasks, "delete_remote_branch", delete)
+
+    if failure_point:
+        with pytest.raises(RuntimeError, match=f"{failure_point} failed"):
+            async with scratch_build_branch(tmp_path, "https://fork.invalid/repo", "ymir-123", "abc", []):
+                assert failure_point == "build"
+                calls.append("build")
+                raise RuntimeError("build failed")
+    else:
+        async with scratch_build_branch(
+            tmp_path, "https://fork.invalid/repo", "ymir-123", "abc", []
+        ) as branch:
+            assert branch.startswith("ymir-123-ymir-konflux-build-")
+            calls.append("build")
+
+    branch = calls[0][3]
+    assert calls == [
+        ["git", "branch", "-f", branch, "abc"],
+        ("push", branch),
+        *([] if failure_point == "push" else ["build"]),
+        ("delete", branch),
+        ["git", "branch", "-D", branch],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scratch_build_branch_preserves_live_remote_ref(tmp_path):
+    repo = tmp_path / "repo"
+    remote = tmp_path / "remote.git"
+    repo.mkdir()
+
+    def git(*args, cwd=repo):
+        return subprocess.run(
+            ["git", *map(str, args)], cwd=cwd, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    git("init", "--bare", remote, cwd=tmp_path)
+    git("init", repo, cwd=tmp_path)
+    git("config", "user.name", "Ymir Tests")
+    git("config", "user.email", "ymir-tests@example.com")
+    (repo / "package.spec").write_text("Release: 1\n")
+    git("add", "package.spec")
+    git("commit", "-m", "Base")
+    base = git("rev-parse", "HEAD")
+    git("branch", "ymir-123")
+    git("push", remote, "ymir-123")
+    (repo / "package.spec").write_text("Release: 2\n")
+    git("commit", "-am", "Candidate")
+    candidate = git("rev-parse", "HEAD")
+
+    async def push_tool(name, **kwargs):
+        assert name == "push_to_remote_repository"
+        git("push", kwargs["repository"], kwargs["branch"])
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(push_tool).twice()
+
+    def remote_head(branch):
+        output = git("ls-remote", "--heads", remote, branch)
+        return output.split()[0] if output else None
+
+    async with scratch_build_branch(repo, str(remote), "ymir-123", candidate, []) as scratch:
+        assert remote_head(scratch) == candidate
+        assert remote_head("ymir-123") == base
+
+    assert remote_head(scratch) is None
+    assert remote_head("ymir-123") == base
+    assert not git("branch", "--list", scratch)
 
 
 @pytest.mark.asyncio

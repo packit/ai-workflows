@@ -242,6 +242,129 @@ Subsequent deploys via `deploy.sh` will read the cert/key from the
 `ymir-cname-tls` Secret and patch the Route automatically.  If the Secret
 does not exist yet, the patch is skipped with a warning.
 
+## Konflux build token (konflux-bot-0) rotation
+
+When `BUILD_BACKEND=konflux`, the MCP gateway authenticates to Konflux as the
+`konflux-bot-0` ServiceAccount in `ymir-tenant` on `kflux-rhel-p01`. That token
+is bound and **expires every 24h**, so it is rotated automatically by a CronJob
+(`konflux-token-rotation`) that lives in the Konflux tenant tree
+(`konflux-release-data`, synced by Argo) -- NOT in this repo. See that tenant's
+`cronjobs/README.md` for the mint side.
+
+The CronJob mints a fresh token on `kflux-rhel-p01` and **pushes it into this
+project** as the Opaque Secret `konflux-bot-0-token` (key `token`). The gateway
+mounts that Secret at `KONFLUX_TOKEN_FILE` and reads it fresh per build, so
+rotation needs no gateway restart.
+
+> `konflux-bot-0-token` is created and kept up to date by the CronJob -- do not
+> create it by hand. `deploy-oc.sh` is apply-only (no `delete`, no `--prune`),
+> so deploys never touch it.
+
+### One-time bootstrap
+
+Two credentials must be set up once (neither is in GitOps, like the other
+secrets above). You need to be logged in to **both** clusters.
+
+**1. Writer ServiceAccount in this project (gateway cluster).** Grants the
+rotation CronJob permission to write only the `konflux-bot-0-token` Secret here:
+
+```bash
+oc apply -n jotnar-ymir--jotnar-ymir -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: konflux-token-writer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: konflux-token-writer
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["konflux-bot-0-token"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: konflux-token-writer
+subjects:
+  - kind: ServiceAccount
+    name: konflux-token-writer
+    namespace: jotnar-ymir--jotnar-ymir
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: konflux-token-writer
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: konflux-token-writer-token
+  annotations:
+    kubernetes.io/service-account.name: konflux-token-writer
+type: kubernetes.io/service-account-token
+EOF
+```
+
+The manually-created `konflux-token-writer-token` Secret yields a **long-lived**
+token (no expiry), so this delivery credential does not itself need rotating.
+
+**2. Push kubeconfig on `kflux-rhel-p01`.** Build a kubeconfig that authenticates
+as `konflux-token-writer` against this cluster and store it in `ymir-tenant`,
+where the CronJob mounts it:
+
+```bash
+# Still logged in to the gateway cluster:
+SERVER=https://api.gpc.ocp-hub.prod.psi.redhat.com:6443
+NS=jotnar-ymir--jotnar-ymir
+TOKEN=$(oc -n "$NS" get secret konflux-token-writer-token -o jsonpath='{.data.token}' | base64 -d)
+CA=$(oc -n "$NS" get secret konflux-token-writer-token -o jsonpath='{.data.ca\.crt}')  # already base64
+cat > push-kubeconfig <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+  - name: gateway
+    cluster:
+      server: ${SERVER}
+      certificate-authority-data: ${CA}
+contexts:
+  - name: push
+    context: {cluster: gateway, namespace: ${NS}, user: konflux-token-writer}
+current-context: push
+users:
+  - name: konflux-token-writer
+    user: {token: ${TOKEN}}
+EOF
+
+# Switch to the ymir-tenant context on kflux-rhel-p01, then:
+oc --context <ymir-tenant-on-kflux-rhel-p01> -n ymir-tenant \
+  create secret generic konflux-token-push-kubeconfig --from-file=kubeconfig=push-kubeconfig
+
+shred -u push-kubeconfig   # remove the local copy
+```
+
+Verify the whole chain by triggering one run on `kflux-rhel-p01`:
+
+```bash
+oc -n ymir-tenant create job --from=cronjob/konflux-token-rotation rotate-test
+oc -n ymir-tenant logs job/rotate-test     # expect "Rotation complete."
+# Back on the gateway cluster:
+oc -n jotnar-ymir--jotnar-ymir get secret konflux-bot-0-token
+```
+
+### Gateway wiring (pending)
+
+To actually use the rotated token the gateway Deployment must mount
+`konflux-bot-0-token` and set `BUILD_BACKEND=konflux` +
+`KONFLUX_TOKEN_FILE=/home/mcp/konflux-token` (plus `KONFLUX_API_URL`,
+`KUBEARCHIVE_API_URL`, `KONFLUX_PIPELINE_URL`). Until that lands the gateway
+stays on the Copr backend and the Secret is simply kept fresh.
+
 ## API Authentication (OIDC)
 
 The API validates OIDC Bearer tokens (JWTs) directly using an aiohttp

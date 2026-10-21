@@ -80,6 +80,10 @@ make check-unprivileged-tools-in-container
 - **SSH config**: Update `files/internal_dist-git_ssh.conf` User field with your Kerberos ID
 - **Clone timeouts**: Large repos may timeout; adjust timeout in `ymir/tools/privileged/distgit.py` if needed
 
+### Konflux Builds
+
+- **Local token prerequisite**: Before using `BUILD_BACKEND=konflux`, log in to the gateway OpenShift cluster and run `make konflux-token`. The short-lived token is stored in `.secrets/konflux/token`; refresh it if a build returns 401. See [Konflux backend setup](docs/konflux-backend.md).
+
 ### CI Pipeline
 - **COPY <<EOF variable trap**: Shell variables in COPY instructions don't expand. Use `RUN` with shell redirection instead
 - **quay.io naming**: Images must push to `quay.io/jotnar/` namespace; verify Containerfile registry config
@@ -123,7 +127,7 @@ If you introduce a new service as a dependency to our agents, make sure to read 
 
 - [ ] Write tests first (especially for tools/git operations) — make sure they use `flexmock` for mocking.
 - [ ] Run `make check-in-container` — all tests pass
-- [ ] Test with `DRY_RUN=true` — don't touch real Jira/git
+- [ ] Test with `DRY_RUN=true` and mock repositories or a disposable fork namespace — Jira and MR writes are skipped, but build workflows may create forks and push Git refs
 - [ ] Use rebase merge (see [CONTRIBUTING.md](CONTRIBUTING.md))
 - [ ] Don't modify `.env`, `.secrets/`, keytab files in PRs
 - [ ] Update relevant documentation (README-agents.md, jira_data_flow.md, etc.)

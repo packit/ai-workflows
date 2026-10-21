@@ -60,9 +60,10 @@ class RedisQueues(Enum):
     REPRODUCER_QUEUE = "reproducer_queue"
     REPRODUCER_QUEUE_TODO = "reproducer_queue_todo"
     COMPLETED_REPRODUCER_LIST = "completed_reproducer_list"
-    # Redis ZSET (score = unix ready-time) for delayed reproducer retries.
+    # Redis ZSETs (score = unix ready-time) for delayed agent retries.
     # Not a BRPOP list — excluded from all_queues().
     REPRODUCER_DELAYED_QUEUE = "reproducer_queue_delayed"
+    TRIAGE_DELAYED_QUEUE = "triage_queue_delayed"
     # Redis scalar counter (INCR) assigning unique, stable ids to error_list
     # entries so a specific failure can be requeued by id. Not a list/hash/zset
     # — excluded from all_queues().
@@ -78,6 +79,7 @@ class RedisQueues(Enum):
             not in (
                 cls.MERGE_CONSOLIDATION_QUEUE,
                 cls.REPRODUCER_DELAYED_QUEUE,
+                cls.TRIAGE_DELAYED_QUEUE,
                 cls.ERROR_ID_COUNTER,
             )
         }

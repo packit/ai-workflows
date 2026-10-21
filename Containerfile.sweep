@@ -8,6 +8,7 @@ RUN dnf -y install --allowerasing \
       # Build dependencies (removed after pip install)
       gcc \
       gcc-c++ \
+      git \
       python3-devel \
       # Runtime system packages
       python3 \
@@ -16,8 +17,8 @@ RUN dnf -y install --allowerasing \
       python3-pip \
       python3-requests
 RUN pip3 install -v --no-cache-dir \
-      "litellm<1.106.0,!=1.82.7,!=1.82.8" \
-      beeai-framework[mcp]==0.1.85 \
+      "litellm!=1.82.7,!=1.82.8,!=1.92.0,!=1.107.0" \
+      "beeai-framework[mcp] @ https://github.com/i-am-bee/beeai-framework/archive/e7ef6091360e54d18c298d4fc2a6ed8e8d1205bc.tar.gz#subdirectory=python" \
       pydantic \
       aiofiles \
       aiohttp \

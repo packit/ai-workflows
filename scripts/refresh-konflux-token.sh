@@ -50,11 +50,28 @@ if [[ -z "$token" ]]; then
   exit 1
 fi
 
-# A prior container run may have chown'd the file to the container UID (the
-# compose mount uses :U). We own the directory, so replace the file wholesale.
+# Compose bind-mounts this file, so replacing it would leave a running gateway
+# reading the old inode. Keep the existing file and update its contents in place.
 mkdir -p "$(dirname "$TOKEN_FILE")"
-rm -f "$TOKEN_FILE"
-( umask 077; printf '%s' "$token" > "$TOKEN_FILE" )
-chmod 600 "$TOKEN_FILE"
-echo "Pulled konflux-bot-0 token ($(wc -c < "$TOKEN_FILE") bytes) from $server -> $TOKEN_FILE"
+if [[ -e "$TOKEN_FILE" || -L "$TOKEN_FILE" ]]; then
+  if [[ ! -f "$TOKEN_FILE" || -L "$TOKEN_FILE" ]]; then
+    echo "ERROR: $TOKEN_FILE must be a regular file, not a symlink." >&2
+    exit 1
+  fi
+  if [[ -O "$TOKEN_FILE" ]]; then
+    chmod 600 "$TOKEN_FILE"
+    printf '%s' "$token" > "$TOKEN_FILE"
+  elif command -v podman >/dev/null 2>&1; then
+    # The :U mount may have chown'd the file to the container UID. Podman's
+    # user namespace can write that inode without changing its ownership.
+    printf '%s' "$token" | podman unshare sh -c 'cat > "$1" && chmod 600 "$1"' _ "$TOKEN_FILE"
+  else
+    echo "ERROR: $TOKEN_FILE is owned by another user; install Podman to refresh it in place." >&2
+    exit 1
+  fi
+else
+  ( umask 077; printf '%s' "$token" > "$TOKEN_FILE" )
+  chmod 600 "$TOKEN_FILE"
+fi
+echo "Pulled konflux-bot-0 token ($(printf '%s' "$token" | wc -c) bytes) from $server -> $TOKEN_FILE"
 echo "The token is rotated ~every 12h; re-run 'make konflux-token' if a build 401s."

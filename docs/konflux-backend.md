@@ -48,6 +48,11 @@ call is cancelled, Ymir requests PipelineRun cancellation and waits for a
 terminal status before deleting its per-build git-auth Secret. If cancellation
 or status confirmation fails, Ymir keeps the Secret and logs its name for
 cleanup after the run stops.
+Cancellation during Secret creation waits for the creation request to finish,
+then deletes the Secret if the request returned its name.
+
+If Tekton reports a terminal `PipelineRunTimeout`, Ymir returns a build timeout
+and deletes the Secret without requesting cancellation.
 
 ## The SA token
 
@@ -61,8 +66,10 @@ Builds authenticate as `konflux-bot-0` in `ymir-tenant`. `kflux-rhel-p01`
 - mounts `.secrets/konflux/token` (host) to `/home/mcp/konflux-token` (gateway)
 - sets `KONFLUX_TOKEN_FILE=/home/mcp/konflux-token`
 
-Because the file is read per build, **overwriting it rotates the token with no
-gateway restart.**
+Because Compose bind-mounts the file itself, `make konflux-token` updates the
+existing file in place. The gateway reads the new contents on the next build
+without a restart. Replacing the file would leave a running gateway attached to
+the old inode.
 
 ### Refreshing locally
 
@@ -85,7 +92,9 @@ bot-0` cannot mint its own token anyway; see below.)
 `make konflux-token` runs `scripts/refresh-konflux-token.sh`, which verifies you
 are logged in to the gateway cluster, then decodes
 `secret/konflux-bot-0-token` (namespace `jotnar-ymir--jotnar-ymir`) into
-`.secrets/konflux/token` (mode 0600). The next build picks it up. The delivered
+`.secrets/konflux/token` (mode 0600). If Compose's `:U` mount changed the file's
+host ownership, the script uses `podman unshare` to update the same file without
+changing ownership. The next build picks it up. The delivered
 token is rotated roughly every 12h, so re-run the command whenever a build
 starts returning 401. Override the defaults with `GATEWAY_API_URL`,
 `GATEWAY_NAMESPACE`, `SECRET_NAME`, or `OC` if your setup differs.
